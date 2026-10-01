@@ -81,7 +81,7 @@ app.get('/api/state', async (_req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), sites: db.prepare('SELECT * FROM sites ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -152,17 +152,29 @@ app.post('/api/sites', (req, res) => {
 });
 app.patch('/api/sites/:id', (req, res) => {
   const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(normalizedSite(data, site.id)), site.id);
   audit(req.user.id, 'site.update', site.id); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   const data = z.object({ enabled: z.boolean(), schedule: z.string().max(100), timezone: z.string().max(100), retention: z.number().int().min(1).max(1000) }).parse(req.body);
   new Intl.DateTimeFormat('en', { timeZone: data.timezone });
   const next = CronExpressionParser.parse(data.schedule, { tz: data.timezone }).next().toISOString();
   db.prepare('UPDATE policies SET enabled=?,schedule=?,timezone=?,retention=?,next_run=? WHERE site_id=?').run(Number(data.enabled), data.schedule, data.timezone, data.retention, next, site.id);
   audit(req.user.id, 'policy.update', site.id, data); res.json({ ...data, next_run: next });
+});
+app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
+  const site=getSite(req.params.id);
+  transaction(()=>{
+    if(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id))throw Object.assign(new Error('Finish the active job or resolve recovery before removing this site.'),{status:409});
+    db.prepare('INSERT OR IGNORE INTO site_archives(site_id,archived_at) VALUES (?,?)').run(site.id,now());
+    db.prepare('UPDATE policies SET enabled=0,next_run=NULL WHERE site_id=?').run(site.id);
+    audit(req.user.id,'site.removed',site.id,{backupsPreserved:true});
+  });
+  res.json({id:site.id,removed:true,backupsPreserved:true});
 });
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));

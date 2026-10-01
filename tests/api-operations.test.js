@@ -92,6 +92,28 @@ test('project file browser rejects malformed paths and operator access before co
  try{assert.equal((await request(route+'?containers=fixture&path=/tmp/project')).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
 });
 
+test('removing a site pauses schedules, keeps backups and rejects active work or further edits',async()=>{
+ const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Archive fixture',config:{containers:['fixture']}})});
+ const saved=await response.json();assert.equal(response.status,201);
+ const route='/sites/'+saved.id,archiveJob=id(),backupId=id(),file=join(process.env.BACKUP_DIR,'archive-fixture.enc');await writeFile(file,'preserved');
+ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(archiveJob,saved.id,new Date().toISOString());
+ db.prepare("UPDATE policies SET enabled=1,next_run=? WHERE site_id=?").run(new Date().toISOString(),saved.id);
+ assert.equal((await request(route,{method:'DELETE'})).status,409,'Active jobs block removal');
+ assert.equal(db.prepare('SELECT COUNT(*) AS n FROM site_archives WHERE site_id=?').get(saved.id).n,0);
+ db.prepare("UPDATE jobs SET status='completed',stage='completed' WHERE id=?").run(archiveJob);
+ db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(backupId,saved.id,archiveJob,new Date().toISOString(),file,9,'a'.repeat(64),'{}',0,1,new Date().toISOString());
+ db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
+ try{assert.equal((await request(route,{method:'DELETE'})).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
+ assert.equal((await request(route,{method:'DELETE'})).status,200);
+ assert.equal(db.prepare('SELECT enabled FROM policies WHERE site_id=?').get(saved.id).enabled,0);
+ const state=await (await request('/state')).json();assert.ok(!state.sites.some(site=>site.id===saved.id));assert.ok(state.archivedSites.some(site=>site.id===saved.id&&site.name==='Archive fixture'));
+ assert.ok(db.prepare('SELECT 1 FROM backups WHERE id=?').get(backupId));
+ assert.equal(await (await import('node:fs/promises')).readFile(file,'utf8'),'preserved');
+ assert.equal((await request(route+'/backup',{method:'POST',body:'{}'})).status,409);
+ assert.equal((await request(route+'/policy',{method:'POST',body:JSON.stringify({enabled:true,schedule:'0 2 * * *',timezone:'UTC',retention:7})})).status,409);
+ assert.equal((await request(route,{method:'PATCH',body:JSON.stringify({serverId:host,name:'Edited removed site',config:{containers:['fixture']}})})).status,409);
+});
+
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);
  db.prepare("INSERT INTO settings VALUES('worker_heartbeat',?)").run(JSON.stringify({running:true,lastSeen:new Date().toISOString()}));

@@ -215,6 +215,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
   await page.route('**/api/sites/fixture-site',route=>{
+    if(route.request().method()==='DELETE'){fixtureSites=[];fixturePolicies=[];return route.fulfill({json:{id:'fixture-site',removed:true,backupsPreserved:true}});}
     assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
     assert.deepEqual(body.config.containers,['shop','shop-db']);assert.deepEqual(body.config.composeFiles,['/srv/shop/docker-compose.yml']);
     assert.deepEqual(body.config.configFiles,['/srv/shop/.env','/srv/shop/config/app.json']);assert.equal(body.config.externalReferencesConfirmed,true);
@@ -280,6 +281,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'custom','Unrecognized schedules remain custom rather than silently changing');
   assert.equal(await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).inputValue(),expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByRole('button',{name:'Remove site',exact:true}).click();
+  const removeDialog=page.getByRole('dialog');
+  await removeDialog.getByText(/Existing backup files and history will be kept/).waitFor();
+  await removeDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByRole('button',{name:'Remove site',exact:true}).click();
+  await removeDialog.getByRole('button',{name:'Remove site',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
+  await page.getByRole('heading',{name:'Choose the sites to protect',exact:true}).waitFor();
   let storageFixture=[];
   await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
   await page.route('**/api/storage-targets/connect',route=>{
