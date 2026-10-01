@@ -2,11 +2,14 @@ export const containerName=container=>container.name||container.Name?.replace(/^
 export function containerGroups(containers){
  const groups=new Map();
  for(const container of containers){
-  const labels=container.labels||container.Config?.Labels||{};
+  const labels={...container.Config?.Labels,...container.Labels,...container.labels};
   const project=labels['com.docker.compose.project'];
-  if(!project){if(!groups.has('standalone:'))groups.set('standalone:',{id:'standalone:',name:'Ungrouped containers',compose:false,containers:[]});groups.get('standalone:').containers.push(container);continue;}
-  if(!groups.has(project))groups.set(project,{id:'compose:'+project,name:project,compose:true,containers:[]});
-  groups.get(project).containers.push({...container,service:labels['com.docker.compose.service']||''});
+  const stack=labels['com.docker.stack.namespace'];
+  const kind=project?'compose':stack?'swarm':'standalone';
+  const name=project||stack||'Ungrouped containers';
+  const id=kind+':'+(project||stack||'');
+  if(!groups.has(id))groups.set(id,{id,name,kind,compose:kind==='compose',containers:[]});
+  groups.get(id).containers.push({...container,service:labels['com.docker.compose.service']||labels['com.docker.swarm.service.name']||''});
  }
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }

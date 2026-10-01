@@ -7,3 +7,17 @@ test('site groups use Compose evidence, include stopped services and never guess
  assert.deepEqual(groups.find(g=>!g.compose).containers.map(c=>c.name),['shop-unrelated']);
  assert.deepEqual(groups.filter(g=>g.compose).map(g=>[g.name,g.containers.map(c=>c.name)]),[['other',['other-web']],['shop',['shop-web','shop-db']]]);
 });
+
+test('group identities separate Compose and Swarm with identical names and reserved-looking projects',()=>{
+ const groups=containerGroups([
+  {name:'compose',Labels:{'com.docker.compose.project':'shop'}},
+  {name:'swarm',labels:{'com.docker.stack.namespace':'shop','com.docker.swarm.service.name':'shop_db'}},
+  {name:'reserved',Config:{Labels:{'com.docker.compose.project':'standalone:'}},labels:{}},
+  {name:'manual'}
+ ]);
+ assert.equal(groups.length,4);
+ assert.equal(groups.find(g=>g.id==='swarm:shop').containers[0].service,'shop_db');
+ assert.equal(groups.find(g=>g.id==='compose:shop').containers[0].name,'compose');
+ assert.equal(groups.find(g=>g.id==='compose:standalone:').containers[0].name,'reserved');
+ assert.deepEqual(groups.find(g=>g.id==='standalone:').containers.map(c=>c.name),['manual']);
+});
