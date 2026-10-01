@@ -46,4 +46,5 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .auth-card .notice code{display:inline;font-size:11px}.auth-card .primary{font-size:13px}
 .primary:disabled{opacity:1;background:var(--surface-muted);color:var(--text-muted);border-color:var(--border-subtle)}
 .wizard-steps [aria-current=step]{color:var(--link)}
+.site-wizard h3{margin-bottom:12px}.site-wizard summary{cursor:pointer;color:var(--link);padding:10px 0}.site-wizard .hint p{font-size:12px;margin-top:6px;overflow-wrap:anywhere}.setup-review{display:grid;grid-template-columns:100px minmax(0,1fr);gap:12px;margin:20px 0;padding:16px;background:var(--surface-muted);border-radius:6px;font-size:12px}.setup-review dt{color:var(--text-secondary)}.setup-review dd{margin:0;overflow-wrap:anywhere}.site-wizard .wizard-steps{margin-bottom:24px}
 @media(max-width:680px){.auth-card{padding:28px 24px}.auth-main{padding:32px 20px}}
