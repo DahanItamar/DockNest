@@ -51,7 +51,7 @@ export function SiteWizard({api,Field,servers,initialServer='',onSaved,onCancel,
   <ol className="wizard-steps" aria-label="Site setup steps">{['Select site','Site details','Review & add'].map((label,index)=><li key={label} aria-current={step===index+1?'step':undefined}>{index+1}. {label}</li>)}</ol>
   {step===1&&<>
    <h3>Which site do you want to back up?</h3>
-   <Field label="Source server" value={serverId} onChange={event=>setServerId(event.target.value)} options={[[ '', 'Choose a server'],...servers.map(server=>[server.id,server.name])]} required/>
+   <Field label="Source server" value={serverId} onChange={event=>setServerId(event.target.value)} options={[[ '', 'Choose a server'],...servers.map(server=>[server.id,server.name+(server.note?' · '+server.note:'')])]} required/>
    {loading&&<p role="status">Loading Docker containers from this server…</p>}
    {serverId&&!loading&&!error&&<>
     {containers.length?<>

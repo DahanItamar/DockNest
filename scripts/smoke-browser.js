@@ -85,6 +85,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     const body=route.request().postDataJSON();
     assert.equal(body.host,'server.example.org');
     assert.equal(body.username,'root');
+    assert.equal(body.note,'Production WordPress');
     assert.equal(body.hostKey,'ab'.repeat(32));
     assert.equal(body.privateKey,prepared.privateKey);
     saved++;
@@ -94,6 +95,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     await page.getByRole('button',{name:'Add server',exact:true}).click();
     const dialog=page.getByRole('dialog');
     await dialog.getByLabel('Server name',{exact:true}).fill('Fixture Ubuntu');
+    await dialog.getByLabel('Server note (optional)',{exact:true}).fill('Production WordPress');
     await dialog.getByLabel('IP address or hostname',{exact:true}).fill('server.example.org');
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
     if(mode==='existing'){
@@ -132,6 +134,21 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(saved,2,'Existing and dedicated key paths both submit verified connection details');
   // Site discovery and save are browser fixtures; no containers are stopped or backed up.
   fixtureServers=[{id:'host-one',name:'Production'},{id:'host-two',name:'Other server'}];
+  await page.route('**/api/servers/host-one/details',route=>{
+    assert.equal(route.request().method(),'PATCH');
+    assert.deepEqual(route.request().postDataJSON(),{name:'DemoBlog_srv',note:'DemoBlog production'});
+    fixtureServers=fixtureServers.map(server=>server.id==='host-one'?{...server,...route.request().postDataJSON()}:server);
+    return route.fulfill({json:fixtureServers[0]});
+  });
+  await page.getByRole('button',{name:'Refresh dashboard'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
+  await page.getByRole('row').filter({hasText:'Production'}).getByRole('button',{name:'Edit details',exact:true}).click();
+  const detailsDialog=page.getByRole('dialog');
+  await detailsDialog.getByLabel('Server name',{exact:true}).fill('DemoBlog_srv');
+  await detailsDialog.getByLabel('Server note (optional)',{exact:true}).fill('DemoBlog production');
+  await detailsDialog.getByRole('button',{name:'Save details',exact:true}).click();
+  await detailsDialog.waitFor({state:'hidden'});
+  await page.getByRole('row').filter({hasText:'DemoBlog_srv'}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
   await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
@@ -140,6 +157,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.equal(body.serverId,'host-one');assert.equal(body.name,'My shop');
     assert.deepEqual(body.config.containers,['shop','shop-db']);
     assert.equal(body.config.stagingRoot,'/var/lib/docknest');
+    assert.deepEqual(body.config.domains,['shop.example.org']);
     assert.equal(body.config.exclusiveSourcesConfirmed,true);assert.equal(body.config.cleanShutdownConfirmed,true);assert.equal(body.config.externalReferencesConfirmed,true);
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
   });

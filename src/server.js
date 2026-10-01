@@ -66,6 +66,7 @@ const siteSchema = z.object({
   }),
 });
 const serverSchema = z.object({
+  note: z.string().trim().max(200).default(''),
   name: z.string().trim().min(1).max(100), host: z.string().regex(/^[a-zA-Z0-9_.:-]{1,253}$/),
   port: z.number().int().min(1).max(65535).default(22), username: z.string().regex(/^[a-z_][a-z0-9_-]{0,31}$/),
   privateKey: z.string().min(50).max(30000), hostKey: z.string().regex(/^(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+/]{43}=?)$/),
@@ -92,20 +93,27 @@ app.post('/api/servers/connect', requireAdmin, rateLimit('server-connect',5), as
   const server={id:serverId,host:data.host,port:data.port,username:data.username,private_key:seal(data.privateKey),host_key:fingerprint(data.hostKey)};
   const capabilities=await testServer(server);
   if(capabilities.uid!==0)return res.status(409).json({error:'SSH connected, but this backup engine requires a root SSH account to preserve volume ownership. Run the setup command as root and connect using root.'});
-  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(serverId,data.name,data.host,data.port,data.username,server.private_key,server.host_key,'connected',JSON.stringify(capabilities),now());
+  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at,note) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(serverId,data.name,data.host,data.port,data.username,server.private_key,server.host_key,'connected',JSON.stringify(capabilities),now(),data.note);
   audit(req.user.id,'server.connected',serverId);
   res.status(201).json(safeServer(getServer(serverId)));
 });
 app.post('/api/servers', requireAdmin, (req, res) => {
   const data = serverSchema.parse(req.body), serverId = id();
-  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES (?,?,?,?,?,?,?,?)').run(serverId, data.name, data.host, data.port, data.username, seal(data.privateKey), fingerprint(data.hostKey), now());
+  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at,note) VALUES (?,?,?,?,?,?,?,?,?)').run(serverId, data.name, data.host, data.port, data.username, seal(data.privateKey), fingerprint(data.hostKey), now(),data.note);
   audit(req.user.id, 'server.create', serverId); res.status(201).json(safeServer(getServer(serverId)));
+});
+app.patch('/api/servers/:id/details', requireAdmin, (req, res) => {
+  const previous = getServer(req.params.id);
+  const data = z.object({name:z.string().trim().max(100),note:z.string().trim().max(200).default('')}).strict().parse(req.body);
+  db.prepare('UPDATE servers SET name=?,note=? WHERE id=?').run(data.name||previous.host,data.note,previous.id);
+  audit(req.user.id,'server.details_updated',previous.id);
+  res.json(safeServer(getServer(previous.id)));
 });
 app.patch('/api/servers/:id', requireAdmin, (req, res) => {
   const previous = getServer(req.params.id);
-  const data = serverSchema.extend({ privateKey: serverSchema.shape.privateKey.optional(), hostKeyConfirmation: z.literal(true).optional() }).parse(req.body);
+  const data = serverSchema.extend({ note:z.string().trim().max(200).optional(), privateKey: serverSchema.shape.privateKey.optional(), hostKeyConfirmation: z.literal(true).optional() }).parse(req.body);
   if (fingerprint(data.hostKey) !== previous.host_key && !data.hostKeyConfirmation) return res.status(409).json({ error: 'SSH host key changed. Verify the new fingerprint independently and explicitly confirm the change.' });
-  db.prepare("UPDATE servers SET name=?,host=?,port=?,username=?,private_key=?,host_key=?,status='unchecked',capabilities=NULL WHERE id=?").run(data.name, data.host, data.port, data.username, data.privateKey ? seal(data.privateKey) : previous.private_key, fingerprint(data.hostKey), previous.id);
+  db.prepare("UPDATE servers SET name=?,note=?,host=?,port=?,username=?,private_key=?,host_key=?,status='unchecked',capabilities=NULL WHERE id=?").run(data.name, data.note??previous.note, data.host, data.port, data.username, data.privateKey ? seal(data.privateKey) : previous.private_key, fingerprint(data.hostKey), previous.id);
   audit(req.user.id, 'server.update', previous.id); res.json(safeServer(getServer(previous.id)));
 });
 app.post('/api/servers/:id/test', async (req, res) => {

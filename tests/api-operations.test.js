@@ -43,6 +43,26 @@ test('storage accounting includes backups beyond the displayed 1000 rows and met
  assert.equal(state.backups.some(backup=>'path' in backup),false);
  assert.equal(state.servers.some(server=>'private_key' in server||'privateKey' in server),false);
 });
+test('optional server notes persist and details edits preserve verified connection settings',async()=>{
+ const payload={name:'DemoBlog_srv',note:'  DemoBlog production  ',host:'fixture.example.invalid',port:22,username:'root',privateKey:'fixture-only-key-'.repeat(5),hostKey:'a'.repeat(64)};
+ const created=await request('/servers',{method:'POST',body:JSON.stringify(payload)});
+ assert.equal(created.status,201);
+ const saved=await created.json();assert.equal(saved.note,'DemoBlog production');assert.ok(!('private_key' in saved));
+ db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run('{"uid":0}',saved.id);
+ const before=db.prepare('SELECT * FROM servers WHERE id=?').get(saved.id);
+ const route='/servers/'+saved.id+'/details';
+ let response=await request(route,{method:'PATCH',body:JSON.stringify({name:'DemoBlog',note:'Website host'})});
+ assert.equal(response.status,200);assert.equal((await response.json()).note,'Website host');
+ const after=db.prepare('SELECT * FROM servers WHERE id=?').get(saved.id);
+ for(const field of ['host','port','username','private_key','host_key','status','capabilities','created_at'])assert.equal(after[field],before[field],field+' must survive a details edit');
+ response=await request(route,{method:'PATCH',body:JSON.stringify({name:'DemoBlog',note:'x'.repeat(201)})});assert.equal(response.status,400);
+ response=await request(route,{method:'PATCH',body:JSON.stringify({name:'DemoBlog',note:'',host:'other.example.invalid'})});assert.equal(response.status,400,'Details endpoint rejects connection fields');
+ db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
+ try{assert.equal((await request(route,{method:'PATCH',body:JSON.stringify({name:'DemoBlog',note:'changed'})})).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
+ response=await request(route,{method:'PATCH',body:JSON.stringify({name:' ',note:' '})});assert.equal(response.status,200);
+ const cleared=await response.json();assert.equal(cleared.name,payload.host);assert.equal(cleared.note,'');
+});
+
 test('site and schedule validation reject unsafe paths, invalid URLs and invalid cron/timezone',async()=>{
  const payload={serverId:host,name:'Invalid site',config:{containers:['fixture'],healthUrl:'file:///etc/passwd'}};
  let response=await request('/sites',{method:'POST',body:JSON.stringify(payload)});assert.ok(response.status>=400);

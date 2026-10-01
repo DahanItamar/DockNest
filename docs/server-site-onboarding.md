@@ -2,6 +2,8 @@
 
 Server names are optional and default to the address. With the dedicated key option, Continue creates the key automatically; the separate create button is optional.
 
+Each server also has an optional note (up to 200 characters), for a short title or reminder. Add it when connecting, or use **Servers → Edit details** to change the name and note later. Notes appear below the server name and in the site wizard's server dropdown. Clearing the name uses its address. Editing these details preserves the existing SSH settings and connection verification.
+
 Docker group identity uses Compose project labels and Swarm stack namespace labels, including stopped containers returned by discovery. Compose and Swarm identities remain separate even with matching names. Swarm discovery covers only containers on the selected server, not the entire cluster. Containers without group labels require manual selection; names and shared networks are not proof of membership. Detection does not prove backup completeness.
 
 Upstream role reference: [Agency Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md), applied to clear defaults, accessible setup controls and responsive group selection. Used as design reference without spawning agents.
@@ -16,4 +18,4 @@ Changing servers clears the selected containers and discovery errors can be retr
 
 Verification: `npm run check` and `npm run test:browser`. Browser tests use isolated API fixtures for connection/discovery/site creation, covering both key options, the connection-to-site handoff, project and single-container cards, collapsed controls, replacing a selection, custom selection, settings preservation, discovery failure/retry, empty results, and desktop/mobile rendering. `TEST_SCREENSHOT_DIR` can redirect screenshots to a writable folder. They do not validate a real server connection or Linux Docker backup/restore.
 
-Site-selection refinement: production build and browser smoke passed on Windows, including desktop/mobile rendering. `npm run check` passed 30 of 31 tests; the remote-helper test could not run because Python is missing from PATH. No Linux Docker backup or restore was validated.
+Site-selection and server-note refinement: production build and browser smoke passed on Windows, including desktop/mobile rendering. `npm run check` passed all 32 tests with the installed Python available outside the sandbox's PATH. No Linux Docker backup or restore was validated.
