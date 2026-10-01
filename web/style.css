@@ -85,6 +85,15 @@ dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}.ap
 dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}
 
 /* Consistent spacing and alignment for actions throughout the dashboard. */
+.schedule-time{display:flex;align-items:flex-end;gap:12px;max-width:320px;margin:12px 0 20px}
+.schedule-time .field{flex:1;min-width:0;margin:0}
+.schedule-time>span{padding-bottom:12px;font-size:16px}
+.schedule-description{font-variant-numeric:tabular-nums}
+.cron-preview{margin-top:16px}
+.cron-fields{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:16px 0}
+.cron-fields>div{display:flex;flex-direction:column;gap:8px;min-width:64px;text-align:center}
+.cron-fields code{font-size:16px;line-height:1.5}
+.cron-separator{color:var(--text-muted)}
 /* Site selection leads with the project; service controls stay on demand. */
 .site-wizard .application-group.chosen{border-color:var(--accent);background:var(--accent-soft)}
 .site-wizard .application-group header button[aria-pressed="true"]{border-color:var(--accent);color:var(--link)}

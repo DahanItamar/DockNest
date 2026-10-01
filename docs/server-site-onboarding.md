@@ -6,6 +6,8 @@ Each server also has an optional note (up to 200 characters), for a short title 
 
 Domains accept either a hostname or a copied HTTP(S) website URL. For example, `https://www.blog.example.invalid/` becomes `www.blog.example.invalid`. Multiple domains use commas. The form normalizes them when leaving the field and when saving; the API also normalizes website URLs. Invalid addresses receive a plain-language error.
 
+**Schedule** offers Every day, Every week and Every hour with explicit 24-hour hour/minute controls. The preview says, for example, **Every day at 23:45** in the selected time zone. Weekly schedules add a weekday. **Custom cron (advanced)** preserves other existing expressions; **View cron fields** shows the five labelled fields separated by `|`. The saved expression still uses spaces, as required by cron.
+
 Docker group identity uses Compose project labels and Swarm stack namespace labels, including stopped containers returned by discovery. Compose and Swarm identities remain separate even with matching names. Swarm discovery covers only containers on the selected server, not the entire cluster. Containers without group labels require manual selection; names and shared networks are not proof of membership. Detection does not prove backup completeness.
 
 Upstream role reference: [Agency Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md), applied to clear defaults, accessible setup controls and responsive group selection. Used as design reference without spawning agents.
