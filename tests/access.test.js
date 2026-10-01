@@ -74,9 +74,10 @@ test('shared password requires per-person factor; invitations activate only afte
   assert.equal((await request('/auth/invite-complete',{token:token(invitation),enrollmentChallenge:start.data.enrollmentChallenge,code:totp(start.data.secret,Math.floor(Date.now()/30_000)+10)})).status,401, 'a distant future code must not enroll');
   const enrolled=await enroll(invitation);
   db.prepare('UPDATE users SET totp_last_counter=-1 WHERE id=?').run(invitation.userId);
-  const factorUser=actor(await login(totp(enrolled.secret)));
+  const loginCode=totp(enrolled.secret);
+  const factorUser=actor(await login(loginCode));
   assert.equal(factorUser.user.name,'Alice Operator');
-  assert.equal((await login(totp(enrolled.secret))).status,401,'successful TOTP cannot be replayed');
+  assert.equal((await login(loginCode)).status,401,'successful TOTP cannot be replayed');
   db.prepare('UPDATE invitations SET expires_at=? WHERE id=?').run(Date.now()-1,invitation.id);
   const user=actor(await login(enrolled.recoveryCodes[0]));
   assert.equal(user.user.name,'Alice Operator');
