@@ -36,3 +36,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
  ::view-transition-old(root),::view-transition-new(root){animation:none!important}
  :root,body,body *{transition:none!important}
 }
+
+/* Restrained slate surfaces and a focused login card. */
+.auth-header,.topbar{background:var(--surface);border-color:var(--border-subtle)}
+.auth-card{width:440px;border-radius:10px;padding:32px}
+.auth-card h2{font-weight:550;font-size:24px}
+.auth-card>p{color:var(--text-secondary);font-size:14px;line-height:1.6}
+.auth-card .field{font-size:13px}.auth-card .notice{display:block;font-size:12px;overflow-wrap:anywhere}
+.auth-card .notice code{display:inline;font-size:11px}.auth-card .primary{font-size:13px}
+.primary:disabled{opacity:1;background:var(--surface-muted);color:var(--text-muted);border-color:var(--border-subtle)}
+.wizard-steps [aria-current=step]{color:var(--link)}
+@media(max-width:680px){.auth-card{padding:28px 24px}.auth-main{padding:32px 20px}}
