@@ -175,7 +175,42 @@ try {
   await siteDialog.getByText(/No Docker containers found/).waitFor();
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'Empty discovery cannot create a site');
   await siteDialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Access']) {
+  let storageFixture=[];
+  await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
+  await page.route('**/api/storage-targets/connect',route=>{
+    const body=route.request().postDataJSON();
+    assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,1e12);
+    assert.equal(body.host,'u681095.your-storagebox.de');assert.equal(body.username,'u681095');
+    assert.ok(!body.privateKey);
+    storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:body.capacityBytes,hasCredential:true}];
+    return route.fulfill({status:201,json:storageFixture[0]});
+  });
+  await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
+  await page.getByRole('button',{name:'Add storage destination'}).click();
+  for(const label of ['Destination name','Storage hostname','Storage username'])assert.equal(await page.getByLabel(label,{exact:true}).inputValue(),'','Connection details start blank');
+  await page.getByLabel('Destination name',{exact:true}).fill('Hetzner Storage Box');
+  await page.getByLabel('Storage hostname',{exact:true}).fill('u681095.your-storagebox.de');
+  await page.getByLabel('Storage username',{exact:true}).fill('u681095');
+  await page.getByLabel('Authentication method').selectOption('ssh-key');
+  await page.getByLabel('Storage SSH private key').waitFor();
+  assert.equal(await page.getByLabel('Storage password',{exact:true}).count(),0,'SSH auth does not keep a hidden password field');
+  await page.getByLabel('Authentication method').selectOption('password');
+  await page.getByLabel('Storage password',{exact:true}).fill('fixture-only-not-a-real-password');
+  await page.getByLabel('Verified SSH host fingerprint').fill('ab'.repeat(32));
+  await page.getByRole('button',{name:'Test & connect storage'}).click();
+  await page.getByRole('heading',{name:'Hetzner Storage Box · Selected for new backups'}).waitFor();
+  assert.equal(await page.getByLabel('Storage password',{exact:true}).count(),0,'Successful connection discards the password input');
+  await page.route('**/api/storage-targets/storage-fixture/tree',route=>route.fulfill({json:{root:'/home/docknest',limited:false,servers:[{id:'host-one',name:'Production',sites:[{id:'fixture-site',name:'Shop',days:[{date:'2026-10-01',backups:[{id:'fixture-backup',capturedAt:'2026-10-01T20:30:00Z',size:1024*1024,pinned:false,verified:true,relativePath:'production--host-one/shop--fixture-site/2026-10-01/20-30-00Z--fixture-backup/payload.enc'}]}]}]}]}}));
+  await page.getByRole('button',{name:'Browse backup folders'}).click();
+  await page.getByText('Server: Production',{exact:true}).waitFor();
+  await page.getByText('2026-10-01 · 1 backup',{exact:true}).click();
+  assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download'}).getAttribute('href'),'/api/backups/fixture-backup/download');
+  await page.screenshot({path:'data/screenshots/storage-desktop.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
+  await page.screenshot({path:'data/screenshots/storage-mobile.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:1440,height:960});
+  for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
   }
@@ -184,5 +219,29 @@ try {
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path: 'data/screenshots/dashboard-mobile.png', fullPage: true, animations: 'disabled' });
   assert.deepEqual(problems, [], 'No uncaught browser errors');
+  const setupPage=await browser.newPage();
+  let setupVerified=false;
+  await setupPage.route('**/api/auth/status',route=>route.fulfill({json:{setupRequired:!setupVerified,authenticated:setupVerified,csrfToken:'fixture',user:{name:'QA',role:'admin'},serverTime:Date.now()}}));
+  await setupPage.route('**/api/state',route=>route.fulfill({json:{servers:[],sites:[],jobs:[],backups:[],policies:[],audit:[],storage:{}}}));
+  await setupPage.route('**/api/auth/setup',route=>{
+    const body=route.request().postDataJSON();assert.equal(body.name,'QA');assert.equal(body.email,'qa@example.invalid');assert.equal(body.setupToken,'fixture-only-token');
+    return route.fulfill({status:201,json:{enrollmentRequired:true,challenge:'fixture-challenge',qrDataUrl:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E',secret:'fixture-only-secret',recoveryCodes:['fixture-recovery-code']}});
+  });
+  await setupPage.route('**/api/auth/verify',route=>{assert.equal(route.request().postDataJSON().challenge,'fixture-challenge');setupVerified=true;return route.fulfill({json:{csrfToken:'fixture',user:{name:'QA',role:'admin'}}});});
+  await setupPage.goto(baseUrl);
+  await setupPage.getByRole('heading',{name:'Sign in',exact:true}).waitFor();
+  assert.equal(await setupPage.getByText(/set-admin-password\.ps1/).count(),0,'Login never displays the removed Windows setup instructions');
+  assert.equal(await setupPage.getByRole('button',{name:'Sign in',exact:true}).isEnabled(),true,'First-run sign in is clickable');
+  await setupPage.getByRole('button',{name:'Sign in',exact:true}).click();
+  await setupPage.getByRole('heading',{name:'Set up DockNest',exact:true}).waitFor();
+  await setupPage.getByLabel('Administrator name').fill('QA');await setupPage.getByLabel('Administrator email').fill('qa@example.invalid');
+  await setupPage.getByLabel('Setup token').fill('fixture-only-token');await setupPage.getByLabel('System password',{exact:true}).fill('fixture-password');await setupPage.getByLabel('Confirm system password').fill('fixture-password');
+  await setupPage.getByRole('button',{name:'Continue setup'}).click();
+  await setupPage.getByRole('heading',{name:'Connect your authenticator'}).waitFor();
+  await setupPage.getByRole('checkbox',{name:'I saved my recovery codes securely.'}).check();
+  await setupPage.getByLabel('Authenticator code').fill('123456');await setupPage.getByRole('button',{name:'Confirm administrator'}).click();
+  await setupPage.getByRole('heading',{name:'Overview',exact:true}).waitFor();
+  assert.ok(setupVerified,'Separate administrator enrollment confirms the factor before opening the dashboard');
+  await setupPage.close();
   console.log('Browser smoke passed: setup desktop/mobile, eight dashboard views, responsive layout, no uncaught errors.');
 } finally { await browser.close(); }
