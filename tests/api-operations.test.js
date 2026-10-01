@@ -84,6 +84,13 @@ test('site domains accept copied website URLs and reject credentials or invalid 
   const error=(await rejected.json()).error;assert.ok(error.includes('Enter a domain'));assert.ok(!error.includes('must match pattern'));assert.ok(!error.includes('fixture@example.org'));
  }
 });
+test('project file browser rejects malformed paths and operator access before contacting SSH',async()=>{
+ const route='/servers/'+host+'/project-files';
+ assert.equal((await request(route+'?containers=fixture&path=/tmp/../outside')).status,400);
+ assert.equal((await request(route+'?containers=--bad&path=/tmp/project')).status,400);
+ db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
+ try{assert.equal((await request(route+'?containers=fixture&path=/tmp/project')).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
+});
 
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);

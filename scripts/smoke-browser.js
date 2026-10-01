@@ -150,7 +150,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await detailsDialog.waitFor({state:'hidden'});
   await page.getByRole('row').filter({hasText:'DemoBlog_srv'}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -158,6 +158,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.deepEqual(body.config.containers,['shop','shop-db']);
     assert.equal(body.config.stagingRoot,'/var/lib/docknest');
     assert.deepEqual(body.config.domains,['shop.example.org']);
+    assert.deepEqual(body.config.composeFiles,['/srv/shop/docker-compose.yml']);
+    assert.deepEqual(body.config.configFiles,['/srv/shop/.env','/srv/shop/config/app.json']);
     assert.equal(body.config.exclusiveSourcesConfirmed,true);assert.equal(body.config.cleanShutdownConfirmed,true);assert.equal(body.config.externalReferencesConfirmed,true);
     fixtureSites=[{id:'fixture-site',...body}];
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
@@ -185,6 +187,16 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.setViewportSize({width:1440,height:960});
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
+  assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
+  await page.route('**/api/servers/host-one/project-files?**',route=>{
+    const path=new URL(route.request().url()).searchParams.get('path');
+    return route.fulfill({json:path==='/srv/shop/config'?{directory:path,parent:'/srv/shop',entries:[{name:'app.json',path:path+'/app.json',kind:'file',selectable:true}]}:{directory:'/srv/shop',parent:null,entries:[{name:'config',path:'/srv/shop/config',kind:'directory',selectable:false},{name:'.env',path:'/srv/shop/.env',kind:'file',selectable:true}]}});
+  });
+  await siteDialog.getByRole('button',{name:'Browse configuration files',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Open folder config',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select file app.json',exact:true}).click();
+  assert.ok((await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue()).includes('/srv/shop/config/app.json'),'Tree navigation adds the chosen file path');
   assert.equal(await siteDialog.getByLabel('Shutdown profile').isVisible(),false,'Optional configuration is collapsed by default');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByLabel('Domains (comma separated)').fill('https://shop.example.org/catalog/');
@@ -202,6 +214,18 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
+  await page.route('**/api/sites/fixture-site',route=>{
+    assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
+    assert.deepEqual(body.config.containers,['shop','shop-db']);assert.deepEqual(body.config.composeFiles,['/srv/shop/docker-compose.yml']);
+    assert.deepEqual(body.config.configFiles,['/srv/shop/.env','/srv/shop/config/app.json']);assert.equal(body.config.externalReferencesConfirmed,true);
+    fixtureSites=[{id:'fixture-site',...body}];return route.fulfill({json:fixtureSites[0]});
+  });
+  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
+  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop edited');
+  await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
+  await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
+  await siteDialog.getByRole('button',{name:'Save configuration',exact:true}).click();await siteDialog.waitFor({state:'hidden'});
   await page.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.getByLabel('Source server').selectOption('host-one');
   await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();

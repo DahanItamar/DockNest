@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,tarfile
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,tarfile,re
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -79,6 +79,47 @@ def recover(root,ids,cfg,deadline,parent):
         (root/'recovery.json').write_text(json.dumps({'recovered':True,'at':time.time()}))
     except Exception:
         (root/'recovery.json').write_text(json.dumps({'recovered':False,'at':time.time()}))
+def project_roots(container):
+    labels=container.get('Config',{}).get('Labels',{}) or {}
+    if not labels.get('com.docker.compose.project'):return []
+    paths=[labels.get('com.docker.compose.project.working_dir','')]
+    paths.extend(str(pathlib.Path(value.strip()).parent) for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip())
+    roots=[]
+    for value in paths:
+        p=pathlib.Path(value)
+        if not value or not p.is_absolute() or '..' in p.parts:continue
+        if str(p) in ['/', '/etc','/home','/root','/var','/srv','/opt','/tmp']:continue
+        if str(p).startswith(('/proc','/sys','/dev','/run')):continue
+        if p.is_dir() and os.path.realpath(p)==os.path.abspath(p) and str(p) not in roots:roots.append(str(p))
+    return roots
+
+def configuration_paths(container):
+    labels=container.get('Config',{}).get('Labels',{}) or {}
+    roots=project_roots(container)
+    def valid_file(value):
+        p=pathlib.Path(value)
+        return p.is_absolute() and '..' not in p.parts and any(p.is_relative_to(root) for root in roots) and p.is_file() and os.path.realpath(p)==os.path.abspath(p) and os.access(p,os.R_OK)
+    compose=[value.strip() for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip()]
+    configs=[str(pathlib.Path(root)/'.env') for root in roots if valid_file(str(pathlib.Path(root)/'.env'))]
+    return {'composeFiles':[value for value in compose if valid_file(value)],'configFiles':configs,'directory':roots[0] if roots else ''}
+
+def list_project_files(ids,directory=None):
+    if not ids or len(ids)>30 or not all(isinstance(value,str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',value) for value in ids):raise ValueError('Choose valid site containers')
+    roots=list(dict.fromkeys(root for container in inspect(ids) for root in project_roots(container)))
+    if not roots:raise ValueError('No project configuration folder was detected. Enter the file paths manually.')
+    p=pathlib.Path(directory or roots[0])
+    if not p.is_absolute() or '..' in p.parts or not any(p.is_relative_to(root) for root in roots):raise ValueError('Choose a folder inside this site\'s detected project directory')
+    if os.path.realpath(p)!=os.path.abspath(p) or not p.is_dir():raise ValueError('Choose a regular project folder, not a symbolic link')
+    entries=[]
+    with os.scandir(p) as items:
+        for item in items:
+            kind='link' if item.is_symlink() else 'directory' if item.is_dir(follow_symlinks=False) else 'file' if item.is_file(follow_symlinks=False) else 'other'
+            entry_path=str(p/item.name)
+            entries.append({'name':item.name,'path':entry_path,'kind':kind,'selectable':kind=='file' and bool(re.fullmatch(r'/[a-zA-Z0-9_./-]+',entry_path))})
+    entries.sort(key=lambda item:(item['kind']!='directory',item['name'].lower()))
+    parent=str(p.parent) if any(p.parent.is_relative_to(root) for root in roots) else None
+    return {'directory':str(p),'parent':parent,'entries':entries[:500],'limited':len(entries)>500}
+
 def preflight(cfg):
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
@@ -93,7 +134,8 @@ def preflight(cfg):
         if c.get('HostConfig',{}).get('Tmpfs'):raise ValueError('tmpfs requires explicit capture adapter')
         if c.get('HostConfig',{}).get('Privileged') or c.get('HostConfig',{}).get('Devices'):raise ValueError('Privileged/device-backed containers require a capture adapter')
         if c.get('Config',{}).get('Labels',{}).get('com.docker.compose.project'):
-            if not cfg.get('composeFiles') or not cfg.get('externalReferencesConfirmed'):raise ValueError('Compose sites require explicit composeFiles, configFiles and externalReferencesConfirmed')
+            if not cfg.get('composeFiles'):raise ValueError('Select this site\'s Compose project files in Edit configuration before backing up. No files have been selected for this backup.')
+            if not cfg.get('externalReferencesConfirmed'):raise ValueError('Review the Compose and environment files in Edit configuration and confirm the dependencies before backing up.')
         for m in c['Mounts']:
             if m['Type'] not in ['bind','volume']:raise ValueError('Unsupported mount: '+m['Type'])
             if m['Type']=='volume':
@@ -339,7 +381,8 @@ def main(req):
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
         # Do not expose environment secrets to dashboard.
-        emit(result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'ports':c['NetworkSettings']['Ports']} for c in cs]})
+        emit(result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'ports':c['NetworkSettings']['Ports'],'backupConfiguration':configuration_paths(c)} for c in cs]})
+    elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='prepare-restore':prepare_restore(req)
     elif op=='restore':restore(req)

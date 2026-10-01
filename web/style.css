@@ -85,6 +85,15 @@ dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}.ap
 dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}
 
 /* Consistent spacing and alignment for actions throughout the dashboard. */
+.configuration-browser{margin:16px 0;padding:16px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface-muted)}
+.configuration-browser header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.configuration-path{display:block;margin:12px 0;overflow-wrap:anywhere}
+.configuration-tree{list-style:none;padding:0;margin:16px 0;max-height:280px;overflow:auto}
+.configuration-tree button{width:100%;justify-content:flex-start;white-space:normal;text-align:left;margin:4px 0}
+.configuration-tree button>span{margin-left:auto;color:var(--text-muted);font-size:11px}
+.configuration-tree svg{flex-shrink:0}
+.site-files{margin:20px 0;padding:16px;border:1px solid var(--border-subtle);border-radius:8px}
+.site-files .actions{margin-top:12px}
 .schedule-time{display:flex;align-items:flex-end;gap:12px;max-width:320px;margin:12px 0 20px}
 .schedule-time .field{flex:1;min-width:0;margin:0}
 .schedule-time>span{padding-bottom:12px;font-size:16px}

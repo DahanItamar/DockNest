@@ -13,6 +13,7 @@ import { CronExpressionParser } from 'cron-parser';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
+export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 export async function verifyRecovery(job){
  if(job.type==='restore'){
   const details=typeof job.details==='string'?JSON.parse(job.details):job.details;

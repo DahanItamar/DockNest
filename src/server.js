@@ -14,7 +14,7 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 
 export const app = express();
@@ -129,6 +129,11 @@ app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id));
   const containers = Array.isArray(result) ? result : result.containers || [];
   res.json({ containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
+});
+app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
+  const containers=siteSchema.shape.config.shape.containers.parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
+  const directory=linuxPath.optional().parse(req.query.path);
+  res.json(await browseProjectFiles(getServer(req.params.id),containers,directory));
 });
 function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();

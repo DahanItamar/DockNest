@@ -20,6 +20,10 @@ Upstream role reference: [Agency Frontend Developer](https://github.com/msitarze
 
 Changing servers clears the selected containers and discovery errors can be retried. Empty or failed discovery cannot save a site. Wizard navigation preserves entered settings. Discovery reads container information without stopping containers.
 
+**Edit configuration** reopens a saved site's details, containers and file selections. Compose discovery fills in readable project files from Docker labels and existing `.env` files in its project directories. The review lists those paths and requires dependency confirmation. File paths remain editable; missing Compose files block progressing from details. Existing health/maintenance configuration and backup options are preserved on edit.
+
+Administrators can use **Browse Compose files** or **Browse configuration files** to navigate and select files inside the selected containers' detected project folders. Folder roots are checked on the source server from Docker labels rather than trusted from the browser. Browsing returns names/paths only, refuses traversal and symbolic-link navigation, and cannot go above those roots. It does not display file contents. Standalone containers or unsupported paths use explicit manual entry.
+
 Verification: `npm run check` and `npm run test:browser`. Browser tests use isolated API fixtures for connection/discovery/site creation, covering both key options, the connection-to-site handoff, project and single-container cards, collapsed controls, replacing a selection, custom selection, settings preservation, discovery failure/retry, empty results, and desktop/mobile rendering. `TEST_SCREENSHOT_DIR` can redirect screenshots to a writable folder. They do not validate a real server connection or Linux Docker backup/restore.
 
 Site-selection and server-note refinement: production build and browser smoke passed on Windows, including desktop/mobile rendering. `npm run check` passed all 32 tests with the installed Python available outside the sandbox's PATH. No Linux Docker backup or restore was validated.

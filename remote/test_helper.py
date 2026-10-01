@@ -1,6 +1,30 @@
 import unittest, tempfile, pathlib, tarfile, io, urllib.error
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files
+
+class ConfigurationFileTests(unittest.TestCase):
+    def test_detection_and_browsing_return_paths_and_names_without_file_contents(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'project';root.mkdir();(root/'nested').mkdir()
+            (root/'docker-compose.yml').write_text('fixture definition')
+            (root/'.env').write_text('DO_NOT_EXPOSE_THIS_VALUE')
+            container={'Config':{'Labels':{'com.docker.compose.project':'fixture','com.docker.compose.project.working_dir':str(root),'com.docker.compose.project.config_files':str(root/'docker-compose.yml')}}}
+            detected=configuration_paths(container)
+            self.assertEqual(detected['composeFiles'],[str(root/'docker-compose.yml')])
+            self.assertEqual(detected['configFiles'],[str(root/'.env')])
+            with patch('helper.inspect',return_value=[container]):
+                listing=list_project_files(['fixture'])
+                self.assertIsNone(listing['parent'])
+                self.assertEqual({entry['name'] for entry in listing['entries']},{'.env','docker-compose.yml','nested'})
+                self.assertNotIn('DO_NOT_EXPOSE_THIS_VALUE',str(listing))
+                nested=list_project_files(['fixture'],str(root/'nested'))
+                self.assertEqual(nested['parent'],str(root))
+                with self.assertRaises(ValueError):list_project_files(['fixture'],d)
+                with self.assertRaises(ValueError):list_project_files(['fixture'],str(root/'..'))
+    def test_standalone_containers_and_unsafe_ids_cannot_enable_arbitrary_browsing(self):
+        with patch('helper.inspect',return_value=[{'Config':{'Labels':{}}}]):
+            with self.assertRaises(ValueError):list_project_files(['fixture'],'/')
+        with self.assertRaises(ValueError):list_project_files(['--unsafe'],'/')
 class ArchiveSecurityTests(unittest.TestCase):
     def test_valid_archive_preserves_file(self):
         with tempfile.TemporaryDirectory() as d:
