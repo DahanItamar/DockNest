@@ -1,0 +1,55 @@
+name: docker-backup-manager
+x-runtime: &runtime
+  build: .
+  image: docker-backup-manager:local
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: ["/tmp:size=256m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  environment:
+    NODE_ENV: production
+    PORT: 3000
+    DATA_DIR: /data
+    BACKUP_DIR: /backups
+    MASTER_KEY_FILE: /run/secrets/master_key
+    SETUP_TOKEN_FILE: /run/secrets/setup_token
+    APP_ORIGIN: ${APP_ORIGIN:?Configure the HTTPS dashboard origin before starting Compose}
+    SECURE_COOKIES: ${SECURE_COOKIES:-true}
+  volumes: ["state:/data", "backups:/backups"]
+  secrets: [master_key, setup_token]
+services:
+  api:
+    <<: *runtime
+    ports: ["127.0.0.1:3000:3000"]
+  worker:
+    <<: *runtime
+    command: ["node", "src/worker.js"]
+    depends_on: [api]
+  proxy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-backup.example.com}
+      EMAIL: ${EMAIL:-admin@example.com}
+    entrypoint: /bin/sh
+    command:
+      - -ec
+      - |
+        printf '%s\n' "{" "  email $$EMAIL" "}" "$$APP_DOMAIN {" "  reverse_proxy api:3000" "}" > /tmp/Caddyfile
+        exec caddy run --config /tmp/Caddyfile --adapter caddyfile
+    volumes: ["caddy_data:/data", "caddy_config:/config"]
+    depends_on: [api]
+secrets:
+  master_key:
+    file: ./data/master.key
+  setup_token:
+    file: ./data/setup.token
+volumes:
+  state:
+  backups:
+  caddy_data:
+  caddy_config:
