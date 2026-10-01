@@ -1,0 +1,15 @@
+import { db } from './db.js';
+import { config } from './config.js';
+import { mkdir, open, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { claimJob, executeJob, tickScheduler } from './engine.js';
+await mkdir(config.backupDir,{recursive:true,mode:0o700});
+// Single worker per storage directory. Lock is deliberately retained after an unclean death.
+const lock=join(config.dataDir,'worker.lock');
+let handle;try{handle=await open(lock,'wx',0o600);await handle.writeFile(String(process.pid));}catch{console.error('Worker lock exists. Verify old worker is stopped and inspect remote recovery before removing worker.lock.');process.exit(1);}
+db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
+let stopping=false;
+for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{stopping=true;});
+try{
+ while(!stopping){tickScheduler();const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,3000));}
+}finally{await handle.close();await unlink(lock);}
