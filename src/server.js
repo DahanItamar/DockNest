@@ -5,7 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from './config.js';
+import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
@@ -18,7 +18,7 @@ app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], 
 app.use(express.json({ limit: '128kb' }));
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin !== config.origin) return res.status(403).json({ error: 'Request origin does not match APP_ORIGIN.' });
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !trustedOrigins.has(req.headers.origin)) return res.status(403).json({ error: 'Request origin does not match APP_ORIGIN. Open the configured application address.' });
   next();
 });
 app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.json({ status: 'ok' }); });

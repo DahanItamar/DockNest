@@ -85,6 +85,18 @@ test('all private API routes reject anonymous and forged sessions before reading
   }
 });
 
+test('local loopback aliases work while foreign, missing and production alias origins remain blocked', async () => {
+  const { allowedOrigins } = await import('../src/config.js');
+  assert.deepEqual([...allowedOrigins('http://127.0.0.1:3000',true)],['http://127.0.0.1:3000']);
+  assert.deepEqual([...allowedOrigins('https://backup.example.org',false)],['https://backup.example.org']);
+  for(const Origin of ['http://localhost:3000','http://127.0.0.1:3000']){
+    assert.equal((await request('/auth/login',{password:'wrong'},{headers:{Origin}})).status,401);
+  }
+  for(const Origin of ['http://localhost:3001','http://localhost.attacker.invalid:3000','https://localhost:3000','null','']){
+    assert.equal((await request('/auth/login',{password:'wrong'},{headers:{Origin}})).status,403);
+  }
+});
+
 test('authenticated secret encryption and RFC 6238 counter vector', () => {
   const value = seal('private ssh material'); assert.equal(open(value), 'private ssh material');
   const tampered = Buffer.from(value, 'base64'); tampered[15] ^= 1;

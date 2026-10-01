@@ -7,6 +7,19 @@ const dataDir = path.resolve(process.env.DATA_DIR || 'data');
 const origin = process.env.APP_ORIGIN || 'http://127.0.0.1:3000';
 const url = new URL(origin);
 if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) throw new Error('APP_ORIGIN must be an HTTP(S) origin without a trailing slash');
+export function allowedOrigins(appOrigin, production = process.env.NODE_ENV === 'production') {
+  const configured = new URL(appOrigin);
+  const origins = new Set([configured.origin]);
+  if (!production && ['localhost', '127.0.0.1'].includes(configured.hostname)) {
+    for (const hostname of ['localhost', '127.0.0.1']) {
+      const alias = new URL(configured.origin);
+      alias.hostname = hostname;
+      origins.add(alias.origin);
+    }
+  }
+  return origins;
+}
+export const trustedOrigins = allowedOrigins(origin);
 export const config = {
   dataDir,
   backupDir: path.resolve(process.env.BACKUP_DIR || path.join(dataDir, 'backups')),
