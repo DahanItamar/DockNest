@@ -6,6 +6,7 @@ import { config } from '../src/config.js';
 import { passwordHash, seal, open, base32, digest, verifyTotp } from '../src/crypto.js';
 import { qrEnrollment } from '../src/auth.js';
 
+async function main() {
 // Secrets arrive on stdin, never in process arguments or environment variables.
 let input='';for await(const chunk of process.stdin)input+=chunk;
 const data=JSON.parse(input), mode=process.argv[2];
@@ -47,3 +48,16 @@ if(mode==='password'){
  fs.rmSync(file,{force:true});console.log(JSON.stringify({enrolled:true}));
 }else throw new Error('Unknown setup operation.');
 db.close();
+
+}
+main().catch(error=>{
+ const safeMessages=['Choose a password between 14 and 256 characters.','No active administrator exists. Restore an administrator before continuing.','Invalid authenticator code. Run setup again to retry.','Unknown setup operation.'];
+ const message=safeMessages.includes(error.message)?error.message:
+  error instanceof SyntaxError?'Could not read the password input. Please rerun the PowerShell script.':
+  /locked|busy/i.test(error.message)?'The database is busy. Close the running API and worker, then retry.':
+  error.code==='EACCES'||error.code==='EPERM'?'Windows denied access to the project data files. Run from your Windows account and check project permissions.':
+  error.code==='ENOENT'?'A required setup file is missing. Run npm.cmd run setup, then retry.':
+  'Administrator setup failed. Check Node.js 24 or newer and access to the project data directory.';
+ console.log(JSON.stringify({error:message}));
+ process.exitCode=1;
+});
