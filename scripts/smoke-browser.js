@@ -119,6 +119,7 @@ try {
     if(mode==='new'){
       await page.route('**/api/servers/fixture-server/discover',route=>route.fulfill({json:{containers:[{name:'first-site',image:'app:latest',state:{status:'running'}}]}}));
       await dialog.getByRole('button',{name:'Add a site',exact:true}).click();
+      await dialog.getByText('Choose a primary container manually',{exact:true}).click();
       await dialog.getByLabel('Docker container (site)').waitFor();
       assert.equal(await dialog.getByLabel('Source server').inputValue(),'fixture-server','Successful connection hands off the chosen server');
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -129,7 +130,7 @@ try {
   // Site discovery and save are browser fixtures; no containers are stopped or backed up.
   fixtureServers=[{id:'host-one',name:'Production'},{id:'host-two',name:'Other server'}];
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running'}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -145,9 +146,10 @@ try {
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
-  await siteDialog.getByText('Include other containers in this site (optional)',{exact:true}).click();
-  await siteDialog.getByRole('checkbox',{name:'shop-db'}).check();
+  await siteDialog.getByRole('button',{name:'Select all in shop',exact:true}).click();
+  assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true);
+  await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
+  await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
   await page.screenshot({path:'data/screenshots/site-selection-desktop.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Site selection fits mobile');
@@ -167,6 +169,11 @@ try {
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
   await page.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.getByLabel('Source server').selectOption('host-one');
+  await siteDialog.getByRole('button',{name:'Select all in shop',exact:true}).click();
+  assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true,'Compose project selects its database');
+  await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
+  await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
+  await siteDialog.getByText('Choose a primary container manually',{exact:true}).click();
   await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
   await siteDialog.getByLabel('Source server').selectOption('host-two');
   await siteDialog.getByRole('alert').getByText('The server is unavailable. Retry the connection.',{exact:true}).waitFor();
