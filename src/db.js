@@ -26,6 +26,32 @@ CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,created_at);
 CREATE INDEX IF NOT EXISTS backups_site ON backups(site_id,created_at);
 CREATE INDEX IF NOT EXISTS audit_date ON audit_events(created_at);
 `);
+// Additive, serialized migration preserves existing administrators and sessions.
+db.exec('BEGIN IMMEDIATE');
+try {
+  const extend = (table, columns) => {
+    const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
+    for (const [name, definition] of Object.entries(columns)) if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+  };
+  extend('users', { name: "TEXT NOT NULL DEFAULT ''", role: "TEXT NOT NULL DEFAULT 'operator'", disabled: 'INTEGER NOT NULL DEFAULT 0', revoked_at: 'TEXT' });
+  extend('sessions', { last_activity_at: 'INTEGER NOT NULL DEFAULT 0', created_at: 'INTEGER NOT NULL DEFAULT 0', authenticated_at: 'INTEGER NOT NULL DEFAULT 0' });
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS login_challenges (token_hash TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,credential_epoch INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),token_hash TEXT UNIQUE NOT NULL,expires_at INTEGER NOT NULL,created_at TEXT NOT NULL,created_by TEXT NOT NULL,revoked_at INTEGER,consumed_at INTEGER,attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS enrollment_challenges (token_hash TEXT PRIMARY KEY,invitation_id TEXT NOT NULL REFERENCES invitations(id),expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS invitations_user ON invitations(user_id,created_at);
+    CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+  `);
+  db.prepare("UPDATE users SET name=email WHERE name=''").run();
+  const firstUser = db.prepare('SELECT * FROM users ORDER BY created_at,id LIMIT 1').get();
+  if (firstUser && !db.prepare("SELECT 1 FROM users WHERE role='admin'").get()) db.prepare("UPDATE users SET role='admin' WHERE id=?").run(firstUser.id);
+  if (firstUser && !db.prepare("SELECT 1 FROM settings WHERE key='shared_password_hash'").get()) db.prepare("INSERT INTO settings VALUES ('shared_password_hash',?)").run(firstUser.password_hash);
+  db.prepare("INSERT OR IGNORE INTO settings VALUES ('auth_epoch','0')").run();
+  // Legacy sessions lack trustworthy idle/re-auth timestamps; require a fresh login.
+  db.prepare('DELETE FROM sessions WHERE created_at=0').run();
+  db.prepare('DELETE FROM challenges').run();
+  db.exec('COMMIT');
+} catch (error) { db.exec('ROLLBACK'); throw error; }
 export const id = () => randomUUID();
 export function parse(row) {
   if (!row) return row;

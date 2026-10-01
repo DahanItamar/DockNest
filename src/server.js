@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
-import { auth, session, requireAuth, csrf, rateLimit } from './auth.js';
+import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
+import { access } from './access.js';
 import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance } from './engine.js';
 
 export const app = express();
@@ -24,6 +25,7 @@ app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.json({ st
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
+app.use('/api/access', access);
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
@@ -68,12 +70,12 @@ app.get('/api/state', (_req, res) => {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), sites: db.prepare('SELECT * FROM sites ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), storage: { used: backups.reduce((sum, b) => sum + b.size, 0), total: Number(storage.blocks) * Number(storage.bsize), available: Number(storage.bavail) * Number(storage.bsize) }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
 });
-app.post('/api/servers', (req, res) => {
+app.post('/api/servers', requireAdmin, (req, res) => {
   const data = serverSchema.parse(req.body), serverId = id();
   db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES (?,?,?,?,?,?,?,?)').run(serverId, data.name, data.host, data.port, data.username, seal(data.privateKey), fingerprint(data.hostKey), now());
   audit(req.user.id, 'server.create', serverId); res.status(201).json(safeServer(getServer(serverId)));
 });
-app.patch('/api/servers/:id', (req, res) => {
+app.patch('/api/servers/:id', requireAdmin, (req, res) => {
   const previous = getServer(req.params.id);
   const data = serverSchema.extend({ privateKey: serverSchema.shape.privateKey.optional(), hostKeyConfirmation: z.literal(true).optional() }).parse(req.body);
   if (fingerprint(data.hostKey) !== previous.host_key && !data.hostKeyConfirmation) return res.status(409).json({ error: 'SSH host key changed. Verify the new fingerprint independently and explicitly confirm the change.' });
