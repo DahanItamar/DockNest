@@ -8,8 +8,10 @@ page.on('pageerror', error => problems.push(error.message));
 await mkdir('data/screenshots', { recursive: true });
 try {
   await page.goto('http://127.0.0.1:3000');
-  await page.getByRole('heading', { name: 'Set up your administrator' }).waitFor();
-  await page.getByLabel('First-run setup token').waitFor();
+  await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+  await page.getByLabel('Password', { exact: true }).waitFor();
+  await page.getByLabel('2FA code').waitFor();
+  assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
   await page.screenshot({ path: 'data/screenshots/setup-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Setup must fit mobile viewport');

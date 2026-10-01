@@ -1,10 +1,10 @@
 # Authentication and access
 
-The system uses one shared system password plus a separate authenticator identity for each authorized person. Login asks for the shared password, then a six-digit TOTP code or an unused personal recovery code. The second factor identifies the person's account and role. Knowing the shared password alone does not grant access.
+The system uses one shared system password plus a separate authenticator identity for each authorized person. Login asks for the shared password and a six-digit TOTP code together, or an unused personal recovery code. The second factor identifies the person's account and role. Knowing the shared password alone does not grant access.
 
 ## Enrollment and account lifetime
 
-The first administrator is created using the local one-time setup token. If first enrollment is interrupted, resuming it requires that setup token again; the shared password alone cannot expose the pending administrator’s authenticator. Administrators create named operator invitations in Access management. An invitation expires after 15 minutes and can be used once. Its enrollment URL places the opaque token in a browser fragment; the browser submits it only to the enrollment endpoints.
+The first administrator is provisioned through the local PowerShell setup command. It prompts for the selected password, opens a temporary local QR/recovery page, and requires a valid authenticator code before activating the administrator. The QR file is deleted after confirmation. The web login only shows Password and 2FA code. The legacy API setup route still requires the local setup token; it cannot expose a pending administrator authenticator with the shared password alone. Administrators create named operator invitations in Access management. An invitation expires after 15 minutes and can be used once. Its enrollment URL places the opaque token in a browser fragment; the browser submits it only to the enrollment endpoints.
 
 The invited person opens the link, enters the shared password, scans the locally generated authenticator QR, and confirms a code. Password verification produces a short-lived enrollment proof required for confirmation. An account awaiting enrollment cannot log in. Save the resulting personal recovery codes privately; each works once. The administrator distributes the invitation and shared password through their chosen private channels: this application does not send email invitations automatically.
 

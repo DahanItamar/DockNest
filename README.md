@@ -21,7 +21,15 @@ Start the separate scheduler/worker in another terminal:
 npm run worker
 ```
 
-Open http://127.0.0.1:3000. Read the one-time setup token from `data/setup.token`, create your admin account, enroll an authenticator, and save the recovery codes privately. Later logins require the shared system password and your personal six-digit authenticator code (or an unused recovery code); the code identifies your named account. Keep the PC and phone clocks correct.
+On Windows, set your chosen main password locally:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\set-admin-password.ps1
+```
+
+The command prompts privately for the password twice. On first setup, it opens a local administrator QR page. Scan it with your authenticator, save the recovery codes, and enter the six-digit code in PowerShell. The temporary QR file is deleted after confirmation. If setup is interrupted, rerun the command. For an existing enrolled administrator, this command changes only the shared password and preserves the authenticator; it signs out everyone and invalidates pending invitations.
+
+Open http://127.0.0.1:3000. Login has exactly two fields: Password and 2FA code, submitted together. The code identifies your named account; an unused recovery code also works. Keep the PC and phone clocks correct.
 
 Administrators use Access management to create named operator invitations. Each QR enrollment link expires after 15 minutes and can be redeemed once; enrolled accounts remain valid until revoked. The invited person enters the shared password, scans the authenticator QR, and confirms a code. The app does not send invitations by email automatically. Revoking a person immediately ends their sessions. Rotating the shared password signs everyone out and invalidates pending invitations.
 
