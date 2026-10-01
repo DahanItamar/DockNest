@@ -1,6 +1,7 @@
 import { Client } from 'ssh2';
 import { open } from './crypto.js';
 import { readFile } from 'node:fs/promises';
+import { sftpWriteStream } from './sftp-streams.js';
 const helper = new URL('../remote/helper.py', import.meta.url);
 export function connect(server) {
   return new Promise((resolve,reject)=>{
@@ -50,7 +51,14 @@ export async function upload(server,localPath,remotePath) {
   if(err)return reject(err);
   import('node:stream/promises').then(async({pipeline})=>{
    const {createReadStream}=await import('node:fs');
-   await pipeline(createReadStream(localPath),sftp.createWriteStream(remotePath,{flags:'wx',mode:0o600}));
+   await pipeline(createReadStream(localPath),sftpWriteStream(sftp,remotePath));
   }).then(resolve,reject);
+ }));}finally{client.end();}
+}
+export async function uploadStream(server,input,remotePath) {
+ const client=await connect(server);
+ try{return await new Promise((resolve,reject)=>client.sftp((error,sftp)=>{
+  if(error)return reject(error);
+  import('node:stream/promises').then(({pipeline})=>pipeline(input,sftpWriteStream(sftp,remotePath))).then(resolve,reject);
  }));}finally{client.end();}
 }

@@ -5,13 +5,16 @@ import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pipeline } from 'node:stream/promises';
+import { storageCapacity, statFile, openRead } from './storage.js';
+import { storageTargets } from './storage-targets.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance } from './engine.js';
+import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -27,6 +30,7 @@ app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
 app.use('/api/access', access);
+app.use('/api/storage-targets',storageTargets);
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
@@ -41,22 +45,24 @@ const view = row => {
   if (converted.target) converted.targetId = converted.target;
   return converted;
 };
+const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.');
+const healthUrl = z.string().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Use an HTTP(S) URL without embedded credentials.');
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).min(1).max(30),
-    stagingRoot: z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).default('/var/lib/docknest'),
+    stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').default('/var/lib/docknest'),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
-    configFiles: z.array(z.string().regex(/^\/[a-zA-Z0-9_./-]+$/)).max(50).default([]),
-    composeFiles: z.array(z.string().regex(/^\/[a-zA-Z0-9_./-]+$/)).max(20).default([]),
+    configFiles: z.array(linuxPath).max(50).default([]),
+    composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),
     domains: z.array(z.string().regex(/^[a-zA-Z0-9.-]+$/)).max(20).default([]),
-    healthUrl: z.string().max(2048).default(''),
-    maintenance: z.object({ required: z.boolean(), directory: z.string().regex(/^\/[a-zA-Z0-9_./-]+$/), publicUrl: z.string().max(2048), healthUrl: z.string().max(2048) }).optional(),
+    healthUrl: healthUrl.default(''),
+    maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl }).optional(),
   }),
 });
 const serverSchema = z.object({
@@ -65,11 +71,15 @@ const serverSchema = z.object({
   privateKey: z.string().min(50).max(30000), hostKey: z.string().regex(/^(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+/]{43}=?)$/),
 });
 const fingerprint = value => value.startsWith('SHA256:') ? Buffer.from(value.slice(7), 'base64').toString('hex') : value.toLowerCase();
-app.get('/api/state', (_req, res) => {
-  const storage = statfsSync(config.backupDir);
+app.get('/api/state', async (_req, res) => {
   const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC LIMIT 1000').all().map(parse);
+  const storedBytes = db.prepare('SELECT COALESCE(SUM(size),0) AS total FROM backups').get().total;
+  const storage = await storageCapacity(storedBytes);
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), sites: db.prepare('SELECT * FROM sites ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), storage: { used: backups.reduce((sum, b) => sum + b.size, 0), total: Number(storage.blocks) * Number(storage.bsize), available: Number(storage.bavail) * Number(storage.bsize) }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
+  const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
+  const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
+  worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), sites: db.prepare('SELECT * FROM sites ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -147,30 +157,38 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   const site = getSite(job.site_id);
   const data = z.object({ confirmation: z.string(), reviewedRemoteRecovery: z.literal(true) }).parse(req.body);
   if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the site name and review its remote recovery before acknowledging.' });
-  const result = await discover(getServer(site.server_id));
-  const containers = Array.isArray(result) ? result : result.containers || [];
-  const configured = site.config.containers.map(name => containers.find(c => c.id === name || c.name === name || c.Id === name || c.Name?.replace(/^\//, '') === name));
-  if (configured.some(c => !c || !(c.running ?? c.State?.Running) || (c.health && c.health !== 'healthy') || (c.State?.Health && c.State.Health.Status !== 'healthy'))) return res.status(409).json({ error: 'One or more site containers have not recovered. Inspect the Linux host.' });
-  db.prepare("UPDATE jobs SET status='failed',stage='failed',error='Recovery reviewed and containers verified running' WHERE id=?").run(job.id);
-  audit(req.user.id, 'job.recovery_acknowledged', job.id); res.json({ status: 'failed', recoveryReviewed: true });
+  const result = await verifyRecovery(job);
+  if(job.type==='restore'){
+    const details=JSON.parse(job.details);
+    db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(details.restoreId);
+  }
+  db.prepare("UPDATE jobs SET status='failed',stage='failed',error='Remote recovery reviewed and verified' WHERE id=?").run(job.id);
+  audit(req.user.id, 'job.recovery_acknowledged', job.id); res.json({ status: 'failed', ...result });
 });
-app.get('/api/backups/:id/download', (req, res, next) => {
-  const leaseId = id();
-  const backup = transaction(() => {
-    const row = db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id) || notFound('Verified backup not found.');
-    db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId, row.id, Date.now() + 120000);
+app.get('/api/backups/:id/download', async (req, res, next) => {
+  const leaseId=id();
+  const backup=transaction(()=>{
+    const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id)||notFound('Verified backup not found.');
+    db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId,row.id,Date.now()+120000);
     return row;
   });
-  const storage = realpathSync(config.backupDir), file = realpathSync(backup.path);
-  const relative = path.relative(storage, file);
-  if (relative.startsWith('..') || path.isAbsolute(relative) || !statSync(file).isFile()) throw new Error('Backup path is outside managed storage.');
-  const interval = setInterval(() => db.prepare('UPDATE downloads SET expires_at=? WHERE id=?').run(Date.now() + 120000, leaseId), 30000);
-  let cleared = false;
-  const clear = () => { if (cleared) return; cleared = true; clearInterval(interval); db.prepare('DELETE FROM downloads WHERE id=?').run(leaseId); };
-  res.once('close', clear); res.once('finish', clear);
-  audit(req.user.id, 'backup.download', backup.id, { range: Boolean(req.headers.range) });
-  res.set('X-Backup-SHA256', backup.checksum);
-  res.download(file, `${backup.site_id}_${backup.id}.enc`, error => { clear(); if (error && !res.headersSent) next(error); });
+  let cleared=false;
+  const interval=setInterval(()=>db.prepare('UPDATE downloads SET expires_at=? WHERE id=?').run(Date.now()+120000,leaseId),30000);
+  const clear=()=>{if(cleared)return;cleared=true;clearInterval(interval);db.prepare('DELETE FROM downloads WHERE id=?').run(leaseId);};
+  res.once('close',clear);res.once('finish',clear);
+  try{
+    const attrs=await statFile(backup.path),size=attrs.size,etag='"'+backup.checksum+'"';
+    let start=0,end=size-1;
+    const range=req.method!=='HEAD'&&req.headers.range&&(!req.headers['if-range']||req.headers['if-range']===etag)?req.range(size):null;
+    if(range===-1||range===-2||(Array.isArray(range)&&range.length!==1)){res.set('Content-Range','bytes */'+size);return res.status(416).end();}
+    if(Array.isArray(range)&&range.type==='bytes'){start=range[0].start;end=range[0].end;res.status(206);res.set('Content-Range','bytes '+start+'-'+end+'/'+size);}
+    res.attachment(backup.site_id+'_'+backup.id+'.enc');
+    res.set({'Content-Type':'application/octet-stream','Content-Length':String(end-start+1),'Accept-Ranges':'bytes','ETag':etag,'X-Backup-SHA256':backup.checksum});
+    audit(req.user.id,'backup.download',backup.id,{range:res.statusCode===206});
+    if(req.method==='HEAD')return res.end();
+    await pipeline(await openRead(backup.path,{start,end}),res);
+  }catch(error){if(!res.headersSent)next(error);else res.destroy();}
+  finally{clear();}
 });
 app.post('/api/backups/:id/pin', (req, res) => {
   const data = z.object({ pinned: z.boolean() }).parse(req.body);
@@ -209,5 +227,5 @@ app.use((error, req, res, _next) => {
   res.status(error.status || (error instanceof SyntaxError ? 400 : 422)).json({ error: message || 'Operation failed.' });
 });
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  app.listen(config.port, '0.0.0.0', () => console.log(`DockNest listening on port ${config.port}`));
+  app.listen(config.port, config.host, () => console.log(`DockNest listening on port ${config.port}`));
 }

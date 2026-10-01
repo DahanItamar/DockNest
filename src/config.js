@@ -27,8 +27,23 @@ export const config = {
   setupTokenFile: process.env.SETUP_TOKEN_FILE || path.join(dataDir, 'setup.token'),
   origin,
   port: Number(process.env.PORT || 3000),
+  host: process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1'),
+  storage: {
+    mode:process.env.BACKUP_STORAGE || 'unconfigured',
+    host:process.env.STORAGE_HOST || '',port:Number(process.env.STORAGE_PORT || 23),username:process.env.STORAGE_USERNAME || '',
+    hostKey:process.env.STORAGE_HOST_KEY_SHA256 || '',keyFile:process.env.STORAGE_PRIVATE_KEY_FILE || '',passwordFile:process.env.STORAGE_PASSWORD_FILE || '',
+    root:process.env.STORAGE_ROOT || '/home/docknest',capacity:Number(process.env.STORAGE_CAPACITY_BYTES || 1000000000000),
+  },
   secureCookies: process.env.SECURE_COOKIES !== 'false',
 };
 if (process.env.NODE_ENV === 'production' && (!config.secureCookies || url.protocol !== 'https:')) throw new Error('Production requires HTTPS APP_ORIGIN and Secure cookies');
 fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-fs.mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });
+if(!['unconfigured','local','sftp'].includes(config.storage.mode))throw new Error('BACKUP_STORAGE must be unconfigured or sftp');
+if(config.storage.mode==='local'&&process.env.NODE_ENV!=='test'&&process.env.ALLOW_LOCAL_BACKUP_STORAGE!=='true')throw new Error('Local backup storage is disabled. Connect a remote destination in Storage.');
+if(config.storage.mode==='sftp'){
+ if(!/^\/[a-zA-Z0-9_./-]+$/.test(config.storage.root)||config.storage.root==='/'||config.storage.root.split('/').includes('..'))throw new Error('STORAGE_ROOT must be a dedicated absolute directory without traversal');
+ if(!/^[a-f0-9]{64}$/i.test(config.storage.hostKey))throw new Error('STORAGE_HOST_KEY_SHA256 must be an independently verified SHA256 hex fingerprint');
+ if(!config.storage.host||!config.storage.username||(!config.storage.keyFile&&!config.storage.passwordFile))throw new Error('SFTP storage requires a host, username and mounted credential file');
+ if(!Number.isSafeInteger(config.storage.capacity)||config.storage.capacity<=0||!Number.isInteger(config.storage.port)||config.storage.port<1||config.storage.port>65535)throw new Error('Invalid Storage Box port or capacity');
+}
+if(config.storage.mode==='local')fs.mkdirSync(config.backupDir, { recursive: true, mode: 0o700 });

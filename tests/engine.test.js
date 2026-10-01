@@ -8,6 +8,9 @@ import { Readable } from 'node:stream';
 import { createWriteStream } from 'node:fs';
 const temporary=await mkdtemp(join(tmpdir(),'dbm-engine-'));
 process.env.DATA_DIR=join(temporary,'data');
+process.env.BACKUP_DIR=temporary;
+process.env.BACKUP_STORAGE='local';
+process.env.NODE_ENV='test';
 const {encryptStream,verifyEncrypted}=await import('../src/engine.js');
 test('authenticated streaming backup rejects tampering, truncation and wrong key',async()=>{
  const secret=randomBytes(32),file=join(temporary,'capture.enc');
@@ -45,5 +48,41 @@ test('retention keeps pinned backups and active downloads then prunes oldest',as
  db.prepare("DELETE FROM downloads WHERE id='active-download'").run();await retain('site-a');
  assert.equal(db.prepare("SELECT count(*) AS n FROM backups WHERE site_id='site-a'").get().n,8);
  await assert.rejects(readFile(join(config.backupDir,'retention-0.enc')),/ENOENT/);
+});
+
+test('scheduler keeps due work during overlap and catches up once without duplicate jobs',async()=>{
+ const {db}=await import('../src/db.js');const {tickScheduler}=await import('../src/engine.js');
+ const currentDate=new Date('2026-03-08T07:30:00Z');
+ db.prepare("UPDATE jobs SET status='completed'").run();
+ db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone,retention,next_run) VALUES('site-c',1,'30 2 * * *','America/New_York',7,?)").run('2026-03-07T07:30:00Z');
+ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('scheduler-overlap','site-c','backup','running','copying',?)").run(currentDate.toISOString());
+ tickScheduler(currentDate);
+ assert.equal(db.prepare("SELECT next_run FROM policies WHERE site_id='site-c'").get().next_run,'2026-03-07T07:30:00Z');
+ db.prepare("UPDATE jobs SET status='completed' WHERE id='scheduler-overlap'").run();
+ tickScheduler(currentDate);tickScheduler(currentDate);
+ assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE site_id='site-c' AND status='queued'").get().n,1);
+ const next=db.prepare("SELECT next_run FROM policies WHERE site_id='site-c'").get().next_run;
+ assert.equal(next,'2026-03-09T06:30:00.000Z','Timezone offset follows the DST transition');
+ db.prepare("UPDATE policies SET enabled=0,next_run='2026-01-01T00:00:00Z' WHERE site_id='site-c'").run();
+ tickScheduler(currentDate);
+ assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE site_id='site-c' AND status='queued'").get().n,1);
+});
+
+test('retention protects active restores while keeping finished restore history after package pruning',async()=>{
+ const {db}=await import('../src/db.js');const {retain}=await import('../src/engine.js');const {config}=await import('../src/config.js');
+ const job=db.prepare("SELECT id FROM jobs WHERE site_id='site-b' LIMIT 1").get().id;
+ db.prepare("INSERT INTO policies VALUES('site-b',0,'0 0 * * *','UTC',1,NULL)").run();
+ for(let i=0;i<3;i++){
+  const file=join(config.backupDir,'restore-retention-'+i+'.enc');await writeFile(file,'fixture');
+  db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('restore-retention-'+i,'site-b',job,new Date(2026,0,i+1).toISOString(),file,7,'fixture','{}',0,1,new Date().toISOString());
+ }
+ for(const [name,backup,status] of [['historic','restore-retention-0','completed'],['active','restore-retention-1','running']])db.prepare('INSERT INTO restores VALUES(?,?,?,?,?,?,?)').run(name,backup,'server-b','new-copy',JSON.stringify({backupId:backup}),status,new Date().toISOString());
+ await retain('site-b');
+ assert.equal(db.prepare("SELECT backup_id FROM restores WHERE id='historic'").get().backup_id,null);
+ assert.equal(JSON.parse(db.prepare("SELECT plan FROM restores WHERE id='historic'").get().plan).backupId,'restore-retention-0');
+ assert.ok(db.prepare("SELECT id FROM backups WHERE id='restore-retention-1'").get());
+ db.prepare("UPDATE restores SET status='failed' WHERE id='active'").run();await retain('site-b');
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM backups WHERE site_id='site-b'").get().n,1);
+ assert.equal(db.prepare("SELECT backup_id FROM restores WHERE id='active'").get().backup_id,null);
 });
 test.after(async()=>{const {db}=await import('../src/db.js');db.close();await rm(temporary,{recursive:true,force:true});});
