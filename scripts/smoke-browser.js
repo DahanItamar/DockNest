@@ -1,14 +1,17 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import { prepareServerKey, serverReportCommand } from '../src/server-onboarding.js';
 const baseUrl = process.env.TEST_BASE_URL || 'http://127.0.0.1:3000';
+const screenshotDir = process.env.TEST_SCREENSHOT_DIR || 'data/screenshots';
 const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
 const problems = [];
 page.on('pageerror', error => problems.push(error.message));
-await mkdir('data/screenshots', { recursive: true });
+await mkdir(screenshotDir, { recursive: true });
 try {
+  await page.route('**/api/auth/status',route=>route.fulfill({json:{authenticated:false,setupRequired:false}}));
   await page.goto(baseUrl);
   await page.getByRole('heading', { name: 'Sign in' }).waitFor();
   await page.getByLabel('Password', { exact: true }).waitFor();
@@ -30,19 +33,19 @@ try {
   }
   await checkContrast();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({ path: 'data/screenshots/setup-desktop.png', fullPage: true, animations: 'disabled' });
+await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Setup must fit mobile viewport');
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({ path: 'data/screenshots/setup-mobile.png', fullPage: true, animations: 'disabled' });
+  await page.screenshot({ path:path.join(screenshotDir,'setup-mobile.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
   await checkContrast();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/setup-dark-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'setup-dark-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/setup-dark-desktop.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'setup-dark-desktop.png'),fullPage:true,animations:'disabled'});
   await page.getByRole('button',{name:'Switch to light theme'}).click();
   await page.emulateMedia({reducedMotion:'reduce'});
   assert.equal(await page.evaluate(()=>getComputedStyle(document.body).transitionDuration),'0s','Reduced motion disables fallback transitions');
@@ -61,16 +64,16 @@ try {
   await page.reload();
   await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({ path: 'data/screenshots/dashboard-desktop.png', fullPage: true, animations: 'disabled' });
+  await page.screenshot({ path:path.join(screenshotDir,'dashboard-desktop.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
   await page.locator('img[src="/brand/logo-horizontal-dark.svg"]').waitFor();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/dashboard-dark-desktop.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Dark dashboard fits mobile');
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/dashboard-dark-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await page.getByRole('button',{name:'Switch to light theme'}).click();
   // Wizard requests stay inside browser fixtures; no real remote connection or key installation occurs.
@@ -107,11 +110,11 @@ try {
     await dialog.getByRole('button',{name:'Read server result'}).click();
     if(mode==='new'){
       await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/server-wizard-desktop.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'server-wizard-desktop.png'),fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Wizard fits mobile');
       await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:'data/screenshots/server-wizard-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'server-wizard-mobile.png'),fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:1440,height:960});
     }
     await dialog.getByRole('button',{name:'Test connection & save'}).click();
@@ -119,8 +122,8 @@ try {
     if(mode==='new'){
       await page.route('**/api/servers/fixture-server/discover',route=>route.fulfill({json:{containers:[{name:'first-site',image:'app:latest',state:{status:'running'}}]}}));
       await dialog.getByRole('button',{name:'Add a site',exact:true}).click();
-      await dialog.getByText('Choose a primary container manually',{exact:true}).click();
-      await dialog.getByLabel('Docker container (site)').waitFor();
+      await dialog.getByRole('button',{name:'Select site first-site',exact:true}).click();
+      assert.equal(await dialog.getByRole('button',{name:'Continue',exact:true}).isEnabled(),true,'A standalone site can be selected without technical controls');
       assert.equal(await dialog.getByLabel('Source server').inputValue(),'fixture-server','Successful connection hands off the chosen server');
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
     }else await dialog.getByRole('button',{name:'Done',exact:true}).click();
@@ -130,7 +133,7 @@ try {
   // Site discovery and save are browser fixtures; no containers are stopped or backed up.
   fixtureServers=[{id:'host-one',name:'Production'},{id:'host-two',name:'Other server'}];
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -146,17 +149,27 @@ try {
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select all in shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isVisible(),false,'Service controls stay collapsed during site selection');
+  await siteDialog.getByRole('button',{name:'Select site blog',exact:true}).click();
+  assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true,includeHidden:true}).isChecked(),false,'Choosing another site replaces the prior project');
+  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true);
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
-  await page.screenshot({path:'data/screenshots/site-selection-desktop.png',fullPage:true,animations:'disabled'});
+  await siteDialog.getByText('Review services in shop',{exact:true}).click();
+  await page.screenshot({path:path.join(screenshotDir,'site-selection-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Site selection fits mobile');
-  await page.screenshot({path:'data/screenshots/site-selection-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'site-selection-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  assert.equal(await siteDialog.getByLabel('Shutdown profile').isVisible(),false,'Optional configuration is collapsed by default');
+  await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
+  await siteDialog.getByLabel('Domains (comma separated)').fill('shop.example.org');
+  await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
@@ -164,16 +177,20 @@ try {
   await siteDialog.getByRole('checkbox',{name:/No containers or processes/}).check();
   await siteDialog.getByRole('button',{name:'Back',exact:true}).click();
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
+  await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
+  assert.equal(await siteDialog.getByLabel('Domains (comma separated)').inputValue(),'shop.example.org','Advanced settings survive navigation');
+  await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
   await page.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select all in shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true,'Compose project selects its database');
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
-  await siteDialog.getByText('Choose a primary container manually',{exact:true}).click();
+  await siteDialog.getByText('My site needs a custom selection',{exact:true}).click();
   await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
   await siteDialog.getByLabel('Source server').selectOption('host-two');
   await siteDialog.getByRole('alert').getByText('The server is unavailable. Retry the connection.',{exact:true}).waitFor();
@@ -212,10 +229,10 @@ try {
   await page.getByText('Server: Production',{exact:true}).waitFor();
   await page.getByText('2026-10-01 · 1 backup',{exact:true}).click();
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download'}).getAttribute('href'),'/api/backups/fixture-backup/download');
-  await page.screenshot({path:'data/screenshots/storage-desktop.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'storage-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
-  await page.screenshot({path:'data/screenshots/storage-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'storage-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
@@ -224,7 +241,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Dashboard must fit mobile viewport');
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({ path: 'data/screenshots/dashboard-mobile.png', fullPage: true, animations: 'disabled' });
+  await page.screenshot({ path:path.join(screenshotDir,'dashboard-mobile.png'), fullPage: true, animations: 'disabled' });
   assert.deepEqual(problems, [], 'No uncaught browser errors');
   const setupPage=await browser.newPage();
   await page.setViewportSize({width:1440,height:960});
@@ -236,10 +253,10 @@ try {
   const action=await identity.getByRole('button',{name:'Verify identity',exact:true}).boundingBox();
   const field=await identity.locator('input[name="password"]').boundingBox();
   assert.ok(action.y>=field.y+field.height+20,'Identity action is separated from input fields');
-  await page.screenshot({path:'data/screenshots/access-actions-desktop.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'access-actions-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Access actions fit mobile');
-  await page.screenshot({path:'data/screenshots/access-actions-mobile.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:path.join(screenshotDir,'access-actions-mobile.png'),fullPage:true,animations:'disabled'});
   let setupVerified=false;
   await setupPage.route('**/api/auth/status',route=>route.fulfill({json:{setupRequired:!setupVerified,authenticated:setupVerified,csrfToken:'fixture',user:{name:'QA',role:'admin'},serverTime:Date.now()}}));
   await setupPage.route('**/api/state',route=>route.fulfill({json:{servers:[],sites:[],jobs:[],backups:[],policies:[],audit:[],storage:{}}}));
