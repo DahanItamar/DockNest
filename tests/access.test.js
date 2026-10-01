@@ -84,6 +84,7 @@ test('shared password requires per-person factor; invitations activate only afte
   assert.equal(user.user.role,'operator');
   assert.equal((await request('/access',undefined,user)).status,403);
   assert.equal((await request('/access/invitations',{name:'Forbidden'},user)).status,403);
+  assert.equal((await request('/access/password',{currentPassword:password,newPassword:'1234'},user)).status,403,'regular users cannot change the shared password even by calling the API directly');
   assert.equal((await request('/servers',{name:'Forbidden host'},user)).status,403);
   assert.equal((await request('/auth/invite-info',{token:token(invitation)})).status,410);
 });
