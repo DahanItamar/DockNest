@@ -28,7 +28,7 @@ async function request(route, body, options = {}) {
 test('setup, mandatory 2FA, sessions, CSRF, replay protection and one-use recovery', async () => {
   assert.equal((await request('/state')).status, 401);
   assert.equal((await request('/backups/no-id/download')).status, 401);
-  const credentials = { email: 'owner@example.org', password: 'a-unique-long-passphrase' };
+  const credentials = { email: 'owner@example.org', password: 'auth-test-1234' };
   assert.equal((await request('/auth/setup', { ...credentials, setupToken: 'wrong-token' })).status, 403);
   assert.equal((await request('/auth/setup', { ...credentials, setupToken: 'integration-test-setup-token' }, { headers: { Origin: 'https://attacker.invalid' } })).status, 403);
   const setup = await request('/auth/setup', { ...credentials, setupToken: 'integration-test-setup-token' });
@@ -65,6 +65,26 @@ test('setup, mandatory 2FA, sessions, CSRF, replay protection and one-use recove
   const secondLogin = await request('/auth/login', credentials);
   assert.equal((await request('/auth/verify', { challenge: secondLogin.data.challenge, code: setup.data.recoveryCodes[0] })).status, 401);
 });
+test('all private API routes reject anonymous and forged sessions before reading data or running operations', async () => {
+  const routes = [
+    ['GET','/state'], ['GET','/servers/example/discover'], ['GET','/jobs/example'], ['GET','/backups/example/download'],
+    ['POST','/servers'], ['PATCH','/servers/example'], ['POST','/servers/example/test'],
+    ['POST','/sites'], ['PATCH','/sites/example'], ['POST','/sites/example/policy'], ['POST','/sites/example/backup'],
+    ['POST','/jobs/example/recovery'], ['POST','/backups/example/pin'], ['POST','/backups/example/restore-plan'], ['POST','/backups/example/restore'],
+    ['PATCH','/maintenance'], ['POST','/sites/example/maintenance'], ['POST','/sites/example/maintenance/deploy'],
+    ['GET','/access'], ['POST','/access/invitations'], ['POST','/access/users/example/invitation'], ['POST','/access/users/example/revoke'],
+    ['POST','/access/invitations/example/revoke'], ['POST','/access/password'],
+    ['POST','/auth/activity'], ['POST','/auth/reauth'], ['POST','/auth/logout'], ['GET','/unknown-private-route'],
+  ];
+  for(const cookie of ['', 'dbm_session='+ 'a'.repeat(43)]){
+    for(const [method,route] of routes){
+      const response=await fetch(base+route,{method,headers:{Origin:process.env.APP_ORIGIN,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(method==='GET'?{}:{body:'{}'})});
+      assert.equal(response.status,401,`${method} ${route} must require a valid session`);
+      assert.equal((await response.json()).user,undefined);
+    }
+  }
+});
+
 test('authenticated secret encryption and RFC 6238 counter vector', () => {
   const value = seal('private ssh material'); assert.equal(open(value), 'private ssh material');
   const tampered = Buffer.from(value, 'base64'); tampered[15] ^= 1;

@@ -16,7 +16,7 @@ const { totp, digest, seal } = await import('../src/crypto.js');
 const server = app.listen(0,'127.0.0.1');
 await new Promise(resolve => server.once('listening',resolve));
 const base = `http://127.0.0.1:${server.address().port}/api`;
-const password = 'shared-access-test-passphrase';
+const password = 'access-test-1234';
 let admin, initial;
 async function request(route, body, actor) {
   // Each scenario checks its own security invariant, independently of global throttle counters.
@@ -173,7 +173,10 @@ test('sensitive administration requires recent own-factor proof and password rot
   const pendingProof=await request('/auth/invite-start',{token:token(pending),password});
   assert.equal(pendingProof.status,200);
   const pendingLogin=await request('/auth/login',{password});
-  const changed=await request('/access/password',{currentPassword:password,newPassword:'rotated-unique-long-passphrase'},admin);
+  for(const newPassword of ['123','12345678901234567']) {
+    assert.equal((await request('/access/password',{currentPassword:password,newPassword},admin)).status,400);
+  }
+  const changed=await request('/access/password',{currentPassword:password,newPassword:'rotated-1234'},admin);
   assert.equal(changed.status,200);
   assert.equal((await request('/auth/invite-complete',{token:token(pending),enrollmentChallenge:pendingProof.data.enrollmentChallenge,code:totp(pendingProof.data.secret)})).status,410);
   assert.equal((await request('/auth/verify',{challenge:pendingLogin.data.challenge,code:enrolled.recoveryCodes[1]})).status,401);
@@ -181,7 +184,7 @@ test('sensitive administration requires recent own-factor proof and password rot
   assert.equal((await request('/state',undefined,user)).status,401);
   assert.equal((await request('/state',undefined,admin)).status,401);
   assert.equal((await request('/auth/login',{password})).status,401);
-  assert.equal((await request('/auth/login',{password:'rotated-unique-long-passphrase'})).status,200);
+  assert.equal((await request('/auth/login',{password:'rotated-1234'})).status,200);
 });
 test('legacy database migration preserves the first administrator password',async()=>{
   const { DatabaseSync } = await import('node:sqlite');
