@@ -15,6 +15,7 @@ import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './aut
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { normalizeDomain } from '../shared/domains.js';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -60,7 +61,7 @@ const siteSchema = z.object({
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),
-    domains: z.array(z.string().regex(/^[a-zA-Z0-9.-]+$/)).max(20).default([]),
+    domains: z.array(z.string().max(2048).transform(normalizeDomain).pipe(z.string().max(253).regex(/^[a-zA-Z0-9.-]+$/, 'Enter a domain such as www.blog.example.invalid, or paste an HTTP(S) website URL without login details.'))).max(20).default([]),
     healthUrl: healthUrl.default(''),
     maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl }).optional(),
   }),

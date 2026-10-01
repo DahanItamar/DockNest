@@ -4,6 +4,8 @@ Server names are optional and default to the address. With the dedicated key opt
 
 Each server also has an optional note (up to 200 characters), for a short title or reminder. Add it when connecting, or use **Servers → Edit details** to change the name and note later. Notes appear below the server name and in the site wizard's server dropdown. Clearing the name uses its address. Editing these details preserves the existing SSH settings and connection verification.
 
+Domains accept either a hostname or a copied HTTP(S) website URL. For example, `https://www.blog.example.invalid/` becomes `www.blog.example.invalid`. Multiple domains use commas. The form normalizes them when leaving the field and when saving; the API also normalizes website URLs. Invalid addresses receive a plain-language error.
+
 Docker group identity uses Compose project labels and Swarm stack namespace labels, including stopped containers returned by discovery. Compose and Swarm identities remain separate even with matching names. Swarm discovery covers only containers on the selected server, not the entire cluster. Containers without group labels require manual selection; names and shared networks are not proof of membership. Detection does not prove backup completeness.
 
 Upstream role reference: [Agency Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md), applied to clear defaults, accessible setup controls and responsive group selection. Used as design reference without spawning agents.

@@ -186,7 +186,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
   assert.equal(await siteDialog.getByLabel('Shutdown profile').isVisible(),false,'Optional configuration is collapsed by default');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
-  await siteDialog.getByLabel('Domains (comma separated)').fill('shop.example.org');
+  await siteDialog.getByLabel('Domains (comma separated)').fill('https://shop.example.org/catalog/');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();

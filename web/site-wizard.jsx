@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups} from './container-groups.js';
+import {normalizeDomain} from '../shared/domains.js';
 const containerStatus=container=>typeof container.state==='object'?container.state.status:container.state||container.State?.Status||'unknown';
 
 export function SiteWizard({api,Field,servers,initialServer='',onSaved,onCancel,onSessionExpired}) {
@@ -43,7 +44,7 @@ export function SiteWizard({api,Field,servers,initialServer='',onSaved,onCancel,
   setBusy(true);
   const paths=value=>value.split('\n').map(path=>path.trim()).filter(Boolean);
   try{
-   const site=await api('/sites',{serverId,name:settings.name,config:{containers:selected,stagingRoot:settings.stagingRoot,maintenanceRequired:true,domains:settings.domains.split(',').map(domain=>domain.trim()).filter(Boolean),healthUrl:settings.healthUrl,shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}});
+   const site=await api('/sites',{serverId,name:settings.name,config:{containers:selected,stagingRoot:settings.stagingRoot,maintenanceRequired:true,domains:settings.domains.split(',').map(normalizeDomain).filter(Boolean),healthUrl:settings.healthUrl,shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}});
    onSaved(site);
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
@@ -82,7 +83,7 @@ export function SiteWizard({api,Field,servers,initialServer='',onSaved,onCancel,
    <Field label="Application health URL" name="healthUrl" type="url" value={settings.healthUrl} onChange={update} required help="Use the URL that responds when this site is healthy, as reached from its source server."/>
    <p className="hint">The site name is filled in from your selection. Check the health URL so DockNest can tell when your site is back online after a backup.</p>
    <details><summary>Advanced backup settings</summary>
-    <Field label="Domains (comma separated)" name="domains" value={settings.domains} onChange={update} help="Used for the maintenance page. Add these before running a backup."/>
+    <Field label="Domains (comma separated)" name="domains" value={settings.domains} onChange={update} onBlur={()=>setSettings(previous=>({...previous,domains:previous.domains.split(',').map(normalizeDomain).filter(Boolean).join(', ')}))} help="Enter www.blog.example.invalid or paste https://www.blog.example.invalid. Separate multiple domains with commas. Used for the maintenance page."/>
     <Field label="Shutdown profile" name="shutdownProfile" value={settings.shutdownProfile} onChange={update} options={[[ 'generic','Generic services'],['postgres','PostgreSQL'],['mysql','MySQL']]} help="Generic requires you to verify clean shutdown in the next step. Choose a database profile only when it matches this site's database."/>
     <Field label="Staging directory" name="stagingRoot" value={settings.stagingRoot} onChange={update} required help="Temporary capture space on the source server. Permanent backups use the selected storage destination."/>
     <Field label="Compose and environment files (one absolute path per line)" name="configFiles" multiline value={settings.configFiles} onChange={update} help="Include configuration files required to recreate this site. Missing files block a complete backup."/>

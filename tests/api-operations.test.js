@@ -72,6 +72,19 @@ test('site and schedule validation reject unsafe paths, invalid URLs and invalid
  response=await request('/sites/'+site+'/policy',{method:'POST',body:JSON.stringify({enabled:true,schedule:'bad cron',timezone:'UTC',retention:7})});assert.ok(response.status>=400);
  response=await request('/sites/'+site+'/policy',{method:'POST',body:JSON.stringify({enabled:true,schedule:'0 2 * * *',timezone:'No/SuchZone',retention:7})});assert.ok(response.status>=400);
 });
+test('site domains accept copied website URLs and reject credentials or invalid addresses with plain guidance',async()=>{
+ const payload={serverId:host,name:'Domain fixture',config:{containers:['fixture'],domains:[' https://www.blog.example.invalid/ ','http://SHOP.example.org:8080/catalog','example.org/']}};
+ const response=await request('/sites',{method:'POST',body:JSON.stringify(payload)});
+ assert.equal(response.status,201);const created=await response.json();
+ assert.deepEqual(created.config.domains,['www.blog.example.invalid','shop.example.org','example.org']);
+ assert.equal(created.config.maintenance.publicUrl,'https://www.blog.example.invalid');
+ for(const domain of ['ftp://example.org/','https://user:fixture@example.org/','not a domain']){
+  const rejected=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:[domain]}})});
+  assert.equal(rejected.status,400);
+  const error=(await rejected.json()).error;assert.ok(error.includes('Enter a domain'));assert.ok(!error.includes('must match pattern'));assert.ok(!error.includes('fixture@example.org'));
+ }
+});
+
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);
  db.prepare("INSERT INTO settings VALUES('worker_heartbeat',?)").run(JSON.stringify({running:true,lastSeen:new Date().toISOString()}));
