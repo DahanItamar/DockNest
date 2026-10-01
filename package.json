@@ -1,5 +1,5 @@
 {
-  "name": "docker-backup-manager",
+  "name": "docknest",
   "version": "0.1.0",
   "private": true,
   "type": "module",

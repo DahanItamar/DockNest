@@ -209,5 +209,5 @@ app.use((error, req, res, _next) => {
   res.status(error.status || (error instanceof SyntaxError ? 400 : 422)).json({ error: message || 'Operation failed.' });
 });
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  app.listen(config.port, '0.0.0.0', () => console.log(`Docker Backup Manager listening on port ${config.port}`));
+  app.listen(config.port, '0.0.0.0', () => console.log(`DockNest listening on port ${config.port}`));
 }

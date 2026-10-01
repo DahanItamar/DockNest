@@ -63,3 +63,7 @@ node scripts/decrypt-backup.js payload.enc /secure/master.key recovered.tar.gz
 ```
 
 The tool streams into a restricted temporary file and publishes output only after AES-256-GCM authentication succeeds. It refuses to replace existing output. The format is 16-byte header (ASCII DBM1 plus 12-byte IV), ciphertext, and final 16-byte authentication tag; the header is authenticated additional data. The key file holds the base64-encoded 32-byte AES key. Inspect the bundled manifest and restore guide before extraction; never pipe unauthenticated plaintext into a tar extractor.
+
+## DockNest rename compatibility
+
+The application, image, and Compose project are now named DockNest/docknest. Compose explicitly preserves the original volume names so upgrades reuse existing SQLite state, backups, and Caddy certificates. The encrypted backup format, session cookie, existing remote staging paths, and existing authenticator secrets remain compatible. Newly issued authenticator QR labels use DockNest. Do not rename or delete those storage volumes during a branding update.

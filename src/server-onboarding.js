@@ -18,7 +18,7 @@ export async function prepareServerKey() {
  const {privateKey}=await promisify(generateKeyPair)('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs1',format:'pem'}});
  const parsed=utils.parseKey(privateKey);
  if(parsed instanceof Error)throw parsed;
- const publicKey=`ssh-rsa ${parsed.getPublicSSH().toString('base64')} docker-backup-manager`;
+ const publicKey=`ssh-rsa ${parsed.getPublicSSH().toString('base64')} docknest`;
  const installCommand=String.raw`set -eu
 umask 077
 mkdir -p "$HOME/.ssh"

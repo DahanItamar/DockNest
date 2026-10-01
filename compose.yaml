@@ -1,7 +1,7 @@
-name: docker-backup-manager
+name: docknest
 x-runtime: &runtime
   build: .
-  image: docker-backup-manager:local
+  image: docknest:local
   restart: unless-stopped
   init: true
   read_only: true
@@ -50,6 +50,10 @@ secrets:
     file: ./data/setup.token
 volumes:
   state:
+    name: docker-backup-manager_state
   backups:
+    name: docker-backup-manager_backups
   caddy_data:
+    name: docker-backup-manager_caddy_data
   caddy_config:
+    name: docker-backup-manager_caddy_config

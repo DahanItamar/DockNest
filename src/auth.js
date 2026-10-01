@@ -27,7 +27,7 @@ export function sharedPasswordMatches(password){
 }
 export async function qrEnrollment(user){
  const secret=open(user.totp_secret);
- const uri='otpauth://totp/'+encodeURIComponent('Docker Backup:'+(user.name||user.email))+'?secret='+secret+'&issuer=Docker%20Backup&algorithm=SHA1&digits=6&period=30';
+ const uri='otpauth://totp/'+encodeURIComponent('DockNest:'+(user.name||user.email))+'?secret='+secret+'&issuer=DockNest&algorithm=SHA1&digits=6&period=30';
  const qrDataUrl=await QRCode.toDataURL(uri,{errorCorrectionLevel:'M',margin:2,width:320});
  return {secret,uri,qrDataUrl};
 }

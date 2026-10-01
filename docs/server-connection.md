@@ -10,7 +10,7 @@ In the dashboard choose **Add server**. This wizard is available only to the adm
 
 The existing-key command only reads public host-key fingerprints and prerequisites. The dedicated-key command additionally appends its public key to the root account's `authorized_keys`, preserving existing entries and avoiding duplicate copies. It does not install packages, change SSH daemon policy, or alter containers. Docker, Python 3, a reachable SSH service, and an SSH policy permitting the selected account must already exist. Cloud consoles and provider SSH restrictions vary; the wizard reports connection failures rather than rewriting those policies.
 
-Canceling closes the dialog without saving its private key. If you already installed a dedicated public key on the server and decide not to use it, remove its `docker-backup-manager` entry from that account's `authorized_keys` through your trusted server console. Do not publish private keys or screenshot a filled private-key field.
+Canceling closes the dialog without saving its private key. If you already installed a dedicated public key on the server and decide not to use it, remove its `docknest` entry from that account's `authorized_keys` through your trusted server console. Do not publish private keys or screenshot a filled private-key field.
 
 The platform selector covers Linux hosts supported by the Python/Linux backup helper. Windows Docker hosts require another adapter. This is independent of the operating system running the dashboard or your browser.
 

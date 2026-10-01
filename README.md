@@ -1,12 +1,18 @@
-# Docker Backup Manager
+# DockNest
 
-A central web dashboard for Docker site backups, with a shared system password + a personal authenticator TOTP code for each authorized person. Product requirements are preserved in [the original spec](docs/docker-backup-spec.md). This first implementation requires the Linux integration checks in [acceptance.md](docs/acceptance.md) before it can be trusted for production recovery.
+**Docker Backup & Restore**
+
+DockNest is a self-hosted dashboard for Docker site backups, with a shared system password + a personal authenticator TOTP code for each authorized person. Product requirements are preserved in [the original spec](docs/docker-backup-spec.md). This first implementation requires the Linux integration checks in [acceptance.md](docs/acceptance.md) before it can be trusted for production recovery.
 
 ## Run locally
 
+Local project folder: `./docknest`. Private repository: [repository-owner/docknest](https://github.com/repository-owner/docknest).
+
 Install Node.js 24 or newer, then run from this directory:
 
-On Windows PowerShell, use `npm.cmd` in place of `npm` if the execution policy blocks npm's PowerShell wrapper.
+On Windows PowerShell, use 
+pm.cmd` in place of 
+pm` if the execution policy blocks npm's PowerShell wrapper.
 
 ```sh
 npm install

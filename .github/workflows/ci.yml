@@ -13,4 +13,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: docker build -t docker-backup-manager:ci .
+      - run: docker build -t docknest:ci .
