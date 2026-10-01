@@ -12,17 +12,17 @@ x-runtime: &runtime
     NODE_ENV: production
     PORT: 3000
     DATA_DIR: /data
-    BACKUP_DIR: /backups
+    BACKUP_STORAGE: unconfigured
     MASTER_KEY_FILE: /run/secrets/master_key
     SETUP_TOKEN_FILE: /run/secrets/setup_token
     APP_ORIGIN: ${APP_ORIGIN:?Configure the HTTPS dashboard origin before starting Compose}
     SECURE_COOKIES: ${SECURE_COOKIES:-true}
-  volumes: ["state:/data", "backups:/backups"]
+  volumes: ["state:/data"]
   secrets: [master_key, setup_token]
 services:
   api:
     <<: *runtime
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:${HOST_PORT:-3000}:3000"]
   worker:
     <<: *runtime
     command: ["node", "src/worker.js"]
@@ -33,13 +33,12 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443", "443:443/udp"]
     environment:
-      APP_DOMAIN: ${APP_DOMAIN:-backup.example.com}
-      EMAIL: ${EMAIL:-admin@example.com}
+      APP_DOMAIN: ${APP_DOMAIN:?Set the dashboard domain before enabling the HTTPS profile}
     entrypoint: /bin/sh
     command:
       - -ec
       - |
-        printf '%s\n' "{" "  email $$EMAIL" "}" "$$APP_DOMAIN {" "  reverse_proxy api:3000" "}" > /tmp/Caddyfile
+        printf '%s\n' "$$APP_DOMAIN {" "  reverse_proxy api:3000" "}" > /tmp/Caddyfile
         exec caddy run --config /tmp/Caddyfile --adapter caddyfile
     volumes: ["caddy_data:/data", "caddy_config:/config"]
     depends_on: [api]
@@ -51,8 +50,6 @@ secrets:
 volumes:
   state:
     name: docker-backup-manager_state
-  backups:
-    name: docker-backup-manager_backups
   caddy_data:
     name: docker-backup-manager_caddy_data
   caddy_config:
