@@ -1,5 +1,11 @@
 # Connect a server and add a site
 
+Server names are optional and default to the address. With the dedicated key option, Continue creates the key automatically; the separate create button is optional.
+
+Docker group identity uses Compose project labels and Swarm stack namespace labels, including stopped containers returned by discovery. Compose and Swarm identities remain separate even with matching names. Swarm discovery covers only containers on the selected server, not the entire cluster. Containers without group labels require manual selection; names and shared networks are not proof of membership. Detection does not prove backup completeness.
+
+Upstream role reference: [Agency Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md), applied to clear defaults, accessible setup controls and responsive group selection. Used as design reference without spawning agents.
+
 1. Choose **Add server** and enter its name and IP address or hostname. SSH defaults to root on port 22; expand SSH settings if needed. The Linux server needs SSH, Python 3 and Docker.
 2. Create a dedicated backup key, or choose an existing unencrypted private key. With the dedicated key, copy the provided installation command into a trusted root shell on that server. Only its public key is installed there.
 3. Paste the JSON result into DockNest. The report is read automatically; verify its host fingerprint through the trusted server console/connection. Choose **Test connection & save**. DockNest checks access before saving the connection and encrypts the private key.
