@@ -83,3 +83,22 @@ button.primary:disabled:hover{background:var(--accent);border-color:var(--accent
 dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}.application-group header{display:flex;align-items:center;justify-content:space-between;gap:16px}.application-group header button{flex-shrink:0}.container-state{margin-left:auto;font-size:11px;color:var(--text-secondary)}@media(max-width:680px){.application-group header{align-items:flex-start;flex-direction:column}}
 
 dialog .modal-head{position:sticky;top:0;z-index:2;background:var(--surface)}
+
+/* Consistent spacing and alignment for actions throughout the dashboard. */
+.form-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:20px;border-top:1px solid var(--border-subtle)}
+.form-actions>button{min-width:144px;max-width:100%}
+.panel.padded>p{margin:8px 0 20px;line-height:1.6}
+.panel.padded form>.form-grid{align-items:start;gap:16px}
+.panel.padded form>.form-grid>.field{margin:0 0 16px}
+.panel.padded form>.field{margin-bottom:16px}
+.panel.padded form>details{margin:16px 0}
+.actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+td .actions{justify-content:flex-start;min-width:160px}
+.storage-destination>.actions{justify-content:flex-end}
+.server-wizard .setup-command{margin:16px 0}
+.server-wizard button+.hint,.server-wizard button+.notice{margin-top:16px}
+.server-wizard .hint+.field,.server-wizard .notice+.field{margin-top:20px}
+.server-wizard .command-preview+button{margin-bottom:4px}
+.auth-card form>.primary{margin-top:16px}
+button.primary:disabled:hover{background:var(--surface-muted);border-color:var(--border-subtle)}
+@media(max-width:680px){.form-actions{gap:12px;padding-top:16px;margin-top:20px}.form-actions>button{width:100%;min-width:0}.storage-destination>.actions{width:100%;justify-content:flex-start}.actions button{flex-grow:0}.page-head .actions>button,.storage-destination>.actions>button{flex:1}.panel.padded form>.form-grid{gap:0}}
