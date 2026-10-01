@@ -13,10 +13,30 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
   await page.getByLabel('2FA code').waitFor();
   assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
-  await page.screenshot({ path: 'data/screenshots/setup-desktop.png', fullPage: true });
+  assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
+  for(const asset of ['favicon.svg','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.svg','logo-horizontal-dark.svg','logo-tagline-light.svg','logo-tagline-dark.svg']){
+    assert.equal((await page.request.get('http://127.0.0.1:3000/brand/'+asset)).status(),200,asset+' must be served');
+  }
+  async function checkContrast(){
+    const failures=await page.evaluate(()=>{
+      const styles=getComputedStyle(document.documentElement);
+      function luminance(token){const hex=styles.getPropertyValue('--'+token).trim().replace('#','');const rgb=[0,2,4].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;}
+      return [['text-primary','surface',4.5],['text-secondary','background',4.5],['text-muted','surface',4.5],['text-muted','surface-muted',4.5],['primary-foreground','accent',4.5],['primary-foreground','accent-hover',4.5],['link','surface',4.5],['link','accent-soft',4.5],['success','success-surface',4.5],['warning','warning-surface',4.5],['error','error-surface',4.5],['info','info-surface',4.5],['border-control','surface',3],['border-control','surface-muted',3],['focus-ring','background',3],['focus-ring','surface',3]].flatMap(([a,b,min])=>{const l=[luminance(a),luminance(b)].sort((x,y)=>y-x),ratio=(l[0]+.05)/(l[1]+.05);return ratio>=min?[]:[a+'/'+b+': '+ratio.toFixed(2)];});
+    });
+    assert.deepEqual(failures,[],'Semantic rendered palette must meet contrast targets');
+  }
+  await checkContrast();
+  await page.screenshot({ path: 'data/screenshots/setup-desktop.png', fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Setup must fit mobile viewport');
-  await page.screenshot({ path: 'data/screenshots/setup-mobile.png', fullPage: true });
+  await page.screenshot({ path: 'data/screenshots/setup-mobile.png', fullPage: true, animations: 'disabled' });
+  await page.getByRole('button',{name:'Switch to dark theme'}).click();
+  await page.locator('html[data-theme="dark"]').waitFor();
+  await checkContrast();
+  await page.screenshot({path:'data/screenshots/setup-dark-mobile.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:1440,height:960});
+  await page.screenshot({path:'data/screenshots/setup-dark-desktop.png',fullPage:true,animations:'disabled'});
+  await page.getByRole('button',{name:'Switch to light theme'}).click();
   // Isolated browser-only empty fixtures exercise UI navigation without creating an administrator.
   await page.route('**/api/auth/status', route => route.fulfill({ json: { authenticated: true, setupRequired: false, csrfToken: 'fixture', user: { name: 'Administrator', role: 'admin', email: 'ui-test@example.org' }, serverTime: Date.now(), idleExpiresAt: Date.now()+1800000, absoluteExpiresAt: Date.now()+28800000 } }));
   await page.route('**/api/access', route => route.fulfill({ json: { users: [], security: { idleMinutes: 30, absoluteHours: 8, invitationMinutes: 15 } } }));
@@ -25,7 +45,16 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.reload();
   await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
-  await page.screenshot({ path: 'data/screenshots/dashboard-desktop.png', fullPage: true });
+  await page.screenshot({ path: 'data/screenshots/dashboard-desktop.png', fullPage: true, animations: 'disabled' });
+  await page.getByRole('button',{name:'Switch to dark theme'}).click();
+  await page.locator('html[data-theme="dark"]').waitFor();
+  await page.locator('img[src="/brand/logo-horizontal-dark.svg"]').waitFor();
+  await page.screenshot({path:'data/screenshots/dashboard-dark-desktop.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Dark dashboard fits mobile');
+  await page.screenshot({path:'data/screenshots/dashboard-dark-mobile.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:1440,height:960});
+  await page.getByRole('button',{name:'Switch to light theme'}).click();
   // Wizard requests stay inside browser fixtures; no real remote connection or key installation occurs.
   const prepared = await prepareServerKey();
   await page.route('**/api/servers/onboarding', route => route.fulfill({json:{reportCommand:serverReportCommand}}));
@@ -56,10 +85,10 @@ try {
     await dialog.getByLabel('Paste the JSON result from your server').fill(JSON.stringify({version:1,hostname:'fixture',username:'root',uid:0,dockerInstalled:true,hostKeys:[{algorithm:'ssh-ed25519',fingerprint:'ab'.repeat(32)}]}));
     await dialog.getByRole('button',{name:'Read server result'}).click();
     if(mode==='new'){
-      await page.screenshot({path:'data/screenshots/server-wizard-desktop.png',fullPage:true});
+      await page.screenshot({path:'data/screenshots/server-wizard-desktop.png',fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Wizard fits mobile');
-      await page.screenshot({path:'data/screenshots/server-wizard-mobile.png',fullPage:true});
+      await page.screenshot({path:'data/screenshots/server-wizard-mobile.png',fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:1440,height:960});
     }
     await dialog.getByRole('button',{name:'Test connection & save'}).click();
@@ -72,7 +101,7 @@ try {
   }
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Dashboard must fit mobile viewport');
-  await page.screenshot({ path: 'data/screenshots/dashboard-mobile.png', fullPage: true });
+  await page.screenshot({ path: 'data/screenshots/dashboard-mobile.png', fullPage: true, animations: 'disabled' });
   assert.deepEqual(problems, [], 'No uncaught browser errors');
   console.log('Browser smoke passed: setup desktop/mobile, eight dashboard views, responsive layout, no uncaught errors.');
 } finally { await browser.close(); }
