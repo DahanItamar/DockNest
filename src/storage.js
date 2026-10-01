@@ -8,6 +8,7 @@ import { db } from './db.js';
 import { open } from './crypto.js';
 import { backupLayout } from './backup-layout.js';
 import { sftpWriteStream } from './sftp-streams.js';
+import { storageConnectionError } from './storage-errors.js';
 
 const prefix='sftp:';
 export const isRemoteFile=file=>file.startsWith(prefix);
@@ -38,16 +39,18 @@ async function localPath(file){
 async function session(options){
  if(!options.host||!options.username||!options.hostKey||(!options.keyFile&&!options.passwordFile&&!options.privateKey&&!options.password))throw new Error('Configure the storage connection and verified host key first');
  const client=new Client();
+ let hostRejected=false,phase='ssh';
  try{
   const privateKey=options.privateKey||(options.keyFile?await readFile(options.keyFile):undefined);
   const password=options.password||(options.passwordFile?(await readFile(options.passwordFile,'utf8')).trimEnd():undefined);
   await new Promise((resolve,reject)=>{
    client.once('error',reject).once('ready',resolve);
-   client.connect({host:options.host,port:options.port,username:options.username,privateKey,password,hostHash:'sha256',hostVerifier:hash=>hash.toLowerCase()===options.hostKey.toLowerCase(),readyTimeout:15000,keepaliveInterval:10000});
+   client.connect({host:options.host,port:options.port,username:options.username,privateKey,password,hostHash:'sha256',hostVerifier:hash=>{const matches=hash.toLowerCase()===options.hostKey.toLowerCase();hostRejected=!matches;return matches;},readyTimeout:15000,keepaliveInterval:10000});
   });
+  phase='sftp';
   const sftp=await new Promise((resolve,reject)=>client.sftp((error,value)=>error?reject(error):resolve(value)));
   return {client,sftp};
- }catch{client.end();throw new Error('Storage connection failed. Check access, authentication and the independently verified host key.');}
+ }catch(error){client.end();throw new Error(storageConnectionError(error,{hostRejected,phase}));}
 }
 const call=(sftp,name,...args)=>new Promise((resolve,reject)=>sftp[name](...args,(error,result)=>error?reject(error):resolve(result)));
 async function withSession(options,fn){const {client,sftp}=await session(options);try{return await fn(sftp);}finally{client.end();}}
