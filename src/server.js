@@ -45,7 +45,7 @@ const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).min(1).max(30),
-    stagingRoot: z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).default('/var/lib/docker-backup-manager'),
+    stagingRoot: z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).default('/var/lib/docknest'),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),

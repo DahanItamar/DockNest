@@ -67,3 +67,5 @@ The tool streams into a restricted temporary file and publishes output only afte
 ## DockNest rename compatibility
 
 The application, image, and Compose project are now named DockNest/docknest. Compose explicitly preserves the original volume names so upgrades reuse existing SQLite state, backups, and Caddy certificates. The encrypted backup format, session cookie, existing remote staging paths, and existing authenticator secrets remain compatible. Newly issued authenticator QR labels use DockNest. Do not rename or delete those storage volumes during a branding update.
+
+New sites default to `/var/lib/docknest` for remote staging. Saved site configuration and legacy maintenance fallback paths are preserved; no remote directories or persistent volumes are moved automatically. The checkout remains at its current workspace path.

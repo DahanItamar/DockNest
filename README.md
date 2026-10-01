@@ -6,13 +6,11 @@ DockNest is a self-hosted dashboard for Docker site backups, with a shared syste
 
 ## Run locally
 
-Local project folder: `./docknest`. Private repository: [repository-owner/docknest](https://github.com/repository-owner/docknest).
+Current checkout: `./docknest`. Product, package, image, and Compose project names are DockNest. Generic source folders and imports remain unchanged. Private repository: [repository-owner/docknest](https://github.com/repository-owner/docknest).
 
 Install Node.js 24 or newer, then run from this directory:
 
-On Windows PowerShell, use 
-pm.cmd` in place of 
-pm` if the execution policy blocks npm's PowerShell wrapper.
+On Windows PowerShell, use `npm.cmd` in place of `npm` if the execution policy blocks npm?s PowerShell wrapper.
 
 ```sh
 npm install
