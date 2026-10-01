@@ -6,6 +6,8 @@ A central web dashboard for Docker site backups, with password + authenticator T
 
 Install Node.js 24 or newer, then run from this directory:
 
+On Windows PowerShell, use `npm.cmd` in place of `npm` if the execution policy blocks npm's PowerShell wrapper.
+
 ```sh
 npm install
 npm run setup
