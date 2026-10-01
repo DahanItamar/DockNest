@@ -25,3 +25,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 .brand-button{border:0;border-radius:0;padding:8px 0}.brand-button:hover{border:0}.theme-toggle{flex-shrink:0}
 .header-utilities{margin-left:auto}.auth-qr{background:var(--qr-background)}.auth-shell{background:var(--background)}
 @media(max-width:680px){.auth-header{gap:12px}.auth-header .theme-toggle{margin-left:auto}.brand-lockup{width:160px}.brand-lockup.descriptive{width:100%;max-width:360px}.topbar-inner{gap:16px}.header-utilities{gap:8px}}
+
+/* Native snapshots fade the whole theme, including the matching logo. */
+::view-transition-old(root),::view-transition-new(root){animation-duration:220ms;animation-timing-function:ease-out}
+/* Color-only fallback for browsers without document.startViewTransition. */
+@supports not (view-transition-name:root){
+ :root,body,body *{transition:background-color 220ms ease-out,color 220ms ease-out,border-color 220ms ease-out}
+}
+@media(prefers-reduced-motion:reduce){
+ ::view-transition-old(root),::view-transition-new(root){animation:none!important}
+ :root,body,body *{transition:none!important}
+}

@@ -2,20 +2,21 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { prepareServerKey, serverReportCommand } from '../src/server-onboarding.js';
+const baseUrl = process.env.TEST_BASE_URL || 'http://127.0.0.1:3000';
 const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
 const problems = [];
 page.on('pageerror', error => problems.push(error.message));
 await mkdir('data/screenshots', { recursive: true });
 try {
-  await page.goto('http://127.0.0.1:3000');
+  await page.goto(baseUrl);
   await page.getByRole('heading', { name: 'Sign in' }).waitFor();
   await page.getByLabel('Password', { exact: true }).waitFor();
   await page.getByLabel('2FA code').waitFor();
   assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
   for(const asset of ['favicon.svg','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.svg','logo-horizontal-dark.svg','logo-tagline-light.svg','logo-tagline-dark.svg']){
-    assert.equal((await page.request.get('http://127.0.0.1:3000/brand/'+asset)).status(),200,asset+' must be served');
+    assert.equal((await page.request.get(baseUrl+'/brand/'+asset)).status(),200,asset+' must be served');
   }
   async function checkContrast(){
     const failures=await page.evaluate(()=>{
@@ -26,17 +27,28 @@ try {
     assert.deepEqual(failures,[],'Semantic rendered palette must meet contrast targets');
   }
   await checkContrast();
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path: 'data/screenshots/setup-desktop.png', fullPage: true, animations: 'disabled' });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Setup must fit mobile viewport');
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path: 'data/screenshots/setup-mobile.png', fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
   await checkContrast();
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:'data/screenshots/setup-dark-mobile.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:'data/screenshots/setup-dark-desktop.png',fullPage:true,animations:'disabled'});
   await page.getByRole('button',{name:'Switch to light theme'}).click();
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.body).transitionDuration),'0s','Reduced motion disables fallback transitions');
+  await page.getByRole('button',{name:'Switch to dark theme'}).click();
+  await page.locator('html[data-theme="dark"]').waitFor();
+  assert.equal(await page.evaluate(()=>document.getAnimations().length),0,'Reduced motion switches without animation');
+  await page.getByRole('button',{name:'Switch to light theme'}).click();
+  await page.emulateMedia({reducedMotion:'no-preference'});
   // Isolated browser-only empty fixtures exercise UI navigation without creating an administrator.
   await page.route('**/api/auth/status', route => route.fulfill({ json: { authenticated: true, setupRequired: false, csrfToken: 'fixture', user: { name: 'Administrator', role: 'admin', email: 'ui-test@example.org' }, serverTime: Date.now(), idleExpiresAt: Date.now()+1800000, absoluteExpiresAt: Date.now()+28800000 } }));
   await page.route('**/api/access', route => route.fulfill({ json: { users: [], security: { idleMinutes: 30, absoluteHours: 8, invitationMinutes: 15 } } }));
@@ -45,13 +57,16 @@ try {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.reload();
   await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path: 'data/screenshots/dashboard-desktop.png', fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
   await page.locator('img[src="/brand/logo-horizontal-dark.svg"]').waitFor();
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:'data/screenshots/dashboard-dark-desktop.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Dark dashboard fits mobile');
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:'data/screenshots/dashboard-dark-mobile.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await page.getByRole('button',{name:'Switch to light theme'}).click();
@@ -85,10 +100,12 @@ try {
     await dialog.getByLabel('Paste the JSON result from your server').fill(JSON.stringify({version:1,hostname:'fixture',username:'root',uid:0,dockerInstalled:true,hostKeys:[{algorithm:'ssh-ed25519',fingerprint:'ab'.repeat(32)}]}));
     await dialog.getByRole('button',{name:'Read server result'}).click();
     if(mode==='new'){
-      await page.screenshot({path:'data/screenshots/server-wizard-desktop.png',fullPage:true,animations:'disabled'});
+      await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
+  await page.screenshot({path:'data/screenshots/server-wizard-desktop.png',fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Wizard fits mobile');
-      await page.screenshot({path:'data/screenshots/server-wizard-mobile.png',fullPage:true,animations:'disabled'});
+      await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
+  await page.screenshot({path:'data/screenshots/server-wizard-mobile.png',fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:1440,height:960});
     }
     await dialog.getByRole('button',{name:'Test connection & save'}).click();
@@ -101,6 +118,7 @@ try {
   }
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Dashboard must fit mobile viewport');
+  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path: 'data/screenshots/dashboard-mobile.png', fullPage: true, animations: 'disabled' });
   assert.deepEqual(problems, [], 'No uncaught browser errors');
   console.log('Browser smoke passed: setup desktop/mobile, eight dashboard views, responsive layout, no uncaught errors.');
