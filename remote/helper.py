@@ -6,7 +6,7 @@ VERSION=1
 RESTORE_GUIDE="""# Independent restore guide — format v1
 Keep the DBM1 encrypted file, its SHA256 checksum, and the separate 32-byte master key.
 Use scripts/decrypt-backup.js from this project's repository on Node.js 24. Verify the whole GCM tag and checksum before extraction. Never extract plaintext streamed before authentication.
-After successful authenticated decryption, unpack payload.tar.gz into a new root-owned directory with mode 0700. Reject absolute paths, traversal, device nodes and all links before extraction. The automatic adapter deliberately rejects archive links; use a reviewed offline link adapter if your site needs them.
+After successful authenticated decryption, unpack payload.tar.gz into a new root-owned directory with mode 0700. Reject absolute paths, traversal, device nodes, escaping links and writes through symlinks before extraction. Safe relative symlinks and hard links to archived regular files are preserved.
 Contents: manifest.json (contains secret Docker environment and settings), images.tar (exact original images and committed writable layers), mount-I-J.tar for each container/mount, config-I.tar for explicit compose/env/config files, and this guide.
 Run docker load -i images.tar. Match manifest.containers[I] with manifest.snapshotImages[I]; do not use latest from a registry.
 Extract each mount-I-J.tar into a different empty directory, keeping numeric UID/GID, modes, ACLs and xattrs. Recreate mounts at manifest.containers[I].Mounts[J].Destination; use read-only when RW is false. Never overwrite live bind paths or existing volume data.
@@ -30,7 +30,7 @@ def health(containers,url=None):
     if url:
         try:
             with urllib.request.urlopen(url,timeout=5) as r:
-                if r.status!=200:return False
+                if r.status!=200 or b'dbm-maintenance-v1' in r.read(256*1024):return False
         except Exception:return False
     return True
 def maintenance(cfg,enabled):
@@ -40,15 +40,20 @@ def maintenance(cfg,enabled):
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
     if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
     if enabled:
+        was_enabled=(directory/'enabled').exists()
         (directory/'enabled').touch(mode=0o600)
-        if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
         try:
-            urllib.request.urlopen(m['publicUrl'],timeout=10)
-            raise ValueError('Maintenance probe must return HTTP 503')
-        except urllib.error.HTTPError as e:
-            if e.code!=503 or b'dbm-maintenance-v1' not in e.read(256*1024):raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
+            if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
+            try:
+                with urllib.request.urlopen(m['publicUrl'],timeout=10):
+                    raise ValueError('Maintenance probe must return HTTP 503')
+            except urllib.error.HTTPError as e:
+                if e.code!=503 or b'dbm-maintenance-v1' not in e.read(256*1024):raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
+        except Exception:
+            if not was_enabled:(directory/'enabled').unlink(missing_ok=True)
+            raise
     else:
-        if not health(cfg['containers'],m.get('healthUrl')):raise ValueError('Health probe failed; maintenance retained')
+        if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl')):raise ValueError('Health probe failed; maintenance retained')
         (directory/'enabled').unlink(missing_ok=True)
         if m.get('publicUrl'):
             try:
@@ -118,7 +123,7 @@ def preflight(cfg):
     return cs
 def capture(req):
     cfg=req['config'];cs=preflight(cfg)
-    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docker-backup-manager'))
+    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts:raise ValueError('Staging path must be absolute')
     job=req['job']
     uuid.UUID(job)
@@ -126,7 +131,8 @@ def capture(req):
     if root.exists():raise ValueError('Staging already exists; inspect retained job before retry')
     for c in cs:
         for m in c['Mounts']:
-            if os.path.commonpath([str(base),m['Source']])==m['Source']:raise ValueError('Staging cannot be inside source')
+            a,b=os.path.realpath(base),os.path.realpath(m['Source'])
+            if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Staging and source paths cannot overlap')
     root.mkdir(parents=True,mode=0o700)
     # Capacity is estimated before stopping; additional free space remains mandatory.
     needed=sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])
@@ -135,6 +141,9 @@ def capture(req):
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
     running=[c['Id'] for c in cs if c['State']['Running']]
+    cfg['_runningContainers']=running
+    (root/'recovery-plan.json').write_text(json.dumps({'running':running,'containers':[c['Id'] for c in cs]}))
+    os.chmod(root/'recovery-plan.json',0o600)
     stop_timeout=int(cfg.get('stopTimeout',60))
     if stop_timeout<5 or stop_timeout>600:raise ValueError('Stop timeout must be 5..600 seconds')
     deadline=time.time()+int(cfg.get('captureTimeout',1800))+stop_timeout*len(running)+120
@@ -212,16 +221,54 @@ def owned_job_root(req):
     job=req['job'];uuid.UUID(job)
     base=pathlib.Path('/var/lib/docker-backup-manager/restore')
     return base/job
+
+def verify_recovery(req):
+    cfg=req['config'];job=req['job'];uuid.UUID(job)
+    root=pathlib.Path(cfg.get('stagingRoot','/var/lib/docker-backup-manager'))/job
+    if not (root/'recovery-plan.json').is_file():raise ValueError('Recovery journal is missing; offline review required')
+    plan=json.loads((root/'recovery-plan.json').read_text())
+    recovered=json.loads((root/'recovery.json').read_text()).get('recovered') if (root/'recovery.json').is_file() else False
+    if not (root/'watchdog.done').exists() or not ((root/'disarmed').exists() or recovered):raise ValueError('Local recovery has not finished successfully')
+    states=inspect(plan['containers'])
+    if any(bool(c['State']['Running'])!=(c['Id'] in plan['running']) for c in states):raise ValueError('Container states do not match the pre-backup state')
+    if not health(plan['running'],cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health has not recovered')
+    m=cfg.get('maintenance',{})
+    if m.get('required'):
+        if (pathlib.Path(m['directory'])/'enabled').exists():raise ValueError('Maintenance remains enabled')
+        if not m.get('publicUrl'):raise ValueError('Public health probe required')
+        with urllib.request.urlopen(m['publicUrl'],timeout=10) as r:
+            if r.status!=200 or b'dbm-maintenance-v1' in r.read(256*1024):raise ValueError('Public access has not recovered')
+    emit(result={'recoveryReviewed':True,'healthVerified':True,'originalStatesPreserved':True})
+
+def verify_restore_recovery(req):
+    job=req['job'];uuid.UUID(job)
+    ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
+    if ids and any(c['State']['Running'] for c in inspect(ids)):raise ValueError('Stop the interrupted isolated restore containers on the target before acknowledging recovery')
+    emit(result={'recoveryReviewed':True,'targetContainersStopped':True,'stagingRetained':True})
 def safe_extract(archive,destination):
+    if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if any(destination.iterdir()):raise ValueError('Restore destination must be empty')
     root=destination.resolve()
     with tarfile.open(archive,'r:*') as tar:
-        for member in tar.getmembers():
+        members=tar.getmembers()
+        symlinks={pathlib.PurePosixPath(m.name) for m in members if m.issym()}
+        regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
+        seen=set()
+        for member in members:
             p=pathlib.PurePosixPath(member.name)
-            if p.is_absolute() or '..' in p.parts or member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+            if p.is_absolute() or '..' in p.parts or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
                 raise ValueError('Unsafe archive member or link; use reviewed offline restore adapter')
+            if p in seen or any(parent in symlinks for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
+            seen.add(p)
             target=(root/member.name).resolve()
             if os.path.commonpath([str(root),str(target)])!=str(root):raise ValueError('Archive path escapes destination')
+            if member.issym() or member.islnk():
+                link=pathlib.PurePosixPath(member.linkname)
+                if link.is_absolute():raise ValueError('Absolute archive link is not portable')
+                linked=(target.parent/member.linkname).resolve() if member.issym() else (root/member.linkname).resolve()
+                if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
+                if member.islnk() and (link not in regular or any(parent in symlinks for parent in link.parents)):raise ValueError('Hard link must target an archived regular file')
         if os.name=='posix':
             run(['tar','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
         else:tar.extractall(destination,filter='fully_trusted')
@@ -296,6 +343,8 @@ def main(req):
     elif op=='capture':capture(req)
     elif op=='prepare-restore':prepare_restore(req)
     elif op=='restore':restore(req)
+    elif op=='verify-recovery':verify_recovery(req)
+    elif op=='verify-restore-recovery':verify_restore_recovery(req)
     elif op=='deploy-maintenance':deploy_maintenance(req)
     elif op=='maintenance':
         req['config'].setdefault('maintenance',{})['required']=True
