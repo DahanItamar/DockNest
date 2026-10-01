@@ -31,3 +31,5 @@ Password hashes use the project's password-hashing routine. Authenticator and SS
 Existing installations migrate the earliest account to administrator and preserve its password as the shared system password. Keep a protected state/key backup before upgrades. Shared passwords have operational tradeoffs: rotate when membership changes, retain personal-factor separation, and review the per-person audit trail.
 
 Run `npm run check` for regression checks. Verify HTTPS, browser interaction/idle logout, authenticators, and revoke behavior on the actual deployment before granting access.
+
+New shared passwords must be 4-16 characters, including numeric passwords. Login still accepts previously configured longer passwords so the policy change does not lock out existing users. Password-only login never grants a session. Every private API route requires an enabled, enrolled account and a valid session; API data responses are never cached. Login/enrollment screens and static frontend assets remain public. Short passwords reduce resistance to guessing; mandatory personal MFA, rate limits, replay checks, and session revocation remain enforced.

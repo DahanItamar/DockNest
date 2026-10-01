@@ -89,7 +89,7 @@ access.post('/invitations/:id/revoke', requireRecentAuth, (req, res) => {
   res.json({ revoked: true });
 });
 access.post('/password', requireRecentAuth, (req, res) => {
-  const data = z.object({ currentPassword: z.string().min(1).max(256), newPassword: z.string().min(14).max(256) }).parse(req.body);
+  const data = z.object({ currentPassword: z.string().min(1).max(256), newPassword: z.string().min(4).max(16) }).parse(req.body);
   if (!sharedPasswordMatches(data.currentPassword)) return res.status(401).json({ error: 'The current universal password is incorrect.' });
   if (data.currentPassword === data.newPassword) return res.status(400).json({ error: 'Choose a different universal password.' });
   transaction(() => {

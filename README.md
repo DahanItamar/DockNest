@@ -27,7 +27,7 @@ On Windows, set your chosen main password locally:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\set-admin-password.ps1
 ```
 
-The command prompts privately for the password twice. On first setup, it opens a local administrator QR page. Scan it with your authenticator, save the recovery codes, and enter the six-digit code in PowerShell. The temporary QR file is deleted after confirmation. If setup is interrupted, rerun the command. For an existing enrolled administrator, this command changes only the shared password and preserves the authenticator; it signs out everyone and invalidates pending invitations.
+The command prompts privately for the password twice. Choose 4-16 characters; a four-digit password is accepted. On first setup, it opens a local administrator QR page. Scan it with your authenticator, save the recovery codes, and enter the six-digit code in PowerShell. The temporary QR file is deleted after confirmation. If setup is interrupted, rerun the command. For an existing enrolled administrator, this command changes only the shared password and preserves the authenticator; it signs out everyone and invalidates pending invitations.
 
 Open http://127.0.0.1:3000. Login has exactly two fields: Password and 2FA code, submitted together. The code identifies your named account; an unused recovery code also works. Keep the PC and phone clocks correct.
 

@@ -126,7 +126,7 @@ auth.get('/status',(req,res)=>{
  res.json({setupRequired:!db.prepare('SELECT 1 FROM users LIMIT 1').get(),authenticated:Boolean(req.user),securityPolicy,...(req.user?{user:req.user,csrfToken:req.session.csrf_token,...sessionTimes(req.session)}:{serverTime:Date.now()})});
 });
 auth.post('/setup',rateLimit('setup',5),async(req,res)=>{
- const data=z.object({email:z.email().max(254).transform(v=>v.toLowerCase()),name:z.string().trim().min(1).max(100).optional(),password:z.string().min(14).max(256),setupToken:z.string().min(1).max(256)}).parse(req.body);
+ const data=z.object({email:z.email().max(254).transform(v=>v.toLowerCase()),name:z.string().trim().min(1).max(100).optional(),password:z.string().min(4).max(16),setupToken:z.string().min(1).max(256)}).parse(req.body);
  if(!validSetupToken(data.setupToken))return res.status(403).json({error:'Invalid setup token.'});
  const user=transaction(()=>{
   if(db.prepare('SELECT 1 FROM users LIMIT 1').get())throw Object.assign(new Error('Administrator already exists. Sign in instead.'),{status:409});

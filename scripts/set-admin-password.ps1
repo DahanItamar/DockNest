@@ -5,7 +5,7 @@ Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
     & npm.cmd run setup
     if ($LASTEXITCODE -ne 0) { throw 'Local setup failed.' }
-    Write-Host 'Choose the shared system password (at least 14 characters). Changing it signs out everyone and invalidates pending invitations.'
+    Write-Host 'Choose the shared system password (4-16 characters). Changing it signs out everyone and invalidates pending invitations.'
     $secret = Read-Host 'Main password' -AsSecureString
     $confirm = Read-Host 'Confirm password' -AsSecureString
     $firstPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
@@ -14,7 +14,7 @@ try {
         $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($firstPtr)
         $confirmation = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secondPtr)
         if ($password -cne $confirmation) { throw 'Passwords do not match.' }
-        if ($password.Length -lt 14 -or $password.Length -gt 256) { throw 'Choose a password between 14 and 256 characters. Please run the command again.' }
+        if ($password.Length -lt 4 -or $password.Length -gt 16) { throw 'Choose a password between 4 and 16 characters. Please run the command again.' }
         $result = @{ password = $password } | ConvertTo-Json -Compress | & node scripts/admin-password.js password
         if ($LASTEXITCODE -ne 0) {
             $failure = $result | ConvertFrom-Json

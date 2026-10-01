@@ -12,7 +12,7 @@ let input='';for await(const chunk of process.stdin)input+=chunk;
 const data=JSON.parse(input), mode=process.argv[2];
 const file=path.join(config.dataDir,'admin-enrollment.html');
 if(mode==='password'){
- if(typeof data.password!=='string'||data.password.length<14||data.password.length>256)throw new Error('Choose a password between 14 and 256 characters.');
+ if(typeof data.password!=='string'||data.password.length<4||data.password.length>16)throw new Error('Choose a password between 4 and 16 characters.');
  const user=transaction(()=>{
   let user=db.prepare("SELECT * FROM users WHERE role='admin' AND disabled=0 ORDER BY created_at,id LIMIT 1").get();
   if(!user){
@@ -51,7 +51,7 @@ db.close();
 
 }
 main().catch(error=>{
- const safeMessages=['Choose a password between 14 and 256 characters.','No active administrator exists. Restore an administrator before continuing.','Invalid authenticator code. Run setup again to retry.','Unknown setup operation.'];
+ const safeMessages=['Choose a password between 4 and 16 characters.','No active administrator exists. Restore an administrator before continuing.','Invalid authenticator code. Run setup again to retry.','Unknown setup operation.'];
  const message=safeMessages.includes(error.message)?error.message:
   error instanceof SyntaxError?'Could not read the password input. Please rerun the PowerShell script.':
   /locked|busy/i.test(error.message)?'The database is busy. Close the running API and worker, then retry.':
