@@ -14,6 +14,8 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
   await page.getByLabel('2FA code').waitFor();
   assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
+  assert.equal(await page.locator('.auth-card img.brand-lockup').count(),0,'Login logo belongs only in the header');
+  assert.equal(await page.locator('.auth-header img.brand-lockup').count(),1,'Header displays the brand once');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
   for(const asset of ['favicon.svg','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.svg','logo-horizontal-dark.svg','logo-tagline-light.svg','logo-tagline-dark.svg']){
     assert.equal((await page.request.get(baseUrl+'/brand/'+asset)).status(),200,asset+' must be served');
@@ -53,7 +55,8 @@ try {
   await page.route('**/api/auth/status', route => route.fulfill({ json: { authenticated: true, setupRequired: false, csrfToken: 'fixture', user: { name: 'Administrator', role: 'admin', email: 'ui-test@example.org' }, serverTime: Date.now(), idleExpiresAt: Date.now()+1800000, absoluteExpiresAt: Date.now()+28800000 } }));
   await page.route('**/api/access', route => route.fulfill({ json: { users: [], security: { idleMinutes: 30, absoluteHours: 8, invitationMinutes: 15 } } }));
   await page.route('**/api/auth/activity', route => route.fulfill({ json: { serverTime: Date.now(), idleExpiresAt: Date.now()+1800000, absoluteExpiresAt: Date.now()+28800000 } }));
-  await page.route('**/api/state', route => route.fulfill({ json: { servers: [], sites: [], policies: [], backups: [], jobs: [], restores: [], audit: [], storage: { used: 0, total: 1000000 }, maintenance: { title: 'Briefly under maintenance', message: 'We will be back shortly.', color: '#147d73' } } }));
+  let fixtureServers=[];
+  await page.route('**/api/state', route => route.fulfill({ json: { servers: fixtureServers, sites: [], policies: [], backups: [], jobs: [], restores: [], audit: [], storage: { used: 0, total: 1000000 }, maintenance: { title: 'Briefly under maintenance', message: 'We will be back shortly.', color: '#147d73' } } }));
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.reload();
   await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
@@ -82,7 +85,7 @@ try {
     assert.equal(body.hostKey,'ab'.repeat(32));
     assert.equal(body.privateKey,prepared.privateKey);
     saved++;
-    return route.fulfill({status:201,json:{id:'fixture-server',status:'connected'}});
+    return route.fulfill({status:201,json:{id:'fixture-server',name:'Fixture Ubuntu',status:'connected'}});
   });
   for(const mode of ['existing','new']){
     await page.getByRole('button',{name:'Add server',exact:true}).click();
@@ -90,7 +93,10 @@ try {
     await dialog.getByLabel('Server name',{exact:true}).fill('Fixture Ubuntu');
     await dialog.getByLabel('IP address or hostname',{exact:true}).fill('server.example.org');
     await dialog.getByRole('button',{name:'Continue',exact:true}).click();
-    if(mode==='existing')await dialog.getByLabel('Select SSH private key file').setInputFiles({name:'fixture_key',mimeType:'text/plain',buffer:Buffer.from(prepared.privateKey)});
+    if(mode==='existing'){
+      await dialog.getByLabel('SSH key option').selectOption('existing');
+      await dialog.getByLabel('Select SSH private key file').setInputFiles({name:'fixture_key',mimeType:'text/plain',buffer:Buffer.from(prepared.privateKey)});
+    }
     else{
       await dialog.getByLabel('SSH key option').selectOption('new');
       await dialog.getByRole('button',{name:'Create dedicated key',exact:true}).click();
@@ -109,9 +115,66 @@ try {
       await page.setViewportSize({width:1440,height:960});
     }
     await dialog.getByRole('button',{name:'Test connection & save'}).click();
+    await dialog.getByRole('heading',{name:'Fixture Ubuntu is connected'}).waitFor();
+    if(mode==='new'){
+      await page.route('**/api/servers/fixture-server/discover',route=>route.fulfill({json:{containers:[{name:'first-site',image:'app:latest',state:{status:'running'}}]}}));
+      await dialog.getByRole('button',{name:'Add a site',exact:true}).click();
+      await dialog.getByLabel('Docker container (site)').waitFor();
+      assert.equal(await dialog.getByLabel('Source server').inputValue(),'fixture-server','Successful connection hands off the chosen server');
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    }else await dialog.getByRole('button',{name:'Done',exact:true}).click();
     await dialog.waitFor({state:'hidden'});
   }
   assert.equal(saved,2,'Existing and dedicated key paths both submit verified connection details');
+  // Site discovery and save are browser fixtures; no containers are stopped or backed up.
+  fixtureServers=[{id:'host-one',name:'Production'},{id:'host-two',name:'Other server'}];
+  let discoveryFailed=true,createdSites=0;
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:{status:'running'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running'}]}}));
+  await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
+  await page.route('**/api/sites',route=>{
+    const body=route.request().postDataJSON();
+    assert.equal(body.serverId,'host-one');assert.equal(body.name,'My shop');
+    assert.deepEqual(body.config.containers,['shop','shop-db']);
+    assert.equal(body.config.stagingRoot,'/var/lib/docknest');
+    assert.equal(body.config.exclusiveSourcesConfirmed,true);assert.equal(body.config.cleanShutdownConfirmed,true);assert.equal(body.config.externalReferencesConfirmed,true);
+    createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
+  });
+  await page.getByRole('button',{name:'Refresh dashboard'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Sites & schedules'}).click();
+  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  const siteDialog=page.getByRole('dialog');
+  assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
+  await siteDialog.getByLabel('Source server').selectOption('host-one');
+  await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
+  await siteDialog.getByText('Include other containers in this site (optional)',{exact:true}).click();
+  await siteDialog.getByRole('checkbox',{name:'shop-db'}).check();
+  await page.screenshot({path:'data/screenshots/site-selection-desktop.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Site selection fits mobile');
+  await page.screenshot({path:'data/screenshots/site-selection-mobile.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:1440,height:960});
+  await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop');
+  await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
+  await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
+  await siteDialog.getByRole('checkbox',{name:/normal stop/}).check();
+  await siteDialog.getByRole('checkbox',{name:/No containers or processes/}).check();
+  await siteDialog.getByRole('button',{name:'Back',exact:true}).click();
+  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
+  await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
+  await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
+  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  await siteDialog.getByLabel('Source server').selectOption('host-one');
+  await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
+  await siteDialog.getByLabel('Source server').selectOption('host-two');
+  await siteDialog.getByRole('alert').getByText('The server is unavailable. Retry the connection.',{exact:true}).waitFor();
+  assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'A failed server switch cannot reuse a previous selection');
+  discoveryFailed=false;await siteDialog.getByRole('button',{name:'Retry container discovery'}).click();
+  await siteDialog.getByText(/No Docker containers found/).waitFor();
+  assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'Empty discovery cannot create a site');
+  await siteDialog.getByRole('button',{name:'Cancel',exact:true}).click();
   for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
