@@ -68,7 +68,7 @@ test('setup, mandatory 2FA, sessions, CSRF, replay protection and one-use recove
 test('all private API routes reject anonymous and forged sessions before reading data or running operations', async () => {
   const routes = [
     ['GET','/state'], ['GET','/servers/example/discover'], ['GET','/jobs/example'], ['GET','/backups/example/download'],
-    ['POST','/servers'], ['PATCH','/servers/example'], ['POST','/servers/example/test'],
+    ['POST','/servers'], ['PATCH','/servers/example'], ['POST','/servers/example/test'], ['GET','/servers/onboarding'], ['POST','/servers/prepare-key'], ['POST','/servers/connect'],
     ['POST','/sites'], ['PATCH','/sites/example'], ['POST','/sites/example/policy'], ['POST','/sites/example/backup'],
     ['POST','/jobs/example/recovery'], ['POST','/backups/example/pin'], ['POST','/backups/example/restore-plan'], ['POST','/backups/example/restore'],
     ['PATCH','/maintenance'], ['POST','/sites/example/maintenance'], ['POST','/sites/example/maintenance/deploy'],

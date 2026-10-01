@@ -10,6 +10,7 @@ import { db, parse, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
+import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance } from './engine.js';
 
 export const app = express();
@@ -69,6 +70,21 @@ app.get('/api/state', (_req, res) => {
   const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC LIMIT 1000').all().map(parse);
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), sites: db.prepare('SELECT * FROM sites ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), storage: { used: backups.reduce((sum, b) => sum + b.size, 0), total: Number(storage.blocks) * Number(storage.bsize), available: Number(storage.bavail) * Number(storage.bsize) }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
+});
+app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
+app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
+  const result=await prepareServerKey();
+  audit(req.user.id,'server.key_prepared');
+  res.json(result);
+});
+app.post('/api/servers/connect', requireAdmin, rateLimit('server-connect',5), async (req,res) => {
+  const data=serverSchema.parse(req.body), serverId=id();
+  const server={id:serverId,host:data.host,port:data.port,username:data.username,private_key:seal(data.privateKey),host_key:fingerprint(data.hostKey)};
+  const capabilities=await testServer(server);
+  if(capabilities.uid!==0)return res.status(409).json({error:'SSH connected, but this backup engine requires a root SSH account to preserve volume ownership. Run the setup command as root and connect using root.'});
+  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(serverId,data.name,data.host,data.port,data.username,server.private_key,server.host_key,'connected',JSON.stringify(capabilities),now());
+  audit(req.user.id,'server.connected',serverId);
+  res.status(201).json(safeServer(getServer(serverId)));
 });
 app.post('/api/servers', requireAdmin, (req, res) => {
   const data = serverSchema.parse(req.body), serverId = id();
