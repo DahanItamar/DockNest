@@ -1,4 +1,8 @@
 .git
+.ssh
+.aws
+.codex
+.agents
 node_modules
 dist
 data
