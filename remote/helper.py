@@ -35,7 +35,7 @@ def health(containers,url=None):
     return True
 def maintenance(cfg,enabled):
     m=cfg.get('maintenance',{})
-    if not m.get('required') and not m.get('directory'):return
+    if not m.get('required'):return
     directory=pathlib.Path(m['directory'])
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
     if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
@@ -46,10 +46,17 @@ def maintenance(cfg,enabled):
             urllib.request.urlopen(m['publicUrl'],timeout=10)
             raise ValueError('Maintenance probe must return HTTP 503')
         except urllib.error.HTTPError as e:
-            if e.code!=503:raise ValueError('Maintenance response is not 503')
+            if e.code!=503 or b'dbm-maintenance-v1' not in e.read(256*1024):raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
     else:
         if not health(cfg['containers'],m.get('healthUrl')):raise ValueError('Health probe failed; maintenance retained')
         (directory/'enabled').unlink(missing_ok=True)
+        if m.get('publicUrl'):
+            try:
+                with urllib.request.urlopen(m['publicUrl'],timeout=10) as response:
+                    if response.status!=200 or b'dbm-maintenance-v1' in response.read(256*1024):raise ValueError('Public access did not recover')
+            except Exception:
+                (directory/'enabled').touch(mode=0o600)
+                raise ValueError('Public probe failed; maintenance retained')
 def recover(root,ids,cfg,deadline,parent):
     while not (root/'disarmed').exists() and time.time()<deadline:time.sleep(2)
     if (root/'disarmed').exists():
@@ -291,6 +298,7 @@ def main(req):
     elif op=='restore':restore(req)
     elif op=='deploy-maintenance':deploy_maintenance(req)
     elif op=='maintenance':
+        req['config'].setdefault('maintenance',{})['required']=True
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
     elif op=='cleanup':
         root=pathlib.Path(req['root']);uuid.UUID(root.name)

@@ -137,12 +137,15 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   audit(req.user.id, 'job.recovery_acknowledged', job.id); res.json({ status: 'failed', recoveryReviewed: true });
 });
 app.get('/api/backups/:id/download', (req, res, next) => {
-  const backup = db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id) || notFound('Verified backup not found.');
+  const leaseId = id();
+  const backup = transaction(() => {
+    const row = db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id) || notFound('Verified backup not found.');
+    db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId, row.id, Date.now() + 120000);
+    return row;
+  });
   const storage = realpathSync(config.backupDir), file = realpathSync(backup.path);
   const relative = path.relative(storage, file);
   if (relative.startsWith('..') || path.isAbsolute(relative) || !statSync(file).isFile()) throw new Error('Backup path is outside managed storage.');
-  const leaseId = id();
-  db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId, backup.id, Date.now() + 120000);
   const interval = setInterval(() => db.prepare('UPDATE downloads SET expires_at=? WHERE id=?').run(Date.now() + 120000, leaseId), 30000);
   let cleared = false;
   const clear = () => { if (cleared) return; cleared = true; clearInterval(interval); db.prepare('DELETE FROM downloads WHERE id=?').run(leaseId); };
