@@ -41,7 +41,7 @@ Setup creates `.env`, `data/master.key`, and `data/setup.token` without overwrit
 
 Follow [deployment.md](docs/deployment.md) for Compose, HTTPS, remote prerequisites, updates, and disaster recovery. The central services do not mount the Docker socket. Docker operations run over SSH on your Linux source/target servers.
 
-Add a server using its SSH private key and independently verified host-key fingerprint. Scan containers, review the entire site and mounted data, then configure capture and maintenance integration before scheduling. Daily policies use the site's configured timezone. Retention applies to successful backups; failed attempts must not consume the retained successful history.
+Use **Add server** for the guided Ubuntu/Linux setup: select an existing SSH key file or generate a dedicated backup key, run the supplied command in your server console, paste its public-fingerprint report, then test and save. See [server connection steps](docs/server-connection.md). Scan containers, review the entire site and mounted data, then configure capture and maintenance integration before scheduling. Daily policies use the site's configured timezone. Retention applies to successful backups; failed attempts must not consume the retained successful history.
 
 Download and Restore are separate operations. New-copy restore currently supports one compatible, unprivileged container, fresh data paths, and networking disabled. Custom mappings and multi-container restore require additional adapters. Replacement of an existing site remains blocked until the rollback and pre-replacement-backup workflow is implemented and validated. External buckets, generic proxy installation, and online database backup are extensions.
 
