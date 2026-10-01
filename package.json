@@ -14,7 +14,10 @@
     "build": "vite build",
     "test": "node --test tests/*.test.js",
     "check": "npm run build && npm test",
-    "setup": "node scripts/setup.js"
+    "setup": "node scripts/setup.js",
+    "brand:export": "node scripts/export-brand.js",
+    "test:browser": "node scripts/smoke-browser.js",
+    "test:integration": "node scripts/integration-linux.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

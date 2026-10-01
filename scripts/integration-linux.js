@@ -1,0 +1,186 @@
+import assert from 'node:assert/strict';
+import { execFile,spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
+
+const exec = promisify(execFile);
+const run = async (...args) => {
+  try { return (await exec('docker', args, { maxBuffer: 4 * 1024 * 1024 })).stdout.trim(); }
+  catch(error) {
+    if(args.includes('nginx')) throw new Error('Nginx fixture configuration/start failed: '+String(error.stderr).slice(0,1000));
+    throw error;
+  }
+};
+const token = randomUUID().slice(0, 8);
+const hosts = [`docknest-qa-source-${token}`, `docknest-qa-target-${token}`,`docknest-qa-storage-${token}`];
+const directory = resolve('data', `linux-qa-${token}`);
+await mkdir(directory, { recursive: true });
+process.env.DATA_DIR = join(directory, 'state');
+process.env.BACKUP_DIR = join(directory, 'backups');
+process.env.MASTER_KEY_FILE = join(directory, 'master.key');
+process.env.SETUP_TOKEN_FILE = join(directory, 'setup.token');
+process.env.APP_ORIGIN = 'http://127.0.0.1:3000';
+process.env.NODE_ENV = 'test';
+process.env.SECURE_COOKIES = 'false';
+process.env.BACKUP_STORAGE = 'unconfigured';
+await writeFile(process.env.MASTER_KEY_FILE, randomBytes(32).toString('base64'), { mode: 0o600 });
+const evidence = { at: new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target and remote SFTP storage', checks: [] };
+let db;
+async function until(check, message, seconds = 90) {
+  const end = Date.now() + seconds * 1000;
+  while (Date.now() < end) {
+    try { if (await check()) return; } catch {}
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new Error(message);
+}
+function record(message) { evidence.checks.push(message); console.log('PASS ' + message); }
+try {
+  assert.match(await run('info', '--format', '{{.OSType}}'), /linux/);
+  evidence.docker = await run('version', '--format', '{{.Server.Version}}');
+  await run('build', '-t', 'docknest-qa-host:local', '-f', 'tests/integration/Dockerfile', '.');
+  const { prepareServerKey } = await import('../src/server-onboarding.js');
+  const { seal,open } = await import('../src/crypto.js');
+  const { testServer, enqueueBackup, claimJob, executeJob, planRestore, enqueueRestore, verifyEncrypted, verifyRecovery } = await import('../src/engine.js');
+  const { remote, connect } = await import('../src/ssh.js');
+  const {testStorageTarget,openRead,openWrite,storageJoin,removeFile,statFile}=await import('../src/storage.js');
+  ({ db } = await import('../src/db.js'));
+  const servers = [];
+  for (const host of hosts) {
+    await run('run', '-d', '--privileged', '--name', host, '-e', 'DOCKER_TLS_CERTDIR=', '-p', '127.0.0.1::22', 'docknest-qa-host:local');
+    await until(async () => (await run('exec', host, 'docker', 'info', '--format', '{{.OSType}}')) === 'linux', 'Nested Docker engine failed to start');
+    const key = await prepareServerKey();
+    const publicFile = join(directory, host + '.pub');
+    await writeFile(publicFile, key.publicKey + '\n');
+    await run('cp', publicFile, host + ':/root/.ssh/authorized_keys');
+    await run('exec', host, 'chmod', '600', '/root/.ssh/authorized_keys');
+    const publicHostKey = await run('exec', host, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub');
+    const server = { id: randomUUID(), name: host, host: '127.0.0.1', port: Number((await run('port', host, '22/tcp')).split(':').at(-1)), username: 'root', private_key: seal(key.privateKey), host_key: createHash('sha256').update(Buffer.from(publicHostKey.split(' ')[1], 'base64')).digest('hex') };
+    const capabilities = await testServer(server);
+    assert.equal(capabilities.uid, 0);
+    await assert.rejects(connect({ ...server, host_key: '0'.repeat(64) }));
+    db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,capabilities,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(server.id, host, server.host, server.port, 'root', server.private_key, server.host_key, JSON.stringify(capabilities), 'connected', new Date().toISOString());
+    servers.push(server);
+  }
+  record('Three Linux SSH hosts connect; mismatched pinned host keys fail closed');
+  const storageServer=servers[2],storagePassword=randomBytes(32).toString('base64url');
+  await run('exec',hosts[2],'python3','-c',"from pathlib import Path;p=Path('/etc/ssh/sshd_config');p.write_text(p.read_text().replace('PermitRootLogin prohibit-password','PermitRootLogin yes').replace('PasswordAuthentication no','PasswordAuthentication yes'))");
+  await new Promise((resolve,reject)=>{
+   const process=spawn('docker',['exec','-i',hosts[2],'chpasswd'],{stdio:['pipe','ignore','ignore']});
+   process.once('error',reject);process.once('close',code=>code===0?resolve():reject(new Error('Fixture password provisioning failed')));
+   process.stdin.end('root:'+storagePassword+'\n');
+  });
+  await run('kill','--signal','HUP',hosts[2]);
+  const storageOptions={host:storageServer.host,port:storageServer.port,username:'root',hostKey:storageServer.host_key,root:'/storage/docknest'};
+  await until(async()=>Boolean((await testStorageTarget({...storageOptions,password:storagePassword})).readVerified),'Password SFTP fixture connection failed');
+  await testStorageTarget({...storageOptions,privateKey:open(storageServer.private_key)});
+  await assert.rejects(testStorageTarget({...storageOptions,password:storagePassword,hostKey:'0'.repeat(64)}));
+  const destinationId=randomUUID(),storageNow=new Date().toISOString();
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(destinationId,'Remote QA Storage',storageServer.host,storageServer.port,'root',storageServer.host_key,'password',seal(storagePassword),storageOptions.root,1e12,'connected',storageNow,storageNow);
+  db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(destinationId);
+  record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
+  await run('cp','remote',hosts[0]+':/qa-helper');
+  await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
+  record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
+  await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
+  await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
+  await run('exec',hosts[0],'sh','-c',"printf 'snapshot-config' > /fixture-bind.txt; chmod 640 /fixture-bind.txt");
+  await run('exec', hosts[0], 'docker', 'run', '-d', '--name', 'site-a', '-p', '127.0.0.1:8080:8080', '-v', 'site-a-data:/site','-v','/fixture-bind.txt:/config/runtime.txt:ro', 'docknest-fixture:local');
+  await run('exec', hosts[0], 'docker', 'run', '-d', '--name', 'site-b', '-v', 'site-b-data:/site', 'docknest-fixture:local');
+  await until(async () => (await run('exec', hosts[0], 'docker', 'inspect', '--format', '{{.State.Health.Status}}', 'site-a')) === 'healthy', 'Fixture health failed');
+  const siteId = randomUUID();
+  const cfg = { containers: ['site-a'], stagingRoot: '/var/lib/docknest', exclusiveSourcesConfirmed: true, cleanShutdownConfirmed: true, shutdownProfile: 'generic', maintenanceRequired: true, maintenance: { required: true, directory: `/var/lib/docknest/maintenance/${siteId}`, publicUrl: 'http://127.0.0.1:8082/', healthUrl: 'http://127.0.0.1:8080/' } };
+  const proxy = (await readFile('remote/maintenance-nginx.conf','utf8')).replaceAll('SITE_ID',siteId).replace('listen 80;','listen 8082;');
+  const proxyFile=join(directory,'nginx.conf');
+  await writeFile(proxyFile,'events {}\nhttp {\n'+proxy+'\n}\n');
+  await remote(servers[0],{operation:'deploy-maintenance',config:cfg,html:Buffer.from(await readFile('remote/maintenance.html')).toString('base64')});
+  await run('cp',proxyFile,hosts[0]+':/etc/nginx/nginx.conf');
+  await run('exec',hosts[0],'nginx','-t','-c','/etc/nginx/nginx.conf');
+  await run('exec',hosts[0],'nginx','-c','/etc/nginx/nginx.conf');
+  await run('exec',hosts[0],'touch',cfg.maintenance.directory+'/ready');
+  await remote(servers[0],{operation:'maintenance',config:cfg,enabled:true});
+  const headers=await run('exec',hosts[0],'curl','-si','http://127.0.0.1:8082/');
+  assert.match(headers,/503 Service Temporarily Unavailable/);assert.match(headers,/Retry-After: 30/i);assert.match(headers,/Cache-Control: no-store/i);assert.match(headers,/dbm-maintenance-v1/);
+  for(const [method,path] of [['GET','/api/action'],['POST','/submit'],['GET','/__backup_status']]){
+    const response=await run('exec',hosts[0],'curl','-si','-X',method,'http://127.0.0.1:8082'+path);
+    assert.match(response,/503 Service Temporarily Unavailable/);assert.match(response,/application\/json/);assert.doesNotMatch(response,/<script>/);
+  }
+  await remote(servers[0],{operation:'maintenance',config:cfg,enabled:false});
+  record('Real independent Nginx maintenance serves HTML 503/Retry-After/no-store for GET, JSON 503 for APIs and POST, and clears only after direct and public health checks');
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, servers[0].id, 'QA fixture', JSON.stringify(cfg), new Date().toISOString());
+  enqueueBackup(siteId, 'qa');
+  const job = claimJob();
+  await executeJob(job);
+  const finished = db.prepare('SELECT * FROM jobs WHERE id=?').get(job.id);
+  assert.equal(finished.status, 'completed', finished.error);
+  assert.equal(await run('exec', hosts[0], 'docker', 'inspect', '--format', '{{.State.Running}}', 'site-a'), 'true');
+  assert.equal(await run('exec', hosts[0], 'docker', 'inspect', '--format', '{{.State.Running}}', 'site-b'), 'true');
+  const backup = db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);
+  assert.equal(await verifyEncrypted(backup.path), backup.checksum);
+  assert.ok(backup.path.startsWith('sftp:'+destinationId+':'));
+  assert.match(backup.path,/qa-fixture--[a-f0-9-]+\/\d{4}-\d{2}-\d{2}\/\d{2}-\d{2}-\d{2}Z--/);
+  const managerFiles=await readdir(directory,{recursive:true});
+  assert.ok(!managerFiles.some(file=>/\.(enc|tar|gz)(\.partial)?$/.test(file)),'Manager stores no backup or restore payloads');
+  const selectedRange=[];for await(const chunk of await openRead(backup.path,{start:0,end:15}))selectedRange.push(chunk);
+  assert.equal(Buffer.concat(selectedRange).subarray(0,4).toString(),'DBM1');
+  record('Backup is stored exclusively on remote SFTP in readable server/site/date folders; manager has no payload files; ranged reads work');
+  assert.equal(JSON.parse(backup.manifest).restoreTested, false);
+  record('Real capture preserves database, mounted asset and writable layer; source and unrelated site remain running; encrypted package authenticates');
+  await run('exec', hosts[0], 'docker', 'exec', 'site-a', 'python', '-c', "from pathlib import Path;import sqlite3;Path('/site/asset.txt').write_text('live-edited');db=sqlite3.connect('/site/database.sqlite');db.execute(\"UPDATE records SET value='live-edited'\");db.commit()");
+  const plan = await planRestore(backup.id, { serverId: servers[1].id });
+  assert.equal(plan.executable, true, JSON.stringify(plan.blockers));
+  assert.equal((await planRestore(backup.id, { serverId: servers[1].id, mode: 'replace' })).executable, false);
+  const queued = await enqueueRestore(backup.id, plan, 'qa');
+  const restoreJob = claimJob(); assert.equal(restoreJob.id, queued.id);
+  await executeJob(restoreJob);
+  const restoredJob = db.prepare('SELECT * FROM jobs WHERE id=?').get(restoreJob.id);
+  assert.equal(restoredJob.status, 'completed', restoredJob.error);
+  const result = JSON.parse(restoredJob.details).result;
+  const validate = "import sqlite3,json,os;from pathlib import Path;print(json.dumps({'record':sqlite3.connect('/site/database.sqlite').execute('SELECT value FROM records').fetchone()[0],'asset':Path('/site/asset.txt').read_text(),'mode':oct(os.stat('/site/asset.txt').st_mode & 0o777),'uid':os.stat('/site/asset.txt').st_uid,'gid':os.stat('/site/asset.txt').st_gid,'symlink':os.readlink('/site/asset-link.txt'),'hardlink':os.stat('/site/asset.txt').st_ino==os.stat('/site/asset-hardlink.txt').st_ino,'config':Path('/config/runtime.txt').read_text(),'layer':Path('/app/writable.txt').read_text()}))";
+  const values = JSON.parse(await run('exec', hosts[1], 'docker', 'exec', result.containerId, 'python', '-c', validate));
+  assert.deepEqual(values, { record: 'snapshot-record', asset: 'snapshot-asset', mode: '0o640',uid:1234,gid:2345,symlink:'asset.txt',hardlink:true,config:'snapshot-config', layer: 'snapshot-layer' });
+  assert.equal(await run('exec', hosts[1], 'docker', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', result.containerId), 'none');
+  record('Clean second-host restore loads bundled images without pulling; original database rows, asset, mode and writable layer survive live-source edits; copy has network none');
+  const chunks=[];for await(const chunk of await openRead(backup.path))chunks.push(chunk);
+  const bytes = Buffer.concat(chunks); bytes[40] ^= 1;
+  const corrupted=storageJoin(backup.path.slice(0,backup.path.lastIndexOf('/')),'corrupted.enc');
+  const output=await openWrite(corrupted);await new Promise((resolve,reject)=>{output.once('error',reject);output.end(bytes,resolve);});
+  await assert.rejects(verifyEncrypted(corrupted));
+  await removeFile(corrupted);assert.equal((await statFile(backup.path)).size,backup.size);
+  assert.ok(!(await readdir(directory,{recursive:true})).some(file=>/\.(enc|tar|gz)(\.partial)?$/.test(file)),'Restore streams without manager disk staging');
+  record('Corrupted encrypted payload is rejected; replacement mode remains blocked');
+  const wrapper=join(directory,'tar-wrapper');
+  await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
+  await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');
+  await run('exec',hosts[0],'touch','/tmp/docknest-fail-copy');
+  enqueueBackup(siteId,'qa');const failedJob=claimJob();await executeJob(failedJob);
+  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(failedJob.id).status,'failed');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backups WHERE site_id=?').get(siteId).n,1);
+  assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-a'),'true');
+  assert.equal(await run('exec',hosts[0],'test','!','-e',cfg.maintenance.directory+'/enabled'),'');
+  record('Copy failure restarts the original site, clears maintenance after health checks, publishes no incomplete package and preserves the previous good backup');
+  cfg.stopTimeout=5;cfg.captureTimeout=1;
+  db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify(cfg),siteId);
+  await run('exec',hosts[0],'touch','/tmp/docknest-interrupt-copy');
+  enqueueBackup(siteId,'qa');const interrupted=claimJob();
+  console.log('Testing watchdog recovery after capture interruption (about two minutes).');
+  await executeJob(interrupted);
+  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(interrupted.id).status,'recovery_required');
+  await until(async()=>Boolean((await verifyRecovery({...interrupted,status:'recovery_required'})).healthVerified),'Watchdog did not restore health and maintenance state',30);
+  assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-b'),'true');
+  record('Detached Linux watchdog terminates a stuck capture, restarts the original site and clears maintenance after health; central job remains locked until verified recovery');
+  evidence.status = 'passed';
+} catch (error) {
+  evidence.status = 'failed';
+  // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.
+  evidence.failure = error.message.startsWith('Command failed:') ? 'Docker fixture command failed; inspect the isolated test environment' : error.message;
+  console.error(evidence.failure); process.exitCode = 1;
+} finally {
+  for (const host of hosts) await run('rm', '-f', '-v', host).catch(() => {});
+  db?.close();
+  await mkdir('data/qa', { recursive: true });
+  await writeFile('data/qa/linux-integration.json', JSON.stringify(evidence, null, 2) + '\n');
+  await rm(directory, { recursive: true, force: true });
+}
