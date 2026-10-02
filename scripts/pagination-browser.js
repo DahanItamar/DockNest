@@ -53,11 +53,12 @@ try{
  const pagerY=async pager=>(await pager.boundingBox()).y+await page.evaluate(()=>scrollY);
  async function partialPage(label,selector,fullCount){
   const pager=page.getByRole('group',{name:label+' pagination',exact:true});
-  await settle();assert.equal(await page.locator(selector).count(),fullCount);
+  await settle();fullCount??=await page.locator(selector).count();assert.equal(await page.locator(selector).count(),fullCount);
   const y=await pagerY(pager),next=pager.getByRole('button',{name:label+' next page',exact:true});
   while(!await next.isDisabled())await next.click();
-  await settle();assert.equal(await page.locator(selector).count(),1);
+  await settle();const finalCount=await page.locator(selector).count();assert.ok(finalCount>=1&&finalCount<=fullCount);
   assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place on a one-item last page');
+  if(label==='Backup sites')await page.screenshot({path:directory+'/backup-last-'+page.viewportSize().width+'x'+page.viewportSize().height+'.png',fullPage:true});
   while(!await pager.getByRole('button',{name:label+' previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:label+' previous page',exact:true}).click();
   await settle();assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place returning to the full page');
  }
@@ -65,10 +66,46 @@ try{
   await page.setViewportSize({width,height:1000});
   await navigate('Servers');await partialPage('Servers','.server-card',4);
   await navigate('Sites & schedules');await partialPage('Sites','.site-card',4);
-  await navigate('Backups');await partialPage('Backup sites','.backup-group',3);
+  await navigate('Backups');await partialPage('Backup sites','.backup-group');
   await page.locator('.backup-group>summary').first().click();
   await partialPage('Recovery points for Website 0','.backup-group[open] .recovery-row',3);
  }
+ await page.setViewportSize({width:1440,height:1000});
+ await navigate('Backups');
+ await page.locator('.backup-group[open]>summary').evaluateAll(summaries=>summaries.forEach(summary=>summary.click()));await settle();
+ let shorterCount;
+ for(const height of [720,1000,1200]){
+  await page.setViewportSize({width:1440,height});await settle();
+  const pager=page.getByRole('group',{name:'Backup sites pagination',exact:true});
+  while(!await pager.getByRole('button',{name:'Backup sites previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:'Backup sites previous page',exact:true}).click();
+  await settle();
+  const count=await page.locator('.backup-group').count();
+  if(shorterCount!=null)assert.ok(count>shorterCount,'A taller screen fits more backup site groups');shorterCount=count;
+  const geometry=await page.locator('.viewport-page').evaluate(el=>{
+   const list=el.querySelector('.backup-library'),items=[...list.children],gap=parseFloat(getComputedStyle(list).rowGap)||0;
+   const slot=Math.max(...items.map(item=>item.querySelector('summary').getBoundingClientRect().height));
+   return {capacity:el.querySelector('.paged-content').getBoundingClientRect().height,slot,gap};
+  });
+  assert.ok(count*geometry.slot+(count-1)*geometry.gap<=geometry.capacity+.5,'Visible rows fit available height');
+  assert.ok((count+1)*geometry.slot+count*geometry.gap>geometry.capacity,'Every fitting row is included: '+JSON.stringify({height,count,...geometry}));
+  const footer=await page.locator('.workspace>footer').boundingBox();
+  const scroll=await page.evaluate(()=>scrollY);
+  assert.ok(Math.abs(footer.y+scroll+footer.height-height)<1.1,'Backup pagination fills the viewport above the footer: '+JSON.stringify({height,footer,scroll}));
+  await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:directory+'/backup-fit-'+height+'.png',fullPage:true});
+  await partialPage('Backup sites','.backup-group');
+ }
+ const responsivePager=page.getByRole('group',{name:'Backup sites pagination',exact:true});
+ await responsivePager.getByRole('button',{name:'Backup sites next page',exact:true}).click();
+ const anchor=await page.locator('.backup-site-name b').first().textContent();
+ await page.setViewportSize({width:1440,height:720});await settle();
+ assert.ok((await page.locator('.backup-site-name b').allTextContents()).includes(anchor),'Resizing keeps the first visible site in the new page');
+ await page.setViewportSize({width:1440,height:1200});await settle();
+ // Four sites fit together when there is room, without an unnecessary second page.
+ const originalBackups=state.backups;state.backups=backups.filter(b=>Number(b.siteId.slice(5))<4);
+ await page.getByRole('button',{name:'Refresh dashboard'}).click();await settle();
+ assert.equal(await page.locator('.backup-group').count(),4);
+ assert.equal(await page.getByRole('group',{name:'Backup sites pagination',exact:true}).count(),0);
+ state.backups=originalBackups;await page.getByRole('button',{name:'Refresh dashboard'}).click();await settle();
  await page.setViewportSize({width:1440,height:1000});
  await navigate('Servers');await page.getByLabel('Filter Servers').fill('Docker host 28');assert.equal(await page.locator('.server-card').count(),1);assert.equal(await page.getByRole('group',{name:'Servers pagination',exact:true}).count(),0,'Single-page search has no empty reserved page or pager');await page.getByLabel('Filter Servers').fill('');
  await navigate('Backups');await page.locator('.backup-group>summary').first().click();
@@ -80,12 +117,12 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',3],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
    await page.setViewportSize({width:1440,height:1000});await navigate(route);
-   await page.locator(selector).first().waitFor().catch(async e=>{await page.screenshot({path:'data/pagination-failure.png',fullPage:true});console.log(route,errors);throw e});assert.equal(await page.locator(selector).count(),count,route+' bounded record count');
+   await page.locator(selector).first().waitFor().catch(async e=>{await page.screenshot({path:'data/pagination-failure.png',fullPage:true});console.log(route,errors);throw e});await settle();if(count!=null)assert.equal(await page.locator(selector).count(),count,route+' bounded record count');else assert.ok(await page.locator(selector).count()<22,'Backup groups fit the viewport');
    if(route==='Backups')await page.locator('.backup-group>summary').first().click();
    if(route==='Overview')await page.locator('.dash-site>summary').first().click();
    if(route==='Audit')await page.locator('.audit-details>summary').first().click();
@@ -96,5 +133,5 @@ try{
   }
  }
  assert.deepEqual(errors,[]);
- console.log('Large-data pagination passed: every main route bounded in light-only presentation and six widths; search reset, refresh preservation, shrink clamping, fixed page sizes, consistent Previous/Next controls, natural table height and original backup/restore actions passed.');
+ console.log('Large-data pagination passed: responsive backup capacity at three heights, stable partial pages, every main route bounded across six widths, search reset, refresh preservation, shrink clamping and original backup/restore actions.');
 }finally{await browser.close();}

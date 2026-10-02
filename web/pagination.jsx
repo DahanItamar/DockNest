@@ -1,11 +1,38 @@
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {ChevronLeft,ChevronRight} from './icons.jsx';
 
-export function Paginated({rows,label,pageSize=5,resetKey='',children,className='',stableHeight=false}) {
+export function Paginated({rows,label,pageSize=5,resetKey='',children,className='',stableHeight=false,fitViewport=false}) {
  const [page,setPage]=useState(1),[reservedHeight,setReservedHeight]=useState(0),measure=useRef(null),last=useRef({width:0,height:0});
+ const pager=useRef(null),[viewport,setViewport]=useState({size:1,height:0});
+ const size=fitViewport?viewport.size:pageSize;
+ // Measure collapsed site summaries and the actual surrounding chrome, rather than
+ // assigning a desktop row count. Open histories retain their normal document flow.
+ useLayoutEffect(()=>{
+  if(!fitViewport)return;
+  const element=measure.current,main=element.closest('main'),footer=main?.parentElement.querySelector(':scope > footer');
+  const update=()=>{
+   const collection=element.firstElementChild,items=[...(collection?.children||[])];
+   if(!items.length)return;
+   const slot=Math.max(...items.map(item=>(item.querySelector('summary')||item).getBoundingClientRect().height));
+   if(!slot)return;
+   const gap=Number.parseFloat(getComputedStyle(collection).rowGap)||0;
+   const top=element.getBoundingClientRect().top+window.scrollY;
+   const bottom=Number.parseFloat(getComputedStyle(main||element).paddingBottom)||0;
+   const available=window.innerHeight-top-bottom-(footer?.getBoundingClientRect().height||0)-(pager.current?.getBoundingClientRect().height||0);
+   const next={size:Math.max(1,Math.floor((available+gap)/(slot+gap))),height:Math.max(slot,available)};
+   setViewport(previous=>previous.size===next.size&&Math.abs(previous.height-next.height)<.5?previous:next);
+  };
+  const observer=new ResizeObserver(update);
+  for(const target of [element,main,footer,pager.current].filter(Boolean))observer.observe(target);
+  window.addEventListener('resize',update);update();
+  return()=>{observer.disconnect();window.removeEventListener('resize',update);};
+ },[fitViewport,label,resetKey,rows.length]);
+ // On resize, keep the first visible site within the newly sized page.
+ const previousSize=useRef(size);
+ useLayoutEffect(()=>{if(previousSize.current!==size){const oldSize=previousSize.current;setPage(current=>Math.floor((current-1)*oldSize/size)+1);previousSize.current=size;}},[size]);
  // Reserve real collection geometry so partial pages cannot pull the controls upward.
  useLayoutEffect(()=>{
-  if(!stableHeight)return;
+  if(!stableHeight||fitViewport)return;
   last.current={width:0,height:0};
   const update=()=>{
    const element=measure.current;if(!element)return;
@@ -37,15 +64,15 @@ export function Paginated({rows,label,pageSize=5,resetKey='',children,className=
    last.current={width:rect.width,height};setReservedHeight(height);
   };
   const observer=new ResizeObserver(update);observer.observe(measure.current);update();return()=>observer.disconnect();
- },[stableHeight,pageSize,label,resetKey]);
+ },[stableHeight,pageSize,label,resetKey,fitViewport]);
  useEffect(()=>setPage(1),[resetKey,label]);
- const pages=Math.max(1,Math.ceil(rows.length/pageSize)),current=Math.min(page,pages),start=(current-1)*pageSize;
+ const pages=Math.max(1,Math.ceil(rows.length/size)),current=Math.min(page,pages),start=(current-1)*size;
  useEffect(()=>{if(page>pages)setPage(pages);},[page,pages]);
  const change=next=>setPage(Math.max(1,Math.min(pages,next)));
- return <div className={'paginated-list '+(stableHeight?'stable-page ':'')+className}>
-  <div className="paged-content" style={stableHeight&&pages>1?{'--page-height':reservedHeight+'px'}:undefined}><div className="paged-measure" ref={measure}>{children(rows.slice(start,start+pageSize))}</div></div>
-  {pages>1&&<div className="pagination" role="group" aria-label={label+' pagination'}>
-   <span className="pagination-count" role="status" aria-live="polite">{start+1}-{Math.min(start+pageSize,rows.length)} of {rows.length}</span>
+ return <div className={'paginated-list '+(stableHeight?'stable-page ':'')+(fitViewport?'viewport-page ':'')+className}>
+  <div className="paged-content" style={stableHeight&&pages>1?{'--page-height':(fitViewport?viewport.height:reservedHeight)+'px'}:undefined}><div className="paged-measure" ref={measure}>{children(rows.slice(start,start+size))}</div></div>
+  {(pages>1||fitViewport)&&<div ref={pager} className={'pagination'+(pages===1?' pagination-probe':'')} role={pages>1?'group':undefined} aria-hidden={pages===1?true:undefined} inert={pages===1?true:undefined} aria-label={label+' pagination'}>
+   <span className="pagination-count" role="status" aria-live="polite">{start+1}-{Math.min(start+size,rows.length)} of {rows.length}</span>
    <div className="pagination-controls">
     <button type="button" aria-label={label+' previous page'} disabled={current===1} onClick={()=>change(current-1)}><ChevronLeft size={18}/><span>Previous</span></button>
     <span className="pagination-page" aria-label={label+' page'}>Page {current} of {pages}</span>

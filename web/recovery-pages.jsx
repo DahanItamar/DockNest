@@ -39,7 +39,7 @@ export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onC
  if(!backups.length)return <section className="panel"><Empty icon={BackupIcon} title="No matching recovery points" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another recovery point, timestamp or site identifier.</Empty></section>;
  const groups=new Map();
  for(const backup of backups){const group=groups.get(backup.siteId)||[];group.push(backup);groups.set(backup.siteId,group);}
- return <Paginated rows={[...groups]} label="Backup sites" pageSize={3} stableHeight resetKey={query}>{visible=><section className="backup-library" aria-label="Recovery points by site">{visible.map(([siteId,rows])=>{
+ return <Paginated rows={[...groups]} label="Backup sites" fitViewport stableHeight resetKey={query}>{visible=><section className="backup-library" aria-label="Recovery points by site">{visible.map(([siteId,rows])=>{
   const history=[...rows].sort((a,b)=>new Date(b.capturedAt||b.createdAt)-new Date(a.capturedAt||a.createdAt));
   return <details className="backup-group" key={siteId}>
    <summary><span className="backup-site-name"><BrandIcon name="sites" size={28}/><span><b>{name(siteId)}</b><small>Recovery history</small></span></span><span className="backup-group-count"><b>{history.length} recovery {history.length===1?'point':'points'}</b><small>{bytes(history.reduce((sum,b)=>sum+(b.size||b.sizeBytes||0),0))} stored</small></span><span className="backup-latest"><small>Latest capture</small><b>{date(history[0].capturedAt||history[0].createdAt)}</b></span><ChevronDown size={20}/></summary>
