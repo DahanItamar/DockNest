@@ -11,6 +11,8 @@
 
 DockNest brings server discovery, scheduled backups and recovery into one self-hosted dashboard. It captures containers, images, persistent data and reviewed configuration, stores an authenticated encrypted package on remote SFTP, and supports isolated restores. Native static nginx sites can also be backed up without stopping their web server.
 
+Recovery safeguards include fingerprinted filesystem/dependency plans, per-service cold database contracts, separate integrity/consistency/isolated data evidence, durable artifact reconciliation and an independently encrypted manager/key recovery kit. This remains a controlled beta: exact tested versions and limitations are documented in the [support matrix](docs/support-matrix.md), [database contracts](docs/database-contracts.md), [verification guide](docs/recovery-verification.md) and [independent recovery guide](docs/independent-recovery.md). Opt-in boot automation still requires a real host-reboot drill before supported production use.
+
 **Every screenshot uses mock data.** Names, addresses, activity and storage totals are synthetic; production accounts and credentials are never used for documentation.
 
 ## Features

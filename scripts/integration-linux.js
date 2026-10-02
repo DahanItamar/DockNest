@@ -27,7 +27,7 @@ process.env.NODE_ENV = 'test';
 process.env.SECURE_COOKIES = 'false';
 process.env.BACKUP_STORAGE = 'unconfigured';
 await writeFile(process.env.MASTER_KEY_FILE, randomBytes(32).toString('base64'), { mode: 0o600 });
-const evidence = { at: new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target and remote SFTP storage', checks: [] };
+const evidence = { formatVersion:2,release:process.env.GITHUB_SHA||(await exec('git',['rev-parse','HEAD'])).stdout.trim(),at:new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target and remote SFTP storage', checks: [] };
 let db;
 async function until(check, message, seconds = 90) {
   const end = Date.now() + seconds * 1000;
@@ -224,6 +224,8 @@ try {
   assert.equal(await run('exec',hosts[1],'stat','-c','%a',staticResult.documentRoot+'/assets/logo.txt'),'640');assert.equal(await run('exec',hosts[0],'cat',staticRoot+'/index.html'),'live-edit');
   await assert.rejects(remote(servers[0],{operation:'readiness',config:{...staticCfg,documentRoot:'/etc'}}).then(result=>{if(!result.ready)throw new Error('blocked')}));
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
+  const {runMilestones}=await import('./integration-milestones.js');
+  await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
   const wrapper=join(directory,'tar-wrapper');
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');

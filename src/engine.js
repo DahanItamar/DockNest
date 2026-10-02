@@ -39,11 +39,14 @@ export async function verifyRecovery(job){
 }
 function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
 function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(siteId);}
+function requireNoDeploymentHold(){if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
 export function enqueueBackup(siteId,actor='scheduler'){
+ requireNoDeploymentHold();
  siteInfo(siteId);if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
  const job=id();db.exec('BEGIN IMMEDIATE');try{if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
+ requireNoDeploymentHold();
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)throw new Error('Backup not found');
  db.exec('BEGIN IMMEDIATE');
  try{if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
@@ -70,6 +73,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
+ requireNoDeploymentHold();
  const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings});
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
@@ -77,6 +81,7 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  db.exec('BEGIN IMMEDIATE');
  try{
   if(busy(backup.site_id))throw new Error('Site already has active work or unresolved recovery');
+  requireNoDeploymentHold();
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
   db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,?,?,'queued',?)").run(restoreId,backupId,fresh.serverId,fresh.mode,JSON.stringify(fresh),now());
   db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore','queued','queued',?,?)").run(jobId,backup.site_id,now(),JSON.stringify({restoreId,backupId,targetServerId:fresh.serverId}));
@@ -188,6 +193,7 @@ export async function executeJob(job){
  }
 }
 export function tickScheduler(currentDate=new Date()){
+ if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')return;
  const policies=db.prepare('SELECT * FROM policies WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all();
  for(const policy of policies){
   try{

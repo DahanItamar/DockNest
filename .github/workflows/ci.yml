@@ -56,7 +56,7 @@ jobs:
           TEST_BASE_URL: http://127.0.0.1:3000
   linux-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -70,3 +70,25 @@ jobs:
         with:
           name: linux-integration-results
           path: data/qa/linux-integration.json
+  controlled-beta-gate:
+    needs: [privacy, check, browser, linux-integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-integration-results
+          path: data/qa
+      - run: node scripts/aggregate-gate.js data/qa/linux-integration.json
+        env:
+          NODE_CHECKS: ${{ needs.check.result }}
+          PRIVACY_CHECKS: ${{ needs.privacy.result }}
+          BROWSER_CHECKS: ${{ needs.browser.result }}
+      - run: node scripts/beta-gate.js data/qa/controlled-beta.json "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controlled-beta-evidence
+          path: data/qa/controlled-beta.json

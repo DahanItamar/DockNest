@@ -1,0 +1,13 @@
+import {db,transaction} from '../src/db.js';
+const mode=process.argv[2]||'check';
+try{
+ if(!['check','hold','release'].includes(mode))throw new Error('Invalid mode');
+ const result=transaction(()=>{
+  const pending=db.prepare("SELECT status,COUNT(*) AS count FROM jobs WHERE status IN ('queued','running','recovery_required') GROUP BY status").all();
+  const artifacts=db.prepare("SELECT COUNT(*) AS count FROM artifact_operations WHERE state IN ('prepared','authenticated')").get().count;
+  const deletions=db.prepare('SELECT COUNT(*) AS count FROM retention_operations').get().count;
+  if(pending.length||artifacts||deletions)throw new Error('Queue or recovery reconciliation needs review');
+  if(mode!=='check')db.prepare("INSERT INTO settings VALUES('deployment_hold',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(mode==='hold'?'true':'false');
+  return {queueEmpty:true,recoveryResolved:true,reconciliationClean:true,hold:mode==='hold'||(mode==='check'&&db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')};
+ });console.log(JSON.stringify(result));
+}catch{console.error('Deployment blocked: queued/running/recovery work or pending artifact operations must be resolved first.');process.exitCode=1;}finally{db.close();}
