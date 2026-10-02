@@ -1,6 +1,6 @@
 import { createDecipheriv,createHash } from 'node:crypto';
-import { mkdtemp,rm,statfs,mkdir,readdir } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import { mkdtemp,rm,statfs,mkdir,readdir,stat } from 'node:fs/promises';
+import { createWriteStream,createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -36,11 +36,14 @@ export async function exportFullZip(backup,response){
   await pipeline(await openRead(backup.path,{start:16,end:size-17}),digest,decipher,createWriteStream(payload,{flags:'wx',mode:0o600}),{signal:abort.signal});
   hash.update(tag);if(hash.digest('hex')!==backup.checksum)throw new Error('Backup checksum verification failed');
   if(abort.signal.aborted)throw new Error('Download canceled');
-  child=spawn(process.platform==='win32'?'python':'python3',[fileURLToPath(new URL('../remote/export_zip.py',import.meta.url)),payload],{stdio:['ignore','pipe','ignore'],windowsHide:true});
+  const zip=join(directory,'full-site.zip');
+  child=spawn(process.platform==='win32'?'python':'python3',[fileURLToPath(new URL('../remote/export_zip.py',import.meta.url)),payload,zip],{stdio:['ignore','ignore','ignore'],windowsHide:true});
   const completed=new Promise((resolve,reject)=>{child.once('error',()=>reject(new Error('ZIP export could not start')));child.once('close',code=>code===0?resolve():reject(new Error('ZIP export did not complete')));});
   completed.catch(()=>{});
-  response.attachment(backup.site_id+'_'+backup.id+'_full-site.zip');response.set({'Content-Type':'application/zip','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
-  await pipeline(child.stdout,response,{signal:abort.signal});await completed;
+  await completed;
+  if(abort.signal.aborted)throw new Error('Download canceled');
+  response.attachment(backup.site_id+'_'+backup.id+'_full-site.zip');response.set({'Content-Type':'application/zip','Content-Length':String((await stat(zip)).size),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+  await pipeline(createReadStream(zip),response,{signal:abort.signal});
  }finally{
   response.removeListener('close',cancel);child?.kill('SIGTERM');
   try{if(directory)await rm(directory,{recursive:true,force:true});}finally{exporting=false;}

@@ -10,7 +10,7 @@ const run = async (...args) => {
   try { return (await exec('docker', args, { maxBuffer: 4 * 1024 * 1024 })).stdout.trim(); }
   catch(error) {
     if(args.includes('nginx')) throw new Error('Nginx fixture configuration/start failed: '+String(error.stderr).slice(0,1000));
-    if(args.includes('/full-site.zip'))throw new Error('ZIP fixture verification failed: '+String(error.stderr).slice(0,1200));
+    if(args.some(arg=>arg.includes('full-site.zip')))throw new Error('ZIP fixture verification failed: '+String(error.stderr).slice(0,1200));
     throw error;
   }
 };
@@ -156,8 +156,10 @@ try {
   const {exportFullZip}=await import('../src/backup-export.js');const {createWriteStream}=await import('node:fs');
   const fullZip=join(directory,'full-site.zip'),zipResponse=createWriteStream(fullZip);zipResponse.attachment=()=>zipResponse;zipResponse.set=()=>zipResponse;
   await exportFullZip(backup,zipResponse);
+  const {execFileSync}=await import('node:child_process');
+  execFileSync(process.platform==='win32'?'python':'python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);bad=z.testzip();assert bad is None,repr(bad)",fullZip],{stdio:['ignore','ignore','pipe']});
   await run('cp',fullZip,hosts[1]+':/full-site.zip');
-  assert.equal(await run('exec',hosts[1],'python3','-c',"import zipfile;z=zipfile.ZipFile('/full-site.zip');assert z.testzip() is None;assert z.read('site-files/site-a/site/asset.txt')==b'snapshot-asset';assert 'site-files/site-a/site/database.sqlite' in z.namelist();assert 'recovery-originals/images.tar' in z.namelist();assert 'recovery-originals/manifest.json' in z.namelist();print('full-zip-verified')"),'full-zip-verified');
+  assert.equal(await run('exec',hosts[1],'python3','-c',"import zipfile;z=zipfile.ZipFile('/full-site.zip');bad=z.testzip();assert bad is None,repr(bad);assert z.read('site-files/site-a/site/asset.txt')==b'snapshot-asset';assert 'site-files/site-a/site/database.sqlite' in z.namelist();assert 'recovery-originals/images.tar' in z.namelist();assert 'recovery-originals/manifest.json' in z.namelist();print('full-zip-verified')"),'full-zip-verified');
   await rm(fullZip);assert.deepEqual(await readdir(join(process.env.DATA_DIR,'private-exports')),[]);
   record('Full ZIP authenticates the encrypted SFTP backup, exports browsable database/files and original image archives, passes every ZIP CRC and removes temporary plaintext');
   record('Clean second-host restore loads bundled images without pulling; original database rows, asset, mode and writable layer survive live-source edits; copy has network none');

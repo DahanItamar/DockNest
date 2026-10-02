@@ -16,7 +16,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
  useEffect(()=>{
   let current=true;
   const preserve=firstDiscovery.current&&!!initialSite;firstDiscovery.current=false;
-  setContainers([]);if(!preserve){setPrimary('');setAdditional([]);filesEdited.current={composeFiles:false,configFiles:false};}setBrowser('');setError('');setLoading(!!serverId);
+  setContainers([]);if(!preserve){setTemporaryReviewed(false);setPrimary('');setAdditional([]);filesEdited.current={composeFiles:false,configFiles:false};}setBrowser('');setError('');setLoading(!!serverId);
   setSettings(previous=>({...previous,...(!nameEdited.current?{name:''}:{}),...(!preserve?{composeFiles:'',configFiles:'',externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}:{})}));
   if(serverId)api('/servers/'+serverId+'/discover').then(result=>{
    if(current)setContainers((result.containers||[]).filter(container=>containerName(container)));
@@ -47,7 +47,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
   setSettings(previous=>({...previous,[name]:type==='checkbox'?checked:value}));
  };
  function chooseContainer(event){
-  const value=event.target.value;setPrimary(value);setAdditional([]);
+  const value=event.target.value;setTemporaryReviewed(false);setPrimary(value);setAdditional([]);
   setSettings(previous=>({...previous,...(!nameEdited.current?{name:value}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));
  }
  async function submit(event){
@@ -87,7 +87,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
      <p>Select the app and its database or other services. Docker project labels suggest membership; check that shared services belong in this backup.</p>
      <Field label="Docker container (site)" value={primary} onChange={chooseContainer} options={[[ '', 'Choose a Docker container'],...containers.map(container=>[containerName(container),containerName(container)+' · '+containerStatus(container)])]}/>
      {source&&<div className="hint"><b>{primary}</b><p>{source.image||source.Config?.Image||'Docker container'} · {containerStatus(source)}</p><p>{(source.mounts||source.Mounts)?.map(mount=>(mount.Type||mount.type)+': '+(mount.Destination||mount.destination)).join(' · ')||'Mounted data is inspected during backup preflight.'}</p></div>}
-     {primary&&containers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same site.</p><div className="container-list">{containers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name))}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
+     {primary&&containers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same site.</p><div className="container-list">{containers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setTemporaryReviewed(false);setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
      </details>
     </>:<p role="status">No Docker containers found. Check the selected server, or create your site’s container and refresh.</p>}
    </>}

@@ -29,7 +29,11 @@ class FullZipTests(unittest.TestCase):
             with tarfile.open(payload,'w:gz') as t:
                 for name,content in [('manifest.json',json.dumps(manifest).encode()),('images.tar',b'images'),('restore-guide.md',b'guide'),('mount-0-0.tar',mount.getvalue()),('config-0.tar',config.getvalue())]:
                     m=tarfile.TarInfo(name);m.size=len(content);t.addfile(m,io.BytesIO(content))
-            output=io.BytesIO();export_zip(payload,output)
+            class Pipe(io.BytesIO):
+                def seek(self,*args):raise io.UnsupportedOperation('pipe')
+                def tell(self):raise io.UnsupportedOperation('pipe')
+            streamed=Pipe();export_zip(payload,streamed)
+            output=io.BytesIO(streamed.getvalue())
             with zipfile.ZipFile(output) as z:
                 self.assertIsNone(z.testzip())
                 self.assertEqual(z.read('site-files/wordpress/var/www/html/upload.png'),b'image')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Export an already authenticated private backup as a browsable, complete ZIP."""
-import sys,tarfile,zipfile,json,pathlib,shutil,re,stat
+import sys,tarfile,zipfile,json,pathlib,shutil,re,stat,os
 
 def safe_name(name):
     p=pathlib.PurePosixPath(name)
@@ -57,7 +57,13 @@ def export_zip(payload,output):
                         else:raise ValueError('Unsupported file type in backup')
 
 if __name__=='__main__':
-    try:export_zip(sys.argv[1],sys.stdout.buffer)
+    try:
+        if len(sys.argv)>2:
+            with open(sys.argv[2],'xb') as output:
+                os.chmod(sys.argv[2],0o600);export_zip(sys.argv[1],output)
+            with zipfile.ZipFile(sys.argv[2]) as completed:
+                if completed.testzip() is not None:raise ValueError('ZIP integrity verification failed')
+        else:export_zip(sys.argv[1],sys.stdout.buffer)
     except (BrokenPipeError,ConnectionResetError):sys.exit(1)
     except Exception:
         print('Could not export the complete backup ZIP.',file=sys.stderr);sys.exit(1)
