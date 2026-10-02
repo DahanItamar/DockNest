@@ -22,6 +22,15 @@ export function activeStorage(){
  const selected=db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get();
  return selected?targetOptions(selected.value):{...config.storage,id:'env'};
 }
+export async function checkStorageReadiness(){
+ const options=activeStorage();
+ if(options.mode==='unconfigured')throw new Error('Storage is not configured');
+ if(options.mode==='local'){const attrs=await stat(config.backupDir);if(!attrs.isDirectory())throw new Error('Storage directory missing');}
+ else await withSession(options,async sftp=>{const attrs=await call(sftp,'stat',options.root);if(!attrs.isDirectory())throw new Error('Storage directory missing');});
+ const capacity=await storageCapacity();
+ if(capacity.available<1024**3)throw new Error('Insufficient storage capacity');
+ return {reachable:true,writeTested:false};
+}
 function fileOptions(file){
  const value=file.slice(prefix.length),separator=value.indexOf(':');
  if(!isRemoteFile(file))throw new Error('Expected an SFTP storage path');

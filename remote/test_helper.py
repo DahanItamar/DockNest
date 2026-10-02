@@ -1,6 +1,6 @@
 import unittest, tempfile, pathlib, tarfile, io, urllib.error
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness
 
 class ConfigurationFileTests(unittest.TestCase):
     def test_detection_and_browsing_return_paths_and_names_without_file_contents(self):
@@ -69,6 +69,36 @@ class ArchiveSecurityTests(unittest.TestCase):
             self.assertFalse((base/'output/alias').exists())
 
 class MaintenanceTests(unittest.TestCase):
+    def test_origin_https_verifies_original_hostname_on_loopback(self):
+        from unittest.mock import Mock
+        context=Mock();sock=Mock()
+        connection=OriginHTTPSConnection('www.example.org',443,timeout=10,context=context)
+        with patch('helper.socket.create_connection',return_value=sock) as connect:
+            connection.connect()
+        connect.assert_called_once_with(('127.0.0.1',443),10)
+        context.wrap_socket.assert_called_once_with(sock,server_hostname='www.example.org')
+        context.wrap_socket.side_effect=__import__('ssl').SSLCertVerificationError('certificate mismatch')
+        with patch('helper.socket.create_connection',return_value=sock):
+            with self.assertRaises(__import__('ssl').SSLCertVerificationError):connection.connect()
+        sock.close.assert_called_once()
+    def test_origin_probe_preserves_host_and_query_without_following_redirects(self):
+        from unittest.mock import Mock
+        conn=Mock();response=Mock(status=301);response.read.return_value=b'redirect';conn.getresponse.return_value=response
+        with patch('helper.http.client.HTTPConnection',return_value=conn) as connect:
+            self.assertEqual(public_probe({'publicUrl':'http://example.invalid:8082/path?x=1','probeOrigin':True}),(301,b'redirect'))
+        connect.assert_called_once_with('127.0.0.1',8082,timeout=10)
+        conn.request.assert_called_once_with('GET','/path?x=1',headers={'Host':'example.invalid:8082','Cache-Control':'no-cache'})
+        conn.close.assert_called_once()
+        for url in ['file:///etc/passwd','https://user:secret@example.org/']:
+            with self.assertRaises(ValueError):public_probe({'publicUrl':url,'probeOrigin':True})
+    def test_readiness_reports_missing_setup_without_mutating_flags(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d}}
+            with patch('helper.preflight',side_effect=ValueError('Select Compose files')),patch('helper.health',return_value=True):result=readiness(cfg)
+            self.assertFalse(result['ready']);self.assertTrue(result['readOnly']);self.assertFalse(result['maintenanceActivationTested'])
+            self.assertEqual(result['checks'][0]['message'],'Select Compose files')
+            self.assertTrue(result['checks'][1]['ok']);self.assertFalse(result['checks'][2]['ok'])
+            self.assertEqual(list(pathlib.Path(d).iterdir()),[])
     def test_failed_activation_restores_previous_flag_state(self):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch()

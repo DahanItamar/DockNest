@@ -108,6 +108,11 @@ try {
     assert.match(response,/503 Service Temporarily Unavailable/);assert.match(response,/application\/json/);assert.doesNotMatch(response,/<script>/);
   }
   await remote(servers[0],{operation:'maintenance',config:cfg,enabled:false});
+  const originCfg={...cfg,maintenance:{...cfg.maintenance,publicUrl:'http://example.invalid:8082/',probeOrigin:true}};
+  assert.equal((await remote(servers[0],{operation:'readiness',config:originCfg})).ready,true);
+  await remote(servers[0],{operation:'maintenance',config:originCfg,enabled:true});
+  await remote(servers[0],{operation:'maintenance',config:originCfg,enabled:false});
+  record('Read-only readiness and a local-origin hostname probe verify maintenance activation and recovery without external DNS');
   record('Real independent Nginx maintenance serves HTML 503/Retry-After/no-store for GET, JSON 503 for APIs and POST, and clears only after direct and public health checks');
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, servers[0].id, 'QA fixture', JSON.stringify(cfg), new Date().toISOString());
   enqueueBackup(siteId, 'qa');

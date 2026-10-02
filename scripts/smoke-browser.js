@@ -281,6 +281,11 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'custom','Unrecognized schedules remain custom rather than silently changing');
   assert.equal(await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).inputValue(),expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.route('**/api/sites/fixture-site/readiness',route=>route.fulfill({json:{ready:false,readOnly:true,checks:[{name:'Containers and configuration files',ok:true,message:'Ready'},{name:'Maintenance proxy and website',ok:false,message:'Deploy the maintenance page and integrate it with the source proxy.'}]}}));
+  await page.getByRole('button',{name:'Check readiness',exact:true}).click();
+  await page.getByRole('dialog').getByRole('heading',{name:'Setup needs attention',exact:true}).waitFor();
+  await page.getByRole('dialog').getByText('Deploy the maintenance page and integrate it with the source proxy.',{exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();
   await page.getByRole('button',{name:'Remove site',exact:true}).click();
   const removeDialog=page.getByRole('dialog');
   await removeDialog.getByText(/Existing backup files and history will be kept/).waitFor();

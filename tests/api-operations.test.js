@@ -113,6 +113,13 @@ test('removing a site pauses schedules, keeps backups and rejects active work or
  assert.equal((await request(route+'/policy',{method:'POST',body:JSON.stringify({enabled:true,schedule:'0 2 * * *',timezone:'UTC',retention:7})})).status,409);
  assert.equal((await request(route,{method:'PATCH',body:JSON.stringify({serverId:host,name:'Edited removed site',config:{containers:['fixture']}})})).status,409);
 });
+test('origin probe preference survives configuration normalization and readiness rejects active work',async()=>{
+ const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Origin fixture',config:{containers:['fixture'],domains:['www.example.org'],maintenanceProbeOrigin:true}})});
+ assert.equal(response.status,201);const saved=await response.json();assert.equal(saved.config.maintenance.probeOrigin,true);
+ const pending=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(pending,saved.id,new Date().toISOString());
+ assert.equal((await request('/sites/'+saved.id+'/readiness',{method:'POST',body:'{}'})).status,409);
+ assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(pending).status,'queued');
+});
 
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);

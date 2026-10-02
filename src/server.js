@@ -14,7 +14,7 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, checkReadiness, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 
 export const app = express();
@@ -61,9 +61,10 @@ const siteSchema = z.object({
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),
+    maintenanceProbeOrigin:z.boolean().optional(),
     domains: z.array(z.string().max(2048).transform(normalizeDomain).pipe(z.string().max(253).regex(/^[a-zA-Z0-9.-]+$/, 'Enter a domain such as www.blog.example.invalid, or paste an HTTP(S) website URL without login details.'))).max(20).default([]),
     healthUrl: healthUrl.default(''),
-    maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl }).optional(),
+    maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl, probeOrigin:z.boolean().default(false) }).optional(),
   }),
 });
 const serverSchema = z.object({
@@ -138,6 +139,7 @@ app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
 function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const maintenance = data.config.maintenance || { required: data.config.maintenanceRequired, directory: `${data.config.stagingRoot}/maintenance/${siteId}`, publicUrl: data.config.domains[0] ? 'https://' + data.config.domains[0] : '', healthUrl: data.config.healthUrl };
+  if(data.config.maintenanceProbeOrigin!==undefined)maintenance.probeOrigin=data.config.maintenanceProbeOrigin;
   for (const value of [maintenance.healthUrl, maintenance.publicUrl]) {
     if (value && !['http:', 'https:'].includes(new URL(value).protocol)) throw new Error('Maintenance URLs must use HTTP or HTTPS.');
   }
@@ -177,6 +179,7 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
   res.json({id:site.id,removed:true,backupsPreserved:true});
 });
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
+app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadiness(req.params.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {
   const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id) || notFound('Job not found.');

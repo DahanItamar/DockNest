@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,tarfile,re
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -23,6 +23,30 @@ def run(args,timeout=3600):
     return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout)
 def docker(*args): return run(['docker',*args])
 def inspect(ids): return json.loads(docker('inspect',*ids))
+class OriginHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock=socket.create_connection(('127.0.0.1',self.port),self.timeout)
+        try:self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
+        except Exception:sock.close();raise
+
+def public_probe(m):
+    url=m.get('publicUrl','')
+    parsed=urllib.parse.urlsplit(url)
+    if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ValueError('A valid HTTP or HTTPS public probe URL is required')
+    if not m.get('probeOrigin'):
+        try:
+            with urllib.request.urlopen(url,timeout=10) as response:return response.status,response.read(256*1024)
+        except urllib.error.HTTPError as error:return error.code,error.read(256*1024)
+    # Same hostname and verified TLS identity; only the connection address changes to loopback.
+    if parsed.scheme=='https':connection=OriginHTTPSConnection(parsed.hostname,parsed.port or 443,timeout=10,context=ssl.create_default_context())
+    else:connection=http.client.HTTPConnection('127.0.0.1',parsed.port or 80,timeout=10)
+    try:
+        path=urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,''))
+        connection.request('GET',path,headers={'Host':parsed.netloc,'Cache-Control':'no-cache'})
+        response=connection.getresponse()
+        return response.status,response.read(256*1024)
+    finally:connection.close()
+
 def health(containers,url=None):
     for c in inspect(containers):
         if not c['State']['Running']: return False
@@ -44,11 +68,8 @@ def maintenance(cfg,enabled):
         (directory/'enabled').touch(mode=0o600)
         try:
             if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
-            try:
-                with urllib.request.urlopen(m['publicUrl'],timeout=10):
-                    raise ValueError('Maintenance probe must return HTTP 503')
-            except urllib.error.HTTPError as e:
-                if e.code!=503 or b'dbm-maintenance-v1' not in e.read(256*1024):raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
+            status,body=public_probe(m)
+            if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
         except Exception:
             if not was_enabled:(directory/'enabled').unlink(missing_ok=True)
             raise
@@ -57,8 +78,8 @@ def maintenance(cfg,enabled):
         (directory/'enabled').unlink(missing_ok=True)
         if m.get('publicUrl'):
             try:
-                with urllib.request.urlopen(m['publicUrl'],timeout=10) as response:
-                    if response.status!=200 or b'dbm-maintenance-v1' in response.read(256*1024):raise ValueError('Public access did not recover')
+                status,body=public_probe(m)
+                if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access did not recover')
             except Exception:
                 (directory/'enabled').touch(mode=0o600)
                 raise ValueError('Public probe failed; maintenance retained')
@@ -163,6 +184,28 @@ def preflight(cfg):
     if cfg.get('externalSources'):raise ValueError('External sources require a capture adapter')
     if os.geteuid()!=0:raise ValueError('Root SSH required to preserve ownership and read volume data')
     return cs
+def readiness(cfg):
+    checks=[]
+    def check(name,fn):
+        try:
+            fn();checks.append({'name':name,'ok':True,'message':'Ready'})
+        except Exception as error:
+            message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
+            checks.append({'name':name,'ok':False,'message':message})
+    check('Containers and configuration files',lambda:preflight(cfg))
+    def direct_health():
+        if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
+    check('Application health',direct_health)
+    def proxy():
+        m=cfg.get('maintenance',{})
+        if not m.get('required'):raise ValueError('Enable maintenance protection before backing up a live site.')
+        directory=pathlib.Path(m.get('directory',''))
+        if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise ValueError('Deploy the maintenance page and integrate it with the source proxy. The proxy readiness marker is missing.')
+        if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
+        status,body=public_probe(m)
+        if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
+    check('Maintenance proxy and website',proxy)
+    return {'ready':all(item['ok'] for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
 def capture(req):
     cfg=req['config'];cs=preflight(cfg)
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
@@ -278,8 +321,8 @@ def verify_recovery(req):
     if m.get('required'):
         if (pathlib.Path(m['directory'])/'enabled').exists():raise ValueError('Maintenance remains enabled')
         if not m.get('publicUrl'):raise ValueError('Public health probe required')
-        with urllib.request.urlopen(m['publicUrl'],timeout=10) as r:
-            if r.status!=200 or b'dbm-maintenance-v1' in r.read(256*1024):raise ValueError('Public access has not recovered')
+        status,body=public_probe(m)
+        if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access has not recovered')
     emit(result={'recoveryReviewed':True,'healthVerified':True,'originalStatesPreserved':True})
 
 def verify_restore_recovery(req):
@@ -375,7 +418,8 @@ def deploy_maintenance(req):
 
 def main(req):
     op=req['operation']
-    if op=='test':
+    if op=='readiness':emit(result=readiness(req['config']))
+    elif op=='test':
         emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid()})
     elif op=='discover':
         ids=docker('ps','-aq').decode().split()

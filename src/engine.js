@@ -2,7 +2,7 @@ import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
 import { key } from './crypto.js';
 import { remote, download, uploadStream } from './ssh.js';
-import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity } from './storage.js';
+import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness } from './storage.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -14,6 +14,14 @@ const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+export async function checkReadiness(siteId){
+ const {site,server}=siteInfo(siteId);
+ if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
+ const result=await remote(server,{operation:'readiness',config:site.config});
+ try{await checkStorageReadiness();result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
+ result.ready=result.checks.every(check=>check.ok);
+ return result;
+}
 export async function verifyRecovery(job){
  if(job.type==='restore'){
   const details=typeof job.details==='string'?JSON.parse(job.details):job.details;
