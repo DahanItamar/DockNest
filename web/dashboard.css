@@ -1,10 +1,10 @@
-.dashboard-page .topbar {background:var(--surface);padding:0 32px}
-.dashboard-page .topbar-inner {max-width:1440px;min-height:80px;gap:20px}
+.dashboard-page .topbar {background:var(--surface);padding:0 40px}
+.dashboard-page .topbar-inner {max-width:none;min-height:80px;gap:20px}
 .dashboard-page .topbar nav button {font-size:12px;padding:10px 9px}
 .dashboard-page .topbar nav button.selected {background:transparent;color:var(--link);box-shadow:inset 0 -2px var(--accent);border-radius:0}
 .dashboard-page .account {font-size:12px}
 .dashboard-page .dashboard-brand {width:210px;height:auto}
-.dashboard-page main#content {padding:40px 40px 48px}
+.dashboard-page main#content {max-width:none;width:100%;padding:40px 40px 48px}
 .dashboard-page .page-head {margin-bottom:32px;align-items:center}
 .dashboard-page .page-head h1 {font-size:32px;font-weight:550;letter-spacing:-1px;margin-bottom:8px}
 .dashboard-page .page-head p {font-size:14px}
@@ -15,14 +15,13 @@
 .dash-metrics {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:32px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:24px 0}
 .dash-metric {padding:0 24px;border-left:1px solid var(--border-subtle);min-width:0}
 .dash-metric:first-child {padding-left:0;border-left:0}
-.dash-metric>div {display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:12px}
+.dash-metric>div {min-height:36px;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:12px}
 .dash-metric>div svg {color:var(--accent);flex-shrink:0}
 .dash-metric strong {display:block;font-size:32px;letter-spacing:-1px;font-weight:500;line-height:1.2;margin:12px 0 8px}
-.dash-metric small {font-size:12px;line-height:1.5;display:block}
-.dash-layout {display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:24px;align-items:start}
-.dash-main,.dash-side {display:grid;gap:24px;min-width:0}
-.dash-panel {background:var(--surface);border:1px solid var(--border-subtle);border-radius:12px;overflow:hidden;isolation:isolate;min-width:0}
-.dash-panel-head {padding:24px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.dash-metric small {min-height:36px;font-size:12px;line-height:1.5;display:block}
+.dash-layout {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:stretch}
+.dash-panel {display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:12px;overflow:hidden;isolation:isolate;min-width:0}
+.dash-panel-head {min-height:96px;flex-shrink:0;padding:24px;display:flex;justify-content:space-between;align-items:center;gap:16px}
 .dash-eyebrow {display:block;font-size:10px;letter-spacing:1.2px;font-weight:600;color:var(--text-muted);margin-bottom:8px}
 .dash h2 {font-size:17px;font-weight:550;letter-spacing:-.3px;display:flex;align-items:center;gap:8px}
 .dash-count {font-size:11px;background:var(--surface-muted);border-radius:6px;min-width:24px;padding:4px 8px;text-align:center;font-weight:500;letter-spacing:0}
@@ -105,13 +104,11 @@
   .dashboard-page .topbar-inner {gap:20px}
   .dashboard-page .topbar nav button {padding:10px 8px;font-size:11px}
   .dashboard-page .account>span:last-child {display:none}
-  .dash-layout {grid-template-columns:minmax(0,1fr) 296px}
   .dash-site-columns,.dash-site>summary {grid-template-columns:minmax(120px,1fr) minmax(140px,1fr) 20px}
   .dash-site-schedule,.dash-site-columns>span:nth-child(3) {display:none}
 }
 @media(max-width:1100px) {
   .dash-layout {grid-template-columns:1fr}
-  .dash-side {grid-template-columns:1fr 1fr;align-items:start}
   .dashboard-page .topbar-inner {flex-wrap:wrap;gap:12px;padding:16px 0}
   .dashboard-page .topbar nav {order:3;flex-basis:100%;overflow-x:auto}
   .dashboard-page .topbar nav button {flex-shrink:0}
@@ -130,10 +127,9 @@
   .dash-metrics {grid-template-columns:1fr 1fr;gap:24px 16px;padding:20px 0;margin-bottom:24px}
   .dash-metric {padding:0 0 0 16px}
   .dash-metric:nth-child(odd) {padding-left:0;border-left:0}
-  .dash-metric>div {align-items:flex-start;font-size:11px;line-height:1.5}
+  .dash-metric>div {min-height:36px;align-items:flex-start;font-size:11px;line-height:1.5}
   .dash-metric strong {font-size:28px}
   .dash-metric small {font-size:11px}
-  .dash-side {grid-template-columns:1fr}
   .dash-panel-head {padding:20px 16px;gap:12px}
   .dash h2 {font-size:16px}
   .dash-summary {padding:16px;align-items:flex-start}
@@ -172,3 +168,13 @@
 @media(max-width:360px){.dashboard-page .dashboard-brand{width:148px}.dashboard-page .header-utilities{gap:4px}}
 
 code,pre{font-family:"IBM Plex Mono",monospace}
+
+/* Matching columns share each row's height, including when recovery history expands. */
+.dash-activity .dash-job-list{flex:1;display:grid;grid-auto-rows:1fr}
+.dash-activity .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.dash-captures .dash-capture-body{flex:1;grid-template-columns:1fr;gap:24px;align-content:start}
+.dash-capture-body>div:first-child{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 12px}
+.dash-capture-body p{margin:0}
+.dash-capture-body small{width:100%}
+.dash-job-list .dash-job{align-items:center}
+@media(max-width:1100px){.dash-layout{grid-template-columns:1fr}.dash-activity .dash-job-list{display:block}}

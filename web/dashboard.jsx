@@ -36,7 +36,6 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
     </div>
 
     <div className="dash-layout">
-      <div className="dash-main">
         <section className="dash-panel dash-sites" aria-labelledby="dash-sites-title">
           <header className="dash-panel-head"><div><span className="dash-eyebrow">YOUR INFRASTRUCTURE</span><h2 id="dash-sites-title">Sites at a glance <span className="dash-count">{s.sites.length}</span></h2></div><button className="dash-link" onClick={()=>navigate('Sites & schedules')}>Manage sites <ArrowRight size={16}/></button></header>
           <div className={`dash-summary ${attention.length?'has-attention':''}`}>
@@ -74,19 +73,19 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
           
         </section>
 
-        <section className="dash-panel dash-captures" aria-labelledby="dash-captures-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">LAST 7 DAYS</span><h2 id="dash-captures-title">Capture activity</h2></div><button className="dash-link" onClick={()=>navigate('Backups')}>Backup library <ArrowRight size={16}/></button></header><div className="dash-capture-body"><div><strong>{week.length}</strong><p>recovery points captured</p><small>{backups.filter(b=>b.pinned).length} pinned for retention</small></div><HistoryChart rows={backups} value={()=>1} kind="bars"/></div></section>
-      </div>
 
-      <aside className="dash-side">
-        <section className="dash-panel" aria-labelledby="dash-activity-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">OPERATIONS</span><h2 id="dash-activity-title">Recent activity</h2></div><IconButton label="View all jobs" onClick={()=>navigate('Jobs')}><ArrowRight size={17}/></IconButton></header>
+
+        <section className="dash-panel dash-activity" aria-labelledby="dash-activity-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">OPERATIONS</span><h2 id="dash-activity-title">Recent activity</h2></div><IconButton label="View all jobs" onClick={()=>navigate('Jobs')}><ArrowRight size={17}/></IconButton></header>
           {jobs.length?<div className="dash-job-list">{jobs.slice(0,5).map(job=>{
             const failed=['failed','recovery_required'].includes(job.status),running=['running','queued'].includes(job.status);
             return <div className="dash-job" key={job.id}><span className={`dash-job-icon ${failed?'warning':running?'neutral':'stored'}`}>{failed?<TriangleAlert size={16}/>:running?<BrandIcon name="jobs" size={16}/>:<Check size={16}/>}</span><div><b>{name(job.siteId)}</b><span>{job.type==='restore'?'Restore':'Backup'} · {job.status.replaceAll('_',' ')}</span><small title={date(job.createdAt||job.startedAt)}>{shortDate(job.createdAt||job.startedAt)}</small>{job.status==='recovery_required'&&<button className="dash-link" onClick={()=>open({type:'recovery',item:job})}>Review recovery <ArrowRight size={12}/></button>}</div><IconButton label={`View job ${job.id}`} onClick={()=>open({type:'job',item:job})}><ArrowRight size={16}/></IconButton></div>;
           })}</div>:<Empty icon={Activity} title="No jobs yet">Your backup and restore activity will appear here.</Empty>}
         </section>
 
+        <section className="dash-panel dash-captures" aria-labelledby="dash-captures-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">LAST 7 DAYS</span><h2 id="dash-captures-title">Capture activity</h2></div><button className="dash-link" onClick={()=>navigate('Backups')}>Backup library <ArrowRight size={16}/></button></header><div className="dash-capture-body"><div><strong>{week.length}</strong><p>recovery points captured</p><small>{backups.filter(b=>b.pinned).length} pinned for retention</small></div><HistoryChart rows={backups} value={()=>1} kind="bars"/></div></section>
+
         <section className="dash-panel dash-storage" aria-labelledby="dash-storage-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">DESTINATION</span><h2 id="dash-storage-title">Backup storage</h2></div><BrandIcon name="storage" size={20}/></header><div className="dash-storage-body"><div className="dash-storage-total"><strong>{bytes(s.storage?.used)}</strong><span>{storagePercent!=null?`${storagePercent}% used`:'Capacity not reported'}</span></div><progress aria-label="Backup storage used" max={s.storage?.total||1} value={s.storage?.used||0}/><p>{s.storage?.total?`${bytes(s.storage.total)} total capacity`:'Connect a remote storage destination.'}</p><div className="dash-storage-security"><BrandIcon name="encrypted-download" size={22}/><span>Encrypted at rest</span></div>{user?.role==='admin'&&<button className="dash-link" onClick={()=>navigate('Storage')}>Manage storage <ArrowRight size={14}/></button>}</div></section>
-      </aside>
+
     </div>
   </div>;
 }
