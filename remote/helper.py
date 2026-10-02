@@ -172,7 +172,7 @@ def shutdown_evidence(services,containers,stopped_at):
         item={'container':c['Id'],'engine':service['engine'],'version':service['version'],'zeroExitCodeVerified':True}
         if service['engine']=='postgres':
             original=by_id[c['Id']]
-            output=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--volumes-from',c['Id']+':ro','--env','LC_ALL=C','--entrypoint','pg_controldata',original['Image'],service['dataDirectory']],timeout=30).decode()
+            output=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','postgres','--volumes-from',c['Id']+':ro','--env','LC_ALL=C','--entrypoint','pg_controldata',original['Image'],service['dataDirectory']],timeout=30).decode()
             if not re.search(r'^Database cluster state:\s+shut down\s*$',output,re.M):raise ValueError('PostgreSQL control file does not prove a clean primary shutdown')
             item['controlFileCleanShutdownVerified']=True
         elif service['engine'] in ['mysql','mariadb']:
