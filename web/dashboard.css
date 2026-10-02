@@ -1,16 +1,16 @@
-.dashboard-page .topbar {background:var(--surface);padding:0 40px}
-.dashboard-page .topbar-inner {max-width:none;min-height:80px;gap:20px}
-.dashboard-page .topbar nav button {font-size:12px;padding:10px 9px}
-.dashboard-page .topbar nav button.selected {background:transparent;color:var(--link);box-shadow:inset 0 -2px var(--accent);border-radius:0}
-.dashboard-page .account {font-size:12px}
-.dashboard-page .dashboard-brand {width:210px;height:auto}
-.dashboard-page main#content {max-width:none;width:100%;padding:40px 40px 48px}
-.dashboard-page .page-head {margin-bottom:32px;align-items:center}
-.dashboard-page .page-head h1 {font-size:32px;font-weight:550;letter-spacing:-1px;margin-bottom:8px}
-.dashboard-page .page-head p {font-size:14px}
-.dashboard-page .page-head .actions {gap:12px}
-.dashboard-page .page-head .primary {padding:12px 16px;font-size:13px}
-.dashboard-page .page-head .icon {display:inline-flex;border:1px solid var(--border-subtle);background:var(--surface);width:42px;height:42px}
+.rebrand-page .topbar {background:var(--surface);padding:0 40px}
+.rebrand-page .topbar-inner {max-width:none;min-height:80px;gap:20px}
+.rebrand-page .topbar nav button {font-size:12px;padding:10px 9px}
+.rebrand-page .topbar nav button.selected {background:transparent;color:var(--link);box-shadow:inset 0 -2px var(--accent);border-radius:0}
+.rebrand-page .account {font-size:12px}
+.rebrand-page .dashboard-brand {width:210px;height:auto}
+.rebrand-page main#content {max-width:none;width:100%;padding:40px 40px 48px}
+.rebrand-page .page-head {margin-bottom:32px;align-items:center}
+.rebrand-page .page-head h1 {font-size:32px;font-weight:550;letter-spacing:-1px;margin-bottom:8px}
+.rebrand-page .page-head p {font-size:14px}
+.rebrand-page .page-head .actions {gap:12px}
+.rebrand-page .page-head .primary {padding:12px 16px;font-size:13px}
+.rebrand-page .page-head .icon {display:inline-flex;border:1px solid var(--border-subtle);background:var(--surface);width:42px;height:42px}
 .dash {font-size:14px;--dash-ease:cubic-bezier(.2,0,0,1)}
 .dash-metrics {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:32px;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:24px 0}
 .dash-metric {padding:0 24px;border-left:1px solid var(--border-subtle);min-width:0}
@@ -101,29 +101,29 @@
 .dash .empty .primary {font-size:12px;margin-top:8px}
 @keyframes dash-reveal {from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 @media(min-width:1101px) and (max-width:1350px) {
-  .dashboard-page .topbar-inner {gap:20px}
-  .dashboard-page .topbar nav button {padding:10px 8px;font-size:11px}
-  .dashboard-page .account>span:last-child {display:none}
+  .rebrand-page .topbar-inner {gap:20px}
+  .rebrand-page .topbar nav button {padding:10px 8px;font-size:11px}
+  .rebrand-page .account>span:last-child {display:none}
   .dash-site-columns,.dash-site>summary {grid-template-columns:minmax(120px,1fr) minmax(140px,1fr) 20px}
   .dash-site-schedule,.dash-site-columns>span:nth-child(3) {display:none}
 }
 @media(max-width:1100px) {
   .dash-layout {grid-template-columns:1fr}
-  .dashboard-page .topbar-inner {flex-wrap:wrap;gap:12px;padding:16px 0}
-  .dashboard-page .topbar nav {order:3;flex-basis:100%;overflow-x:auto}
-  .dashboard-page .topbar nav button {flex-shrink:0}
+  .rebrand-page .topbar-inner {flex-wrap:wrap;gap:12px;padding:16px 0}
+  .rebrand-page .topbar nav {order:3;flex-basis:100%;overflow-x:auto}
+  .rebrand-page .topbar nav button {flex-shrink:0}
 }
 @media(max-width:680px) {
-  .dashboard-page .topbar {padding:0 20px}
-  .dashboard-page .topbar-inner {gap:12px}
-  .dashboard-page .header-utilities {margin-left:auto}
-  .dashboard-page .account>span:last-child {display:none}
-  .dashboard-page main#content {padding:24px 20px 32px}
-  .dashboard-page .page-head {gap:16px;margin-bottom:24px;align-items:flex-start}
-  .dashboard-page .page-head h1 {font-size:28px}
-  .dashboard-page .page-head p {font-size:13px}
-  .dashboard-page .page-head .actions {width:100%;justify-content:flex-end}
-  .dashboard-page .page-head .actions button {flex-grow:0}
+  .rebrand-page .topbar {padding:0 20px}
+  .rebrand-page .topbar-inner {gap:12px}
+  .rebrand-page .header-utilities {margin-left:auto}
+  .rebrand-page .account>span:last-child {display:none}
+  .rebrand-page main#content {padding:24px 20px 32px}
+  .rebrand-page .page-head {gap:16px;margin-bottom:24px;align-items:flex-start}
+  .rebrand-page .page-head h1 {font-size:28px}
+  .rebrand-page .page-head p {font-size:13px}
+  .rebrand-page .page-head .actions {width:100%;justify-content:flex-end}
+  .rebrand-page .page-head .actions button {flex-grow:0}
   .dash-metrics {grid-template-columns:1fr 1fr;gap:24px 16px;padding:20px 0;margin-bottom:24px}
   .dash-metric {padding:0 0 0 16px}
   .dash-metric:nth-child(odd) {padding-left:0;border-left:0}
@@ -163,9 +163,9 @@
 .dash-metric>div .brand-icon{width:22px;height:22px}
 .dash-backup-date>b,.dash-site-latest>b,.dash-job small{font-family:'IBM Plex Mono',monospace;font-weight:400;font-size:11px}
 .dash-icon{width:40px;height:40px}
-@media(min-width:1101px) and (max-width:1500px){.dashboard-page .topbar-inner{gap:16px}.dashboard-page .topbar nav button{font-size:11px;padding:10px 6px;gap:4px}.dashboard-page .account>span:last-child{display:none}.dashboard-page .dashboard-brand{width:190px}}
-@media(max-width:680px){.brand-lockup,.dashboard-page .dashboard-brand{width:175px}.topbar nav button .brand-icon{width:18px;height:18px}}
-@media(max-width:360px){.dashboard-page .dashboard-brand{width:148px}.dashboard-page .header-utilities{gap:4px}}
+@media(min-width:1101px) and (max-width:1500px){.rebrand-page .topbar-inner{gap:16px}.rebrand-page .topbar nav button{font-size:11px;padding:10px 6px;gap:4px}.rebrand-page .account>span:last-child{display:none}.rebrand-page .dashboard-brand{width:190px}}
+@media(max-width:680px){.brand-lockup,.rebrand-page .dashboard-brand{width:175px}.topbar nav button .brand-icon{width:18px;height:18px}}
+@media(max-width:360px){.rebrand-page .dashboard-brand{width:148px}.rebrand-page .header-utilities{gap:4px}}
 
 code,pre{font-family:"IBM Plex Mono",monospace}
 

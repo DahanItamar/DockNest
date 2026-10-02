@@ -142,13 +142,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
   await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
-  await page.getByRole('row').filter({hasText:'Production'}).getByRole('button',{name:'Edit details',exact:true}).click();
+  await page.getByRole('article',{name:'Production',exact:true}).getByRole('button',{name:'Edit details',exact:true}).click();
   const detailsDialog=page.getByRole('dialog');
   await detailsDialog.getByLabel('Server name',{exact:true}).fill('DemoBlog_srv');
   await detailsDialog.getByLabel('Server note (optional)',{exact:true}).fill('DemoBlog production');
   await detailsDialog.getByRole('button',{name:'Save details',exact:true}).click();
   await detailsDialog.waitFor({state:'hidden'});
-  await page.getByRole('row').filter({hasText:'DemoBlog_srv'}).getByText('DemoBlog production',{exact:true}).waitFor();
+  await page.getByRole('article',{name:'DemoBlog_srv',exact:true}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
   await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));

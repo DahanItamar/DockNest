@@ -18,7 +18,8 @@
     "brand:export": "node scripts/export-brand.js",
     "test:browser": "node scripts/smoke-browser.js",
     "test:integration": "node scripts/integration-linux.js",
-    "test:dashboard": "node scripts/dashboard-browser.js"
+    "test:dashboard": "node scripts/dashboard-browser.js",
+    "test:servers": "node scripts/servers-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

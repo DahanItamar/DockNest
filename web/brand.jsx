@@ -20,7 +20,7 @@ export function ThemeProvider({children}) {
 }
 export function Brand({descriptive=false,dashboard=false}) {
  const {theme}=useContext(Theme);
- return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-tagline-${theme}.png`} alt="DockNest ? Docker Backup & Restore" width="1200" height={theme==='light'?355:380}/>;
+ return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-tagline-${theme}.png`} alt="DockNest - Docker Backup & Restore" width="1200" height={theme==='light'?355:380}/>;
 }
 export function BrandIcon({name,size=20,className=''}) {
  const {theme}=useContext(Theme);
