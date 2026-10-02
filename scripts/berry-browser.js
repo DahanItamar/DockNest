@@ -6,6 +6,7 @@ try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},colorScheme:'dark',reducedMotion:'no-preference'}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  const now=new Date(),recent=new Date(now-3600000).toISOString(),old=new Date(now-90*86400000).toISOString();
  const state={servers:[{id:'host',name:'Production'}],sites:[{id:'site',name:'Storefront',serverId:'host'}],policies:[],audit:[],storage:{used:12e9,total:100e9},backups:[{id:'a',siteId:'site',createdAt:recent,verified:true},{id:'b',siteId:'site',createdAt:recent,verified:false},{id:'c',siteId:'site',createdAt:old,verified:true}],jobs:[{id:'run',siteId:'site',type:'backup',status:'running',createdAt:recent},{id:'restore',siteId:'site',type:'restore',status:'completed',createdAt:recent},{id:'fail',siteId:'site',type:'backup',status:'failed',createdAt:recent}]};
+ await page.route('**/api/auth/activity',r=>r.fulfill({json:{}}));
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{id:'admin',name:'Administrator',role:'admin'}}}));await page.route('**/api/state',r=>r.fulfill({json:state}));await page.addInitScript(()=>localStorage.setItem('docknest-theme','dark'));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5173');await page.locator('.dash-growth').waitFor();await page.evaluate(()=>document.fonts.ready);
  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');assert.equal(await page.getByRole('button',{name:/Switch to .* theme/}).count(),1);
