@@ -3,6 +3,28 @@ import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
+from helper import mount_table, classify_source, revalidate_sources, preflight
+
+class FilesystemPlanTests(unittest.TestCase):
+    def test_mount_table_decodes_paths_and_rejects_incomplete_input(self):
+        self.assertEqual(mount_table('12 1 8:1 / /data\\040files rw - ext4 /dev/sda rw')[0]['path'],'/data files')
+        for value in ['', '12 1 incomplete']:
+            with self.assertRaises(ValueError):mount_table(value)
+    def test_unknown_remote_and_nested_mounts_are_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=str(pathlib.Path(d).resolve())
+            table=[{'id':'1','path':root,'filesystem':'ext4'}]
+            self.assertEqual(classify_source(root,table)['filesystem'],'ext4')
+            for filesystem in ['nfs','nfs4','cifs','fuse.sshfs','tmpfs','unknown']:
+                with self.assertRaises(ValueError):classify_source(root,[{**table[0],'filesystem':filesystem}])
+            with self.assertRaises(ValueError):classify_source(root,table+[{'id':'2','path':root+'/nested','filesystem':'ext4'}])
+            plan={'sources':[classify_source(root,table)]}
+            with patch('helper.mount_table',return_value=[{**table[0],'id':'2'}]):
+                with self.assertRaises(ValueError):revalidate_sources(plan)
+    def test_unresolved_dependency_blocks_before_docker_access(self):
+        with patch('helper.docker') as command:
+            with self.assertRaises(ValueError):preflight({'unresolvedDependencies':['external writer']})
+            command.assert_not_called()
 
 class StaticSiteTests(unittest.TestCase):
     def test_cdn_probe_is_optional_only_for_static_capture(self):
@@ -23,7 +45,7 @@ class StaticSiteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d);(root/'index.html').write_text('first');before=tree_digest(root)
             (root/'index.html').write_text('other');self.assertNotEqual(tree_digest(root),before)
-            with patch('helper.nginx_sites',return_value=[{'kind':'static','documentRoot':str(root)}]),patch('helper.os.geteuid',return_value=0,create=True):
+            with patch('helper.nginx_sites',return_value=[{'kind':'static','documentRoot':str(root)}]),patch('helper.os.geteuid',return_value=0,create=True),patch('helper.classify_source',return_value={}):
                 cfg={'kind':'static','documentRoot':str(root),'containers':[],'configFiles':[],'externalReferencesConfirmed':True,'exclusiveSourcesConfirmed':True}
                 self.assertEqual(static_preflight(cfg),root)
                 with self.assertRaises(ValueError):static_preflight({**cfg,'exclusiveSourcesConfirmed':False})

@@ -15,7 +15,7 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 await clearInterruptedExports();
@@ -62,6 +62,7 @@ const siteSchema = z.object({
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
+    unresolvedDependencies: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
     configFiles: z.array(linuxPath).max(50).default([]),
     temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'])})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),
@@ -192,6 +193,7 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
 });
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
 app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadiness(req.params.id)));
+app.post('/api/sites/:id/plan', async (req,res)=>res.json(await planBackup(req.params.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {
   const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id) || notFound('Job not found.');

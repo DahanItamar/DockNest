@@ -15,6 +15,7 @@ const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return remote(server,{operation:'plan',config:site.config});}
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
@@ -146,12 +147,13 @@ export async function executeJob(job){
  const {site,server}=siteInfo(job.site_id);
  try{
   stage(job.id,'preflight');
+  const plan=await planBackup(site.id);
   const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups').get().bytes;
   const capacity=await storageCapacity(used);if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB estimated free');
   const backupId=id(),directory=backupDirectory(server,site,backupId);
   await makeDirectory(directory);artifactDirectory=directory;
   contacted=true;
-  const result=await remote(server,{operation:'capture',job:job.id,config:site.config},value=>{remoteStage=value;stage(job.id,value);});
+  const result=await remote(server,{operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint},value=>{remoteStage=value;stage(job.id,value);});
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   const temporary=storageJoin(directory,'payload.enc.partial'),published=storageJoin(directory,'payload.enc');

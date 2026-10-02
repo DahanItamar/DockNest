@@ -23,6 +23,56 @@ def run(args,timeout=3600):
     return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout)
 def docker(*args): return run(['docker',*args])
 def inspect(ids): return json.loads(docker('inspect',*ids))
+
+# A Docker bind path can conceal a remote filesystem. Unknown filesystems fail closed.
+LOCAL_FILESYSTEMS={'ext2','ext3','ext4','xfs','btrfs','zfs','overlay'}
+def mount_table(text=None):
+    if text is None:
+        try:text=pathlib.Path('/proc/self/mountinfo').read_text()
+        except OSError:raise ValueError('Cannot inspect Linux mount tables; capture is blocked')
+    def unescape(value):return re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),value)
+    result=[]
+    for line in text.splitlines():
+        fields=line.split();
+        try:
+            divider=fields.index('-')
+            if divider<6 or len(fields)<divider+4:raise ValueError()
+            result.append({'id':fields[0],'device':fields[2],'root':unescape(fields[3]),'path':unescape(fields[4]),'filesystem':fields[divider+1]})
+        except (ValueError,IndexError):raise ValueError('Malformed Linux mount table; capture is blocked')
+    if not result:raise ValueError('Empty Linux mount table; capture is blocked')
+    return result
+
+def classify_source(source,table=None):
+    table=mount_table() if table is None else table
+    value=os.path.abspath(source)
+    if os.path.realpath(value)!=value:raise ValueError('Source path contains a symbolic link; reviewed mapping required')
+    covering=[m for m in table if value==m['path'] or value.startswith(m['path'].rstrip('/')+'/')]
+    if not covering:raise ValueError('Source filesystem could not be classified')
+    mount=max(covering,key=lambda m:len(m['path']))
+    if mount['filesystem'] not in LOCAL_FILESYSTEMS:raise ValueError('Unsupported source filesystem: '+mount['filesystem']+'. NFS/CIFS/FUSE and unknown filesystems require an adapter.')
+    if any(m['path']!=value and m['path'].startswith(value.rstrip('/')+'/') for m in table):raise ValueError('Source contains a nested mount; reviewed capture adapter required')
+    metadata=os.stat(value,follow_symlinks=False)
+    return {'filesystem':mount['filesystem'],'mountId':mount['id'],'device':metadata.st_dev,'inode':metadata.st_ino,'path':value}
+
+def backup_plan(cfg,containers=None):
+    containers=preflight(cfg) if containers is None else containers
+    table=mount_table();sources=[];seen=set()
+    for c in containers:
+        for m in c['Mounts']:
+            if m['Source'] not in seen:sources.append(classify_source(m['Source'],table));seen.add(m['Source'])
+    for source in ([cfg['documentRoot']] if cfg.get('kind')=='static' else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
+        if source not in seen:sources.append(classify_source(source,table));seen.add(source)
+    topology=[{'id':c['Id'],'image':c['Image'],'config':c['Config'],'host':c['HostConfig'],'mounts':c['Mounts'],'networks':c.get('NetworkSettings',{}).get('Networks',{})} for c in containers]
+    fingerprint=hashlib.sha256(json.dumps({'sources':sources,'topology':topology,'configuration':{k:v for k,v in cfg.items() if not k.startswith('_')}},sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'coverage':{'status':'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed'))},'unresolvedDependencies':[]}
+
+def public_plan(plan):
+    return {**{k:v for k,v in plan.items() if k!='sources'},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']]}
+
+def revalidate_sources(plan):
+    table=mount_table()
+    for source in plan['sources']:
+        if classify_source(source['path'],table)!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 class OriginHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
         sock=socket.create_connection(('127.0.0.1',self.port),self.timeout)
@@ -237,6 +287,7 @@ def temporary_mounts(c,declared):
     return result
 
 def static_preflight(cfg):
+    if cfg.get('unresolvedDependencies'):raise ValueError('Resolve required external dependencies before capture')
     root=pathlib.Path(cfg.get('documentRoot',''))
     if not root.is_absolute() or '..' in root.parts or not root.is_dir() or root.resolve()!=root:raise ValueError('Choose a regular static website directory from discovery')
     if not any(site.get('documentRoot')==str(root) for site in nginx_sites() if site['kind']=='static'):raise ValueError('The directory must belong to a discovered static nginx website')
@@ -246,6 +297,8 @@ def static_preflight(cfg):
     for filename in cfg.get('configFiles',[]):
         p=pathlib.Path(filename)
         if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink():raise ValueError('Static configuration file is unreadable or invalid')
+    classify_source(str(root))
+    for source in cfg.get('configFiles',[]):classify_source(source)
     tree_digest(root)
     return root
 
@@ -267,6 +320,8 @@ def tree_digest(root):
 
 def capture_static(req):
     cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job'])
+    plan=backup_plan(cfg,[])
+    if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts or base.resolve()!=base:raise ValueError('Use a regular absolute staging directory')
     if os.path.commonpath([str(base),str(source)]) in [str(base),str(source)]:raise ValueError('Staging and static website paths cannot overlap')
@@ -284,6 +339,7 @@ def capture_static(req):
     for i,filename in enumerate(cfg.get('configFiles',[])):
         p=pathlib.Path(filename);run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(p.parent),'--',p.name])
     manifest={'formatVersion':1,'kind':'static','complete':True,'capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False}
+    revalidate_sources(plan);manifest['backupPlan']=plan
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text('Static website backup. static-files.tar preserves numeric owners, permissions, ACLs and xattrs. Restore into a new private directory and verify staticFiles.sha256 before an explicit nginx cutover. Original website and nginx/TLS configuration must never be overwritten automatically. Configuration archives are for review; TLS keys and external services are not included.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
@@ -292,6 +348,7 @@ def capture_static(req):
     emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest})
 
 def preflight(cfg):
+    if cfg.get('unresolvedDependencies'):raise ValueError('Resolve required external dependencies before capture')
     if cfg.get('kind')=='static':static_preflight(cfg);return []
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
@@ -316,6 +373,7 @@ def preflight(cfg):
             src=m['Source']
             if src.startswith(('/proc','/sys','/dev','/run')) or src.endswith('docker.sock'):raise ValueError('System mount is not portable')
             if not os.path.exists(src) or not os.access(src,os.R_OK):raise ValueError('Unreadable mount source')
+            classify_source(src)
             if os.path.islink(src):raise ValueError('Mount source symlink requires a capture adapter')
             if os.path.isdir(src):
                 for current,dirs,files in os.walk(src,followlinks=False):
@@ -332,6 +390,7 @@ def preflight(cfg):
     for filename in cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
         p=pathlib.Path(filename)
         if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink() or not os.access(p,os.R_OK):raise ValueError('Explicit configuration file is unreadable or invalid')
+        classify_source(filename)
     if cfg.get('externalSources'):raise ValueError('External sources require a capture adapter')
     if os.geteuid()!=0:raise ValueError('Root SSH required to preserve ownership and read volume data')
     return cs
@@ -362,7 +421,8 @@ def readiness(cfg):
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
 def capture(req):
     if req['config'].get('kind')=='static':return capture_static(req)
-    cfg=req['config'];cs=preflight(cfg)
+    cfg=req['config'];cs=preflight(cfg);plan=backup_plan(cfg,cs)
+    if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts:raise ValueError('Staging path must be absolute')
     job=req['job']
@@ -406,6 +466,7 @@ def capture(req):
         emit(stage='stopping')
         visitor_start=time.time()
         maintenance(cfg,True)
+        if backup_plan(cfg,preflight(cfg))['fingerprint']!=plan['fingerprint']:raise ValueError('Docker configuration changed after planning; capture blocked')
         stopped_at=time.time()
         for cid in running:docker('stop','--time',str(stop_timeout),cid)
         for c in inspect([c['Id'] for c in cs]):
@@ -424,6 +485,7 @@ def capture(req):
                 shutdown_evidence.append({'container':c['Id'],'profile':profile,'cleanShutdownLogVerified':True})
         else:shutdown_evidence=[{'profile':'generic','applicationShutdownConfirmed':True,'zeroExitCodeVerified':True}]
         emit(stage='copying')
+        revalidate_sources(plan)
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -450,6 +512,7 @@ def capture(req):
     docker('save','-o',str(root/'images.tar'),*original_ids,*images)
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_evidence,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
+    manifest['backupPlan']=plan
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
@@ -631,6 +694,7 @@ def deploy_maintenance(req):
 def main(req):
     op=req['operation']
     if op=='readiness':emit(result=readiness(req['config']))
+    elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='test':
         emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid()})
     elif op=='discover':
