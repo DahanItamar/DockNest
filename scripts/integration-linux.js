@@ -56,6 +56,7 @@ try {
     const publicFile = join(directory, host + '.pub');
     await writeFile(publicFile, key.publicKey + '\n');
     await run('cp', publicFile, host + ':/root/.ssh/authorized_keys');
+    await run('exec', host, 'chown', 'root:root', '/root/.ssh/authorized_keys');
     await run('exec', host, 'chmod', '600', '/root/.ssh/authorized_keys');
     const publicHostKey = await run('exec', host, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub');
     const server = { id: randomUUID(), name: host, host: '127.0.0.1', port: Number((await run('port', host, '22/tcp')).split(':').at(-1)), username: 'root', private_key: seal(key.privateKey), host_key: createHash('sha256').update(Buffer.from(publicHostKey.split(' ')[1], 'base64')).digest('hex') };
