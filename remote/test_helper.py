@@ -6,6 +6,22 @@ from helper import safe_extract, health, maintenance, configuration_paths, list_
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services
 from helper import artifact_inventory, verify_artifacts, data_checks
+from boot_recovery import recover_jobs
+
+class BootRecoveryTests(unittest.TestCase):
+    def test_prior_boot_restarts_original_services_and_keeps_stopped_services_stopped(self):
+        import uuid
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);root=base/str(uuid.uuid4());root.mkdir()
+            record={'version':1,'bootId':'previous','running':['db','web'],'identities':{'db':'image-db','web':'image-web','idle':'image-idle'},'config':{'_serviceContracts':[],'maintenance':{}}}
+            (root/'boot-recovery.json').write_text(json.dumps(record))
+            states=[{'Id':cid,'Image':image,'State':{'Running':False}} for cid,image in record['identities'].items()]
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states),patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json') as write:
+                result=recover_jobs([d],'current');self.assertEqual(result['recovered'],1)
+                restart.assert_called_once_with(['db','web'],[]);flags.assert_called_once_with(record['config'],False)
+                restart.reset_mock();self.assertEqual(recover_jobs([d],'previous')['ignored'],1);restart.assert_not_called()
+                states[0]['Image']='replacement'
+                self.assertEqual(recover_jobs([d],'current')['reviewRequired'],1);restart.assert_not_called()
 
 class RecoveryEvidenceTests(unittest.TestCase):
     def test_missing_and_changed_artifacts_fail_before_restore(self):

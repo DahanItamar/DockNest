@@ -1,0 +1,26 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp,writeFile,readFile,rm,stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { exportRecoveryKit,restoreRecoveryKit } from '../src/recovery-kit.js';
+const root=await mkdtemp(join(tmpdir(),'docknest-kit-'));
+process.env.DATA_DIR=join(root,'manager');process.env.NODE_ENV='test';
+const {db}=await import('../src/db.js');
+test('consistent WAL kit survives manager loss, wrong passphrases fail before writing, and live destinations cannot be overwritten',async()=>{
+ const passphrase=randomBytes(32).toString('base64url'),masterKey=join(root,'master.key'),output=join(root,'manager.dkit');
+ await writeFile(masterKey,randomBytes(32).toString('base64'));
+ db.prepare("INSERT INTO settings VALUES('fixture_wal_value','preserved')").run();
+ const evidence=await exportRecoveryKit({database:db,masterKey,output,passphrase,release:'fixture'});assert.match(evidence.sha256,/^[a-f0-9]{64}$/);
+ const contents=await readFile(output);assert.ok(!contents.includes(Buffer.from('fixture_wal_value')));
+ const target=join(root,'restored');await assert.rejects(restoreRecoveryKit({input:output,directory:target,passphrase:randomBytes(32).toString('base64url')}),/authentication/);await assert.rejects(stat(target));
+ db.close();await rm(join(root,'manager'),{recursive:true,force:true});
+ const result=await restoreRecoveryKit({input:output,directory:target,passphrase});assert.equal(result.sessionsRevoked,true);
+ const restored=new DatabaseSync(join(target,'state.sqlite'));assert.equal(restored.prepare("SELECT value FROM settings WHERE key='fixture_wal_value'").get().value,'preserved');restored.close();
+ assert.equal(await readFile(join(target,'master.key'),'utf8'),await readFile(masterKey,'utf8'));
+ await assert.rejects(restoreRecoveryKit({input:output,directory:target,passphrase}),/EEXIST/);
+ contents[50]^=1;await writeFile(join(root,'tampered.dkit'),contents);await assert.rejects(restoreRecoveryKit({input:join(root,'tampered.dkit'),directory:join(root,'tampered-output'),passphrase}),/authentication/);
+ await rm(root,{recursive:true,force:true});
+});

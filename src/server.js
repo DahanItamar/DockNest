@@ -17,6 +17,7 @@ import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification } from './recovery-evidence.js';
+import { installBootRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 await clearInterruptedExports();
@@ -196,6 +197,7 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
 app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadiness(req.params.id)));
 app.post('/api/sites/:id/plan', async (req,res)=>res.json(await planBackup(req.params.id)));
+app.post('/api/sites/:id/boot-recovery', requireAdmin, async (req,res)=>res.json(await installBootRecovery(req.params.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {
   const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id) || notFound('Job not found.');
@@ -213,6 +215,7 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
 app.get('/api/backups/:id/download', async (req, res, next) => {
   const leaseId=id();
   const backup=transaction(()=>{
+    if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(req.params.id))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
     const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id)||notFound('Verified backup not found.');
     db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId,row.id,Date.now()+120000);
     return row;
@@ -242,6 +245,7 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
   finally{clear();}
 });
 app.post('/api/backups/:id/pin', (req, res) => {
+  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(req.params.id))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
   const data = z.object({ pinned: z.boolean() }).parse(req.body);
   const result = db.prepare('UPDATE backups SET pinned=? WHERE id=?').run(Number(data.pinned), req.params.id);
   if (!result.changes) notFound('Backup not found.');

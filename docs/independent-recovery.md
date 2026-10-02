@@ -1,0 +1,39 @@
+# Durable and independent recovery
+
+Publication journals are written before transfer and record authentication before rename. Worker startup and five-minute reconciliation authenticate pending packages again before adopting them. A partial without durable authentication is never published. Metadata, integrity/consistency evidence and completion are committed together. Offline or corrupt destinations leave a pending review event rather than erase an authenticated package.
+
+Retention records deletion intent before removing bytes and removes metadata only afterward. Downloads, queued/running restores, integrity scrubs, pins and the latest successful configured application recovery point block deletion. Pending packages refuse new downloads, restores and pin changes. Missing-file reconciliation finishes an interrupted deletion; inaccessible storage preserves intent for retry. Protected recovery points may exceed ordinary count retention.
+
+## Source boot recovery
+
+Administrators can opt in with authenticated `POST /api/sites/:id/boot-recovery`. This installs the versioned helper and a systemd oneshot after Docker/network startup. It registers a dedicated root-owned 0700 staging directory, and keeps private, fsynced 0600 job journals with original service identities and restart order. It does not start immediately or reboot the server.
+
+On a later boot, recovery examines interrupted jobs from previous boots, rejects changed identities and unexpectedly running services that were originally stopped, restarts originally running databases before writers, and clears maintenance only after source/public health succeeds. Same-boot jobs remain owned by their watchdog. A failed boot check exits nonzero for systemd monitoring and keeps maintenance/review evidence. Use `systemctl status docknest-source-recovery.service` for sanitized counts. Custom non-systemd hosts need a reviewed boot integration.
+
+The manager deliberately retains its worker lock after an unclean death. Stop the old worker and inspect source recovery before removing that lock. Do not treat a PID from another container namespace as proof that a worker is dead. Startup journal reconciliation happens once the operator has safely restarted the single worker.
+
+## Manager and key recovery kit
+
+Run the kit command in the manager release with Node 24. The exporter uses the [SQLite online backup API](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html) so WAL state is included consistently. It embeds the 32-byte manager key, metadata/authentication snapshot, and standalone package-decryption/Python recovery tooling in a scrypt-derived AES-256-GCM envelope. The separate recovery passphrase must contain at least 24 characters. Store it separately from the kit; never pass a password as a command argument.
+
+```sh
+# Use an existing private 0600 passphrase file, held outside Git.
+DOCKNEST_RELEASE=<matching-commit> node scripts/recovery-kit.js export /private/manager.dkit /private/recovery.passphrase
+node scripts/recovery-kit.js restore /private/manager.dkit /private/new-manager /private/recovery.passphrase
+```
+
+Wrong passphrases/tampered kits fail authentication before creating output. Import requires a new directory; it never overwrites live state. Sessions/challenges and download leases are revoked, schedules paused, queued work cancelled and interrupted work flagged for recovery review. Keep the matching application image/source, production environment settings and any environment-mounted SSH/storage credentials independently: those environment files are not embedded automatically. On Windows, protect private files/directories with user ACLs; POSIX mode bits do not substitute for Windows ACLs.
+
+Validate recovery on a clean host with the original manager unavailable. Reconnect retained storage using independently verified host keys, authenticate a package using the recovered master key, and run an isolated restore/data check before resuming schedules. Kit encryption does not prove that the application or its external dependencies recover.
+
+## Independent protected copies
+
+Keep an offline or independently administered archive. The manager must not possess its root/deletion credential. On that separate Linux archive host, create a root-owned 0700 archive under root-owned ancestors without group/other write permission. Fetch a package/kit with a read-only primary-storage credential, then run:
+
+```sh
+sudo python3 scripts/protected-copy.py /private/incoming/payload.enc /private/archive EXPECTED_SHA256
+```
+
+The expected checksum must come from authenticated publication/kit evidence. The script copies to an exclusive file, verifies SHA256, fsyncs, publishes without overwriting and creates a private index. Files are root-owned/read-only; an ordinary manager identity cannot delete them because it cannot write/traverse the archive. Retention on this host is a separate administrator responsibility. This is separation of deletion authority, not WORM/cloud object-lock or protection from compromise of the archive root administrator. Do not run the archive host with the source server's or manager's administrative credential.
+
+Reconciliation failures and integrity failures generate sanitized audit events and job/worker health evidence. Configure independent systemd/provider monitoring for host loss; the manager cannot alert from a host that is completely unavailable.

@@ -2,7 +2,8 @@ import { db } from './db.js';
 import { config } from './config.js';
 import { mkdir, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { claimJob, executeJob, tickScheduler } from './engine.js';
+import { claimJob, executeJob, tickScheduler,verifyEncrypted } from './engine.js';
+import { reconcileArtifacts } from './artifact-journal.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per storage directory. Lock is deliberately retained after an unclean death.
 const lock=join(config.dataDir,'worker.lock');
@@ -14,5 +15,6 @@ heartbeat();
 const heartbeatTimer=setInterval(()=>heartbeat(),15000);
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{stopping=true;});
 try{
- while(!stopping){tickScheduler();const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,3000));}
+ let reconcileAt=0;
+ while(!stopping){if(Date.now()>=reconcileAt){const reconciliation=await reconcileArtifacts(verifyEncrypted);db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));reconcileAt=Date.now()+300000;}tickScheduler();const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,3000));}
 }finally{clearInterval(heartbeatTimer);heartbeat(false);await handle.close();await unlink(lock);}

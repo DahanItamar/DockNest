@@ -141,7 +141,7 @@ export async function removeFile(file){
  return withSession(fileOptions(file).options,async sftp=>call(sftp,'unlink',await ownedRemote(sftp,file)));
 }
 export async function removeDirectory(directory){
- if(!isRemoteFile(directory))return rm(directory,{recursive:true,force:true});
+ if(!isRemoteFile(directory)){const root=await realpath(config.backupDir),value=await realpath(directory),relative=path.relative(root,value);if(!relative||relative.startsWith('..')||path.isAbsolute(relative))throw new Error('Cleanup path escapes storage');return rm(value,{recursive:true,force:true});}
  const {options,value}=fileOptions(directory);
  return withSession(options,async sftp=>{
   const canonical=await call(sftp,'realpath',value),root=(await call(sftp,'realpath',options.root)).replace(/\/$/,'');

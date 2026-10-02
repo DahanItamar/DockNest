@@ -2,6 +2,7 @@ import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
+import { preparePublication,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
 import { key } from './crypto.js';
 import { remote, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness } from './storage.js';
@@ -17,6 +18,7 @@ export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return remote(server,{operation:'plan',config:site.config});}
+export async function installBootRecovery(siteId){const {site,server}=siteInfo(siteId);if(busy(siteId))throw new Error('Finish active work before installing boot recovery');const helper=await readFile(new URL('../remote/helper.py',import.meta.url)),bootHelper=await readFile(new URL('../remote/boot_recovery.py',import.meta.url));const result=await remote(server,{operation:'install-boot-recovery',config:site.config,helper:helper.toString('base64'),bootHelper:bootHelper.toString('base64')});audit('administrator','boot_recovery.installed',siteId,{});return result;}
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
@@ -52,6 +54,7 @@ async function executeScrub(job){
  catch{if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.' WHERE id=?").run(now(),job.id);audit('worker','backup.scrub.failed',backupId,{job:job.id});}
 }
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
+ if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));if(!backup?.verified)throw new Error('Verified backup not found');
  const target=db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);if(!target)throw new Error('Target server not found');
  const capabilities=await testServer(target),blockers=[];
@@ -74,6 +77,7 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  db.exec('BEGIN IMMEDIATE');
  try{
   if(busy(backup.site_id))throw new Error('Site already has active work or unresolved recovery');
+  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
   db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,?,?,'queued',?)").run(restoreId,backupId,fresh.serverId,fresh.mode,JSON.stringify(fresh),now());
   db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore','queued','queued',?,?)").run(jobId,backup.site_id,now(),JSON.stringify({restoreId,backupId,targetServerId:fresh.serverId}));
   audit(actor,'restore.enqueue',backupId,{job:jobId,restoreId});db.exec('COMMIT');
@@ -107,20 +111,7 @@ export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
  for(const backup of stale){
-  if(db.prepare("SELECT id FROM restores WHERE backup_id=? AND status IN ('queued','running','recovery_required')").get(backup.id))continue;
-  if(db.prepare('SELECT id FROM downloads WHERE backup_id=? AND expires_at>?').get(backup.id,Date.now()))continue;
-  // Both backends verify canonical ownership before metadata or files are removed.
-  await statFile(backup.path);
-  db.exec('BEGIN IMMEDIATE');
-  try{
-   if(db.prepare('SELECT id FROM backups WHERE id=? AND pinned=1').get(backup.id)||db.prepare("SELECT id FROM restores WHERE backup_id=? AND status IN ('queued','running','recovery_required')").get(backup.id)){db.exec('COMMIT');continue;}
-   if(db.prepare('SELECT id FROM downloads WHERE backup_id=? AND expires_at>?').get(backup.id,Date.now())){db.exec('COMMIT');continue;}
-   db.prepare('DELETE FROM downloads WHERE backup_id=? AND expires_at<=?').run(backup.id,Date.now());
-   const removed=db.prepare('DELETE FROM backups WHERE id=? AND pinned=0').run(backup.id);
-   if(!removed.changes){db.exec('COMMIT');continue;}
-   db.exec('COMMIT');
-  }catch(e){db.exec('ROLLBACK');throw e;}
-  await removeFile(backup.path);
+  if(claimDeletion(backup.id))await finishDeletion(backup.id);
  }
 }
 
@@ -172,6 +163,8 @@ export async function executeJob(job){
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   const temporary=storageJoin(directory,'payload.enc.partial'),published=storageJoin(directory,'payload.enc');
+  manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
+  preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest,capturedAt:new Date(result.manifest.capturedAt*1000).toISOString()});
   stage(job.id,'transferring');
   const pass=new Transform({transform(c,e,cb){cb(null,c);}});
   pass.on('error',()=>{});
@@ -179,17 +172,16 @@ export async function executeJob(job){
   writing.catch(error=>pass.destroy(error));
   try{await download(server,result.remotePath,pass);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   stage(job.id,'verifying');const checksum=await verifyEncrypted(temporary);
-  await renameFile(temporary,published);const size=(await statFile(published)).size;
-  db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,1,?)').run(backupId,site.id,job.id,new Date(result.manifest.capturedAt*1000).toISOString(),published,size,checksum,JSON.stringify(manifest),now());
-  recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);
-  recordVerification(backupId,'consistency',result.manifest.consistency||{status:'not-tested'},job.id);
+  const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
+  await renameFile(temporary,published);finalizePublication(backupId);
   publishedBackup=true;
   db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds}),job.id);
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
   await remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
-  if(artifactDirectory&&!publishedBackup)await removeDirectory(artifactDirectory).catch(()=>{});
+  const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);
+  if(artifactDirectory&&!publishedBackup&&journal?.state!=='authenticated')await removeDirectory(artifactDirectory).catch(()=>{});
   const recovery=site.config.kind!=='static' && contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
   db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),job.id);
   audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});

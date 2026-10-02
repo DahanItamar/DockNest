@@ -19,3 +19,5 @@ __pycache__/
 *.sqlite-*
 *.db
 *.enc
+*.dkit
+*.passphrase

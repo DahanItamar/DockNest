@@ -19,6 +19,16 @@ Delete plaintext staging securely according to your storage policy; filesystem d
 """
 
 def emit(**kw): print(json.dumps(kw),flush=True)
+def atomic_json(path,value):
+    path=pathlib.Path(path);temporary=path.with_name(path.name+'.tmp-'+str(uuid.uuid4()))
+    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    try:
+        with os.fdopen(fd,'w') as output:json.dump(value,output);output.flush();os.fsync(output.fileno())
+        os.replace(temporary,path)
+        directory=os.open(path.parent,os.O_RDONLY)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+    finally:temporary.unlink(missing_ok=True)
 def run(args,timeout=3600):
     return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout)
 def docker(*args): return run(['docker',*args])
@@ -296,9 +306,9 @@ def recover(root,ids,cfg,deadline,parent):
         while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
         if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Recovery health failed')
         maintenance(cfg,False)
-        (root/'recovery.json').write_text(json.dumps({'recovered':True,'at':time.time()}))
+        atomic_json(root/'recovery.json',{'recovered':True,'at':time.time()})
     except Exception:
-        (root/'recovery.json').write_text(json.dumps({'recovered':False,'at':time.time()}))
+        atomic_json(root/'recovery.json',{'recovered':False,'at':time.time()})
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     if not labels.get('com.docker.compose.project'):return []
@@ -597,8 +607,8 @@ def capture(req):
     running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
     cfg['_runningContainers']=running
     cfg['_serviceContracts']=plan['services']
-    (root/'recovery-plan.json').write_text(json.dumps({'running':running,'containers':[c['Id'] for c in cs]}))
-    os.chmod(root/'recovery-plan.json',0o600)
+    atomic_json(root/'recovery-plan.json',{'running':running,'containers':[c['Id'] for c in cs]})
+    atomic_json(root/'boot-recovery.json',{'version':1,'bootId':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'running':running,'identities':{c['Id']:c['Image'] for c in cs},'config':cfg})
     stop_timeout=int(cfg.get('stopTimeout',60))
     if stop_timeout<5 or stop_timeout>600:raise ValueError('Stop timeout must be 5..600 seconds')
     deadline=time.time()+int(cfg.get('captureTimeout',1800))+stop_timeout*len(running)+120
@@ -850,10 +860,38 @@ def deploy_maintenance(req):
     os.chmod(temp,0o644);os.replace(temp,p/'maintenance.html')
     emit(result={'distributed':True,'helperVersion':VERSION,'ready':False,'proxyIntegrationRequired':True,'directory':str(p)})
 
+def install_boot_recovery(req):
+    if os.geteuid()!=0:raise ValueError('Boot recovery installation requires root')
+    base=pathlib.Path(req['config'].get('stagingRoot','/var/lib/docknest'))
+    if not base.is_absolute() or '..' in base.parts or base.resolve()!=base or str(base) in ['/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp']:raise ValueError('Dedicated root-owned staging directory required')
+    base.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if base.stat().st_uid!=0 or base.stat().st_mode&0o077:raise ValueError('Staging directory must be root-owned with mode 0700')
+    library=pathlib.Path('/usr/local/lib/docknest');registry=pathlib.Path('/etc/docknest')
+    for directory in [library,registry]:
+        if directory.resolve()!=directory:raise ValueError('Recovery installation paths cannot be symbolic links')
+        directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        if directory.stat().st_uid!=0 or directory.stat().st_mode&0o077:raise ValueError('Recovery installation directory must be private and root-owned')
+    for name,key_name in [('helper.py','helper'),('boot_recovery.py','bootHelper')]:
+        content=__import__('base64').b64decode(req[key_name],validate=True)
+        if len(content)>512*1024:raise ValueError('Recovery helper exceeds size limit')
+        temporary=library/(name+'.new')
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'wb') as output:output.write(content);output.flush();os.fsync(output.fileno())
+        os.replace(temporary,library/name)
+    file=registry/'recovery-roots.json'
+    roots=json.loads(file.read_text()).get('roots',[]) if file.exists() else []
+    atomic_json(file,{'version':1,'roots':list(dict.fromkeys(roots+[str(base)]))})
+    unit=pathlib.Path('/etc/systemd/system/docknest-source-recovery.service')
+    if unit.is_symlink():raise ValueError('Recovery unit cannot be a symbolic link')
+    unit.write_text('[Unit]\nDescription=DockNest interrupted source recovery\nAfter=docker.service network-online.target\nWants=network-online.target\nRequires=docker.service\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /usr/local/lib/docknest/boot_recovery.py\nTimeoutStartSec=1800\nUMask=0077\n[Install]\nWantedBy=multi-user.target\n')
+    os.chmod(unit,0o644);run(['systemctl','daemon-reload']);run(['systemctl','enable','docknest-source-recovery.service'])
+    emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
+
 def main(req):
     op=req['operation']
     if op=='readiness':emit(result=readiness(req['config']))
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
+    elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
         emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid()})
     elif op=='discover':
