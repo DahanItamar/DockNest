@@ -144,4 +144,13 @@ test('storage catalog separates destinations, redacts credentials and groups man
  db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
  try{assert.equal((await request('/storage-targets/'+target+'/tree')).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
 });
+test('full ZIP refuses tampered ciphertext before sending bytes and cleans private temporary files',async()=>{
+ const {encryptStream}=await import('../src/engine.js');const {Readable}=await import('node:stream');const {createWriteStream}=await import('node:fs');const {readFile,readdir}=await import('node:fs/promises');const {createHash}=await import('node:crypto');
+ const file=join(process.env.BACKUP_DIR,'zip-auth.enc');await encryptStream(Readable.from(Buffer.from('fixture payload')),createWriteStream(file));
+ const bytes=await readFile(file);backup('zip-auth',file,bytes.length);db.prepare('UPDATE backups SET checksum=? WHERE id=?').run(createHash('sha256').update(bytes).digest('hex'),'zip-auth');
+ bytes[20]^=1;await writeFile(file,bytes);
+ const response=await request('/backups/zip-auth/download?format=zip');assert.ok(response.status>=400);assert.match(response.headers.get('content-type'),/json/);await response.text();
+ assert.deepEqual(await readdir(join(directory,'private-exports')),[]);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM downloads').get().n,0);
+ assert.equal((await request('/backups/zip-auth/download?format=zip',{headers:{Range:'bytes=0-9'}})).status,416);
+});
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();await rm(directory,{recursive:true,force:true});});

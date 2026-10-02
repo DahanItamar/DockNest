@@ -141,6 +141,17 @@ def list_project_files(ids,directory=None):
     parent=str(p.parent) if any(p.parent.is_relative_to(root) for root in roots) else None
     return {'directory':str(p),'parent':parent,'entries':entries[:500],'limited':len(entries)>500}
 
+TEMPORARY_FOLDERS={'/tmp','/run/mysqld','/var/run/mysqld'}
+def temporary_mounts(c,declared):
+    result=[]
+    names={c.get('Id'),c.get('Name','').lstrip('/')}
+    for destination,options in c.get('HostConfig',{}).get('Tmpfs',{}).items():
+        if destination not in TEMPORARY_FOLDERS:raise ValueError('RAM folder '+destination+' needs a reviewed capture adapter; it may contain persistent data.')
+        if not any(item.get('container') in names and item.get('destination')==destination for item in declared):raise ValueError('Review temporary RAM folders in Edit configuration. '+destination+' must be recreated empty on restore; its contents disappear when the container stops.')
+        if not isinstance(options,str) or not re.fullmatch(r'(?:(?:size=\d+[kKmMgG]?|mode=0?[0-7]{3,4}|uid=\d+|gid=\d+|nr_inodes=\d+|ro|rw|nosuid|suid|nodev|dev|noexec|exec)(?:,|$))+',options):raise ValueError('Temporary RAM folder options require a reviewed adapter')
+        result.append((destination,options))
+    return result
+
 def preflight(cfg):
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
@@ -152,7 +163,7 @@ def preflight(cfg):
     others=docker('ps','-q').decode().split()
     mounts=[]
     for c in cs:
-        if c.get('HostConfig',{}).get('Tmpfs'):raise ValueError('tmpfs requires explicit capture adapter')
+        temporary_mounts(c,cfg.get('temporaryMemoryFolders',[]))
         if c.get('HostConfig',{}).get('Privileged') or c.get('HostConfig',{}).get('Devices'):raise ValueError('Privileged/device-backed containers require a capture adapter')
         if c.get('Config',{}).get('Labels',{}).get('com.docker.compose.project'):
             if not cfg.get('composeFiles'):raise ValueError('Select this site\'s Compose project files in Edit configuration before backing up. No files have been selected for this backup.')
@@ -294,6 +305,7 @@ def capture(req):
     emit(stage='packing')
     docker('save','-o',str(root/'images.tar'),*original_ids,*images)
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_evidence,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
+    manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
@@ -402,6 +414,7 @@ def restore(req):
         # A copy must never remain a member of the source's Compose project.
         args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
+        for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
         for j,m in enumerate(c['Mounts']):
             key=(m['Type'],m['Source'])
             if key not in sources:
@@ -471,7 +484,7 @@ def main(req):
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
         # Do not expose environment secrets to dashboard.
-        emit(result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'ports':c['NetworkSettings']['Ports'],'backupConfiguration':configuration_paths(c)} for c in cs]})
+        emit(result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'backupConfiguration':configuration_paths(c)} for c in cs]})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='prepare-restore':prepare_restore(req)

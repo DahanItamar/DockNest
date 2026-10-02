@@ -150,7 +150,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await detailsDialog.waitFor({state:'hidden'});
   await page.getByRole('row').filter({hasText:'DemoBlog_srv'}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -160,6 +160,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.deepEqual(body.config.domains,['shop.example.org']);
     assert.deepEqual(body.config.composeFiles,['/srv/shop/docker-compose.yml']);
     assert.deepEqual(body.config.configFiles,['/srv/shop/.env','/srv/shop/config/app.json']);
+    assert.deepEqual(body.config.temporaryMemoryFolders,[{container:'shop',destination:'/tmp'}]);
     assert.equal(body.config.exclusiveSourcesConfirmed,true);assert.equal(body.config.cleanShutdownConfirmed,true);assert.equal(body.config.externalReferencesConfirmed,true);
     fixtureSites=[{id:'fixture-site',...body}];
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
@@ -189,6 +190,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
   assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
   assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
+  await siteDialog.getByRole('checkbox',{name:'Recreate these temporary folders empty on restore'}).check();
   await page.route('**/api/servers/host-one/project-files?**',route=>{
     const path=new URL(route.request().url()).searchParams.get('path');
     return route.fulfill({json:path==='/srv/shop/config'?{directory:path,parent:'/srv/shop',entries:[{name:'app.json',path:path+'/app.json',kind:'file',selectable:true}]}:{directory:'/srv/shop',parent:null,entries:[{name:'config',path:'/srv/shop/config',kind:'directory',selectable:false},{name:'.env',path:'/srv/shop/.env',kind:'file',selectable:true}]}});
@@ -219,6 +221,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
     assert.deepEqual(body.config.containers,['shop','shop-db']);assert.deepEqual(body.config.composeFiles,['/srv/shop/docker-compose.yml']);
     assert.deepEqual(body.config.configFiles,['/srv/shop/.env','/srv/shop/config/app.json']);assert.equal(body.config.externalReferencesConfirmed,true);
+    assert.deepEqual(body.config.temporaryMemoryFolders,[{container:'shop',destination:'/tmp'}]);
     fixtureSites=[{id:'fixture-site',...body}];return route.fulfill({json:fixtureSites[0]});
   });
   await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
@@ -322,7 +325,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByRole('button',{name:'Browse backup folders'}).click();
   await page.getByText('Server: Production',{exact:true}).waitFor();
   await page.getByText('2026-10-01 · 1 backup',{exact:true}).click();
-  assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download'}).getAttribute('href'),'/api/backups/fixture-backup/download');
+  assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Encrypted backup'}).getAttribute('href'),'/api/backups/fixture-backup/download');
+  assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Full ZIP'}).getAttribute('href'),'/api/backups/fixture-backup/download?format=zip');
   await page.screenshot({path:path.join(screenshotDir,'storage-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');

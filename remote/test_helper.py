@@ -1,6 +1,45 @@
 import unittest, tempfile, pathlib, tarfile, io, urllib.error
+import json,zipfile
+from export_zip import export_zip
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts
+
+class TemporaryMemoryTests(unittest.TestCase):
+    def test_explicit_temporary_folder_preserves_options(self):
+        c={'Id':'123','Name':'/app','HostConfig':{'Tmpfs':{'/tmp':'size=128m,mode=1777'}}}
+        self.assertEqual(temporary_mounts(c,[{'container':'app','destination':'/tmp'}]),[('/tmp','size=128m,mode=1777')])
+        with self.assertRaises(ValueError):temporary_mounts(c,[])
+        c['HostConfig']['Tmpfs']={'/database':'size=128m'}
+        with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/database'}])
+        c['HostConfig']['Tmpfs']={'/tmp':'size=128m,unknown=1'}
+        with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/tmp'}])
+
+class FullZipTests(unittest.TestCase):
+    def test_zip_includes_browsable_data_and_original_recovery_archives(self):
+        with tempfile.TemporaryDirectory() as d:
+            mount=io.BytesIO()
+            with tarfile.open(fileobj=mount,mode='w') as t:
+                m=tarfile.TarInfo('source/upload.png');m.size=5;t.addfile(m,io.BytesIO(b'image'))
+            config=io.BytesIO()
+            with tarfile.open(fileobj=config,mode='w') as t:
+                m=tarfile.TarInfo('.env');m.size=8;t.addfile(m,io.BytesIO(b'KEY=test'))
+            manifest={'formatVersion':1,'complete':True,'containers':[{'Name':'/wordpress','Mounts':[{'Destination':'/var/www/html'}]}],'configurationFiles':['/app/.env']}
+            payload=pathlib.Path(d)/'payload.tar.gz'
+            with tarfile.open(payload,'w:gz') as t:
+                for name,content in [('manifest.json',json.dumps(manifest).encode()),('images.tar',b'images'),('restore-guide.md',b'guide'),('mount-0-0.tar',mount.getvalue()),('config-0.tar',config.getvalue())]:
+                    m=tarfile.TarInfo(name);m.size=len(content);t.addfile(m,io.BytesIO(content))
+            output=io.BytesIO();export_zip(payload,output)
+            with zipfile.ZipFile(output) as z:
+                self.assertIsNone(z.testzip())
+                self.assertEqual(z.read('site-files/wordpress/var/www/html/upload.png'),b'image')
+                self.assertEqual(z.read('configuration/app/.env'),b'KEY=test')
+                self.assertEqual(z.read('recovery-originals/mount-0-0.tar'),mount.getvalue())
+                self.assertEqual(z.read('recovery-originals/images.tar'),b'images')
+    def test_unsafe_package_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            payload=pathlib.Path(d)/'bad.tar.gz'
+            with tarfile.open(payload,'w:gz') as t:t.addfile(tarfile.TarInfo('../outside'))
+            with self.assertRaises(ValueError):export_zip(payload,io.BytesIO())
 
 class RestoreNetworkTests(unittest.TestCase):
     def container(self,name,networks,**host):return {'Name':'/'+name,'Config':{'Hostname':name},'HostConfig':host,'NetworkSettings':{'Networks':networks}}

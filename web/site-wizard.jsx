@@ -30,12 +30,14 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
  const siteChoices=groups.flatMap(group=>group.kind==='standalone'?group.containers.map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group]);
  const selected=[primary,...additional].filter(Boolean);
  const detected=detectedConfiguration(containers,selected);
+ const temporaryFolders=containers.filter(c=>selected.includes(containerName(c))).flatMap(c=>(c.temporaryMemoryFolders||[]).map(destination=>({container:containerName(c),destination})));
+ const [temporaryReviewed,setTemporaryReviewed]=useState(!!initialSite?.config.temporaryMemoryFolders?.length);
  useEffect(()=>{
   if(loading||!selected.length)return;
   const discovery=detectedConfiguration(containers,selected);
   setSettings(previous=>({...previous,...(!filesEdited.current.composeFiles?{composeFiles:discovery.composeFiles.join('\n')}:{ }),...(!filesEdited.current.configFiles?{configFiles:discovery.configFiles.join('\n')}:{ })}));
  },[containers,primary,additional,loading]);
- function selectNames(names,title){if(names.length>30){setError('A site can include up to 30 containers. Select the services it needs individually.');return;}setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
+ function selectNames(names,title){if(names.length>30){setError('A site can include up to 30 containers. Select the services it needs individually.');return;}setTemporaryReviewed(false);setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
  function toggleGrouped(name,checked){selectNames(checked?[...selected,name]:selected.filter(value=>value!==name),settings.name);}
  const source=containers.find(container=>containerName(container)===primary);
  const update=event=>{
@@ -58,7 +60,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
   const paths=value=>value.split('\n').map(path=>path.trim()).filter(Boolean);
   const domains=settings.domains.split(',').map(normalizeDomain).filter(Boolean);
   try{
-   const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,containers:selected,stagingRoot:settings.stagingRoot,maintenanceRequired:true,maintenanceProbeOrigin:!!settings.probeOrigin,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:true,healthUrl:settings.healthUrl,publicUrl:domains[0]?'https://'+domains[0]:''}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
+   const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,containers:selected,temporaryMemoryFolders:temporaryReviewed?temporaryFolders:[],stagingRoot:settings.stagingRoot,maintenanceRequired:true,maintenanceProbeOrigin:!!settings.probeOrigin,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:true,healthUrl:settings.healthUrl,publicUrl:domains[0]?'https://'+domains[0]:''}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
    onSaved(site);
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
@@ -97,6 +99,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
    <Field label="Application health URL" name="healthUrl" type="url" value={settings.healthUrl} onChange={update} required help="Use the URL that responds when this site is healthy, as reached from its source server."/>
    <p className="hint">The site name is filled in from your selection. Check the health URL so DockNest can tell when your site is back online after a backup.</p>
    <section className="site-files" aria-label="Backup configuration files"><h4>Configuration files to include</h4>
+    {!!temporaryFolders.length&&<div className="hint"><h4>Temporary RAM folders</h4><p>{temporaryFolders.map(item=>item.container+': '+item.destination).join(' | ')}</p><p>These folders lose their contents when a container stops. Site files and database data must be in persistent mounts. The restore recreates these RAM folders empty with their original size and permissions.</p><label className="check"><input type="checkbox" checked={temporaryReviewed} onChange={event=>setTemporaryReviewed(event.target.checked)}/> Recreate these temporary folders empty on restore</label></div>}
     {detected.compose&&<p>{detected.composeFiles.length?'Detected Compose files are filled in below. Review them and any environment files before saving.':'This site uses Compose. Select its project file so DockNest can recreate it.'}</p>}
     <Field label="Compose project files (one absolute path per line)" aria-label="Compose project files (one absolute path per line)" name="composeFiles" multiline value={settings.composeFiles} onChange={update} required={detected.compose} help="Project definitions needed to recreate this site."/>
     {allowFileBrowsing&&detected.compose&&<button type="button" onClick={()=>setBrowser('composeFiles')}>Browse Compose files</button>}

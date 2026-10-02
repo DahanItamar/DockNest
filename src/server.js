@@ -16,6 +16,8 @@ import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
+import { exportFullZip,clearInterruptedExports } from './backup-export.js';
+await clearInterruptedExports();
 
 export const app = express();
 app.disable('x-powered-by');
@@ -58,6 +60,7 @@ const siteSchema = z.object({
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
     configFiles: z.array(linuxPath).max(50).default([]),
+    temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld'])})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),
@@ -206,6 +209,12 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
   const clear=()=>{if(cleared)return;cleared=true;clearInterval(interval);db.prepare('DELETE FROM downloads WHERE id=?').run(leaseId);};
   res.once('close',clear);res.once('finish',clear);
   try{
+    if(req.query.format==='zip'){
+      if(req.headers.range)return res.status(416).json({error:'Full ZIP downloads do not support byte ranges. Start a new download.'});
+      if(req.method==='HEAD'){res.attachment(backup.site_id+'_'+backup.id+'_full-site.zip');return res.type('application/zip').end();}
+      audit(req.user.id,'backup.download_zip',backup.id,{decrypted:true});
+      await exportFullZip(backup,res);return;
+    }
     const attrs=await statFile(backup.path),size=attrs.size,etag='"'+backup.checksum+'"';
     let start=0,end=size-1;
     const range=req.method!=='HEAD'&&req.headers.range&&(!req.headers['if-range']||req.headers['if-range']===etag)?req.range(size):null;
