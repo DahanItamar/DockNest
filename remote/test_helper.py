@@ -20,6 +20,7 @@ class FullZipTests(unittest.TestCase):
             mount=io.BytesIO()
             with tarfile.open(fileobj=mount,mode='w') as t:
                 m=tarfile.TarInfo('source/upload.png');m.size=5;t.addfile(m,io.BytesIO(b'image'))
+                m=tarfile.TarInfo('source/duplicate.png');m.type=tarfile.LNKTYPE;m.linkname='source/upload.png';t.addfile(m)
             config=io.BytesIO()
             with tarfile.open(fileobj=config,mode='w') as t:
                 m=tarfile.TarInfo('.env');m.size=8;t.addfile(m,io.BytesIO(b'KEY=test'))
@@ -32,6 +33,7 @@ class FullZipTests(unittest.TestCase):
             with zipfile.ZipFile(output) as z:
                 self.assertIsNone(z.testzip())
                 self.assertEqual(z.read('site-files/wordpress/var/www/html/upload.png'),b'image')
+                self.assertEqual(z.read('site-files/wordpress/var/www/html/duplicate.png'),b'image')
                 self.assertEqual(z.read('configuration/app/.env'),b'KEY=test')
                 self.assertEqual(z.read('recovery-originals/mount-0-0.tar'),mount.getvalue())
                 self.assertEqual(z.read('recovery-originals/images.tar'),b'images')

@@ -10,6 +10,7 @@ const run = async (...args) => {
   try { return (await exec('docker', args, { maxBuffer: 4 * 1024 * 1024 })).stdout.trim(); }
   catch(error) {
     if(args.includes('nginx')) throw new Error('Nginx fixture configuration/start failed: '+String(error.stderr).slice(0,1000));
+    if(args.includes('/full-site.zip'))throw new Error('ZIP fixture verification failed: '+String(error.stderr).slice(0,1200));
     throw error;
   }
 };

@@ -32,7 +32,7 @@ def export_zip(payload,output):
                 elif re.fullmatch(r'config-\d+\.tar',member.name):
                     index=int(member.name[7:-4]);prefix='configuration/'+safe_name(manifest['configurationFiles'][index].lstrip('/'))
                 else:continue
-                with tarfile.open(fileobj=package.extractfile(member),mode='r|') as nested:
+                with tarfile.open(fileobj=package.extractfile(member),mode='r:') as nested:
                     root=None;seen=set()
                     for entry in nested:
                         name=safe_name(entry.name);parts=pathlib.PurePosixPath(name).parts
@@ -42,8 +42,16 @@ def export_zip(payload,output):
                         if target in seen:raise ValueError('Duplicate mount entry')
                         seen.add(target)
                         if entry.isfile():copy_entry(z,target,nested.extractfile(entry),entry.size,entry.mode)
+                        elif entry.islnk():
+                            linked=entry;visited=set()
+                            while linked.islnk():
+                                link=safe_name(linked.linkname)
+                                if link in visited or pathlib.PurePosixPath(link).parts[0]!=root:raise ValueError('Unsafe hard link')
+                                visited.add(link);linked=nested.getmember(link)
+                            if not linked.isfile():raise ValueError('Hard link target is not a regular file')
+                            copy_entry(z,target,nested.extractfile(linked),linked.size,entry.mode)
                         elif entry.isdir():z.writestr(target+'/',b'')
-                        elif entry.issym() or entry.islnk():
+                        elif entry.issym():
                             # Original tar archives retain link semantics; browsing copies never create a potentially unsafe link.
                             z.writestr(target+'.docknest-link.txt','Original Linux link: '+entry.linkname+'\nRestore it from recovery-originals, preserving its original semantics.\n')
                         else:raise ValueError('Unsupported file type in backup')
