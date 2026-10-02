@@ -48,7 +48,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  if(!backup.manifest.containers?.length||backup.manifest.containers.length>30)blockers.push('Restore requires 1 to 30 containers');
  if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
- if(Object.keys(mappings||{}).length)blockers.push('This version restores to fresh owned paths with network none; custom port and host directory maps require reviewed offline restore');
+ if(Object.keys(mappings||{}).length)blockers.push('This version restores to fresh owned paths and isolated networks; custom port and host directory maps require reviewed offline restore');
  if(capabilities.freeBytes<backup.size*3+1024**3)blockers.push('Insufficient estimated target capacity');
  return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
