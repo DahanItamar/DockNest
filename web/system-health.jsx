@@ -17,5 +17,6 @@ export function SystemHealth({connection,worker,jobs=[]}){
   <div className="system-health-label"><b>System health</b><span>{message}</span></div>
   <svg className="health-wide" viewBox="0 0 188 32" aria-hidden="true"><path className="health-track" d={path} pathLength="100"/><path className="health-sweep" d={path} pathLength="100"/></svg>
   <svg className="health-compact" viewBox="0 0 40 32" aria-hidden="true"><path className="health-track" d="M2 16H9L14 9L19 26L25 4L30 16H38" pathLength="100"/><path className="health-sweep" d="M2 16H9L14 9L19 26L25 4L30 16H38" pathLength="100"/></svg>
+  <span className="health-short">{checking?'Checking':healthy?'Online':!connected?'Offline':'Review'}</span>
  </div>;
 }
