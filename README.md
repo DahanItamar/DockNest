@@ -60,3 +60,7 @@ npm run check
 CI runs the build, automated tests, and Docker image build. These checks do not prove a real site can be recovered. See [the acceptance checklist](docs/acceptance.md).
 
 The project uses selected role guidance from [agency-agents](https://github.com/msitarzewski/agency-agents), including [DevOps Automator](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-devops-automator.md) for reproducible deployment, secret separation, and recovery planning. These role documents are reference material.
+
+## Interface design
+
+The current interface follows the supplied Berry reference with a light-only purple/blue palette, recolored Nestweave B logo, Roboto, outline icons, animated real-data charts and compact pagination. Maintenance Studio previews and saves three visitor compositions without enabling maintenance automatically. [Review the implemented pages](docs/design/full-site-implemented/index.html) and [design tokens and verification](docs/design/DESIGN.md).

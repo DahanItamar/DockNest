@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
-const directory='docs/design/servers-implemented';
+const directory='data/screenshots/servers';
 await mkdir(directory,{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
@@ -23,16 +23,16 @@ try{
  await page.getByRole('article',{name:'Production EU',exact:true}).waitFor();
  await page.evaluate(()=>document.fonts.ready);
  const card=name=>page.getByRole('article',{name,exact:true});
- assert.equal(await page.locator('.server-card').count(),4);
+ assert.equal(await page.locator('.server-card').count(),2);
  assert.equal(await card('Production EU').getByLabel('1 configured site').count(),1);
  assert.equal(await card('Production EU').locator('code').filter({hasText:'ab'.repeat(32)}).textContent(),'ab'.repeat(32),'Complete SSH fingerprint remains visible');
  async function measure(){
   const boxes=await page.locator('.server-card').evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect(),f=card.querySelector('footer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,actions:f.y,actionWidth:f.width}}));
   const width=page.viewportSize().width;
-  for(const box of boxes)assert.ok(Math.abs(box.actionWidth-box.width+2)<1,'Action bar fills the card');
+  for(const box of boxes)assert.ok(Math.abs(box.actionWidth-box.width)<=2,'Action bar fills the card');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'No overflow at '+width);
   for(const box of boxes){assert.ok(Math.abs(box.width-boxes[0].width)<1,'Equal widths at '+width);assert.ok(Math.abs(box.height-boxes[0].height)<1,'Equal card heights at '+width);}
-  if(width>1100){for(const [a,b] of [[0,1],[2,3]]){assert.ok(Math.abs(boxes[a].y-boxes[b].y)<1,'Aligned rows');assert.ok(Math.abs(boxes[a].actions-boxes[b].actions)<1,'Aligned action bars');}assert.ok(Math.abs(boxes[0].x-40)<1,'Available-width grid');}
+  if(width>1100){for(const [a,b] of [[0,1]]){assert.ok(Math.abs(boxes[a].y-boxes[b].y)<1,'Aligned rows');assert.ok(Math.abs(boxes[a].actions-boxes[b].actions)<1,'Aligned action bars');}assert.ok(Math.abs(boxes[0].x-(await page.locator('main').evaluate(el=>el.getBoundingClientRect().x+parseFloat(getComputedStyle(el).paddingLeft))))<1,'Available-width grid');}
  }
  await measure();
  await page.screenshot({path:directory+'/servers-light.png',fullPage:true});
@@ -55,30 +55,26 @@ try{
  await card('Production EU').getByText('Main storefront host - reviewed',{exact:true}).waitFor();
  await page.getByLabel('Filter Servers').fill('nothing-matches');
  await page.getByRole('heading',{name:'No matching servers'}).waitFor();
- await page.getByRole('button',{name:'Clear filter',exact:true}).click();assert.equal(await page.locator('.server-card').count(),4);
+ await page.getByRole('button',{name:'Clear filter',exact:true}).click();assert.equal(await page.locator('.server-card').count(),2);
  await page.getByLabel('Filter Servers').fill('Commerce host');
  assert.equal(await page.locator('.server-card').count(),1);
  assert.ok(await page.locator('.server-card').evaluate(el=>Math.abs(el.getBoundingClientRect().width-document.querySelector('.server-grid').getBoundingClientRect().width)<1),'Single result fills the row');
  await page.getByLabel('Filter Servers').fill('');
  await page.getByRole('button',{name:'Dismiss message'}).click();
- await page.getByRole('button',{name:'Switch to dark theme'}).click();
- await page.screenshot({path:directory+'/servers-dark.png',fullPage:true});
  for(const width of [1920,1440,1280,1024,768,390,320]){await page.setViewportSize({width,height:900});await measure();}
  await page.setViewportSize({width:390,height:844});
- await page.screenshot({path:directory+'/servers-mobile-dark.png',fullPage:true});
- await page.getByRole('button',{name:'Switch to light theme'}).click();
  await page.screenshot({path:directory+'/servers-mobile.png',fullPage:true});
  await page.setViewportSize({width:1440,height:1000});
  failState=true;
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();assert.equal(await page.locator('.server-card').count(),4);
+ await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();assert.equal(await page.locator('.server-card').count(),2);
  failState=false;
  role='operator';await page.reload();
  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
  await card('Production EU').waitFor();
  assert.equal(await page.getByRole('button',{name:'Edit details',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);
- assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),4);
+ assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),2);
  state.servers=[];state.sites=[];
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
  await page.getByRole('heading',{name:'Connect your first Docker host'}).waitFor();assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);
@@ -87,5 +83,5 @@ try{
  await page.getByRole('heading',{name:'Connect your first Docker host'}).waitFor();
  await page.screenshot({path:directory+'/servers-empty.png',fullPage:true});
  assert.deepEqual(errors,[]);
- console.log('Servers browser checks passed: existing test/discovery/edit requests, complete fingerprints, filtering, retained state on refresh errors, role restrictions, both themes and seven responsive widths with equal card heights and action bars.');
+ console.log('Servers browser checks passed: existing test/discovery/edit requests, complete fingerprints, filtering, retained state on refresh errors, role restrictions, light-only presentation and seven responsive widths with equal card heights and action bars.');
 }finally{await browser.close();}

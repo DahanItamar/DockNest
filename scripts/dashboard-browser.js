@@ -13,14 +13,14 @@ await page.route('**/api/jobs/job-store',r=>r.fulfill({json:{job:state.jobs[1],e
 await page.addInitScript(()=>localStorage.setItem('docknest-theme','light'));
 await page.emulateMedia({reducedMotion:'reduce'});
 await page.goto(process.env.TEST_BASE_URL || 'http://127.0.0.1:5173');
-await page.getByRole('heading',{name:'Overview',exact:true}).waitFor();
+await page.locator('.dash-metrics').waitFor();
 await page.locator('.dash-site').first().waitFor();
 await page.evaluate(()=>document.fonts.ready);
-assert.equal(await page.evaluate(()=>document.fonts.check('14px Manrope')),true,'Manrope loaded');
+assert.equal(await page.evaluate(()=>document.fonts.check('14px "Roboto Variable"')),true,'Roboto loaded');
 assert.equal(await page.evaluate(()=>document.fonts.check('12px "IBM Plex Mono"')),true,'Technical typography loaded');
-assert.equal(await page.locator('.brand-icon').evaluateAll(images=>images.every(i=>i.complete && i.naturalWidth>0)),true,'Custom assets loaded');
-await mkdir('docs/design/dashboard-implemented',{recursive:true});
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-desktop.png',fullPage:true,animations:'disabled'});
+assert.equal(await page.locator('.brand-icon').evaluateAll(icons=>icons.every(i=>i.tagName.toLowerCase()==='svg')),true,'Outline icons rendered');
+await mkdir('data/screenshots/dashboard',{recursive:true});
+await page.screenshot({path:'data/screenshots/dashboard/dashboard-desktop.png',fullPage:true,animations:'disabled'});
 await page.locator('.dash-site summary').first().click();
 assert.equal(await page.locator('.dash-site[open] .dash-backup').count(),2);
 assert.equal(await page.getByRole('link',{name:'Download full ZIP fleur-latest'}).getAttribute('href'),'/api/backups/fleur-latest/download?format=zip');
@@ -38,18 +38,13 @@ await page.getByRole('button',{name:'Pin backup fleur-latest',exact:true}).click
 await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();
 assert.deepEqual(pinRequest,{pinned:true});
 await page.getByRole('button',{name:'Dismiss message'}).click();
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-expanded.png',fullPage:true,animations:'disabled'});
-await page.getByRole('button',{name:'Switch to dark theme'}).click();
-await page.locator('html[data-theme="dark"]').waitFor();
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-dark.png',fullPage:true,animations:'disabled'});
+await page.screenshot({path:'data/screenshots/dashboard/dashboard-expanded.png',fullPage:true,animations:'disabled'});
 for(const width of [1440,1280,1024,768,390,320]){
  await page.setViewportSize({width,height:900});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`No overflow at ${width}px`);
 }
 await page.setViewportSize({width:390,height:844});
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-mobile-dark.png',fullPage:true,animations:'disabled'});
-await page.getByRole('button',{name:'Switch to light theme'}).click();
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-mobile.png',fullPage:true,animations:'disabled'});
+await page.screenshot({path:'data/screenshots/dashboard/dashboard-mobile.png',fullPage:true,animations:'disabled'});
 await page.emulateMedia({reducedMotion:'reduce'});
 await page.locator('.dash-site summary').first().click();
 await page.locator('.dash-site summary').first().click();
@@ -59,7 +54,7 @@ await page.getByRole('heading',{name:'Sites & schedules',exact:true}).waitFor();
 assert.equal(await page.locator('.dashboard-page').count(),0,'Other routes retain existing styles');
 await page.setViewportSize({width:1440,height:1100});
 // Keep previous content visible when a background refresh fails.
-await page.getByRole('button',{name:'Overview',exact:true}).click();
+if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Toggle navigation',exact:true}).click();await page.getByRole('button',{name:'Overview',exact:true}).click();
 await page.route('**/api/state',r=>r.fulfill({status:503,json:{error:'Fixture refresh unavailable.'}}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
 await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();
@@ -71,12 +66,12 @@ await page.route('**/api/state',r=>r.fulfill({json:{...state,servers:[],sites:[]
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
 await page.getByRole('button',{name:'Connect a server',exact:true}).waitFor();
 assert.equal(await page.locator('.dash-site').count(),0,'Empty state has no fabricated recovery history');
-await page.screenshot({path:'docs/design/dashboard-implemented/dashboard-empty.png',fullPage:true,animations:'disabled'});
+await page.screenshot({path:'data/screenshots/dashboard/dashboard-empty.png',fullPage:true,animations:'disabled'});
 await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{name:'Operator',role:'operator'},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}}));
 await page.reload();
-await page.getByRole('heading',{name:'Overview',exact:true}).waitFor();
+await page.locator('.dash-metrics').waitFor();
 assert.equal(await page.getByRole('button',{name:'Connect a server',exact:true}).count(),0,'Operator cannot add a server');
 assert.equal(await page.getByRole('button',{name:'Manage storage',exact:true}).count(),0,'Storage administration remains role-gated');
 assert.equal(errors.length,0,errors.join('\n'));
 await browser.close();
-console.log('Dashboard fixtures passed: recovery expansion, original action URLs, details, restore, pin, six viewport widths, both themes, reduced motion and navigation.');
+console.log('Dashboard fixtures passed: recovery expansion, original action URLs, details, restore, pin, six viewport widths, light-only presentation, reduced motion and navigation.');

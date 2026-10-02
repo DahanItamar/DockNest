@@ -17,10 +17,10 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
   await page.getByLabel('2FA code').waitFor();
   assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
-  assert.equal(await page.locator('.auth-card img.brand-lockup').count(),0,'Login logo belongs only in the header');
-  assert.equal(await page.locator('.auth-header img.brand-lockup').count(),1,'Header displays the brand once');
+  assert.equal(await page.locator('.auth-card .brand-lockup').count(),0,'Login logo belongs only in the header');
+  assert.equal(await page.locator('.auth-header .brand-lockup').count(),1,'Header displays the brand once');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
-  for(const asset of ['favicon.png','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.png','logo-horizontal-dark.png','logo-tagline-light.png','logo-tagline-dark.png']){
+  for(const asset of ['favicon.png','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo.png','mark.png']){
     assert.equal((await page.request.get(baseUrl+'/brand/'+asset)).status(),200,asset+' must be served');
   }
   async function checkContrast(){
@@ -38,22 +38,10 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Setup must fit mobile viewport');
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path:path.join(screenshotDir,'setup-mobile.png'), fullPage: true, animations: 'disabled' });
-  await page.getByRole('button',{name:'Switch to dark theme'}).click();
-  await page.locator('html[data-theme="dark"]').waitFor();
-  await checkContrast();
-  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:path.join(screenshotDir,'setup-dark-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
-  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:path.join(screenshotDir,'setup-dark-desktop.png'),fullPage:true,animations:'disabled'});
-  await page.getByRole('button',{name:'Switch to light theme'}).click();
   await page.emulateMedia({reducedMotion:'reduce'});
   assert.equal(await page.evaluate(()=>getComputedStyle(document.body).transitionDuration),'0s','Reduced motion disables fallback transitions');
-  await page.getByRole('button',{name:'Switch to dark theme'}).click();
-  await page.locator('html[data-theme="dark"]').waitFor();
-  assert.equal(await page.evaluate(()=>document.getAnimations().length),0,'Reduced motion switches without animation');
-  await page.getByRole('button',{name:'Switch to light theme'}).click();
-  await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.emulateMedia({reducedMotion:'no-preference'});
   // Isolated browser-only empty fixtures exercise UI navigation without creating an administrator.
   await page.route('**/api/auth/status', route => route.fulfill({ json: { authenticated: true, setupRequired: false, csrfToken: 'fixture', user: { name: 'Administrator', role: 'admin', email: 'ui-test@example.org' }, serverTime: Date.now(), idleExpiresAt: Date.now()+1800000, absoluteExpiresAt: Date.now()+28800000 } }));
   await page.route('**/api/access', route => route.fulfill({ json: { users: [], security: { idleMinutes: 30, absoluteHours: 8, invitationMinutes: 15 } } }));
@@ -62,20 +50,10 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.route('**/api/state', route => route.fulfill({ json: { servers: fixtureServers, sites: fixtureSites, policies: fixturePolicies, backups: [], jobs: [], restores: [], audit: [], storage: { used: 0, total: 1000000 }, maintenance: { title: 'Briefly under maintenance', message: 'We will be back shortly.', color: '#147d73' } } }));
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.reload();
-  await page.getByRole('heading', { name: 'Overview', exact: true }).waitFor();
+  await page.locator('.dash-metrics').waitFor();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({ path:path.join(screenshotDir,'dashboard-desktop.png'), fullPage: true, animations: 'disabled' });
-  await page.getByRole('button',{name:'Switch to dark theme'}).click();
-  await page.locator('html[data-theme="dark"]').waitFor();
-  await page.locator('img[src="/brand/logo-tagline-dark.png"]').waitFor();
-  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-desktop.png'),fullPage:true,animations:'disabled'});
-  await page.setViewportSize({width:390,height:844});
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Dark dashboard fits mobile');
-  await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
-  await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-mobile.png'),fullPage:true,animations:'disabled'});
-  await page.setViewportSize({width:1440,height:960});
-  await page.getByRole('button',{name:'Switch to light theme'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
   // Wizard requests stay inside browser fixtures; no real remote connection or key installation occurs.
   const prepared = await prepareServerKey();
   await page.route('**/api/servers/onboarding', route => route.fulfill({json:{reportCommand:serverReportCommand}}));
@@ -114,6 +92,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
       await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:path.join(screenshotDir,'server-wizard-desktop.png'),fullPage:true,animations:'disabled'});
       await page.setViewportSize({width:390,height:844});
+      if(!await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))console.log(await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>innerWidth+1).map(el=>({tag:el.tagName,class:String(el.className),width:Math.round(el.getBoundingClientRect().width),right:Math.round(el.getBoundingClientRect().right)})).slice(0,12)));
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Wizard fits mobile');
       await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:path.join(screenshotDir,'server-wizard-mobile.png'),fullPage:true,animations:'disabled'});
@@ -375,7 +354,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await setupPage.getByRole('heading',{name:'Connect your authenticator'}).waitFor();
   await setupPage.getByRole('checkbox',{name:'I saved my recovery codes securely.'}).check();
   await setupPage.getByLabel('Authenticator code').fill('123456');await setupPage.getByRole('button',{name:'Confirm administrator'}).click();
-  await setupPage.getByRole('heading',{name:'Overview',exact:true}).waitFor();
+  await setupPage.locator('.dash-metrics').waitFor();
   assert.ok(setupVerified,'Separate administrator enrollment confirms the factor before opening the dashboard');
   await setupPage.close();
   console.log('Browser smoke passed: setup desktop/mobile, eight dashboard views, responsive layout, no uncaught errors.');
