@@ -1,0 +1,194 @@
+{
+  "identity": "DockNest / Homebird",
+  "presentation": "Light only",
+  "version": "deadd2f768",
+  "operation": "Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged.",
+  "sourceAlpha": {
+    "occupied": 307069,
+    "partial": 13761,
+    "white": 0,
+    "pixels": 1572528
+  },
+  "outputs": [
+    {
+      "filename": "logo.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 2015,
+      "height": 395,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 2015,
+        "height": 395
+      },
+      "bytes": 501436,
+      "sha256": "fafbc16e8f73f5ad5eae28569e443257f38ecdfd3ea91ffc583f05ddd353da8a"
+    },
+    {
+      "filename": "mark.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 476,
+      "height": 395,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 151110,
+      "sha256": "69eb9be7b6bf01dfd35847e02016af47b8db2f84a6bf7ff4d72c17ff40dd9f3d"
+    },
+    {
+      "filename": "logo-600-deadd2f768.webp",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 600,
+      "height": 118,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 2015,
+        "height": 395
+      },
+      "bytes": 21700,
+      "sha256": "539e45592a9bf31bee142621d309349b885fd130cb68e1d6cadf8b710e703159"
+    },
+    {
+      "filename": "logo-1200-deadd2f768.webp",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 1200,
+      "height": 235,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 2015,
+        "height": 395
+      },
+      "bytes": 50498,
+      "sha256": "2bb7cb24fcde0781688d9c8544c4e66f0a7330e2b5c8d3868b600ca4faa62d80"
+    },
+    {
+      "filename": "favicon-16-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 16,
+      "height": 16,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 713,
+      "sha256": "b7b88f11984e5868eb86922bb955dc711f5cdd1e3aac676a662f3ad7041a0f4e"
+    },
+    {
+      "filename": "favicon-32-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1757,
+      "sha256": "58ebcfade5a533d90853c8177b182ac70adde37b9c0f4419e8389da9cbe93ee8"
+    },
+    {
+      "filename": "favicon-48-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 48,
+      "height": 48,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 2946,
+      "sha256": "1534321e2e44dbf1762b66e445e370f037d168591489c54efc11b46c52f0366b"
+    },
+    {
+      "filename": "favicon-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 32,
+      "height": 32,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 1757,
+      "sha256": "58ebcfade5a533d90853c8177b182ac70adde37b9c0f4419e8389da9cbe93ee8"
+    },
+    {
+      "filename": "app-icon-192-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 192,
+      "height": 192,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 21624,
+      "sha256": "7c3c8edc5980965e9300b7a123e60ca8ffd05928ada684eef9c36a0c88795f23"
+    },
+    {
+      "filename": "app-icon-512-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 512,
+      "height": 512,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 121231,
+      "sha256": "2390fdfe64f1a8b8e46e34deef59b0517fcdb02537f37dafe76c300d20eb8766"
+    },
+    {
+      "filename": "app-icon-maskable-512-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 512,
+      "height": 512,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 72954,
+      "sha256": "59893cc92a4d29d73ea222d4499af2ec4cab4b561b250a197183fc0f1519db4d"
+    },
+    {
+      "filename": "apple-touch-icon-deadd2f768.png",
+      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
+      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "width": 180,
+      "height": 180,
+      "crop": {
+        "left": 98,
+        "top": 175,
+        "width": 476,
+        "height": 395
+      },
+      "bytes": 18730,
+      "sha256": "fa601a5456bf5f2336c3f49d331b00fa20ff6740344259209f98ffd97b8d707c"
+    }
+  ]
+}
