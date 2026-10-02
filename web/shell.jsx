@@ -2,8 +2,9 @@ import React,{useEffect,useRef,useState} from 'react';
 import {IconMenu2,IconX,IconSearch,IconSettings,IconBell,IconLogout,IconDatabase,IconChevronRight} from '@tabler/icons-react';
 import {Brand,BrandIcon} from './brand.jsx';
 import './shell.css';
+import {SystemHealth} from './system-health.jsx';
 
-export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLogout,onRefresh,children}){
+export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLogout,onRefresh,connection,worker,jobs,children}){
  const [collapsed,setCollapsed]=useState(()=>localStorage.getItem('docknest-sidebar')==='collapsed'),[mobile,setMobile]=useState(false),[customizer,setCustomizer]=useState(false),[notifications,setNotifications]=useState(false),[search,setSearch]=useState('');
  const drawer=useRef(null),label=user?.name||user?.email||'Administrator';
  useEffect(()=>{localStorage.setItem('docknest-sidebar',collapsed?'collapsed':'expanded')},[collapsed]);
@@ -24,8 +25,8 @@ export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLo
    <nav aria-label="Main navigation">{[['Dashboard',['Overview']],['Infrastructure',['Servers','Sites & schedules','Backups']],['Operations',['Jobs','Maintenance','Audit']],['Administration',['Storage','Access']]].map(([group,names])=>{
     const items=routes.filter(([name])=>names.includes(name));return items.length?<div className="berry-nav-group" key={group}><h2>{group}</h2>{group==='Dashboard'&&<button className="berry-nav-toggle" aria-label="Toggle navigation" title={collapsed?'Expand navigation':'Collapse navigation'} aria-expanded={innerWidth<900?mobile:!collapsed} onClick={()=>{if(innerWidth<900)setMobile(false);else setCollapsed(!collapsed)}}><IconMenu2 size={20}/><span>Collapse menu</span></button>}{items.map(([name])=><button key={name} aria-label={name} title={collapsed?name:undefined} aria-current={route===name?'page':undefined} className={route===name?'selected':''} onClick={()=>go(name)}><BrandIcon name={{Overview:'overview',Servers:'server','Sites & schedules':'sites',Backups:'backups',Jobs:'jobs',Maintenance:'maintenance',Audit:'audit',Storage:'storage',Access:'access'}[name]} size={20}/><span>{name==='Overview'?'Dashboard':name==='Sites & schedules'?'Sites & schedules':name}</span>{name==='Jobs'&&active.length>0&&<span className="count">{active.length}</span>}</button>)}</div>:null;
    })}</nav>
+   <SystemHealth connection={connection} worker={worker} jobs={jobs}/>
    <div className="berry-sidebar-storage"><div><span className="berry-storage-icon"><IconDatabase size={24}/></span><span><b>Backup storage</b><small>{bytes(storage?.used)}{storage?.total?' / '+bytes(storage.total):''}</small></span></div><p><span>{storage?.total?'Capacity used':'Capacity not reported'}</span><b>{storage?.total?percent+'%':'\u2014'}</b></p><progress aria-label="Sidebar storage used" value={percent} max={100}/></div>
-   <span className="berry-version">DockNest</span>
   </aside>
   <div className="workspace">{children}</div>
   <dialog className="berry-customizer" ref={drawer} aria-labelledby="customizer-title" onCancel={()=>setCustomizer(false)} onClick={e=>{if(e.target===drawer.current)setCustomizer(false)}}><header><h2 id="customizer-title">Design preferences</h2><button className="icon" aria-label="Close preferences" onClick={()=>setCustomizer(false)}><IconX size={20}/></button></header><section><h3>NAVIGATION</h3><button onClick={()=>setCollapsed(!collapsed)}>{collapsed?'Expand sidebar':'Collapse sidebar'}</button></section><section><h3>DESIGN SYSTEM</h3><p>Light presentation, Roboto typography, 8 px surfaces, purple and blue accents. Motion follows your device's reduced motion setting.</p></section><section><h3>ACCOUNT</h3><p>{label}</p><small>{user?.role==='admin'?'Administrator':'Operator'}</small><button onClick={onLogout}><IconLogout size={18}/> End session</button></section></dialog>
