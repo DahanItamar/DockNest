@@ -3,6 +3,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const folder='docs/design/berry-brand',manifest=JSON.parse(await readFile(folder+'/asset-manifest.json','utf8')),original=await readFile(folder+'/'+manifest.filename);
 const hash=createHash('sha256').update(original).digest('hex');if(hash!==manifest.sha256)throw Error('Source checksum mismatch');
+const version=hash.slice(0,10);
 const browser=await chromium.launch({channel:'chrome',headless:true}),outputs=[];
 try{
  const page=await browser.newPage();
@@ -21,10 +22,16 @@ try{
   const bytes=Buffer.from(result.png,'base64');await writeFile('public/brand/'+filename,bytes);outputs.push({filename,source:folder+'/'+manifest.filename,sourceSha256:hash,width:result.width,height:result.height,crop:result.crop,sha256:createHash('sha256').update(bytes).digest('hex')});
  }
  await exportImage('logo.png');await exportImage('mark.png',{width:1024,mark:true});
- for(const size of [16,32,192,512])await exportImage('app-icon-'+size+'.png',{size,mark:true,background:'#FFFFFF'});
- await exportImage('apple-touch-icon.png',{size:180,mark:true,background:'#FFFFFF'});await exportImage('favicon.png',{size:32,mark:true,background:'#FFFFFF'});
- const png=await readFile('public/brand/favicon.png'),header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=32;header[7]=32;header.writeUInt16LE(1,10);header.writeUInt16LE(32,12);header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18);await writeFile('public/brand/favicon.ico',Buffer.concat([header,png]));
+ for(const size of [16,32,192,512])await exportImage('app-icon-'+size+'-'+version+'.png',{size,mark:true,background:'#FFFFFF'});
+ await exportImage('apple-touch-icon-'+version+'.png',{size:180,mark:true,background:'#FFFFFF'});await exportImage('favicon-'+version+'.png',{size:32,mark:true,background:'#FFFFFF'});
+ const png=await readFile('public/brand/favicon-'+version+'.png'),header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=32;header[7]=32;header.writeUInt16LE(1,10);header.writeUInt16LE(32,12);header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18);await writeFile('public/brand/favicon-'+version+'.ico',Buffer.concat([header,png]));
  await writeFile('public/brand/asset-manifest.json',JSON.stringify({identity:'DockNest / Nestweave B / Berry',presentation:'Light only',operation:'Native transparent-margin cropping and downsampling only; Higgsfield original unchanged.',outputs},null,2)+'\n');
- await writeFile('public/brand/site.webmanifest',JSON.stringify({name:'DockNest',short_name:'DockNest',icons:[{src:'/brand/app-icon-192.png',sizes:'192x192',type:'image/png'},{src:'/brand/app-icon-512.png',sizes:'512x512',type:'image/png'}],theme_color:'#673AB7',background_color:'#EEF2F6',display:'standalone'},null,2)+'\n');
+ await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Docker Backup & Restore',start_url:'/',scope:'/',icons:[{src:'/brand/app-icon-192-'+version+'.png',sizes:'192x192',type:'image/png',purpose:'any'},{src:'/brand/app-icon-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'any'}],theme_color:'#673AB7',background_color:'#EEF2F6',display:'standalone'},null,2)+'\n');
+ // Root fallbacks also cover browsers that request conventional icon paths.
+ await writeFile('public/favicon.ico',await readFile('public/brand/favicon-'+version+'.ico'));
+ await writeFile('public/apple-touch-icon.png',await readFile('public/brand/apple-touch-icon-'+version+'.png'));
+ await writeFile('public/apple-touch-icon-precomposed.png',await readFile('public/brand/apple-touch-icon-'+version+'.png'));
+ const index=await readFile('index.html','utf8');
+ await writeFile('index.html',index.replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]png','g'),'/brand/favicon-'+version+'.png').replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]ico','g'),'/brand/favicon-'+version+'.ico').replace(new RegExp('/brand/apple-touch-icon(?:-[a-f0-9]+)?[.]png','g'),'/brand/apple-touch-icon-'+version+'.png').replace(new RegExp('/brand/site[.]webmanifest(?:[?]v=[a-f0-9]+)?','g'),'/brand/site.webmanifest?v='+version));
  console.log('Exported new Berry logo, original symbol and application icons.');
 }finally{await browser.close()}
