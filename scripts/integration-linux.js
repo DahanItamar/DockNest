@@ -182,6 +182,8 @@ try {
   assert.equal(await run('exec',hosts[1],'docker','exec',groupResult.containerIds[0],'python','-c',"import urllib.request;print(urllib.request.urlopen('http://db:8080/record').read().decode())"),'snapshot-record');
   const copiedStates=JSON.parse(await run('exec',hosts[1],'docker','inspect',...groupResult.containerIds));assert.deepEqual(copiedStates.map(c=>c.State.Running),[true,true,false]);
   assert.ok(copiedStates.every(c=>!Object.values(c.NetworkSettings.Ports||{}).some(Boolean)),'No copy ports are published');
+  assert.ok(copiedStates.every(c=>c.Config.Labels['com.docker.compose.project']==='docknest-restore-'+groupRestoreJob.id.slice(0,12)),'Copies belong to a separate project rather than the original app');
+  assert.ok(copiedStates.every(c=>!c.Config.Labels['com.docker.compose.project.working_dir']&&!c.Config.Labels['com.docker.compose.project.config_files']),'Copies do not advertise live source configuration paths');
   assert.equal(copiedStates[0].Mounts.find(m=>m.Destination==='/config/runtime.txt').Source,copiedStates[1].Mounts.find(m=>m.Destination==='/config/runtime.txt').Source,'Shared source mounts stay shared');
   const copiedNetwork=JSON.parse(await run('exec',hosts[1],'docker','network','inspect',groupResult.networks[0]))[0];assert.equal(copiedNetwork.Internal,true);assert.equal(copiedNetwork.Options['com.docker.network.bridge.gateway_mode_ipv4'],'isolated');
   const routes=await run('exec',hosts[1],'docker','exec',groupResult.containerIds[0],'python','-c',"from pathlib import Path;print(Path('/proc/net/route').read_text())");assert.ok(!routes.split('\n').slice(1).some(line=>line.split(/\s+/)[1]==='00000000'),'Isolated copy has no default route');

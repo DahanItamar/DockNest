@@ -399,6 +399,8 @@ def restore(req):
     for i,c in enumerate(containers):
         name='dbm-restore-'+req['job'][:12]+('-'+str(i) if multi else '')
         args=['create','--name',name,'--network','none','--restart','no','--label','docker-backup-manager.restore='+req['job']]
+        # A copy must never remain a member of the source's Compose project.
+        args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for j,m in enumerate(c['Mounts']):
             key=(m['Type'],m['Source'])
