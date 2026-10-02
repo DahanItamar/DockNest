@@ -34,7 +34,7 @@
  .berry-bell:hover>svg{animation:berry-ring 450ms ease-in-out}
  .berry-logout:hover>svg{transform:translateX(3px)}
  .berry-header-tools>.icon:not(.berry-logout):hover>svg{transform:rotate(80deg)}
- .berry-header-tools>.icon:hover{background:var(--accent-soft);color:var(--accent)}
+ .berry-header-tools>.icon:hover{background:transparent;color:var(--accent)}
 }
 @keyframes berry-ring{0%,100%{transform:rotate(0)}25%{transform:rotate(12deg)}50%{transform:rotate(-10deg)}75%{transform:rotate(6deg)}}
 @media(prefers-reduced-motion:reduce){.berry-header-tools button>svg{transition:none!important;animation:none!important}.berry-header-tools button:hover>svg{transform:none}}

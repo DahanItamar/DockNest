@@ -5,6 +5,7 @@ import {BrandIcon} from './brand.jsx';
 import {describeSchedule} from './schedule.js';
 import './dashboard.css';
 import {Paginated} from './pagination.jsx';
+import {formatDate} from './date-format.js';
 
 const Layers=props=><BrandIcon name="sites" {...props}/>;
 const Archive=props=><BrandIcon name="backups" {...props}/>;
@@ -13,7 +14,7 @@ const Clock=props=><BrandIcon name="schedule" {...props}/>;
 const Server=props=><BrandIcon name="server" {...props}/>;
 
 const newest = rows => [...rows].sort((a,b)=>new Date(b.capturedAt||b.createdAt)-new Date(a.capturedAt||a.createdAt));
-const shortDate = value => value ? new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : 'No backup yet';
+const shortDate = value => value ? formatDate(value,{shortTime:true}) : 'No backup yet';
 
 function IconButton({label,children,...props}) {
   return <button type="button" className="dash-icon" aria-label={label} title={label} {...props}>{children}</button>;

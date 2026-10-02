@@ -22,7 +22,8 @@ import {Paginated} from './pagination.jsx';
 const routes=[['Overview',LayoutDashboard],['Servers',Server],['Sites & schedules',Layers],['Backups',Archive],['Jobs',Activity],['Maintenance',Wrench],['Audit',ShieldCheck]];
 let csrf='';
 async function api(path,body,method){const r=await fetch('/api'+path,{credentials:'same-origin',method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json','x-csrf-token':csrf},...(body?{body:JSON.stringify(body)}:{})});const d=await r.json().catch(()=>({error:'The server returned an unreadable response.'}));if(!r.ok){const e=new Error(d.error||d.message||'Request failed');e.status=r.status;e.code=d.code;throw e;}return d;}
-const date=v=>v?new Date(v).toLocaleString():'—';
+import {formatDate} from './date-format.js';
+const date=v=>formatDate(v);
 const bytes=v=>{if(!v)return '0 B';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i];};
 function Badge({value}){return <span className={'badge '+(/failed|error|recovery/i.test(value||'')?'bad':/complete|success|ready|healthy/i.test(value||'')?'good':'')}>{value||'Unknown'}</span>;}
 function Field({label,help,options,multiline,...props}){return <label className="field"><span>{label}</span>{options?<select {...props}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea {...props}/>:<input {...props}/>} {help&&<small>{help}</small>}</label>;}
