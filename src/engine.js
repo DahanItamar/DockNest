@@ -44,11 +44,13 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  const capabilities=await testServer(target),blockers=[];
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
  if(capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
- if(backup.manifest.containers?.length!==1)blockers.push('Multi-container restore requires an isolated networking adapter');
+ const grouped=(backup.manifest.containers?.length||0)>1;
+ if(!backup.manifest.containers?.length||backup.manifest.containers.length>30)blockers.push('Restore requires 1 to 30 containers');
+ if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  if(Object.keys(mappings||{}).length)blockers.push('This version restores to fresh owned paths with network none; custom port and host directory maps require reviewed offline restore');
  if(capabilities.freeBytes<backup.size*3+1024**3)blockers.push('Insufficient estimated target capacity');
- return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:'none',warnings:['No inbound or outbound network: use docker exec for validation, then explicitly plan production routing.','Escaping links/device files in data archives and privileged host configuration are rejected during extraction.','Application-specific data validation is required after container health succeeds.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings});
@@ -128,7 +130,7 @@ async function executeRestoreJob(job){
   stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum});
   db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
   db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({...details,result}),job.id);
-  audit('worker','restore.completed',backup.id,{job:job.id,containerId:result.containerId,networkMode:'none'});
+  audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});
  }catch(error){
   db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
   db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error=? WHERE id=?").run(now(),String(error.message).slice(0,1000),job.id);

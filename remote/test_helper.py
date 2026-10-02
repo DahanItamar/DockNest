@@ -1,6 +1,17 @@
 import unittest, tempfile, pathlib, tarfile, io, urllib.error
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan
+
+class RestoreNetworkTests(unittest.TestCase):
+    def container(self,name,networks,**host):return {'Name':'/'+name,'Config':{'Hostname':name},'HostConfig':host,'NetworkSettings':{'Networks':networks}}
+    def test_network_membership_and_service_aliases_remain_separate(self):
+        cs=[self.container('app',{'front':{'Aliases':['web']},'back':{'Aliases':['app']}}),self.container('db',{'back':{'Aliases':['database']}})]
+        self.assertEqual(restore_network_plan(cs),[{'front':['app','web'],'back':['app']},{'back':['db','database']}])
+        self.assertEqual(restore_network_plan(cs[:1]),[{}])
+    def test_host_modes_static_ips_and_unsafe_aliases_are_rejected(self):
+        for c in [self.container('app',{},Privileged=True),self.container('app',{},NetworkMode='container:production'),self.container('app',{},NetworkMode='host'),self.container('app',{'net':{'Aliases':['--unsafe']}}),self.container('app',{'net':{'IPAMConfig':{'IPv4Address':'172.20.0.2'}}})]:
+            with self.assertRaises(ValueError):restore_network_plan([c,self.container('db',{})])
+        with self.assertRaises(ValueError):restore_network_plan([])
 
 class ConfigurationFileTests(unittest.TestCase):
     def test_detection_and_browsing_return_paths_and_names_without_file_contents(self):

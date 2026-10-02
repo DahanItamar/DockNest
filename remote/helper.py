@@ -12,7 +12,7 @@ Run docker load -i images.tar. Match manifest.containers[I] with manifest.snapsh
 Extract each mount-I-J.tar into a different empty directory, keeping numeric UID/GID, modes, ACLs and xattrs. Recreate mounts at manifest.containers[I].Mounts[J].Destination; use read-only when RW is false. Never overwrite live bind paths or existing volume data.
 For the basic isolated one-container restore, use docker create --name NEW_UNIQUE_NAME --network none --restart no --mount type=bind,src=NEW_SOURCE,dst=ORIGINAL_DEST SNAPSHOT_IMAGE_ID for every mount; append readonly when required. Committed image configuration preserves original command, entrypoint, environment and health check. Then docker start NEW_UNIQUE_NAME.
 Run docker inspect and docker exec checks to verify database records, uploaded files, login and important workflows. No inbound or outbound networking is available in this mode. Network isolation prevents production emails, payments and integrations. Do not enable networking until secrets, scheduled jobs and external side effects have been reviewed.
-Multi-container restores require an explicit isolated-network/firewall plan and original dependency startup order. Saved Compose files require path/port/project-name updates and secret review; do not run them unchanged.
+The automatic grouped restore creates fresh internal bridge networks with isolated gateway mode (Docker 28+), preserves original network membership and DNS aliases, publishes no ports, disables external DNS forwarding and keeps originally stopped containers stopped. Static IP assignments, shared container network namespaces and overlapping mount paths require a reviewed offline adapter. Saved Compose files require path/port/project-name updates and secret review; do not run them unchanged.
 Copy config archives into separate review directories. Configure TLS, reverse proxy, domains and DNS separately. Plan cutover only after application validation succeeds.
 Replacement requires a verified backup of the current target before stopping it, explicit confirmation, a rollback plan and separate health verification. Never infer application recoverability from transport checksum alone.
 Delete plaintext staging securely according to your storage policy; filesystem deletion alone does not guarantee erasure on every disk.
@@ -362,6 +362,23 @@ def prepare_restore(req):
     if root.exists():raise ValueError('Restore staging already exists')
     root.mkdir(parents=True,mode=0o700)
     emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz')})
+def restore_network_plan(containers):
+    if not 1<=len(containers)<=30:raise ValueError('Restore requires 1 to 30 containers')
+    plans=[]
+    for c in containers:
+        hc=c['HostConfig'];mode=hc.get('NetworkMode','')
+        if hc.get('Privileged') or hc.get('Devices') or hc.get('CapAdd') or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
+        networks={}
+        for name,n in c.get('NetworkSettings',{}).get('Networks',{}).items():
+            if name=='none':continue
+            if n.get('IPAMConfig'):raise ValueError('Static IP assignments require a reviewed offline restore')
+            aliases=list(dict.fromkeys([c['Name'].lstrip('/'),c.get('Config',{}).get('Hostname','')]+(n.get('Aliases') or [])))
+            if any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',alias) for alias in aliases if alias):raise ValueError('Unsupported network alias requires offline restore')
+            networks[name]=[alias for alias in aliases if alias]
+        plans.append(networks if len(containers)>1 else {})
+    if len({name for networks in plans for name in networks})>30:raise ValueError('Too many restore networks')
+    return plans
+
 def restore(req):
     root=owned_job_root(req)
     payload=root/'payload.tar.gz'
@@ -373,36 +390,63 @@ def restore(req):
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
     if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise ValueError('Architecture mismatch')
-    if len(manifest['containers'])!=1:raise ValueError('Multi-container isolation requires a reviewed networking adapter')
-    c=manifest['containers'][0];hc=c['HostConfig']
+    containers=manifest['containers'];plans=restore_network_plan(containers)
+    if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
+    multi=len(containers)>1
+    if multi and int(docker('version','--format','{{.Server.Version}}').decode().split('.')[0])<28:raise ValueError('Grouped isolated restores require Docker 28 or newer')
     if shutil.disk_usage(root).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+1024**3:raise ValueError('Insufficient target capacity for extracted data')
-    if hc.get('Privileged') or hc.get('Devices') or hc.get('CapAdd') or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or hc.get('NetworkMode')=='host':raise ValueError('Host privileges cannot be restored automatically')
-    # Network none is explicit and prohibits outbound production effects.
-    name='dbm-restore-'+req['job'][:12]
-    args=['create','--name',name,'--network','none','--restart','no','--label','docker-backup-manager.restore='+req['job']]
-    for j,m in enumerate(c['Mounts']):
-        directory=root/('data-%d'%j)
-        safe_extract(unpacked/('mount-0-%d.tar'%j),directory)
-        entries=list(directory.iterdir())
-        if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
-        source=entries[0]
-        if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
-        mount='type=bind,src='+str(source)+',dst='+m['Destination']
-        if not m.get('RW',True):mount+=',readonly'
-        args+=['--mount',mount]
+    definitions=[];sources={}
+    for i,c in enumerate(containers):
+        name='dbm-restore-'+req['job'][:12]+('-'+str(i) if multi else '')
+        args=['create','--name',name,'--network','none','--restart','no','--label','docker-backup-manager.restore='+req['job']]
+        if multi and plans[i]:args+=['--dns','127.0.0.1']
+        for j,m in enumerate(c['Mounts']):
+            key=(m['Type'],m['Source'])
+            if key not in sources:
+                for _,existing in sources:
+                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
+                    if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths require offline restore')
+                directory=root/('data-%d-%d'%(i,j))
+                safe_extract(unpacked/('mount-%d-%d.tar'%(i,j)),directory)
+                entries=list(directory.iterdir())
+                if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
+                sources[key]=entries[0]
+            source=sources[key]
+            if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
+            mount='type=bind,src='+str(source)+',dst='+m['Destination']
+            if not m.get('RW',True):mount+=',readonly'
+            args+=['--mount',mount]
+        definitions.append((name,args+[manifest['snapshotImages'][i]]))
     docker('load','-i',str(unpacked/'images.tar'))
-    args.append(manifest['snapshotImages'][0])
-    cid=docker(*args).decode().strip()
+    created=[];networks={};running=[]
     try:
-        docker('start',cid)
+        for index,original in enumerate(dict.fromkeys(name for plan in plans for name in plan)):
+            name='dbm-restore-'+req['job'][:12]+'-net-'+str(index)
+            docker('network','create','--internal','--driver','bridge','--opt','com.docker.network.bridge.gateway_mode_ipv4=isolated','--opt','com.docker.network.bridge.gateway_mode_ipv6=isolated','--label','docker-backup-manager.restore='+req['job'],name)
+            networks[original]=name
+            n=json.loads(docker('network','inspect',name))[0]
+            if not n['Internal'] or n.get('EnableIPv6') or n.get('Options',{}).get('com.docker.network.bridge.gateway_mode_ipv4')!='isolated':raise ValueError('Target did not create an isolated restore network')
+        for i,(name,args) in enumerate(definitions):
+            if plans[i]:
+                original=next(iter(plans[i]));args[args.index('--network')+1]=networks[original]
+                args[1:1]=[part for alias in plans[i][original] for part in ['--network-alias',alias]]
+            cid=docker(*args).decode().strip();created.append(cid)
+            if plans[i]:
+                for original,aliases in list(plans[i].items())[1:]:
+                    flags=[part for alias in aliases for part in ['--alias',alias]]
+                    docker('network','connect',*flags,networks[original],cid)
+        for c,cid in zip(containers,created):
+            if c['State'].get('Running'):
+                docker('start',cid);running.append(cid)
         until=time.time()+120
-        while time.time()<until and not health([cid]):time.sleep(2)
-        if not health([cid]):raise ValueError('Restored container health check failed')
+        while time.time()<until and not health(running):time.sleep(2)
+        if not health(running):raise ValueError('Restored container health check failed')
     except Exception:
-        try:docker('stop','--time','30',cid)
+        try:
+            if created:docker('stop','--time','30',*created)
         except Exception:pass
         raise
-    emit(result={'containerId':cid,'name':name,'networkMode':'none','root':str(root),'access':'docker exec '+name+' sh','externallyAccessible':False,'restoreTested':False,'containerHealthVerified':True})
+    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':False,'containerHealthVerified':True,'originalStatesPreserved':True})
 def deploy_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{})
     p=pathlib.Path(m.get('directory',''))
