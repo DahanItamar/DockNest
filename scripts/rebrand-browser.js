@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
-const directory='docs/design/full-site-implemented';
+const directory='data/theme-verification/routes';
 await mkdir(directory,{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
@@ -21,7 +21,7 @@ try{
  const routes=[['Overview','dashboard'],['Servers','servers'],['Sites & schedules','sites'],['Backups','backups'],['Jobs','jobs'],['Maintenance','maintenance'],['Audit','audit'],['Storage','storage'],['Access','access']];
  async function navigate(name){if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation').getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);await page.waitForFunction(()=>[...document.querySelectorAll('img[src^="/brand/"]')].every(image=>image.complete&&image.naturalWidth>0));}
  async function equalCards(selector){const cards=await page.locator(selector).evaluateAll(elements=>elements.map(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,x:r.x,y:r.y}}));if(cards.length>=2){for(const card of cards){assert.ok(Math.abs(card.width-cards[0].width)<1,'Equal widths: '+selector);assert.ok(Math.abs(card.height-cards[0].height)<1,'Equal heights: '+selector);}}}
- for(const theme of ['light']){
+ for(const theme of ['light','dark']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug] of routes){
    await page.setViewportSize({width:1440,height:1000});await navigate(route);
@@ -45,7 +45,7 @@ try{
  await navigate('Maintenance');let saved;
  await page.route('**/api/maintenance',r=>{assert.equal(r.request().method(),'PATCH');saved=r.request().postDataJSON();return r.fulfill({json:saved});});
  await page.getByLabel('Page title',{exact:true}).fill('Scheduled update');await page.getByRole('button',{name:'Save design',exact:true}).click();await page.getByRole('status').filter({hasText:'Maintenance design saved.'}).waitFor();assert.equal(saved.title,'Scheduled update');assert.equal(saved.color.toLowerCase(),'#5e35b1');
- role='operator';await page.reload();await navigate('Sites & schedules');assert.equal(await page.getByRole('button',{name:'Remove site',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Back up now',exact:true}).count(),2);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Access',exact:true}).count(),0);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).count(),0);
+ role='operator';await page.reload();await navigate('Sites & schedules');assert.equal(await page.getByRole('button',{name:'Remove site',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Back up now',exact:true}).count(),4);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Access',exact:true}).count(),0);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).count(),0);
  const authPage=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
  authPage.on('pageerror',error=>problems.push(error.message));
  await authPage.addInitScript(()=>localStorage.setItem('docknest-theme','light'));
@@ -54,7 +54,7 @@ try{
  for(const [slug,hash,heading] of [['signin','','Sign in'],['setup','#/setup','Set up DockNest'],['enrollment','#/enroll/'+ 'x'.repeat(43),'Set up access for Sam Operator']]){
   await authPage.goto((process.env.TEST_BASE_URL||'http://127.0.0.1:5173')+'/'+hash);
   await authPage.getByRole('heading',{name:heading,exact:true}).waitFor();
-  for(const theme of ['light']){
+  for(const theme of ['light','dark']){
    if(await authPage.locator('html').getAttribute('data-theme')!==theme)await authPage.getByRole('button',{name:'Switch to '+theme+' theme'}).click();
    for(const [width,height,suffix] of [[1440,1000,''],[390,844,'-mobile']]){
     await authPage.setViewportSize({width,height});await authPage.evaluate(()=>document.fonts.ready);
@@ -66,5 +66,5 @@ try{
  }
  await authPage.close();
  assert.deepEqual(problems,[]);
- console.log('Full-site UI checks passed: all nine routes in light-only presentation, desktop/mobile screenshots, six responsive widths, equal card geometry, grouped recovery points, unchanged backup/pin/restore/maintenance requests and existing operator restrictions.');
+ console.log('Full-site UI checks passed: all nine routes in light and dark, desktop/mobile screenshots, six responsive widths, equal card geometry, grouped recovery points, unchanged backup/pin/restore/maintenance requests and existing operator restrictions.');
 }finally{await browser.close();}

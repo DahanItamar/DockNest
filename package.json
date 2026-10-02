@@ -27,7 +27,8 @@
     "test:design": "node scripts/berry-browser.js",
     "docs:screenshots": "node scripts/readme-screenshots.js",
     "test:health": "node scripts/system-health-browser.js",
-    "audit:repo": "node scripts/audit-repository.js"
+    "audit:repo": "node scripts/audit-repository.js",
+    "test:theme": "node scripts/theme-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

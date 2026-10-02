@@ -1,6 +1,8 @@
 # DockNest interface design
 
-The light-only interface uses a blue/violet palette, approved Homebird identity, self-hosted Roboto and consistent outline icons. Shared semantic colors and spacing live in [tokens.css](../../web/tokens.css). The shell has a 260px expanded sidebar, 72px collapsed rail, 88px header and 8px card corners.
+The interface uses light and dark blue/violet palettes, approved Homebird identity, self-hosted Roboto and consistent outline icons. Shared semantic colors and spacing live in [tokens.css](../../web/tokens.css). The shell has a 260px expanded sidebar, 72px collapsed rail, 88px header and 8px card corners.
+
+Light is the default. A sun/moon toggle in the header saves the selected appearance locally and synchronizes open tabs. The local bootstrap applies it before React paints, including on sign-in/setup/enrollment screens. Deep navy dark surfaces use brighter blue/violet foregrounds, separate filled-button colors, readable status tones and the existing blue wordmark. Charts use the same palette without changing their data, legends or exports. The sun rays rotate gently on hover; moon stars lift slightly. Reduced motion disables those effects. Maintenance visitor pages retain their independently saved design.
 
 Charts summarize loaded recovery points and jobs. Period controls, legends, tooltips and PNG/CSV exports are functional. Reduced motion disables chart transitions, sidebar motion and hover animation. Card pairs have equal columns, matching heights and aligned actions; mobile uses one column and a navigation drawer.
 

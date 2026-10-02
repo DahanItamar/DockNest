@@ -49,8 +49,11 @@ jobs:
             sleep 1
           done
           npm run test:browser
+          npm run test:theme
+          npm run test:design
         env:
           TEST_BROWSER_CHANNEL: chromium
+          TEST_BASE_URL: http://127.0.0.1:3000
   linux-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -8,6 +8,8 @@ Exports in [public/brand](../../../public/brand) include transparent logo/mark P
 
 Preserve proportions and clear space. Use the bird alone for small browser/app tiles and the full lockup for headers. Keep the slogan as separate live text. Avoid stretching or added shadows.
 
+Dark app surfaces use the existing all-blue [README logo](../../media/logo-blue.png), exported as transparent 600/1200px WebP wordmarks. Light surfaces retain the approved blue/ink lockup. Both sources and export checksums appear in the runtime asset manifest.
+
 Palette: blue `#1E88E5` / `#2196F3`, violet `#5E35B1` / `#673AB7`, ink `#121926` and white. These are raster assets, not vector masters.
 
 Rebuild with `npm run brand:export`. In Safari, choose Share → Add to Home Screen. Existing shortcuts may retain cached icons and need to be added again. Metadata/image contracts have browser verification; native iPhone behavior has not been device-tested.

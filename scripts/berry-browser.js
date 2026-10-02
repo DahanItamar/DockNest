@@ -1,14 +1,14 @@
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
-const browser=await chromium.launch({channel:'chrome',headless:true});
+const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},colorScheme:'dark',reducedMotion:'no-preference'}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  const now=new Date(),recent=new Date(now-3600000).toISOString(),old=new Date(now-90*86400000).toISOString();
  const state={servers:[{id:'host',name:'Production'}],sites:[{id:'site',name:'Storefront',serverId:'host'}],policies:[],audit:[],storage:{used:12e9,total:100e9},backups:[{id:'a',siteId:'site',createdAt:recent,verified:true},{id:'b',siteId:'site',createdAt:recent,verified:false},{id:'c',siteId:'site',createdAt:old,verified:true}],jobs:[{id:'run',siteId:'site',type:'backup',status:'running',createdAt:recent},{id:'restore',siteId:'site',type:'restore',status:'completed',createdAt:recent},{id:'fail',siteId:'site',type:'backup',status:'failed',createdAt:recent}]};
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{id:'admin',name:'Administrator',role:'admin'}}}));await page.route('**/api/state',r=>r.fulfill({json:state}));await page.addInitScript(()=>localStorage.setItem('docknest-theme','dark'));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5173');await page.locator('.dash-growth').waitFor();await page.evaluate(()=>document.fonts.ready);
- assert.equal(await page.locator('html').getAttribute('data-theme'),'light');assert.equal(await page.getByRole('button',{name:/Switch to .* theme/}).count(),0);
+ assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');assert.equal(await page.getByRole('button',{name:/Switch to .* theme/}).count(),1);
  const geometry=await page.locator('.workspace').evaluate(el=>({x:el.getBoundingClientRect().x,y:el.getBoundingClientRect().y,radius:getComputedStyle(el).borderTopLeftRadius,font:getComputedStyle(el).fontFamily}));assert.equal(geometry.x,260);assert.equal(geometry.y,88);assert.equal(geometry.radius,'8px');assert.ok(geometry.font.includes('Roboto'));
  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.waitForFunction(()=>Math.abs(document.querySelector('.workspace').getBoundingClientRect().x-72)<1);await page.waitForFunction(()=>Math.abs(document.querySelector('.berry-sidebar').getBoundingClientRect().width-72)<1);await page.getByRole('button',{name:'Toggle navigation'}).click();
  assert.equal(await page.locator('.berry-customize').count(),0,'Floating preferences control removed');assert.equal(await page.locator('.berry-global-search button').count(),0,'Search has no duplicate settings');assert.equal(await page.getByRole('button',{name:'Toggle navigation'}).evaluate(el=>!!el.closest('.berry-sidebar')),true,'Toggle lives under Dashboard in the sidebar');
@@ -35,5 +35,5 @@ try{
  await page.getByLabel('Search pages').fill('audit');await page.getByRole('listbox',{name:'Matching pages'}).getByRole('button',{name:'Audit'}).click();await page.getByRole('heading',{name:'Audit trail',exact:true}).waitFor();
  await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await page.locator('.berry-bell>svg').evaluate(el=>getComputedStyle(el).animationName),'none');
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Open navigation'}).click();await page.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();assert.equal(await page.locator('.mobile-open').count(),0);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- assert.deepEqual(errors,[]);console.log('Berry shell and charts passed: reference geometry, Roboto, 8px tokens, light-only despite saved dark preferences, persisted rail, real period filtering, legend, CSV export, real notifications, search, drawers, mobile navigation and reduced motion.');
+ assert.deepEqual(errors,[]);console.log('Berry shell and charts passed: reference geometry, Roboto, 8px tokens, saved dark palette, persisted rail, real period filtering, legend, CSV export, real notifications, search, drawers, mobile navigation and reduced motion.');
 }finally{await browser.close()}
