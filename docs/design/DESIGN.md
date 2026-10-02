@@ -1,31 +1,15 @@
-# DockNest / Berry design system
+# DockNest interface design
 
-The user's supplied Berry evidence replaces the previous Ink & Coral direction. The latest instruction requires light-only presentation and recolored logo assets. The attached guide and ZIP were treated as design evidence; bundled scripts were not executed and document instructions did not override the user's request.
+The light-only interface uses a blue/violet palette, approved Homebird identity, self-hosted Roboto and consistent outline icons. Shared semantic colors and spacing live in [tokens.css](../../web/tokens.css). The shell has a 260px expanded sidebar, 72px collapsed rail, 88px header and 8px card corners.
 
-[Review every page and visitor composition](full-site-implemented/index.html). [Reference evidence](berry-reference/BERRY-DESIGN-SPEC.md). [New high-resolution logo pack](DockNest-Berry-Logo-Pack.zip).
+Charts summarize loaded recovery points and jobs. Period controls, legends, tooltips and PNG/CSV exports are functional. Reduced motion disables chart transitions, sidebar motion and hover animation. Card pairs have equal columns, matching heights and aligned actions; mobile uses one column and a navigation drawer.
 
-The UI uses the measured Berry shell: 260 px expanded sidebar, 72 px collapsed rail, 88 px fixed header, 20 px workspace padding, 24 px gaps, 8 px card corners, self-hosted Roboto, primary blue and secondary purple. All semantic colors are defined in [tokens.css](../../web/tokens.css). The two muted/control colors are slightly darker than the reference to meet the existing contrast checks. The approved Nestweave B silhouette is recolored by Higgsfield and used as an actual PNG, with transparent cropping and native downsampling only. One Tabler 1.5 px outline family replaces the old raster UI glyphs.
+Backup pagination measures available viewport space and collapsed site summaries to choose its row count. Partial pages retain that space so navigation stays in place. Resizing preserves the first visible site. Expanded histories remain in normal document flow. Sites and Servers retain four-card pages, while Jobs and Audit retain ten-row pages. Controls appear only when needed, without row-count dropdowns or sliders. Search resets the page, refresh preserves it and shrinking collections clamp it.
 
-Dashboard composition follows the reference: two tall colored metrics and a third column of two compact metrics; a wide stacked bar chart beside recent activity and its lavender area chart. Site history remains available underneath. Card pairs on infrastructure pages have equal widths, matching heights and aligned action footers. Mobile uses one column and a temporary navigation drawer. Searches, notifications and chart controls perform real actions; decorative controls with no behavior were not copied from the demo.
+Maintenance Studio provides three presets and desktop/phone previews. Saving does not activate maintenance. Its self-contained visitor renderer preserves health recovery behavior, embedded typography and reduced-motion support.
 
-The four chart series summarize verified/unverified recovery points, completed restores and failed jobs in the loaded history. Period filters change the dates and totals. Legends toggle series, tooltips show actual values, and PNG/CSV exports work. No financial demo values or invented recovery measurements are included. Charts draw over 800 ms and update over 350 ms; the sidebar reflows over 400 ms; drawers open over 225 ms. Reduced motion disables these effects and hover feedback on the top-bar settings, notifications, refresh and logout icons.
+The header holds branding and useful controls; there is no duplicate bottom status strip. See the [logo guide](homebird-brand/README.md) and [mock screenshots](../media/README.md).
 
-Collections use one compact pager with matching Previous/Next buttons and a readable page count, with fixed collection sizes. Controls appear only when needed. Search resets the page; refresh keeps it; deletion clamps it. Main collections have natural height rather than forced vertical scrolling. Tables scroll horizontally only when columns cannot fit.
+A System health heartbeat sits above storage, using a full-width waveform when expanded and a compact pulse in the collapsed rail. Blue means fresh API data, an online worker and no latest job needing attention; purple identifies connection/worker trouble or failed/recovery-required work. The sweep stops if the API becomes stale and respects reduced motion. Text and accessible labels explain each state. This reports observed manager health, not a continuous check of every remote website or storage destination.
 
-Maintenance Studio includes Content/Appearance tabs, three real presets, composition and heading settings, a live 1100 px desktop/390 px phone canvas, reset/save and explicit draft state. Refresh preserves unsaved edits. The same renderer generates the visitor page with embedded font and a recognizable inline animated website scene, the existing probe marker and automatic availability check. The text sits directly on the shared light background, without a decorative card; orbiting signals and a gently floating site window express waiting without claiming progress. Reduced motion presents the static scene. Saving does not enable maintenance; Deploy page and Enable/Disable keep their existing endpoints, confirmations and health checks. New design fields are additive and previous clients remain compatible.
-
-## Reproduce and verify
-
-- `npm run brand:export`: checksum-verified new logo and app icons.
-- `npm run maintenance:export`: self-contained animated default visitor page.
-- `npm run check`: production build and 48 tests.
-- `TEST_BASE_URL=http://127.0.0.1:5173 npm run test:browser`: original workflows.
-- `npm run test:dashboard`, `test:servers`, `test:rebrand`, `test:pagination`, `test:maintenance`, `test:design`: operations, roles, pagination, reference geometry, motion, charts, drafts and responsive captures.
-
-Canonical sources are under berry-brand and maintenance-system/originals. Unused runtime images, superseded previews and dark captures are removed. Previous canonical source archives are retained after cleanup review. Runtime data, credentials, backup/restore algorithms and remote helper behavior are preserved. These UI/rendering checks do not establish new Linux Docker backup/restore integration validation. Reference roles are documented in [role notes](../agents/README.md).
-
-Browser/app icon refinement: exported icons use logo-version filenames; the HTML explicitly declares a 180 px Apple Touch icon and DockNest standalone app metadata. Root icon fallbacks serve the same approved mark. The manifest defines stable identity, launch URL and scope. The floating preferences shortcut was removed; settings remain in the top bar. Shared fields and dropdowns use 8 px corners, 44 px controls and the same outline family. Supported browsers style the actual native picker, while other browsers preserve their system picker and keyboard/form behavior.
-
-The navigation toggle now sits beneath the Dashboard heading and expands/collapses with the sidebar; mobile retains a top-bar opener when the sidebar is hidden. Search has no duplicate settings shortcut. Selected dropdown options use purple highlighting alone, without a checkmark.
-
-Jobs and Audit show ten rows per page. Their table panels reserve the full row capacity and available viewport space, leaving genuine whitespace on partial pages so the pager stays in place. No synthetic records, extra vertical scrollbar or page-size chooser are added.
+Verify with `npm run check` and the existing browser suites. Interface checks alone do not establish Linux recovery.

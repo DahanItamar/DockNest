@@ -11,3 +11,11 @@ playwright-report/
 test-results/
 __pycache__/
 *.pyc
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite-*
+*.db
+*.enc

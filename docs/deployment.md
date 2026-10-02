@@ -71,6 +71,6 @@ New sites default to `/var/lib/docknest` for remote staging. Saved site configur
 
 ## DemoHost deployment and storage layout
 
-See `docs/deployment-DemoHost.md` for the existing nginx deployment on port 3400. First administrator setup is a separate page at `/#/setup`; the token stays in the restricted deployment-server data directory. The login screen contains no Windows setup-script instructions.
+For an existing nginx host, publish the API only on a loopback port and proxy the selected hostname to it; preserve unrelated virtual hosts and verify nginx configuration before reload. First administrator setup is a separate page at `/#/setup`; the token stays in the restricted deployment-server data directory.
 
 New remote backups use `<root>/<server-name>--<server-id>/<site-name>--<site-id>/<UTC-date>/<UTC-time>--<backup-id>/payload.enc`. Names are sanitized and identifiers prevent collisions. Existing backups keep their recorded paths. Storage offers a metadata-backed folder tree with download and pin controls; it lists only DockNest-managed backups and never reorganizes unrelated files.
