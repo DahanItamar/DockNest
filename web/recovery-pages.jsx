@@ -18,7 +18,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
     <header className="site-card-head"><BrandIcon name="sites" size={36}/><h2 id={`site-title-${site.id}`} title={site.name}>{site.name}</h2><span className={`schedule-badge ${policy.enabled?'enabled':''}`}>{policy.enabled?'Enabled':policy.schedule?'Paused':'Not scheduled'}</span></header>
     <dl className="site-metadata">
      <div><dt>Server</dt><dd><BrandIcon name="server" size={18}/><span>{name(site.serverId,'servers')}</span></dd></div>
-     <div><dt>Containers</dt><dd className="container-labels">{site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
+     <div><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
      <div><dt>Schedule</dt><dd><BrandIcon name="schedule" size={18}/><span>{describeSchedule(policy.schedule)}<small>{policy.timezone||'Time zone not set'}</small></span></dd></div>
      <div><dt>Retention</dt><dd>{policy.retention!=null?`${policy.retention} successful backups`:'Not configured'}</dd></div>
     </dl>
