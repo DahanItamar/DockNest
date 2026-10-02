@@ -18,9 +18,9 @@ export function ThemeProvider({children}) {
  }
  return <Theme.Provider value={{theme,setTheme:changeTheme}}>{children}</Theme.Provider>;
 }
-export function Brand({descriptive=false}) {
+export function Brand({descriptive=false,dashboard=false}) {
  const {theme}=useContext(Theme);
- return <img className={descriptive?'brand-lockup descriptive':'brand-lockup'} src={`/brand/logo-${descriptive?'tagline':'horizontal'}-${theme}.svg`} alt={descriptive?'DockNest — Docker Backup & Restore':'DockNest'} width={descriptive?360:160} height={descriptive?105:45}/>;
+ return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-${descriptive?'tagline':'horizontal'}-${theme}.png`} alt={descriptive?'DockNest — Docker Backup & Restore':'DockNest'} width={descriptive?360:160} height={descriptive?(theme==='light'?104:106):(theme==='light'?53:43)}/>;
 }
 export function ThemeToggle() {
  const {theme,setTheme}=useContext(Theme),dark=theme==='dark';

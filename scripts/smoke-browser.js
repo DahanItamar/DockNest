@@ -20,7 +20,7 @@ try {
   assert.equal(await page.locator('.auth-card img.brand-lockup').count(),0,'Login logo belongs only in the header');
   assert.equal(await page.locator('.auth-header img.brand-lockup').count(),1,'Header displays the brand once');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
-  for(const asset of ['favicon.svg','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.svg','logo-horizontal-dark.svg','logo-tagline-light.svg','logo-tagline-dark.svg']){
+  for(const asset of ['favicon.png','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo-horizontal-light.png','logo-horizontal-dark.png','logo-tagline-light.png','logo-tagline-dark.png']){
     assert.equal((await page.request.get(baseUrl+'/brand/'+asset)).status(),200,asset+' must be served');
   }
   async function checkContrast(){
@@ -67,7 +67,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.screenshot({ path:path.join(screenshotDir,'dashboard-desktop.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
-  await page.locator('img[src="/brand/logo-horizontal-dark.svg"]').waitFor();
+  await page.locator('img[src="/brand/logo-horizontal-dark.png"]').waitFor();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});

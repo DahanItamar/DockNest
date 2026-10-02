@@ -1,42 +1,74 @@
-import { chromium } from '@playwright/test';
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+﻿import { chromium } from '@playwright/test';
+import { readFile, writeFile, readdir, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 
-// Rasterize our editable SVG artwork; no redraw or raster upscaling.
+// Web derivatives of the approved Higgsfield originals: trim and downsample only.
 const directory = resolve('public/brand');
+const sources = resolve('docs/design/DockNest-Nestweave-B');
+const manifest = JSON.parse(await readFile(resolve(sources, 'asset-manifest.json'), 'utf8'));
 const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true });
 try {
-  async function render(name, output, width, height, scale = 1) {
-    const svg = await readFile(resolve(directory, name), 'utf8');
-    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale });
-    try {
-      const page = await context.newPage();
-      await page.setContent('<style>html,body{margin:0;background:transparent}img{display:block;width:100%;height:100%}</style><img src="data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64') + '">');
-      await page.locator('img').evaluate(image => image.decode());
-      await page.screenshot({ path: resolve(directory, output), omitBackground: true });
-    } finally { await context.close(); }
+  const page = await browser.newPage();
+  const outputs = [];
+  async function exportImage(source, output, { width, size, background } = {}) {
+    const original = await readFile(resolve(sources, source));
+    const expected = manifest.assets.find(asset => asset.filename === source);
+    const hash = createHash('sha256').update(original).digest('hex');
+    if (!expected || hash !== expected.sha256) throw new Error(`Original asset checksum mismatch: ${source}`);
+    const result = await page.evaluate(async ({ data, width, size, background }) => {
+      const image = new Image();
+      image.src = data;
+      await image.decode();
+      const scan = document.createElement('canvas');
+      scan.width = image.naturalWidth; scan.height = image.naturalHeight;
+      const scanContext = scan.getContext('2d', { willReadFrequently: true });
+      scanContext.drawImage(image, 0, 0);
+      const pixels = scanContext.getImageData(0, 0, scan.width, scan.height).data;
+      let left = scan.width, top = scan.height, right = -1, bottom = -1;
+      for (let y = 0; y < scan.height; y++) for (let x = 0; x < scan.width; x++) {
+        if (pixels[(y * scan.width + x) * 4 + 3] >= 8) {
+          left = Math.min(left, x); top = Math.min(top, y);
+          right = Math.max(right, x); bottom = Math.max(bottom, y);
+        }
+      }
+      if (right < left) throw new Error('Source artwork is empty');
+      left = Math.max(0, left - 16); top = Math.max(0, top - 16);
+      right = Math.min(scan.width - 1, right + 16); bottom = Math.min(scan.height - 1, bottom + 16);
+      const cropWidth = right - left + 1, cropHeight = bottom - top + 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = size || Math.min(width, cropWidth);
+      canvas.height = size || Math.round(canvas.width * cropHeight / cropWidth);
+      const context = canvas.getContext('2d');
+      context.imageSmoothingEnabled = true; context.imageSmoothingQuality = 'high';
+      if (background) { context.fillStyle = background; context.fillRect(0, 0, canvas.width, canvas.height); }
+      const scale = size ? Math.min(size * .8 / cropWidth, size * .8 / cropHeight) : canvas.width / cropWidth;
+      const drawWidth = cropWidth * scale, drawHeight = cropHeight * scale;
+      context.drawImage(image, left, top, cropWidth, cropHeight, (canvas.width - drawWidth) / 2, (canvas.height - drawHeight) / 2, drawWidth, drawHeight);
+      return { png: canvas.toDataURL('image/png').split(',')[1], width: canvas.width, height: canvas.height };
+    }, { data: `data:image/png;base64,${original.toString('base64')}`, width, size, background });
+    await writeFile(resolve(directory, output), Buffer.from(result.png, 'base64'));
+    outputs.push({ filename: output, source, width: result.width, height: result.height, sourceSha256: hash });
   }
-  for (const name of (await readdir(directory)).filter(name => name.endsWith('.svg'))) {
-    const svg = await readFile(resolve(directory, name), 'utf8');
-    const width = Number(svg.match(/\bwidth="(\d+)"/)[1]);
-    const height = Number(svg.match(/\bheight="(\d+)"/)[1]);
-    if (name === 'app-icon.svg') {
-      for (const size of [16, 32, 192, 512]) await render(name, `app-icon-${size}.png`, size, size);
-      await render(name, 'apple-touch-icon.png', 180, 180);
-    } else {
-      await render(name, name.replace('.svg', '.png'), width, height, name === 'favicon.svg' ? 1 : 4);
-    }
+  for (const theme of ['light', 'dark']) {
+    await exportImage(`docknest-horizontal-${theme}.png`, `logo-horizontal-${theme}.png`, { width: 960 });
+    await exportImage(`docknest-tagline-${theme}.png`, `logo-tagline-${theme}.png`, { width: 1200 });
+    await exportImage(`docknest-mark-${theme}.png`, `mark-${theme}.png`, { width: 1024 });
   }
+  for (const size of [16, 32, 192, 512]) await exportImage('docknest-mark-dark.png', `app-icon-${size}.png`, { size, background: '#236B58' });
+  await exportImage('docknest-mark-dark.png', 'apple-touch-icon.png', { size: 180, background: '#236B58' });
+  await exportImage('docknest-mark-dark.png', 'favicon.png', { size: 32, background: '#236B58' });
   const png = await readFile(resolve(directory, 'favicon.png'));
   const header = Buffer.alloc(22);
   header.writeUInt16LE(1, 2); header.writeUInt16LE(1, 4);
   header[6] = 32; header[7] = 32; header.writeUInt16LE(1, 10); header.writeUInt16LE(32, 12);
   header.writeUInt32LE(png.length, 14); header.writeUInt32LE(22, 18);
   await writeFile(resolve(directory, 'favicon.ico'), Buffer.concat([header, png]));
-  const page = await browser.newPage({ viewport: { width: 1200, height: 720 }, deviceScaleFactor: 2 });
-  const lockup = async theme => 'data:image/svg+xml;base64,' + Buffer.from(await readFile(resolve(directory, `logo-tagline-${theme}.svg`))).toString('base64');
-  await page.setContent(`<style>body{margin:0;display:grid;grid-template-columns:1fr 1fr;font:16px system-ui}section{height:720px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;background:#e8ecf0;color:#253240}section+section{background:#252c35;color:#e1e7ed}img{width:480px;height:auto}</style><section><img src="${await lockup('light')}"><p>DockNest · Light</p></section><section><img src="${await lockup('dark')}"><p>DockNest · Dark</p></section>`);
-  await page.locator('img').evaluateAll(images => Promise.all(images.map(image => image.decode())));
-  await page.screenshot({ path: resolve(directory, 'DockNest-Brand-Preview.png') });
-  console.log('Exported transparent PNGs at 4× SVG dimensions, icons, favicon and brand preview.');
+  await writeFile(resolve(directory, 'asset-manifest.json'), JSON.stringify({ identity: 'DockNest / Nestweave B', outputs }, null, 2) + '\n');
+  const keep = new Set([...outputs.map(output => output.filename), 'favicon.ico', 'site.webmanifest', 'asset-manifest.json']);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isFile() && !keep.has(entry.name) && /\.(svg|png|ico)$/.test(entry.name)) await unlink(resolve(directory, entry.name));
+  }
+  console.log('Exported approved Nestweave B PNGs, app icons and favicon. Higgsfield originals are unchanged.');
+  console.log(outputs.map(output => `${output.filename}: ${output.width}x${output.height}`).join('\n'));
 } finally { await browser.close(); }
