@@ -7,12 +7,14 @@ try{
  page.on('pageerror',error=>errors.push(error.message));
  await page.clock.install({time:now});
  const state={servers:[],sites:[],jobs:[],backups:[],policies:[],audit:[],worker:{running:true,online:true,lastSeen:new Date(now).toISOString()},storage:{used:0,total:1e12}};
- let mode='online';const pending=[];
+ let mode='hung';const pending=[];
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{id:'admin',name:'Administrator',role:'admin'},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}}));
  await page.route('**/api/auth/activity',r=>r.fulfill({json:{}}));
  await page.route('**/api/state',r=>mode==='hung'?pending.push(r):mode==='failed'?r.abort('failed'):r.fulfill({json:state}));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5176');
  const health=page.locator('.system-health'),refresh=()=>page.getByRole('button',{name:'Refresh dashboard'}).click();
+ await health.filter({hasText:'Checking connection'}).waitFor();await page.clock.fastForward(20000);await health.filter({hasText:'Connection interrupted'}).waitFor();
+ mode='online';for(const route of pending.splice(0))await route.fulfill({json:state});await refresh();
  await health.filter({hasText:'API & worker online'}).waitFor();
  assert.equal(await health.evaluate(el=>getComputedStyle(el).color),'rgb(30, 136, 229)');
  assert.equal(await health.locator('.health-wide .health-sweep').evaluate(el=>getComputedStyle(el).animationName),'health-sweep');

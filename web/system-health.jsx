@@ -1,9 +1,9 @@
 import React,{useEffect,useState} from 'react';
 
 export function SystemHealth({connection,worker,jobs=[]}){
- const [now,setNow]=useState(Date.now()),[online,setOnline]=useState(navigator.onLine);
+ const [now,setNow]=useState(Date.now()),[started]=useState(Date.now),[online,setOnline]=useState(navigator.onLine);
  useEffect(()=>{const tick=()=>setNow(Date.now()),network=()=>{setOnline(navigator.onLine);tick();};const timer=setInterval(tick,5000);addEventListener('online',network);addEventListener('offline',network);return()=>{clearInterval(timer);removeEventListener('online',network);removeEventListener('offline',network);};},[]);
- const checking=!connection?.lastSuccess&&!connection?.failed;
+ const checking=!connection?.lastSuccess&&!connection?.failed&&now-started<15000;
  const connected=online&&!connection?.failed&&now-(connection?.lastSuccess||0)<15000;
  const workerFresh=worker?.online===true; // The API evaluates its own worker clock.
  // Old failed jobs do not keep the system in error after a later successful run.
