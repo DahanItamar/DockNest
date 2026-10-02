@@ -184,17 +184,24 @@ def shutdown_evidence(services,containers,stopped_at):
     return evidence
 
 def restart_services(ids,services=None):
-    for cid in ids:
-        docker('start',cid)
-        deadline=time.time()+120
-        service=next((s for s in services or [] if s['container']==cid and s['engine']!='generic'),None)
+    by_id={s['container']:s for s in services or []};pending=list(ids)
+    while pending:
+        # Independent services start together; their health may depend on one another.
+        level=[cid for cid in pending if not set(by_id.get(cid,{}).get('dependsOn',[])).intersection(pending)]
+        if not level:raise ValueError('Recovery dependency cycle; operator review required')
+        docker('start',*level);deadline=time.time()+120
         def ready():
-            if not health([cid]):return False
-            if not service:return True
-            try:return database_query(cid,service,'SELECT 1;')=='1'
-            except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return False
+            if not health(level):return False
+            for cid in level:
+                service=by_id.get(cid)
+                if service and service['engine']!='generic':
+                    try:
+                        if database_query(cid,service,'SELECT 1;')!='1':return False
+                    except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return False
+            return True
         while time.time()<deadline and not ready():time.sleep(2)
         if not ready():raise ValueError('Service failed restart health; dependants remain stopped')
+        pending=[cid for cid in pending if cid not in level]
 
 def data_checks(container,service):
     result=[]
@@ -826,11 +833,8 @@ def restore(req):
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
-        for original_id in ordered:
-            c=next(c for c in containers if c['Id']==original_id);cid=mapping[original_id]
-            if c['State'].get('Running'):
-                service=next((s for s in contracts if s['container']==original_id),None)
-                restart_services([cid],[{**service,'container':cid}] if service else []);running.append(cid)
+        running=[mapping[original_id] for original_id in ordered if next(c for c in containers if c['Id']==original_id)['State'].get('Running')]
+        restart_services(running,[{**service,'container':mapping[service['container']],'dependsOn':[mapping[cid] for cid in service.get('dependsOn',[])]} for service in contracts])
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('Restored container health check failed')

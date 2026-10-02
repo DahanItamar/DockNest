@@ -305,7 +305,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.route('**/api/storage-targets/storage-fixture/tree',route=>route.fulfill({json:{root:'/home/docknest',limited:false,servers:[{id:'host-one',name:'Production',sites:[{id:'fixture-site',name:'Shop',days:[{date:'2026-10-01',backups:[{id:'fixture-backup',capturedAt:'2026-10-01T20:30:00Z',size:1024*1024,pinned:false,verified:true,relativePath:'production--host-one/shop--fixture-site/2026-10-01/20-30-00Z--fixture-backup/payload.enc'}]}]}]}]}}));
   await page.getByRole('button',{name:'Browse backup folders'}).click();
   await page.getByText('Server: Production',{exact:true}).waitFor();
-  await page.getByText('2026-10-01 · 1 backup',{exact:true}).click();
+  await page.getByText('01/10/2026 · 1 backup',{exact:true}).click();
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Encrypted backup'}).getAttribute('href'),'/api/backups/fixture-backup/download');
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Full ZIP'}).getAttribute('href'),'/api/backups/fixture-backup/download?format=zip');
   await page.screenshot({path:path.join(screenshotDir,'storage-desktop.png'),fullPage:true,animations:'disabled'});

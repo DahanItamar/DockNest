@@ -43,13 +43,13 @@ function requireNoDeploymentHold(){if(db.prepare("SELECT value FROM settings WHE
 export function enqueueBackup(siteId,actor='scheduler'){
  requireNoDeploymentHold();
  siteInfo(siteId);if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)throw new Error('Backup not found');
  db.exec('BEGIN IMMEDIATE');
- try{if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
+ try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);

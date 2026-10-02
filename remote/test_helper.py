@@ -66,8 +66,12 @@ class ServiceContractTests(unittest.TestCase):
             self.assertIn('123',logs.call_args[0][0])
     def test_restart_waits_for_database_before_writer(self):
         with patch('helper.docker') as command,patch('helper.health',return_value=True),patch('helper.database_query',return_value='1'):
-            restart_services(['db','web'],[{'container':'db','engine':'postgres'}])
+            restart_services(['db','web'],[{'container':'db','engine':'postgres'},{'container':'web','engine':'generic','dependsOn':['db']}])
             self.assertEqual([c.args for c in command.call_args_list],[('start','db'),('start','web')])
+    def test_independent_peers_start_together_before_health_barrier(self):
+        with patch('helper.docker') as command,patch('helper.health',return_value=True):
+            restart_services(['web','peer'],[{'container':'web','engine':'generic'},{'container':'peer','engine':'generic'}])
+            command.assert_called_once_with('start','web','peer')
 
 class FilesystemPlanTests(unittest.TestCase):
     def test_mount_table_decodes_paths_and_rejects_incomplete_input(self):
