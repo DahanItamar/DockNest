@@ -9,7 +9,7 @@
  --success:#247047;--success-surface:#E8F5EC;--warning:#875F00;--warning-surface:#FFF8E1;
  --error:#C62828;--error-surface:#FDECEC;--info:#1565C0;--info-surface:#E3F2FD;
  --backdrop:rgb(18 25 38 / 45%);--shadow:rgb(18 25 38 / 16%);--transparent:transparent;--qr-background:#FFFFFF;
- --radius:8px;--radius-input:4px;--spacing:8px;--sidebar-width:260px;--header-height:88px;
+ --radius:8px;--radius-input:8px;--spacing:8px;--sidebar-width:260px;--header-height:88px;
  --muted:var(--text-muted);--line:var(--border-subtle);--cream:var(--surface);--sage:var(--primary-main);--brand-accent:var(--accent);
  font-family:'Roboto Variable',Roboto,sans-serif;font-variant-numeric:tabular-nums;color:var(--text-primary);background:var(--surface);color-scheme:light;
 }
