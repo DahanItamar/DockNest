@@ -7,7 +7,8 @@ const helper = new URL('../remote/helper.py', import.meta.url);
 export function connect(server) {
   return new Promise((resolve,reject)=>{
     const client=new Client();
-    client.once('error',reject).once('ready',()=>resolve(client));
+    // SSH can emit a second error while closing a rejected handshake.
+    client.on('error',reject).once('ready',()=>resolve(client));
     if (!/^[a-f0-9]{64}$/i.test(server.host_key||'')) return reject(new Error('A verified SHA256 SSH host-key fingerprint is required'));
     client.connect({host:server.host,port:server.port||22,username:server.username,
       privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>hash.toLowerCase()===server.host_key.toLowerCase(),readyTimeout:15000,keepaliveInterval:10000});
