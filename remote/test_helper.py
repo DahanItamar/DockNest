@@ -4,6 +4,33 @@ from export_zip import export_zip
 from unittest.mock import patch
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
+from helper import service_order, service_contracts, shutdown_evidence, restart_services
+
+class ServiceContractTests(unittest.TestCase):
+    def test_dependency_order_and_cycles(self):
+        services=[{'container':'web','dependsOn':['db']},{'container':'db','dependsOn':[]}]
+        self.assertEqual(service_order(services),['db','web'])
+        services[1]['dependsOn']=['web']
+        with self.assertRaises(ValueError):service_order(services)
+        with self.assertRaises(ValueError):service_order([{'container':'web','dependsOn':['outside']}])
+    def test_native_version_and_declared_engine_mismatch(self):
+        c={'Id':'db','Name':'/database','Config':{'Image':'custom:tag'},'State':{'Running':True}}
+        with patch('helper.run',return_value=b'postgres (PostgreSQL) 16.13'):
+            self.assertEqual(service_contracts({},[c])[0]['version'],'16.13')
+            with self.assertRaises(ValueError):service_contracts({'services':[{'container':'database','engine':'mysql'}]},[c])
+    def test_forced_exit_and_missing_current_shutdown_proof_fail(self):
+        service={'container':'db','engine':'mysql','version':'8.4.0','slowShutdownVerified':True}
+        for state in [{'Running':False,'ExitCode':137},{'Running':False,'ExitCode':0,'OOMKilled':True}]:
+            with patch('helper.inspect',return_value=[{'Id':'db','State':state}]):
+                with self.assertRaises(ValueError):shutdown_evidence([service],[{'Id':'db'}],123)
+        from subprocess import CompletedProcess
+        with patch('helper.inspect',return_value=[{'Id':'db','State':{'Running':False,'ExitCode':0}}]),patch('helper.subprocess.run',return_value=CompletedProcess([],0,b'old startup',b'')) as logs:
+            with self.assertRaises(ValueError):shutdown_evidence([service],[{'Id':'db'}],123)
+            self.assertIn('123',logs.call_args[0][0])
+    def test_restart_waits_for_database_before_writer(self):
+        with patch('helper.docker') as command,patch('helper.health',return_value=True),patch('helper.database_query',return_value='1'):
+            restart_services(['db','web'],[{'container':'db','engine':'postgres'}])
+            self.assertEqual([c.args for c in command.call_args_list],[('start','db'),('start','web')])
 
 class FilesystemPlanTests(unittest.TestCase):
     def test_mount_table_decodes_paths_and_rejects_incomplete_input(self):

@@ -63,6 +63,7 @@ const siteSchema = z.object({
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
     unresolvedDependencies: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
+    services: z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),engine:z.enum(['auto','generic','postgres','mysql','mariadb']).default('auto'),version:z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),dependsOn:z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30).default([]),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),user:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),checks:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9 _-]{1,80}$/),table:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/)})).max(20).default([])})).max(30).default([]),
     configFiles: z.array(linuxPath).max(50).default([]),
     temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'])})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),

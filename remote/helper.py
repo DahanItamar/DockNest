@@ -56,6 +56,8 @@ def classify_source(source,table=None):
 
 def backup_plan(cfg,containers=None):
     containers=preflight(cfg) if containers is None else containers
+    services=service_contracts(cfg,containers)
+    validate_database_contracts(services,containers)
     table=mount_table();sources=[];seen=set()
     for c in containers:
         for m in c['Mounts']:
@@ -63,16 +65,123 @@ def backup_plan(cfg,containers=None):
     for source in ([cfg['documentRoot']] if cfg.get('kind')=='static' else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
         if source not in seen:sources.append(classify_source(source,table));seen.add(source)
     topology=[{'id':c['Id'],'image':c['Image'],'config':c['Config'],'host':c['HostConfig'],'mounts':c['Mounts'],'networks':c.get('NetworkSettings',{}).get('Networks',{})} for c in containers]
-    fingerprint=hashlib.sha256(json.dumps({'sources':sources,'topology':topology,'configuration':{k:v for k,v in cfg.items() if not k.startswith('_')}},sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'coverage':{'status':'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed'))},'unresolvedDependencies':[]}
+    fingerprint=hashlib.sha256(json.dumps({'sources':sources,'topology':topology,'services':services,'configuration':{k:v for k,v in cfg.items() if not k.startswith('_')}},sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'services':services,'restartOrder':service_order(services),'coverage':{'status':'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed'))},'unresolvedDependencies':[]}
 
 def public_plan(plan):
-    return {**{k:v for k,v in plan.items() if k!='sources'},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']]}
+    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn']} for s in plan['services']]}
 
 def revalidate_sources(plan):
     table=mount_table()
     for source in plan['sources']:
         if classify_source(source['path'],table)!=source:raise ValueError('Source identity or mount changed; capture is blocked')
+
+def service_contracts(cfg,containers):
+    """Resolve exact service identities and probe native binaries, never infer version from tags."""
+    references={value:c['Id'] for c in containers for value in [c['Id'],c['Name'].lstrip('/')]}
+    declarations={};result=[]
+    for item in cfg.get('services',[]):
+        cid=references.get(item['container'])
+        if not cid or cid in declarations:raise ValueError('Service contracts must refer to unique selected containers')
+        declarations[cid]=item
+    for c in containers:
+        declaration=declarations.get(c['Id'],{})
+        engine=declaration.get('engine','auto');detected=None;version=None
+        if c['State']['Running']:
+            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld')]:
+                try:
+                    output=run(['docker','exec',c['Id'],binary,'--version'],timeout=10).decode(errors='replace')
+                    match=re.search(r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
+                    if match:detected=name;version=match[1];break
+                except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
+        hint=c['Config'].get('Image','').lower()
+        if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
+        engine=detected or ('generic' if engine=='auto' else engine)
+        if engine=='generic' and any(word in hint for word in ['postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch']):raise ValueError('Stateful service requires a supported per-service database contract')
+        if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
+        expected=declaration.get('version')
+        if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
+        dependencies=[]
+        for value in declaration.get('dependsOn',[]):
+            if value not in references:raise ValueError('Service dependency is outside the selected site')
+            dependencies.append(references[value])
+        result.append({'container':c['Id'],'engine':engine,'version':version,'role':'database' if engine!='generic' else 'writer','dependsOn':dependencies,'database':declaration.get('database'),'user':declaration.get('user'),'checks':declaration.get('checks',[])})
+    databases=[s['container'] for s in result if s['role']=='database']
+    for s in result:
+        if s['role']=='writer':s['dependsOn']=list(dict.fromkeys(s['dependsOn']+databases))
+    service_order(result) # Reject cycles before maintenance or stop.
+    return result
+
+def service_order(services):
+    by_id={s['container']:s for s in services};order=[];visiting=set()
+    def visit(cid):
+        if cid in visiting:raise ValueError('Service dependencies contain a cycle')
+        if cid in order:return
+        if cid not in by_id:raise ValueError('Unknown service dependency')
+        visiting.add(cid)
+        for dependency in by_id[cid].get('dependsOn',[]):visit(dependency)
+        visiting.remove(cid);order.append(cid)
+    for cid in by_id:visit(cid)
+    return order
+
+def database_query(container,service,query):
+    """Local socket only. Credential files/variables stay inside the container."""
+    if service['engine']=='postgres':
+        args=['docker','exec','--user','postgres',container,'psql','-X','-w','-h','/var/run/postgresql','-U',service.get('user') or 'postgres','-d',service.get('database') or 'postgres','-At','-v','ON_ERROR_STOP=1','-c',query]
+        return run(args,timeout=30).decode().strip()
+    client='mariadb' if service['engine']=='mariadb' else 'mysql'
+    script='set -eu; export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}"; file="${MYSQL_ROOT_PASSWORD_FILE:-${MARIADB_ROOT_PASSWORD_FILE:-}}"; if [ -n "$file" ]; then MYSQL_PWD=$(cat -- "$file"); export MYSQL_PWD; fi; exec "$1" --protocol=socket --batch --skip-column-names --user="$2" --execute="$3"'
+    return run(['docker','exec',container,'sh','-c',script,'docknest',client,service.get('user') or 'root',query],timeout=30).decode().strip()
+
+def validate_database_contracts(services,containers):
+    by_id={c['Id']:c for c in containers}
+    for service in services:
+        if service['engine']=='generic':continue
+        c=by_id[service['container']]
+        if service['engine']=='postgres':
+            env=dict(v.split('=',1) for v in c['Config'].get('Env',[]) if '=' in v)
+            data=env.get('PGDATA','/var/lib/postgresql/data')
+            if not data.startswith('/') or not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('PostgreSQL PGDATA must be included in a writable captured mount')
+            if database_query(c['Id'],service,'SELECT pg_is_in_recovery();')!='f':raise ValueError('PostgreSQL standby/recovery capture requires a separate adapter')
+            service['dataDirectory']=data
+        else:
+            values=database_query(c['Id'],service,'SELECT @@version, @@global.innodb_fast_shutdown, @@datadir;').split('\t')
+            if len(values)!=3 or values[1]!='0':raise ValueError('MySQL/MariaDB cold capture requires innodb_fast_shutdown=0 before preflight')
+            data=values[2].rstrip('/')
+            if not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('Database data directory must be included in a captured writable mount')
+            service['slowShutdownVerified']=True
+
+def shutdown_evidence(services,containers,stopped_at):
+    evidence=[];by_id={c['Id']:c for c in containers}
+    for service in services:
+        c=inspect([service['container']])[0];state=c['State']
+        if state['Running'] or state['ExitCode']!=0 or state.get('OOMKilled'):raise ValueError('Clean shutdown failed: running, nonzero exit or OOM')
+        item={'container':c['Id'],'engine':service['engine'],'version':service['version'],'zeroExitCodeVerified':True}
+        if service['engine']=='postgres':
+            original=by_id[c['Id']]
+            output=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--volumes-from',c['Id']+':ro','--env','LC_ALL=C','--entrypoint','pg_controldata',original['Image'],service['dataDirectory']],timeout=30).decode()
+            if not re.search(r'^Database cluster state:\s+shut down\s*$',output,re.M):raise ValueError('PostgreSQL control file does not prove a clean primary shutdown')
+            item['controlFileCleanShutdownVerified']=True
+        elif service['engine'] in ['mysql','mariadb']:
+            output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+            if output.returncode or 'shutdown complete' not in (output.stdout+output.stderr).decode(errors='replace').lower():raise ValueError('Native database shutdown evidence missing from the current stop')
+            item.update({'slowShutdownVerified':service['slowShutdownVerified'],'cleanShutdownLogVerified':True})
+        else:item['applicationShutdownConfirmed']=True
+        evidence.append(item)
+    return evidence
+
+def restart_services(ids,services=None):
+    for cid in ids:
+        docker('start',cid)
+        deadline=time.time()+120
+        service=next((s for s in services or [] if s['container']==cid and s['engine']!='generic'),None)
+        def ready():
+            if not health([cid]):return False
+            if not service:return True
+            try:return database_query(cid,service,'SELECT 1;')=='1'
+            except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return False
+        while time.time()<deadline and not ready():time.sleep(2)
+        if not ready():raise ValueError('Service failed restart health; dependants remain stopped')
 class OriginHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
         sock=socket.create_connection(('127.0.0.1',self.port),self.timeout)
@@ -142,7 +251,7 @@ def recover(root,ids,cfg,deadline,parent):
         if os.getpgid(parent)==parent:os.killpg(parent,signal.SIGTERM)
     except ProcessLookupError:pass
     try:
-        if ids:docker('start',*ids)
+        restart_services(ids,cfg.get('_serviceContracts'))
         until=time.time()+120
         while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
         if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Recovery health failed')
@@ -440,8 +549,9 @@ def capture(req):
     if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
-    running=[c['Id'] for c in cs if c['State']['Running']]
+    running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
     cfg['_runningContainers']=running
+    cfg['_serviceContracts']=plan['services']
     (root/'recovery-plan.json').write_text(json.dumps({'running':running,'containers':[c['Id'] for c in cs]}))
     os.chmod(root/'recovery-plan.json',0o600)
     stop_timeout=int(cfg.get('stopTimeout',60))
@@ -461,29 +571,15 @@ def capture(req):
             try:(root/'watchdog.done').touch(mode=0o600)
             except Exception:pass
         os._exit(0)
-    stopped_at=None;visitor_start=None;captured=None;images=[];shutdown_evidence=[]
+    stopped_at=None;visitor_start=None;captured=None;images=[]
     try:
         emit(stage='stopping')
         visitor_start=time.time()
         maintenance(cfg,True)
         if backup_plan(cfg,preflight(cfg))['fingerprint']!=plan['fingerprint']:raise ValueError('Docker configuration changed after planning; capture blocked')
         stopped_at=time.time()
-        for cid in running:docker('stop','--time',str(stop_timeout),cid)
-        for c in inspect([c['Id'] for c in cs]):
-            if c['State']['Running'] or c['State']['ExitCode']!=0 or c['State'].get('OOMKilled'):raise ValueError('Graceful clean shutdown was not proven')
-        profile=cfg.get('shutdownProfile','generic')
-        if profile in ['postgres','mysql']:
-            pattern='postgres' if profile=='postgres' else ('mysql','mariadb')
-            databases=[c for c in cs if (any(v in c['Config']['Image'].lower() for v in pattern) if isinstance(pattern,tuple) else pattern in c['Config']['Image'].lower())]
-            if not databases:raise ValueError('Selected database shutdown profile does not match a database image')
-            marker='database system is shut down' if profile=='postgres' else 'shutdown complete'
-            for c in databases:
-                log_args=['docker','logs','--since',str(stopped_at),c['Id']] if c['Id'] in running else ['docker','logs','--tail','100',c['Id']]
-                result=subprocess.run(log_args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
-                logs=(result.stdout+result.stderr).decode(errors='replace').lower()
-                if marker not in logs:raise ValueError('Database shutdown evidence not found in logs; full capture blocked')
-                shutdown_evidence.append({'container':c['Id'],'profile':profile,'cleanShutdownLogVerified':True})
-        else:shutdown_evidence=[{'profile':'generic','applicationShutdownConfirmed':True,'zeroExitCodeVerified':True}]
+        for cid in reversed(running):docker('stop','--time',str(stop_timeout),cid)
+        shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at)
         emit(stage='copying')
         revalidate_sources(plan)
         for i,c in enumerate(cs):
@@ -499,7 +595,7 @@ def capture(req):
     finally:
         emit(stage='restarting')
         try:
-            if running:docker('start',*running)
+            restart_services(running,plan['services'])
             until=time.time()+120
             while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
             if running and not health(running,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
@@ -510,7 +606,7 @@ def capture(req):
     restarted=time.time()
     emit(stage='packing')
     docker('save','-o',str(root/'images.tar'),*original_ids,*images)
-    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_evidence,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
+    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     manifest['backupPlan']=plan
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
