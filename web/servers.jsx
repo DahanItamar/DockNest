@@ -9,7 +9,7 @@ const ServerIcon=props=><BrandIcon name="server" {...props}/>;
 export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,onEdit,onAdd,onClearFilter,Empty,query}) {
  if(!allServers.length)return <section className="server-empty-panel"><Empty icon={ServerIcon} title="Connect your first Docker host" action={user?.role==='admin'?<button className="primary" onClick={onAdd}>Add server <ArrowRight size={16}/></button>:null}>{user?.role==='admin'?'Connect a host with an SSH key and its independently verified host fingerprint.':'Ask your administrator to connect a Docker host with a verified SSH host key.'}</Empty></section>;
  if(!servers.length)return <section className="server-empty-panel"><Empty icon={ServerIcon} title="No matching servers" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another server name, address or note.</Empty></section>;
- return <Paginated rows={servers} label="Servers" pageSize={2} resetKey={query}>{visible=><div className="server-grid" aria-label="Docker servers">{visible.map(server=>{
+ return <Paginated rows={servers} label="Servers" pageSize={4} stableHeight resetKey={query}>{visible=><div className="server-grid" aria-label="Docker servers">{visible.map(server=>{
   const count=sites.filter(site=>site.serverId===server.id).length;
   return <article className="server-card" key={server.id} aria-labelledby={`server-title-${server.id}`}>
    <div className="server-card-body">
