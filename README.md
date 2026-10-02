@@ -1,6 +1,5 @@
 <div align="center">
-  <img src="public/brand/logo.png" alt="DockNest" width="360" />
-  <h1>DockNest</h1>
+  <img src="docs/media/logo-blue.png" alt="DockNest" width="360" />
   <p><strong>Back up Docker sites. Verify recovery points. Restore a private copy.</strong></p>
   <img src="https://img.shields.io/badge/Node.js-24-339933?style=flat-square" alt="Node.js 24" />
   <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
