@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 const directory = resolve('public/brand');
 const sources = resolve('docs/design/ink-coral');
 const logos = resolve(sources, 'logo-bottom-fix');
+const utilities = resolve(sources,'utility-icons');
+const utilityManifest = JSON.parse(await readFile(resolve(utilities,'asset-manifest.json'),'utf8'));
 const logoManifest = JSON.parse(await readFile(resolve(logos, 'asset-manifest.json'), 'utf8'));
 const atlasManifest = JSON.parse(await readFile(resolve(sources, 'asset-manifest.json'), 'utf8'));
 const iconNames = ['overview','server','sites','backups','jobs','storage','schedule','download','encrypted-download','pin','restore','details','refresh','theme','access','maintenance'];
@@ -14,18 +16,18 @@ await mkdir(resolve(directory,'icons'), {recursive:true});
 const browser = await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL || 'chrome',headless:true});
 try {
  const page = await browser.newPage(), outputs = [];
- async function exportImage(source, output, {width,size,background,cell,mark=false} = {}) {
-  const folder=source.startsWith('logo-')?logos:sources;
+ async function exportImage(source, output, {width,size,background,cell,rows=4,mark=false} = {}) {
+  const folder=source.startsWith('logo-')?logos:source.startsWith('utility-')?utilities:sources;
   const original=await readFile(resolve(folder,source));
-  const expected=[...logoManifest.assets,...atlasManifest.assets,...atlasManifest.finalRefinements].find(a=>a.filename===source);
+  const expected=[...logoManifest.assets,...atlasManifest.assets,...atlasManifest.finalRefinements,...utilityManifest.assets].find(a=>a.filename===source);
   const hash=createHash('sha256').update(original).digest('hex');
   if(!expected || hash!==expected.sha256) throw new Error(`Source checksum mismatch: ${source}`);
-  const result=await page.evaluate(async ({data,width,size,background,cell,mark})=>{
+  const result=await page.evaluate(async ({data,width,size,background,cell,rows,mark})=>{
    const image=new Image();image.src=data;await image.decode();
    const scan=document.createElement('canvas');scan.width=image.naturalWidth;scan.height=image.naturalHeight;
    const ctx=scan.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
    const pixels=ctx.getImageData(0,0,scan.width,scan.height).data;
-   const area=cell==null?{x:0,y:0,w:scan.width,h:scan.height}:{x:(cell%4)*scan.width/4,y:Math.floor(cell/4)*scan.height/4,w:scan.width/4,h:scan.height/4};
+   const area=cell==null?{x:0,y:0,w:scan.width,h:scan.height}:{x:(cell%4)*scan.width/4,y:Math.floor(cell/4)*scan.height/rows,w:scan.width/4,h:scan.height/rows};
    let left=area.x+area.w,top=area.y+area.h,right=-1,bottom=-1;
    for(let y=area.y;y<area.y+area.h;y++)for(let x=area.x;x<area.x+area.w;x++)if(pixels[(y*scan.width+x)*4+3]>=8){left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x);bottom=Math.max(bottom,y);}
    if(right<left)throw new Error('Empty artwork');
@@ -49,7 +51,7 @@ try {
    const scale=size?Math.min(size*.85/cw,size*.85/ch):canvas.width/cw;
    out.drawImage(image,left,top,cw,ch,(canvas.width-cw*scale)/2,(canvas.height-ch*scale)/2,cw*scale,ch*scale);
    return {png:canvas.toDataURL('image/png').split(',')[1],width:canvas.width,height:canvas.height,crop:{left,top,width:cw,height:ch}};
-  },{data:`data:image/png;base64,${original.toString('base64')}`,width,size,background,cell,mark});
+  },{data:`data:image/png;base64,${original.toString('base64')}`,width,size,background,cell,rows,mark});
   await writeFile(resolve(directory,output),Buffer.from(result.png,'base64'));
   outputs.push({filename:output,source:resolve(folder,source).replace(resolve('.')+'\\','').replaceAll('\\','/'),sourceSha256:hash,width:result.width,height:result.height,crop:result.crop});
  }
@@ -58,6 +60,7 @@ try {
   await exportImage(`logo-horizontal-${theme}.png`,`mark-${theme}.png`,{width:1024,mark:true});
   for(const [cell,name] of iconNames.entries())await exportImage(`icons-${theme}-atlas.png`,`icons/${name}-${theme}.png`,{size:128,cell});
  }
+ for(const theme of ['light','dark'])for(const [cell,name] of ['readiness','edit','remove','deploy','pause','resume','audit','terminal'].entries())await exportImage(`utility-${theme}-atlas.png`,`icons/${name}-${theme}.png`,{size:128,cell,rows:2});
  for(const size of [16,32,192,512])await exportImage('logo-horizontal-dark.png',`app-icon-${size}.png`,{size,background:'#161C25',mark:true});
  await exportImage('logo-horizontal-dark.png','apple-touch-icon.png',{size:180,background:'#161C25',mark:true});
  await exportImage('logo-horizontal-dark.png','favicon.png',{size:32,background:'#161C25',mark:true});

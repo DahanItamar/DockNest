@@ -22,9 +22,9 @@ export function Brand({descriptive=false,dashboard=false}) {
  const {theme}=useContext(Theme);
  return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-tagline-${theme}.png`} alt="DockNest - Docker Backup & Restore" width="1200" height={theme==='light'?355:380}/>;
 }
-export function BrandIcon({name,size=20,className=''}) {
+export function BrandIcon({name,size=20,className='',inverse=false}) {
  const {theme}=useContext(Theme);
- return <img className={`brand-icon ${className}`} src={`/brand/icons/${name}-${theme}.png`} width={size} height={size} alt="" aria-hidden="true"/>;
+ return <img className={`brand-icon ${className}`} src={`/brand/icons/${name}-${inverse?(theme==='light'?'dark':'light'):theme}.png`} width={size} height={size} alt="" aria-hidden="true"/>;
 }
 export function ThemeToggle() {
  const {theme,setTheme}=useContext(Theme),dark=theme==='dark';
