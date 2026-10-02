@@ -30,6 +30,9 @@ try{
  await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await health.locator('.health-wide .health-sweep').evaluate(el=>getComputedStyle(el).animationName),'none');
  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.clock.fastForward(1000);await health.locator('.health-compact').waitFor({state:'visible'});
  assert.match(await health.getAttribute('aria-label'),/API & worker online/);assert.ok((await health.boundingBox()).width<=56);
+ const compact=page.getByRole('button',{name:/Backup storage:.*stored/});await compact.focus();await page.locator('#compact-storage-details').waitFor();assert.match(await page.locator('#compact-storage-details').innerText(),/Total capacity/);
+ await page.keyboard.press('Escape');await page.locator('#compact-storage-details').waitFor({state:'hidden'});
+ state.storage={used:1024,total:null};await refresh();await page.waitForFunction(()=>document.querySelector('.compact-storage-button').getAttribute('aria-label').includes('capacity not reported'));await compact.hover();await page.locator('#compact-storage-details').waitFor();assert.match(await page.locator('#compact-storage-details').innerText(),/Not reported/);assert.equal(await page.locator('#compact-storage-details progress').count(),0);await page.keyboard.press('Escape');
  await mkdir('data/system-health-verification',{recursive:true});await page.screenshot({path:'data/system-health-verification/collapsed.png'});
  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.clock.fastForward(1000);await health.locator('.health-wide').waitFor({state:'visible'});await page.screenshot({path:'data/system-health-verification/expanded.png'});
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Open navigation'}).click();assert.equal(await health.locator('.health-wide').isVisible(),true);

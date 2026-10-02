@@ -20,7 +20,7 @@ DockNest brings server discovery, scheduled backups and recovery into one self-h
 - **Capture and verify:** preserve images, mounts, writable layers and file metadata; authenticate encrypted packages before recovery or export.
 - **Recover privately:** restore supported containers into isolated copies or static files into private directories. Live replacement remains blocked.
 - **Download your data:** encrypted originals with range support, or authenticated Full ZIP exports with browsable files and original Linux recovery archives.
-- **Monitor clearly:** activity charts, job stages, audit history, grouped recovery points and responsive pagination. A sidebar heartbeat reports API/worker availability and jobs needing attention. Light and dark palettes include a saved sun/moon appearance toggle.
+- **Monitor clearly:** activity charts, job stages, audit history, grouped recovery points and responsive pagination. A sidebar heartbeat reports API/worker availability and jobs needing attention. Light and dark palettes include a sun/moon control, smooth theme fading and saved Light / Dark / System preferences.
 - **Manage maintenance:** a visual editor, animated visitor pages and explicit deployment/activation controls.
 - **Control access:** a shared password plus each person's TOTP authenticator, expiring invitations, recovery codes and revocable sessions.
 
