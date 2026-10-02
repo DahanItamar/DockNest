@@ -1,8 +1,8 @@
 {
   "identity": "DockNest / Homebird",
-  "presentation": "Light only",
+  "presentation": "Light and dark",
   "version": "deadd2f768",
-  "operation": "Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged.",
+  "operation": "Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.",
   "sourceAlpha": {
     "occupied": 307069,
     "partial": 13761,
@@ -69,6 +69,36 @@
       },
       "bytes": 50498,
       "sha256": "2bb7cb24fcde0781688d9c8544c4e66f0a7330e2b5c8d3868b600ca4faa62d80"
+    },
+    {
+      "filename": "logo-blue-600-dabcf86f23.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365",
+      "width": 600,
+      "height": 118,
+      "crop": {
+        "left": 2,
+        "top": 147,
+        "width": 2169,
+        "height": 426
+      },
+      "bytes": 23714,
+      "sha256": "fc010a2fd285b90ab5439f491af861095e781fa2dbefcd24daec6927f316fc19"
+    },
+    {
+      "filename": "logo-blue-1200-dabcf86f23.webp",
+      "source": "docs/media/logo-blue.png",
+      "sourceSha256": "dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365",
+      "width": 1200,
+      "height": 236,
+      "crop": {
+        "left": 2,
+        "top": 147,
+        "width": 2169,
+        "height": 426
+      },
+      "bytes": 60990,
+      "sha256": "b3fcf05aadb0cbe0ef776b47ec7b274cb2f10b7c8332eeaa602e9904e8b04b69"
     },
     {
       "filename": "favicon-16-deadd2f768.png",

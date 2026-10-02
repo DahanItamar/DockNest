@@ -1,6 +1,8 @@
 {
   "src": "/brand/logo-600-deadd2f768.webp",
   "srcSet": "/brand/logo-600-deadd2f768.webp 600w, /brand/logo-1200-deadd2f768.webp 1200w",
+  "darkSrc": "/brand/logo-blue-600-dabcf86f23.webp",
+  "darkSrcSet": "/brand/logo-blue-600-dabcf86f23.webp 600w, /brand/logo-blue-1200-dabcf86f23.webp 1200w",
   "width": 600,
   "height": 118
 }

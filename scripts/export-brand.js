@@ -37,8 +37,8 @@ try{
   const crop=(l,t,r,b)=>({left:Math.max(0,l-pad),top:Math.max(0,t-pad),width:r-l+1+pad*2,height:b-t+1+pad*2});
   return{full:crop(left,top,right,bottom),bird:crop(left,birdTop,gapStart-1,birdBottom),alpha:{occupied,partial,white,pixels:canvas.width*canvas.height}};
  },'data:image/png;base64,'+original.toString('base64'));
- async function exportImage(filename,{width,size,mark=false,background,fill=.82,maskable=false,mime='image/png'}={}){
-  const crop=mark?source.bird:source.full;
+ async function exportImage(filename,{width,size,mark=false,background,fill=.82,maskable=false,mime='image/png',sourceImage=original,sourceCrop}={}){
+  const crop=sourceCrop||(mark?source.bird:source.full);
   const result=await page.evaluate(async({data,crop,width,size,background,fill,maskable,mime})=>{
    const image=new Image();image.src=data;await image.decode();
    const canvas=document.createElement('canvas');canvas.width=size||width||crop.width;canvas.height=size||Math.round(canvas.width*crop.height/crop.width);
@@ -48,13 +48,20 @@ try{
    if(maskable)scale=Math.min(scale,size*.38/Math.hypot(crop.width/2,crop.height/2));
    ctx.drawImage(image,crop.left,crop.top,crop.width,crop.height,(canvas.width-crop.width*scale)/2,(canvas.height-crop.height*scale)/2,crop.width*scale,crop.height*scale);
    return{bytes:canvas.toDataURL(mime,.96).split(',')[1],width:canvas.width,height:canvas.height};
-  },{data:'data:image/png;base64,'+original.toString('base64'),crop,width,size,background,fill,maskable,mime});
+  },{data:'data:image/png;base64,'+sourceImage.toString('base64'),crop,width,size,background,fill,maskable,mime});
   const bytes=Buffer.from(result.bytes,'base64');await writeFile('public/brand/'+filename,bytes);
-  outputs.push({filename,source:folder+'/'+manifest.filename,sourceSha256:hash,width:result.width,height:result.height,crop,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
+  outputs.push({filename,source:sourceImage===original?folder+'/'+manifest.filename:'docs/media/logo-blue.png',sourceSha256:createHash('sha256').update(sourceImage).digest('hex'),width:result.width,height:result.height,crop,bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')});
   return result;
  }
  const logo=await exportImage('logo.png');await exportImage('mark.png',{mark:true});
  for(const width of [600,1200])await exportImage('logo-'+width+'-'+version+'.webp',{width,mime:'image/webp'});
+ const blue=await readFile('docs/media/logo-blue.png'),blueVersion=createHash('sha256').update(blue).digest('hex').slice(0,10);
+ const blueCrop=await page.evaluate(async data=>{
+  const image=new Image();image.src=data;await image.decode();const c=document.createElement('canvas');c.width=image.naturalWidth;c.height=image.naturalHeight;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);const p=ctx.getImageData(0,0,c.width,c.height).data;let l=c.width,t=c.height,r=-1,b=-1;
+  for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++)if(p[(y*c.width+x)*4+3]>=16){l=Math.min(l,x);t=Math.min(t,y);r=Math.max(r,x);b=Math.max(b,y)}
+  return{left:Math.max(0,l-8),top:Math.max(0,t-8),width:Math.min(c.width,r+9)-Math.max(0,l-8),height:Math.min(c.height,b+9)-Math.max(0,t-8)};
+ },'data:image/png;base64,'+blue.toString('base64'));
+ for(const width of [600,1200])await exportImage('logo-blue-'+width+'-'+blueVersion+'.webp',{width,mime:'image/webp',sourceImage:blue,sourceCrop:blueCrop});
  for(const size of [16,32,48])await exportImage('favicon-'+size+'-'+version+'.png',{size,mark:true,fill:.96});
  await exportImage('favicon-'+version+'.png',{size:32,mark:true,fill:.96});
  for(const size of [192,512])await exportImage('app-icon-'+size+'-'+version+'.png',{size,mark:true,background:'#FFFFFF'});
@@ -67,9 +74,9 @@ try{
  const ico=Buffer.concat([header,...entries.map(x=>x.png)]);await writeFile('public/brand/favicon-'+version+'.ico',ico);
  await writeFile('public/favicon.ico',ico);
  for(const filename of ['apple-touch-icon.png','apple-touch-icon-precomposed.png'])await writeFile('public/'+filename,await readFile('public/brand/apple-touch-icon-'+version+'.png'));
- await writeFile('public/brand/asset-manifest.json',JSON.stringify({identity:manifest.identity,presentation:'Light only',version,operation:'Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged.',sourceAlpha:source.alpha,outputs},null,2)+'\n');
+ await writeFile('public/brand/asset-manifest.json',JSON.stringify({identity:manifest.identity,presentation:'Light and dark',version,operation:'Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.',sourceAlpha:source.alpha,outputs},null,2)+'\n');
  await writeFile('public/brand/site.webmanifest',JSON.stringify({id:'/',name:'DockNest',short_name:'DockNest',description:'Docker Backup & Restore',start_url:'/',scope:'/',icons:[...[192,512].map(size=>({src:'/brand/app-icon-'+size+'-'+version+'.png',sizes:size+'x'+size,type:'image/png',purpose:'any'})),{src:'/brand/app-icon-maskable-512-'+version+'.png',sizes:'512x512',type:'image/png',purpose:'maskable'}],theme_color:'#673AB7',background_color:'#EEF2F6',display:'standalone'},null,2)+'\n');
- await writeFile('web/brand-assets.json',JSON.stringify({src:'/brand/logo-600-'+version+'.webp',srcSet:'/brand/logo-600-'+version+'.webp 600w, /brand/logo-1200-'+version+'.webp 1200w',width:600,height:Math.round(600*logo.height/logo.width)},null,2)+'\n');
+ await writeFile('web/brand-assets.json',JSON.stringify({src:'/brand/logo-600-'+version+'.webp',srcSet:'/brand/logo-600-'+version+'.webp 600w, /brand/logo-1200-'+version+'.webp 1200w',darkSrc:'/brand/logo-blue-600-'+blueVersion+'.webp',darkSrcSet:'/brand/logo-blue-600-'+blueVersion+'.webp 600w, /brand/logo-blue-1200-'+blueVersion+'.webp 1200w',width:600,height:Math.round(600*logo.height/logo.width)},null,2)+'\n');
  const index=await readFile('index.html','utf8');
  await writeFile('index.html',index.replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]png','g'),'/brand/favicon-'+version+'.png').replace(new RegExp('/brand/favicon(?:-[a-f0-9]+)?[.]ico','g'),'/brand/favicon-'+version+'.ico').replace(new RegExp('/brand/apple-touch-icon(?:-[a-f0-9]+)?[.]png','g'),'/brand/apple-touch-icon-'+version+'.png').replace(new RegExp('/brand/site[.]webmanifest(?:[?]v=[a-f0-9]+)?','g'),'/brand/site.webmanifest?v='+version));
  console.log(JSON.stringify({version,source,outputs:outputs.map(({filename,width,height,bytes})=>({filename,width,height,bytes}))}));
