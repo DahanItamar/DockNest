@@ -88,9 +88,10 @@ try{
   });
   assert.ok(count*geometry.slot+(count-1)*geometry.gap<=geometry.capacity+.5,'Visible rows fit available height');
   assert.ok((count+1)*geometry.slot+count*geometry.gap>geometry.capacity,'Every fitting row is included: '+JSON.stringify({height,count,...geometry}));
-  const footer=await page.locator('.workspace>footer').boundingBox();
+  const main=await page.locator('main#content').boundingBox();
   const scroll=await page.evaluate(()=>scrollY);
-  assert.ok(Math.abs(footer.y+scroll+footer.height-height)<1.1,'Backup pagination fills the viewport above the footer: '+JSON.stringify({height,footer,scroll}));
+  assert.ok(Math.abs(main.y+scroll+main.height-height)<1.1,'Backup pagination fills the viewport: '+JSON.stringify({height,main,scroll}));
+  assert.equal(await page.locator('.workspace>footer').count(),0,'Redundant branding/status footer removed');
   await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:directory+'/backup-fit-'+height+'.png',fullPage:true});
   await partialPage('Backup sites','.backup-group');
  }

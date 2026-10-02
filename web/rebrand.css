@@ -67,7 +67,7 @@
 .backup-library{display:grid;gap:12px}
 .backup-group{margin:0;border:0;border-radius:var(--radius);overflow:hidden;background:var(--surface)}
 .backup-group>summary{list-style:none;display:grid;grid-template-columns:minmax(0,1fr) 160px 220px 20px;gap:24px;align-items:center;cursor:pointer;padding:20px 24px;font-size:13px}
-.backups-page main#content{padding-bottom:12px}.backups-page .workspace>footer{padding-block:20px}
+.backups-page main#content{padding-bottom:12px}
 .backup-group>summary::-webkit-details-marker{display:none}
 .backup-group>summary:hover,.backup-group[open]>summary{background:var(--surface-muted)}
 .backup-group>summary>svg{color:var(--text-secondary);transition:transform 160ms ease-out}
