@@ -23,7 +23,7 @@ try{
  await page.getByRole('article',{name:'Production EU',exact:true}).waitFor();
  await page.evaluate(()=>document.fonts.ready);
  const card=name=>page.getByRole('article',{name,exact:true});
- assert.equal(await page.locator('.server-card').count(),2);
+ assert.equal(await page.locator('.server-card').count(),4);
  assert.equal(await card('Production EU').getByLabel('1 configured site').count(),1);
  assert.equal(await card('Production EU').locator('code').filter({hasText:'ab'.repeat(32)}).textContent(),'ab'.repeat(32),'Complete SSH fingerprint remains visible');
  async function measure(){
@@ -55,7 +55,7 @@ try{
  await card('Production EU').getByText('Main storefront host - reviewed',{exact:true}).waitFor();
  await page.getByLabel('Filter Servers').fill('nothing-matches');
  await page.getByRole('heading',{name:'No matching servers'}).waitFor();
- await page.getByRole('button',{name:'Clear filter',exact:true}).click();assert.equal(await page.locator('.server-card').count(),2);
+ await page.getByRole('button',{name:'Clear filter',exact:true}).click();assert.equal(await page.locator('.server-card').count(),4);
  await page.getByLabel('Filter Servers').fill('Commerce host');
  assert.equal(await page.locator('.server-card').count(),1);
  assert.ok(await page.locator('.server-card').evaluate(el=>Math.abs(el.getBoundingClientRect().width-document.querySelector('.server-grid').getBoundingClientRect().width)<1),'Single result fills the row');
@@ -67,14 +67,14 @@ try{
  await page.setViewportSize({width:1440,height:1000});
  failState=true;
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();assert.equal(await page.locator('.server-card').count(),2);
+ await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();assert.equal(await page.locator('.server-card').count(),4);
  failState=false;
  role='operator';await page.reload();
  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
  await card('Production EU').waitFor();
  assert.equal(await page.getByRole('button',{name:'Edit details',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);
- assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),2);
+ assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),4);
  state.servers=[];state.sites=[];
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
  await page.getByRole('heading',{name:'Connect your first Docker host'}).waitFor();assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);

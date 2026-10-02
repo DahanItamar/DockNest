@@ -2,15 +2,15 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
-const directory='docs/design/full-site-implemented';
+const directory=process.env.PAGINATION_EVIDENCE_DIR||'data/pagination-verification';
 await mkdir(directory,{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  const time=i=>new Date(Date.now()-i*3600000).toISOString();
  const servers=Array.from({length:29},(_,i)=>({id:'host-'+i,name:'Docker host '+i,username:'root',host:'192.0.2.'+(i+1),port:22,hostKey:'ab'.repeat(32)}));
- const sites=Array.from({length:44},(_,i)=>({id:'site-'+i,name:'Website '+i,serverId:servers[i%29].id,config:{containers:['web-'+i,'db-'+i],domains:['site-'+i+'.example.invalid'],healthUrl:'https://site-'+i+'.example.invalid/health'}}));
- const backups=Array.from({length:504},(_,i)=>({id:'backup-'+i,siteId:'site-'+Math.floor(i/24),capturedAt:time(i),createdAt:time(i),verified:true,size:1048576,pinned:false}));
+ const sites=Array.from({length:45},(_,i)=>({id:'site-'+i,name:'Website '+i,serverId:servers[i%29].id,config:{containers:['web-'+i,'db-'+i],domains:['site-'+i+'.example.invalid'],healthUrl:'https://site-'+i+'.example.invalid/health'}}));
+ const backups=Array.from({length:506},(_,i)=>({id:'backup-'+i,siteId:'site-'+(i<25?0:1+Math.floor((i-25)/24)),capturedAt:time(i),createdAt:time(i),verified:true,size:1048576,pinned:false}));
  const audit=Array.from({length:137},(_,i)=>({id:'event-'+i,createdAt:time(i),action:'fixture.audit.'+i,actor:'Administrator',details:{siteId:'site-'+i,review:'Synthetic audit details'}}));
  const jobs=Array.from({length:76},(_,i)=>({id:'job-'+i,siteId:sites[i%44].id,type:'backup',status:'completed',stage:'completed',createdAt:time(i)}));
  const state={servers,sites,backups,jobs,audit,policies:sites.map(site=>({siteId:site.id,enabled:true,schedule:'0 2 * * *',timezone:'Asia/Jerusalem',retention:7})),storage:{used:504*1048576,total:1e12},maintenance:{title:'Back shortly',message:'Scheduled maintenance. Please return soon.',color:'#5E35B1'}};
@@ -49,6 +49,28 @@ try{
 
  await navigate('Jobs');const jobPager=page.getByRole('group',{name:'Jobs pagination',exact:true});assert.equal(await page.locator('tbody tr').count(),10);const jobY=(await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY);
  for(let i=1;i<8;i++)await jobPager.getByRole('button',{name:'Jobs next page',exact:true}).click();assert.equal(await page.locator('tbody tr').count(),6);assert.ok(Math.abs((await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY)-jobY)<1,'Jobs pager stays in place on a partial last page');
+ const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ const pagerY=async pager=>(await pager.boundingBox()).y+await page.evaluate(()=>scrollY);
+ async function partialPage(label,selector,fullCount){
+  const pager=page.getByRole('group',{name:label+' pagination',exact:true});
+  await settle();assert.equal(await page.locator(selector).count(),fullCount);
+  const y=await pagerY(pager),next=pager.getByRole('button',{name:label+' next page',exact:true});
+  while(!await next.isDisabled())await next.click();
+  await settle();assert.equal(await page.locator(selector).count(),1);
+  assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place on a one-item last page');
+  while(!await pager.getByRole('button',{name:label+' previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:label+' previous page',exact:true}).click();
+  await settle();assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place returning to the full page');
+ }
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000});
+  await navigate('Servers');await partialPage('Servers','.server-card',4);
+  await navigate('Sites & schedules');await partialPage('Sites','.site-card',4);
+  await navigate('Backups');await partialPage('Backup sites','.backup-group',3);
+  await page.locator('.backup-group>summary').first().click();
+  await partialPage('Recovery points for Website 0','.backup-group[open] .recovery-row',3);
+ }
+ await page.setViewportSize({width:1440,height:1000});
+ await navigate('Servers');await page.getByLabel('Filter Servers').fill('Docker host 28');assert.equal(await page.locator('.server-card').count(),1);assert.equal(await page.getByRole('group',{name:'Servers pagination',exact:true}).count(),0,'Single-page search has no empty reserved page or pager');await page.getByLabel('Filter Servers').fill('');
  await navigate('Backups');await page.locator('.backup-group>summary').first().click();
  const historyPager=page.getByRole('group',{name:'Recovery points for Website 0 pagination',exact:true});
  assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),3);
@@ -58,7 +80,7 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',2],['Sites & schedules','sites','.site-card',2],['Backups','backups','.backup-group',3],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',3],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
