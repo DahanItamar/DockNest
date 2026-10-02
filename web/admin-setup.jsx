@@ -1,5 +1,5 @@
 import React,{useState} from 'react';
-import {Brand,ThemeToggle} from './brand.jsx';
+import {Brand} from './brand.jsx';
 
 export function AdminSetup({api,Field,status,onAuth,onExit}) {
  const [enrollment,setEnrollment]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -16,7 +16,7 @@ export function AdminSetup({api,Field,status,onAuth,onExit}) {
    }
   }catch(error){setError(error.message);}finally{setBusy(false);}
  }
- return <div className="auth-shell"><header className="auth-header"><div className="brand"><Brand/></div><ThemeToggle/></header><main className="auth-main"><div className="auth-card"><h2>{enrollment?'Connect your authenticator':status.setupRequired?'Set up DockNest':'Resume administrator setup'}</h2><p>{enrollment?'Scan the QR code, save your recovery codes, then confirm your authenticator.':'Create the first administrator using the private setup token from your deployment server.'}</p><form onSubmit={submit}>
+ return <div className="auth-shell"><header className="auth-header"><div className="brand"><Brand/></div></header><main className="auth-main"><div className="auth-card"><h2>{enrollment?'Connect your authenticator':status.setupRequired?'Set up DockNest':'Resume administrator setup'}</h2><p>{enrollment?'Scan the QR code, save your recovery codes, then confirm your authenticator.':'Create the first administrator using the private setup token from your deployment server.'}</p><form onSubmit={submit}>
   {!enrollment?<>
    {status.setupRequired&&<><Field label="Administrator name" name="name" required maxLength={100}/><Field label="Administrator email" name="email" type="email" required maxLength={254}/></>}
    <Field label="Setup token" name="setupToken" type="password" autoComplete="off" required help="Available only in /opt/docknest/data/setup.token on the deployment server. Never share it in chat."/>

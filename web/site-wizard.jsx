@@ -1,3 +1,4 @@
+import {Paginated} from './pagination.jsx';
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups} from './container-groups.js';
@@ -73,7 +74,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
    {serverId&&!loading&&!error&&<>
     {containers.length?<>
      <p>Choose the project that belongs to your site, then press Continue. Selecting a project includes all its services.</p>
-     <div className="application-groups">{siteChoices.map(group=>{
+     <Paginated rows={siteChoices} label="Discovered sites" pageSize={2} resetKey={serverId}>{visible=><div className="application-groups">{visible.map(group=>{
       const names=group.containers.map(containerName);
       const chosen=names.length===selected.length&&names.every(name=>selected.includes(name));
       return <section className={'application-group'+(chosen?' chosen':'')} key={group.id} aria-label={group.name}>
@@ -81,7 +82,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
        <p className="site-services">{group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
        <details className="site-service-review"><summary>Review services in {group.name}</summary><div className="container-list">{group.containers.map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" aria-label={'Include '+name} checked={selected.includes(name)} disabled={!selected.includes(name)&&selected.length>=30} onChange={event=>toggleGrouped(name,event.target.checked)}/><div><b>{container.service||name}</b><small>{name} / {container.image||container.Config?.Image||'Image unavailable'}</small></div><span className="container-state">{containerStatus(container)}</span></label>;})}</div></details>
       </section>;
-     })}</div>
+     })}</div>}</Paginated>
      <div className="selection-summary" role="status"><b>{selected.length?settings.name||primary:'No site selected'}</b><span>{selected.length?selected.length+' services included: '+selected.join(', '):'Use Select site on one of the cards above.'}</span>{selected.length>0&&<button type="button" onClick={()=>selectNames([])}>Clear selection</button>}</div>
      <details className="manual-container-picker"><summary>My site needs a custom selection</summary>
      <p>Select the app and its database or other services. Docker project labels suggest membership; check that shared services belong in this backup.</p>

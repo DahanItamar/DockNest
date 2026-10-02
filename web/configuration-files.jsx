@@ -1,5 +1,6 @@
+import {Paginated} from './pagination.jsx';
 import React,{useEffect,useState} from 'react';
-import {Folder,File,ArrowUp} from 'lucide-react';
+import {Folder,File,ArrowUp} from './icons.jsx';
 
 export function ConfigurationFiles({api,serverId,containers,directory,onChoose,onClose,onSessionExpired}){
  const [path,setPath]=useState(directory||''),[listing,setListing]=useState(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[retry,setRetry]=useState(0);
@@ -17,7 +18,7 @@ export function ConfigurationFiles({api,serverId,containers,directory,onChoose,o
   {error&&<><div className="alert" role="alert">{error}</div><button type="button" onClick={()=>setRetry(value=>value+1)}>Retry folder</button></>}
   {!loading&&listing&&<>
    {listing.parent&&<button type="button" onClick={()=>setPath(listing.parent)}><ArrowUp size={14}/> Parent folder</button>}
-   <ul className="configuration-tree">{listing.entries.map(entry=><li key={entry.path}>{entry.kind==='directory'?<button type="button" onClick={()=>setPath(entry.path)} aria-label={'Open folder '+entry.name}><Folder size={16}/>{entry.name}<span>Open folder</span></button>:<button type="button" disabled={!entry.selectable} onClick={()=>onChoose(entry.path)} aria-label={'Select file '+entry.name}><File size={16}/>{entry.name}<span>{entry.selectable?'Select file':'Unavailable'}</span></button>}</li>)}</ul>
+   <Paginated rows={listing.entries} label="Project files" resetKey={listing.directory}>{visible=><ul className="configuration-tree">{visible.map(entry=><li key={entry.path}>{entry.kind==='directory'?<button type="button" onClick={()=>setPath(entry.path)} aria-label={'Open folder '+entry.name}><Folder size={16}/>{entry.name}<span>Open folder</span></button>:<button type="button" disabled={!entry.selectable} onClick={()=>onChoose(entry.path)} aria-label={'Select file '+entry.name}><File size={16}/>{entry.name}<span>{entry.selectable?'Select file':'Unavailable'}</span></button>}</li>)}</ul>}</Paginated>
    {!listing.entries.length&&<p>This folder has no files.</p>}
    {listing.limited&&<p>Showing the first 500 entries. Open a smaller folder to find more files.</p>}
   </>}

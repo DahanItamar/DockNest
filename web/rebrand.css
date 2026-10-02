@@ -1,5 +1,5 @@
 ﻿/* Shared presentation for every route; operations and form handlers remain in their owners. */
-.rebrand-page .panel{border:1px solid var(--border-subtle);border-radius:12px;min-width:0;max-width:100%;background:var(--surface);box-shadow:none}
+.rebrand-page .panel{border:0;border-radius:var(--radius);min-width:0;max-width:100%;background:var(--surface);box-shadow:none}
 .rebrand-page .panel.padded{padding:24px}
 .rebrand-page .panel-head{padding:24px;min-height:80px}
 .rebrand-page .panel h2{font-size:18px;font-weight:600;line-height:1.4}
@@ -24,12 +24,12 @@
 .rebrand-page .access-grid .panel{display:flex;flex-direction:column}
 .rebrand-page .access-grid form{flex:1;display:flex;flex-direction:column}
 .rebrand-page .access-grid .form-actions{margin-top:auto;padding-top:24px}
-.rebrand-page .access-rules{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;padding:20px 24px;border:1px solid var(--border-subtle);border-radius:12px;background:var(--surface);font-size:12px;align-items:center;margin-bottom:24px}
+.rebrand-page .access-rules{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;padding:20px 24px;border:0;border-radius:var(--radius);background:var(--surface);font-size:12px;align-items:center;margin-bottom:24px}
 .rebrand-page .access-rules span{min-height:40px;line-height:1.5}
-.rebrand-page .maintenance-preview{min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:12px;padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;overflow-wrap:anywhere}
+.rebrand-page .maintenance-preview{min-width:0;background:var(--surface);border:0;border-radius:var(--radius);padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;overflow-wrap:anywhere}
 .rebrand-page .maintenance-preview h2{font-size:28px;line-height:1.3;max-width:100%;margin:16px 0}
 .rebrand-page .maintenance-preview p{font-size:14px;line-height:1.6;max-width:48ch}
-.rebrand-page .maintenance-preview small{margin-top:24px;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.rebrand-page .maintenance-preview small{margin-top:24px;font-family:ui-monospace,Consolas,monospace;font-size:11px}
 .rebrand-page table{width:100%;font-size:13px}
 .rebrand-page th{font-size:11px;text-transform:none;letter-spacing:.2px;padding:16px 24px;background:var(--surface-muted)}
 .rebrand-page td{padding:20px 24px;line-height:1.5;vertical-align:middle}
@@ -44,7 +44,7 @@
 .audit-details summary{cursor:pointer;color:var(--link);padding:8px 0}
 .audit-details pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface-muted);max-height:240px;overflow:auto;margin-top:12px}
 .site-grid,.storage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr;gap:24px;margin-bottom:24px;align-items:stretch}
-.site-card,.storage-card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:12px;overflow:hidden;isolation:isolate}
+.site-card,.storage-card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:0;border-radius:var(--radius);overflow:hidden;isolation:isolate}
 .site-card:last-child:nth-child(odd),.storage-card:last-child:nth-child(odd){grid-column:1/-1}
 .site-card-body{padding:24px;flex:1}
 .site-card-head{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:16px;align-items:start;min-height:52px;margin-bottom:24px}
@@ -65,7 +65,7 @@
 .recovery-action:active,.recovery-action[aria-pressed=true]{background:var(--accent-soft)}
 .recovery-action:disabled{opacity:.5;cursor:wait}
 .backup-library{display:grid;gap:16px}
-.backup-group{margin:0;border:1px solid var(--border-subtle);border-radius:12px;overflow:hidden;background:var(--surface)}
+.backup-group{margin:0;border:0;border-radius:var(--radius);overflow:hidden;background:var(--surface)}
 .backup-group>summary{list-style:none;display:grid;grid-template-columns:minmax(0,1fr) 160px 220px 20px;gap:24px;align-items:center;cursor:pointer;padding:24px;font-size:13px}
 .backup-group>summary::-webkit-details-marker{display:none}
 .backup-group>summary:hover,.backup-group[open]>summary{background:var(--surface-muted)}
@@ -74,19 +74,19 @@
 .backup-site-name{display:flex;gap:16px;align-items:center;min-width:0}
 .backup-site-name b{font-size:16px;font-weight:600;overflow-wrap:anywhere}
 .backup-group small{display:block;font-size:11px;line-height:1.6;color:var(--text-secondary);margin-top:4px}
-.backup-latest b{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:400;overflow-wrap:anywhere}
+.backup-latest b{font-family:ui-monospace,Consolas,monospace;font-size:11px;font-weight:400;overflow-wrap:anywhere}
 .backup-group-content{border-top:1px solid var(--border-subtle);padding:0 24px;background:var(--background)}
 .recovery-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(100px,.8fr) minmax(100px,.7fr) auto;align-items:center;gap:24px;padding:20px 0;border-bottom:1px solid var(--border-subtle);font-size:13px}
 .recovery-row:last-child{border-bottom:0}
 .recovery-point{display:flex;align-items:center;gap:12px;min-width:0}
 .recovery-point>div{min-width:0}
-.recovery-point b{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:400;line-height:1.5;display:block}
+.recovery-point b{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:400;line-height:1.5;display:block}
 .recovery-point code{display:block;color:var(--text-secondary);font-size:10px;margin-top:4px;overflow-wrap:anywhere}
 .recovery-size b{font-weight:500}
 .recovery-actions{display:flex;gap:4px}
 .storage-card-content{padding:24px;flex:1;min-width:0}
 .storage-card-content h3{font-size:18px;line-height:1.5;font-weight:600;min-height:54px;overflow-wrap:anywhere;display:flex;align-items:flex-start;gap:12px}
-.storage-card-content>p{font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;overflow-wrap:anywhere;margin:16px 0}
+.storage-card-content>p{font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.6;overflow-wrap:anywhere;margin:16px 0}
 .storage-card-content>small{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .storage-card-actions{padding:16px 24px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;border-top:1px solid var(--border-subtle);margin-top:auto;flex-wrap:wrap}
 .storage-card-actions button{flex:1;justify-content:center;gap:8px;white-space:normal;min-height:56px}
@@ -98,24 +98,24 @@
 .rebrand-page .backup-tree-file .actions{flex-shrink:0;justify-content:flex-end}
 .rebrand-page .backup-tree-file code{font-size:11px;overflow-wrap:anywhere}
 .auth-header{padding:24px 40px}
-.auth-card{background:var(--surface);border:1px solid var(--border-subtle);border-radius:16px;padding:32px;box-shadow:none}
+.auth-card{background:var(--surface);border:0;border-radius:var(--radius);padding:32px;box-shadow:none}
 .auth-card h2{font-size:28px;font-weight:600;letter-spacing:-.5px;line-height:1.2;margin-bottom:12px}
 .auth-card p{font-size:13px;line-height:1.6}
 .auth-card .field{font-size:13px;margin-top:20px}
 .auth-card input:not([type=checkbox]),.auth-card select{min-height:44px;font-size:14px}
 .auth-card button.primary{min-height:48px;font-size:14px;border-radius:8px}
 .auth-card .security-note{font-size:12px;align-items:center;margin-top:24px}
-.rebrand-page dialog{border:1px solid var(--border-subtle);border-radius:16px;max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 32px)}
+.rebrand-page dialog{border:0;border-radius:var(--radius);max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 32px)}
 .rebrand-page .modal-head{padding:24px}
 .rebrand-page .modal-head h2{font-size:20px;font-weight:600}
 .rebrand-page .modal-body{padding:24px;font-size:13px}
 .rebrand-page .modal-foot button{min-height:44px;min-width:120px;justify-content:center}
 .rebrand-page .modal-body .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
-.rebrand-page .application-group{border-radius:10px}
+.rebrand-page .application-group{border-radius:var(--radius)}
 .rebrand-page .application-group h4{font-size:15px}
-.rebrand-page .setup-command,.rebrand-page .command-preview{font-family:'IBM Plex Mono',monospace;border-radius:8px}
+.rebrand-page .setup-command,.rebrand-page .command-preview{font-family:ui-monospace,Consolas,monospace;border-radius:8px}
 .rebrand-page .notice,.rebrand-page .alert{font-size:13px;line-height:1.6;border-radius:8px}
-@media(max-width:1100px){
+@media(max-width:899px){
  .site-grid,.storage-grid{grid-template-columns:1fr}
  .site-card:last-child:nth-child(odd),.storage-card:last-child:nth-child(odd){grid-column:auto}
  .rebrand-page .overview-grid,.rebrand-page .access-grid{grid-template-columns:1fr}
@@ -173,3 +173,26 @@
  .auth-card{padding:28px 24px}
 }
 @media(prefers-reduced-motion:reduce){.recovery-action,.backup-group>summary>svg{transition:none}}
+
+
+/* One clear paging control per collection; natural page flow, horizontal table scrolling only. */
+.paginated-list,.paged-content{min-width:0;max-width:100%}
+.rebrand-page .table-wrap{overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--border-control) var(--surface-muted)}
+.rebrand-page .pagination{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:16px 20px;border-top:1px solid var(--border-subtle);background:var(--surface);color:var(--text-secondary);font-size:12px;border-radius:0 0 8px 8px}
+.pagination-controls{display:grid;grid-template-columns:112px minmax(88px,1fr) 112px;align-items:center;gap:12px;min-width:0}
+.pagination-count{font-variant-numeric:tabular-nums;font-size:12px;white-space:nowrap}
+.rebrand-page .pagination button{width:112px;min-width:0;min-height:40px;padding:8px 12px;border:0;background:var(--accent-soft);color:var(--link);border-radius:8px;justify-content:center;gap:8px;font-size:12px}
+.rebrand-page .pagination button:hover:not(:disabled){background:var(--secondary-light)}
+.rebrand-page .pagination button:disabled{color:var(--text-secondary);background:var(--surface-muted);opacity:.65;cursor:default}
+.pagination-page{white-space:nowrap;text-align:center;font-variant-numeric:tabular-nums;font-size:12px}
+.server-grid,.site-grid,.storage-grid{margin-bottom:0}
+.dash-sites .pagination{padding:12px;font-size:11px}
+.dash-site-history .pagination{padding-inline:0;background:transparent;border-radius:0}
+.rebrand-page .modal-body pre{max-height:50dvh;overflow:auto}
+.configuration-tree,.container-list{overscroll-behavior:contain;scrollbar-width:thin}
+@media(max-width:680px){
+ .rebrand-page .pagination{padding:12px;gap:12px}
+ .pagination-controls{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);width:100%;gap:8px}.rebrand-page .pagination button{width:100%;padding:8px;gap:4px}
+ .pagination-page{justify-content:center;gap:4px;font-size:11px}
+ .pagination-count{font-size:11px}
+}

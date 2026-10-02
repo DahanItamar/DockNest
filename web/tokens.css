@@ -1,31 +1,18 @@
-@font-face {font-family:Manrope;src:url('/fonts/Manrope-Variable.ttf') format('truetype');font-weight:200 800;font-style:normal;font-display:swap}
-@font-face {font-family:'IBM Plex Mono';src:url('/fonts/IBMPlexMono-Regular.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+/* Berry reference tokens. Light-only presentation. */
 :root {
- --brand-accent:#B94538; --brand-ink:#222A35; --brand-paper:#F5F3F0; --brand-middle:#5E6773;
- --background:#F5F3F0; --surface:#FCFAF8; --surface-muted:#EEEAE5; --surface-hover:#E8E3DD;
- --text-primary:#222A35; --text-secondary:#5E6773; --text-muted:#5E6773;
- --border-subtle:#DDDDE2; --border-control:#7D7C86;
- --accent:#B94538; --accent-soft:#F9E6E2; --accent-hover:#A53A2F;
- --primary-foreground:#FCFAF8; --focus-ring:#B94538; --link:#AC3E32;
- --success:#315BBF; --success-surface:#E5ECFC; --warning:#805716; --warning-surface:#FFF0D6;
- --error:#9C2732; --error-surface:#FBE7E9; --info:#315BBF; --info-surface:#E5ECFC;
- --backdrop:rgb(22 28 37 / 48%); --shadow:rgb(22 28 37 / 12%); --transparent:transparent; --qr-background:#FFFFFF;
- --muted:var(--text-muted); --line:var(--border-subtle); --cream:var(--surface-muted); --sage:var(--accent);
- font-family:Manrope,'Segoe UI',sans-serif; font-synthesis:none; font-variant-numeric:tabular-nums;
- color:var(--text-primary);background:var(--background);color-scheme:light;
+ --primary-light:#E3F2FD;--primary-main:#2196F3;--primary-dark:#1E88E5;--primary-deep:#1565C0;
+ --secondary-light:#EDE7F6;--secondary-main:#673AB7;--secondary-dark:#5E35B1;--secondary-deep:#4527A0;
+ --background:#EEF2F6;--surface:#FFFFFF;--surface-muted:#F8FAFC;--surface-hover:#EEF2F6;
+ --text-primary:#364152;--heading:#121926;--text-secondary:#4B5565;--text-muted:#667284;
+ --border-subtle:#E3E8EF;--border-control:#7D8998;
+ --accent:#5E35B1;--accent-soft:#EDE7F6;--accent-hover:#4527A0;--link:#5E35B1;--focus-ring:#673AB7;--primary-foreground:#FFFFFF;
+ --success:#247047;--success-surface:#E8F5EC;--warning:#875F00;--warning-surface:#FFF8E1;
+ --error:#C62828;--error-surface:#FDECEC;--info:#1565C0;--info-surface:#E3F2FD;
+ --backdrop:rgb(18 25 38 / 45%);--shadow:rgb(18 25 38 / 16%);--transparent:transparent;--qr-background:#FFFFFF;
+ --radius:8px;--radius-input:4px;--spacing:8px;--sidebar-width:260px;--header-height:88px;
+ --muted:var(--text-muted);--line:var(--border-subtle);--cream:var(--surface);--sage:var(--primary-main);--brand-accent:var(--accent);
+ font-family:'Roboto Variable',Roboto,sans-serif;font-variant-numeric:tabular-nums;color:var(--text-primary);background:var(--surface);color-scheme:light;
 }
-:root[data-theme="dark"] {
- --brand-accent:#F5ADA3; --brand-ink:#F2F4F7; --brand-paper:#161C25; --brand-middle:#BDC6D3;
- --background:#161C25; --surface:#232C38; --surface-muted:#2C3746; --surface-hover:#354254;
- --text-primary:#F2F4F7; --text-secondary:#BDC6D3; --text-muted:#BDC6D3;
- --border-subtle:#465363; --border-control:#8997AB;
- --accent:#F5ADA3; --accent-soft:#49343A; --accent-hover:#FFC0B6;
- --primary-foreground:#262A33; --focus-ring:#F5ADA3; --link:#F5ADA3;
- --success:#A5BCFF; --success-surface:#2C3D60; --warning:#ECC891; --warning-surface:#493D29;
- --error:#FFB4BE; --error-surface:#52313C; --info:#A5BCFF; --info-surface:#2C3D60;
- --backdrop:rgb(9 14 22 / 70%); --shadow:rgb(9 14 22 / 22%); color-scheme:dark;
-}
-code,pre,.mono {font-family:'IBM Plex Mono',monospace}
-.brand-icon {display:inline-block;object-fit:contain;flex-shrink:0;vertical-align:middle}
-.brand-lockup {width:210px;height:auto}
-@media(max-width:680px){.brand-lockup{width:175px}}
+code,pre,.mono {font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.brand-icon {display:inline-block;flex-shrink:0;vertical-align:middle}
+.brand-lockup{display:flex;flex-direction:column;align-items:center;gap:0}.brand-lockup .brand-image{width:176px;height:auto;object-fit:contain}.brand-lockup small{font-size:9px;line-height:1.4;color:var(--text-muted);letter-spacing:.3px}
