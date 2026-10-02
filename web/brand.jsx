@@ -19,6 +19,8 @@ export function ThemeProvider({children}){
   if(!matchMedia('(prefers-reduced-motion: reduce)').matches&&document.startViewTransition){
    transition.current?.skipTransition();
    const current=document.startViewTransition(()=>flushSync(update));transition.current=current;
+   // Skipping an overlapping transition rejects ready even when the update succeeds.
+   current.ready.catch(()=>{});
    current.finished.then(()=>{if(transition.current===current)transition.current=null}).catch(()=>{});
   }else{
    if(!matchMedia('(prefers-reduced-motion: reduce)').matches){document.documentElement.classList.add('theme-changing');clearTimeout(timer.current);timer.current=setTimeout(()=>document.documentElement.classList.remove('theme-changing'),420)}
