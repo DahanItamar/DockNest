@@ -8,6 +8,7 @@ import { db } from './db.js';
 import { open } from './crypto.js';
 import { backupLayout } from './backup-layout.js';
 import { sftpWriteStream } from './sftp-streams.js';
+import { sftpReadStream } from './sftp-read-stream.js';
 import { storageConnectionError } from './storage-errors.js';
 
 const prefix='sftp:';
@@ -118,7 +119,7 @@ export async function statFile(file){
 export async function openRead(file,options={}){
  if(!isRemoteFile(file))return createReadStream(await localPath(file),options);
  const {options:connection}=fileOptions(file),{client,sftp}=await session(connection);
- try{const value=await ownedRemote(sftp,file),stream=sftp.createReadStream(value,options);stream.once('close',()=>client.end());stream.once('error',()=>client.end());return stream;}
+ try{const value=await ownedRemote(sftp,file),stream=sftpReadStream(sftp,value,options);stream.once('close',()=>client.end());return stream;}
  catch(error){client.end();throw error;}
 }
 export async function openWrite(file){
