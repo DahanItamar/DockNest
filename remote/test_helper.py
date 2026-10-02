@@ -5,6 +5,11 @@ from unittest.mock import patch
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
 
 class StaticSiteTests(unittest.TestCase):
+    def test_cdn_probe_is_optional_only_for_static_capture(self):
+        with patch('helper.preflight',return_value=[]),patch('helper.health',return_value=False):
+            result=readiness({'kind':'static','containers':[],'healthUrl':'https://example.org'})
+            self.assertTrue(result['ready']);self.assertFalse(result['checks'][1]['ok']);self.assertFalse(result['checks'][1]['required'])
+            self.assertFalse(readiness({'containers':[],'healthUrl':'https://example.org','maintenance':{}})['ready'])
     def test_nginx_metadata_distinguishes_static_and_proxied_sites_without_secrets(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d)/'website';root.mkdir();(root/'index.html').write_text('hello')

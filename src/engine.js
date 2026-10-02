@@ -20,7 +20,7 @@ export async function checkReadiness(siteId){
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
  const result=await remote(server,{operation:'readiness',config:site.config});
  try{await checkStorageReadiness();result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
- result.ready=result.checks.every(check=>check.ok);
+ result.ready=result.checks.every(check=>check.ok||check.required===false);
  return result;
 }
 export async function verifyRecovery(job){

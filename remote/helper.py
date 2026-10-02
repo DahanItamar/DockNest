@@ -347,6 +347,9 @@ def readiness(cfg):
     def direct_health():
         if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
     check('Application health',direct_health)
+    if cfg.get('kind')=='static':
+        checks[-1]['required']=False
+        if not checks[-1]['ok']:checks[-1]['message']='Public website access could not be verified from this server, possibly because of its CDN. Static files can still be captured and verified without changing hosting; check visitor access separately.'
     def proxy():
         m=cfg.get('maintenance',{})
         if not m.get('required'):raise ValueError('Enable maintenance protection before backing up a live site.')
@@ -356,7 +359,7 @@ def readiness(cfg):
         status,body=public_probe(m)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
     if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
-    return {'ready':all(item['ok'] for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
+    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
 def capture(req):
     if req['config'].get('kind')=='static':return capture_static(req)
     cfg=req['config'];cs=preflight(cfg)
