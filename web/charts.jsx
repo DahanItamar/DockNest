@@ -1,9 +1,12 @@
 import React,{useEffect,useRef,useState} from 'react';
-import Chart from 'chart.js/auto';
+import {Chart,BarController,BarElement,LineController,LineElement,PointElement,CategoryScale,LinearScale,Tooltip,Legend,Filler} from 'chart.js';
 import {IconDownload} from '@tabler/icons-react';
 import {useTheme} from './brand.jsx';
 import {bucketActivity} from './chart-data.js';
 export {bucketActivity} from './chart-data.js';
+// These are the existing bar and line charts' complete feature set. Avoid
+// shipping unused pie, doughnut, radar and polar chart implementations.
+Chart.register(BarController,BarElement,LineController,LineElement,PointElement,CategoryScale,LinearScale,Tooltip,Legend,Filler);
 export function ActivityChart({s,period}){
  const ref=useRef(null),chart=useRef(null),lastDraw=useRef(null),{theme}=useTheme(),[hidden,setHidden]=useState([]),[menu,setMenu]=useState(false);
  const data=bucketActivity(s,period),key=JSON.stringify(data);
