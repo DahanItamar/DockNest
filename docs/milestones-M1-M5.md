@@ -6,7 +6,7 @@ Implementation of M1–M5 was approved on 2026-10-03, following the [architectur
 | --- | --- |
 | M1 | Versioned, fingerprinted plans; Linux mount-table classification; unknown/remote/nested filesystems and unresolved dependencies block capture; source identity and topology rechecked before capture. Unit fixtures exercise blockers. |
 | M2 | Per-service native binary/version detection, declared dependency graph, writers-first stop and databases-first restart; zero-exit/OOM checks; PostgreSQL control-file proof; MySQL/MariaDB slow-shutdown and current-log proof. Unit fixtures cover mismatches, cycles and rejected shutdowns. Real engine fixtures gate advertised support. |
-| M3 | Pending: independent integrity, consistency and isolated application recovery evidence. |
+| M3 | Separate persisted integrity, consistency, isolated restore and application dimensions with attempt history; authenticated scrubs; per-artifact checksums; configured native read-only table counts and static file-digest checks. Container health alone never marks application checks passed. |
 | M4 | Pending: durable publication/retention, boot recovery and independent state/key recovery. |
 | M5 | Pending: supported configuration matrix, sanitized fixtures and release gates. |
 

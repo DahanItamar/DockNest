@@ -140,9 +140,12 @@ def validate_database_contracts(services,containers):
         c=by_id[service['container']]
         if service['engine']=='postgres':
             env=dict(v.split('=',1) for v in c['Config'].get('Env',[]) if '=' in v)
+            service['user']=service.get('user') or env.get('POSTGRES_USER','postgres')
+            service['database']=service.get('database') or env.get('POSTGRES_DB',service['user'])
             data=env.get('PGDATA','/var/lib/postgresql/data')
             if not data.startswith('/') or not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('PostgreSQL PGDATA must be included in a writable captured mount')
             if database_query(c['Id'],service,'SELECT pg_is_in_recovery();')!='f':raise ValueError('PostgreSQL standby/recovery capture requires a separate adapter')
+            if database_query(c['Id'],service,"SELECT COUNT(*) FROM pg_tablespace WHERE pg_tablespace_location(oid) <> '';")!='0':raise ValueError('External PostgreSQL tablespaces require a reviewed capture adapter')
             service['dataDirectory']=data
         else:
             values=database_query(c['Id'],service,'SELECT @@version, @@global.innodb_fast_shutdown, @@datadir;').split('\t')
@@ -182,6 +185,43 @@ def restart_services(ids,services=None):
             except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return False
         while time.time()<deadline and not ready():time.sleep(2)
         if not ready():raise ValueError('Service failed restart health; dependants remain stopped')
+
+def data_checks(container,service):
+    result=[]
+    for check in service.get('checks',[]):
+        table=check['table']
+        if not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]{0,62}',table):raise ValueError('Data check table must be a simple identifier')
+        if service['engine']=='postgres':query='BEGIN READ ONLY; SELECT COUNT(*) FROM "'+table+'"; COMMIT;'
+        elif service['engine'] in ['mysql','mariadb']:
+            database=service.get('database')
+            if not database or not re.fullmatch(r'[a-zA-Z0-9_]{1,63}',database):raise ValueError('Database name is required for MySQL/MariaDB data checks')
+            query='START TRANSACTION READ ONLY; SELECT COUNT(*) FROM `'+database+'`.`'+table+'`; COMMIT;'
+        else:raise ValueError('Generic services require a reviewed application-check adapter')
+        output=database_query(container,service,query)
+        values=[line.strip() for line in output.splitlines() if re.fullmatch(r'\d+',line.strip())]
+        if len(values)!=1:raise ValueError('Native data check did not return one count')
+        result.append({'name':check['name'],'table':table,'sha256':hashlib.sha256(values[0].encode()).hexdigest(),'method':'read-only table row count'})
+    return result
+
+def artifact_inventory(root):
+    result={}
+    for p in sorted(root.iterdir()):
+        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|static-files)\.tar',p.name):
+            digest=hashlib.sha256()
+            with open(p,'rb') as f:
+                for chunk in iter(lambda:f.read(1024*1024),b''):digest.update(chunk)
+            result[p.name]={'bytes':p.stat().st_size,'sha256':digest.hexdigest()}
+    return result
+
+def verify_artifacts(root,manifest):
+    expected=manifest.get('artifacts')
+    if expected is None:return False # Legacy package: no invented artifact evidence.
+    actual=artifact_inventory(root)
+    if actual!=expected:raise ValueError('Backup artifacts are missing, changed or unexpected')
+    names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
+    names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
+    if set(actual)!=names:raise ValueError('Artifact inventory does not cover all manifest dependencies')
+    return True
 class OriginHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
         sock=socket.create_connection(('127.0.0.1',self.port),self.timeout)
@@ -448,7 +488,8 @@ def capture_static(req):
     for i,filename in enumerate(cfg.get('configFiles',[])):
         p=pathlib.Path(filename);run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(p.parent),'--',p.name])
     manifest={'formatVersion':1,'kind':'static','complete':True,'capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False}
-    revalidate_sources(plan);manifest['backupPlan']=plan
+    revalidate_sources(plan);manifest['backupPlan']=plan;manifest['artifacts']=artifact_inventory(root)
+    manifest['consistency']={'status':'passed','method':'stable source tree and extracted-file digest','scope':'static files'}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text('Static website backup. static-files.tar preserves numeric owners, permissions, ACLs and xattrs. Restore into a new private directory and verify staticFiles.sha256 before an explicit nginx cutover. Original website and nginx/TLS configuration must never be overwritten automatically. Configuration archives are for review; TLS keys and external services are not included.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
@@ -512,6 +553,10 @@ def readiness(cfg):
             message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:preflight(cfg))
+    if cfg.get('kind')!='static':
+        def contracts():
+            cs=preflight(cfg);validate_database_contracts(service_contracts(cfg,cs),cs)
+        check('Per-service database consistency contracts',contracts)
     def direct_health():
         if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
     check('Application health',direct_health)
@@ -578,7 +623,10 @@ def capture(req):
         maintenance(cfg,True)
         if backup_plan(cfg,preflight(cfg))['fingerprint']!=plan['fingerprint']:raise ValueError('Docker configuration changed after planning; capture blocked')
         stopped_at=time.time()
-        for cid in reversed(running):docker('stop','--time',str(stop_timeout),cid)
+        for cid in reversed(running):
+            service=next(s for s in plan['services'] if s['container']==cid)
+            if service['engine']!='generic':service['expectedChecks']=data_checks(cid,service)
+            docker('stop','--time',str(stop_timeout),cid)
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at)
         emit(stage='copying')
         revalidate_sources(plan)
@@ -609,6 +657,8 @@ def capture(req):
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     manifest['backupPlan']=plan
+    manifest['artifacts']=artifact_inventory(root)
+    manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
@@ -705,6 +755,7 @@ def restore(req):
     unpacked=root/'unpacked';safe_extract(payload,unpacked)
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
+    artifacts_verified=verify_artifacts(unpacked,manifest)
     if manifest.get('kind')=='static':
         if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
         directory=root/'static-site';safe_extract(unpacked/'static-files.tar',directory)
@@ -712,7 +763,7 @@ def restore(req):
         if len(entries)!=1 or not entries[0].is_dir():raise ValueError('Static archive must have one website directory')
         if tree_digest(entries[0])!=manifest.get('staticFiles'):raise ValueError('Restored static files differ from the captured website')
         for i,_ in enumerate(manifest.get('configurationFiles',[])):safe_extract(unpacked/('config-%d.tar'%i),root/('configuration-%d'%i))
-        emit(result={'kind':'static','root':str(root),'documentRoot':str(entries[0]),'filesVerified':True,'fileCount':manifest['staticFiles']['files'],'hostingUnchanged':True,'externallyAccessible':False,'restoreTested':False,'access':'Review files at '+str(entries[0])+'; configure nginx only after validation.'});return
+        emit(result={'kind':'static','root':str(root),'documentRoot':str(entries[0]),'filesVerified':True,'fileCount':manifest['staticFiles']['files'],'hostingUnchanged':True,'externallyAccessible':False,'restoreTested':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh private directory','artifactsVerified':artifacts_verified},'application':{'status':'passed','scope':'static file contents and metadata; no visitor workflow','method':'captured tree digest'}},'access':'Review files at '+str(entries[0])+'; configure nginx only after validation.'});return
     if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise ValueError('Architecture mismatch')
     containers=manifest['containers'];plans=restore_network_plan(containers)
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
@@ -762,18 +813,30 @@ def restore(req):
                 for original,aliases in list(plans[i].items())[1:]:
                     flags=[part for alias in aliases for part in ['--alias',alias]]
                     docker('network','connect',*flags,networks[original],cid)
-        for c,cid in zip(containers,created):
+        contracts=manifest.get('backupPlan',{}).get('services',[])
+        ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
+        mapping={c['Id']:cid for c,cid in zip(containers,created)}
+        for original_id in ordered:
+            c=next(c for c in containers if c['Id']==original_id);cid=mapping[original_id]
             if c['State'].get('Running'):
-                docker('start',cid);running.append(cid)
+                service=next((s for s in contracts if s['container']==original_id),None)
+                restart_services([cid],[{**service,'container':cid}] if service else []);running.append(cid)
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('Restored container health check failed')
+        checks=[]
+        for service in contracts:
+            if service['engine']=='generic':continue
+            actual=data_checks(mapping[service['container']],service)
+            if actual!=service.get('expectedChecks',[]):raise ValueError('Isolated database data checks differ from capture')
+            checks.extend({'container':service['container'],'name':check['name'],'method':check['method'],'status':'passed'} for check in actual)
     except Exception:
         try:
             if created:docker('stop','--time','30',*created)
         except Exception:pass
         raise
-    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':False,'containerHealthVerified':True,'originalStatesPreserved':True})
+    application_complete=bool(contracts) and all(s['engine']!='generic' and s.get('expectedChecks') for s in contracts)
+    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only database row counts','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
 def deploy_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{})
     p=pathlib.Path(m.get('directory',''))

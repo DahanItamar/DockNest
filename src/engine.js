@@ -1,6 +1,7 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
+import { recordVerification } from './recovery-evidence.js';
 import { key } from './crypto.js';
 import { remote, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness } from './storage.js';
@@ -39,6 +40,16 @@ function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND
 export function enqueueBackup(siteId,actor='scheduler'){
  siteInfo(siteId);if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
  const job=id();db.exec('BEGIN IMMEDIATE');try{if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+}
+export function enqueueScrub(backupId,actor='administrator'){
+ const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)throw new Error('Backup not found');
+ db.exec('BEGIN IMMEDIATE');
+ try{if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
+}
+async function executeScrub(job){
+ const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
+ try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE id=?").run(now(),job.id);audit('worker','backup.scrub.completed',backupId,{job:job.id});}
+ catch{if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.' WHERE id=?").run(now(),job.id);audit('worker','backup.scrub.failed',backupId,{job:job.id});}
 }
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));if(!backup?.verified)throw new Error('Verified backup not found');
@@ -131,10 +142,13 @@ async function executeRestoreJob(job){
   try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
   // Only invoke extraction after the complete GCM-authenticated stream finishes.
   stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum});
+  recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
+  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
   db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
   db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({...details,result}),job.id);
   audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});
  }catch(error){
+  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
   db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
   db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error=? WHERE id=?").run(now(),String(error.message).slice(0,1000),job.id);
   audit('worker','restore.failed',backup.id,{job:job.id});
@@ -142,6 +156,7 @@ async function executeRestoreJob(job){
 }
 
 export async function executeJob(job){
+ if(job.type==='scrub')return executeScrub(job);
  if(job.type==='restore')return executeRestoreJob(job);
  let remoteStage='preflight',contacted=false,artifactDirectory=null,publishedBackup=false;
  const {site,server}=siteInfo(job.site_id);
@@ -166,6 +181,8 @@ export async function executeJob(job){
   stage(job.id,'verifying');const checksum=await verifyEncrypted(temporary);
   await renameFile(temporary,published);const size=(await statFile(published)).size;
   db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,1,?)').run(backupId,site.id,job.id,new Date(result.manifest.capturedAt*1000).toISOString(),published,size,checksum,JSON.stringify(manifest),now());
+  recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);
+  recordVerification(backupId,'consistency',result.manifest.consistency||{status:'not-tested'},job.id);
   publishedBackup=true;
   db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds}),job.id);
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});

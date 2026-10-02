@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS downloads (id TEXT PRIMARY KEY,backup_id TEXT NOT NUL
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,created_at);
 CREATE INDEX IF NOT EXISTS backups_site ON backups(site_id,created_at);
 CREATE INDEX IF NOT EXISTS audit_date ON audit_events(created_at);
+CREATE TABLE IF NOT EXISTS backup_verifications (backup_id TEXT NOT NULL REFERENCES backups(id) ON DELETE CASCADE,kind TEXT NOT NULL,status TEXT NOT NULL,evidence TEXT NOT NULL,job_id TEXT,checked_at TEXT NOT NULL,PRIMARY KEY(backup_id,kind));
+CREATE TABLE IF NOT EXISTS backup_verification_history (id INTEGER PRIMARY KEY,backup_id TEXT NOT NULL REFERENCES backups(id) ON DELETE CASCADE,kind TEXT NOT NULL,status TEXT NOT NULL,evidence TEXT NOT NULL,job_id TEXT,checked_at TEXT NOT NULL);
 `);
 // Additive, serialized migration preserves existing administrators and sessions.
 db.exec('BEGIN IMMEDIATE');

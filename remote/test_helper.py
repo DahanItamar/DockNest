@@ -5,6 +5,27 @@ from unittest.mock import patch
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services
+from helper import artifact_inventory, verify_artifacts, data_checks
+
+class RecoveryEvidenceTests(unittest.TestCase):
+    def test_missing_and_changed_artifacts_fail_before_restore(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'static-files.tar').write_bytes(b'fixture')
+            manifest={'kind':'static','artifacts':artifact_inventory(root),'configurationFiles':[]}
+            self.assertTrue(verify_artifacts(root,manifest))
+            (root/'static-files.tar').write_bytes(b'changed')
+            with self.assertRaises(ValueError):verify_artifacts(root,manifest)
+            (root/'static-files.tar').unlink()
+            with self.assertRaises(ValueError):verify_artifacts(root,manifest)
+            self.assertFalse(verify_artifacts(root,{}))
+    def test_checks_use_read_only_count_without_raw_data_in_evidence(self):
+        service={'engine':'postgres','checks':[{'name':'orders available','table':'orders'}]}
+        with patch('helper.database_query',return_value='BEGIN\n17\nCOMMIT') as query:
+            result=data_checks('db',service)
+            self.assertIn('READ ONLY',query.call_args.args[2]);self.assertEqual(len(result[0]['sha256']),64)
+            self.assertNotIn('count',result[0]);self.assertNotIn('output',result[0]);self.assertNotIn('value',result[0])
+        service['checks'][0]['table']='orders; DELETE'
+        with self.assertRaises(ValueError):data_checks('db',service)
 
 class ServiceContractTests(unittest.TestCase):
     def test_dependency_order_and_cycles(self):
@@ -251,7 +272,9 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.preflight',side_effect=ValueError('Select Compose files')),patch('helper.health',return_value=True):result=readiness(cfg)
             self.assertFalse(result['ready']);self.assertTrue(result['readOnly']);self.assertFalse(result['maintenanceActivationTested'])
             self.assertEqual(result['checks'][0]['message'],'Select Compose files')
-            self.assertTrue(result['checks'][1]['ok']);self.assertFalse(result['checks'][2]['ok'])
+            checks={item['name']:item for item in result['checks']}
+            self.assertTrue(checks['Application health']['ok']);self.assertFalse(checks['Maintenance proxy and website']['ok'])
+            self.assertFalse(checks['Per-service database consistency contracts']['ok'])
             self.assertEqual(list(pathlib.Path(d).iterdir()),[])
     def test_failed_activation_restores_previous_flag_state(self):
         with tempfile.TemporaryDirectory() as d:

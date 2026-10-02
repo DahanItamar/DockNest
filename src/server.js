@@ -15,7 +15,8 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { backupVerification } from './recovery-evidence.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 await clearInterruptedExports();
@@ -43,7 +44,7 @@ const safeServer = row => { const { private_key, ...rest } = parse(row); return 
 const view = row => {
   const parsed = parse(row), converted = { ...parsed };
   for (const [name, value] of Object.entries(parsed)) converted[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
-  if ('verified' in converted) converted.status = converted.verified ? 'Verified' : 'Unverified';
+  if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=backupVerification(converted.id);}
   if (converted.manifest?.downtimeSeconds != null) converted.downtimeMs = converted.manifest.downtimeSeconds * 1000;
   if (converted.detail) converted.details = converted.detail;
   if (converted.target) converted.targetId = converted.target;
@@ -246,6 +247,7 @@ app.post('/api/backups/:id/pin', (req, res) => {
   if (!result.changes) notFound('Backup not found.');
   audit(req.user.id, 'backup.pin', req.params.id, data); res.json(data);
 });
+app.post('/api/backups/:id/scrub', (req,res)=>res.status(202).json(enqueueScrub(req.params.id,req.user.id)));
 app.post('/api/backups/:id/restore-plan', async (req, res) => {
   const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
   const plan = await planRestore(req.params.id, { ...data, mode: data.mode === 'copy' ? 'new-copy' : data.mode });
