@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -48,7 +48,7 @@ def public_probe(m):
     finally:connection.close()
 
 def health(containers,url=None):
-    for c in inspect(containers):
+    for c in inspect(containers) if containers else []:
         if not c['State']['Running']: return False
         if c['State'].get('Health',{}).get('Status','healthy')!='healthy': return False
     if url:
@@ -114,6 +114,68 @@ def project_roots(container):
         if p.is_dir() and os.path.realpath(p)==os.path.abspath(p) and str(p) not in roots:roots.append(str(p))
     return roots
 
+def nginx_sites(folders=None):
+    """Return routing metadata only, never nginx configuration contents or TLS keys."""
+    sites=[]
+    def parse(tokens):
+        nodes=[];words=[]
+        for token in tokens:
+            if token==';':
+                if words:nodes.append((words[0],words[1:],[]))
+                words=[]
+            elif token=='{':
+                nested=parse(tokens)
+                if words:nodes.append((words[0],words[1:],nested))
+                words=[]
+            elif token=='}':break
+            else:words.append(token)
+        return nodes
+    def walk(nodes):
+        for name,args,children in nodes:
+            yield name,args,children
+            yield from walk(children)
+    for folder in folders or ['/etc/nginx/sites-enabled','/etc/nginx/conf.d']:
+        directory=pathlib.Path(folder)
+        if not directory.is_dir():continue
+        for file in sorted(directory.iterdir()):
+            if not file.is_file() or file.stat().st_size>1024*1024:continue
+            try:
+                lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True
+                nodes=parse(iter(lexer))
+            except (ValueError,OSError):continue
+            for name,args,children in walk(nodes):
+                if name!='server':continue
+                domains=[v for key,values,_ in children if key=='server_name' for v in values if re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]+',v) and '.' in v]
+                if not domains:continue
+                flattened=list(walk(children))
+                proxies=[values[0] for key,values,_ in flattened if key=='proxy_pass' and values]
+                dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)
+                roots=[values[0] for key,values,_ in children if key=='root' and values]
+                if not roots:
+                    roots=[v[0] for key,values,nested in children if key=='location' and values==['/'] for k,v,_ in nested if k=='root' and v]
+                for root in roots[:1] if not dynamic else []:
+                    p=pathlib.Path(root)
+                    if p.is_absolute() and '..' not in p.parts and str(p) not in ['/','/etc','/root','/home','/var','/var/www','/srv','/opt','/tmp'] and p.is_dir() and p.resolve()==p and (p/'index.html').is_file():
+                        sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0]})
+                if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies})
+    unique={}
+    for site in sites:unique[(site['kind'],tuple(site['domains']),site.get('documentRoot',''))]=site
+    return list(unique.values())
+
+def web_hints(container,routes):
+    ports=container.get('NetworkSettings',{}).get('Ports',{}) or {}
+    candidates=[];domains=[]
+    for internal,bindings in ports.items():
+        if not internal.endswith('/tcp'):continue
+        for binding in bindings or []:
+            port=binding.get('HostPort','');host=binding.get('HostIp','')
+            if not port.isdigit() or host not in ['127.0.0.1','0.0.0.0','::','::1']:continue
+            if internal.split('/')[0] not in ['80','8080','3000','5173','8000','5000','5678']:continue
+            candidates.append('http://127.0.0.1:'+port+'/')
+            for route in routes:
+                if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
+    return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
+
 def configuration_paths(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     roots=project_roots(container)
@@ -121,7 +183,29 @@ def configuration_paths(container):
         p=pathlib.Path(value)
         return p.is_absolute() and '..' not in p.parts and any(p.is_relative_to(root) for root in roots) and p.is_file() and os.path.realpath(p)==os.path.abspath(p) and os.access(p,os.R_OK)
     compose=[value.strip() for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip()]
-    configs=[str(pathlib.Path(root)/'.env') for root in roots if valid_file(str(pathlib.Path(root)/'.env'))]
+    configs=[]
+    for root in roots:
+        candidate=str((pathlib.Path(root)/'.env').resolve())
+        if valid_file(candidate) and candidate not in configs:configs.append(candidate)
+    for filename in compose:
+        if not valid_file(filename):continue
+        text=pathlib.Path(filename).read_text(errors='replace')
+        # Support inline, list and path-object env_file syntax without exposing values.
+        values=[];indent=None
+        for line in text.splitlines():
+            match=re.match(r'^(\s*)env_file:\s*(.*?)\s*(?:#.*)?$',line)
+            if match:
+                indent=len(match[1]);value=match[2].strip()
+                if value:values.extend(part.strip().strip('\"\'') for part in value.strip('[]').split(','))
+                continue
+            if indent is not None:
+                if line.strip() and len(line)-len(line.lstrip())<=indent:indent=None;continue
+                match=re.match(r'\s*(?:-\s*)?(?:path:\s*)?([./][^\s#]+)\s*(?:#.*)?$',line)
+                if match:values.append(match[1].strip('\"\''))
+        for value in values:
+            if '$' in value:continue
+            candidate=str((pathlib.Path(filename).parent/value).resolve())
+            if valid_file(candidate) and candidate not in configs:configs.append(candidate)
     return {'composeFiles':[value for value in compose if valid_file(value)],'configFiles':configs,'directory':roots[0] if roots else ''}
 
 def list_project_files(ids,directory=None):
@@ -141,7 +225,7 @@ def list_project_files(ids,directory=None):
     parent=str(p.parent) if any(p.parent.is_relative_to(root) for root in roots) else None
     return {'directory':str(p),'parent':parent,'entries':entries[:500],'limited':len(entries)>500}
 
-TEMPORARY_FOLDERS={'/tmp','/run/mysqld','/var/run/mysqld'}
+TEMPORARY_FOLDERS={'/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'}
 def temporary_mounts(c,declared):
     result=[]
     names={c.get('Id'),c.get('Name','').lstrip('/')}
@@ -152,7 +236,63 @@ def temporary_mounts(c,declared):
         result.append((destination,options))
     return result
 
+def static_preflight(cfg):
+    root=pathlib.Path(cfg.get('documentRoot',''))
+    if not root.is_absolute() or '..' in root.parts or not root.is_dir() or root.resolve()!=root:raise ValueError('Choose a regular static website directory from discovery')
+    if not any(site.get('documentRoot')==str(root) for site in nginx_sites() if site['kind']=='static'):raise ValueError('The directory must belong to a discovered static nginx website')
+    if cfg.get('containers') or cfg.get('composeFiles'):raise ValueError('Static sites cannot contain Docker services or Compose files')
+    if not cfg.get('exclusiveSourcesConfirmed') or not cfg.get('externalReferencesConfirmed'):raise ValueError('Review the static website files and confirm that no deployment will change them during capture')
+    if os.geteuid()!=0:raise ValueError('Root SSH required to preserve ownership')
+    for filename in cfg.get('configFiles',[]):
+        p=pathlib.Path(filename)
+        if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink():raise ValueError('Static configuration file is unreadable or invalid')
+    tree_digest(root)
+    return root
+
+def tree_digest(root):
+    digest=hashlib.sha256();count=0;size=0
+    for current,dirs,files in os.walk(root,followlinks=False):
+        dirs.sort();files.sort()
+        for name in dirs+files:
+            p=pathlib.Path(current)/name;s=p.lstat();relative=str(p.relative_to(root))
+            if not (stat.S_ISREG(s.st_mode) or stat.S_ISDIR(s.st_mode)):raise ValueError('Static website contains a link or special file requiring an offline capture adapter')
+            record=[relative,stat.S_IMODE(s.st_mode),s.st_uid,s.st_gid,'directory' if p.is_dir() else 'file']
+            if p.is_file():
+                file_hash=hashlib.sha256()
+                with p.open('rb') as source:
+                    for chunk in iter(lambda:source.read(1024*1024),b''):file_hash.update(chunk)
+                record.extend([s.st_size,file_hash.hexdigest()]);count+=1;size+=s.st_size
+            digest.update(json.dumps(record,separators=(',',':')).encode()+b'\n')
+    return {'sha256':digest.hexdigest(),'files':count,'bytes':size}
+
+def capture_static(req):
+    cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job'])
+    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
+    if not base.is_absolute() or '..' in base.parts or base.resolve()!=base:raise ValueError('Use a regular absolute staging directory')
+    if os.path.commonpath([str(base),str(source)]) in [str(base),str(source)]:raise ValueError('Staging and static website paths cannot overlap')
+    root=base/req['job']
+    if root.exists():raise ValueError('Staging already exists; inspect retained job before retry')
+    root.mkdir(parents=True,mode=0o700)
+    emit(stage='source_ready') # No daemon is stopped and no maintenance flag is touched.
+    before=tree_digest(source)
+    if shutil.disk_usage(root).free<before['bytes']*3+1024**3:raise ValueError('Insufficient staging capacity')
+    run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/'static-files.tar'),'-C',str(source.parent),'--',source.name])
+    if tree_digest(source)!=before:raise ValueError('Website changed during capture. Retry when its deployment has finished.')
+    verification=root/'verification';safe_extract(root/'static-files.tar',verification)
+    if tree_digest(verification/source.name)!=before:raise ValueError('Captured static files do not match the website. Retry after its deployment has finished.')
+    shutil.rmtree(verification)
+    for i,filename in enumerate(cfg.get('configFiles',[])):
+        p=pathlib.Path(filename);run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(p.parent),'--',p.name])
+    manifest={'formatVersion':1,'kind':'static','complete':True,'capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False}
+    (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
+    (root/'restore-guide.md').write_text('Static website backup. static-files.tar preserves numeric owners, permissions, ACLs and xattrs. Restore into a new private directory and verify staticFiles.sha256 before an explicit nginx cutover. Original website and nginx/TLS configuration must never be overwritten automatically. Configuration archives are for review; TLS keys and external services are not included.\n')
+    (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
+    emit(stage='packing')
+    run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'static-files.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('config-*.tar')]])
+    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest})
+
 def preflight(cfg):
+    if cfg.get('kind')=='static':static_preflight(cfg);return []
     ids=cfg.get('containers',[])
     if not ids or not all(isinstance(x,str) and x and not x.startswith('-') for x in ids):raise ValueError('Select valid containers')
     if not cfg.get('exclusiveSourcesConfirmed'):raise ValueError('Confirm no external processes write the selected data')
@@ -203,7 +343,7 @@ def readiness(cfg):
         except Exception as error:
             message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
-    check('Containers and configuration files',lambda:preflight(cfg))
+    check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:preflight(cfg))
     def direct_health():
         if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
     check('Application health',direct_health)
@@ -215,9 +355,10 @@ def readiness(cfg):
         if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
         status,body=public_probe(m)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
-    check('Maintenance proxy and website',proxy)
+    if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
     return {'ready':all(item['ok'] for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
 def capture(req):
+    if req['config'].get('kind')=='static':return capture_static(req)
     cfg=req['config'];cs=preflight(cfg)
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts:raise ValueError('Staging path must be absolute')
@@ -321,6 +462,7 @@ def owned_job_root(req):
 
 def verify_recovery(req):
     cfg=req['config'];job=req['job'];uuid.UUID(job)
+    if cfg.get('kind')=='static':emit(result={'recoveryReviewed':True,'hostingUnchanged':True});return
     root=pathlib.Path(cfg.get('stagingRoot','/var/lib/docker-backup-manager'))/job
     if not (root/'recovery-plan.json').is_file():raise ValueError('Recovery journal is missing; offline review required')
     plan=json.loads((root/'recovery-plan.json').read_text())
@@ -401,6 +543,14 @@ def restore(req):
     unpacked=root/'unpacked';safe_extract(payload,unpacked)
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
+    if manifest.get('kind')=='static':
+        if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
+        directory=root/'static-site';safe_extract(unpacked/'static-files.tar',directory)
+        entries=list(directory.iterdir())
+        if len(entries)!=1 or not entries[0].is_dir():raise ValueError('Static archive must have one website directory')
+        if tree_digest(entries[0])!=manifest.get('staticFiles'):raise ValueError('Restored static files differ from the captured website')
+        for i,_ in enumerate(manifest.get('configurationFiles',[])):safe_extract(unpacked/('config-%d.tar'%i),root/('configuration-%d'%i))
+        emit(result={'kind':'static','root':str(root),'documentRoot':str(entries[0]),'filesVerified':True,'fileCount':manifest['staticFiles']['files'],'hostingUnchanged':True,'externallyAccessible':False,'restoreTested':False,'access':'Review files at '+str(entries[0])+'; configure nginx only after validation.'});return
     if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise ValueError('Architecture mismatch')
     containers=manifest['containers'];plans=restore_network_plan(containers)
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
@@ -484,7 +634,8 @@ def main(req):
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
         # Do not expose environment secrets to dashboard.
-        emit(result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'backupConfiguration':configuration_paths(c)} for c in cs]})
+        routes=nginx_sites()
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c in cs]})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='prepare-restore':prepare_restore(req)

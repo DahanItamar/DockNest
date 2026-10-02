@@ -153,6 +153,14 @@ test('full ZIP refuses tampered ciphertext before sending bytes and cleans priva
  assert.deepEqual(await readdir(join(directory,'private-exports')),[]);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM downloads').get().n,0);
  assert.equal((await request('/backups/zip-auth/download?format=zip',{headers:{Range:'bytes=0-9'}})).status,416);
 });
+test('static-site settings persist without Docker services and maintenance controls are disabled',async()=>{
+ const config={kind:'static',documentRoot:'/var/www/example.org',containers:[],domains:['example.org'],healthUrl:'https://example.org',configFiles:['/etc/nginx/sites-available/example'],externalReferencesConfirmed:true,exclusiveSourcesConfirmed:true};
+ let response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Static website',config})});assert.equal(response.status,201);const saved=await response.json();
+ assert.equal(saved.config.kind,'static');assert.equal(saved.config.maintenance.required,false);assert.equal(saved.config.maintenanceRequired,false);
+ response=await request('/sites/'+saved.id+'/maintenance',{method:'POST',body:JSON.stringify({enabled:true})});assert.equal(response.status,400);
+ for(const bad of [{...config,documentRoot:undefined},{...config,containers:['app']},{...config,composeFiles:['/app/compose.yml']},{...config,kind:'docker'}]){response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Invalid static',config:bad})});assert.equal(response.status,400);}
+});
+
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();await rm(directory,{recursive:true,force:true});});
 
 test('maintenance design persists composition and supports previous clients',async()=>{

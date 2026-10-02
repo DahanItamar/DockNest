@@ -44,14 +44,15 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  const target=db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);if(!target)throw new Error('Target server not found');
  const capabilities=await testServer(target),blockers=[];
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
- if(capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
+ const staticSite=backup.manifest.kind==='static';
+ if(!staticSite&&capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
  const grouped=(backup.manifest.containers?.length||0)>1;
- if(!backup.manifest.containers?.length||backup.manifest.containers.length>30)blockers.push('Restore requires 1 to 30 containers');
+ if(!staticSite&&(!backup.manifest.containers?.length||backup.manifest.containers.length>30))blockers.push('Restore requires 1 to 30 containers');
  if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  if(Object.keys(mappings||{}).length)blockers.push('This version restores to fresh owned paths and isolated networks; custom port and host directory maps require reviewed offline restore');
  if(capabilities.freeBytes<backup.size*3+1024**3)blockers.push('Insufficient estimated target capacity');
- return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings});
@@ -67,8 +68,8 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  }catch(e){db.exec('ROLLBACK');throw e;}
  return {id:jobId,restoreId};
 }
-export async function setMaintenance(siteId,enabled){const {site,server}=siteInfo(siteId);const result=await remote(server,{operation:'maintenance',config:site.config,enabled});audit('administrator','maintenance.set',siteId,{enabled});return result;}
-export async function deployMaintenance(siteId){const {site,server}=siteInfo(siteId);const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const font=await readFile(new URL('../dist/fonts/Roboto-Latin.woff2',import.meta.url));const html=renderMaintenancePage(settings,{font:'data:font/woff2;base64,'+font.toString('base64')});return remote(server,{operation:'deploy-maintenance',config:site.config,html:Buffer.from(html).toString('base64')});}
+export async function setMaintenance(siteId,enabled){const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not use Docker maintenance controls.'),{status:400});const result=await remote(server,{operation:'maintenance',config:site.config,enabled});audit('administrator','maintenance.set',siteId,{enabled});return result;}
+export async function deployMaintenance(siteId){const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not need a maintenance proxy.'),{status:400});const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const font=await readFile(new URL('../dist/fonts/Roboto-Latin.woff2',import.meta.url));const html=renderMaintenancePage(settings,{font:'data:font/woff2;base64,'+font.toString('base64')});return remote(server,{operation:'deploy-maintenance',config:site.config,html:Buffer.from(html).toString('base64')});}
 export async function encryptStream(input,output,secret=key()){
  const header=Buffer.concat([Buffer.from('DBM1'),randomBytes(12)]);
  const cipher=createCipheriv('aes-256-gcm',secret,header.subarray(4));cipher.setAAD(header);
@@ -152,7 +153,7 @@ export async function executeJob(job){
   contacted=true;
   const result=await remote(server,{operation:'capture',job:job.id,config:site.config},value=>{remoteStage=value;stage(job.id,value);});
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
-  const manifest={formatVersion:1,complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
+  const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   const temporary=storageJoin(directory,'payload.enc.partial'),published=storageJoin(directory,'payload.enc');
   stage(job.id,'transferring');
   const pass=new Transform({transform(c,e,cb){cb(null,c);}});
@@ -170,7 +171,7 @@ export async function executeJob(job){
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   if(artifactDirectory&&!publishedBackup)await removeDirectory(artifactDirectory).catch(()=>{});
-  const recovery=contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
+  const recovery=site.config.kind!=='static' && contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
   db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),job.id);
   audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
  }

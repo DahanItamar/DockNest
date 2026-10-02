@@ -2,7 +2,29 @@ import unittest, tempfile, pathlib, tarfile, io, urllib.error
 import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
+
+class StaticSiteTests(unittest.TestCase):
+    def test_nginx_metadata_distinguishes_static_and_proxied_sites_without_secrets(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'website';root.mkdir();(root/'index.html').write_text('hello')
+            config=pathlib.Path(d)/'nginx';config.mkdir()
+            (config/'site').write_text('server { server_name static.example.org; root '+root.as_posix()+'; ssl_certificate_key /secret/key; location / { try_files $uri =404; } }\nserver { server_name app.example.org; location / { proxy_pass http://127.0.0.1:3200; } }')
+            sites=nginx_sites([str(config)])
+            self.assertEqual(len(sites),2);self.assertEqual(sites[0]['documentRoot'],str(root));self.assertNotIn('/secret/key',str(sites))
+            c={'NetworkSettings':{'Ports':{'3000/tcp':[{'HostIp':'127.0.0.1','HostPort':'3200'}]}}}
+            self.assertEqual(web_hints(c,sites),{'healthUrls':['http://127.0.0.1:3200/'],'domains':['app.example.org']})
+    def test_static_tree_detects_changes_and_rejects_escaping_links(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'index.html').write_text('first');before=tree_digest(root)
+            (root/'index.html').write_text('other');self.assertNotEqual(tree_digest(root),before)
+            with patch('helper.nginx_sites',return_value=[{'kind':'static','documentRoot':str(root)}]),patch('helper.os.geteuid',return_value=0,create=True):
+                cfg={'kind':'static','documentRoot':str(root),'containers':[],'configFiles':[],'externalReferencesConfirmed':True,'exclusiveSourcesConfirmed':True}
+                self.assertEqual(static_preflight(cfg),root)
+                with self.assertRaises(ValueError):static_preflight({**cfg,'exclusiveSourcesConfirmed':False})
+                with self.assertRaises(ValueError):static_preflight({**cfg,'containers':['app']})
+                with patch('helper.nginx_sites',return_value=[]):
+                    with self.assertRaises(ValueError):static_preflight(cfg)
 
 class TemporaryMemoryTests(unittest.TestCase):
     def test_explicit_temporary_folder_preserves_options(self):
@@ -13,8 +35,23 @@ class TemporaryMemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/database'}])
         c['HostConfig']['Tmpfs']={'/tmp':'size=128m,unknown=1'}
         with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/tmp'}])
+        for destination in ['/var/cache/nginx','/app/.next/cache']:
+            c['HostConfig']['Tmpfs']={destination:'size=8m,mode=0700'}
+            self.assertEqual(temporary_mounts(c,[{'container':'app','destination':destination}]),[(destination,'size=8m,mode=0700')])
 
 class FullZipTests(unittest.TestCase):
+    def test_static_zip_contains_browsable_files_and_original_archive(self):
+        with tempfile.TemporaryDirectory() as d:
+            nested=io.BytesIO()
+            with tarfile.open(fileobj=nested,mode='w') as t:
+                entry=tarfile.TarInfo('website/index.html');entry.size=5;t.addfile(entry,io.BytesIO(b'hello'))
+            payload=pathlib.Path(d)/'payload.tar.gz';manifest={'formatVersion':1,'kind':'static','complete':True,'documentRoot':'/var/www/website','configurationFiles':[]}
+            with tarfile.open(payload,'w:gz') as t:
+                for name,data in [('manifest.json',json.dumps(manifest).encode()),('static-files.tar',nested.getvalue())]:
+                    entry=tarfile.TarInfo(name);entry.size=len(data);t.addfile(entry,io.BytesIO(data))
+            output=io.BytesIO();export_zip(payload,output)
+            with zipfile.ZipFile(output) as z:
+                self.assertIsNone(z.testzip());self.assertEqual(z.read('site-files/website/index.html'),b'hello');self.assertEqual(z.read('recovery-originals/static-files.tar'),nested.getvalue());self.assertIn(b'static website',z.read('START-HERE.txt'))
     def test_zip_includes_browsable_data_and_original_recovery_archives(self):
         with tempfile.TemporaryDirectory() as d:
             mount=io.BytesIO()
@@ -77,6 +114,13 @@ class ConfigurationFileTests(unittest.TestCase):
                 self.assertEqual(nested['parent'],str(root))
                 with self.assertRaises(ValueError):list_project_files(['fixture'],d)
                 with self.assertRaises(ValueError):list_project_files(['fixture'],str(root/'..'))
+    def test_compose_environment_files_are_detected_without_values_or_escaping_paths(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'project';root.mkdir();compose=root/'compose.yml'
+            compose.write_text('services:\n  web:\n    env_file: [.env.production]\n  worker:\n    env_file:\n      - .env.worker\n      - ../outside.env\n')
+            (root/'.env.production').write_text('PRIVATE=do-not-print');(root/'.env.worker').write_text('OTHER=private');(root.parent/'outside.env').write_text('OUTSIDE=private')
+            c={'Config':{'Labels':{'com.docker.compose.project':'app','com.docker.compose.project.working_dir':str(root),'com.docker.compose.project.config_files':str(compose)}}}
+            result=configuration_paths(c);self.assertEqual(set(result['configFiles']),{str(root/'.env.production'),str(root/'.env.worker')});self.assertNotIn('do-not-print',str(result))
     def test_standalone_containers_and_unsafe_ids_cannot_enable_arbitrary_browsing(self):
         with patch('helper.inspect',return_value=[{'Config':{'Labels':{}}}]):
             with self.assertRaises(ValueError):list_project_files(['fixture'],'/')

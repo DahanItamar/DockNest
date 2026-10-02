@@ -54,21 +54,27 @@ const healthUrl = z.string().max(2048).refine(value => { if (!value) return true
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
-    containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).min(1).max(30),
+    kind:z.enum(['docker','static']).default('docker'),
+    documentRoot:linuxPath.optional(),
+    containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
     stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').default('/var/lib/docknest'),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
     configFiles: z.array(linuxPath).max(50).default([]),
-    temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld'])})).max(90).default([]),
+    temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'])})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),
     maintenanceProbeOrigin:z.boolean().optional(),
+    maintenancePublicUrl:healthUrl.optional(),
     domains: z.array(z.string().max(2048).transform(normalizeDomain).pipe(z.string().max(253).regex(/^[a-zA-Z0-9.-]+$/, 'Enter a domain such as www.blog.example.invalid, or paste an HTTP(S) website URL without login details.'))).max(20).default([]),
     healthUrl: healthUrl.default(''),
     maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl, probeOrigin:z.boolean().default(false) }).optional(),
+  }).superRefine((value,context)=>{
+    if(value.kind==='docker'&&!value.containers.length)context.addIssue({code:'custom',path:['containers'],message:'Select at least one Docker container.'});
+    if(value.kind==='static'&&(!value.documentRoot||value.containers.length||value.composeFiles.length))context.addIssue({code:'custom',message:'Choose a static website directory without Docker containers or Compose files.'});
   }),
 });
 const serverSchema = z.object({
@@ -133,10 +139,10 @@ app.post('/api/servers/:id/test', async (req, res) => {
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id));
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
+  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
 });
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
-  const containers=siteSchema.shape.config.shape.containers.parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
+  const containers=siteSchema.shape.config.shape.containers.min(1).parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
   const directory=linuxPath.optional().parse(req.query.path);
   res.json(await browseProjectFiles(getServer(req.params.id),containers,directory));
 });
@@ -144,10 +150,12 @@ function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const maintenance = data.config.maintenance || { required: data.config.maintenanceRequired, directory: `${data.config.stagingRoot}/maintenance/${siteId}`, publicUrl: data.config.domains[0] ? 'https://' + data.config.domains[0] : '', healthUrl: data.config.healthUrl };
   if(data.config.maintenanceProbeOrigin!==undefined)maintenance.probeOrigin=data.config.maintenanceProbeOrigin;
+  if(data.config.maintenancePublicUrl!==undefined)maintenance.publicUrl=data.config.maintenancePublicUrl;
+  if(data.config.kind==='static')maintenance.required=false;
   for (const value of [maintenance.healthUrl, maintenance.publicUrl]) {
     if (value && !['http:', 'https:'].includes(new URL(value).protocol)) throw new Error('Maintenance URLs must use HTTP or HTTPS.');
   }
-  return { ...data.config, maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
+  return { ...data.config, ...(data.config.kind==='static'?{maintenanceRequired:false}:{}),maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
 }
 app.post('/api/sites', (req, res) => {
   const data = siteSchema.parse(req.body); getServer(data.serverId); const siteId = id();
