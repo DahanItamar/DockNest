@@ -23,7 +23,7 @@ try{
  await page.route('**/api/access',r=>r.fulfill({json:{users,security:{idleMinutes:30,absoluteHours:8,invitationMinutes:15}}}));
  await page.addInitScript(()=>localStorage.setItem('docknest-theme','light'));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5173');
- const navigate=async name=>{if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Toggle navigation',exact:true}).click();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);};
+ const navigate=async name=>{if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);};
  await navigate('Audit');
  const auditPager=()=>page.getByRole('group',{name:'Audit pagination',exact:true});
  assert.equal(await page.locator('tbody tr').count(),5);

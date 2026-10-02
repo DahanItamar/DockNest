@@ -54,7 +54,7 @@ await page.getByRole('heading',{name:'Sites & schedules',exact:true}).waitFor();
 assert.equal(await page.locator('.dashboard-page').count(),0,'Other routes retain existing styles');
 await page.setViewportSize({width:1440,height:1100});
 // Keep previous content visible when a background refresh fails.
-if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Toggle navigation',exact:true}).click();await page.getByRole('button',{name:'Overview',exact:true}).click();
+if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:'Overview',exact:true}).click();
 await page.route('**/api/state',r=>r.fulfill({status:503,json:{error:'Fixture refresh unavailable.'}}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
 await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor();

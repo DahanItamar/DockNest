@@ -20,8 +20,10 @@ try {
   assert.equal(await page.locator('.auth-card .brand-lockup').count(),0,'Login logo belongs only in the header');
   assert.equal(await page.locator('.auth-header .brand-lockup').count(),1,'Header displays the brand once');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
-  for(const asset of ['favicon.png','favicon.ico','apple-touch-icon.png','app-icon-192.png','app-icon-512.png','site.webmanifest','logo.png','mark.png']){
-    assert.equal((await page.request.get(baseUrl+'/brand/'+asset)).status(),200,asset+' must be served');
+  const assetLinks=await page.locator('link[rel="icon"],link[rel="alternate icon"],link[rel="apple-touch-icon"],link[rel="manifest"]').evaluateAll(links=>links.map(x=>x.href));
+  const appManifest=await(await page.request.get(await page.locator('link[rel="manifest"]').getAttribute('href').then(href=>new URL(href,baseUrl).href))).json();
+  for(const asset of [...assetLinks,...appManifest.icons.map(x=>new URL(x.src,baseUrl).href),baseUrl+'/brand/logo.png',baseUrl+'/brand/mark.png']){
+    const response=await page.request.get(asset);assert.equal(response.status(),200,asset+' must be served');assert.match(response.headers()['content-type'],/image|manifest|json/,asset+' must not return the SPA fallback');
   }
   async function checkContrast(){
     const failures=await page.evaluate(()=>{
