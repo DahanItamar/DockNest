@@ -1,6 +1,6 @@
 import React,{createContext,useContext,useLayoutEffect,useState} from 'react';
 import {flushSync} from 'react-dom';
-import {Sun,Moon} from 'lucide-react';
+import {Moon} from 'lucide-react';
 
 const Theme=createContext(null);
 export function ThemeProvider({children}) {
@@ -20,9 +20,13 @@ export function ThemeProvider({children}) {
 }
 export function Brand({descriptive=false,dashboard=false}) {
  const {theme}=useContext(Theme);
- return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-${descriptive?'tagline':'horizontal'}-${theme}.png`} alt={descriptive?'DockNest — Docker Backup & Restore':'DockNest'} width={descriptive?360:160} height={descriptive?(theme==='light'?104:106):(theme==='light'?53:43)}/>;
+ return <img className={descriptive?'brand-lockup descriptive':dashboard?'brand-lockup dashboard-brand':'brand-lockup'} src={`/brand/logo-tagline-${theme}.png`} alt="DockNest ? Docker Backup & Restore" width="1200" height={theme==='light'?355:380}/>;
+}
+export function BrandIcon({name,size=20,className=''}) {
+ const {theme}=useContext(Theme);
+ return <img className={`brand-icon ${className}`} src={`/brand/icons/${name}-${theme}.png`} width={size} height={size} alt="" aria-hidden="true"/>;
 }
 export function ThemeToggle() {
  const {theme,setTheme}=useContext(Theme),dark=theme==='dark';
- return <button type="button" className="icon theme-toggle" aria-label={`Switch to ${dark?'light':'dark'} theme`} onClick={()=>setTheme(dark?'light':'dark')}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button>;
+ return <button type="button" className="icon theme-toggle" aria-label={`Switch to ${dark?'light':'dark'} theme`} onClick={()=>setTheme(dark?'light':'dark')}>{dark?<BrandIcon name="theme" size={22}/>:<Moon size={18}/>}</button>;
 }

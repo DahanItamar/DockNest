@@ -67,7 +67,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.screenshot({ path:path.join(screenshotDir,'dashboard-desktop.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
   await page.locator('html[data-theme="dark"]').waitFor();
-  await page.locator('img[src="/brand/logo-horizontal-dark.png"]').waitFor();
+  await page.locator('img[src="/brand/logo-tagline-dark.png"]').waitFor();
   await page.evaluate(async()=>{await Promise.race([Promise.allSettled(document.getAnimations().map(a=>a.finished)),new Promise(resolve=>setTimeout(resolve,500))]);});
   await page.screenshot({path:path.join(screenshotDir,'dashboard-dark-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
