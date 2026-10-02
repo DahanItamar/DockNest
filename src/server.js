@@ -1,3 +1,4 @@
+import {maintenanceDefaults,normalizeMaintenance} from '../shared/maintenance-design.js';
 import express from 'express';
 import helmet from 'helmet';
 import { z, ZodError } from 'zod';
@@ -85,7 +86,7 @@ app.get('/api/state', async (_req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We are creating a safe backup. Please check back in a few minutes.', color: '#147d73' } });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -146,7 +147,7 @@ function normalizedSite(data, siteId) {
   for (const value of [maintenance.healthUrl, maintenance.publicUrl]) {
     if (value && !['http:', 'https:'].includes(new URL(value).protocol)) throw new Error('Maintenance URLs must use HTTP or HTTPS.');
   }
-  return { ...data.config, maintenance, maintenancePage: settings ? JSON.parse(settings.value) : { title: 'Briefly under maintenance', message: 'We will be back in a few minutes.', color: '#147d73' } };
+  return { ...data.config, maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
 }
 app.post('/api/sites', (req, res) => {
   const data = siteSchema.parse(req.body); getServer(data.serverId); const siteId = id();
@@ -248,7 +249,7 @@ app.post('/api/backups/:id/restore', async (req, res) => {
   res.status(202).json(await enqueueRestore(backup.id, plan, req.user.id));
 });
 app.patch('/api/maintenance', (req, res) => {
-  const data = z.object({ title: z.string().min(1).max(150), message: z.string().min(1).max(1000), color: z.string().regex(/^#[a-fA-F0-9]{6}$/) }).parse(req.body);
+  const data = z.object({ title: z.string().min(1).max(150), message: z.string().min(1).max(1000), color: z.string().regex(/^#[a-fA-F0-9]{6}$/), layout:z.enum(['studio','editorial','compact']).default('studio'), theme:z.literal('light').default('light'), typeScale:z.enum(['balanced','bold']).default('balanced') }).parse(req.body);
   db.prepare("INSERT INTO settings VALUES ('maintenance',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(data));
   audit(req.user.id, 'maintenance.design'); res.json(data);
 });

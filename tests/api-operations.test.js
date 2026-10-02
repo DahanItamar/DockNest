@@ -154,3 +154,11 @@ test('full ZIP refuses tampered ciphertext before sending bytes and cleans priva
  assert.equal((await request('/backups/zip-auth/download?format=zip',{headers:{Range:'bytes=0-9'}})).status,416);
 });
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();await rm(directory,{recursive:true,force:true});});
+
+test('maintenance design persists composition and supports previous clients',async()=>{
+ const design={title:'A polished pause',message:'Please return soon.',color:'#5E35B1',layout:'editorial',theme:'light',typeScale:'bold'};
+ let response=await request('/maintenance',{method:'PATCH',body:JSON.stringify(design)});assert.equal(response.status,200);assert.deepEqual(await response.json(),design);
+ const state=await (await request('/state')).json();assert.deepEqual(state.maintenance,design);
+ response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({...design,layout:'unsafe'})});assert.equal(response.status,400);
+ response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({title:'Legacy',message:'Compatible',color:'#123456'})});assert.equal(response.status,200);const legacy=await response.json();assert.equal(legacy.layout,'studio');assert.equal(legacy.theme,'light');assert.equal(legacy.typeScale,'balanced');
+});

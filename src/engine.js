@@ -1,3 +1,4 @@
+import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
 import { key } from './crypto.js';
@@ -67,7 +68,7 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  return {id:jobId,restoreId};
 }
 export async function setMaintenance(siteId,enabled){const {site,server}=siteInfo(siteId);const result=await remote(server,{operation:'maintenance',config:site.config,enabled});audit('administrator','maintenance.set',siteId,{enabled});return result;}
-export async function deployMaintenance(siteId){const {site,server}=siteInfo(siteId);const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let html=await readFile(new URL('../remote/maintenance.html',import.meta.url),'utf8');const color=/^#[0-9a-f]{6}$/i.test(settings.color||'')?settings.color:'#147d73';html=html.replace('<title>Brief maintenance</title>','<title>'+escape(settings.title||'Brief maintenance')+'</title>').replace('We will be back shortly',escape(settings.title||'We will be back shortly')).replace('This site is undergoing brief maintenance.',escape(settings.message||'This site is undergoing brief maintenance.')).replace('color:#172033','color:#172033;border-top:4px solid '+color);return remote(server,{operation:'deploy-maintenance',config:site.config,html:Buffer.from(html).toString('base64')});}
+export async function deployMaintenance(siteId){const {site,server}=siteInfo(siteId);const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const font=await readFile(new URL('../dist/fonts/Roboto-Latin.woff2',import.meta.url));const html=renderMaintenancePage(settings,{font:'data:font/woff2;base64,'+font.toString('base64')});return remote(server,{operation:'deploy-maintenance',config:site.config,html:Buffer.from(html).toString('base64')});}
 export async function encryptStream(input,output,secret=key()){
  const header=Buffer.concat([Buffer.from('DBM1'),randomBytes(12)]);
  const cipher=createCipheriv('aes-256-gcm',secret,header.subarray(4));cipher.setAAD(header);
