@@ -196,3 +196,6 @@
  .pagination-page{justify-content:center;gap:4px;font-size:11px}
  .pagination-count{font-size:11px}
 }
+
+/* Stable page controls: preserve real rows and leave unused capacity as whitespace. */
+.stable-table{--table-row-height:76px}.stable-table .paged-content{min-height:max(var(--page-height,0px),calc(100dvh - 360px))}.stable-table tbody tr{height:var(--table-row-height)}.stable-table .paged-measure{min-width:0;max-width:100%}

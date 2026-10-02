@@ -26,26 +26,29 @@ try{
  const navigate=async name=>{if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);};
  await navigate('Audit');
  const auditPager=()=>page.getByRole('group',{name:'Audit pagination',exact:true});
- assert.equal(await page.locator('tbody tr').count(),5);
+ assert.equal(await page.locator('tbody tr').count(),10);
  await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await auditPager().getByRole('status').filter({hasText:'6-10 of 137'}).waitFor();
- assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 2 of 28','Refresh preserves page');
+ await auditPager().getByRole('status').filter({hasText:'11-20 of 137'}).waitFor();
+ assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 2 of 14','Refresh preserves page');
  await page.getByLabel('Filter Audit').fill('fixture.audit.136');
  await page.getByText('fixture.audit.136',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),1);
  await page.getByLabel('Filter Audit').fill('');await page.getByText('fixture.audit.0',{exact:true}).waitFor();
- assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 28','Search resets page');
- for(let i=1;i<28;i++)await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
- await auditPager().getByRole('status').filter({hasText:'136-137 of 137'}).waitFor();
- assert.equal(await auditPager().getByRole('button',{name:'Audit next page',exact:true}).isDisabled(),true);
+ assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 14','Search resets page');
+ const auditY=(await auditPager().boundingBox()).y+await page.evaluate(()=>scrollY);
+ for(let i=1;i<14;i++)await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
+ await auditPager().getByRole('status').filter({hasText:'131-137 of 137'}).waitFor();
+ assert.equal(await auditPager().getByRole('button',{name:'Audit next page',exact:true}).isDisabled(),true);assert.ok(Math.abs((await auditPager().boundingBox()).y+await page.evaluate(()=>scrollY)-auditY)<1,'Audit pager stays in place on a partial last page');
  state.audit=audit.slice(0,4);await page.getByRole('button',{name:'Refresh dashboard'}).click();
  await page.getByText('fixture.audit.0',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),4,'Shrinking collection clamps the page');
  state.audit=audit;await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await auditPager().getByLabel('Audit page',{exact:true}).waitFor();assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 28');
+ await auditPager().getByLabel('Audit page',{exact:true}).waitFor();assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 14');
  assert.equal(await auditPager().locator('select,input[type=range]').count(),0,'Fixed pagination has no dropdowns, sliders or page-size controls');
  const tableBox=await page.locator('.table-wrap').evaluate(el=>({height:el.clientHeight,scroll:el.scrollHeight}));
  assert.equal(tableBox.height,tableBox.scroll,'Tables use natural height, with no forced vertical scrollbar');assert.equal(await page.locator('input[type=range]').count(),0,'Pagination has no sliders');
 
+ await navigate('Jobs');const jobPager=page.getByRole('group',{name:'Jobs pagination',exact:true});assert.equal(await page.locator('tbody tr').count(),10);const jobY=(await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY);
+ for(let i=1;i<8;i++)await jobPager.getByRole('button',{name:'Jobs next page',exact:true}).click();assert.equal(await page.locator('tbody tr').count(),6);assert.ok(Math.abs((await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY)-jobY)<1,'Jobs pager stays in place on a partial last page');
  await navigate('Backups');await page.locator('.backup-group>summary').first().click();
  const historyPager=page.getByRole('group',{name:'Recovery points for Website 0 pagination',exact:true});
  assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),3);
@@ -55,7 +58,7 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',2],['Sites & schedules','sites','.site-card',2],['Backups','backups','.backup-group',3],['Jobs','jobs','tbody tr',5],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',5],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',2],['Sites & schedules','sites','.site-card',2],['Backups','backups','.backup-group',3],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
