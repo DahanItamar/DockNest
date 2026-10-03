@@ -67,6 +67,14 @@ try{
  await page.getByLabel('I saved my recovery passphrase separately from DockNest.').check();
  await page.getByRole('button',{name:'Save recovery settings',exact:true}).click();
  await page.getByText('Recovery passphrases do not match.',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Open navigation',exact:true}).click();
+ await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
+ await page.getByRole('button',{name:'Browse backup folders',exact:true}).click();
+ await page.getByText('docknest-recovery',{exact:true}).waitFor();
+ await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit',exact:true}).waitFor();
+ assert.ok((await page.locator('.backup-tree code').allTextContents()).some(path=>/^BACKUP\/docknest-recovery\/docknest_.*\.dkit$/.test(path)));
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.screenshot({path:'test-results/self-backup/storage-mobile.png',animations:'disabled'});
  assert.deepEqual(errors,[]);
  console.log('Synthetic DockNest backup UI passed: administrator setup, pinned loopback SFTP upload, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));await fixture.close();db.close();await rm(directory,{recursive:true,force:true});}

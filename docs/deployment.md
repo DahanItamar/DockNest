@@ -75,4 +75,17 @@ New sites default to `/var/lib/docknest` for remote staging. Saved site configur
 
 For an existing nginx host, publish the API only on a loopback port and proxy the selected hostname to it; preserve unrelated virtual hosts and verify nginx configuration before reload. First administrator setup is a separate page at `/#/setup`; the token stays in the restricted deployment-server data directory.
 
-New remote backups use `<root>/<server-name>--<server-id>/<site-name>--<site-id>/<UTC-date>/<UTC-time>--<backup-id>/payload.enc`. Names are sanitized and identifiers prevent collisions. Existing backups keep their recorded paths. Storage offers a metadata-backed folder tree with download and pin controls; it lists only DockNest-managed backups and never reorganizes unrelated files.
+New remote backups use this hierarchy inside the selected SFTP storage root:
+
+```text
+BACKUP/
+├── <server-name>--<server-id>/
+│   └── <site-name>--<site-id>/
+│       └── backup_2026-10-03_12-13-14Z--<backup-id>.tar.gz.enc
+└── docknest-recovery/
+    └── docknest_<manager-key-id>_2026-10-03_12-13-14Z--<backup-id>.dkit
+```
+
+If the configured root already ends in `BACKUP`, it is reused without creating `BACKUP/BACKUP`. Names are sanitized and identifiers prevent collisions, including captures within the same UTC second. Site archives remain encrypted; `.tar.gz.enc` describes the encrypted compressed archive. Recovery kits have their own passphrase and `.dkit` format. Temporary uploads use the same filename plus `.partial` until publication succeeds. Failure cleanup and retention remove individual files, never a shared site folder.
+
+Existing backups and recovery kits keep their recorded paths and remain accessible; there is no automatic relocation. Storage offers a metadata-backed folder tree with site download/pin controls and a separate recovery folder. It displays actual paths, includes earlier layouts, lists only DockNest-managed files, and never reorganizes unrelated files.

@@ -7,7 +7,35 @@ function StorageTree({api,target,refreshKey,onSessionExpired}) {
  const [tree,setTree]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[reload,setReload]=useState(0);
  useEffect(()=>{let current=true;setTree(null);setError('');api('/storage-targets/'+target.id+'/tree').then(result=>{if(current)setTree(result);}).catch(error=>{if(current){if(error.status===401)onSessionExpired();else setError(error.message);}});return()=>{current=false;};},[target.id,reload,refreshKey]);
  async function pin(backup){setBusy(true);setError('');try{await api('/backups/'+backup.id+'/pin',{pinned:!backup.pinned});setReload(value=>value+1);}catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}}
- return <section className="panel padded"><h2>{target.name} · Backup folders</h2><p>DockNest-managed backups, grouped by server, site and UTC date. Other files on the Storage Box are not listed.</p>{error&&<div className="alert" role="alert">{error}<button onClick={()=>setReload(value=>value+1)}>Retry</button></div>}{!tree&&!error&&<p role="status">Loading backup folders…</p>}{tree&&<><p><code>{tree.root}/</code></p>{tree.limited&&<p>Showing the latest 1,000 backups. Use the backup library for other recovery points.</p>}{!tree.servers.length?<p>No backups stored here yet. New files use server → site → date → backup folders.</p>:<div className="backup-tree"><Paginated rows={tree.servers} label="Storage servers" pageSize={5}>{servers=>servers.map(server=><details key={server.id} open><summary>Server: {server.name}</summary><Paginated rows={server.sites} label={"Storage sites on "+server.name} pageSize={5}>{sites=>sites.map(site=><details key={site.id} open><summary>Site: {site.name}</summary><Paginated rows={site.days} label={"Storage dates for "+site.name} pageSize={5}>{days=>days.map(day=><details key={day.date}><summary>{formatDate(day.date,{dateOnly:true,utc:true})} · {day.backups.length} backup{day.backups.length===1?'':'s'}</summary><Paginated rows={day.backups} label={"Stored backups on "+day.date+" for "+site.name} pageSize={5}>{points=>points.map(backup=><div className="backup-tree-file" key={backup.id}><div><b>{new Date(backup.capturedAt).toLocaleTimeString()} · payload.enc</b><small>{(backup.size/1024/1024).toFixed(1)} MB · {backup.verified?'Verified':'Unverified'}{backup.pinned?' · Pinned':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div><div className="actions"><a className="button" href={'/api/backups/'+backup.id+'/download?format=zip'}>Full ZIP</a><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a><button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div></div>)}</Paginated></details>)}</Paginated></details>)}</Paginated></details>)}</Paginated></div>}</>}</section>;
+ const filename=file=>file.filename||file.relativePath?.split('/').at(-1)||'Encrypted backup';
+ return <section className="panel padded">
+  <h2>{target.name} · Backup folders</h2><p>Site backups are organized by server and site. DockNest recovery kits have their own folder.</p>
+  {error&&<div className="alert" role="alert">{error}<button onClick={()=>setReload(value=>value+1)}>Retry</button></div>}
+  {!tree&&!error&&<p role="status">Loading backup folders…</p>}
+  {tree&&<>
+   <p>New backups go under <code>{tree.managedRoot||tree.root}/</code>. Existing files show their recorded paths. Other files on the destination are not listed.</p>
+   {tree.limited&&<p>Showing the latest 1,000 site backups. Use the backup library for other recovery points.</p>}
+   <div className="backup-tree">
+    {!tree.servers.length?<p>No site backups stored here yet.</p>:<Paginated rows={tree.servers} label="Storage servers" pageSize={5}>{servers=>servers.map(server=><details key={server.id} open>
+     <summary>Server: {server.name}</summary>
+     <Paginated rows={server.sites} label={'Storage sites on '+server.name} pageSize={5}>{sites=>sites.map(site=><details key={site.id} open>
+      <summary>Site: {site.name}</summary>
+      <Paginated rows={site.days.flatMap(day=>day.backups)} label={'Stored backups for '+site.name} pageSize={5}>{points=>points.map(backup=><div className="backup-tree-file" key={backup.id}>
+       <div><b>{filename(backup)}</b><small>{formatDate(backup.capturedAt)} · {(backup.size/1024/1024).toFixed(1)} MB · {backup.verified?'Integrity checked':'Integrity unchecked'}{backup.pinned?' · Pinned':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div>
+       <div className="actions"><a className="button" href={'/api/backups/'+backup.id+'/download?format=zip'}>Full ZIP</a><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a><button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>
+      </div>)}</Paginated>
+     </details>)}</Paginated>
+    </details>)}</Paginated>}
+    <details open><summary>docknest-recovery</summary>
+     {!tree.recovery?.files.length?<p>No DockNest recovery kit stored here yet.</p>:<Paginated rows={tree.recovery.files} label="DockNest recovery kits" pageSize={5}>{files=>files.map(file=><div className="backup-tree-file" key={file.id}>
+      <div><b>{filename(file)}</b><small>{formatDate(file.createdAt)} · {(file.size/1024/1024).toFixed(1)} MB · Encrypted recovery kit</small>{file.relativePath&&<code>{file.relativePath}</code>}</div>
+      {file.downloadable&&<div className="actions"><a className="button" href="/api/self-backup/download">Download recovery kit</a></div>}
+     </div>)}</Paginated>}
+     {tree.recovery?.limited&&<p>Showing the latest 1,000 recovery kits pending cleanup.</p>}
+    </details>
+   </div>
+  </>}
+ </section>;
 }
 
 export function StorageTargets({api,Field,onChanged,onSessionExpired}) {
