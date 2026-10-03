@@ -95,7 +95,9 @@
 .storage-intro>div{max-width:80ch}
 .storage-intro .form-actions{border:0;margin:0;padding:0;flex-shrink:0}
 .rebrand-page .backup-tree summary{padding:16px;font-size:13px;display:list-item}
-.rebrand-page .backup-tree-file{background:var(--surface-muted);border:1px solid var(--border-subtle);border-radius:8px;padding:16px;margin:12px 0;gap:16px;align-items:center}
+.rebrand-page .backup-tree-file{display:flex;background:var(--surface-muted);border:1px solid var(--border-subtle);border-radius:8px;padding:16px;margin:12px 0;gap:16px;align-items:center}
+.rebrand-page .backup-tree-file>div:first-child{min-width:0;flex:1}
+.rebrand-page .backup-tree-file b,.rebrand-page .backup-tree-file small,.rebrand-page .backup-tree-file code{display:block;overflow-wrap:anywhere}
 .rebrand-page .backup-tree-file .actions{flex-shrink:0;justify-content:flex-end}
 .rebrand-page .backup-tree-file code{font-size:11px;overflow-wrap:anywhere}
 .auth-header{padding:24px 40px}
@@ -163,6 +165,7 @@
  .rebrand-page .backup-tree-file{flex-direction:column;align-items:stretch}
  .rebrand-page .backup-tree-file .actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:8px}
  .rebrand-page .backup-tree-file .actions .button,.rebrand-page .backup-tree-file .actions button{font-size:11px;padding:8px 4px;white-space:normal;justify-content:center;min-width:0}
+ .rebrand-page .backup-tree-file .actions>:only-child{grid-column:1/-1}
  .rebrand-page .backup-tree{padding:0}
  .rebrand-page .backup-tree details{margin-left:0;padding-left:8px}
  .rebrand-page .maintenance-preview{padding:32px 24px}

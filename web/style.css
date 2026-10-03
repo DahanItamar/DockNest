@@ -36,3 +36,22 @@ select:disabled{cursor:default}
 @media(max-width:899px){.access-grid,.overview-grid{grid-template-columns:1fr}.access-rules{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:599px){main#content{padding:16px}.page-head{flex-wrap:wrap;gap:16px}.page-head .actions{width:100%;display:flex}.page-head .actions>.primary{flex:1}.form-grid{grid-template-columns:1fr}.form-grid .field{margin:12px 0}.form-actions>button{width:100%;min-width:0}.padded,.panel-head,.modal-head,.modal-body{padding:20px 16px}.modal-foot button{min-width:0;flex:1}.application-group header{align-items:flex-start;flex-direction:column}.application-group header button{width:100%}.auth-header{padding:20px}.auth-header>span{display:none}.auth-main{padding:16px}.auth-card{padding:32px 24px}.auth-card>p{font-size:14px}.search span{font-size:11px}.workspace>footer{font-size:11px}.access-rules{padding:16px;gap:12px}.codes{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Narrow screens keep every table value and action visible as labeled records. */
+@media(max-width:680px){
+ .rebrand-page .table-wrap:has(>.mobile-table){overflow:visible}
+ .rebrand-page .table-wrap .mobile-table{display:block;min-width:0;width:100%;max-width:100%}
+ .rebrand-page .mobile-table thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .rebrand-page .mobile-table caption,.rebrand-page .mobile-table tbody{display:block;width:100%}
+ .rebrand-page .mobile-table tbody tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;height:auto;padding:16px;border-bottom:1px solid var(--border-subtle)}
+ .rebrand-page .mobile-table tbody tr:last-child{border-bottom:0}
+ .rebrand-page .mobile-table td{display:block;min-width:0;max-width:100%;padding:0;border:0;overflow-wrap:anywhere;white-space:normal}
+ .rebrand-page .mobile-table td::before{content:attr(data-label);display:block;margin-bottom:6px;color:var(--text-muted);font-size:11px;font-weight:500}
+ .rebrand-page .mobile-table td:first-child,.rebrand-page .mobile-table td:last-child,.jobs-page .mobile-table td:nth-child(4){grid-column:1/-1}
+ .audit-page .mobile-table td:nth-child(2),.audit-page .mobile-table td:nth-child(3),.maintenance-page .mobile-table td:nth-child(2){grid-column:1/-1}
+ .rebrand-page .mobile-table td .actions{min-width:0;max-width:100%;gap:8px}
+ .rebrand-page .mobile-table td .actions>button,.rebrand-page .mobile-table td .actions>.button{max-width:100%;min-height:40px;white-space:normal}
+ .rebrand-page .mobile-table td .truncate{max-width:none;white-space:normal;overflow:visible}
+ .rebrand-page .chart-data .mobile-table td:last-child{grid-column:auto}
+ .rebrand-page .stable-table .paged-content{min-height:0}
+}

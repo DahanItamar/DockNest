@@ -121,4 +121,10 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 @media(max-width:359px){
  .berry-header{padding-inline:6px;gap:0}
 }
+@media(max-width:680px){
+ .berry-popover{position:fixed;top:80px;left:12px;right:12px;width:auto;max-width:420px;margin-left:auto;max-height:calc(100dvh - 104px);overflow-y:auto;overflow-wrap:anywhere}
+ .berry-popover header{gap:12px}
+ .berry-popover header h2{min-width:0}
+ .berry-popover header button{flex-shrink:0}
+}
 @media(prefers-reduced-motion:reduce){.menu-symbol .menu-bar{transition:none}}

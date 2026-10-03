@@ -74,6 +74,8 @@ try{
  await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit',exact:true}).waitFor();
  assert.ok((await page.locator('.backup-tree code').allTextContents()).some(path=>/^BACKUP\/docknest-recovery\/docknest_.*\.dkit$/.test(path)));
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.locator('.backup-tree-file').first().scrollIntoViewIfNeeded();
+ assert.equal(await page.locator('.backup-tree-file').first().evaluate(el=>el.scrollWidth<=el.clientWidth),true,'Recovery filename fits inside its mobile card');
  await page.screenshot({path:'test-results/self-backup/storage-mobile.png',animations:'disabled'});
  assert.deepEqual(errors,[]);
  console.log('Synthetic DockNest backup UI passed: administrator setup, pinned loopback SFTP upload, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
