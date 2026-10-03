@@ -51,6 +51,8 @@ jobs:
           npm run test:browser
           npm run test:theme
           npm run test:design
+          npm run test:self-backup
+          npm run test:mobile
         env:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000
