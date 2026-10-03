@@ -86,14 +86,14 @@ export async function testStorageTarget(options){
   const temporary=options.root+'/.docknest-probe-'+randomUUID(),published=temporary+'.verified';
   try{
    const handle=await call(sftp,'open',temporary,'wx',0o600);
-   try{await call(sftp,'write',handle,Buffer.from('DockNest storage probe'),0,22,0);}finally{await call(sftp,'close',handle);}
+   try{await call(sftp,'write',handle,Buffer.from('DockNest storage probe'),0,22,0);try{await call(sftp,'ext_openssh_fsync',handle);}catch{throw new Error('Storage requires working fsync@openssh.com support for durable backup files');}}finally{await call(sftp,'close',handle);}
    await call(sftp,'rename',temporary,published);
    const attrs=await call(sftp,'stat',published);if(attrs.size!==22)throw new Error('Storage write verification failed');
    const readHandle=await call(sftp,'open',published,'r');
    const buffer=Buffer.alloc(22);
    try{await call(sftp,'read',readHandle,buffer,0,22,0);}finally{await call(sftp,'close',readHandle);}
    if(buffer.toString()!=='DockNest storage probe')throw new Error('Storage read verification failed');
-   return {connected:true,writeVerified:true,readVerified:true,renameVerified:true};
+   return {connected:true,writeVerified:true,readVerified:true,renameVerified:true,fileFsyncVerified:true};
   }finally{for(const file of [temporary,published]){try{await call(sftp,'unlink',file);}catch(error){if(error.code!==2)throw error;}}}
  });
 }

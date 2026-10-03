@@ -1,6 +1,6 @@
 import hashlib, json, secrets, subprocess, unittest
 from unittest.mock import patch
-from helper import service_contracts, validate_database_contracts, redis_query, data_checks, shutdown_evidence, restart_services
+from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services
 
 
 def fixture():
@@ -20,6 +20,10 @@ def fixture():
 
 
 class RedisContracts(unittest.TestCase):
+    def test_info_verbatim_reply_is_parsed_without_assuming_json(self):
+        with patch('helper.redis_query',return_value=b'# Server\r\nredis_version:7.4.7\r\nredis_mode:standalone\r\n') as query:
+            self.assertEqual(redis_info('redis',{},'server'),{'redis_version':'7.4.7','redis_mode':'standalone'})
+            query.assert_called_once_with('redis',{},['INFO','server'],raw=True)
     def test_auto_detects_native_version_and_rejects_untested_or_mismatched_engines(self):
         container,*_=fixture()
         def binary(args,**_):

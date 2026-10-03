@@ -114,6 +114,9 @@ def service_contracts(cfg,containers):
         if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
         expected=declaration.get('version')
         if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
+        for check in declaration.get('checks',[]):
+            if engine=='generic' or (engine=='redis' and (not check.get('key') or check.get('table'))) or (engine in ['postgres','mysql','mariadb'] and (not check.get('table') or check.get('key'))):
+                raise ValueError('Configured data checks do not match the detected native engine')
         dependencies=[]
         for value in declaration.get('dependsOn',[]):
             if value not in references:raise ValueError('Service dependency is outside the selected site')
@@ -175,8 +178,8 @@ def redis_pairs(value):
     return dict(zip(value[::2],value[1::2]))
 
 def redis_info(container,service,section):
-    output=redis_query(container,service,['INFO',section])
-    if not isinstance(output,str):raise ValueError('Redis native INFO reply is incomplete')
+    # redis-cli renders INFO verbatim even when --json is selected.
+    output=redis_query(container,service,['INFO',section],raw=True).decode()
     return dict(line.split(':',1) for line in output.splitlines() if line and not line.startswith('#') and ':' in line)
 
 def validate_redis_contract(service,c):
@@ -683,7 +686,7 @@ def readiness(cfg):
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:preflight(cfg))
     if cfg.get('kind')!='static':
         def contracts():
-            cs=preflight(cfg);validate_database_contracts(service_contracts(cfg,cs),cs)
+            backup_plan(cfg,preflight(cfg))
         check('Per-service database consistency contracts',contracts)
     def direct_health():
         if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
