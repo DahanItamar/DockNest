@@ -6,6 +6,8 @@ from helper import safe_extract, health, maintenance, configuration_paths, list_
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
+from helper import recover, complete_recovery
+from helper import create_staging_root, sync_directory, capture
 from boot_recovery import recover_jobs
 
 class BootRecoveryTests(unittest.TestCase):
@@ -16,7 +18,7 @@ class BootRecoveryTests(unittest.TestCase):
             record={'version':1,'bootId':'previous','running':['db','web'],'identities':{'db':'image-db','web':'image-web','idle':'image-idle'},'config':{'_serviceContracts':[],'maintenance':{}}}
             (root/'boot-recovery.json').write_text(json.dumps(record))
             states=[{'Id':cid,'Image':image,'State':{'Running':False}} for cid,image in record['identities'].items()]
-            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states),patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json') as write:
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states),patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json') as write,patch('boot_recovery.complete_recovery'):
                 result=recover_jobs([d],'current');self.assertEqual(result['recovered'],1)
                 restart.assert_called_once_with(['db','web'],[]);flags.assert_called_once_with(record['config'],False)
                 restart.reset_mock();self.assertEqual(recover_jobs([d],'previous')['ignored'],1);restart.assert_not_called()
@@ -32,16 +34,44 @@ class BootRecoveryTests(unittest.TestCase):
             # Emulate the atomic writer to exercise replay on Windows too; production
             # atomic_json fsyncs both the completion file and its parent directory.
             def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
-            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states) as inspect_source,patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json',side_effect=write_journal) as write:
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states) as inspect_source,patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json',side_effect=write_journal),patch('helper.atomic_json',side_effect=write_journal) as write:
                 self.assertEqual(recover_jobs([d],'recovery-boot')['recovered'],1)
-                completion=json.loads((root/'boot-recovery-completed.json').read_text())
+                completion=json.loads((root/'disarmed').read_text())
                 self.assertTrue(completion['completed']);self.assertEqual(completion['bootId'],'recovery-boot')
-                self.assertEqual(write.call_args_list[-1].args[0],root/'boot-recovery-completed.json')
+                self.assertEqual(write.call_args_list[-1].args[0],root/'disarmed')
                 # The source was stopped intentionally after recovery. A later boot
                 # must leave it stopped and must not alter maintenance or inspect it.
                 restart.reset_mock();flags.reset_mock();inspect_source.reset_mock();write.reset_mock()
                 self.assertEqual(recover_jobs([d],'later-boot'),{'recovered':0,'reviewRequired':0,'ignored':1})
                 restart.assert_not_called();flags.assert_not_called();inspect_source.assert_not_called();write.assert_not_called()
+    def test_watchdog_success_durably_disarms_before_later_boot_after_operator_stop(self):
+        import uuid
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/str(uuid.uuid4());root.mkdir()
+            record={'version':1,'bootId':'interrupted','running':['db'],'identities':{'db':'image-db'},'config':{'containers':['db'],'_serviceContracts':[],'maintenance':{}}}
+            (root/'boot-recovery.json').write_text(json.dumps(record))
+            def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
+            with patch('helper.os.getpgid',side_effect=ProcessLookupError,create=True),patch('helper.restart_services') as restart,patch('helper.health',return_value=True),patch('helper.maintenance') as flags,patch('helper.atomic_json',side_effect=write_journal):
+                recover(root,['db'],record['config'],0,123)
+                restart.assert_called_once();flags.assert_called_once_with(record['config'],False)
+                self.assertTrue(json.loads((root/'disarmed').read_text())['completed'])
+                self.assertTrue(json.loads((root/'recovery.json').read_text())['recovered'])
+            # The operator stops the recovered database. A later host boot must
+            # preserve that choice even though the interrupted job is retained.
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect') as inspect_source,patch('boot_recovery.restart_services') as restart:
+                self.assertEqual(recover_jobs([d],'later-boot')['ignored'],1)
+                inspect_source.assert_not_called();restart.assert_not_called()
+    def test_failed_public_recovery_or_marker_sync_keeps_watchdog_armed(self):
+        for failure in ['public-health','completion-sync']:
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as d:
+                root=pathlib.Path(d)
+                def write_journal(path,value):
+                    pathlib.Path(path).write_text(json.dumps(value))
+                    if failure=='completion-sync' and pathlib.Path(path).name=='disarmed':raise OSError('Simulated completion fsync failure')
+                with patch('helper.os.getpgid',side_effect=ProcessLookupError,create=True),patch('helper.restart_services'),patch('helper.health',return_value=True),patch('helper.maintenance',side_effect=ValueError('Public access unavailable') if failure=='public-health' else None),patch('helper.atomic_json',side_effect=write_journal):
+                    recover(root,['db'],{'containers':['db'],'maintenance':{}},0,123)
+                self.assertFalse((root/'disarmed').exists())
+                self.assertFalse(json.loads((root/'recovery.json').read_text())['recovered'])
 
 class RecoveryEvidenceTests(unittest.TestCase):
     def test_missing_and_changed_artifacts_fail_before_restore(self):
@@ -64,6 +94,18 @@ class RecoveryEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):data_checks('db',service)
 
 class ServiceContractTests(unittest.TestCase):
+    def test_postgres_uses_active_native_data_directory_and_version(self):
+        container={'Id':'db','Config':{'Env':['PGDATA=/stale']},'Mounts':[{'Destination':'/captured','RW':True}]}
+        service={'container':'db','engine':'postgres','version':'16.13'}
+        with patch('helper.database_query',side_effect=['16.13 (distribution build)','/captured/active','f','0']):
+            validate_database_contracts([service],[container])
+            self.assertEqual(service['dataDirectory'],'/captured/active')
+        # A captured but inactive PGDATA must not certify an uncaptured live cluster.
+        container['Config']['Env']=['PGDATA=/captured/inactive']
+        with patch('helper.database_query',side_effect=['16.13','/outside/active']):
+            with self.assertRaisesRegex(ValueError,'Active PostgreSQL data directory'):validate_database_contracts([service],[container])
+        with patch('helper.database_query',return_value='16.12'):
+            with self.assertRaisesRegex(ValueError,'version'):validate_database_contracts([service],[container])
     def test_fast_shutdown_is_prepared_only_for_capture_and_original_setting_recovers(self):
         service={'container':'db','engine':'mysql','version':'8.4.8'}
         container={'Id':'db','Mounts':[{'Destination':'/var/lib/mysql','RW':True}]}
@@ -112,6 +154,28 @@ class ServiceContractTests(unittest.TestCase):
             command.assert_called_once_with('start','web','peer')
 
 class FilesystemPlanTests(unittest.TestCase):
+    def test_new_staging_directory_syncs_all_ancestor_entries_before_use(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'new-base'/'new-job'
+            with patch('helper.sync_directory') as sync:
+                create_staging_root(root)
+            self.assertTrue(root.is_dir())
+            self.assertEqual([call.args[0] for call in sync.call_args_list],[root,*root.parents])
+    def test_staging_sync_failure_prevents_journal_and_docker_stop(self):
+        import uuid
+        with tempfile.TemporaryDirectory() as d:
+            job=str(uuid.uuid4());root=pathlib.Path(d)/job
+            cfg={'stagingRoot':d,'containers':['db']}
+            with patch('helper.preflight',return_value=[{'Mounts':[]}]),patch('helper.backup_plan',return_value={'fingerprint':'fixture'}),patch('helper.sync_directory',side_effect=OSError('Simulated directory fsync failure')),patch('helper.docker') as docker:
+                with self.assertRaises(OSError):capture({'job':job,'config':cfg})
+                docker.assert_not_called();self.assertFalse((root/'boot-recovery.json').exists())
+    @unittest.skipUnless(__import__('os').name=='posix','Directory fsync requires Linux')
+    def test_linux_staging_directory_fsyncs_real_new_parent_chain(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'new-base'/'new-job'
+            with patch('helper.sync_directory',wraps=sync_directory) as sync:
+                create_staging_root(root)
+            self.assertEqual([call.args[0] for call in sync.call_args_list],[root,*root.parents])
     def test_mount_table_decodes_paths_and_rejects_incomplete_input(self):
         self.assertEqual(mount_table('12 1 8:1 / /data\\040files rw - ext4 /dev/sda rw')[0]['path'],'/data files')
         for value in ['', '12 1 incomplete']:
@@ -302,6 +366,26 @@ class ArchiveSecurityTests(unittest.TestCase):
             self.assertFalse((base/'output/alias').exists())
 
 class MaintenanceTests(unittest.TestCase):
+    def setUp(self):
+        directory_sync=patch('helper.sync_directory');directory_sync.start();self.addCleanup(directory_sync.stop)
+    def test_maintenance_flag_is_synced_after_successful_public_probes(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);(base/'ready').touch()
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            events=[]
+            def probe(m):
+                events.append(('probe',(base/'enabled').exists()))
+                return (503,b'dbm-maintenance-v1') if (base/'enabled').exists() else (200,b'healthy')
+            with patch('helper.public_probe',side_effect=probe),patch('helper.health',return_value=True),patch('helper.sync_maintenance_flag',side_effect=lambda directory:events.append(('sync',(directory/'enabled').exists()))):
+                maintenance(cfg,True);maintenance(cfg,False)
+            self.assertEqual(events,[('probe',True),('sync',True),('probe',False),('sync',False)])
+    def test_failed_clear_restores_and_syncs_maintenance_before_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);(base/'ready').touch();(base/'enabled').touch()
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            with patch('helper.health',return_value=True),patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag') as sync:
+                with self.assertRaises(ValueError):maintenance(cfg,False)
+                self.assertTrue((base/'enabled').exists());sync.assert_called_once_with(base)
     def test_origin_https_verifies_original_hostname_on_loopback(self):
         from unittest.mock import Mock
         context=Mock();sock=Mock()

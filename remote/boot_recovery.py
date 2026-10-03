@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Root-owned, opt-in boot recovery. Never execute config-supplied commands."""
 import json,os,pathlib,stat,uuid,time,sys
-from helper import inspect,restart_services,health,maintenance,atomic_json
+from helper import inspect,restart_services,health,maintenance,atomic_json,complete_recovery
 
 def private_path(path,directory=False):
     path=pathlib.Path(path)
@@ -42,7 +42,7 @@ def recover_jobs(roots,boot_id=None):
                 atomic_json(root/'recovery.json',{'recovered':True,'bootRecovery':True,'at':time.time()})
                 # A retained successful journal must never restart an intentionally
                 # stopped service on a later boot. Persist completion before return.
-                atomic_json(completed,{'version':1,'completed':True,'bootId':boot_id,'at':time.time()})
+                complete_recovery(root,boot_id)
                 (root/'watchdog.done').touch(mode=0o600)
                 result['recovered']+=1
             except Exception:

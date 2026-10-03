@@ -1,6 +1,7 @@
-import hashlib, json, secrets, subprocess, unittest
+import hashlib, json, secrets, subprocess, unittest, tempfile, pathlib, os
+from types import SimpleNamespace
 from unittest.mock import patch
-from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services
+from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services, redis_aof_check
 
 
 def fixture():
@@ -110,28 +111,127 @@ class RedisContracts(unittest.TestCase):
             with self.assertRaises(ValueError):shutdown_evidence([service],[container],123)
             native.assert_not_called()
 
-    def test_clean_current_stop_requires_read_only_native_rdb_and_aof_validation(self):
+    def test_clean_current_stop_requires_read_only_rdb_and_disposable_aof_validation(self):
         container,service,_,infos,_,_,query=fixture()
         with patch('helper.redis_query',side_effect=query),patch('helper.redis_info',side_effect=lambda _c,_s,section:infos[section]),patch('helper.run',return_value=b'/data\n'):validate_database_contracts([service],[container])
         container['State']={'Running':False,'ExitCode':0}
         def proof(args,**_):return b'RDB looks OK!' if 'redis-check-rdb' in args else b'All AOF files and manifest are valid'
         valid_log=b'1:M # Calling fsync() on the AOF file.\n1:M * Saving the final RDB snapshot before exiting.\n1:M * DB saved on disk\n1:M # Redis is now ready to exit, bye bye...\n'
         log=subprocess.CompletedProcess([],0,valid_log,b'')
-        with patch('helper.inspect',return_value=[container]),patch('helper.subprocess.run',return_value=log) as logs,patch('helper.run',side_effect=proof) as native:
-            evidence=shutdown_evidence([service],[container],123)[0]
+        with patch('helper.inspect',return_value=[container]),patch('helper.subprocess.run',return_value=log) as logs,patch('helper.run',side_effect=proof) as native,patch('helper.redis_aof_check',return_value={'aofValidationCopyVerified':True,'aofSourceUnchangedVerified':True}) as aof:
+            evidence=shutdown_evidence([service],[container],123,'/private-job')[0]
             self.assertTrue(evidence['rdbOfflineVerified']);self.assertTrue(evidence['aofOfflineVerified'])
+            self.assertTrue(evidence['aofValidationCopyVerified']);self.assertTrue(evidence['aofSourceUnchangedVerified'])
             self.assertIn('123',logs.call_args.args[0])
-            self.assertEqual(len(native.call_args_list),2)
+            self.assertEqual(len(native.call_args_list),1)
             for call in native.call_args_list:
                 args=call.args[0]
                 self.assertIn('--read-only',args);self.assertIn('ALL',args);self.assertIn('redis',args);self.assertIn('none',args)
                 self.assertNotIn('--fix',args);self.assertIn(container['Image'],args)
-            self.assertEqual(native.call_args_list[1].args[0][-1],'/data/appendonlydir/appendonly.aof.manifest')
+            aof.assert_called_once_with(service,container,container,'/private-job')
         with patch('helper.inspect',return_value=[container]),patch('helper.subprocess.run',return_value=log),patch('helper.run',side_effect=subprocess.CalledProcessError(1,['redis-check-aof'])):
             with self.assertRaises(subprocess.CalledProcessError):shutdown_evidence([service],[container],123)
         for invalid in [valid_log.replace(b'DB saved on disk',b'old RDB remains'),valid_log.replace(b'Saving the final RDB snapshot before exiting.',b'No current RDB save'),valid_log.replace(b'Calling fsync() on the AOF file.',b'Calling fsync() on the AOF file.\nFail to fsync the AOF file: disk error')]:
             with patch('helper.inspect',return_value=[container]),patch('helper.subprocess.run',return_value=subprocess.CompletedProcess([],0,invalid,b'')),patch('helper.run') as native:
                 with self.assertRaises(ValueError):shutdown_evidence([service],[container],123)
+                native.assert_not_called()
+
+    @unittest.skipUnless(hasattr(os,'O_NOFOLLOW'),'Requires Linux file-open semantics')
+    def test_aof_native_checker_writes_only_a_disposable_exact_copy(self):
+        self.check_aof_copy()
+
+    @unittest.skipUnless(hasattr(os,'O_NOFOLLOW'),'Requires Linux file-open semantics')
+    def test_aof_changed_source_copy_and_native_failure_block_and_remove_copy(self):
+        for failure in ['source-change','copy-change','native-failure','missing-proof']:
+            with self.subTest(failure=failure):self.check_aof_copy(failure)
+
+    def check_aof_copy(self,failure=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);source=base/'data';aof=source/'appendonlydir';aof.mkdir(parents=True)
+            staging=base/'private-job';staging.mkdir(mode=0o700)
+            originals={'appendonly.aof.manifest':b'file appendonly.aof.1.base.rdb seq 1 type b\nfile appendonly.aof.1.incr.aof seq 1 type i\n','appendonly.aof.1.base.rdb':b'fixture-rdb','appendonly.aof.1.incr.aof':b'*1\r\n$4\r\nPING\r\n'}
+            for name,value in originals.items():(aof/name).write_bytes(value)
+            container={'Id':'redis-id','Image':'sha256:fixture','Mounts':[{'Source':str(source),'Destination':'/data','RW':True}]}
+            service={'dataDirectory':'/data','aofDirectory':'appendonlydir','aofFilename':'appendonly.aof'}
+            def native(args,**kwargs):
+                self.assertEqual(kwargs['timeout'],120)
+                self.assertNotIn('--volumes-from',args);self.assertNotIn('--fix',args);self.assertNotIn('--truncate-to-timestamp',args)
+                for expected in ['none','--read-only','ALL','--memory','--pids-limit','redis-check-aof']:self.assertIn(expected,args)
+                mount=args[args.index('--mount')+1]
+                self.assertTrue(mount.endswith(',dst=/check'));copy=pathlib.Path(mount[len('type=bind,src='):-len(',dst=/check')])
+                self.assertEqual(copy.parent,staging)
+                self.assertNotEqual(copy,aof)
+                self.assertEqual(args[-1],'/check/appendonly.aof.manifest')
+                self.assertEqual({p.name:p.read_bytes() for p in copy.iterdir()},originals)
+                # Models Redis 7.4 fopen(r+) and proves that it receives writable files.
+                with (copy/'appendonly.aof.1.incr.aof').open('r+b') as stream:self.assertEqual(stream.read(),originals['appendonly.aof.1.incr.aof'])
+                if failure=='source-change':(aof/'appendonly.aof.1.incr.aof').write_bytes(b'changed-source')
+                if failure=='copy-change':(copy/'appendonly.aof.1.incr.aof').write_bytes(b'changed-copy')
+                if failure=='native-failure':raise subprocess.CalledProcessError(1,args)
+                return b'no success marker' if failure=='missing-proof' else b'All AOF files and manifest are valid'
+            with patch('helper.run',side_effect=native),patch('helper.os.chown',create=True),patch('helper.os.fchown',create=True):
+                if failure:
+                    with self.assertRaises((ValueError,subprocess.CalledProcessError)):redis_aof_check(service,container,container,staging)
+                else:self.assertTrue(redis_aof_check(service,container,container,staging)['aofSourceUnchangedVerified'])
+            self.assertEqual(list(staging.iterdir()),[])
+            if failure!='source-change':self.assertEqual({p.name:p.read_bytes() for p in aof.iterdir()},originals)
+
+    @unittest.skipUnless(hasattr(os,'O_NOFOLLOW'),'Requires Linux file-open semantics')
+    def test_aof_source_replaced_by_symlink_during_copy_never_changes_link_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);source=base/'data';aof=source/'appendonlydir';aof.mkdir(parents=True)
+            staging=base/'private-job';staging.mkdir(mode=0o700)
+            (aof/'appendonly.aof.manifest').write_bytes(b'manifest')
+            member=aof/'appendonly.aof.1.incr.aof';member.write_bytes(b'original-aof')
+            victim=base/'unrelated-private-file';victim.write_bytes(b'unchanged-private-bytes');victim.chmod(0o640)
+            metadata=victim.stat();before=(victim.read_bytes(),metadata.st_mode,metadata.st_uid,metadata.st_gid)
+            container={'Id':'redis-id','Image':'sha256:fixture','Mounts':[{'Source':str(source),'Destination':'/data','RW':True}]}
+            service={'dataDirectory':'/data','aofDirectory':'appendonlydir','aofFilename':'appendonly.aof'}
+            real_open=os.open;opens=0
+            def raced_open(path,flags,*args,**kwargs):
+                nonlocal opens
+                if pathlib.Path(path)==member:
+                    opens+=1
+                    if opens==2:
+                        # Initial source inventory passed; race occurs at the copy open.
+                        member.unlink();member.symlink_to(victim)
+                        self.assertTrue(flags&os.O_NOFOLLOW);self.assertTrue(flags&os.O_NONBLOCK)
+                return real_open(path,flags,*args,**kwargs)
+            with patch('helper.os.open',side_effect=raced_open),patch('helper.run') as native,patch('helper.os.chmod') as chmod,patch('helper.os.chown',create=True) as chown,patch('helper.os.fchmod',create=True) as fchmod,patch('helper.os.fchown',create=True) as fchown:
+                with self.assertRaises(OSError):redis_aof_check(service,container,container,staging)
+                native.assert_not_called();chmod.assert_not_called();chown.assert_not_called()
+                fchmod.assert_not_called();fchown.assert_not_called()
+            metadata=victim.stat()
+            self.assertEqual((victim.read_bytes(),metadata.st_mode,metadata.st_uid,metadata.st_gid),before)
+            self.assertEqual(list(staging.iterdir()),[])
+
+    @unittest.skipUnless(hasattr(os,'O_NOFOLLOW'),'Requires Linux file-open semantics')
+    def test_aof_private_staging_source_mapping_and_links_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);source=base/'data';aof=source/'appendonlydir';aof.mkdir(parents=True)
+            staging=base/'private-job';staging.mkdir(mode=0o700)
+            container={'Id':'redis-id','Image':'sha256:fixture','Mounts':[{'Source':str(source),'Destination':'/data','RW':True}]}
+            service={'dataDirectory':'/data','aofDirectory':'appendonlydir','aofFilename':'appendonly.aof'}
+            (aof/'appendonly.aof.manifest').write_bytes(b'manifest')
+            with patch('helper.run') as native:
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,None)
+                staging.chmod(0o755)
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,staging)
+                staging.chmod(0o700)
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,source)
+                service['dataDirectory']='/outside'
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,staging)
+                service['dataDirectory']='/data'
+                with patch('helper.shutil.disk_usage',return_value=SimpleNamespace(free=0)):
+                    with self.assertRaises(ValueError):redis_aof_check(service,container,container,staging)
+                (aof/'nested').mkdir()
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,staging)
+                (aof/'nested').rmdir()
+                (aof/'link').symlink_to(aof/'appendonly.aof.manifest')
+                with self.assertRaises((ValueError,OSError)):redis_aof_check(service,container,container,staging)
+                (aof/'link').unlink()
+                aof.rename(source/'real-aof');aof.symlink_to(source/'real-aof',target_is_directory=True)
+                with self.assertRaises(ValueError):redis_aof_check(service,container,container,staging)
                 native.assert_not_called()
 
     def test_restart_requires_redis_ping_before_starting_dependent_writer(self):

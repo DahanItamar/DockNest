@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -19,6 +19,22 @@ Delete plaintext staging securely according to your storage policy; filesystem d
 """
 
 def emit(**kw): print(json.dumps(kw),flush=True)
+def sync_directory(path):
+    directory=os.open(path,os.O_RDONLY)
+    try:os.fsync(directory)
+    finally:os.close(directory)
+
+def create_staging_root(root):
+    root=pathlib.Path(root);root.mkdir(parents=True,mode=0o700)
+    # Each new ancestor entry must survive before a journal can authorize stop.
+    for directory in [root,*root.parents]:sync_directory(directory)
+
+def sync_maintenance_flag(directory):
+    flag=directory/'enabled'
+    if flag.exists():
+        with flag.open('rb') as source:os.fsync(source.fileno())
+    sync_directory(directory)
+
 def atomic_json(path,value):
     path=pathlib.Path(path);temporary=path.with_name(path.name+'.tmp-'+str(uuid.uuid4()))
     fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
@@ -29,6 +45,22 @@ def atomic_json(path,value):
         try:os.fsync(directory)
         finally:os.close(directory)
     finally:temporary.unlink(missing_ok=True)
+def complete_recovery(root,boot_id=None):
+    """One durable marker both records completion and disarms all recovery drivers."""
+    root=pathlib.Path(root);marker=root/'disarmed'
+    record={'version':1,'completed':True,'at':time.time()}
+    if boot_id is not None:record['bootId']=boot_id
+    try:atomic_json(marker,record)
+    except Exception:
+        # atomic_json may have renamed before directory fsync failed. Keep this
+        # job armed on failure and let the caller persist operator-review evidence.
+        try:
+            marker.unlink(missing_ok=True)
+            directory=os.open(root,os.O_RDONLY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        except OSError:pass
+        raise
 def run(args,timeout=3600,input=None):
     return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input)
 def docker(*args): return run(['docker',*args])
@@ -208,7 +240,65 @@ def validate_redis_contract(service,c):
         if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',options[name]) or options[name] in ['.','..']:raise ValueError('Redis persistence filenames require a reviewed adapter')
     service.update({'dataDirectory':directory,'rdbEnabled':rdb,'aofEnabled':aof,'rdbFilename':options['dbfilename'],'aofDirectory':options['appenddirname'],'aofFilename':options['appendfilename']})
 
-def redis_shutdown_evidence(service,c,original,stopped_at):
+def redis_aof_inventory(directory):
+    directory=pathlib.Path(directory)
+    if not directory.is_dir() or directory.resolve()!=directory:raise ValueError('Redis AOF directory must be a regular captured directory')
+    inventory={}
+    for path in sorted(directory.iterdir()):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            metadata=os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):raise ValueError('Redis AOF checks reject links, directories and special files')
+            digest=hashlib.sha256()
+            with os.fdopen(fd,'rb',closefd=False) as stream:
+                for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+            inventory[path.name]={'bytes':metadata.st_size,'sha256':digest.hexdigest()}
+        finally:os.close(fd)
+    if not inventory:raise ValueError('Redis AOF directory is empty')
+    return inventory
+
+def redis_aof_check(service,c,original,staging_root):
+    # Redis 7.4 opens every AOF member with fopen("r+") even without --fix:
+    # https://github.com/redis/redis/blob/7.4/src/redis-check-aof.c#L213
+    # Only a disposable byte-identical copy is writable; live data is never mounted.
+    if staging_root is None:raise ValueError('Redis offline AOF checks require private capture staging')
+    staging_root=pathlib.Path(staging_root)
+    if not staging_root.is_dir() or staging_root.resolve()!=staging_root or staging_root.stat().st_mode&0o077 or ',' in str(staging_root):raise ValueError('Redis AOF check staging must be a private regular directory without mount separators')
+    directory=pathlib.PurePosixPath(service['dataDirectory'])/service['aofDirectory']
+    mounts=[m for m in original['Mounts'] if m.get('RW') and (str(directory)==m['Destination'] or str(directory).startswith(m['Destination'].rstrip('/')+'/'))]
+    if not mounts:raise ValueError('Redis AOF directory is outside captured writable mounts')
+    mount=max(mounts,key=lambda m:len(m['Destination']))
+    source=pathlib.Path(mount['Source'])/directory.relative_to(mount['Destination'])
+    if os.path.commonpath([str(staging_root),str(source)]) in [str(staging_root),str(source)]:raise ValueError('Redis AOF check staging and source must not overlap')
+    before=redis_aof_inventory(source)
+    manifest=service['aofFilename']+'.manifest'
+    if manifest not in before:raise ValueError('Redis multipart AOF manifest is missing')
+    if shutil.disk_usage(staging_root).free<sum(item['bytes'] for item in before.values())+1024**3:raise ValueError('Insufficient private staging capacity for Redis AOF check')
+    owner=source.stat()
+    with tempfile.TemporaryDirectory(prefix='redis-aof-check-',dir=staging_root) as temporary:
+        copy=pathlib.Path(temporary)
+        for name in before:
+            destination=copy/name
+            source_fd=os.open(source/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            try:
+                if not stat.S_ISREG(os.fstat(source_fd).st_mode):raise ValueError('Redis AOF validation copy requires regular source files')
+                destination_fd=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+                try:
+                    with os.fdopen(source_fd,'rb',closefd=False) as reader,os.fdopen(destination_fd,'wb',closefd=False) as writer:
+                        shutil.copyfileobj(reader,writer,1024*1024)
+                    os.fchmod(destination_fd,0o600);os.fchown(destination_fd,owner.st_uid,owner.st_gid)
+                finally:os.close(destination_fd)
+            finally:os.close(source_fd)
+        os.chown(copy,owner.st_uid,owner.st_gid)
+        if redis_aof_inventory(source)!=before or redis_aof_inventory(copy)!=before:raise ValueError('Redis AOF validation copy does not match the stopped source')
+        try:
+            proof=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--memory','1g','--memory-swap','1g','--cpus','1','--pids-limit','64','--user',str(owner.st_uid)+':'+str(owner.st_gid),'--mount','type=bind,src='+str(copy)+',dst=/check','--entrypoint','redis-check-aof',original['Image'],'/check/'+manifest],timeout=120).decode(errors='replace')
+        finally:
+            if redis_aof_inventory(source)!=before or redis_aof_inventory(copy)!=before:raise ValueError('Redis AOF source or disposable copy changed during validation')
+        if 'All AOF files and manifest are valid' not in proof:raise ValueError('Redis offline multipart AOF check did not pass')
+    return {'aofValidationCopyVerified':True,'aofSourceUnchangedVerified':True}
+
+def redis_shutdown_evidence(service,c,original,stopped_at,staging_root=None):
     output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
     logs=(output.stdout+output.stderr).decode(errors='replace')
     if output.returncode or not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):raise ValueError('Redis current graceful-shutdown proof is missing')
@@ -220,10 +310,9 @@ def redis_shutdown_evidence(service,c,original,stopped_at):
         proof=run([*flags,'--entrypoint','redis-check-rdb',original['Image'],service['dataDirectory']+'/'+service['rdbFilename']],timeout=120).decode(errors='replace')
         if 'RDB looks OK!' not in proof:raise ValueError('Redis offline RDB check did not pass')
     if service['aofEnabled']:
-        manifest=service['dataDirectory']+'/'+service['aofDirectory']+'/'+service['aofFilename']+'.manifest'
-        proof=run([*flags,'--entrypoint','redis-check-aof',original['Image'],manifest],timeout=120).decode(errors='replace')
-        if 'All AOF files and manifest are valid' not in proof:raise ValueError('Redis offline multipart AOF check did not pass')
-    return {'cleanShutdownLogVerified':True,'finalRdbSaveVerified':service['rdbEnabled'],'finalAofFsyncVerified':service['aofEnabled'],'rdbOfflineVerified':service['rdbEnabled'],'aofOfflineVerified':service['aofEnabled']}
+        copy_evidence=redis_aof_check(service,c,original,staging_root)
+    else:copy_evidence={}
+    return {'cleanShutdownLogVerified':True,'finalRdbSaveVerified':service['rdbEnabled'],'finalAofFsyncVerified':service['aofEnabled'],'rdbOfflineVerified':service['rdbEnabled'],'aofOfflineVerified':service['aofEnabled'],**copy_evidence}
 
 def validate_database_contracts(services,containers):
     by_id={c['Id']:c for c in containers}
@@ -234,8 +323,10 @@ def validate_database_contracts(services,containers):
             env=dict(v.split('=',1) for v in c['Config'].get('Env',[]) if '=' in v)
             service['user']=service.get('user') or env.get('POSTGRES_USER','postgres')
             service['database']=service.get('database') or env.get('POSTGRES_DB',service['user'])
-            data=env.get('PGDATA','/var/lib/postgresql/data')
-            if not data.startswith('/') or not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('PostgreSQL PGDATA must be included in a writable captured mount')
+            version=database_query(c['Id'],service,'SHOW server_version;').split()[0]
+            if version!=service['version']:raise ValueError('Running PostgreSQL version does not match the installed server binary')
+            data=database_query(c['Id'],service,'SHOW data_directory;')
+            if not data.startswith('/') or '..' in pathlib.PurePosixPath(data).parts or not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('Active PostgreSQL data directory must be included in a writable captured mount')
             if database_query(c['Id'],service,'SELECT pg_is_in_recovery();')!='f':raise ValueError('PostgreSQL standby/recovery capture requires a separate adapter')
             if database_query(c['Id'],service,"SELECT COUNT(*) FROM pg_tablespace WHERE pg_tablespace_location(oid) <> '';")!='0':raise ValueError('External PostgreSQL tablespaces require a reviewed capture adapter')
             service['dataDirectory']=data
@@ -258,7 +349,7 @@ def prepare_database_shutdown(service):
     if database_query(cid,service,'SELECT @@global.innodb_fast_shutdown;')!='0':raise ValueError('Could not prepare a verified slow database shutdown; capture blocked')
     service['slowShutdownVerified']=True
 
-def shutdown_evidence(services,containers,stopped_at):
+def shutdown_evidence(services,containers,stopped_at,staging_root=None):
     evidence=[];by_id={c['Id']:c for c in containers}
     for service in services:
         c=inspect([service['container']])[0];state=c['State']
@@ -273,7 +364,7 @@ def shutdown_evidence(services,containers,stopped_at):
             output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
             if output.returncode or 'shutdown complete' not in (output.stdout+output.stderr).decode(errors='replace').lower():raise ValueError('Native database shutdown evidence missing from the current stop')
             item.update({'slowShutdownVerified':service['slowShutdownVerified'],'cleanShutdownLogVerified':True})
-        elif service['engine']=='redis':item.update(redis_shutdown_evidence(service,c,by_id[c['Id']],stopped_at))
+        elif service['engine']=='redis':item.update(redis_shutdown_evidence(service,c,by_id[c['Id']],stopped_at,staging_root))
         else:item['applicationShutdownConfirmed']=True
         evidence.append(item)
     return evidence
@@ -400,8 +491,11 @@ def maintenance(cfg,enabled):
             if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
             status,body=public_probe(m)
             if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
+            sync_maintenance_flag(directory)
         except Exception:
-            if not was_enabled:(directory/'enabled').unlink(missing_ok=True)
+            if not was_enabled:
+                (directory/'enabled').unlink(missing_ok=True)
+                sync_maintenance_flag(directory)
             raise
     else:
         if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl')):raise ValueError('Health probe failed; maintenance retained')
@@ -410,9 +504,12 @@ def maintenance(cfg,enabled):
             try:
                 status,body=public_probe(m)
                 if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access did not recover')
+                sync_maintenance_flag(directory)
             except Exception:
                 (directory/'enabled').touch(mode=0o600)
+                sync_maintenance_flag(directory)
                 raise ValueError('Public probe failed; maintenance retained')
+        else:sync_maintenance_flag(directory)
 def recover(root,ids,cfg,deadline,parent):
     while not (root/'disarmed').exists() and time.time()<deadline:time.sleep(2)
     if (root/'disarmed').exists():
@@ -428,6 +525,7 @@ def recover(root,ids,cfg,deadline,parent):
         if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Recovery health failed')
         maintenance(cfg,False)
         atomic_json(root/'recovery.json',{'recovered':True,'at':time.time()})
+        complete_recovery(root)
     except Exception:
         atomic_json(root/'recovery.json',{'recovered':False,'at':time.time()})
 def project_roots(container):
@@ -607,7 +705,7 @@ def capture_static(req):
     if os.path.commonpath([str(base),str(source)]) in [str(base),str(source)]:raise ValueError('Staging and static website paths cannot overlap')
     root=base/req['job']
     if root.exists():raise ValueError('Staging already exists; inspect retained job before retry')
-    root.mkdir(parents=True,mode=0o700)
+    create_staging_root(root)
     emit(stage='source_ready') # No daemon is stopped and no maintenance flag is touched.
     before=tree_digest(source)
     if shutil.disk_usage(root).free<before['bytes']*3+1024**3:raise ValueError('Insufficient staging capacity')
@@ -718,7 +816,7 @@ def capture(req):
         for m in c['Mounts']:
             a,b=os.path.realpath(base),os.path.realpath(m['Source'])
             if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Staging and source paths cannot overlap')
-    root.mkdir(parents=True,mode=0o700)
+    create_staging_root(root)
     # Capacity is estimated before stopping; additional free space remains mandatory.
     needed=sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])
     needed+=sum(c.get('SizeRw',0) or 0 for c in cs)
@@ -759,7 +857,7 @@ def capture(req):
             if service['engine']!='generic':service['expectedChecks']=data_checks(cid,service)
             prepare_database_shutdown(service)
             docker('stop','--time',str(stop_timeout),cid)
-        shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at)
+        shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
         for i,c in enumerate(cs):
@@ -780,7 +878,7 @@ def capture(req):
             while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
             if running and not health(running,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
             maintenance(cfg,False)
-            (root/'disarmed').touch(mode=0o600)
+            complete_recovery(root)
             emit(stage='source_ready')
         except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
