@@ -23,7 +23,7 @@ export async function exportRecoveryKit({database,masterKey,output,passphrase,re
   const snapshot=join(temporary,'snapshot.sqlite');await backup(database,snapshot);await chmod(snapshot,0o600);
   const files={'state.sqlite':await readFile(snapshot),'master.key':await readFile(masterKey)};
   if(Buffer.from(files['master.key'].toString().trim(),'base64').length!==32)throw new Error('Invalid manager key');
-  const snapshotDb=new DatabaseSync(snapshot,{readOnly:true});try{validateKey(snapshotDb,Buffer.from(files['master.key'].toString().trim(),'base64'));}finally{snapshotDb.close();}
+  const snapshotDb=new DatabaseSync(snapshot,{readOnly:true});try{validateKey(snapshotDb,Buffer.from(files['master.key'].toString().trim(),'base64'));if(snapshotDb.prepare('PRAGMA quick_check').get().quick_check!=='ok'||snapshotDb.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Manager snapshot validation failed');}finally{snapshotDb.close();}
   for(const [name,url] of [['recovery/decrypt-backup.js','../scripts/decrypt-backup.js'],['recovery/helper.py','../remote/helper.py'],['recovery/boot_recovery.py','../remote/boot_recovery.py'],['recovery/export_zip.py','../remote/export_zip.py']])files[name]=await readFile(new URL(url,import.meta.url));
   files['recovery/README.md']=Buffer.from('Private recovery kit. Keep the recovery passphrase separately and a copy of the matching DockNest release image/source and environment configuration offline. Restore into a new private DATA_DIR; do not overwrite a live manager. Sessions and schedules are disabled during import. Reconnect storage with independently verified host keys; environment-mounted credentials are not embedded. Decrypt packages using node decrypt-backup.js PACKAGE MASTER_KEY NEW_TAR, then use the bundled helper and manifest for reviewed isolated restore. No production replacement is automatic.\n');
   const payload=Buffer.from(JSON.stringify({version:1,createdAt:new Date().toISOString(),release,node:process.version,keyId:hash(files['master.key']).slice(0,16),files:Object.fromEntries(Object.entries(files).map(([name,bytes])=>[name,{sha256:hash(bytes),body:bytes.toString('base64')}]))}));
@@ -51,6 +51,11 @@ export async function restoreRecoveryKit({input,directory,passphrase}){
   validateKey(state,Buffer.from(files['master.key'].toString().trim(),'base64'));
   if(state.prepare('PRAGMA quick_check').get().quick_check!=='ok'||state.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Manager snapshot validation failed');
   state.exec('BEGIN IMMEDIATE');
+  if(state.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manager_backups'").get()){
+   state.exec('DELETE FROM manager_backups;');
+   const saved=state.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get();
+   if(saved){const settings=JSON.parse(saved.value);settings.enabled=false;settings.nextRun=null;state.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(JSON.stringify(settings));}
+  }
   for(const table of ['sessions','challenges','login_challenges','enrollment_challenges','downloads','leases'])if(state.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))state.exec('DELETE FROM '+table);
   state.exec("UPDATE policies SET enabled=0,next_run=NULL; UPDATE jobs SET status='failed',stage='failed',error='Queued work cancelled during independent manager recovery' WHERE status='queued'; UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Independent manager recovery: review source state before unlocking' WHERE status='running'; UPDATE restores SET status='failed' WHERE status='queued'; UPDATE restores SET status='recovery_required' WHERE status='running'; DELETE FROM settings WHERE key IN ('worker_heartbeat','artifact_reconciliation');");
   state.exec('COMMIT');state.close();state=null;
