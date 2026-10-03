@@ -143,13 +143,17 @@ test('storage catalog separates destinations, redacts credentials and groups man
  for(const targetId of [target,other])db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,'Fixture destination','box.example.invalid',22,'fixture','a'.repeat(64),'password','fixture-not-a-real-credential','/home/docknest',1e12,'connected',stamp,stamp);
  backup('catalog-one','sftp:'+target+':/home/docknest/qa/site/date/backup/payload.enc',42);
  backup('catalog-other','sftp:'+other+':/home/docknest/other/payload.enc',84);
+ const kit=id(),kitFile='docknest_0123456789abcdef_2026-10-03_12-13-14Z--'+kit+'.dkit';
+ db.prepare("INSERT INTO manager_backups(id,status,created_at,finished_at,size,target_id,path) VALUES(?,'completed',?,?,64,?,?)").run(kit,stamp,stamp,target,'sftp:'+target+':/home/docknest/BACKUP/docknest-recovery/'+kitFile);
  const response=await request('/storage-targets/'+target+'/tree');assert.equal(response.status,200);const tree=await response.json();
- assert.equal(tree.root,'/home/docknest');assert.equal(tree.servers.length,1);
+ assert.equal(tree.root,'/home/docknest');assert.equal(tree.managedRoot,'/home/docknest/BACKUP');assert.equal(tree.servers.length,1);
  const entry=tree.servers[0].sites[0].days[0].backups[0];
  assert.equal(entry.id,'catalog-one');assert.equal(entry.relativePath,'qa/site/date/backup/payload.enc');assert.equal(entry.size,42);
+ assert.equal(entry.filename,'payload.enc');assert.equal(tree.recovery.folder,'docknest-recovery');assert.equal(tree.recovery.files.length,1);
+ assert.equal(tree.recovery.files[0].filename,kitFile);assert.equal(tree.recovery.files[0].relativePath,'BACKUP/docknest-recovery/'+kitFile);assert.equal(tree.recovery.files[0].downloadable,true);
  assert.ok(!JSON.stringify(tree).includes('catalog-other'));assert.ok(!JSON.stringify(tree).includes('credential'));
  const targets=await (await request('/storage-targets')).json();
- assert.ok(targets.targets.every(target=>!('credential' in target)));assert.equal(targets.targets.find(row=>row.id===target).trackedBytes,42);
+ assert.ok(targets.targets.every(target=>!('credential' in target)));assert.equal(targets.targets.find(row=>row.id===target).trackedBytes,106);
  assert.equal((await request('/storage-targets/'+id()+'/tree')).status,404);
  db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
  try{assert.equal((await request('/storage-targets/'+target+'/tree')).status,403);}finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}

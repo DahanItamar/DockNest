@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import { db } from './db.js';
 import { open } from './crypto.js';
-import { backupLayout } from './backup-layout.js';
+import { backupLayout,backupRoot } from './backup-layout.js';
 import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
 import { storageConnectionError } from './storage-errors.js';
@@ -97,11 +97,11 @@ export async function testStorageTarget(options){
   }finally{for(const file of [temporary,published]){try{await call(sftp,'unlink',file);}catch(error){if(error.code!==2)throw error;}}}
  });
 }
-export function backupDirectory(server,site,id){
+export function backupDirectory(server,site){
  const options=activeStorage();
  if(options.mode==='unconfigured')throw new Error('Connect a remote storage destination before backing up');
- const folders=backupLayout(server,site,id);
- return options.mode==='sftp'?prefix+options.id+':'+path.posix.join(options.root,...folders):path.join(config.backupDir,...folders);
+ const folders=backupLayout(server,site);
+ return options.mode==='sftp'?prefix+options.id+':'+path.posix.join(backupRoot(options.root),...folders):path.join(config.backupDir,...folders);
 }
 export function storageJoin(directory,name){
  if(!isRemoteFile(directory))return path.join(directory,name);
@@ -111,7 +111,7 @@ export function managerBackupDirectory(targetId,keyId){
  const options=targetOptions(targetId);
  if(options.mode!=='sftp')throw new Error('DockNest backup requires the selected SFTP destination');
  if(!/^[a-f0-9]{16}$/.test(keyId))throw new Error('Invalid manager key identifier');
- return prefix+options.id+':'+path.posix.join(options.root,'docknest-manager',keyId);
+ return prefix+options.id+':'+path.posix.join(backupRoot(options.root),'docknest-recovery');
 }
 export async function makeDirectory(directory){
  if(!isRemoteFile(directory))return mkdir(directory,{recursive:true,mode:0o700});

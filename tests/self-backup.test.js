@@ -94,7 +94,7 @@ test('queued uploads keep their selected destination; failed transfer stages and
  const queued=enqueueSelfBackup(administrator);db.prepare("UPDATE settings SET value=? WHERE key='backup_storage_target'").run(secondTarget);
  await executeSelfBackup(claimSelfBackup());
  assert.equal(db.prepare('SELECT target_id FROM manager_backups WHERE id=?').get(queued.id).target_id,target);
- assert.match(db.prepare('SELECT path FROM manager_backups WHERE id=?').get(queued.id).path,/\/backups\/docknest-manager\//);
+ assert.match(db.prepare('SELECT path FROM manager_backups WHERE id=?').get(queued.id).path,/\/backups\/BACKUP\/docknest-recovery\/docknest_[a-f0-9]{16}_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}Z--[a-f0-9-]+\.dkit$/);
  enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());
  assert.equal(selfBackupStatus().latest.storage.name,'Other destination');
  assert.equal([...fixture.files.keys()].filter(name=>name.endsWith('.dkit')).length,1);
@@ -106,6 +106,19 @@ test('active downloads protect the old copy during replacement and expired lease
  enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());assert.ok(db.prepare('SELECT 1 FROM manager_backups WHERE id=?').get(old.id));
  db.prepare('UPDATE manager_backup_downloads SET expires_at=0 WHERE id=?').run(lease);await pruneSelfBackups();
  assert.equal(db.prepare('SELECT 1 FROM manager_backups WHERE id=?').get(old.id),undefined);
+ assert.equal([...fixture.files.keys()].filter(name=>name.endsWith('.dkit')).length,1);
+});
+test('legacy remote kit paths remain downloadable and are pruned only after a successful new-layout replacement',async()=>{
+ const latest=selfBackupStatus().latest,row=db.prepare('SELECT * FROM manager_backups WHERE id=?').get(latest.id);
+ const file=row.path.slice(row.path.indexOf(':/')+1),bytes=fixture.files.get(file),legacy='/other/docknest-manager/0123456789abcdef/'+row.id+'.dkit';
+ const {makeDirectory}=await import('../src/storage.js');await makeDirectory('sftp:'+secondTarget+':/other/docknest-manager/0123456789abcdef');
+ fixture.files.set(legacy,bytes);fixture.files.delete(file);
+ db.prepare('UPDATE manager_backups SET path=? WHERE id=?').run('sftp:'+secondTarget+':'+legacy,row.id);
+ assert.deepEqual((await readLatestSelfBackup()).bytes,bytes);
+ fixture.faults.writes=true;enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());fixture.faults.writes=false;
+ assert.equal(selfBackupStatus().latest.id,latest.id);assert.ok(fixture.files.has(legacy));
+ enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());
+ assert.notEqual(selfBackupStatus().latest.id,latest.id);assert.equal(fixture.files.has(legacy),false);
  assert.equal([...fixture.files.keys()].filter(name=>name.endsWith('.dkit')).length,1);
 });
 test('interrupted runs keep the last kit and tampered downloads fail closed',async()=>{

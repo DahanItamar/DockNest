@@ -4,6 +4,7 @@ import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, rateLimit } from './auth.js';
 import { testStorageTarget, targetOptions, activeStorage } from './storage.js';
+import { backupRoot } from './backup-layout.js';
 
 export const storageTargets=Router();
 storageTargets.use(requireAdmin);
@@ -36,9 +37,14 @@ storageTargets.get('/:id/tree',(req,res)=>{
   const site=server.sites.get(row.site_id),day=row.captured_at.slice(0,10);
   if(!site.days.has(day))site.days.set(day,{date:day,backups:[]});
   const root=prefix+target.root+'/';
-  site.days.get(day).backups.push({id:row.id,capturedAt:row.captured_at,size:row.size,pinned:Boolean(row.pinned),verified:Boolean(row.verified),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null});
+  site.days.get(day).backups.push({id:row.id,capturedAt:row.captured_at,size:row.size,pinned:Boolean(row.pinned),verified:Boolean(row.verified),filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null});
  }
- res.json({root:target.root,limited,servers:[...servers.values()].map(server=>({...server,sites:[...server.sites.values()].map(site=>({...site,days:[...site.days.values()]}))}))});
+ const latest=db.prepare("SELECT id FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
+ const kits=db.prepare("SELECT id,created_at,size,path FROM manager_backups WHERE status='completed' AND target_id=? AND path IS NOT NULL ORDER BY rowid DESC LIMIT 1001").all(target.id);
+ const recoveryLimited=kits.length>1000;if(recoveryLimited)kits.pop();
+ const root=prefix+target.root+'/';
+ const recovery={folder:'docknest-recovery',limited:recoveryLimited,files:kits.map(row=>({id:row.id,createdAt:row.created_at,size:row.size,filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null,downloadable:row.id===latest?.id}))};
+ res.json({root:target.root,managedRoot:backupRoot(target.root),limited,recovery,servers:[...servers.values()].map(server=>({...server,sites:[...server.sites.values()].map(site=>({...site,days:[...site.days.values()]}))}))});
 });
 storageTargets.post('/connect',rateLimit('storage-connect',10),async(req,res)=>{
  const data=schema.parse(req.body),targetId=id(),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();

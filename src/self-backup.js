@@ -9,6 +9,7 @@ import { db,id,audit,transaction } from './db.js';
 import { config } from './config.js';
 import { seal,open,digest } from './crypto.js';
 import { exportRecoveryKit } from './recovery-kit.js';
+import { backupRoot,managerBackupFilename } from './backup-layout.js';
 import { activeStorage,targetOptions,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
 
 const now=()=>new Date().toISOString(),settingsKey='manager_backup_config';
@@ -17,7 +18,7 @@ const release=process.env.DOCKNEST_RELEASE||packageInfo.version;
 const schema=z.object({enabled:z.boolean(),schedule:z.string().trim().max(100).default('0 3 * * *'),timezone:z.string().max(100).default('UTC'),passphrase:z.string().min(24).max(4096).optional(),recoverySecretSaved:z.literal(true)});
 export const selfBackupConfig=()=>JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(settingsKey)?.value||'null');
 const active=()=>db.prepare("SELECT * FROM manager_backups WHERE status IN ('queued','running')").get();
-function destination(){try{const selected=activeStorage();return selected.mode==='sftp'?{id:selected.id,name:selected.name||'Deployment SFTP destination',root:selected.root,available:true}:{available:false};}catch{return {available:false};}}
+function destination(){try{const selected=activeStorage();return selected.mode==='sftp'?{id:selected.id,name:selected.name||'Deployment SFTP destination',root:selected.root,recoveryDirectory:backupRoot(selected.root)+'/docknest-recovery',available:true}:{available:false};}catch{return {available:false};}}
 function runStorage(row){
  if(!row?.path)return {mode:'local',name:'Local copy from before remote storage was enabled'};
  try{return {mode:'sftp',name:targetOptions(row.target_id).name||'Deployment SFTP destination'};}catch{return {mode:'sftp',name:'Original SFTP destination unavailable'};}
@@ -78,8 +79,11 @@ export async function pruneSelfBackups(){
  }
 }
 function validateRemotePath(row){
- const selected=targetOptions(row.target_id),prefix='sftp:'+selected.id+':'+selected.root.replace(/\/+$/,'')+'/docknest-manager/';
- if(selected.mode!=='sftp'||!row.path.startsWith(prefix)||!new RegExp('^[a-f0-9]{16}/'+z.uuid().parse(row.id)+'\\.dkit$').test(row.path.slice(prefix.length)))throw new Error('Invalid manager backup path');
+ const selected=targetOptions(row.target_id),prefix='sftp:'+selected.id+':',runId=z.uuid().parse(row.id);
+ const recovery=prefix+backupRoot(selected.root)+'/docknest-recovery/',legacy=prefix+selected.root.replace(/\/+$/,'')+'/docknest-manager/';
+ const current=row.path.startsWith(recovery)&&new RegExp('^docknest_[a-f0-9]{16}_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}Z--'+runId+'\\.dkit$').test(row.path.slice(recovery.length));
+ const previous=row.path.startsWith(legacy)&&new RegExp('^[a-f0-9]{16}/'+runId+'\\.dkit$').test(row.path.slice(legacy.length));
+ if(selected.mode!=='sftp'||!(current||previous))throw new Error('Invalid manager backup path');
 }
 async function remoteHash(file){const hash=createHash('sha256');for await(const chunk of await openRead(file))hash.update(chunk);return hash.digest('hex');}
 export async function executeSelfBackup(run){
@@ -91,7 +95,7 @@ export async function executeSelfBackup(run){
   const file=join(temporary,'manager.dkit');
   const evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase:open(saved.passphrase),release});
   const bytes=await readFile(file);if(digest(bytes)!==evidence.sha256)throw new Error('Recovery kit checksum mismatch');
-  const remoteDirectory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(remoteDirectory,run.id+'.dkit');
+  const remoteDirectory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(remoteDirectory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
   db.prepare('UPDATE manager_backups SET target_id=?,path=? WHERE id=?').run(targetId,published,run.id);
   await makeDirectory(remoteDirectory);await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
   if(await remoteHash(published+'.partial')!==evidence.sha256)throw new Error('Uploaded recovery kit checksum mismatch');

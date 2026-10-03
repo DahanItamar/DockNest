@@ -5,7 +5,8 @@ import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
 import { key } from './crypto.js';
 import { remote, download, uploadStream } from './ssh.js';
-import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
+import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
+import { backupFilename } from './backup-layout.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -154,20 +155,21 @@ async function executeRestoreJob(job){
 export async function executeJob(job){
  if(job.type==='scrub')return executeScrub(job);
  if(job.type==='restore')return executeRestoreJob(job);
- let remoteStage='preflight',contacted=false,artifactDirectory=null,publishedBackup=false;
+ let remoteStage='preflight',contacted=false,artifactTemporary=null,publishedBackup=false;
  const {site,server}=siteInfo(job.site_id);
  try{
   stage(job.id,'preflight');
   const plan=await planBackup(site.id);
   const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups').get().bytes;
   const capacity=await storageCapacity(used);if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB estimated free');
-  const backupId=id(),directory=backupDirectory(server,site,backupId);
-  await makeDirectory(directory);artifactDirectory=directory;
+  const backupId=id(),directory=backupDirectory(server,site);
+  await makeDirectory(directory);
   contacted=true;
   const result=await remote(server,{operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint},value=>{remoteStage=value;stage(job.id,value);});
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
-  const temporary=storageJoin(directory,'payload.enc.partial'),published=storageJoin(directory,'payload.enc');
+  const published=storageJoin(directory,backupFilename(backupId,new Date(result.manifest.capturedAt*1000))),temporary=published+'.partial';
+  artifactTemporary=temporary;
   manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
   preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest,capturedAt:new Date(result.manifest.capturedAt*1000).toISOString()});
   stage(job.id,'transferring');
@@ -186,7 +188,8 @@ export async function executeJob(job){
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);
-  if(artifactDirectory&&!publishedBackup&&journal?.state!=='authenticated')await removeDirectory(artifactDirectory).catch(()=>{});
+  // Site folders are shared by recovery points; clean up only this job's file.
+  if(artifactTemporary&&!publishedBackup&&journal?.state!=='authenticated')await removeFile(artifactTemporary).catch(()=>{});
   const recovery=site.config.kind!=='static' && contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
   db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),job.id);
   audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
