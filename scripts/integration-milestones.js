@@ -3,6 +3,29 @@ import { randomBytes,randomUUID,createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+// Diagnostics contain only fixed categories. Never expose raw plan/subprocess
+// messages: Docker errors can contain a command's credential-bearing arguments.
+export function nativePlanFailure(error) {
+ const message=String(error?.message||'');
+ for(const [pattern,category] of [
+  [/symlink to uncaptured external data/,'external-source-symlink'],
+  [/Database must be running/,'native-version-unavailable'],
+  [/returned non-zero exit status|native query failed/,'native-query-failed'],
+  [/native database shutdown setting/,'invalid-shutdown-setting'],
+  [/version does not match|version differs/,'native-version-mismatch'],
+  [/data directory must be|Active PostgreSQL data directory/,'data-path-not-captured'],
+  [/source filesystem|nested mount/,'unsupported-source-mount'],
+  [/SSH|ECONN|handshake|connect/i,'ssh-transport-failed']
+ ])if(pattern.test(message))return category;
+ return 'native-plan-rejected';
+}
+
+export async function nativeFixtureDiagnostics(run,source,name) {
+ const probe="import json,subprocess,sys,re\nname=sys.argv[1]\ntry:\n c=json.loads(subprocess.check_output(['docker','inspect',name],stderr=subprocess.DEVNULL))[0];s=c['State'];status=s.get('Status');d={'running':bool(s.get('Running')),'status':status if status in ['created','running','paused','restarting','removing','exited','dead'] else 'unknown','exitCode':s.get('ExitCode') if type(s.get('ExitCode')) is int else None,'oomKilled':bool(s.get('OOMKilled'))}\n log=subprocess.run(['docker','logs','--tail','250',name],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10);text=(log.stdout+log.stderr).decode(errors='replace')\n patterns={'readyForConnections':r'ready for connections','initializationComplete':r'init process done|Initialization complete','temporaryServerFailed':r'Unable to start server|Unable to shut down server','diskFull':r'No space left on device|disk is full','permissionDenied':r'Permission denied','outOfMemory':r'out of memory|Cannot allocate memory','unknownOption':r'unknown (?:option|variable)','aborting':r'Aborting','accessDenied':r'Access denied','socketFailure':r'cannot.*socket|Can.t.*socket'}\n d['logCategories']={key:bool(re.search(pattern,text,re.I)) for key,pattern in patterns.items()};print(json.dumps(d))\nexcept Exception:print(json.dumps({'diagnosticsUnavailable':True}))";
+ try{return JSON.parse(await run('exec',source,'python3','-c',probe,name));}
+ catch{return {diagnosticsUnavailable:true};}
+}
+
 // This module receives only isolated fixture hosts from integration-linux.js.
 export async function runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record}){
  const {enqueueBackup,enqueueRestore,claimJob,executeJob,planBackup,planRestore,verifyEncrypted}=await import('../src/engine.js');
@@ -26,7 +49,17 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
   const siteId=randomUUID(),cfg={containers:[name],stagingRoot:'/var/lib/docknest',exclusiveSourcesConfirmed:true,externalReferencesConfirmed:true,cleanShutdownConfirmed:true,shutdownProfile:'generic',stopTimeout:90,maintenance:{required:false},temporaryMemoryFolders:[{container:name,destination:'/tmp'}],services:[{container:name,engine:definition.engine,database:'fixture',dependsOn:[],checks:[{name:'Fixture records',table:'records'}]}]};
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId,servers[0].id,'Native '+definition.engine,JSON.stringify(cfg),new Date().toISOString());
   // Wait on native version/readiness, not merely State.Running.
-  await until(async()=>Boolean((await planBackup(siteId)).services[0].version),'Native database preflight failed: '+definition.engine,180);
+  let lastPlanFailure='native-version-unavailable';
+  try{
+   await until(async()=>{
+    try{return Boolean((await planBackup(siteId)).services[0].version);}
+    catch(error){lastPlanFailure=nativePlanFailure(error);return false;}
+   },'Native database preflight failed: '+definition.engine,180);
+  }catch{
+   const diagnostics=await nativeFixtureDiagnostics(run,source,name);
+   evidence.nativePreflightFailure={engine:definition.engine,planFailure:lastPlanFailure,...diagnostics};
+   throw new Error('Native database preflight failed: '+definition.engine+'; '+JSON.stringify(evidence.nativePreflightFailure));
+  }
   const client=definition.engine==='postgres'?'psql':definition.engine==='mariadb'?'mariadb':'mysql';
   async function query(host,cid,sql){
    if(definition.engine==='postgres')return run('exec',host,'docker','exec','--user','postgres',cid,client,'-X','-w','-h','/var/run/postgresql','-U','postgres','-d','fixture','-At','-v','ON_ERROR_STOP=1','-c',sql);

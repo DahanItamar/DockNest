@@ -7,8 +7,42 @@ from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
 from helper import recover, complete_recovery
+from helper import database_query
 from helper import create_staging_root, sync_directory, capture
 from boot_recovery import recover_jobs
+
+class DatabaseSocketTests(unittest.TestCase):
+    def test_container_socket_override_remains_private_and_default_config_is_preserved(self):
+        with patch('helper.run',return_value=b'1\n') as command:
+            self.assertEqual(database_query('db',{'engine':'mysql'},'SELECT 1'),'1')
+            arguments=command.call_args.args[0]
+            self.assertEqual(arguments[:4],['docker','exec','db','sh'])
+            script=arguments[arguments.index('-c')+1]
+            self.assertIn('--socket="$MYSQL_UNIX_PORT"',script)
+            self.assertIn('--protocol=socket',script)
+            self.assertNotIn('--host',script);self.assertNotIn('--port',script)
+            self.assertNotIn('--password',script)
+            self.assertIn('MYSQL_ROOT_PASSWORD_FILE',script)
+
+    @unittest.skipUnless(__import__('os').name=='posix','Requires a POSIX container shell')
+    def test_container_shell_applies_explicit_socket_and_rejects_unsupported_paths(self):
+        import os,subprocess,secrets
+        with patch('helper.run',return_value=b'1\n') as command:database_query('db',{'engine':'mysql'},'SELECT 1')
+        arguments=command.call_args.args[0];script=arguments[arguments.index('-c')+1]
+        with tempfile.TemporaryDirectory() as temporary:
+            client=pathlib.Path(temporary)/'client';client.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n');client.chmod(0o700)
+            password=secrets.token_urlsafe(24);password_file=pathlib.Path(temporary)/'password';password_file.write_text(password)
+            environment={**os.environ,'MYSQL_ROOT_PASSWORD_FILE':str(password_file),'MYSQL_ROOT_PASSWORD':'','MARIADB_ROOT_PASSWORD_FILE':'','MARIADB_ROOT_PASSWORD':''}
+            for socket in ['', '/tmp/mysql.sock']:
+                result=subprocess.run(['sh','-c',script,'docknest',str(client),'root','SELECT 1'],env={**environment,'MYSQL_UNIX_PORT':socket},capture_output=True,text=True)
+                self.assertEqual(result.returncode,0)
+                self.assertNotIn(password,result.stdout+result.stderr)
+                options=result.stdout.splitlines();self.assertIn('--protocol=socket',options)
+                self.assertEqual([option for option in options if option.startswith('--socket=')],['--socket='+socket] if socket else [])
+            for socket in ['relative.sock','@abstract','/tmp/bad\nsocket','/tmp/bad\rsocket']:
+                result=subprocess.run(['sh','-c',script,'docknest',str(client),'root','SELECT 1'],env={**environment,'MYSQL_UNIX_PORT':socket},capture_output=True,text=True)
+                self.assertEqual(result.returncode,64)
+                self.assertEqual(result.stdout,'');self.assertNotIn(password,result.stderr)
 
 class BootRecoveryTests(unittest.TestCase):
     def test_prior_boot_restarts_original_services_and_keeps_stopped_services_stopped(self):

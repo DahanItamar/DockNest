@@ -13,3 +13,5 @@ Redis 7.4 uses a native standalone-primary contract, not a disposable-cache assu
 Generic writers require the operator's explicit clean-shutdown confirmation and zero exit without OOM. This is declared application consistency, not engine-validated database consistency. External writers, tablespaces, plugins, credentials and configuration dependencies still need inventory and inclusion. A supported engine name does not certify every version or deployment; consult the tested support matrix before beta use.
 
 The editor preserves saved service contracts when editing other settings. Advanced contracts can be supplied through the existing authenticated site API; automatic discovery supplies native defaults. Do not add passwords to service contracts.
+
+MySQL/MariaDB clients use their normal local socket configuration. When the container sets `MYSQL_UNIX_PORT`, DockNest explicitly uses that absolute local socket path, including when an image's client option file specifies a different default. Unsupported socket paths fail preflight; credentials remain inside the container.
