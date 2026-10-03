@@ -26,6 +26,43 @@ export async function nativeFixtureDiagnostics(run,source,name) {
  catch{return {diagnosticsUnavailable:true};}
 }
 
+export async function bootFixtureDiagnostics(run,source,base,job) {
+ const probe=`import json,sys,pathlib
+sys.path.insert(0,'/qa-helper')
+import boot_recovery as driver
+diagnostic={'lastStage':'not-started','failureCategory':None}
+def category(error):
+ message=str(error)
+ for marker,label in [('root-owned and private','journal-ownership-or-mode'),('must not use symlinks','journal-symlink'),('directory required','journal-not-directory'),('regular file','journal-not-regular-file'),('Source service identity changed','source-identity-changed'),('Originally stopped service','original-state-changed'),('Unsupported recovery journal','unsupported-journal-version'),('Source health did not recover','source-health-failed'),('Service failed restart health','native-restart-health-failed'),('Public probe failed','public-health-failed'),('Recovery dependency cycle','dependency-cycle')]:
+  if marker in message:return label
+ kind=type(error).__name__
+ return {'PermissionError':'filesystem-permission','FileNotFoundError':'missing-file-or-service','CalledProcessError':'native-command-failed','TimeoutExpired':'native-command-timeout','KeyError':'incomplete-recovery-contract','OSError':'filesystem-sync-or-io'}.get(kind,'recovery-policy-or-io-failed')
+def wrap(name,original):
+ def invoke(*args,**kwargs):
+  diagnostic['lastStage']=name
+  return original(*args,**kwargs)
+ return invoke
+for name in ['private_path','inspect','restart_services','health','maintenance','atomic_json','complete_recovery']:
+ setattr(driver,name,wrap(name,getattr(driver,name)))
+def trace(frame,event,arg):
+ if frame.f_code is driver.recover_jobs.__code__ and event=='exception' and diagnostic['failureCategory'] is None:
+  diagnostic['failedStage']=diagnostic['lastStage'];diagnostic['failureCategory']=category(arg[1])
+ return trace
+base=pathlib.Path(sys.argv[1]);root=base/sys.argv[2];metadata={}
+for label,path in [('base',base),('job',root),('journal',root/'boot-recovery.json')]:
+ try:
+  value=path.lstat();metadata[label]={'uid':value.st_uid,'gid':value.st_gid,'mode':oct(value.st_mode&0o777),'symlink':path.is_symlink()}
+ except OSError:metadata[label]={'unavailable':True}
+sys.settrace(trace)
+try:result=driver.recover_jobs([str(base)],'current-fixture-boot')
+except Exception as error:
+ result=None
+ if diagnostic['failureCategory'] is None:diagnostic['failedStage']=diagnostic['lastStage'];diagnostic['failureCategory']=category(error)
+finally:sys.settrace(None)
+print(json.dumps({'result':result,'diagnostic':diagnostic,'pathMetadata':metadata}))`;
+ return JSON.parse(await run('exec',source,'python3','-c',probe,base,job));
+}
+
 // This module receives only isolated fixture hosts from integration-linux.js.
 export async function runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record}){
  const {enqueueBackup,enqueueRestore,claimJob,executeJob,planBackup,planRestore,verifyEncrypted}=await import('../src/engine.js');
@@ -101,7 +138,8 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
  const bootRoot='/var/lib/docknest-boot-qa',bootJob=randomUUID(),bootRecord={version:1,bootId:'prior-fixture-boot',running:[native[0].id],identities:{[native[0].id]:native[0].image},config:{...native[0].cfg,_runningContainers:[native[0].id],_serviceContracts:[{container:native[0].id,engine:'postgres',database:'fixture',user:'postgres'}]}};
  await run('exec',source,'mkdir','-p',bootRoot+'/'+bootJob);await run('exec',source,'chmod','700',bootRoot,bootRoot+'/'+bootJob);
  const journal=join(directory,'boot-record.json');await writeFile(journal,JSON.stringify(bootRecord));await run('cp',journal,source+':'+bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'chmod','600',bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'docker','stop',native[0].id);
- const bootResult=JSON.parse(await run('exec',source,'python3','-c',"import sys,json;sys.path.insert(0,'/qa-helper');from boot_recovery import recover_jobs;print(json.dumps(recover_jobs(['/var/lib/docknest-boot-qa'],'current-fixture-boot')))"));assert.equal(bootResult.recovered,1);assert.equal(await run('exec',source,'docker','inspect','--format','{{.State.Running}}',native[0].id),'true');
+ const bootProbe=await bootFixtureDiagnostics(run,source,bootRoot,bootJob);evidence.bootRecovery=bootProbe;
+ assert.deepEqual(bootProbe.result,{recovered:1,reviewRequired:0,ignored:0},JSON.stringify(bootProbe));assert.equal(await run('exec',source,'docker','inspect','--format','{{.State.Running}}',native[0].id),'true');
  passed('M4: Linux boot journal driver recovers native source after simulated boot identity change');
 
  // Separate root archive: manager uid 1000 cannot unlink it, even when it knows the name.
