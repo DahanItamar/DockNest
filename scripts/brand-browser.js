@@ -35,14 +35,14 @@ try{
    const img=new Image();img.src=href;await img.decode();
    const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
    const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);const p=ctx.getImageData(0,0,c.width,c.height).data;
-   let transparent=0,nonOpaque=0,blue=0,maxRadius=0;
+   let transparent=0,nonOpaque=0,purple=0,maxRadius=0;
    for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++){
     const i=(y*c.width+x)*4;if(p[i+3]===0)transparent++;if(p[i+3]!==255)nonOpaque++;
-    if(p[i+2]>p[i]+30&&p[i+3]>64){blue++;if(maskable)maxRadius=Math.max(maxRadius,Math.hypot(x+.5-c.width/2,y+.5-c.height/2));}
+    if(p[i+2]>p[i]+30&&p[i]>p[i+1]+15&&p[i+3]>64){purple++;if(maskable)maxRadius=Math.max(maxRadius,Math.hypot(x+.5-c.width/2,y+.5-c.height/2));}
    }
-   return{width:c.width,height:c.height,transparent,nonOpaque,blue,maxRadius};
+   return{width:c.width,height:c.height,transparent,nonOpaque,purple,maxRadius};
   },{href:new URL(href,base).href,maskable});
-  assert.deepEqual([stats.width,stats.height],[size,size]);assert.ok(stats.blue>size*size*.08);
+  assert.deepEqual([stats.width,stats.height],[size,size]);assert.ok(stats.purple>size*size*.08);
   if(opaque)assert.equal(stats.nonOpaque,0);else assert.ok(stats.transparent>size*size*.2);
   if(maskable)assert.ok(stats.maxRadius<=size*.4,'Bird fits maskable safe circle');
   records.push({href,...stats});

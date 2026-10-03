@@ -1,224 +1,238 @@
 {
   "identity": "DockNest / Homebird",
-  "presentation": "Light and dark",
-  "version": "deadd2f768",
-  "operation": "Native alpha preserved; transparent-margin cropping and downsampling only. Original unchanged. Blue README variant reused for dark surfaces.",
-  "sourceAlpha": {
-    "occupied": 307069,
-    "partial": 13761,
-    "white": 0,
-    "pixels": 1572528
+  "color": "#673AB7",
+  "presentation": "Approved full purple logo in light and dark themes",
+  "version": "fe02431615",
+  "approvedSources": {
+    "full": {
+      "filename": "logo-purple-full.png",
+      "sha256": "fe02431615e5b607b7c6ce62d000219156efcb8ca0ecf2a1a9ebee146ca59d2a",
+      "width": 2171,
+      "height": 724
+    },
+    "logo": {
+      "filename": "logo-purple-web.png",
+      "sha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
+      "width": 2015,
+      "height": 395
+    },
+    "mark": {
+      "filename": "mark-purple.png",
+      "sha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
+      "width": 476,
+      "height": 395
+    }
   },
+  "operation": "Approved PNG sources reused unchanged; responsive downsampling and centered icon fitting only. Original blue master retained.",
   "outputs": [
     {
       "filename": "logo.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "source": "docs/design/logo-purple-preview/logo-purple-web.png",
+      "sourceSha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
       "width": 2015,
       "height": 395,
-      "crop": {
-        "left": 98,
-        "top": 175,
-        "width": 2015,
-        "height": 395
-      },
-      "bytes": 501436,
-      "sha256": "fafbc16e8f73f5ad5eae28569e443257f38ecdfd3ea91ffc583f05ddd353da8a"
+      "bytes": 128427,
+      "sha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
+      "operation": "Byte-for-byte approved native PNG"
     },
     {
       "filename": "mark.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 476,
       "height": 395,
-      "crop": {
-        "left": 98,
-        "top": 175,
-        "width": 476,
-        "height": 395
-      },
-      "bytes": 151110,
-      "sha256": "69eb9be7b6bf01dfd35847e02016af47b8db2f84a6bf7ff4d72c17ff40dd9f3d"
+      "bytes": 29821,
+      "sha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
+      "operation": "Byte-for-byte approved native PNG"
     },
     {
-      "filename": "logo-600-deadd2f768.webp",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "logo-purple-600-fe02431615.webp",
+      "source": "docs/design/logo-purple-preview/logo-purple-web.png",
+      "sourceSha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
       "width": 600,
       "height": 118,
+      "bytes": 22912,
+      "sha256": "430ac3b20f1d786bb39af99ea167f4128edd78dc0a0be0d428c3645ac27b3db2",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 2015,
         "height": 395
       },
-      "bytes": 21700,
-      "sha256": "539e45592a9bf31bee142621d309349b885fd130cb68e1d6cadf8b710e703159"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "logo-1200-deadd2f768.webp",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "logo-purple-1200-fe02431615.webp",
+      "source": "docs/design/logo-purple-preview/logo-purple-web.png",
+      "sourceSha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
       "width": 1200,
       "height": 235,
+      "bytes": 58950,
+      "sha256": "ed9631456a4a7a8d723d3406012426534dbd8214c3a57209fa8cb901f6b63ca3",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 2015,
         "height": 395
       },
-      "bytes": 50498,
-      "sha256": "2bb7cb24fcde0781688d9c8544c4e66f0a7330e2b5c8d3868b600ca4faa62d80"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "logo-blue-600-dabcf86f23.webp",
-      "source": "docs/media/logo-blue.png",
-      "sourceSha256": "dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365",
-      "width": 600,
-      "height": 118,
-      "crop": {
-        "left": 2,
-        "top": 147,
-        "width": 2169,
-        "height": 426
-      },
-      "bytes": 23714,
-      "sha256": "fc010a2fd285b90ab5439f491af861095e781fa2dbefcd24daec6927f316fc19"
-    },
-    {
-      "filename": "logo-blue-1200-dabcf86f23.webp",
-      "source": "docs/media/logo-blue.png",
-      "sourceSha256": "dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365",
-      "width": 1200,
-      "height": 236,
-      "crop": {
-        "left": 2,
-        "top": 147,
-        "width": 2169,
-        "height": 426
-      },
-      "bytes": 60990,
-      "sha256": "b3fcf05aadb0cbe0ef776b47ec7b274cb2f10b7c8332eeaa602e9904e8b04b69"
-    },
-    {
-      "filename": "favicon-16-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "favicon-16-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 16,
       "height": 16,
+      "bytes": 785,
+      "sha256": "4c68b1878d95844ea4734fc00a6036c5707c9abcca53f7a1665f0db9522a7e96",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 713,
-      "sha256": "b7b88f11984e5868eb86922bb955dc711f5cdd1e3aac676a662f3ad7041a0f4e"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "favicon-32-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "favicon-32-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 32,
       "height": 32,
+      "bytes": 1651,
+      "sha256": "9bd5d18ee1e0f7a440cfb1582381e1af4024c26d5f0db83c230204acc222ec94",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 1757,
-      "sha256": "58ebcfade5a533d90853c8177b182ac70adde37b9c0f4419e8389da9cbe93ee8"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "favicon-48-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "favicon-48-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 48,
       "height": 48,
+      "bytes": 2464,
+      "sha256": "008119b26efe8a4e4ff1fcfc47012256cd43872da465bc0002c03d3f51538efb",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 2946,
-      "sha256": "1534321e2e44dbf1762b66e445e370f037d168591489c54efc11b46c52f0366b"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "favicon-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "favicon-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 32,
       "height": 32,
+      "bytes": 1651,
+      "sha256": "9bd5d18ee1e0f7a440cfb1582381e1af4024c26d5f0db83c230204acc222ec94",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 1757,
-      "sha256": "58ebcfade5a533d90853c8177b182ac70adde37b9c0f4419e8389da9cbe93ee8"
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "app-icon-192-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "app-icon-192-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 192,
       "height": 192,
+      "bytes": 10345,
+      "sha256": "af0c5132bf2645d31642e6da1abe174fbcd5ab86b2d570cd53bc92b6b9a3e78e",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 21624,
-      "sha256": "7c3c8edc5980965e9300b7a123e60ca8ffd05928ada684eef9c36a0c88795f23"
+      "background": "#FFFFFF",
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "app-icon-512-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "app-icon-512-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 512,
       "height": 512,
+      "bytes": 46081,
+      "sha256": "1acfb71e70d702c73885b4c8e383c0da2068cba67d6dac2ff04a48ab5b09774b",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 121231,
-      "sha256": "2390fdfe64f1a8b8e46e34deef59b0517fcdb02537f37dafe76c300d20eb8766"
+      "background": "#FFFFFF",
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "app-icon-maskable-512-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "app-icon-maskable-512-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 512,
       "height": 512,
+      "bytes": 30770,
+      "sha256": "c9a7b12ee3e6c19b29c45dd67411f3194b52df7bfeba667f6a5290a1b46f4ca1",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 72954,
-      "sha256": "59893cc92a4d29d73ea222d4499af2ec4cab4b561b250a197183fc0f1519db4d"
+      "background": "#FFFFFF",
+      "maskable": true,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
     },
     {
-      "filename": "apple-touch-icon-deadd2f768.png",
-      "source": "docs/design/homebird-brand/docknest-homebird-transparent.png",
-      "sourceSha256": "deadd2f768543836425a44821d82bc4a5416102af72aeeb9d236e566e9b78a98",
+      "filename": "apple-touch-icon-fe02431615.png",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
       "width": 180,
       "height": 180,
+      "bytes": 9892,
+      "sha256": "07b99a95e4aa607d51b49e9b6caa506a12a13417a02da75f7c72060d864281f5",
       "crop": {
-        "left": 98,
-        "top": 175,
+        "left": 0,
+        "top": 0,
         "width": 476,
         "height": 395
       },
-      "bytes": 18730,
-      "sha256": "fa601a5456bf5f2336c3f49d331b00fa20ff6740344259209f98ffd97b8d707c"
+      "background": "#FFFFFF",
+      "maskable": false,
+      "operation": "Downsample/fit approved source; no recoloring or glyph redraw"
+    },
+    {
+      "filename": "favicon-fe02431615.ico",
+      "source": "docs/design/logo-purple-preview/mark-purple.png",
+      "sourceSha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
+      "width": 48,
+      "height": 48,
+      "bytes": 4954,
+      "sha256": "cf6035b5b3c4eff3b936b64bde2af08bddbf65c82368600b4a853e294e3d0d49",
+      "sizes": [
+        16,
+        32,
+        48
+      ],
+      "operation": "PNG-backed ICO with real 16/32/48 entries"
     }
   ]
 }

@@ -19,7 +19,7 @@ try{
  await page.evaluate(()=>{const start=document.startViewTransition.bind(document);document.startViewTransition=update=>{const transition=start(update);window.themeFade=transition;return transition}});
  await toggle.click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
  assert.equal(await page.evaluate(async()=>{await window.themeFade.ready;return getComputedStyle(document.documentElement,'::view-transition-new(root)').animationDuration}),'0.38s');await contrast();
- assert.match(await page.locator('.brand-image').getAttribute('src'),/logo-blue/);await page.waitForFunction(()=>document.querySelector('.brand-image').complete&&document.querySelector('.brand-image').naturalWidth>0);
+ assert.match(await page.locator('.brand-image').getAttribute('src'),/logo-purple/);await page.waitForFunction(()=>document.querySelector('.brand-image').complete&&document.querySelector('.brand-image').naturalWidth>0);
  await page.getByRole('button',{name:'Switch to light theme'}).hover();await page.waitForTimeout(280);assert.notEqual(await page.locator('.theme-symbol .moon-star').first().evaluate(el=>getComputedStyle(el).transform),'none');
  // Hold the React bundle to verify the saved dark preference is applied before it runs.
  let release;const gate=new Promise(r=>release=r);await page.route('**/assets/index-*.js',async r=>{await gate;await r.continue()});

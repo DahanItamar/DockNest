@@ -1,0 +1,71 @@
+{
+  "previewOnly": true,
+  "color": "#673AB7",
+  "geometry": "Native full logo, web logo and mark alpha verified pixel-for-pixel identical to their sources",
+  "imagegen": {
+    "mode": "Built-in edit; color direction draft only",
+    "reason": "Generated canvas was 2173x724 versus source 2171x724. Exact final assets retain original source alpha and dimensions."
+  },
+  "outputs": [
+    {
+      "filename": "logo-purple-full.png",
+      "source": "docs/media/logo-blue.png",
+      "width": 2171,
+      "height": 724,
+      "sha256": "fe02431615e5b607b7c6ce62d000219156efcb8ca0ecf2a1a9ebee146ca59d2a",
+      "sourceSha256": "dabcf86f2375d3fed6d7a0b7a0c801714d51405c1bc4660b22e5c325ac5a8365",
+      "alphaSha256": "0bf7ffd07d0c56755f4aab4d23c6b9f92cfa59606ba6f426c44fb3ebe9f29b2b",
+      "changedAlphaPixels": 0,
+      "operation": "Set RGB to #673AB7; preserve every original alpha byte and canvas dimensions"
+    },
+    {
+      "filename": "logo-purple-web.png",
+      "source": "public/brand/logo.png",
+      "width": 2015,
+      "height": 395,
+      "sha256": "1167530b8448ef7201c359658892090184973cfc6f735b64b5913c00c31237c3",
+      "sourceSha256": "fafbc16e8f73f5ad5eae28569e443257f38ecdfd3ea91ffc583f05ddd353da8a",
+      "alphaSha256": "107481453535e887f88f751c0fdb2d506d3f8a523ce352d6554a485c0ee304e4",
+      "changedAlphaPixels": 0,
+      "operation": "Set RGB to #673AB7; preserve every original alpha byte and canvas dimensions"
+    },
+    {
+      "filename": "mark-purple.png",
+      "source": "public/brand/mark.png",
+      "width": 476,
+      "height": 395,
+      "sha256": "2aa3cbbf02ce09923c2df396da63307e33910b1d6fa7717a0f3d042cc3b49bdf",
+      "sourceSha256": "69eb9be7b6bf01dfd35847e02016af47b8db2f84a6bf7ff4d72c17ff40dd9f3d",
+      "alphaSha256": "ee7b894203bf49cbdcfb8a9ff20ffc77662b852e0d194c1bfc093a272c58ec6a",
+      "changedAlphaPixels": 0,
+      "operation": "Set RGB to #673AB7; preserve every original alpha byte and canvas dimensions"
+    },
+    {
+      "filename": "favicon-purple-32.png",
+      "source": "mark-purple.png",
+      "width": 32,
+      "height": 32,
+      "sha256": "9bd5d18ee1e0f7a440cfb1582381e1af4024c26d5f0db83c230204acc222ec94",
+      "operation": "Downsample unchanged mark geometry for preview only",
+      "background": null
+    },
+    {
+      "filename": "favicon-purple-48.png",
+      "source": "mark-purple.png",
+      "width": 48,
+      "height": 48,
+      "sha256": "008119b26efe8a4e4ff1fcfc47012256cd43872da465bc0002c03d3f51538efb",
+      "operation": "Downsample unchanged mark geometry for preview only",
+      "background": null
+    },
+    {
+      "filename": "app-icon-purple-512.png",
+      "source": "mark-purple.png",
+      "width": 512,
+      "height": 512,
+      "sha256": "1acfb71e70d702c73885b4c8e383c0da2068cba67d6dac2ff04a48ab5b09774b",
+      "operation": "Downsample unchanged mark geometry for preview only",
+      "background": "#FFFFFF"
+    }
+  ]
+}
