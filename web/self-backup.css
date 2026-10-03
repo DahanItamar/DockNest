@@ -20,7 +20,7 @@
 .backup-empty-copy{margin:0 0 24px;font-size:13px}
 .backup-location{display:flex;align-items:flex-start;gap:12px;padding:14px;background:var(--info-surface);border-radius:8px;color:var(--info)}
 .backup-location>svg{flex-shrink:0;margin-top:2px}
-.backup-location b{font-size:13px;font-weight:500}
+.backup-location b{font-size:13px;font-weight:500;overflow-wrap:anywhere}
 .backup-location p{font-size:12px;margin-top:4px;color:var(--info)}
 .backup-actions{display:grid;gap:10px;margin-top:20px}
 .backup-actions button{width:100%;min-width:0;white-space:normal}

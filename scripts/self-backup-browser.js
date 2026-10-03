@@ -5,12 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
+import { startSftpFixture } from '../tests/sftp-fixture.js';
 const reservation=createServer();reservation.listen(0,'127.0.0.1');await new Promise(resolve=>reservation.once('listening',resolve));const port=reservation.address().port;await new Promise(resolve=>reservation.close(resolve));
 const directory=await mkdtemp(join(tmpdir(),'docknest-backup-ui-'));
 Object.assign(process.env,{DATA_DIR:directory,MASTER_KEY_FILE:join(directory,'master.key'),NODE_ENV:'test',BACKUP_STORAGE:'unconfigured',SECURE_COOKIES:'false',APP_ORIGIN:`http://127.0.0.1:${port}`});
 await writeFile(process.env.MASTER_KEY_FILE,randomBytes(32).toString('base64'));
 const {app}=await import('../src/server.js'),{db,id}=await import('../src/db.js'),{digest,seal}=await import('../src/crypto.js');
 const {claimSelfBackup,executeSelfBackup}=await import('../src/self-backup.js');
+const {testStorageTarget}=await import('../src/storage.js');
+const fixture=await startSftpFixture(),target=id();
+await testStorageTarget({...fixture.options,root:'/backups'});
+db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(target,'Connected backups',fixture.options.host,fixture.options.port,fixture.options.username,fixture.options.hostKey,'password',seal(fixture.options.password),'/backups',1e12,'connected',new Date().toISOString(),new Date().toISOString());
+db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(target);
 const user=id(),token=randomBytes(32).toString('base64url'),passphrase=randomBytes(32).toString('base64url');
 db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,?)").run(user,'fixture@example.invalid','fixture',seal('JBSWY3DPEHPK3PXP'),'[]',new Date().toISOString(),'Fixture administrator','admin');
 db.prepare('INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,last_activity_at,created_at,authenticated_at) VALUES(?,?,?,?,?,?,?)').run(digest(token),user,'fixture-csrf',Date.now()+3600000,Date.now(),Date.now(),Date.now());
@@ -25,6 +31,7 @@ try{
  await page.goto(`http://127.0.0.1:${server.address().port}`);
  await page.getByRole('button',{name:'DockNest backup',exact:true}).click();
  await page.getByRole('heading',{name:'Recovery settings'}).waitFor();
+ await page.locator('.backup-location').getByText('Connected backups',{exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'Back up DockNest now',exact:true}).isDisabled(),true);
  await page.locator('input[name="passphrase"]').fill(passphrase);
  await page.getByLabel('Confirm recovery passphrase',{exact:true}).fill(passphrase);
@@ -61,5 +68,5 @@ try{
  await page.getByRole('button',{name:'Save recovery settings',exact:true}).click();
  await page.getByText('Recovery passphrases do not match.',{exact:true}).waitFor();
  assert.deepEqual(errors,[]);
- console.log('Synthetic DockNest backup UI passed: administrator setup, worker kit creation, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
-}finally{await browser?.close();await new Promise(resolve=>server.close(resolve));db.close();await rm(directory,{recursive:true,force:true});}
+ console.log('Synthetic DockNest backup UI passed: administrator setup, pinned loopback SFTP upload, encrypted download, passphrase mismatch, desktop/dark/mobile layouts. No Linux Docker recovery was tested.');
+}finally{await browser?.close();await new Promise(resolve=>server.close(resolve));await fixture.close();db.close();await rm(directory,{recursive:true,force:true});}
