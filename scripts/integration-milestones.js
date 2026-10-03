@@ -137,7 +137,10 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
  // Real Linux boot-recovery driver on private journals, with a simulated boot identity.
  const bootRoot='/var/lib/docknest-boot-qa',bootJob=randomUUID(),bootRecord={version:1,bootId:'prior-fixture-boot',running:[native[0].id],identities:{[native[0].id]:native[0].image},config:{...native[0].cfg,_runningContainers:[native[0].id],_serviceContracts:[{container:native[0].id,engine:'postgres',database:'fixture',user:'postgres'}]}};
  await run('exec',source,'mkdir','-p',bootRoot+'/'+bootJob);await run('exec',source,'chmod','700',bootRoot,bootRoot+'/'+bootJob);
- const journal=join(directory,'boot-record.json');await writeFile(journal,JSON.stringify(bootRecord));await run('cp',journal,source+':'+bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'chmod','600',bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'docker','stop',native[0].id);
+ const journal=join(directory,'boot-record.json');await writeFile(journal,JSON.stringify(bootRecord));await run('cp',journal,source+':'+bootRoot+'/'+bootJob+'/boot-recovery.json');
+ // Docker cp can retain the CI runner uid; real boot journals are written by root.
+ // Match that fixture ownership explicitly before exercising the strict guard.
+ await run('exec',source,'chown','root:root',bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'chmod','600',bootRoot+'/'+bootJob+'/boot-recovery.json');await run('exec',source,'docker','stop',native[0].id);
  const bootProbe=await bootFixtureDiagnostics(run,source,bootRoot,bootJob);evidence.bootRecovery=bootProbe;
  assert.deepEqual(bootProbe.result,{recovered:1,reviewRequired:0,ignored:0},JSON.stringify(bootProbe));assert.equal(await run('exec',source,'docker','inspect','--format','{{.State.Running}}',native[0].id),'true');
  passed('M4: Linux boot journal driver recovers native source after simulated boot identity change');
