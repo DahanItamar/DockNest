@@ -16,7 +16,7 @@ const schema=z.object({
 }).superRefine((value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});});
 function safe(row){
  const {credential,...rest}=row;
- const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+row.id+':%').bytes;
+ const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+row.id+':%').bytes+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
  return {...rest,hasCredential:Boolean(credential),trackedBytes:used};
 }
 storageTargets.get('/',(_req,res)=>res.json({targets:db.prepare('SELECT * FROM storage_targets ORDER BY created_at').all().map(safe),activeTargetId:activeStorage().id}));

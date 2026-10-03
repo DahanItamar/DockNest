@@ -107,6 +107,12 @@ export function storageJoin(directory,name){
  if(!isRemoteFile(directory))return path.join(directory,name);
  const {options,value}=fileOptions(directory);return prefix+options.id+':'+path.posix.join(value,name);
 }
+export function managerBackupDirectory(targetId,keyId){
+ const options=targetOptions(targetId);
+ if(options.mode!=='sftp')throw new Error('DockNest backup requires the selected SFTP destination');
+ if(!/^[a-f0-9]{16}$/.test(keyId))throw new Error('Invalid manager key identifier');
+ return prefix+options.id+':'+path.posix.join(options.root,'docknest-manager',keyId);
+}
 export async function makeDirectory(directory){
  if(!isRemoteFile(directory))return mkdir(directory,{recursive:true,mode:0o700});
  const {options,value}=fileOptions(directory);return withSession(options,sftp=>makeRemoteDirectory(sftp,value));
@@ -186,6 +192,7 @@ export async function storageCapacity(used=0){
  if(options.mode==='unconfigured')return {total:0,available:0,backend:'unconfigured',capacitySource:'none',name:'Connect a storage destination'};
  if(options.mode==='local'){const value=await statfs(config.backupDir);return {total:Number(value.blocks)*Number(value.bsize),available:Number(value.bavail)*Number(value.bsize),backend:'local',capacitySource:'filesystem'};}
  used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+options.id+':%').bytes;
+ used+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(options.id).bytes;
  if(options.id==='env')used+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE 'sftp:/%'").get().bytes;
  return {used,total:options.capacity,available:Math.max(0,options.capacity-used),backend:'sftp',targetId:options.id,name:options.name||'Storage Box',capacitySource:'configured',estimated:true};
 }

@@ -52,6 +52,7 @@ export async function restoreRecoveryKit({input,directory,passphrase}){
   if(state.prepare('PRAGMA quick_check').get().quick_check!=='ok'||state.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Manager snapshot validation failed');
   state.exec('BEGIN IMMEDIATE');
   if(state.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manager_backups'").get()){
+   if(state.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manager_backup_downloads'").get())state.exec('DELETE FROM manager_backup_downloads;');
    state.exec('DELETE FROM manager_backups;');
    const saved=state.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get();
    if(saved){const settings=JSON.parse(saved.value);settings.enabled=false;settings.nextRun=null;state.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(JSON.stringify(settings));}
