@@ -4,7 +4,7 @@ from export_zip import export_zip
 from unittest.mock import patch
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
-from helper import service_order, service_contracts, shutdown_evidence, restart_services
+from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
 from boot_recovery import recover_jobs
 
@@ -22,6 +22,26 @@ class BootRecoveryTests(unittest.TestCase):
                 restart.reset_mock();self.assertEqual(recover_jobs([d],'previous')['ignored'],1);restart.assert_not_called()
                 states[0]['Image']='replacement'
                 self.assertEqual(recover_jobs([d],'current')['reviewRequired'],1);restart.assert_not_called()
+    def test_completed_recovery_is_not_replayed_after_operator_stops_source(self):
+        import uuid
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);root=base/str(uuid.uuid4());root.mkdir()
+            record={'version':1,'bootId':'interrupted','running':['db'],'identities':{'db':'image-db'},'config':{'_serviceContracts':[],'maintenance':{}}}
+            (root/'boot-recovery.json').write_text(json.dumps(record))
+            states=[{'Id':'db','Image':'image-db','State':{'Running':False}}]
+            # Emulate the atomic writer to exercise replay on Windows too; production
+            # atomic_json fsyncs both the completion file and its parent directory.
+            def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states) as inspect_source,patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json',side_effect=write_journal) as write:
+                self.assertEqual(recover_jobs([d],'recovery-boot')['recovered'],1)
+                completion=json.loads((root/'boot-recovery-completed.json').read_text())
+                self.assertTrue(completion['completed']);self.assertEqual(completion['bootId'],'recovery-boot')
+                self.assertEqual(write.call_args_list[-1].args[0],root/'boot-recovery-completed.json')
+                # The source was stopped intentionally after recovery. A later boot
+                # must leave it stopped and must not alter maintenance or inspect it.
+                restart.reset_mock();flags.reset_mock();inspect_source.reset_mock();write.reset_mock()
+                self.assertEqual(recover_jobs([d],'later-boot'),{'recovered':0,'reviewRequired':0,'ignored':1})
+                restart.assert_not_called();flags.assert_not_called();inspect_source.assert_not_called();write.assert_not_called()
 
 class RecoveryEvidenceTests(unittest.TestCase):
     def test_missing_and_changed_artifacts_fail_before_restore(self):
@@ -44,6 +64,24 @@ class RecoveryEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):data_checks('db',service)
 
 class ServiceContractTests(unittest.TestCase):
+    def test_fast_shutdown_is_prepared_only_for_capture_and_original_setting_recovers(self):
+        service={'container':'db','engine':'mysql','version':'8.4.8'}
+        container={'Id':'db','Mounts':[{'Destination':'/var/lib/mysql','RW':True}]}
+        with patch('helper.database_query',return_value='8.4.8\t1\t/var/lib/mysql/') as query:
+            validate_database_contracts([service],[container])
+            self.assertEqual(service['originalFastShutdown'],1);self.assertFalse(service['slowShutdownVerified'])
+            self.assertNotIn('SET ',query.call_args.args[2])
+        with patch('helper.database_query',side_effect=['','0']) as query:
+            prepare_database_shutdown(service);self.assertTrue(service['slowShutdownVerified'])
+            self.assertEqual(query.call_args_list[0].args[2],'SET GLOBAL innodb_fast_shutdown=0;')
+        with patch('helper.docker'),patch('helper.health',return_value=True),patch('helper.database_query',side_effect=['1','1','','1']) as query:
+            restart_services(['db'],[service])
+            self.assertIn('SET GLOBAL innodb_fast_shutdown=1;',[c.args[2] for c in query.call_args_list])
+        with patch('helper.database_query',side_effect=['','1']):
+            with self.assertRaises(ValueError):prepare_database_shutdown(service)
+    def test_legacy_database_profile_cannot_bypass_writer_confirmation(self):
+        with patch('helper.service_contracts',return_value=[{'engine':'generic'}]):
+            with self.assertRaises(ValueError):backup_plan({'shutdownProfile':'postgres'},[])
     def test_dependency_order_and_cycles(self):
         services=[{'container':'web','dependsOn':['db']},{'container':'db','dependsOn':[]}]
         self.assertEqual(service_order(services),['db','web'])

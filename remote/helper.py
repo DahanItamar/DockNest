@@ -29,8 +29,8 @@ def atomic_json(path,value):
         try:os.fsync(directory)
         finally:os.close(directory)
     finally:temporary.unlink(missing_ok=True)
-def run(args,timeout=3600):
-    return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout)
+def run(args,timeout=3600,input=None):
+    return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input)
 def docker(*args): return run(['docker',*args])
 def inspect(ids): return json.loads(docker('inspect',*ids))
 
@@ -67,6 +67,8 @@ def classify_source(source,table=None):
 def backup_plan(cfg,containers=None):
     containers=preflight(cfg) if containers is None else containers
     services=service_contracts(cfg,containers)
+    if any(s['engine']=='generic' for s in services) and not cfg.get('cleanShutdownConfirmed'):
+        raise ValueError('Application writers require explicit clean-shutdown confirmation regardless of the legacy shutdown profile')
     validate_database_contracts(services,containers)
     table=mount_table();sources=[];seen=set()
     for c in containers:
@@ -98,10 +100,10 @@ def service_contracts(cfg,containers):
         declaration=declarations.get(c['Id'],{})
         engine=declaration.get('engine','auto');detected=None;version=None
         if c['State']['Running']:
-            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld')]:
+            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld'),('redis','redis-server')]:
                 try:
                     output=run(['docker','exec',c['Id'],binary,'--version'],timeout=10).decode(errors='replace')
-                    match=re.search(r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
+                    match=re.search(r'\bv=(\d+\.\d+\.\d+)\b' if name=='redis' else r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
                     if match:detected=name;version=match[1];break
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
         hint=c['Config'].get('Image','').lower()
@@ -109,6 +111,7 @@ def service_contracts(cfg,containers):
         engine=detected or ('generic' if engine=='auto' else engine)
         if engine=='generic' and any(word in hint for word in ['postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch']):raise ValueError('Stateful service requires a supported per-service database contract')
         if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
+        if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
         expected=declaration.get('version')
         if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
         dependencies=[]
@@ -143,6 +146,82 @@ def database_query(container,service,query):
     script='set -eu; export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:-${MARIADB_ROOT_PASSWORD:-}}"; file="${MYSQL_ROOT_PASSWORD_FILE:-${MARIADB_ROOT_PASSWORD_FILE:-}}"; if [ -n "$file" ]; then MYSQL_PWD=$(cat -- "$file"); export MYSQL_PWD; fi; exec "$1" --protocol=socket --batch --skip-column-names --user="$2" --execute="$3"'
     return run(['docker','exec',container,'sh','-c',script,'docknest',client,service.get('user') or 'root',query],timeout=30).decode().strip()
 
+def redis_query(container,service,command,raw=False):
+    """Loopback only; password variables/files remain inside the container.
+
+    An explicit --requirepass value is transported through stdin, never Docker
+    command arguments or service evidence. Shell source is static and not interpolated.
+    """
+    database=str(service.get('database') or '0')
+    if not re.fullmatch(r'\d{1,3}',database) or int(database)>15:raise ValueError('Redis checks require a supported numeric database 0..15')
+    if service.get('user') not in [None,'default']:raise ValueError('Redis ACL users require a reviewed adapter')
+    password='';arguments=inspect([container])[0]['Config'].get('Cmd') or []
+    for index,value in enumerate(arguments):
+        if value=='--requirepass':
+            if index+1>=len(arguments):raise ValueError('Redis password configuration is incomplete')
+            password=arguments[index+1]
+    if any(character in password for character in ['\n','\r','\x00']):raise ValueError('Redis command password requires a reviewed credential adapter')
+    script='set -eu; IFS= read -r supplied; export REDISCLI_AUTH="${REDISCLI_AUTH:-${REDIS_PASSWORD:-$supplied}}"; file="${REDIS_PASSWORD_FILE:-}"; if [ -n "$file" ]; then REDISCLI_AUTH=$(cat -- "$file"); export REDISCLI_AUTH; fi; if [ -z "$REDISCLI_AUTH" ]; then unset REDISCLI_AUTH; fi; database="$1"; format="$2"; shift 2; exec redis-cli -e -h 127.0.0.1 -p 6379 -n "$database" "$format" -2 "$@"'
+    try:
+        output=run(['docker','exec','-i',container,'sh','-c',script,'docknest',database,'--raw' if raw else '--json',*command],timeout=30,input=(password+'\n').encode())
+        if raw:
+            if not output.endswith(b'\n'):raise ValueError('Redis raw reply is incomplete')
+            return output[:-1]
+        return json.loads(output.decode())
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,UnicodeError,json.JSONDecodeError):raise ValueError('Redis local native query failed; review credentials and supported configuration')
+
+def redis_pairs(value):
+    if not isinstance(value,list) or len(value)%2:raise ValueError('Redis configuration reply is incomplete')
+    return dict(zip(value[::2],value[1::2]))
+
+def redis_info(container,service,section):
+    output=redis_query(container,service,['INFO',section])
+    if not isinstance(output,str):raise ValueError('Redis native INFO reply is incomplete')
+    return dict(line.split(':',1) for line in output.splitlines() if line and not line.startswith('#') and ':' in line)
+
+def validate_redis_contract(service,c):
+    if not re.fullmatch(r'7\.4\.\d+',service['version']):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions')
+    cid=c['Id'];server=redis_info(cid,service,'server');replication=redis_info(cid,service,'replication');persistence=redis_info(cid,service,'persistence')
+    if server.get('redis_version')!=service['version'] or server.get('redis_mode')!='standalone':raise ValueError('Redis native version/mode does not match the standalone contract')
+    if replication.get('role')!='master' or replication.get('connected_slaves')!='0':raise ValueError('Redis replication requires a reviewed adapter')
+    options=redis_pairs(redis_query(cid,service,['CONFIG','GET','dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','tls-port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint']))
+    required=['dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint']
+    if any(name not in options for name in required):raise ValueError('Redis persistence configuration could not be fully resolved')
+    if options['port']!='6379' or options.get('tls-port','0')!='0' or options['cluster-enabled']!='no' or options['aclfile']:raise ValueError('Redis non-default port, TLS, cluster or ACL file requires a reviewed adapter')
+    stop_signal=str(c['Config'].get('StopSignal') or 'SIGTERM').upper()
+    if stop_signal not in ['SIGTERM','TERM','15','SIGINT','INT','2'] or any(options[name] not in ['default','save'] for name in ['shutdown-on-sigterm','shutdown-on-sigint']):raise ValueError('Redis requires a persistence-preserving SIGTERM/SIGINT shutdown; NOSAVE/FORCE and custom signals are blocked')
+    if redis_query(cid,service,['ACL','USERS'])!=['default'] or redis_query(cid,service,['MODULE','LIST'])!=[]:raise ValueError('Redis custom ACL users or modules require a reviewed adapter')
+    acl=redis_pairs(redis_query(cid,service,['ACL','GETUSER','default']))
+    if 'on' not in acl.get('flags',[]) or acl.get('commands')!='+@all' or acl.get('keys') not in ['~*','%RW~*'] or acl.get('channels')!='&*' or acl.get('selectors',[]):raise ValueError('Redis restricted ACL configuration requires a reviewed adapter')
+    rdb=bool(options['save'].strip());aof=options['appendonly']=='yes'
+    if options['appendonly'] not in ['yes','no'] or not (rdb or aof):raise ValueError('Redis persistence must be explicitly enabled; cache-only inference is not supported')
+    healthy={'loading':'0','async_loading':'0','rdb_bgsave_in_progress':'0','aof_rewrite_in_progress':'0','aof_rewrite_scheduled':'0','rdb_last_bgsave_status':'ok'}
+    if aof:healthy.update({'aof_enabled':'1','aof_last_write_status':'ok','aof_last_bgrewrite_status':'ok'})
+    if any(persistence.get(name)!=value for name,value in healthy.items()):raise ValueError('Redis persistence is loading, busy or unhealthy; capture blocked')
+    directory=options['dir']
+    if not directory.startswith('/') or '..' in pathlib.PurePosixPath(directory).parts or directory=='/' or not any(directory==m['Destination'] or directory.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('Redis persistence directory must be inside a captured writable mount')
+    if run(['docker','exec',cid,'readlink','-f',directory],timeout=30).decode().strip()!=directory:raise ValueError('Redis persistence directory symlinks require a reviewed adapter')
+    for name in ['dbfilename','appenddirname','appendfilename']:
+        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',options[name]) or options[name] in ['.','..']:raise ValueError('Redis persistence filenames require a reviewed adapter')
+    service.update({'dataDirectory':directory,'rdbEnabled':rdb,'aofEnabled':aof,'rdbFilename':options['dbfilename'],'aofDirectory':options['appenddirname'],'aofFilename':options['appendfilename']})
+
+def redis_shutdown_evidence(service,c,original,stopped_at):
+    output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+    logs=(output.stdout+output.stderr).decode(errors='replace')
+    if output.returncode or not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):raise ValueError('Redis current graceful-shutdown proof is missing')
+    if re.search(r'Fail to fsync the AOF file:|Error writing to the AOF file:|Error trying to save the DB',logs):raise ValueError('Redis current stop reported a persistence failure')
+    if service['rdbEnabled'] and not re.search(r'Saving the final RDB snapshot before exiting\.[\s\S]*DB saved on disk[\s\S]*Redis is now ready to exit, bye bye\.\.\.',logs):raise ValueError('Redis current stop did not prove a completed final RDB save')
+    if service['aofEnabled'] and 'Calling fsync() on the AOF file.' not in logs:raise ValueError('Redis current stop did not prove healthy AOF flush and fsync')
+    flags=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','redis','--volumes-from',c['Id']+':ro']
+    if service['rdbEnabled']:
+        proof=run([*flags,'--entrypoint','redis-check-rdb',original['Image'],service['dataDirectory']+'/'+service['rdbFilename']],timeout=120).decode(errors='replace')
+        if 'RDB looks OK!' not in proof:raise ValueError('Redis offline RDB check did not pass')
+    if service['aofEnabled']:
+        manifest=service['dataDirectory']+'/'+service['aofDirectory']+'/'+service['aofFilename']+'.manifest'
+        proof=run([*flags,'--entrypoint','redis-check-aof',original['Image'],manifest],timeout=120).decode(errors='replace')
+        if 'All AOF files and manifest are valid' not in proof:raise ValueError('Redis offline multipart AOF check did not pass')
+    return {'cleanShutdownLogVerified':True,'finalRdbSaveVerified':service['rdbEnabled'],'finalAofFsyncVerified':service['aofEnabled'],'rdbOfflineVerified':service['rdbEnabled'],'aofOfflineVerified':service['aofEnabled']}
+
 def validate_database_contracts(services,containers):
     by_id={c['Id']:c for c in containers}
     for service in services:
@@ -157,12 +236,24 @@ def validate_database_contracts(services,containers):
             if database_query(c['Id'],service,'SELECT pg_is_in_recovery();')!='f':raise ValueError('PostgreSQL standby/recovery capture requires a separate adapter')
             if database_query(c['Id'],service,"SELECT COUNT(*) FROM pg_tablespace WHERE pg_tablespace_location(oid) <> '';")!='0':raise ValueError('External PostgreSQL tablespaces require a reviewed capture adapter')
             service['dataDirectory']=data
+        elif service['engine']=='redis':validate_redis_contract(service,c)
         else:
             values=database_query(c['Id'],service,'SELECT @@version, @@global.innodb_fast_shutdown, @@datadir;').split('\t')
-            if len(values)!=3 or values[1]!='0':raise ValueError('MySQL/MariaDB cold capture requires innodb_fast_shutdown=0 before preflight')
+            if len(values)!=3 or values[1] not in ['0','1','2']:raise ValueError('Cannot validate the native database shutdown setting')
+            if not values[0].startswith(service['version']):raise ValueError('Running database version does not match the installed server binary')
             data=values[2].rstrip('/')
             if not any(data==m['Destination'] or data.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW')):raise ValueError('Database data directory must be included in a captured writable mount')
-            service['slowShutdownVerified']=True
+            service['originalFastShutdown']=int(values[1])
+            service['slowShutdownVerified']=values[1]=='0'
+
+def prepare_database_shutdown(service):
+    # Read-only plans never change the server. Prepare only the running capture,
+    # after writers stop; the recovery contract restores the original value.
+    if service['engine'] not in ['mysql','mariadb']:return
+    cid=service['container']
+    database_query(cid,service,'SET GLOBAL innodb_fast_shutdown=0;')
+    if database_query(cid,service,'SELECT @@global.innodb_fast_shutdown;')!='0':raise ValueError('Could not prepare a verified slow database shutdown; capture blocked')
+    service['slowShutdownVerified']=True
 
 def shutdown_evidence(services,containers,stopped_at):
     evidence=[];by_id={c['Id']:c for c in containers}
@@ -179,6 +270,7 @@ def shutdown_evidence(services,containers,stopped_at):
             output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
             if output.returncode or 'shutdown complete' not in (output.stdout+output.stderr).decode(errors='replace').lower():raise ValueError('Native database shutdown evidence missing from the current stop')
             item.update({'slowShutdownVerified':service['slowShutdownVerified'],'cleanShutdownLogVerified':True})
+        elif service['engine']=='redis':item.update(redis_shutdown_evidence(service,c,by_id[c['Id']],stopped_at))
         else:item['applicationShutdownConfirmed']=True
         evidence.append(item)
     return evidence
@@ -196,16 +288,35 @@ def restart_services(ids,services=None):
                 service=by_id.get(cid)
                 if service and service['engine']!='generic':
                     try:
-                        if database_query(cid,service,'SELECT 1;')!='1':return False
-                    except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return False
+                        if service['engine']=='redis':
+                            if redis_query(cid,service,['PING'])!='PONG':return False
+                        elif database_query(cid,service,'SELECT 1;')!='1':return False
+                    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):return False
             return True
         while time.time()<deadline and not ready():time.sleep(2)
         if not ready():raise ValueError('Service failed restart health; dependants remain stopped')
+        for cid in level:
+            service=by_id.get(cid,{})
+            if service.get('engine') in ['mysql','mariadb'] and 'originalFastShutdown' in service:
+                value=service['originalFastShutdown']
+                if value not in [0,1,2]:raise ValueError('Invalid original database shutdown setting')
+                database_query(cid,service,'SET GLOBAL innodb_fast_shutdown='+str(value)+';')
+                if database_query(cid,service,'SELECT @@global.innodb_fast_shutdown;')!=str(value):raise ValueError('Original database setting did not recover; dependants remain stopped')
         pending=[cid for cid in pending if cid not in level]
 
 def data_checks(container,service):
     result=[]
     for check in service.get('checks',[]):
+        if service['engine']=='redis':
+            key=check.get('key')
+            if not isinstance(key,str) or not key or len(key.encode())>1024 or '\x00' in key:raise ValueError('Redis data checks require a named key up to 1024 bytes')
+            kind=redis_query(container,service,['TYPE',key])
+            if kind not in ['string','list','set','zset','hash','stream']:raise ValueError('Redis named check requires an existing supported key')
+            command='GET' if kind=='string' else 'DUMP'
+            value=redis_query(container,service,[command,key],raw=True)
+            if (command=='DUMP' and not value) or redis_query(container,service,['TYPE',key])!=kind:raise ValueError('Redis named key changed during its read-only check')
+            result.append({'name':check['name'],'type':kind,'sha256':hashlib.sha256(kind.encode()+b'\x00'+value).hexdigest(),'method':'read-only Redis TYPE and '+command+' digest'})
+            continue
         table=check['table']
         if not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]{0,62}',table):raise ValueError('Data check table must be a simple identifier')
         if service['engine']=='postgres':query='BEGIN READ ONLY; SELECT COUNT(*) FROM "'+table+'"; COMMIT;'
@@ -643,6 +754,7 @@ def capture(req):
         for cid in reversed(running):
             service=next(s for s in plan['services'] if s['container']==cid)
             if service['engine']!='generic':service['expectedChecks']=data_checks(cid,service)
+            prepare_database_shutdown(service)
             docker('stop','--time',str(stop_timeout),cid)
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at)
         emit(stage='copying')
@@ -850,7 +962,7 @@ def restore(req):
         except Exception:pass
         raise
     application_complete=bool(contracts) and all(s['engine']!='generic' and s.get('expectedChecks') for s in contracts)
-    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only database row counts','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
+    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only native database checks','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
 def deploy_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{})
     p=pathlib.Path(m.get('directory',''))

@@ -22,6 +22,16 @@ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?
 function backup(name,path,size=100){db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(name,site,job,new Date().toISOString(),path,size,'a'.repeat(64),'{}',0,1,new Date().toISOString());}
 function request(route,options={}){return fetch(base+route,{...options,headers:{Cookie:'dbm_session='+token,Origin:process.env.APP_ORIGIN,'x-csrf-token':csrf,'Content-Type':'application/json',...options.headers}});}
 
+test('native Redis checks persist while ambiguous or mismatched check definitions are rejected',async()=>{
+ const service={container:'fixture-redis',engine:'redis',database:'0',checks:[{name:'Cached record',key:'fixture:record'}]};
+ const payload={serverId:host,name:'Redis contract fixture',config:{containers:['fixture-redis'],services:[service]}};
+ const saved=await request('/sites',{method:'POST',body:JSON.stringify(payload)});assert.equal(saved.status,201);
+ assert.deepEqual((await saved.json()).config.services[0].checks,service.checks);
+ for(const invalid of [{...service,checks:[{name:'Both',key:'key',table:'records'}]},{...service,engine:'mysql'},{...service,database:'not_a_number'},{...service,checks:[{name:'Missing'}]}]){
+  const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,services:[invalid]}})});assert.equal(response.status,400);
+ }
+});
+
 test('download range streams the selected bytes and releases its retention lease',async()=>{
  const file=join(process.env.BACKUP_DIR,'range.enc');await writeFile(file,Buffer.from('0123456789'));backup('range',file,10);
  const response=await request('/backups/range/download',{headers:{Range:'bytes=2-5'}});
