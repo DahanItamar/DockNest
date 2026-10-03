@@ -7,9 +7,9 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
-    "worker": "node src/worker.js",
+    "dev": "node --no-addons --watch src/server.js",
+    "start": "node --no-addons src/server.js",
+    "worker": "node --no-addons src/worker.js",
     "dev:web": "vite --host 127.0.0.1",
     "build": "node scripts/build-web.js",
     "test": "node --test tests/*.test.js",
@@ -17,7 +17,7 @@
     "setup": "node scripts/setup.js",
     "brand:export": "node scripts/export-brand.js",
     "test:browser": "node scripts/smoke-browser.js",
-    "test:integration": "node scripts/integration-linux.js",
+    "test:integration": "node --no-addons scripts/integration-linux.js",
     "test:dashboard": "node scripts/dashboard-browser.js",
     "test:servers": "node scripts/servers-browser.js",
     "test:rebrand": "node scripts/rebrand-browser.js",

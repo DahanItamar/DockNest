@@ -14,6 +14,6 @@ M1 allows local ext2/3/4, XFS, Btrfs, ZFS and overlay classification. This is a 
 
 `POST /api/sites/:id/plan` returns a redacted plan without source paths, environment values or credentials. The encrypted manifest retains the full plan needed for recovery. Existing generic sites retain their explicit clean-shutdown requirement.
 
-Selected upstream references: [Agency Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) for explicit contracts and compensating recovery, and [Agency Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md) for evidence boundaries. No subagents were used.
+Selected upstream references: [Agency Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) for explicit contracts and compensating recovery, and [Agency Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md) for evidence boundaries. A delegated safety review and focused legacy/Redis integration fixture work applied these references.
 
 Verification: `npm run check`; real Linux integration remains required before advertising capture/restore support. A unit-test pass does not establish database consistency or recoverability.

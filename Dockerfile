@@ -5,7 +5,7 @@ RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 FROM node:24-bookworm-slim
-ENV NODE_ENV=production PORT=3000 DATA_DIR=/data
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/data NODE_OPTIONS=--no-addons
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/* && mkdir -p /data && chown node:node /data
 COPY --from=build --chown=node:node /app/package*.json ./

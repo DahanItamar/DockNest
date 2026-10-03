@@ -85,6 +85,7 @@ try {
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
   await run('cp','remote',hosts[0]+':/qa-helper');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
   await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
@@ -224,6 +225,10 @@ try {
   assert.equal(await run('exec',hosts[1],'stat','-c','%a',staticResult.documentRoot+'/assets/logo.txt'),'640');assert.equal(await run('exec',hosts[0],'cat',staticRoot+'/index.html'),'live-edit');
   await assert.rejects(remote(servers[0],{operation:'readiness',config:{...staticCfg,documentRoot:'/etc'}}).then(result=>{if(!result.ready)throw new Error('blocked')}));
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
+  const {runLegacyCompatibility}=await import('./integration-legacy.js');
+  await runLegacyCompatibility({run,until,hosts,servers,db,remote,evidence,record});
+  const {runRedisCompatibility}=await import('./integration-redis.js');
+  await runRedisCompatibility({run,until,hosts,servers,db,directory,evidence,record});
   const {runMilestones}=await import('./integration-milestones.js');
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
   const wrapper=join(directory,'tar-wrapper');

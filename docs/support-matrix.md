@@ -9,6 +9,7 @@ The M1–M5 code is gated by `npm run check`, privacy/history checks, browser ch
 | ext2/3/4, XFS, Btrfs, ZFS | Classifier permits them; acceptance is limited to configurations with dedicated capture/restore evidence. Classifier recognition alone does not establish support. |
 | NFS/NFS4, CIFS, FUSE, unknown filesystems; nested mounts | Blocked. Linux parser fixtures cover remote filesystem classification; actual nested/tmpfs fixtures verify preflight refusal. No network filesystem adapter is advertised. |
 | PostgreSQL 16, MySQL 8.4, MariaDB 11.4 official images | Candidate cold adapters; exact installed version, image ID/digest, native clean-shutdown evidence and real isolated data recovery must pass for the release. No arbitrary engine/version promise. |
+| Redis 7.4 official image, standalone primary with mounted persistence | Candidate RDB/multipart-AOF adapter; current-stop persistence proof, native offline checks, real isolated key recovery and forced-kill refusal must pass. Unsupported versions/cluster/replicas/ACL/TLS/modules block capture. |
 | Mixed selected engines | Same writer boundary and ordering; dedicated isolated fixture validates each engine's configured checks. |
 | Generic application / SQLite fixture | Explicit declared clean shutdown plus zero exit; actual integration verifies fixture database records/files. No universal database consistency contract. |
 | Other stateful images, stopped native databases, external PostgreSQL tablespaces, unsupported credentials/tool layouts | Blocked or require reviewed adapters. External dependencies cannot be inferred universally from Docker labels. |
@@ -21,13 +22,15 @@ The M1–M5 code is gated by `npm run check`, privacy/history checks, browser ch
 ## Deployment and upgrade gate
 
 1. Pass all CI jobs for the exact commit and retrieve sanitized evidence. Aggregate successful Node/privacy/browser results with the matching Linux report. Run `node scripts/beta-gate.js EVIDENCE.json COMMIT` and, when enabling supported boot automation, `--require-host-reboot` with real reboot evidence.
-2. On the current manager, run `node scripts/deployment-preflight.js hold`. It checks the queue, unresolved recovery and pending publication/retention operations atomically and blocks new enqueues/scheduler work. A failed check changes nothing. Recheck after the worker has stopped gracefully.
+2. On a manager already running the hold-aware release, run `node scripts/deployment-preflight.js hold`. It checks the queue, unresolved recovery and pending publication/retention operations atomically and blocks new enqueues/scheduler work. A failed check changes nothing. For the first upgrade from an older release, stop both old API and worker gracefully before the final queue check: older code cannot honor this new hold. Recheck after both processes have stopped.
 3. Create and verify an encrypted recovery kit, and retain the exact prior application image plus independent mounted credentials. Never copy a live SQLite file without its WAL/online backup protocol.
 4. Build and start the new API/worker against the preserved state only after both old processes are stopped. Additive migrations must preserve administrator/password/factors and existing recovery history; CI includes old-schema migration fixtures and repeated startup.
 5. Validate health, anonymous API rejection, worker heartbeat, existing site plan/readiness blockers and storage reachability. Run an isolated fixture restore with configured data checks. New safety blockers require explicit configuration review; do not weaken them to make an old site appear ready.
 6. Run `node scripts/deployment-preflight.js release` only after verification. Keep rollback state/image until acceptance. Do not restore an old manager snapshot over new jobs or remove in-use Docker images/volumes.
 
 Until candidate engine fixtures pass, native engines remain unqualified. A beta gate must fail on missing, stale, mismatched or failed evidence; screenshots and container health do not substitute for data recovery.
+
+The Node 24 runtime uses `--no-addons` so SSH2 uses standard Node crypto instead of its optional native crypto addon. A Linux qualification run exposed a native addon cleanup crash; disabling optional external addons retains SSH encryption and pinned host-key verification. Direct Node invocations outside the provided npm/Docker entry points must use the same flag.
 
 ## Sanitized support intake
 

@@ -21,8 +21,8 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
  for(const definition of [{engine:'postgres',image:'postgres:16',major:'16',data:'/var/lib/postgresql/data'},{engine:'mysql',image:'mysql:8.4',major:'8.4',data:'/var/lib/mysql'},{engine:'mariadb',image:'mariadb:11.4',major:'11.4',data:'/var/lib/mysql'}]){
   const name='qa-'+definition.engine,password=randomBytes(24).toString('base64url');
   await run('exec',source,'docker','pull',definition.image);
-  const environment=definition.engine==='postgres'?['-e','POSTGRES_PASSWORD='+password,'-e','POSTGRES_DB=fixture']:['-e',(definition.engine==='mariadb'?'MARIADB_ROOT_PASSWORD=':'MYSQL_ROOT_PASSWORD=')+password];
-  await run('exec',source,'docker','run','-d','--name',name,'--restart','no','--tmpfs','/tmp:size=32m,mode=1777','-v',name+'-data:'+definition.data,...environment,definition.image,...(definition.engine==='postgres'?[]:['--innodb-fast-shutdown=0','--socket=/tmp/mysql.sock']));
+  const environment=definition.engine==='postgres'?['-e','POSTGRES_PASSWORD='+password,'-e','POSTGRES_DB=fixture']:['-e',(definition.engine==='mariadb'?'MARIADB_ROOT_PASSWORD=':'MYSQL_ROOT_PASSWORD=')+password,'-e','MYSQL_UNIX_PORT=/tmp/mysql.sock'];
+  await run('exec',source,'docker','run','-d','--name',name,'--restart','no','--tmpfs','/tmp:size=32m,mode=1777','-v',name+'-data:'+definition.data,...environment,definition.image,...(definition.engine==='postgres'?[]:['--socket=/tmp/mysql.sock']));
   const siteId=randomUUID(),cfg={containers:[name],stagingRoot:'/var/lib/docknest',exclusiveSourcesConfirmed:true,externalReferencesConfirmed:true,cleanShutdownConfirmed:true,shutdownProfile:'generic',stopTimeout:90,maintenance:{required:false},temporaryMemoryFolders:[{container:name,destination:'/tmp'}],services:[{container:name,engine:definition.engine,database:'fixture',dependsOn:[],checks:[{name:'Fixture records',table:'records'}]}]};
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId,servers[0].id,'Native '+definition.engine,JSON.stringify(cfg),new Date().toISOString());
   // Wait on native version/readiness, not merely State.Running.
@@ -35,9 +35,11 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
   }
   await query(source,name,(definition.engine==='postgres'?'':'CREATE DATABASE IF NOT EXISTS fixture; USE fixture; ')+'CREATE TABLE records (id INTEGER PRIMARY KEY, value VARCHAR(80)); INSERT INTO records VALUES (1,\'snapshot-native\'),(2,\'second-record\');');
   const plan=await planBackup(siteId);assert.equal(plan.services[0].engine,definition.engine);assert.ok(plan.services[0].version.startsWith(definition.major));
+  if(definition.engine!=='postgres')assert.equal(await query(source,name,'SELECT @@global.innodb_fast_shutdown;'),'1','Read-only preflight must preserve the default setting');
   const image=JSON.parse(await run('exec',source,'docker','image','inspect',definition.image))[0];
   enqueueBackup(siteId,'qa');const job=claimJob();await executeJob(job);const complete=db.prepare('SELECT * FROM jobs WHERE id=?').get(job.id);assert.equal(complete.status,'completed',complete.error);
   const backup=db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);assert.equal(await verifyEncrypted(backup.path),backup.checksum);assert.equal(backupVerification(backup.id).consistency.status,'passed');assert.equal(backupVerification(backup.id).application.status,'not-tested');
+  if(definition.engine!=='postgres')assert.equal(await query(source,name,'SELECT @@global.innodb_fast_shutdown;'),'1','Capture must restore the original shutdown setting');
   await query(source,name,(definition.engine==='postgres'?'':'USE fixture; ')+"UPDATE records SET value='live-change' WHERE id=1;");
   await enqueueRestore(backup.id,await planRestore(backup.id,{serverId:servers[1].id}),'qa');const restore=claimJob();await executeJob(restore);const restored=db.prepare('SELECT * FROM jobs WHERE id=?').get(restore.id);assert.equal(restored.status,'completed',restored.error);
   const result=JSON.parse(restored.details).result;assert.equal(result.networkMode,'none');assert.equal(result.restoreTested,true);assert.equal(backupVerification(backup.id).application.status,'passed');
