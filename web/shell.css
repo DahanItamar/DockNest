@@ -1,6 +1,6 @@
 .berry-shell{--rail:260px}.berry-shell.collapsed{--rail:72px}
 .berry-header{position:fixed;inset:0 0 auto;height:88px;z-index:100;background:var(--surface);display:flex;align-items:center;gap:16px;padding:16px 24px}
-.berry-header>.brand{width:260px;justify-content:flex-start;flex-shrink:0}.berry-menu{width:34px;min-height:34px;padding:0;background:var(--primary-light);color:var(--header-control);border:0;margin-right:0}.berry-header .berry-menu:hover{background:var(--primary-light);color:var(--header-control-hover)}
+.berry-header>.brand{width:260px;justify-content:flex-start;flex-shrink:0}.berry-menu{width:44px;min-width:44px;min-height:44px;padding:0;background:transparent;color:var(--header-control);border:0;margin-right:0;flex-shrink:0}.berry-header .berry-menu{min-height:44px}.berry-header .berry-menu:hover{background:transparent;color:var(--header-control-hover)}
 .berry-global-search{width:460px;max-width:460px;min-width:0;height:46px;margin-left:0;display:flex;align-items:center;gap:12px;border:1px solid var(--border-control);border-radius:var(--radius-input);padding:10px 16px;color:var(--header-control);background:var(--surface-muted);position:relative;transition:background-color 180ms ease,border-color 180ms ease}
 .berry-global-search>svg{flex-shrink:0}.berry-global-search:hover{border-color:var(--header-control);background:var(--surface)}.berry-global-search:focus-within{border-color:var(--header-control-hover);background:var(--surface);outline:2px solid var(--header-control-hover);outline-offset:2px}
 .berry-global-search input{border:0;min-width:0;min-height:0;padding:0;background:transparent;flex:1}.berry-global-search input:focus-visible{outline:none}
@@ -40,10 +40,10 @@
 @keyframes berry-ring{0%,100%{transform:rotate(0)}25%{transform:rotate(12deg)}50%{transform:rotate(-10deg)}75%{transform:rotate(6deg)}}
 @media(prefers-reduced-motion:reduce){.berry-header-tools button>svg{transition:none!important;animation:none!important}.berry-header-tools button:hover>svg{transform:none}}
 
-.berry-mobile-menu{display:none}.berry-nav-group .berry-nav-toggle{min-height:40px;margin-top:-8px;margin-bottom:12px;color:var(--text-muted);font-size:12px}.berry-nav-group .berry-nav-toggle:hover{color:var(--sidebar-nav-accent);background:var(--sidebar-nav-soft)}.berry-nav-toggle svg{flex-shrink:0;transition:transform 200ms ease}.berry-nav-toggle:hover svg{transform:scale(1.08)}
+.berry-mobile-menu{display:none}.berry-nav-group .berry-nav-toggle{min-height:44px;margin-top:-8px;margin-bottom:12px;color:var(--text-muted);font-size:12px}.berry-nav-group .berry-nav-toggle:hover{color:var(--sidebar-nav-accent);background:transparent}
 @media(min-width:900px){.collapsed .berry-nav-group .berry-nav-toggle{padding:8px;justify-content:center;margin-top:0}}
 @media(max-width:899px){.berry-mobile-menu{display:inline-flex}}
-@media(prefers-reduced-motion:reduce){.berry-nav-toggle:hover svg{transform:none}}
+
 
 .system-health{--health-color:var(--primary-dark);margin:0 0 16px;padding:0 16px;color:var(--health-color);outline-offset:4px;border-radius:8px}
 .system-health.attention{--health-color:var(--secondary-dark)}.system-health.checking{--health-color:var(--text-muted)}
@@ -103,3 +103,22 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 .berry-sidebar-storage progress,.compact-storage-details progress{accent-color:var(--sidebar-storage-accent)}
 .berry-sidebar-storage progress::-webkit-progress-value,.compact-storage-details progress::-webkit-progress-value{background:var(--sidebar-storage-accent)}
 .berry-sidebar-storage progress::-moz-progress-bar,.compact-storage-details progress::-moz-progress-bar{background:var(--sidebar-storage-accent)}
+
+/* Menu motion uses the existing corporate easing and responds only to interaction. */
+.menu-symbol{display:block;flex-shrink:0;overflow:visible}
+.menu-symbol .menu-bar{transform-origin:12px 12px;transition:transform 220ms cubic-bezier(.2,0,0,1),opacity 120ms ease}
+.menu-symbol .menu-bar-top{transform:translateY(-6px) scaleX(.75) translateX(-2px)}
+.menu-symbol .menu-bar-bottom{transform:translateY(6px) scaleX(.625) translateX(3px)}
+.menu-symbol.open .menu-bar-top{transform:rotate(45deg)}
+.menu-symbol.open .menu-bar-middle{opacity:0;transform:scaleX(.1)}
+.menu-symbol.open .menu-bar-bottom{transform:rotate(-45deg)}
+.berry-nav-group .menu-control,.berry-nav-group .menu-control:hover,.berry-menu,.berry-menu:hover{background:transparent;border:0}
+.menu-control:focus-visible{outline:2px solid var(--header-control-hover);outline-offset:3px}
+@media(hover:hover){
+ .menu-control:hover .menu-symbol:not(.open) .menu-bar-top{transform:translateY(-7px) scaleX(1)}
+ .menu-control:hover .menu-symbol:not(.open) .menu-bar-bottom{transform:translateY(7px) scaleX(1)}
+}
+@media(max-width:359px){
+ .berry-header{padding-inline:6px;gap:0}
+}
+@media(prefers-reduced-motion:reduce){.menu-symbol .menu-bar{transition:none}}
