@@ -7,19 +7,19 @@
   "scope": "/",
   "icons": [
     {
-      "src": "/brand/app-icon-192-fe02431615.png",
+      "src": "/brand/app-icon-192-deadd2f768.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/brand/app-icon-512-fe02431615.png",
+      "src": "/brand/app-icon-512-deadd2f768.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/brand/app-icon-maskable-512-fe02431615.png",
+      "src": "/brand/app-icon-maskable-512-deadd2f768.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
