@@ -51,7 +51,7 @@ Before updating, stop API and worker and snapshot the metadata volume and remote
 
 ## Central-system recovery
 
-Administrators can create and download an encrypted manager recovery kit from **DockNest backup**. It keeps one latest successful local copy and can refresh it on a schedule. Move downloaded kits to independent storage and keep the recovery passphrase separately; a local copy alone cannot survive host loss. See [DockNest self-backup](docknest-self-backup.md) for contents, release requirements and fresh-server import steps.
+Administrators can create and download an encrypted manager recovery kit from **DockNest backup**. It uploads to the connected SFTP destination selected for site backups, retains one latest successful copy and can refresh it on a schedule. Keep the recovery passphrase and storage sign-in details separately so you can retrieve the kit after server loss. See [DockNest self-backup](docknest-self-backup.md) for contents, release requirements and fresh-server import steps.
 
 Keep an encrypted off-host copy of the metadata volume and a separately protected copy of `data/master.key`. The backup payloads remain on their configured remote destinations. Stop both processes before copying SQLite metadata, including WAL files, or use SQLite's supported backup mechanism. Protect the setup token and SSH credentials. Never commit these files.
 

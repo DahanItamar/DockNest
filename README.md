@@ -61,7 +61,7 @@ Setup creates `.env`, `data/master.key` and `data/setup.token`. Keep them privat
 
 Follow [Deployment](docs/deployment.md) for Compose, HTTPS, remote prerequisites and disaster recovery. The API and worker share SQLite metadata; neither mounts the Docker socket. Remote operations use pinned SSH connections.
 
-Administrators can use **DockNest backup** to create and download an encrypted recovery kit for the manager itself, retaining one latest successful local copy. Keep the downloaded kit and its separate passphrase outside the server. See [Manager self-backup and recovery](docs/docknest-self-backup.md).
+Administrators can use **DockNest backup** to save an encrypted recovery kit for the manager itself to the SFTP destination selected for site backups, retaining one latest successful copy. Keep the recovery passphrase and storage sign-in details outside the server. See [Manager self-backup and recovery](docs/docknest-self-backup.md).
 
 ```mermaid
 flowchart LR
