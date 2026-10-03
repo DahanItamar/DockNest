@@ -5,7 +5,7 @@ import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
 import { key } from './crypto.js';
 import { remote, download, uploadStream } from './ssh.js';
-import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness } from './storage.js';
+import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, removeDirectory, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -176,7 +176,7 @@ export async function executeJob(job){
   const writing=encryptStream(pass,await openWrite(temporary));
   writing.catch(error=>pass.destroy(error));
   try{await download(server,result.remotePath,pass);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
-  stage(job.id,'verifying');const checksum=await verifyEncrypted(temporary);
+  stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   await renameFile(temporary,published);finalizePublication(backupId);
   publishedBackup=true;

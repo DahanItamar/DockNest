@@ -1,6 +1,6 @@
 ﻿import { Client } from 'ssh2';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { readFile, stat, mkdir, rename, rm, realpath, statfs } from 'node:fs/promises';
+import { readFile, stat, mkdir, rename, rm, realpath, statfs, open as openFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
@@ -131,13 +131,44 @@ export async function openWrite(file){
   const stream=sftpWriteStream(sftp,value);stream.once('close',()=>client.end());stream.once('error',()=>client.end());return stream;
  }catch(error){client.end();throw error;}
 }
+async function syncLocalDirectories(...directories){
+ // Windows does not support opening directory handles for fsync through this API.
+ if(process.platform==='win32')return;
+ const pending=new Set();
+ for(let directory of directories){
+  directory=path.resolve(directory);
+  while(!pending.has(directory)){pending.add(directory);const parent=path.dirname(directory);if(parent===directory)break;directory=parent;}
+ }
+ // Sync descendants before ancestors so newly created backup directories survive too.
+ for(const directory of [...pending].sort((a,b)=>b.length-a.length)){
+  const handle=await openFile(directory,'r');try{await handle.sync();}finally{await handle.close();}
+ }
+}
+export async function syncFile(file){
+ if(!isRemoteFile(file)){
+  // Windows FlushFileBuffers requires a writable handle; POSIX fsync can use r.
+  const value=await localPath(file),handle=await openFile(value,process.platform==='win32'?'r+':'r');
+  try{await handle.sync();}finally{await handle.close();}
+  await syncLocalDirectories(path.dirname(value));return;
+ }
+ return withSession(fileOptions(file).options,async sftp=>{
+  const value=await ownedRemote(sftp,file),handle=await call(sftp,'open',value,'r');
+  try{
+   if(typeof sftp.ext_openssh_fsync!=='function')throw new Error('SFTP file fsync is unavailable');
+   await call(sftp,'ext_openssh_fsync',handle);
+  }catch{throw new Error('Durable SFTP publication requires working fsync@openssh.com support');}
+  finally{await call(sftp,'close',handle);}
+  // SFTP provides no portable directory fsync: file bytes are synced, but rename
+  // durability still depends on the independently managed storage server.
+ });
+}
 export async function renameFile(from,to){
- if(!isRemoteFile(from)&&!isRemoteFile(to))return rename(from,to);
+ if(!isRemoteFile(from)&&!isRemoteFile(to)){await rename(from,to);await syncLocalDirectories(path.dirname(from),path.dirname(to));return;}
  const a=fileOptions(from),b=fileOptions(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');
  return withSession(a.options,async sftp=>call(sftp,'rename',await ownedRemote(sftp,from),b.value));
 }
 export async function removeFile(file){
- if(!isRemoteFile(file))return rm(await localPath(file),{force:true});
+ if(!isRemoteFile(file)){const value=await localPath(file);await rm(value,{force:true});await syncLocalDirectories(path.dirname(value));return;}
  return withSession(fileOptions(file).options,async sftp=>call(sftp,'unlink',await ownedRemote(sftp,file)));
 }
 export async function removeDirectory(directory){

@@ -24,6 +24,11 @@ def recover_jobs(roots,boot_id=None):
             try:
                 root=private_path(candidate,True)
                 if (root/'disarmed').exists():result['ignored']+=1;continue
+                completed=root/'boot-recovery-completed.json'
+                if completed.exists():
+                    completion=json.loads(private_path(completed).read_text())
+                    if completion.get('version')!=1 or completion.get('completed') is not True:raise ValueError('Invalid recovery completion journal')
+                    result['ignored']+=1;continue
                 record=json.loads(private_path(root/'boot-recovery.json').read_text())
                 if record.get('version')!=1:raise ValueError('Unsupported recovery journal')
                 if record['bootId']==boot_id:result['ignored']+=1;continue # Current-boot watchdog may own it.
@@ -35,6 +40,9 @@ def recover_jobs(roots,boot_id=None):
                 if not health(record['running'],cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Source health did not recover')
                 maintenance(cfg,False)
                 atomic_json(root/'recovery.json',{'recovered':True,'bootRecovery':True,'at':time.time()})
+                # A retained successful journal must never restart an intentionally
+                # stopped service on a later boot. Persist completion before return.
+                atomic_json(completed,{'version':1,'completed':True,'bootId':boot_id,'at':time.time()})
                 (root/'watchdog.done').touch(mode=0o600)
                 result['recovered']+=1
             except Exception:
