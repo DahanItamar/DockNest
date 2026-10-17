@@ -21,7 +21,7 @@ function IconButton({label,children,...props}) {
 }
 
 export function Dashboard({s,active,busy,user,name,bytes,date,open,action,navigate,Empty}) {
-  const [period,setPeriod]=useState('year'),[metricPeriod,setMetricPeriod]=useState('year');
+  const [period,setPeriod]=useState('week'),[metricPeriod,setMetricPeriod]=useState('year');
   const activity=bucketActivity(s,period),metricData=bucketActivity(s,metricPeriod);
   const backups=newest(s.backups),jobs=newest(s.jobs);
   const week=backups.filter(b=>new Date(b.capturedAt||b.createdAt)>new Date(Date.now()-7*86400000));
