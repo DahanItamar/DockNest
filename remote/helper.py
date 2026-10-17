@@ -19,7 +19,10 @@ Delete plaintext staging securely according to your storage policy; filesystem d
 """
 
 EVENT_STREAM=sys.stdout
+CAPTURE_DIAGNOSTICS=False
 def emit(**kw): print(json.dumps(kw),file=EVENT_STREAM,flush=True)
+def diagnostic(**kw):
+    if CAPTURE_DIAGNOSTICS:emit(diagnostic={'at':time.time(),**kw})
 def sync_directory(path):
     directory=os.open(path,os.O_RDONLY)
     try:os.fsync(directory)
@@ -63,7 +66,18 @@ def complete_recovery(root,boot_id=None):
         except OSError:pass
         raise
 def run(args,timeout=3600,input=None):
-    return subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input)
+    started=time.monotonic();label=pathlib.Path(args[0]).name+(' '+str(args[1]) if len(args)>1 and args[0]=='docker' else '')
+    diagnostic(command=label,phase='start')
+    try:
+        result=subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input)
+        diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='ok')
+        return result
+    except subprocess.TimeoutExpired:
+        diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='timeout',timeoutSeconds=timeout)
+        raise
+    except subprocess.CalledProcessError as error:
+        diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='exit',exitCode=error.returncode)
+        raise
 def docker(*args): return run(['docker',*args])
 def inspect(ids): return json.loads(docker('inspect',*ids))
 
@@ -134,21 +148,41 @@ def source_archive_command(source,excluded=()):
     # atime changes when the first pass reads data; ctime is not restored.
     return ['tar','--format=posix','--pax-option=delete=atime,delete=ctime,exthdr.name=%d/PaxHeaders/%f','--xattrs','--acls','--numeric-owner',*options,'-cpf','-','-C',str(source.parent),'--',source.name]
 
-def command_artifact(command,archive=None,name=None,expected=None):
+TRANSFER=None
+def transfer_progress(count,final=False):
+    # Uncompressed bytes added to the outgoing archive; total comes from the inventory pass.
+    if TRANSFER is None:return
+    TRANSFER['done']+=count;now=time.monotonic()
+    if final or now-TRANSFER['emitted']>=2:
+        TRANSFER['emitted']=now;emit(progress={'done':TRANSFER['done'],'total':TRANSFER['total']})
+
+def command_artifact(command,archive=None,name=None,expected=None,spool=None):
+    started=time.monotonic();label=pathlib.Path(command[0]).name+(' '+str(command[1]) if len(command)>1 and command[0]=='docker' else '')
+    diagnostic(command=label,phase='artifact-start')
     process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
     class Reader:
         def __init__(self):self.bytes=0;self.digest=hashlib.sha256()
         def read(self,size=-1):
-            data=process.stdout.read(size);self.bytes+=len(data);self.digest.update(data);return data
+            data=process.stdout.read(size);self.bytes+=len(data);self.digest.update(data)
+            if archive is not None:transfer_progress(len(data))
+            return data
     reader=Reader()
     try:
-        if archive is None:
+        if archive is None and spool is not None:
+            # Spooled once: some outputs (docker save of fresh commits) are not byte-stable.
+            fd=os.open(spool,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(fd,'wb') as output:
+                while data:=reader.read(1024*1024):output.write(data)
+                output.flush();os.fsync(output.fileno())
+        elif archive is None:
             while reader.read(1024*1024):pass
         else:
             info=tarfile.TarInfo(name);info.size=expected['bytes'];info.mode=0o600
             archive.addfile(info,reader)
             if reader.read(1):raise ValueError('Streamed artifact grew during capture')
-        if process.wait()!=0:raise ValueError('Artifact command failed during direct capture')
+        code=process.wait()
+        diagnostic(command=label,phase='artifact-finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='ok' if code==0 else 'exit',exitCode=code)
+        if code!=0:raise ValueError('Artifact command failed during direct capture')
         evidence={'bytes':reader.bytes,'sha256':reader.digest.hexdigest()}
         if expected is not None and evidence!=expected:raise ValueError('Streamed artifact changed during capture')
         return evidence
@@ -157,15 +191,34 @@ def command_artifact(command,archive=None,name=None,expected=None):
         if process.poll() is None:process.kill()
         process.wait()
 
-def stream_artifacts(archive,specs):
-    inventory={}
-    for name,command,link in specs:
-        inventory[name]=inventory[link] if link else command_artifact(command)
-    emit(stage='transferring')
-    for name,command,link in specs:
-        if link:
-            info=tarfile.TarInfo(name);info.type=tarfile.LNKTYPE;info.linkname=link;info.mode=0o600;archive.addfile(info)
-        else:command_artifact(command,archive,name,inventory[name])
+def open_stream_archive(output,level):
+    # Stream-mode compresslevel exists from Python 3.12. Choose before opening: a
+    # failed open has already written a gzip header to the output.
+    if sys.version_info>=(3,12):return tarfile.open(fileobj=output,mode='w|gz',compresslevel=level,bufsize=1024*1024)
+    return tarfile.open(fileobj=output,mode='w|gz',bufsize=1024*1024)
+
+def stream_artifacts(archive,specs,spool_root=None,spooled=()):
+    inventory={};files={}
+    try:
+        for name,command,link in specs:
+            if link:inventory[name]=inventory[link]
+            elif spool_root is not None and name in spooled:
+                files[name]=pathlib.Path(spool_root)/('spool-'+name)
+                inventory[name]=command_artifact(command,spool=files[name])
+            else:inventory[name]=command_artifact(command)
+        emit(stage='transferring')
+        global TRANSFER
+        TRANSFER={'done':0,'total':sum(inventory[name]['bytes'] for name,_,link in specs if not link),'emitted':0}
+        transfer_progress(0,True)
+        for name,command,link in specs:
+            if link:
+                info=tarfile.TarInfo(name);info.type=tarfile.LNKTYPE;info.linkname=link;info.mode=0o600;archive.addfile(info)
+            elif name in files:command_artifact(['cat','--',str(files[name])],archive,name,inventory[name])
+            else:command_artifact(command,archive,name,inventory[name])
+        transfer_progress(0,True)
+    finally:
+        TRANSFER=None
+        for path in files.values():path.unlink(missing_ok=True)
     return inventory
 
 def stream_document(archive,name,value):
@@ -283,7 +336,88 @@ def sqlite_file_source(filename,container):
         if file.read(16)!=b'SQLite format 3\x00':raise ValueError('Declared file is not a SQLite format-3 database')
     return source,mount
 
-def sqlite_file_proof(service,container):
+SQLITE_OFFLINE_CHECK_MAX_BYTES=1024**3
+def sqlite_checked_online(source):
+    """WAL databases above the offline limit are checked from a live read snapshot."""
+    if source.stat().st_size<=SQLITE_OFFLINE_CHECK_MAX_BYTES:return False
+    with source.open('rb') as file:header=file.read(20)
+    return header[18:20]==b'\x02\x02'
+
+def sqlite_check_mode(cfg):
+    mode=cfg.get('sqliteIntegrityCheck','full')
+    if mode not in ['full','off']:raise ValueError('sqliteIntegrityCheck must be full or off')
+    return mode
+
+def online_sqlite_checks(services,containers,cfg):
+    """Run before maintenance or stop: a WAL read snapshot does not block writers."""
+    if sqlite_check_mode(cfg)=='off':return
+    limit=int(cfg.get('sqliteOnlineCheckTimeout',7200))
+    if limit<60 or limit>21600:raise ValueError('Online SQLite check timeout must be 60..21600 seconds')
+    if not any(service.get('sqliteFiles') for service in services):return
+    by_id={c['Id']:c for c in containers};results={}
+    for service in services:
+        if not service.get('sqliteFiles') or service['container'] not in by_id:continue
+        for filename in service['sqliteFiles']:
+            source,_=sqlite_file_source(filename,by_id[service['container']])
+            if str(source) in results or not sqlite_checked_online(source):continue
+            started=time.monotonic();diagnostic(command='sqlite integrity_check',phase='start')
+            connection=sqlite3.connect(source.as_uri()+'?mode=ro',uri=True,timeout=30)
+            try:
+                connection.execute('PRAGMA query_only=ON');connection.execute('BEGIN')
+                deadline=started+limit;connection.set_progress_handler(lambda:1 if time.monotonic()>deadline else 0,10000)
+                try:status=connection.execute('PRAGMA integrity_check').fetchall()
+                except sqlite3.OperationalError:
+                    if time.monotonic()>deadline:
+                        diagnostic(command='sqlite integrity_check',phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='timeout',timeoutSeconds=limit)
+                        raise ValueError('Online SQLite integrity check exceeded %d seconds; raise sqliteOnlineCheckTimeout'%limit)
+                    raise
+                if status!=[('ok',)]:raise ValueError('Online SQLite integrity check failed')
+            finally:connection.close()
+            elapsed=time.monotonic()-started
+            diagnostic(command='sqlite integrity_check',phase='finish',elapsedMs=round(elapsed*1000),outcome='ok')
+            results[str(source)]={'path':filename,'integrity':'ok','elapsedSeconds':round(elapsed,1),'method':'online SQLite integrity_check on a WAL read snapshot'}
+    for service in services:
+        if service.get('sqliteFiles') and service['container'] in by_id:
+            service['onlineSqliteChecks']=[results[str(sqlite_file_source(f,by_id[service['container']])[0])] for f in service['sqliteFiles'] if str(sqlite_file_source(f,by_id[service['container']])[0]) in results]
+
+SQLITE_PROOF_CACHE=pathlib.Path('/var/lib/docknest/sqlite-proof-cache.json')
+def file_identity(source):
+    info=os.stat(source)
+    return {'device':info.st_dev,'inode':info.st_ino,'bytes':info.st_size,'mtimeNs':info.st_mtime_ns,'ctimeNs':info.st_ctime_ns}
+
+def file_sha256(source):
+    digest=hashlib.sha256()
+    with open(source,'rb') as file:
+        while chunk:=file.read(8*1024*1024):digest.update(chunk)
+    return digest.hexdigest()
+
+def load_sqlite_proof_cache():
+    try:
+        value=json.loads(SQLITE_PROOF_CACHE.read_text())
+        return value if isinstance(value,dict) and value.get('version')==1 and isinstance(value.get('files'),dict) else {'version':1,'files':{}}
+    except (OSError,ValueError):return {'version':1,'files':{}}
+
+def reusable_sqlite_proof(source,filename):
+    """Reuse a passed offline check only for a byte-identical, unchanged database file."""
+    entry=load_sqlite_proof_cache()['files'].get(str(source))
+    if not isinstance(entry,dict) or entry.get('sqliteVersion')!=sqlite3.sqlite_version:return None
+    identity=file_identity(source)
+    if entry.get('identity')!=identity:return None
+    started=time.monotonic();diagnostic(command='sqlite unchanged-file check',phase='start')
+    matched=file_sha256(source)==entry.get('sha256') and file_identity(source)==identity
+    diagnostic(command='sqlite unchanged-file check',phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='ok' if matched else 'exit',exitCode=0 if matched else 1)
+    return {**entry['evidence'],'path':filename} if matched else None
+
+def remember_sqlite_proof(source,identity,item):
+    # Called only after a passed offline check; the file must not change during it.
+    if file_identity(source)!=identity:return
+    cache=load_sqlite_proof_cache()
+    cache['files'][str(source)]={'identity':identity,'sha256':file_sha256(source),'sqliteVersion':sqlite3.sqlite_version,'evidence':item,'checkedAt':time.time()}
+    if file_identity(source)!=identity:return
+    SQLITE_PROOF_CACHE.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    atomic_json(SQLITE_PROOF_CACHE,cache)
+
+def sqlite_file_proof(service,container,reuse=False):
     evidence=[]
     for filename in service['sqliteFiles']:
         source,_=sqlite_file_source(filename,container)
@@ -292,6 +426,25 @@ def sqlite_file_proof(service,container):
         for suffix in ['-wal','-shm','-journal']:
             sidecar=pathlib.Path(str(source)+suffix)
             if sidecar.exists() and (sidecar.resolve()!=sidecar or not sidecar.is_file()):raise ValueError('SQLite sidecar must be a captured regular file')
+        if service.get('sqliteCheckMode')=='off' and source.stat().st_size>SQLITE_OFFLINE_CHECK_MAX_BYTES:
+            # Site opted out of long integrity checks; consistency still rests on the
+            # verified clean shutdown, and restore verification repeats this digest.
+            identity=file_identity(source)
+            evidence.append({'path':filename,'bytes':identity['bytes'],'sha256':file_sha256(source),'method':'offline file SHA-256 after clean shutdown; integrity check disabled for this site'})
+            continue
+        if sqlite_checked_online(source):
+            # Large WAL databases are integrity-checked online before shutdown; offline
+            # evidence is a deterministic file digest that restore verification repeats.
+            digest=hashlib.sha256();size=0
+            with source.open('rb') as file:
+                while chunk:=file.read(8*1024*1024):digest.update(chunk);size+=len(chunk)
+            evidence.append({'path':filename,'bytes':size,'sha256':digest.hexdigest(),'method':'online SQLite integrity_check before shutdown and offline file SHA-256'})
+            continue
+        large=reuse and source.stat().st_size>SQLITE_OFFLINE_CHECK_MAX_BYTES
+        if large:
+            reused=reusable_sqlite_proof(source,filename)
+            if reused is not None:evidence.append(reused);continue
+            identity=file_identity(source)
         connection=sqlite3.connect(source.as_uri()+'?mode=ro',uri=True,timeout=5)
         try:
             connection.execute('PRAGMA query_only=ON');connection.execute('BEGIN')
@@ -301,12 +454,13 @@ def sqlite_file_proof(service,container):
             counts={name:connection.execute('SELECT count(*) FROM "'+name.replace('"','""')+'"').fetchone()[0] for name in tables}
             evidence.append({'path':filename,'integrity':'ok','tableCount':len(tables),'tableDigest':hashlib.sha256(json.dumps(counts,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'method':'offline SQLite integrity_check and table counts'})
         finally:connection.close()
+        if large:remember_sqlite_proof(source,identity,evidence[-1])
     return evidence
 
-def cached_sqlite_file_proof(cache,service,container):
+def cached_sqlite_file_proof(cache,service,container,reuse=False):
     # Only used while every selected writer is stopped, before restore startup.
     key=tuple((filename,str(sqlite_file_source(filename,container)[0])) for filename in service['sqliteFiles'])
-    if key not in cache:cache[key]=sqlite_file_proof(service,container)
+    if key not in cache:cache[key]=sqlite_file_proof(service,container,reuse)
     return cache[key]
 
 def database_query(container,service,query):
@@ -517,9 +671,10 @@ def shutdown_evidence(services,containers,stopped_at,staging_root=None):
         if state['Running'] or (state['ExitCode']!=0 and not sqlite_term) or state.get('OOMKilled'):raise ValueError('Clean shutdown failed: running, nonzero exit or OOM')
         item={'container':c['Id'],'engine':service['engine'],'version':service['version'],'zeroExitCodeVerified':state['ExitCode']==0}
         if service.get('sqliteFiles'):
-            proof=cached_sqlite_file_proof(sqlite_cache,service,c)
+            # Capture may reuse a passed check for byte-identical files; restore always rechecks.
+            proof=cached_sqlite_file_proof(sqlite_cache,service,c,reuse=True)
             service['expectedSqliteChecks']=proof
-            item.update(sqliteOfflineIntegrityVerified=True,sqliteChecks=proof,sigtermExit143Verified=bool(sqlite_term),validatorVersion=sqlite3.sqlite_version)
+            item.update(sqliteOfflineIntegrityVerified=all('integrity' in check for check in proof),sqliteOnlineChecks=service.get('onlineSqliteChecks',[]),sqliteChecks=proof,sigtermExit143Verified=bool(sqlite_term),validatorVersion=sqlite3.sqlite_version)
         if service['engine']=='postgres':
             original=by_id[c['Id']]
             output=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','postgres','--volumes-from',c['Id']+':ro','--env','LC_ALL=C','--entrypoint','pg_controldata',original['Image'],service['dataDirectory']],timeout=30).decode()
@@ -1013,6 +1168,11 @@ def capture(req,output=None):
         for m in c['Mounts']:
             a,b=os.path.realpath(base),os.path.realpath(m['Source'])
             if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Staging and source paths cannot overlap')
+    online_sqlite_checks(plan.get('services',[]),cs,cfg)
+    mode=sqlite_check_mode(cfg)
+    # Recorded in the manifest plan so restore verification produces the same evidence.
+    for service in plan.get('services',[]):
+        if service.get('sqliteFiles'):service['sqliteCheckMode']=mode
     create_staging_root(root)
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
@@ -1025,6 +1185,9 @@ def capture(req,output=None):
         if shutil.disk_usage(root).free<1024**3:raise ValueError('Insufficient recovery journal capacity')
         docker_root=docker('info','--format','{{.DockerRootDir}}').decode().strip()
         if shutil.disk_usage(docker_root).free<sum(c.get('SizeRw',0) or 0 for c in cs)+1024**3:raise ValueError('Insufficient Docker snapshot capacity')
+        # images.tar is spooled once in the staging root; budget it before any service stops.
+        image_bytes=sum(int(image.get('Size',0) or 0) for image in original_images)+sum(c.get('SizeRw',0) or 0 for c in cs)
+        if shutil.disk_usage(root).free<image_bytes*2+1024**3:raise ValueError('Insufficient staging capacity for the image archive')
     running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
     cfg['_runningContainers']=running
     cfg['_serviceContracts']=plan['services']
@@ -1039,6 +1202,8 @@ def capture(req,output=None):
     if os.getpgrp()!=parent:os.setsid()
     pid=os.fork()
     if pid==0:
+        global CAPTURE_DIAGNOSTICS
+        CAPTURE_DIAGNOSTICS=False
         os.setsid()
         for fd in [0,1,2]:
             try:os.close(fd)
@@ -1081,8 +1246,11 @@ def capture(req,output=None):
             if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None))
             else:run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
         if output is not None:
-            archive=tarfile.open(fileobj=output,mode='w|gz',compresslevel=6,bufsize=1024*1024)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*original_ids,*images],None),*specs])
+            level=int(cfg.get('streamCompressLevel',1))
+            if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
+            # Direct capture compresses while services are stopped; favour speed.
+            archive=open_stream_archive(output,level)
+            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*original_ids,*images],None),*specs],root,{'images.tar'})
             revalidate_sources(plan)
         captured=time.time()
     except BaseException:
@@ -1384,8 +1552,9 @@ def install_boot_recovery(req):
     emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
 
 def main(req):
-    global EVENT_STREAM
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
+    CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result=readiness(req['config']))
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
@@ -1417,4 +1586,6 @@ def main(req):
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
-    except Exception as e:emit(error=str(e));sys.exit(1)
+    except Exception as e:
+        diagnostic(phase='helper-failure',exceptionType=type(e).__name__)
+        emit(error=str(e));sys.exit(1)
