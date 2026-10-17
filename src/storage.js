@@ -10,6 +10,7 @@ import { backupLayout,backupRoot } from './backup-layout.js';
 import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
 import { storageConnectionError } from './storage-errors.js';
+import { filesystemCapacity } from './storage-capacity.js';
 
 const prefix='sftp:';
 export const isRemoteFile=file=>file.startsWith(prefix);
@@ -29,6 +30,7 @@ export async function checkStorageReadiness(){
  if(options.mode==='local'){const attrs=await stat(config.backupDir);if(!attrs.isDirectory())throw new Error('Storage directory missing');}
  else await withSession(options,async sftp=>{const attrs=await call(sftp,'stat',options.root);if(!attrs.isDirectory())throw new Error('Storage directory missing');});
  const capacity=await storageCapacity();
+ if(capacity.available===null)throw new Error('Storage available space could not be verified. Check the connection and filesystem capacity support.');
  if(capacity.available<1024**3)throw new Error('Insufficient storage capacity');
  return {reachable:true,writeTested:false};
 }
@@ -187,12 +189,32 @@ export async function removeDirectory(directory){
   await call(sftp,'rmdir',value);
  });
 }
-export async function storageCapacity(used=0){
+let capacityReading;
+async function remoteCapacity(options){
+ return withSession(options,async sftp=>{
+  let timer;
+  try{
+   const value=await Promise.race([call(sftp,'ext_openssh_statvfs',options.root),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Storage capacity request timed out')),5000);})]);
+   return filesystemCapacity({blockSize:value.f_frsize||value.f_bsize,blocks:value.f_blocks,free:value.f_bfree,available:value.f_bavail});
+  }finally{clearTimeout(timer);}
+ });
+}
+export async function storageCapacity({maxAgeMs=0}={}){
  const options=activeStorage();
- if(options.mode==='unconfigured')return {total:0,available:0,backend:'unconfigured',capacitySource:'none',name:'Connect a storage destination'};
- if(options.mode==='local'){const value=await statfs(config.backupDir);return {total:Number(value.blocks)*Number(value.bsize),available:Number(value.bavail)*Number(value.bsize),backend:'local',capacitySource:'filesystem'};}
- used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+options.id+':%').bytes;
- used+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(options.id).bytes;
- if(options.id==='env')used+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE 'sftp:/%'").get().bytes;
- return {used,total:options.capacity,available:Math.max(0,options.capacity-used),backend:'sftp',targetId:options.id,name:options.name||'Storage Box',capacitySource:'configured',estimated:true};
+ if(options.mode==='unconfigured')return {used:null,total:0,available:null,managedBytes:0,backend:'unconfigured',capacitySource:'none',name:'Connect a storage destination'};
+ if(options.mode==='local'){
+  const value=await statfs(config.backupDir),managedBytes=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path NOT LIKE 'sftp:%'").get().bytes;
+  return {...filesystemCapacity({blockSize:value.bsize,blocks:value.blocks,free:value.bfree,available:value.bavail}),managedBytes,backend:'local',capacitySource:'filesystem',estimated:false};
+ }
+ let managedBytes=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+options.id+':%').bytes;
+ managedBytes+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(options.id).bytes;
+ if(options.id==='env')managedBytes+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE 'sftp:/%'").get().bytes;
+ const identity=JSON.stringify([options.id,options.host,options.port,options.username,options.hostKey,options.root]);
+ if(capacityReading?.identity!==identity)capacityReading={identity};
+ const reading=capacityReading;
+ if(!reading.result||Date.now()-reading.readAt>=maxAgeMs){
+  if(!reading.pending)reading.pending=remoteCapacity(options).then(value=>({...value,capacitySource:'filesystem',estimated:false})).catch(()=>({used:null,total:null,available:null,capacitySource:'unavailable',estimated:false})).then(result=>{reading.result=result;reading.readAt=Date.now();reading.pending=null;return result;});
+  await reading.pending;
+ }
+ return {...reading.result,managedBytes,backend:'sftp',targetId:options.id,name:options.name||'Storage Box'};
 }

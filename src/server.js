@@ -62,13 +62,17 @@ const siteSchema = z.object({
     documentRoot:linuxPath.optional(),
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
     stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').default('/var/lib/docknest'),
+    deliveryMode: z.enum(['staged','direct']).default('staged'),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),
     shutdownProfile: z.enum(['generic', 'postgres', 'mysql']).default('generic'),
     cleanShutdownConfirmed: z.boolean().default(false),
     unresolvedDependencies: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
-    services: z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),engine:z.enum(['auto','generic','postgres','mysql','mariadb','redis']).default('auto'),version:z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),dependsOn:z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30).default([]),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),user:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),checks:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9 _-]{1,80}$/),table:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/).optional(),key:z.string().min(1).max(512).refine(value=>!/[\x00-\x1f\x7f]/.test(value)).optional()}).refine(check=>Boolean(check.table)!==Boolean(check.key),'Specify exactly one table or Redis key')).max(20).default([])}).superRefine((service,context)=>{for(const check of service.checks){if(service.engine==='redis'&&(!check.key||(service.database!==undefined&&!/^\d+$/.test(service.database))))context.addIssue({code:'custom',message:'Redis checks need a key and numeric database index'});if(['postgres','mysql','mariadb'].includes(service.engine)&&!check.table)context.addIssue({code:'custom',message:'SQL database checks need a table'});}})).max(30).default([]),
+    services: z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),engine:z.enum(['auto','generic','postgres','mysql','mariadb','redis']).default('auto'),version:z.string().regex(/^\d+\.\d+(?:\.\d+)?$/).optional(),dependsOn:z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30).default([]),database:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),user:z.string().regex(/^[a-zA-Z0-9_]{1,63}$/).optional(),sqliteFiles:z.array(linuxPath).max(30).default([]),sqliteVersion:z.string().regex(/^3\.\d+\.\d+$/).optional(),sqliteSigtermConfirmed:z.boolean().default(false),checks:z.array(z.object({name:z.string().regex(/^[a-zA-Z0-9 _-]{1,80}$/),table:z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/).optional(),key:z.string().min(1).max(512).refine(value=>!/[\x00-\x1f\x7f]/.test(value)).optional()}).refine(check=>Boolean(check.table)!==Boolean(check.key),'Specify exactly one table or Redis key')).max(20).default([])}).superRefine((service,context)=>{for(const check of service.checks){if(service.engine==='redis'&&(!check.key||(service.database!==undefined&&!/^\d+$/.test(service.database))))context.addIssue({code:'custom',message:'Redis checks need a key and numeric database index'});if(['postgres','mysql','mariadb'].includes(service.engine)&&!check.table)context.addIssue({code:'custom',message:'SQL database checks need a table'});}})).max(30).default([]),
     configFiles: z.array(linuxPath).max(50).default([]),
+    mountExclusions:z.array(z.object({source:linuxPath,path:linuxPath,reason:z.string().trim().min(1).max(300),requiredForRestore:z.boolean().optional()})).max(50).default([]),
+    mountExclusionsConfirmed:z.boolean().default(false),
+    restoreReferences:z.array(z.object({serverId:z.uuid(),capturedPath:linuxPath,source:linuxPath})).max(50).default([]),
     temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'])})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
@@ -77,7 +81,7 @@ const siteSchema = z.object({
     maintenancePublicUrl:healthUrl.optional(),
     domains: z.array(z.string().max(2048).transform(normalizeDomain).pipe(z.string().max(253).regex(/^[a-zA-Z0-9.-]+$/, 'Enter a domain such as www.blog.example.invalid, or paste an HTTP(S) website URL without login details.'))).max(20).default([]),
     healthUrl: healthUrl.default(''),
-    maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl, probeOrigin:z.boolean().default(false) }).optional(),
+    maintenance: z.object({ required: z.boolean(), directory: linuxPath, publicUrl: healthUrl, healthUrl, probeOrigin:z.boolean().default(false),readableFlag:z.boolean().default(false) }).optional(),
   }).superRefine((value,context)=>{
     if(value.kind==='docker'&&!value.containers.length)context.addIssue({code:'custom',path:['containers'],message:'Select at least one Docker container.'});
     if(value.kind==='static'&&(!value.documentRoot||value.containers.length||value.composeFiles.length))context.addIssue({code:'custom',message:'Choose a static website directory without Docker containers or Compose files.'});
@@ -92,13 +96,12 @@ const serverSchema = z.object({
 const fingerprint = value => value.startsWith('SHA256:') ? Buffer.from(value.slice(7), 'base64').toString('hex') : value.toLowerCase();
 app.get('/api/state', async (_req, res) => {
   const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC LIMIT 1000').all().map(parse);
-  const storedBytes = db.prepare('SELECT COALESCE(SUM(size),0) AS total FROM backups').get().total;
-  const storage = await storageCapacity(storedBytes);
+  const storage = await storageCapacity({maxAgeMs:30000});
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage: { used: storedBytes, ...storage }, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {

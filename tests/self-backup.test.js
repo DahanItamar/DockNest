@@ -62,7 +62,7 @@ test('worker creates an encrypted consistent kit, replaces one copy only after s
  const download=await request('/download');assert.equal(download.status,200);assert.equal(download.headers.get('x-backup-sha256'),original.checksum);assert.deepEqual(Buffer.from(await download.arrayBuffer()),original.bytes);
  const next=enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());assert.equal(selfBackupStatus().latest.id,next.id);
  assert.equal([...fixture.files.keys()].filter(name=>name.endsWith('.dkit')).length,1);
- assert.equal((await storageCapacity()).used,selfBackupStatus().latest.size);
+ assert.equal((await storageCapacity()).managedBytes,selfBackupStatus().latest.size);
  const saved=await readLatestSelfBackup(),master=await readFile(process.env.MASTER_KEY_FILE);
  await writeFile(process.env.MASTER_KEY_FILE,'invalid');enqueueSelfBackup(administrator);await executeSelfBackup(claimSelfBackup());
  assert.equal(selfBackupStatus().lastAttempt.status,'failed');assert.equal(selfBackupStatus().latest.id,next.id);assert.deepEqual((await readLatestSelfBackup()).bytes,saved.bytes);await writeFile(process.env.MASTER_KEY_FILE,master);

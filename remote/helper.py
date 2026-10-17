@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -18,7 +18,8 @@ Replacement requires a verified backup of the current target before stopping it,
 Delete plaintext staging securely according to your storage policy; filesystem deletion alone does not guarantee erasure on every disk.
 """
 
-def emit(**kw): print(json.dumps(kw),flush=True)
+EVENT_STREAM=sys.stdout
+def emit(**kw): print(json.dumps(kw),file=EVENT_STREAM,flush=True)
 def sync_directory(path):
     directory=os.open(path,os.O_RDONLY)
     try:os.fsync(directory)
@@ -79,12 +80,12 @@ def mount_table(text=None):
         try:
             divider=fields.index('-')
             if divider<6 or len(fields)<divider+4:raise ValueError()
-            result.append({'id':fields[0],'device':fields[2],'root':unescape(fields[3]),'path':unescape(fields[4]),'filesystem':fields[divider+1]})
+            result.append({'id':fields[0],'device':fields[2],'root':unescape(fields[3]),'path':unescape(fields[4]),'filesystem':fields[divider+1],'readOnly':'ro' in fields[5].split(',')})
         except (ValueError,IndexError):raise ValueError('Malformed Linux mount table; capture is blocked')
     if not result:raise ValueError('Empty Linux mount table; capture is blocked')
     return result
 
-def classify_source(source,table=None):
+def classify_source(source,table=None,excluded=()):
     table=mount_table() if table is None else table
     value=os.path.abspath(source)
     if os.path.realpath(value)!=value:raise ValueError('Source path contains a symbolic link; reviewed mapping required')
@@ -92,9 +93,93 @@ def classify_source(source,table=None):
     if not covering:raise ValueError('Source filesystem could not be classified')
     mount=max(covering,key=lambda m:len(m['path']))
     if mount['filesystem'] not in LOCAL_FILESYSTEMS:raise ValueError('Unsupported source filesystem: '+mount['filesystem']+'. NFS/CIFS/FUSE and unknown filesystems require an adapter.')
-    if any(m['path']!=value and m['path'].startswith(value.rstrip('/')+'/') for m in table):raise ValueError('Source contains a nested mount; reviewed capture adapter required')
+    if any(m['path']!=value and m['path'].startswith(value.rstrip('/')+'/') and not excluded_path(m['path'],excluded) for m in table):raise ValueError('Source contains a nested mount; reviewed capture adapter required')
     metadata=os.stat(value,follow_symlinks=False)
-    return {'filesystem':mount['filesystem'],'mountId':mount['id'],'device':metadata.st_dev,'inode':metadata.st_ino,'path':value}
+    result={'filesystem':mount['filesystem'],'mountId':mount['id'],'device':metadata.st_dev,'inode':metadata.st_ino,'path':value}
+    if excluded:result['excludedPaths']=sorted(excluded)
+    return result
+
+def excluded_path(path,excluded):
+    return any(path==entry or path.startswith(entry+'/') for entry in excluded)
+
+def mount_exclusions(cfg,containers):
+    declarations=cfg.get('mountExclusions',[])
+    if declarations and not cfg.get('mountExclusionsConfirmed'):raise ValueError('Confirm excluded data is outside this backup and must be recovered separately')
+    sources={m['Source'] for c in containers for m in c['Mounts']};result={}
+    for item in declarations:
+        source=item.get('source','');path=item.get('path','')
+        if source not in sources or not re.fullmatch(r'/[a-zA-Z0-9_./-]+',path) or '..' in pathlib.PurePosixPath(path).parts or str(pathlib.PurePosixPath(path))!=path or not path.startswith(source.rstrip('/')+'/'):
+            raise ValueError('Mount exclusions require a current selected source and an exact child path')
+        if not isinstance(item.get('reason'),str) or not item['reason'].strip():raise ValueError('Every mount exclusion needs a recovery reason')
+        if 'requiredForRestore' in item and not isinstance(item['requiredForRestore'],bool):raise ValueError('External restore requirement must be a boolean')
+        if os.path.realpath(path)!=path:raise ValueError('Excluded paths cannot contain symbolic links')
+        if path in result.get(source,[]):raise ValueError('Duplicate mount exclusion')
+        result.setdefault(source,[]).append(path)
+    for filename in cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
+        if any(excluded_path(filename,paths) for paths in result.values()):raise ValueError('Required configuration cannot be excluded')
+    return {source:sorted(paths) for source,paths in result.items()}
+
+def scoped_classify(source,table,exclusions):
+    paths=exclusions.get(source,[])
+    return classify_source(source,table,paths) if paths else classify_source(source,table)
+
+def source_archive(source,target,excluded=()):
+    source=pathlib.Path(source)
+    options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    run(['tar','--xattrs','--acls','--numeric-owner',*options,'-cpf',str(target),'-C',str(source.parent),'--',source.name])
+
+def source_archive_command(source,excluded=()):
+    source=pathlib.Path(source)
+    options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    # atime changes when the first pass reads data; ctime is not restored.
+    return ['tar','--format=posix','--pax-option=delete=atime,delete=ctime,exthdr.name=%d/PaxHeaders/%f','--xattrs','--acls','--numeric-owner',*options,'-cpf','-','-C',str(source.parent),'--',source.name]
+
+def command_artifact(command,archive=None,name=None,expected=None):
+    process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    class Reader:
+        def __init__(self):self.bytes=0;self.digest=hashlib.sha256()
+        def read(self,size=-1):
+            data=process.stdout.read(size);self.bytes+=len(data);self.digest.update(data);return data
+    reader=Reader()
+    try:
+        if archive is None:
+            while reader.read(1024*1024):pass
+        else:
+            info=tarfile.TarInfo(name);info.size=expected['bytes'];info.mode=0o600
+            archive.addfile(info,reader)
+            if reader.read(1):raise ValueError('Streamed artifact grew during capture')
+        if process.wait()!=0:raise ValueError('Artifact command failed during direct capture')
+        evidence={'bytes':reader.bytes,'sha256':reader.digest.hexdigest()}
+        if expected is not None and evidence!=expected:raise ValueError('Streamed artifact changed during capture')
+        return evidence
+    finally:
+        process.stdout.close()
+        if process.poll() is None:process.kill()
+        process.wait()
+
+def stream_artifacts(archive,specs):
+    inventory={}
+    for name,command,link in specs:
+        inventory[name]=inventory[link] if link else command_artifact(command)
+    emit(stage='transferring')
+    for name,command,link in specs:
+        if link:
+            info=tarfile.TarInfo(name);info.type=tarfile.LNKTYPE;info.linkname=link;info.mode=0o600;archive.addfile(info)
+        else:command_artifact(command,archive,name,inventory[name])
+    return inventory
+
+def stream_document(archive,name,value):
+    data=value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
+    archive.addfile(info,io.BytesIO(data))
+
+def capture_size(containers,configuration,exclusions,images):
+    sources={m['Source'] for c in containers for m in c['Mounts']}
+    sources.update(configuration)
+    size=0
+    for source in sources:
+        options=['--exclude='+path for path in exclusions.get(source,[])]
+        size+=int(run(['du','-sb',*options,'--',source]).split()[0])
+    return size+sum(c.get('SizeRw',0) or 0 for c in containers)+sum(image['Size'] for image in images)
 
 def backup_plan(cfg,containers=None):
     containers=preflight(cfg) if containers is None else containers
@@ -102,15 +187,20 @@ def backup_plan(cfg,containers=None):
     if any(s['engine']=='generic' for s in services) and not cfg.get('cleanShutdownConfirmed'):
         raise ValueError('Application writers require explicit clean-shutdown confirmation regardless of the legacy shutdown profile')
     validate_database_contracts(services,containers)
-    table=mount_table();sources=[];seen=set()
+    table=mount_table();sources=[];seen=set();exclusions=mount_exclusions(cfg,containers)
+    if exclusions and any(s['engine']!='generic' for s in services):raise ValueError('Mount exclusions require reviewed generic application services; native database adapters retain full capture')
     for c in containers:
         for m in c['Mounts']:
-            if m['Source'] not in seen:sources.append(classify_source(m['Source'],table));seen.add(m['Source'])
+            if m['Source'] not in seen:sources.append(scoped_classify(m['Source'],table,exclusions));seen.add(m['Source'])
     for source in ([cfg['documentRoot']] if cfg.get('kind')=='static' else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
         if source not in seen:sources.append(classify_source(source,table));seen.add(source)
-    topology=[{'id':c['Id'],'image':c['Image'],'config':c['Config'],'host':c['HostConfig'],'mounts':c['Mounts'],'networks':c.get('NetworkSettings',{}).get('Networks',{})} for c in containers]
+    # Docker inspect may enumerate MountPoints in a different order on each
+    # read. Compare the same source/mount records in a stable order, retaining
+    # every identity and mount option; keep raw inspect order for capture.
+    sources.sort(key=lambda source:source['path'])
+    topology=[{'id':c['Id'],'image':c['Image'],'config':c['Config'],'host':c['HostConfig'],'mounts':sorted(c['Mounts'],key=lambda mount:mount['Destination']),'networks':c.get('NetworkSettings',{}).get('Networks',{})} for c in containers]
     fingerprint=hashlib.sha256(json.dumps({'sources':sources,'topology':topology,'services':services,'configuration':{k:v for k,v in cfg.items() if not k.startswith('_')}},sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'services':services,'restartOrder':service_order(services),'coverage':{'status':'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed'))},'unresolvedDependencies':[]}
+    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'services':services,'restartOrder':service_order(services),'coverage':{'status':'scoped' if exclusions else 'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed')),'excludedPaths':cfg.get('mountExclusions',[]),'externalDataIncluded':not bool(exclusions)},'unresolvedDependencies':[]}
 
 def public_plan(plan):
     return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn']} for s in plan['services']]}
@@ -118,7 +208,7 @@ def public_plan(plan):
 def revalidate_sources(plan):
     table=mount_table()
     for source in plan['sources']:
-        if classify_source(source['path'],table)!=source:raise ValueError('Source identity or mount changed; capture is blocked')
+        if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
 def service_contracts(cfg,containers):
     """Resolve exact service identities and probe native binaries, never infer version from tags."""
@@ -154,6 +244,16 @@ def service_contracts(cfg,containers):
             if value not in references:raise ValueError('Service dependency is outside the selected site')
             dependencies.append(references[value])
         result.append({'container':c['Id'],'engine':engine,'version':version,'role':'database' if engine!='generic' else 'writer','dependsOn':dependencies,'database':declaration.get('database'),'user':declaration.get('user'),'checks':declaration.get('checks',[])})
+        if declaration.get('sqliteFiles'):
+            if engine!='generic':raise ValueError('SQLite file proof is limited to declared generic applications')
+            installed=run(['docker','exec',c['Id'],'python3','-c','import sqlite3;print(sqlite3.sqlite_version)'],timeout=10).decode().strip()
+            if not re.fullmatch(r'3\.\d+\.\d+',installed) or installed!=declaration.get('sqliteVersion'):raise ValueError('Installed SQLite version differs from the explicit file contract')
+            item=result[-1];item.update(sqliteFiles=sorted(declaration['sqliteFiles']),sqliteVersion=installed,sqliteSigtermConfirmed=bool(declaration.get('sqliteSigtermConfirmed')))
+            exclusions=mount_exclusions(cfg,containers)
+            for filename in item['sqliteFiles']:
+                source,mount=sqlite_file_source(filename,c)
+                if excluded_path(str(source),exclusions.get(mount['Source'],[])):raise ValueError('Required SQLite database is excluded from capture')
+        elif declaration.get('sqliteSigtermConfirmed'):raise ValueError('SIGTERM acceptance requires explicit SQLite file checks')
     databases=[s['container'] for s in result if s['role']=='database']
     for s in result:
         if s['role']=='writer':s['dependsOn']=list(dict.fromkeys(s['dependsOn']+databases))
@@ -171,6 +271,43 @@ def service_order(services):
         visiting.remove(cid);order.append(cid)
     for cid in by_id:visit(cid)
     return order
+
+def sqlite_file_source(filename,container):
+    if not isinstance(filename,str) or not re.fullmatch(r'/[a-zA-Z0-9_./-]+',filename) or str(pathlib.PurePosixPath(filename))!=filename or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('SQLite database path must be a regular absolute file path')
+    matches=[mount for mount in container['Mounts'] if filename==mount['Destination'] or filename.startswith(mount['Destination'].rstrip('/')+'/')]
+    if not matches:raise ValueError('SQLite database must be inside a captured persistent mount')
+    mount=max(matches,key=lambda value:len(value['Destination']));relative=os.path.relpath(filename,mount['Destination'])
+    source=pathlib.Path(mount['Source']) if relative=='.' else pathlib.Path(mount['Source'])/relative
+    if source.resolve()!=source or not source.is_file():raise ValueError('SQLite database path is unreadable or contains a symbolic link')
+    with source.open('rb') as file:
+        if file.read(16)!=b'SQLite format 3\x00':raise ValueError('Declared file is not a SQLite format-3 database')
+    return source,mount
+
+def sqlite_file_proof(service,container):
+    evidence=[]
+    for filename in service['sqliteFiles']:
+        source,_=sqlite_file_source(filename,container)
+        journal=pathlib.Path(str(source)+'-journal')
+        if journal.exists() and journal.stat().st_size:raise ValueError('SQLite rollback journal needs recovery before offline capture')
+        for suffix in ['-wal','-shm','-journal']:
+            sidecar=pathlib.Path(str(source)+suffix)
+            if sidecar.exists() and (sidecar.resolve()!=sidecar or not sidecar.is_file()):raise ValueError('SQLite sidecar must be a captured regular file')
+        connection=sqlite3.connect(source.as_uri()+'?mode=ro',uri=True,timeout=5)
+        try:
+            connection.execute('PRAGMA query_only=ON');connection.execute('BEGIN')
+            deadline=time.monotonic()+600;connection.set_progress_handler(lambda:1 if time.monotonic()>deadline else 0,10000)
+            if connection.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:raise ValueError('Offline SQLite integrity check failed')
+            tables=[row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            counts={name:connection.execute('SELECT count(*) FROM "'+name.replace('"','""')+'"').fetchone()[0] for name in tables}
+            evidence.append({'path':filename,'integrity':'ok','tableCount':len(tables),'tableDigest':hashlib.sha256(json.dumps(counts,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'method':'offline SQLite integrity_check and table counts'})
+        finally:connection.close()
+    return evidence
+
+def cached_sqlite_file_proof(cache,service,container):
+    # Only used while every selected writer is stopped, before restore startup.
+    key=tuple((filename,str(sqlite_file_source(filename,container)[0])) for filename in service['sqliteFiles'])
+    if key not in cache:cache[key]=sqlite_file_proof(service,container)
+    return cache[key]
 
 def database_query(container,service,query):
     """Local socket only. Credential files/variables stay inside the container."""
@@ -222,9 +359,18 @@ def validate_redis_contract(service,c):
     cid=c['Id'];server=redis_info(cid,service,'server');replication=redis_info(cid,service,'replication');persistence=redis_info(cid,service,'persistence')
     if server.get('redis_version')!=service['version'] or server.get('redis_mode')!='standalone':raise ValueError('Redis native version/mode does not match the standalone contract')
     if replication.get('role')!='master' or replication.get('connected_slaves')!='0':raise ValueError('Redis replication requires a reviewed adapter')
-    options=redis_pairs(redis_query(cid,service,['CONFIG','GET','dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','tls-port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint']))
-    required=['dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint']
+    options=redis_pairs(redis_query(cid,service,['CONFIG','GET','dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','tls-port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint','loglevel','logfile']))
+    required=['dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint','loglevel','logfile']
     if any(name not in options for name in required):raise ValueError('Redis persistence configuration could not be fully resolved')
+    # The native proof uses NOTICE persistence messages and Docker stdout logs.
+    # Reject invisible evidence before interrupting any source services.
+    if options['logfile'] or options['loglevel'] not in ['debug','verbose','notice']:
+        raise ValueError('Redis shutdown proof requires logfile "" and loglevel notice or more verbose; update the persistent Redis configuration before retrying')
+    if c.get('HostConfig',{}).get('LogConfig',{}).get('Type')=='none':raise ValueError('Redis shutdown proof requires readable Docker logs; logging driver none is unsupported')
+    try:
+        logging=subprocess.run(['docker','logs','--tail','0',cid],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+    except subprocess.TimeoutExpired:raise ValueError('Redis Docker logs are unavailable; fix the logging driver before retrying')
+    if logging.returncode:raise ValueError('Redis Docker logs are unavailable; enable a readable logging driver before retrying')
     if options['port']!='6379' or options.get('tls-port','0')!='0' or options['cluster-enabled']!='no' or options['aclfile']:raise ValueError('Redis non-default port, TLS, cluster or ACL file requires a reviewed adapter')
     stop_signal=str(c['Config'].get('StopSignal') or 'SIGTERM').upper()
     if stop_signal not in ['SIGTERM','TERM','15','SIGINT','INT','2'] or any(options[name] not in ['default','save'] for name in ['shutdown-on-sigterm','shutdown-on-sigint']):raise ValueError('Redis requires a persistence-preserving SIGTERM/SIGINT shutdown; NOSAVE/FORCE and custom signals are blocked')
@@ -302,12 +448,22 @@ def redis_aof_check(service,c,original,staging_root):
     return {'aofValidationCopyVerified':True,'aofSourceUnchangedVerified':True}
 
 def redis_shutdown_evidence(service,c,original,stopped_at,staging_root=None):
-    output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
-    logs=(output.stdout+output.stderr).decode(errors='replace')
-    if output.returncode or not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):raise ValueError('Redis current graceful-shutdown proof is missing')
-    if re.search(r'Fail to fsync the AOF file:|Error writing to the AOF file:|Error trying to save the DB',logs):raise ValueError('Redis current stop reported a persistence failure')
-    if service['rdbEnabled'] and not re.search(r'Saving the final RDB snapshot before exiting\.[\s\S]*DB saved on disk[\s\S]*Redis is now ready to exit, bye bye\.\.\.',logs):raise ValueError('Redis current stop did not prove a completed final RDB save')
-    if service['aofEnabled'] and 'Calling fsync() on the AOF file.' not in logs:raise ValueError('Redis current stop did not prove healthy AOF flush and fsync')
+    # Docker logging delivery can lag behind docker stop returning. Re-read only
+    # this stop's window; never fall back to historical successful shutdowns.
+    for attempt in range(6):
+        # Explicit numeric tail avoids empty --since-only reads observed on
+        # Docker 29.1.3 json-file logs. Keep --since so old proof cannot pass.
+        try:output=subprocess.run(['docker','logs','--tail','10000','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+        except subprocess.TimeoutExpired:raise ValueError('Redis current shutdown logs timed out; review the Docker logging driver before retrying')
+        if output.returncode:raise ValueError('Redis current shutdown logs could not be read; review the Docker logging driver before retrying')
+        logs=(output.stdout+output.stderr).decode(errors='replace')
+        if re.search(r'Fail to fsync the AOF file:|Error writing to the AOF file:|Error trying to save the DB',logs):raise ValueError('Redis current stop reported a persistence failure')
+        if not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):failure='graceful-shutdown'
+        elif service['rdbEnabled'] and not re.search(r'Saving the final RDB snapshot before exiting\.[\s\S]*DB saved on disk[\s\S]*Redis is now ready to exit, bye bye\.\.\.',logs):failure='completed final RDB save'
+        elif service['aofEnabled'] and 'Calling fsync() on the AOF file.' not in logs:failure='AOF flush and fsync'
+        else:break
+        if attempt==5:raise ValueError('Redis current '+failure+' proof is missing after waiting for log delivery; verify Redis stdout logging and Docker log retention before retrying')
+        time.sleep(1)
     flags=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','redis','--volumes-from',c['Id']+':ro']
     if service['rdbEnabled']:
         proof=run([*flags,'--entrypoint','redis-check-rdb',original['Image'],service['dataDirectory']+'/'+service['rdbFilename']],timeout=120).decode(errors='replace')
@@ -354,17 +510,23 @@ def prepare_database_shutdown(service):
 
 def shutdown_evidence(services,containers,stopped_at,staging_root=None):
     evidence=[];by_id={c['Id']:c for c in containers}
+    sqlite_cache={}
     for service in services:
         c=inspect([service['container']])[0];state=c['State']
-        if state['Running'] or state['ExitCode']!=0 or state.get('OOMKilled'):raise ValueError('Clean shutdown failed: running, nonzero exit or OOM')
-        item={'container':c['Id'],'engine':service['engine'],'version':service['version'],'zeroExitCodeVerified':True}
+        sqlite_term=service['engine']=='generic' and service.get('sqliteFiles') and service.get('sqliteSigtermConfirmed') and state['ExitCode']==143 and c['Config'].get('StopSignal','SIGTERM') in ['SIGTERM','TERM','15']
+        if state['Running'] or (state['ExitCode']!=0 and not sqlite_term) or state.get('OOMKilled'):raise ValueError('Clean shutdown failed: running, nonzero exit or OOM')
+        item={'container':c['Id'],'engine':service['engine'],'version':service['version'],'zeroExitCodeVerified':state['ExitCode']==0}
+        if service.get('sqliteFiles'):
+            proof=cached_sqlite_file_proof(sqlite_cache,service,c)
+            service['expectedSqliteChecks']=proof
+            item.update(sqliteOfflineIntegrityVerified=True,sqliteChecks=proof,sigtermExit143Verified=bool(sqlite_term),validatorVersion=sqlite3.sqlite_version)
         if service['engine']=='postgres':
             original=by_id[c['Id']]
             output=run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','postgres','--volumes-from',c['Id']+':ro','--env','LC_ALL=C','--entrypoint','pg_controldata',original['Image'],service['dataDirectory']],timeout=30).decode()
             if not re.search(r'^Database cluster state:\s+shut down\s*$',output,re.M):raise ValueError('PostgreSQL control file does not prove a clean primary shutdown')
             item['controlFileCleanShutdownVerified']=True
         elif service['engine'] in ['mysql','mariadb']:
-            output=subprocess.run(['docker','logs','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+            output=subprocess.run(['docker','logs','--tail','10000','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
             if output.returncode or 'shutdown complete' not in (output.stdout+output.stderr).decode(errors='replace').lower():raise ValueError('Native database shutdown evidence missing from the current stop')
             item.update({'slowShutdownVerified':service['slowShutdownVerified'],'cleanShutdownLogVerified':True})
         elif service['engine']=='redis':item.update(redis_shutdown_evidence(service,c,by_id[c['Id']],stopped_at,staging_root))
@@ -487,9 +649,12 @@ def maintenance(cfg,enabled):
     directory=pathlib.Path(m['directory'])
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
     if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
+    def enable_flag():
+        flag=directory/'enabled';flag.touch(mode=0o600)
+        if m.get('readableFlag'):flag.chmod(0o644)
     if enabled:
         was_enabled=(directory/'enabled').exists()
-        (directory/'enabled').touch(mode=0o600)
+        enable_flag()
         try:
             if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
             status,body=public_probe(m)
@@ -509,12 +674,16 @@ def maintenance(cfg,enabled):
                 if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access did not recover')
                 sync_maintenance_flag(directory)
             except Exception:
-                (directory/'enabled').touch(mode=0o600)
+                enable_flag()
                 sync_maintenance_flag(directory)
                 raise ValueError('Public probe failed; maintenance retained')
         else:sync_maintenance_flag(directory)
 def recover(root,ids,cfg,deadline,parent):
-    while not (root/'disarmed').exists() and time.time()<deadline:time.sleep(2)
+    while not (root/'disarmed').exists() and time.time()<deadline:
+        if cfg.get('_directDelivery'):
+            try:os.kill(parent,0)
+            except ProcessLookupError:break
+        time.sleep(2)
     if (root/'disarmed').exists():
         (root/'watchdog.done').touch(mode=0o600)
         return
@@ -729,7 +898,28 @@ def capture_static(req):
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'static-files.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('config-*.tar')]])
     emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest})
 
+def capture_static_stream(req,output):
+    cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job']);plan=backup_plan(cfg,[])
+    if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
+    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
+    if not base.is_absolute() or '..' in base.parts or base.resolve()!=base:raise ValueError('Use a regular absolute staging directory')
+    if os.path.commonpath([str(base),str(source)]) in [str(base),str(source)]:raise ValueError('Staging and static website paths cannot overlap')
+    root=base/req['job']
+    if root.exists():raise ValueError('Staging already exists; inspect retained job before retry')
+    create_staging_root(root);emit(stage='source_ready');before=tree_digest(source)
+    specs=[('static-files.tar',source_archive_command(source),None),*[(f'config-{i}.tar',source_archive_command(path),None) for i,path in enumerate(cfg.get('configFiles',[]))]]
+    with tarfile.open(fileobj=output,mode='w|gz',compresslevel=6,bufsize=1024*1024) as archive:
+        inventory=stream_artifacts(archive,specs)
+        if tree_digest(source)!=before:raise ValueError('Website changed during direct capture')
+        revalidate_sources(plan)
+        manifest={'formatVersion':1,'kind':'static','complete':True,'deliveryMode':'direct','capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False,'backupPlan':plan,'artifacts':inventory,'consistency':{'status':'passed','method':'stable source tree and streamed artifact digests','scope':'static files'}}
+        stream_document(archive,'manifest.json',json.dumps(manifest))
+        stream_document(archive,'restore-guide.md','Static website backup. Restore static-files.tar into a new private directory and verify staticFiles.sha256. Never overwrite the live website automatically.\n')
+    (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600);output.flush()
+    emit(result={'streamed':True,'root':str(root),'manifest':manifest})
+
 def preflight(cfg):
+    if cfg.get('deliveryMode','staged') not in ['staged','direct']:raise ValueError('Unsupported backup delivery mode')
     if cfg.get('unresolvedDependencies'):raise ValueError('Resolve required external dependencies before capture')
     if cfg.get('kind')=='static':static_preflight(cfg);return []
     ids=cfg.get('containers',[])
@@ -738,7 +928,7 @@ def preflight(cfg):
     profile=cfg.get('shutdownProfile','generic')
     if profile not in ['generic','postgres','mysql']:raise ValueError('Unsupported shutdown profile')
     if profile=='generic' and not cfg.get('cleanShutdownConfirmed'):raise ValueError('Generic shutdown requires explicit application clean-shutdown confirmation')
-    cs=inspect(ids); selected={c['Id'] for c in cs}
+    cs=inspect(ids); selected={c['Id'] for c in cs};exclusions=mount_exclusions(cfg,cs)
     others=docker('ps','-q').decode().split()
     mounts=[]
     for c in cs:
@@ -755,12 +945,14 @@ def preflight(cfg):
             src=m['Source']
             if src.startswith(('/proc','/sys','/dev','/run')) or src.endswith('docker.sock'):raise ValueError('System mount is not portable')
             if not os.path.exists(src) or not os.access(src,os.R_OK):raise ValueError('Unreadable mount source')
-            classify_source(src)
+            scoped_classify(src,mount_table(),exclusions)
             if os.path.islink(src):raise ValueError('Mount source symlink requires a capture adapter')
             if os.path.isdir(src):
                 for current,dirs,files in os.walk(src,followlinks=False):
+                    dirs[:]=[name for name in dirs if not excluded_path(os.path.join(current,name),exclusions.get(src,[]))]
                     for filename in dirs+files:
                         p=os.path.join(current,filename)
+                        if excluded_path(p,exclusions.get(src,[])):continue
                         if os.path.islink(p) and os.path.commonpath([os.path.realpath(src),os.path.realpath(p)])!=os.path.realpath(src):raise ValueError('Mount contains a symlink to uncaptured external data')
             mounts.append(m)
     for c in inspect(others) if others else []:
@@ -805,8 +997,10 @@ def readiness(cfg):
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
     if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
-def capture(req):
-    if req['config'].get('kind')=='static':return capture_static(req)
+def capture(req,output=None):
+    if req['config'].get('kind')=='static':
+        if output is not None:return capture_static_stream(req,output)
+        return capture_static(req)
     cfg=req['config'];cs=preflight(cfg);plan=backup_plan(cfg,cs)
     if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
@@ -820,20 +1014,26 @@ def capture(req):
             a,b=os.path.realpath(base),os.path.realpath(m['Source'])
             if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Staging and source paths cannot overlap')
     create_staging_root(root)
-    # Capacity is estimated before stopping; additional free space remains mandatory.
-    needed=sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])
-    needed+=sum(c.get('SizeRw',0) or 0 for c in cs)
-    if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
+    exclusions=mount_exclusions(cfg,cs)
+    # Shared sources are archived once; account for images/configs and packing.
+    needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])+sum(c.get('SizeRw',0) or 0 for c in cs)
+    if output is None:
+        if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
+    else:
+        if shutil.disk_usage(root).free<1024**3:raise ValueError('Insufficient recovery journal capacity')
+        docker_root=docker('info','--format','{{.DockerRootDir}}').decode().strip()
+        if shutil.disk_usage(docker_root).free<sum(c.get('SizeRw',0) or 0 for c in cs)+1024**3:raise ValueError('Insufficient Docker snapshot capacity')
     running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
     cfg['_runningContainers']=running
     cfg['_serviceContracts']=plan['services']
+    if output is not None:cfg['_directDelivery']=True
     atomic_json(root/'recovery-plan.json',{'running':running,'containers':[c['Id'] for c in cs]})
     atomic_json(root/'boot-recovery.json',{'version':1,'bootId':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'running':running,'identities':{c['Id']:c['Image'] for c in cs},'config':cfg})
     stop_timeout=int(cfg.get('stopTimeout',60))
     if stop_timeout<5 or stop_timeout>600:raise ValueError('Stop timeout must be 5..600 seconds')
-    deadline=time.time()+int(cfg.get('captureTimeout',1800))+stop_timeout*len(running)+120
+    deadline=time.time()+int(cfg.get('captureTimeout',7200 if output is not None else 1800))+stop_timeout*len(running)+120
     # Forked watchdog survives SSH loss, cannot remove maintenance until health succeeds.
     parent=os.getpid()
     if os.getpgrp()!=parent:os.setsid()
@@ -848,7 +1048,7 @@ def capture(req):
             try:(root/'watchdog.done').touch(mode=0o600)
             except Exception:pass
         os._exit(0)
-    stopped_at=None;visitor_start=None;captured=None;images=[]
+    stopped_at=None;visitor_start=None;captured=None;images=[];archive=None;inventory=None
     try:
         emit(stage='stopping')
         visitor_start=time.time()
@@ -863,16 +1063,33 @@ def capture(req):
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
+        archives={};specs=[]
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
+            if output is not None:atomic_json(root/'snapshot-images.json',images)
             for j,m in enumerate(c['Mounts']):
-                source=pathlib.Path(m['Source'])
-                run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('mount-%d-%d.tar'%(i,j))),'-C',str(source.parent),'--',source.name])
+                source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j))
+                if output is not None:
+                    link=archives.get(source) if exclusions else None
+                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[])),link))
+                    archives[source]=link or target.name
+                elif exclusions and source in archives:os.link(archives[source],target)
+                else:source_archive(source,target,exclusions.get(source,[]));archives[source]=target
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
             source=pathlib.Path(filename)
-            run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
+            if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None))
+            else:run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
+        if output is not None:
+            archive=tarfile.open(fileobj=output,mode='w|gz',compresslevel=6,bufsize=1024*1024)
+            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*original_ids,*images],None),*specs])
+            revalidate_sources(plan)
         captured=time.time()
+    except BaseException:
+        # Abandon buffered payload bytes on a failed stream. Recovery below is
+        # independent of whether the destination can accept any more output.
+        if archive is not None:archive.fileobj.closed=True;archive.closed=True
+        raise
     finally:
         emit(stage='restarting')
         try:
@@ -886,19 +1103,31 @@ def capture(req):
         except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
     emit(stage='packing')
-    docker('save','-o',str(root/'images.tar'),*original_ids,*images)
+    if output is None:docker('save','-o',str(root/'images.tar'),*original_ids,*images)
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     manifest['backupPlan']=plan
-    manifest['artifacts']=artifact_inventory(root)
+    if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
+    if exclusions:
+        manifest['backupScope']='application-and-local-state'
+        manifest['excludedPaths']=cfg['mountExclusions']
+    manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
+    manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
-    run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
+    if exclusions:
+        with (root/'restore-guide.md').open('a') as guide:
+            guide.write('\n# Selected backup scope\nThis package intentionally excludes the paths listed in manifest.excludedPaths. Recover or reattach that external data separately after validating the isolated application copy. Never replace external storage contents with empty restored directories. Retention of this package does not protect excluded data.\n')
+    if output is not None:
+        stream_document(archive,'manifest.json',json.dumps(manifest))
+        stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
+        archive.close();output.flush()
+    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass
-    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest})
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest})
 
 def owned_job_root(req):
     job=req['job'];uuid.UUID(job)
@@ -978,6 +1207,40 @@ def restore_network_plan(containers):
     if len({name for networks in plans for name in networks})>30:raise ValueError('Too many restore networks')
     return plans
 
+EXTERNAL_RESTORE_ROOT=pathlib.Path('/var/lib/docker-backup-manager/external-restore')
+
+def external_restore_plan(manifest,references,metadata_only=False):
+    if not isinstance(references,list) or len(references)>50:raise ValueError('External restore references must be a reviewed list')
+    excluded=manifest.get('excludedPaths',manifest.get('backupPlan',{}).get('coverage',{}).get('excludedPaths',[]))
+    declared={item['path']:item for item in excluded};table=mount_table() if references else []
+    plans=[];seen=set()
+    for item in references:
+        if not isinstance(item,dict) or set(item)!={'capturedPath','source'}:raise ValueError('External restore references require capturedPath and source only')
+        captured=item['capturedPath'];source=item['source']
+        if not isinstance(captured,str) or captured not in declared or captured in seen:raise ValueError('External restore path must be an exact declared exclusion')
+        if any(excluded_path(captured,[p]) or excluded_path(p,[captured]) for p in seen):raise ValueError('Overlapping external restore references are unsupported')
+        seen.add(captured)
+        if not isinstance(source,str) or not re.fullmatch(r'/[a-zA-Z0-9_./-]+',source) or str(pathlib.PurePosixPath(source))!=source or '..' in pathlib.PurePosixPath(source).parts:raise ValueError('External restore source must be a regular absolute directory')
+        path=pathlib.Path(source)
+        if not path.is_relative_to(EXTERNAL_RESTORE_ROOT) or path==EXTERNAL_RESTORE_ROOT or path.resolve()!=path or not path.is_dir():raise ValueError('Prepare external storage under the dedicated external-restore directory without links')
+        covering=[m for m in table if source==m['path'] or source.startswith(m['path'].rstrip('/')+'/')]
+        if not covering:raise ValueError('External restore filesystem could not be inspected')
+        mount=max(covering,key=lambda m:len(m['path']))
+        if not mount.get('readOnly') or any(not m.get('readOnly') for m in table if m['path'].startswith(source.rstrip('/')+'/')):raise ValueError('External restore storage must already be mounted read-only on the host')
+        destinations=[]
+        for c in ([] if metadata_only else manifest.get('containers',[])):
+            for m in c['Mounts']:
+                if m['Source']==declared[captured]['source'] and captured.startswith(m['Source'].rstrip('/')+'/'):
+                    destination=str(pathlib.PurePosixPath(m['Destination'])/os.path.relpath(captured,m['Source']))
+                    if ',' in destination:raise ValueError('External restore destinations with commas are unsupported')
+                    destinations.append({'container':c['Id'],'destination':destination})
+        if not metadata_only and not destinations:raise ValueError('External restore exclusion is not inside a selected mount')
+        stat=path.stat();plans.append({'capturedPath':captured,'source':source,'destinations':destinations,'readOnly':True,'mountId':mount['id'],'device':stat.st_dev,'inode':stat.st_ino})
+    if any(item.get('requiredForRestore') and item['path'] not in seen for item in excluded):raise ValueError('Required external storage is missing; prepare reviewed read-only restore references')
+    identities=[{k:v for k,v in plan.items() if k!='destinations'} for plan in plans]
+    fingerprint=hashlib.sha256(json.dumps(sorted(identities,key=lambda p:p['capturedPath']),sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    return {'references':plans,'fingerprint':fingerprint}
+
 def restore(req):
     root=owned_job_root(req)
     payload=root/'payload.tar.gz'
@@ -989,6 +1252,8 @@ def restore(req):
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
     artifacts_verified=verify_artifacts(unpacked,manifest)
+    external=external_restore_plan(manifest,req.get('externalReadOnly',[]))
+    if req.get('externalFingerprint') and external['fingerprint']!=req['externalFingerprint']:raise ValueError('External restore mount identity changed after planning')
     if manifest.get('kind')=='static':
         if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
         directory=root/'static-site';safe_extract(unpacked/'static-files.tar',directory)
@@ -1027,7 +1292,18 @@ def restore(req):
             mount='type=bind,src='+str(source)+',dst='+m['Destination']
             if not m.get('RW',True):mount+=',readonly'
             args+=['--mount',mount]
+        for reference in external['references']:
+            for destination in reference['destinations']:
+                if destination['container']==c['Id']:args+=['--mount','type=bind,src='+reference['source']+',dst='+destination['destination']+',readonly']
         definitions.append((name,args+[manifest['snapshotImages'][i]]))
+    sqlite_checks=[];sqlite_cache={}
+    for service in manifest.get('backupPlan',{}).get('services',[]):
+        if not service.get('sqliteFiles'):continue
+        original=next(c for c in containers if c['Id']==service['container'])
+        restored={**original,'Mounts':[{**mount,'Source':str(sources[(mount['Type'],mount['Source'])])} for mount in original['Mounts']]}
+        actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
+        if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
+        sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
     docker('load','-i',str(unpacked/'images.tar'))
     created=[];networks={};running=[]
     try:
@@ -1054,7 +1330,7 @@ def restore(req):
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('Restored container health check failed')
-        checks=[]
+        checks=list(sqlite_checks)
         for service in contracts:
             if service['engine']=='generic':continue
             actual=data_checks(mapping[service['container']],service)
@@ -1066,7 +1342,7 @@ def restore(req):
         except Exception:pass
         raise
     application_complete=bool(contracts) and all(s['engine']!='generic' and s.get('expectedChecks') for s in contracts)
-    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only native database checks','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
+    emit(result={'containerId':created[0],'containerIds':created,'name':definitions[0][0],'networkMode':'isolated-internal' if networks else 'none','networks':list(networks.values()),'root':str(root),'access':'docker exec '+definitions[0][0]+' sh','externallyAccessible':False,'restoreTested':application_complete,'containerHealthVerified':True,'originalStatesPreserved':True,'externalReferences':external,'verification':{'isolatedRestore':{'status':'passed','method':'fresh mounts and isolated networks','artifactsVerified':artifacts_verified,'externalDataReadOnly':bool(external['references'])},'application':{'status':'passed' if application_complete else 'partial' if checks else 'not-tested','method':'named read-only native database checks','checks':checks,'scope':'configured database checks; application workflows require separate review'}}})
 def deploy_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{})
     p=pathlib.Path(m.get('directory',''))
@@ -1108,7 +1384,9 @@ def install_boot_recovery(req):
     emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
 
 def main(req):
+    global EVENT_STREAM
     op=req['operation']
+    if op=='capture-stream':EVENT_STREAM=sys.stderr
     if op=='readiness':emit(result=readiness(req['config']))
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
@@ -1122,8 +1400,10 @@ def main(req):
         emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c in cs]})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
+    elif op=='capture-stream':capture(req,sys.stdout.buffer)
     elif op=='prepare-restore':prepare_restore(req)
     elif op=='restore':restore(req)
+    elif op=='plan-external-restore':emit(result=external_restore_plan(req['manifest'],req.get('externalReadOnly',[]),metadata_only=True))
     elif op=='verify-recovery':verify_recovery(req)
     elif op=='verify-restore-recovery':verify_restore_recovery(req)
     elif op=='deploy-maintenance':deploy_maintenance(req)

@@ -7,7 +7,7 @@ from helper import service_contracts, validate_database_contracts, redis_query, 
 def fixture():
     container={'Id':'redis-id','Image':'sha256:fixture','Name':'/redis-fixture','State':{'Running':True},'Config':{'Image':'redis:7.4','Cmd':['redis-server']},'Mounts':[{'Destination':'/data','RW':True}]}
     service={'container':container['Id'],'engine':'redis','version':'7.4.7','database':'0','user':None,'checks':[{'name':'Fixture value','key':'fixture:key'}]}
-    options={'dir':'/data','dbfilename':'dump.rdb','appendonly':'yes','appenddirname':'appendonlydir','appendfilename':'appendonly.aof','save':'3600 1 300 100 60 10000','port':'6379','tls-port':'0','cluster-enabled':'no','aclfile':'','shutdown-on-sigterm':'default','shutdown-on-sigint':'default'}
+    options={'dir':'/data','dbfilename':'dump.rdb','appendonly':'yes','appenddirname':'appendonlydir','appendfilename':'appendonly.aof','save':'3600 1 300 100 60 10000','port':'6379','tls-port':'0','cluster-enabled':'no','aclfile':'','shutdown-on-sigterm':'default','shutdown-on-sigint':'default','loglevel':'notice','logfile':''}
     infos={'server':{'redis_version':'7.4.7','redis_mode':'standalone'},'replication':{'role':'master','connected_slaves':'0'},'persistence':{'loading':'0','async_loading':'0','rdb_bgsave_in_progress':'0','aof_rewrite_in_progress':'0','aof_rewrite_scheduled':'0','rdb_last_bgsave_status':'ok','aof_enabled':'1','aof_last_write_status':'ok','aof_last_bgrewrite_status':'ok'}}
     acl={'flags':['on'],'commands':'+@all','keys':'~*','channels':'&*','selectors':[]}
     replies={'users':['default'],'modules':[]}
@@ -21,6 +21,13 @@ def fixture():
 
 
 class RedisContracts(unittest.TestCase):
+    def setUp(self):
+        # The contract probes `docker logs --tail 0` before any stop; tests have no Docker daemon.
+        real=subprocess.run
+        def readable_logs(args,*rest,**kwargs):
+            if list(args[:4])==['docker','logs','--tail','0']:return subprocess.CompletedProcess(args,0,b'',b'')
+            return real(args,*rest,**kwargs)
+        patcher=patch('helper.subprocess.run',side_effect=readable_logs);patcher.start();self.addCleanup(patcher.stop)
     def test_info_verbatim_reply_is_parsed_without_assuming_json(self):
         with patch('helper.redis_query',return_value=b'# Server\r\nredis_version:7.4.7\r\nredis_mode:standalone\r\n') as query:
             self.assertEqual(redis_info('redis',{},'server'),{'redis_version':'7.4.7','redis_mode':'standalone'})

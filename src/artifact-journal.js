@@ -7,8 +7,16 @@ export async function fileExists(file){try{await statFile(file);return true;}cat
 export function preparePublication({backupId,jobId,siteId,temporary,published,manifest,capturedAt}){
  db.prepare("INSERT INTO artifact_operations VALUES(?,?,?,?,?,'prepared',?,NULL,NULL,?,?)").run(backupId,jobId,siteId,temporary,published,JSON.stringify({manifest,capturedAt}),now(),now());
 }
+export function completePreparedMetadata(backupId,manifest,capturedAt){
+ if(!manifest?.complete)throw new Error('Complete capture metadata required');
+ const changed=db.prepare("UPDATE artifact_operations SET metadata=?,updated_at=? WHERE backup_id=? AND state='prepared'").run(JSON.stringify({manifest,capturedAt}),now(),backupId);
+ if(changed.changes!==1)throw new Error('Prepared publication journal required');
+}
 export function authenticatePublication(backupId,checksum,size){
  if(!/^[a-f0-9]{64}$/.test(checksum)||!Number.isSafeInteger(size)||size<32)throw new Error('Invalid authenticated artifact evidence');
+ const operation=db.prepare('SELECT metadata FROM artifact_operations WHERE backup_id=?').get(backupId);
+ const manifest=operation&&JSON.parse(operation.metadata).manifest;
+ if(manifest?.deliveryMode==='direct'&&!manifest.complete)throw new Error('Direct capture must complete and recover before publication');
  const row=db.prepare("UPDATE artifact_operations SET state='authenticated',checksum=?,size=?,updated_at=? WHERE backup_id=? AND state='prepared'").run(checksum,size,now(),backupId);
  if(!row.changes)throw new Error('Publication journal does not match capture');
 }
@@ -18,6 +26,7 @@ export function finalizePublication(backupId){
   if(!operation||!['authenticated','completed'].includes(operation.state))throw new Error('Authenticated publication journal required');
   if(operation.state==='completed')return;
   const metadata=JSON.parse(operation.metadata);
+  if(metadata.manifest?.deliveryMode==='direct'&&!metadata.manifest.complete)throw new Error('Incomplete direct capture cannot be published');
   db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,1,?)').run(backupId,operation.site_id,operation.job_id,metadata.capturedAt,operation.published,operation.size,operation.checksum,JSON.stringify(metadata.manifest),now());
   recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},operation.job_id);
   recordVerification(backupId,'consistency',metadata.manifest.consistency||{status:'not-tested'},operation.job_id);

@@ -3,6 +3,7 @@ import { open } from './crypto.js';
 import { readFile } from 'node:fs/promises';
 import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
+import { pipeline } from 'node:stream/promises';
 const helper = new URL('../remote/helper.py', import.meta.url);
 export function connect(server) {
   return new Promise((resolve,reject)=>{
@@ -18,9 +19,10 @@ export async function remote(server, request, onStage=()=>{}) {
  const client=await connect(server);
  try {
   const source=await readFile(helper,'utf8');
-  // Only trusted helper source appears in this fixed command; all inputs use stdin JSON.
+  // Send trusted code and request through stdin; a fixed loader avoids shell
+  // argument limits as the helper grows. Request values never enter the command.
   const encoded=Buffer.from(source).toString('base64');
-  const command = `python3 -c "import base64;exec(base64.b64decode('${encoded}'))"`;
+  const command = 'python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
   return await new Promise((resolve,reject)=>{
    client.exec(command,{pty:false},(err,stream)=>{
     if(err)return reject(err);
@@ -33,7 +35,7 @@ export async function remote(server, request, onStage=()=>{}) {
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
     stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError})));
-    stream.end(JSON.stringify(request)+'\n');
+    stream.end(encoded+'\n'+JSON.stringify(request)+'\n');
    });
   });
  } finally {client.end();}
@@ -45,6 +47,41 @@ export async function download(server,remotePath,output) {
   const input=sftpReadStream(sftp,remotePath);
   import('node:stream/promises').then(({pipeline})=>pipeline(input,output)).then(resolve,reject);
  }));} finally{client.end();}
+}
+
+// Binary stdout and bounded JSON stderr use independent SSH channels. Never log
+// stderr: the final in-memory manifest contains secret container configuration.
+export async function remoteCaptureStream(server,request,output,onStage=()=>{}) {
+ const client=await connect(server);
+ try {
+  const encoded=Buffer.from(await readFile(helper,'utf8')).toString('base64');
+  const command='python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
+  return await new Promise((resolve,reject)=>client.exec(command,{pty:false},(error,stream)=>{
+   if(error)return reject(error);
+   let buffer='',result,remoteError,transportError;
+   stream.stderr.on('data',chunk=>{
+    buffer+=chunk.toString();
+    if(buffer.length>4*1024*1024){transportError=new Error('Remote control output exceeds limit');stream.destroy();reject(transportError);return;}
+    let n;
+    while((n=buffer.indexOf('\n'))>=0){
+     const line=buffer.slice(0,n);buffer=buffer.slice(n+1);
+     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
+    }
+   });
+   const storageFailed=()=>{stream.destroy();reject(new Error('Direct capture storage failed; inspect recovery status before retrying'));};
+   output.once('error',storageFailed);
+   const writing=pipeline(stream,output);
+   writing.catch(error=>{transportError=error;stream.destroy();reject(new Error('Direct capture transport or storage failed; inspect recovery status before retrying'));});
+   stream.once('error',error=>{transportError=error;reject(new Error('Direct capture transport failed; inspect recovery status before retrying'));});
+   stream.once('close',async code=>{
+    await writing.catch(()=>{});
+    output.off('error',storageFailed);
+    if(!transportError&&code===0&&result?.streamed&&result.manifest?.complete)return resolve(result);
+    reject(Object.assign(new Error(remoteError||'Direct capture failed; inspect recovery status before retrying'),{remoteReported:!!remoteError}));
+   });
+   stream.end(encoded+'\n'+JSON.stringify({...request,operation:'capture-stream'})+'\n');
+  }));
+ } finally {client.end();}
 }
 
 export async function upload(server,localPath,remotePath) {

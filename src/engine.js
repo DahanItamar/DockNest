@@ -2,9 +2,9 @@ import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
-import { preparePublication,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
+import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
 import { key } from './crypto.js';
-import { remote, download, uploadStream } from './ssh.js';
+import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
 import { backupFilename } from './backup-layout.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
@@ -60,6 +60,8 @@ async function executeScrub(job){
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));if(!backup?.verified)throw new Error('Verified backup not found');
+ const configuredReferences=(backup.manifest.restoreReferences||[]).filter(reference=>reference.serverId===serverId).map(({capturedPath,source})=>({capturedPath,source}));
+ if(!Object.keys(mappings||{}).length&&configuredReferences.length)mappings={externalReadOnly:configuredReferences};
  const target=db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);if(!target)throw new Error('Target server not found');
  const capabilities=await testServer(target),blockers=[];
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
@@ -69,9 +71,17 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  if(!staticSite&&(!backup.manifest.containers?.length||backup.manifest.containers.length>30))blockers.push('Restore requires 1 to 30 containers');
  if(grouped&&Number.parseInt(capabilities.docker,10)<28)blockers.push('Grouped isolated restores require Docker 28 or newer');
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
- if(Object.keys(mappings||{}).length)blockers.push('This version restores to fresh owned paths and isolated networks; custom port and host directory maps require reviewed offline restore');
+ const externalOnly=Object.keys(mappings||{}).every(name=>name==='externalReadOnly')&&(!mappings.externalReadOnly||Array.isArray(mappings.externalReadOnly));
+ if(!externalOnly)blockers.push('Custom port and writable host directory maps require reviewed offline restore');
  if(capabilities.freeBytes<backup.size*3+1024**3)blockers.push('Insufficient estimated target capacity');
- return {backupId,serverId,mode,mappings,capabilities,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:['No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ const excludedPaths=backup.manifest.excludedPaths||backup.manifest.backupPlan?.coverage?.excludedPaths||[];
+ let externalReferences;
+ if(externalOnly&&(mappings.externalReadOnly?.length||excludedPaths.some(path=>path.requiredForRestore))){
+  try{externalReferences=await remote(target,{operation:'plan-external-restore',manifest:backup.manifest,externalReadOnly:mappings.externalReadOnly||[]});}
+  catch{blockers.push('Required external storage is unavailable or not a reviewed read-only mount on the restore target.');}
+ }
+ const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
+ return {backupId,serverId,mode,mappings,capabilities,externalReferences,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();
@@ -138,7 +148,7 @@ async function executeRestoreJob(job){
   decrypting.catch(error=>pass.destroy(error));
   try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
   // Only invoke extraction after the complete GCM-authenticated stream finishes.
-  stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum});
+  stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint});
   recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
   for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
   db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
@@ -160,24 +170,43 @@ export async function executeJob(job){
  try{
   stage(job.id,'preflight');
   const plan=await planBackup(site.id);
-  const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups').get().bytes;
-  const capacity=await storageCapacity(used);if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB estimated free');
+  const capacity=await storageCapacity();
+  if(capacity.available===null)throw new Error('Backup storage available space could not be verified');
+  if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
   const backupId=id(),directory=backupDirectory(server,site);
   await makeDirectory(directory);
-  contacted=true;
-  const result=await remote(server,{operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint},value=>{remoteStage=value;stage(job.id,value);});
+  const direct=site.config.deliveryMode==='direct';
+  let result,published,temporary;
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint};
+  const onStage=value=>{remoteStage=value;stage(job.id,value);};
+  if(direct){
+   published=storageJoin(directory,backupFilename(backupId,new Date()));temporary=published+'.partial';artifactTemporary=temporary;
+   preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest:{complete:false,deliveryMode:'direct'},capturedAt:now()});
+   const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
+   const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
+   contacted=true;
+   try{result=await remoteCaptureStream(server,request,pass,onStage);await writing;}
+   catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+  }else{
+   contacted=true;result=await remote(server,request,onStage);
+   published=storageJoin(directory,backupFilename(backupId,new Date(result.manifest.capturedAt*1000)));temporary=published+'.partial';artifactTemporary=temporary;
+  }
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
-  const published=storageJoin(directory,backupFilename(backupId,new Date(result.manifest.capturedAt*1000))),temporary=published+'.partial';
-  artifactTemporary=temporary;
+  manifest.deliveryMode=direct?'direct':'staged';
   manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
-  preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest,capturedAt:new Date(result.manifest.capturedAt*1000).toISOString()});
-  stage(job.id,'transferring');
-  const pass=new Transform({transform(c,e,cb){cb(null,c);}});
-  pass.on('error',()=>{});
-  const writing=encryptStream(pass,await openWrite(temporary));
-  writing.catch(error=>pass.destroy(error));
-  try{await download(server,result.remotePath,pass);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+  if(result.manifest.backupScope)manifest.backupScope=result.manifest.backupScope;
+  if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
+  if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
+  const capturedAt=new Date(result.manifest.capturedAt*1000).toISOString();
+  if(direct)completePreparedMetadata(backupId,manifest,capturedAt);
+  else{
+   preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest,capturedAt});
+   stage(job.id,'transferring');
+   const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
+   const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
+   try{await download(server,result.remotePath,pass);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+  }
   stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   await renameFile(temporary,published);finalizePublication(backupId);

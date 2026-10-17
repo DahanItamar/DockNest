@@ -49,7 +49,7 @@ test('missing and outside-storage backup files do not leave retention leases',as
 test('storage accounting includes backups beyond the displayed 1000 rows and metadata excludes paths',async()=>{
  for(let i=0;i<1001;i++)backup('count-'+i,join(process.env.BACKUP_DIR,'fixture'),100);
  const response=await request('/state');assert.equal(response.status,200);const state=await response.json();
- assert.equal(state.backups.length,1000);assert.equal(state.storage.used,100310);
+ assert.equal(state.backups.length,1000);assert.equal(state.storage.managedBytes,100310);
  assert.equal(state.backups.some(backup=>'path' in backup),false);
  assert.equal(state.servers.some(server=>'private_key' in server||'privateKey' in server),false);
 });
