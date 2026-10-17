@@ -282,7 +282,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.route('**/api/storage-targets/connect',route=>{
     const body=route.request().postDataJSON();
     assert.equal(body.authType,'password');assert.equal(body.port,22);assert.equal(body.capacityBytes,1e12);
-    assert.equal(body.host,'u681095.your-storagebox.de');assert.equal(body.username,'u681095');
+    assert.equal(body.host,'u000000.your-storagebox.de');assert.equal(body.username,'u000000');
     assert.ok(!body.privateKey);
     storageFixture=[{id:'storage-fixture',name:body.name,host:body.host,port:body.port,username:body.username,root:body.root,auth_type:'password',capacity_bytes:body.capacityBytes,hasCredential:true}];
     return route.fulfill({status:201,json:storageFixture[0]});
@@ -291,8 +291,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByRole('button',{name:'Add storage destination'}).click();
   for(const label of ['Destination name','Storage hostname','Storage username'])assert.equal(await page.getByLabel(label,{exact:true}).inputValue(),'','Connection details start blank');
   await page.getByLabel('Destination name',{exact:true}).fill('Hetzner Storage Box');
-  await page.getByLabel('Storage hostname',{exact:true}).fill('u681095.your-storagebox.de');
-  await page.getByLabel('Storage username',{exact:true}).fill('u681095');
+  await page.getByLabel('Storage hostname',{exact:true}).fill('u000000.your-storagebox.de');
+  await page.getByLabel('Storage username',{exact:true}).fill('u000000');
   await page.getByLabel('Authentication method').selectOption('ssh-key');
   await page.getByLabel('Storage SSH private key').waitFor();
   assert.equal(await page.getByLabel('Storage password',{exact:true}).count(),0,'SSH auth does not keep a hidden password field');
