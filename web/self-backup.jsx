@@ -1,3 +1,4 @@
+import {timeZoneOptions} from './time-zones.js';
 import React,{useEffect,useState} from 'react';
 import { BrandIcon } from './brand.jsx';
 import { ScheduleFields } from './schedule-fields.jsx';
@@ -15,7 +16,7 @@ function RecoverySettings({settings,Field,busy,onSave}){
   <div className="backup-passphrases"><Field label={settings?.hasPassphrase?'New recovery passphrase (optional)':'Recovery passphrase'} name="passphrase" type="password" autoComplete="new-password" minLength={24} maxLength={4096} required={!settings?.hasPassphrase} help={settings?.hasPassphrase?'At least 24 characters. Leave blank to keep your current passphrase.':'At least 24 characters.'}/><Field label="Confirm recovery passphrase" name="confirmPassphrase" type="password" autoComplete="new-password" maxLength={4096} required={!settings?.hasPassphrase}/></div>
   <label className="check"><input name="recoverySecretSaved" type="checkbox" required/> I saved my recovery passphrase separately from DockNest.</label>
   <div className="backup-schedule-control"><label className="check"><input type="checkbox" checked={enabled} onChange={event=>setEnabled(event.target.checked)}/> Back up DockNest automatically</label><small>{enabled?'Upload a fresh kit to the destination selected for your site backups.':'Manual backups only. You can add a schedule anytime.'}</small></div>
-  {enabled&&<><ScheduleFields Field={Field} initialSchedule={settings?.schedule||'0 3 * * *'}/><Field label="Time zone" name="timezone" defaultValue={settings?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'} required maxLength={100}/></>}
+  {enabled&&<><ScheduleFields Field={Field} initialSchedule={settings?.schedule||'0 3 * * *'}/><Field label="Time zone" name="timezone" defaultValue={settings?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'} required className="dn-zone-select" options={timeZoneOptions(settings?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC')}/></>}
   {error&&<div className="alert" role="alert">{error}</div>}<div className="form-actions"><button className="primary" disabled={busy}>{busy?'Working…':'Save recovery settings'}</button></div>
  </fieldset></form></section>;
 }
