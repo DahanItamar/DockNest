@@ -22,6 +22,15 @@ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?
 function backup(name,path,size=100){db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(name,site,job,new Date().toISOString(),path,size,'a'.repeat(64),'{}',0,1,new Date().toISOString());}
 function request(route,options={}){return fetch(base+route,{...options,headers:{Cookie:'dbm_session='+token,Origin:process.env.APP_ORIGIN,'x-csrf-token':csrf,'Content-Type':'application/json',...options.headers}});}
 
+test('SQLite check mode is validated and survives a site edit that omits it',async()=>{
+ const payload={serverId:host,name:'SQLite mode fixture',config:{containers:['fixture-app'],sqliteIntegrityCheck:'off'}};
+ assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,sqliteIntegrityCheck:'quick'}})})).status,400);
+ const created=await request('/sites',{method:'POST',body:JSON.stringify(payload)});assert.equal(created.status,201);
+ const saved=await created.json();assert.equal(saved.config.sqliteIntegrityCheck,'off');
+ const {sqliteIntegrityCheck:_omitted,...withoutMode}=payload.config;
+ const edited=await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,config:withoutMode})});assert.equal(edited.status,200);
+ assert.equal((await edited.json()).config.sqliteIntegrityCheck,'off');
+});
 test('native Redis checks persist while ambiguous or mismatched check definitions are rejected',async()=>{
  const service={container:'fixture-redis',engine:'redis',database:'0',checks:[{name:'Cached record',key:'fixture:record'}]};
  const payload={serverId:host,name:'Redis contract fixture',config:{containers:['fixture-redis'],services:[service]}};
