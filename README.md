@@ -1,6 +1,7 @@
 <div align="center">
   <img src="docs/media/logo-blue.png" alt="DockNest" width="360" />
   <p><strong>Back up Docker sites. Verify recovery points. Restore a private copy.</strong></p>
+  <img src="https://img.shields.io/badge/version-2.0-5E35B1?style=flat-square" alt="Version 2.0" />
   <img src="https://img.shields.io/badge/Node.js-24-339933?style=flat-square" alt="Node.js 24" />
   <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
   <img src="https://img.shields.io/badge/storage-encrypted%20SFTP-1E88E5?style=flat-square" alt="Encrypted backups on SFTP" />
@@ -13,16 +14,30 @@ DockNest brings server discovery, scheduled backups and recovery into one self-h
 
 Recovery safeguards include fingerprinted filesystem/dependency plans, per-service cold database contracts, separate integrity/consistency/isolated data evidence, durable artifact reconciliation and an independently encrypted manager/key recovery kit. This remains a controlled beta: exact tested versions and limitations are documented in the [support matrix](docs/support-matrix.md), [database contracts](docs/database-contracts.md), [verification guide](docs/recovery-verification.md) and [independent recovery guide](docs/independent-recovery.md). Opt-in boot automation still requires a real host-reboot drill before supported production use.
 
+## What's new in 2.0
+
+- **Large SQLite sites back up reliably.** Databases over 1 GiB are integrity-checked online before anything stops, an unchanged rollback-journal database reuses its last passed check, and the check can be switched per site between `full` and `off`.
+- **Choose how a backup leaves the server.** *Temporary copy, then upload* or *stream directly to backup storage* when the source disk is too small for a local copy.
+- **See what a job is doing.** Job details show a plain-language step timeline, live transfer progress with speed and time left, and the exact cause when something fails.
+- **Readable details everywhere.** Job, backup, audit, result and restore-plan views share one calm layout; the original JSON is always one click away.
+- **Sturdier transfers.** Container images are saved once and streamed byte-for-byte, and long uploads tolerate brief storage stalls.
+- **Small comforts.** A time-zone dropdown with common zones, and the activity chart opens on the last 7 days.
+
+See the [2.0 release notes](docs/releases/2026-10-17-v2.0.md).
+
+![Job details for a synthetic site, with live transfer progress and a plain-language step timeline](docs/media/job-details.png)
+
 **Every screenshot uses mock data.** Names, addresses, activity and storage totals are synthetic; production accounts and credentials are never used for documentation.
 
 ## Features
 
 - **Discover and configure:** connect Linux servers with pinned SSH host keys, search Docker projects and static nginx sites, and review detected URLs and configuration files.
-- **Schedule and retain:** timezone-aware schedules, serialized jobs, successful-backup retention and pinned recovery points.
+- **Schedule and retain:** timezone-aware schedules (pick from common zones), serialized jobs, successful-backup retention and pinned recovery points.
+- **Deliver your way:** stage a temporary copy on the source server, or stream directly to backup storage when local disk space is short.
 - **Capture and verify:** preserve images, mounts, writable layers and file metadata; authenticate encrypted packages before recovery or export.
 - **Recover privately:** restore supported containers into isolated copies or static files into private directories. Live replacement remains blocked.
 - **Download your data:** encrypted originals with range support, or authenticated Full ZIP exports with browsable files and original Linux recovery archives.
-- **Monitor clearly:** activity charts, job stages, audit history, grouped recovery points and responsive pagination. A sidebar heartbeat reports API/worker availability and jobs needing attention. Light and dark palettes include a sun/moon control, smooth theme fading and saved Light / Dark / System preferences.
+- **Monitor clearly:** live transfer progress, plain-language job steps with recorded failure causes, activity charts, job stages, audit history, grouped recovery points and responsive pagination. A sidebar heartbeat reports API/worker availability and jobs needing attention. Light and dark palettes include a sun/moon control, smooth theme fading and saved Light / Dark / System preferences.
 - **Manage maintenance:** a visual editor, animated visitor pages and explicit deployment/activation controls.
 - **Control access:** a shared password plus each person's TOTP authenticator, expiring invitations, recovery codes and revocable sessions.
 
@@ -56,6 +71,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\set-admin-pass
 The script prompts privately and guides first-administrator enrollment. For an enrolled administrator, rotation preserves the authenticator and signs out existing sessions. See [Security](docs/security.md) for exact access behavior.
 
 Setup creates `.env`, `data/master.key` and `data/setup.token`. Keep them private and maintain an independent protected copy of the master key and metadata. Losing the key prevents decryption of saved credentials and backup packages.
+
+## Per-site capture settings
+
+Most sites need no changes. These optional settings live in a site's configuration; the values below are a mock example.
+
+```json
+{
+  "deliveryMode": "direct",
+  "stagingRoot": "/var/lib/docknest",
+  "sqliteIntegrityCheck": "full",
+  "sqliteOnlineCheckTimeout": 7200,
+  "streamCompressLevel": 1
+}
+```
+
+| Setting | Default | What it does |
+|---|---|---|
+| `deliveryMode` | `staged` | `staged` builds the package on the source server, restarts services, then uploads. `direct` streams to backup storage without a full local copy; services stay paused until the transfer finishes. |
+| `stagingRoot` | `/var/lib/docknest` | Local capture and recovery directory on the source server. Direct delivery keeps only small journals and the image archive here. |
+| `sqliteIntegrityCheck` | `full` | `full` runs SQLite's `integrity_check` (online for large WAL databases, before any stop). `off` skips it for databases over 1 GiB; consistency still rests on the verified clean shutdown and SHA-256 evidence, and restore always runs the full check. |
+| `sqliteOnlineCheckTimeout` | `7200` | Seconds allowed for the online check (60 to 21600). |
+| `streamCompressLevel` | `1` | gzip level for direct streams (1 to 9). Lower is faster while services are paused. |
 
 ## Docker and HTTPS
 
