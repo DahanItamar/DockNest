@@ -123,6 +123,25 @@ async function inspectEncrypted(file,secret=key()){
  hash.update(tag);return {checksum:hash.digest('hex'),plaintextChecksum:plaintext.digest('hex'),size,header,tag};
 }
 function stage(job,value){db.prepare("UPDATE jobs SET stage=? WHERE id=?").run(value,job);}
+const transferWrites=new Map();
+function recordTransferProgress(job,value){
+ // Throttled: progress arrives often; persist at most every 2 seconds plus the final value.
+ const done=Number(value?.done),total=value?.total==null?null:Number(value.total);if(!Number.isFinite(done))return;
+ const at=Date.now(),last=transferWrites.get(job)||0;if(!value.final&&at-last<2000&&!(total&&done>=total))return;transferWrites.set(job,at);
+ const row=db.prepare('SELECT details FROM jobs WHERE id=?').get(job);if(!row)return;
+ let details={};try{details=JSON.parse(row.details||'{}');}catch{}
+ const previous=details.transfer||{};
+ details.transfer={done,total:Number.isFinite(total)?total:null,startedAt:previous.startedAt||now(),updatedAt:now()};
+ db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
+}
+function recordBackupDiagnostic(job,value){
+ const row=db.prepare('SELECT details FROM jobs WHERE id=?').get(job);if(!row)return;
+ let details={};try{details=JSON.parse(row.details||'{}');}catch{}
+ const item={at:now()};
+ for(const key of ['command','phase','outcome','elapsedMs','timeoutSeconds','exitCode','exceptionType'])if(['string','number'].includes(typeof value?.[key]))item[key]=value[key];
+ details.diagnostics=[...(details.diagnostics||[]),item].slice(-200);
+ db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
+}
 export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
@@ -177,18 +196,20 @@ export async function executeJob(job){
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';
   let result,published,temporary;
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint};
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1'};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
+  const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
+  const onProgress=value=>recordTransferProgress(job.id,value);
   if(direct){
    published=storageJoin(directory,backupFilename(backupId,new Date()));temporary=published+'.partial';artifactTemporary=temporary;
    preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest:{complete:false,deliveryMode:'direct'},capturedAt:now()});
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
    contacted=true;
-   try{result=await remoteCaptureStream(server,request,pass,onStage);await writing;}
+   try{result=await remoteCaptureStream(server,request,pass,onStage,onDiagnostic,onProgress);await writing;}
    catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }else{
-   contacted=true;result=await remote(server,request,onStage);
+   contacted=true;result=await remote(server,request,onStage,onDiagnostic);
    published=storageJoin(directory,backupFilename(backupId,new Date(result.manifest.capturedAt*1000)));temporary=published+'.partial';artifactTemporary=temporary;
   }
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
@@ -205,7 +226,7 @@ export async function executeJob(job){
    stage(job.id,'transferring');
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
-   try{await download(server,result.remotePath,pass);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+   try{await download(server,result.remotePath,pass,onProgress);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }
   stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
@@ -220,7 +241,11 @@ export async function executeJob(job){
   // Site folders are shared by recovery points; clean up only this job's file.
   if(artifactTemporary&&!publishedBackup&&journal?.state!=='authenticated')await removeFile(artifactTemporary).catch(()=>{});
   const recovery=site.config.kind!=='static' && contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
-  db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),job.id);
+  const row=db.prepare('SELECT details FROM jobs WHERE id=?').get(job.id);let details={};try{details=JSON.parse(row?.details||'{}');}catch{}
+  details.failure={at:now(),lastStage:remoteStage,errorType:error.name||'Error',remoteReported:!!error.remoteReported};
+  // Record the underlying transport/storage reason; strip paths and limit length.
+  const cause=error.cause;if(cause&&typeof cause==='object')details.failure.cause={type:String(cause.name||'Error').slice(0,60),...(cause.code!=null?{code:String(cause.code).slice(0,40)}:{}),...(cause.level?{level:String(cause.level).slice(0,40)}:{}),message:String(cause.message||'').replace(/\/[^\s'"]+/g,'[path]').slice(0,240)};
+  db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=?,details=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details),job.id);
   audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
  }
 }

@@ -57,7 +57,7 @@ async function session(options){
   const password=options.password||(options.passwordFile?(await readFile(options.passwordFile,'utf8')).trimEnd():undefined);
   await new Promise((resolve,reject)=>{
    client.on('error',reject).once('ready',resolve);
-   client.connect({host:options.host,port:options.port,username:options.username,privateKey,password,hostHash:'sha256',hostVerifier:hash=>{const matches=hash.toLowerCase()===options.hostKey.toLowerCase();hostRejected=!matches;return matches;},readyTimeout:15000,keepaliveInterval:10000});
+   client.connect({host:options.host,port:options.port,username:options.username,privateKey,password,hostHash:'sha256',hostVerifier:hash=>{const matches=hash.toLowerCase()===options.hostKey.toLowerCase();hostRejected=!matches;return matches;},readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
   });
   phase='sftp';
   const sftp=await new Promise((resolve,reject)=>client.sftp((error,value)=>error?reject(error):resolve(value)));

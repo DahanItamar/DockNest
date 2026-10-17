@@ -1,4 +1,5 @@
 import { Client } from 'ssh2';
+import { Transform } from 'node:stream';
 import { open } from './crypto.js';
 import { readFile } from 'node:fs/promises';
 import { sftpWriteStream } from './sftp-streams.js';
@@ -12,10 +13,10 @@ export function connect(server) {
     client.on('error',reject).once('ready',()=>resolve(client));
     if (!/^[a-f0-9]{64}$/i.test(server.host_key||'')) return reject(new Error('A verified SHA256 SSH host-key fingerprint is required'));
     client.connect({host:server.host,port:server.port||22,username:server.username,
-      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>hash.toLowerCase()===server.host_key.toLowerCase(),readyTimeout:15000,keepaliveInterval:10000});
+      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>hash.toLowerCase()===server.host_key.toLowerCase(),readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
   });
 }
-export async function remote(server, request, onStage=()=>{}) {
+export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}) {
  const client=await connect(server);
  try {
   const source=await readFile(helper,'utf8');
@@ -30,7 +31,7 @@ export async function remote(server, request, onStage=()=>{}) {
     stream.on('data',chunk=>{
      buffer+=chunk.toString();
      if(buffer.length>4*1024*1024){stream.destroy();reject(new Error('Remote output exceeds limit'));return;}
-     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
+     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
@@ -40,18 +41,24 @@ export async function remote(server, request, onStage=()=>{}) {
   });
  } finally {client.end();}
 }
-export async function download(server,remotePath,output) {
+export async function download(server,remotePath,output,onProgress=null) {
  const client=await connect(server);
  try {return await new Promise((resolve,reject)=>client.sftp((err,sftp)=>{
   if(err)return reject(err);
   const input=sftpReadStream(sftp,remotePath);
+  if(onProgress){
+   let done=0,total=null;sftp.stat(remotePath,(error,stats)=>{if(!error)total=stats.size;onProgress({done,total});});
+   const counter=new Transform({transform(chunk,_e,cb){done+=chunk.length;onProgress({done,total});cb(null,chunk);},flush(cb){onProgress({done,total,final:true});cb();}});
+   import('node:stream/promises').then(({pipeline})=>pipeline(input,counter,output)).then(resolve,reject);
+   return;
+  }
   import('node:stream/promises').then(({pipeline})=>pipeline(input,output)).then(resolve,reject);
  }));} finally{client.end();}
 }
 
 // Binary stdout and bounded JSON stderr use independent SSH channels. Never log
 // stderr: the final in-memory manifest contains secret container configuration.
-export async function remoteCaptureStream(server,request,output,onStage=()=>{}) {
+export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{}) {
  const client=await connect(server);
  try {
   const encoded=Buffer.from(await readFile(helper,'utf8')).toString('base64');
@@ -65,14 +72,14 @@ export async function remoteCaptureStream(server,request,output,onStage=()=>{}) 
     let n;
     while((n=buffer.indexOf('\n'))>=0){
      const line=buffer.slice(0,n);buffer=buffer.slice(n+1);
-     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
+     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.progress)onProgress(event.progress);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
     }
    });
-   const storageFailed=()=>{stream.destroy();reject(new Error('Direct capture storage failed; inspect recovery status before retrying'));};
+   const storageFailed=cause=>{stream.destroy();reject(Object.assign(new Error('Direct capture storage failed; inspect recovery status before retrying'),{cause}));};
    output.once('error',storageFailed);
    const writing=pipeline(stream,output);
-   writing.catch(error=>{transportError=error;stream.destroy();reject(new Error('Direct capture transport or storage failed; inspect recovery status before retrying'));});
-   stream.once('error',error=>{transportError=error;reject(new Error('Direct capture transport failed; inspect recovery status before retrying'));});
+   writing.catch(error=>{transportError=error;stream.destroy();reject(Object.assign(new Error('Direct capture transport or storage failed; inspect recovery status before retrying'),{cause:error}));});
+   stream.once('error',error=>{transportError=error;reject(Object.assign(new Error('Direct capture transport failed; inspect recovery status before retrying'),{cause:error}));});
    stream.once('close',async code=>{
     await writing.catch(()=>{});
     output.off('error',storageFailed);
