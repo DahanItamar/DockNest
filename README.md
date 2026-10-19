@@ -12,97 +12,66 @@
     <a href="#requirements">Requirements</a> ·
     <a href="#installation">Installation</a> ·
     <a href="#your-first-backup">First backup</a> ·
-    <a href="#documentation">Docs</a> ·
-    <a href="SECURITY.md">Security</a> ·
-    <a href="CONTRIBUTING.md">Contributing</a>
+    <a href="#documentation">Docs</a>
   </p>
 </div>
 
 ![DockNest dashboard with synthetic sites, activity and storage metrics](docs/media/dashboard.png)
 
-## Why DockNest
+Most backup tools tell you a job finished. DockNest shows you can actually restore from it.
 
-Most backup tools tell you that a job finished. DockNest is built to show that a site can be restored from it.
-
-It connects to your Linux servers over SSH, captures Docker sites (images, mounts, writable layers and databases) and static nginx sites, and stores authenticated, encrypted packages on your own SFTP storage. Every recovery point can be restored into an isolated copy and checked, without touching the live site.
+It connects to your Linux servers over SSH, backs up each Docker or static nginx site to your own encrypted SFTP storage, and restores any backup into an isolated copy so you can check it, without touching the live site.
 
 > [!NOTE]
-> DockNest is in controlled beta. Tested versions and known limits are listed in the [support matrix](docs/support-matrix.md). Opt-in boot automation still requires a real host-reboot drill before supported production use.
+> DockNest is in controlled beta. See the [support matrix](docs/support-matrix.md) for tested versions and known limits. Optional boot automation still needs a real reboot test before production use.
 
 ## Features
 
-### Back up
+- **Finds your sites.** Connect a server and DockNest discovers its Docker projects and static nginx sites.
+- **Backs up the whole site.** Images, volumes, bind mounts, writable layers and the database, captured safely for PostgreSQL, MySQL/MariaDB and Redis.
+- **Runs on a schedule.** Per-site schedules, a history of recovery points, and pins for the ones you want to keep.
+- **Proves backups work.** Restore any recovery point into an isolated copy and check it. DockNest never replaces a live site automatically.
+- **Keeps visitors informed.** Shows a maintenance page while a site is paused, with a visual editor for the page.
+- **Shows what's happening.** Live progress, a plain-language step timeline, and the real cause when something fails.
+- **Lets you take your data.** Download any backup as an encrypted file or a ZIP.
+- **Stays secure.** Encrypted backups (AES-256-GCM), pinned SSH host keys, a password plus an authenticator for every user, and a dashboard that never mounts the Docker socket.
 
-- **Discover sites:** connect Linux servers with pinned SSH host keys, find Docker projects and static nginx sites, and review detected URLs and configuration files.
-- **Capture everything a site needs:** images, mounts, writable layers and file metadata, with per-engine cold database contracts for PostgreSQL, MySQL/MariaDB and Redis.
-- **Schedule and retain:** timezone-aware schedules, serialized jobs, retention of successful backups and pinned recovery points.
-- **Choose how data leaves the server:** stage a temporary copy on the source server, or stream directly to backup storage when local disk space is short.
-
-### Verify and restore
-
-- **Prove recovery:** packages are authenticated before any recovery or export, and isolated restores record separate integrity, consistency and data evidence.
-- **Restore privately:** restore supported containers into isolated copies, or static files into private directories. Live replacement remains blocked.
-- **Download your data:** encrypted originals with range support, or authenticated Full ZIP exports with browsable files and the original Linux recovery archives.
-
-### Operate
-
-- **See what a job is doing:** live transfer progress with speed and time left, a plain-language step timeline, and the recorded cause when something fails.
-- **Keep visitors informed:** a visual maintenance-page editor, animated visitor pages and explicit deployment and activation controls.
-- **Monitor at a glance:** activity charts, audit history, grouped recovery points and a heartbeat for the API and worker. Light, dark and system themes.
-
-### Security
-
-- **Access:** a shared password plus each person's TOTP authenticator, expiring invitations, recovery codes and revocable sessions.
-- **Encryption:** AES-256-GCM packages; saved credentials are encrypted with the master key.
-- **Recover the manager itself:** an independently encrypted recovery kit for DockNest's own metadata and keys.
-
-![Job details for a synthetic site, with live transfer progress and a plain-language step timeline](docs/media/job-details.png)
-
-<sub>Every screenshot uses mock data. Names, addresses, activity and storage totals are synthetic; production accounts and credentials are never used for documentation.</sub>
+<p align="center">
+  <img src="docs/media/job-details.png" width="640" alt="Job details for a synthetic site, with live transfer progress and a plain-language step timeline" />
+  <br>
+  <sub>All screenshots use mock data.</sub>
+</p>
 
 ## How DockNest compares
 
 | | DockNest | Server snapshot | restic / Borg | docker-volume-backup |
-| --- | --- | --- | --- | --- |
-| Back up and restore one site | Yes | No, the whole server | Yes, the paths you choose | Yes, the volumes you choose |
-| Captures images, mounts and writable layers | Yes | Yes, as part of the disk | No, files only | Volumes only |
-| Consistent database capture | Per-engine contracts; fails closed | Depends on the provider | Up to your own scripts | Can stop labeled containers |
-| Proves a restore works | Restores an isolated copy and checks it | No | Checks repository integrity | No |
-| Maintenance page during capture | Yes | No | No | No |
-| Storage | SFTP | Provider only | restic: many (S3, B2, SFTP, local, …); Borg: SSH or local | Many (S3, WebDAV, SSH, local, …) |
-| Dashboard | Yes | Provider console | No (CLI) | No (configuration) |
+| :-- | :-: | :-: | :-: | :-: |
+| Restore a single site | ✅ | ❌ | ✅ | ✅ |
+| Images and writable layers | ✅ | ✅ | ❌ | ❌ |
+| Safe database capture | ✅ | ⚠️ | ⚠️ | ⚠️ |
+| Proves the restore works | ✅ | ❌ | ⚠️ | ❌ |
+| Maintenance page | ✅ | ❌ | ❌ | ❌ |
+| Web dashboard | ✅ | ⚠️ | ❌ | ❌ |
+| Storage | SFTP | Provider | Many | Many |
 
-DockNest is younger and narrower: it supports Linux hosts running Docker and SFTP storage only. The tools can work together, for example a server snapshot for the whole machine plus DockNest for verified per-site recovery.
+<sub>⚠️ means partly or depending on setup: snapshots of a running database depend on the provider; restic/Borg rely on your own scripts for databases and check repository integrity, not a restored site; docker-volume-backup can stop labeled containers; a snapshot has the provider's console, not a backup dashboard. Borg stores over SSH or locally; restic and docker-volume-backup support S3 and more.</sub>
 
-## How it works
-
-```mermaid
-flowchart LR
-    Browser[Dashboard] --> API[Express API]
-    API --> Metadata[(SQLite metadata)]
-    Worker[Scheduler and worker] --> Metadata
-    Worker -->|Pinned SSH| Source[Linux source or restore host]
-    Worker -->|Encrypted packages| Storage[(Remote SFTP storage)]
-```
-
-The API and worker share SQLite metadata. Neither mounts the Docker socket, and no public Docker API is needed. All remote operations use pinned SSH connections, and backup payloads never fall back to local storage.
+DockNest is newer and focused: Linux servers with Docker, and SFTP storage. It works well alongside a server snapshot.
 
 ## Requirements
 
-| Where | What it needs |
-| --- | --- |
-| **DockNest manager** (the machine running the dashboard) | Linux with Docker Engine and the Compose plugin for production. Node.js 24 for the one-time setup step, or a temporary Node container. Disk space for metadata only. |
-| **Each server you back up** | Linux, Docker, Python 3 (standard library only) and SSH key authentication. The current engine needs root SSH access to preserve file ownership and read volume data. A staging directory (default `/var/lib/docknest`) with room for a full local copy, or direct delivery when space is short. |
-| **Backup storage** | An SFTP server reachable from the manager, with password or SSH-key sign-in. |
-| **Your computer** | A browser and a TOTP authenticator app. |
+| Where | What you need |
+| :-- | :-- |
+| **DockNest server** (runs the dashboard) | Linux with Docker and Docker Compose. Node.js 24 for the one-time setup. |
+| **Each server you back up** | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
+| **Backup storage** | Any SFTP server the DockNest server can reach. |
+| **You** | A browser and an authenticator app. |
 
-To try DockNest locally instead, you only need **Node.js 24+** and **Python 3** on your own machine.
+Just trying it out? Node.js 24 and Python 3 on your own computer are enough.
 
 ## Installation
 
-### Production: Docker Compose with HTTPS
-
-On the manager:
+### Production (Docker Compose with HTTPS)
 
 ```sh
 git clone https://github.com/DahanItamar/DockNest.git
@@ -111,7 +80,7 @@ npm ci
 npm run setup
 ```
 
-Point a domain at the manager, open ports 80 and 443, and set these values in the generated `.env`:
+Point a domain at the server, open ports 80 and 443, and set these in `.env`:
 
 ```dotenv
 APP_DOMAIN=backup.example.com
@@ -119,15 +88,15 @@ APP_ORIGIN=https://backup.example.com
 SECURE_COOKIES=true
 ```
 
-Then start the API, worker and Caddy (which obtains and renews certificates):
+Start everything (Caddy handles the HTTPS certificate):
 
 ```sh
 docker compose --profile https up -d --build
 ```
 
-Skip `--profile https` if you already run an HTTPS reverse proxy. The API binds only to loopback port 3000. See [Deployment](docs/deployment.md) for updates, monitoring and recovery.
+Already have an HTTPS reverse proxy? Leave out `--profile https`. More in [Deployment](docs/deployment.md).
 
-### Local trial
+### Try it locally
 
 ```sh
 npm ci
@@ -136,46 +105,28 @@ npm run build
 npm start
 ```
 
-Start the worker in a second terminal:
-
-```sh
-npm run worker
-```
-
-Open **http://127.0.0.1:3000**. On Windows PowerShell, use `npm.cmd` if npm's wrapper is blocked by execution policy.
+In a second terminal, start the worker with `npm run worker`, then open **http://127.0.0.1:3000**. On Windows, use `npm.cmd` if PowerShell blocks `npm`.
 
 > [!IMPORTANT]
-> Setup creates `.env`, `data/master.key` and `data/setup.token`. Keep them private and store an independent, protected copy of the master key and metadata. Losing the key prevents decryption of saved credentials and backup packages, and resetting the admin password cannot repair it.
+> Setup creates `.env`, `data/master.key` and `data/setup.token`. Keep them private and keep a safe copy of `data/master.key`. Without it, your backups can't be decrypted, and resetting the password won't help.
 
 ## Your first backup
 
-1. **Sign in.** Complete administrator enrollment with the locally generated setup token (`data/setup.token`), connect your authenticator and save the recovery codes securely.
-2. **Connect storage.** Under **Storage**, add your SFTP destination. Backup storage starts unconfigured.
-3. **Add a server.** Use **Add server**, verify its SSH host key from a trusted console and test the connection. See [server connection](docs/server-connection.md).
-4. **Add a site.** Use **Add site** to review discovered components and configuration. See [site setup](docs/site-setup.md).
-5. **Check readiness.** Configure the required maintenance routing for Docker sites and run **Check readiness**.
-6. **Prove it.** Run a real backup and an isolated restore, then turn on the schedule.
+1. **Sign in** with the setup token from `data/setup.token`, add your authenticator and save the recovery codes.
+2. **Connect storage** under **Storage**.
+3. **Add a server** and confirm its SSH fingerprint. See [server connection](docs/server-connection.md).
+4. **Add a site** and review what DockNest found. See [site setup](docs/site-setup.md).
+5. **Check readiness**, including the maintenance page for Docker sites.
+6. **Run a backup and an isolated restore**, then turn on the schedule.
 
-Static captures keep nginx online and detect file changes during capture.
-
-To set or rotate the shared password from Windows:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\set-admin-password.ps1
-```
-
-The script prompts privately and guides first-administrator enrollment. For an enrolled administrator, rotation keeps the authenticator and signs out existing sessions. See [Security](docs/security.md) for exact access behavior.
-
-## Configuration
-
-Most sites need no changes. Optional capture settings live in a site's configuration.
+To set or change the password on Windows, run `scripts\set-admin-password.ps1`. See [Security](docs/security.md).
 
 <details>
-<summary><strong>Per-site capture settings</strong></summary>
+<summary><strong>Optional per-site settings</strong></summary>
 
 <br>
 
-The values below are a mock example:
+Most sites need none of these. Example values:
 
 ```json
 {
@@ -188,59 +139,34 @@ The values below are a mock example:
 ```
 
 | Setting | Default | What it does |
-|---|---|---|
-| `deliveryMode` | `staged` | `staged` builds the package on the source server, restarts services, then uploads. `direct` streams to backup storage without a full local copy; services stay paused until the transfer finishes. |
-| `stagingRoot` | `/var/lib/docknest` | Local capture and recovery directory on the source server. Direct delivery keeps only small journals and the image archive here. |
-| `sqliteIntegrityCheck` | `full` | `full` runs SQLite's `integrity_check` (online for large WAL databases, before any stop). `off` skips it for databases over 1 GiB; consistency still rests on the verified clean shutdown and SHA-256 evidence, and restore always runs the full check. |
-| `sqliteOnlineCheckTimeout` | `7200` | Seconds allowed for the online check (60 to 21600). |
-| `streamCompressLevel` | `1` | gzip level for direct streams (1 to 9). Lower is faster while services are paused. |
+| :-- | :-- | :-- |
+| `deliveryMode` | `staged` | `staged` makes a temporary copy on the server, then uploads. `direct` streams straight to storage when disk space is short; the site stays paused until the upload finishes. |
+| `stagingRoot` | `/var/lib/docknest` | Where the temporary copy is made on the server. |
+| `sqliteIntegrityCheck` | `full` | Checks large SQLite databases before the site pauses. `off` skips the check for databases over 1 GiB; restores always run it. |
+| `sqliteOnlineCheckTimeout` | `7200` | Seconds allowed for that check (60 to 21600). |
+| `streamCompressLevel` | `1` | Compression for direct streaming (1 to 9). Lower is faster. |
 
 </details>
 
-## Security and your data
+## Good to know
 
-- **Manager recovery kit:** **DockNest backup** saves an encrypted recovery kit for the manager itself to the SFTP destination used for site backups, keeping the latest successful copy. Keep the recovery passphrase and storage sign-in details outside the server. See [manager self-backup and recovery](docs/docknest-self-backup.md).
-- **Full ZIP exports** contain decrypted data and configuration, which may include secrets. Keep them private. Physical database files require compatible database images; a ZIP is not a SQL dump. Temporary plaintext exports are cleaned up after completion, cancellation or an interrupted API restart.
-- **Reporting vulnerabilities:** privately, as described in [SECURITY.md](SECURITY.md).
-
-## What's new in 2.0
-
-- **Large SQLite sites back up reliably.** Databases over 1 GiB are integrity-checked online before anything stops, an unchanged rollback-journal database reuses its last passed check, and the check can be switched per site between `full` and `off`.
-- **Choose how a backup leaves the server.** *Temporary copy, then upload* or *stream directly to backup storage* when the source disk is too small for a local copy.
-- **See what a job is doing.** Job details show a plain-language step timeline, live transfer progress with speed and time left, and the exact cause when something fails.
-- **Readable details everywhere.** Job, backup, audit, result and restore-plan views share one calm layout; the original JSON is always one click away.
-- **Sturdier transfers.** Container images are saved once and streamed byte-for-byte, and long uploads tolerate brief storage stalls.
-- **Small comforts.** A time-zone dropdown with common zones, and the activity chart opens on the last 7 days.
-
-See the [2.0 release notes](docs/releases/2026-10-17-v2.0.md).
-
-![Backup library showing synthetic recovery histories and pagination](docs/media/backups.png)
+- **Back up DockNest itself.** **DockNest backup** saves an encrypted recovery kit of its own data to your storage. Keep the passphrase somewhere else. See [self-backup](docs/docknest-self-backup.md).
+- **ZIP downloads are not encrypted.** They can contain secrets, so keep them private. Database files in a ZIP need a matching database image; they are not SQL dumps.
+- **New in 2.0:** reliable large SQLite backups, direct streaming, live job progress and more. See the [release notes](docs/releases/2026-10-17-v2.0.md).
 
 ## Documentation
 
 | Topic | Guides |
-| --- | --- |
-| Getting started | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
+| :-- | :-- |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) |
-| Internals | [Backup format](docs/backup-format.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) · [Logo assets](docs/design/homebird-brand/README.md) |
+| Internals | [Backup format](docs/backup-format.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |
-
-## Development and verification
-
-```sh
-npm run check              # build the UI and run Node/Python tests
-npm run test:integration   # real Linux Docker integration
-npm run dev:web            # frontend development server
-```
-
-`check` builds the UI and runs Node and Python tests. Linux Docker integration exercises real SSH, SFTP, capture, tamper rejection, source recovery and isolated restore, including static files. Browser fixtures verify original actions, charts, responsive layouts and pagination. Reproduce documentation screenshots against an isolated preview with `npm run docs:screenshots`; see [capture provenance](docs/media/README.md).
-
-Automated checks do not prove that every database, mount type or external dependency can be recovered. Unsupported privileges, unsafe paths and unresolved writers fail closed. Replacement and custom network or mount adapters require separate validated workflows.
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: keep changes focused, use mock data in examples and screenshots, and run the relevant checks. Ideas and questions go to [Discussions](https://github.com/DahanItamar/DockNest/discussions). Selected [agency-agents roles](docs/agents/README.md) serve as reference guidance.
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), which covers setup and the checks every pull request runs (`npm run check`, and `npm run test:integration` for backup and restore changes). Questions and ideas go to [Discussions](https://github.com/DahanItamar/DockNest/discussions). Report security issues privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-DockNest is licensed under the [GNU Affero General Public License v3.0](LICENSE). Bundled fonts and dependencies retain their own licenses.
+[GNU AGPL-3.0](LICENSE). Bundled fonts and dependencies keep their own licenses.
