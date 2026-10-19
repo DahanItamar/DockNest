@@ -133,6 +133,6 @@ For frontend development, run `npm run dev:web`. Reproduce documentation screens
 - [Interface design](docs/design/DESIGN.md) and [logo assets](docs/design/homebird-brand/README.md)
 - [Repository privacy](docs/repository-privacy.md) and [verification checklist](docs/acceptance.md)
 
-Keep changes focused, use mock data in examples and screenshots, and run relevant checks. Report security issues privately to the repository owner; do not include credentials or customer data in issues, commits or logs. Selected [agency-agents roles](docs/agents/README.md) serve as reference guidance.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: keep changes focused, use mock data in examples and screenshots, and run the relevant checks. Report security issues privately as described in [SECURITY.md](SECURITY.md); do not include credentials or customer data in issues, commits or logs. Selected [agency-agents roles](docs/agents/README.md) serve as reference guidance.
 
-No project-wide license has been published. Bundled fonts and dependencies retain their own licenses.
+DockNest is licensed under the [GNU Affero General Public License v3.0](LICENSE). Bundled fonts and dependencies retain their own licenses.
