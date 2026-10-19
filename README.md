@@ -45,6 +45,22 @@ See the [2.0 release notes](docs/releases/2026-10-17-v2.0.md).
 
 ![Backup library showing synthetic recovery histories and pagination](docs/media/backups.png)
 
+## How DockNest compares
+
+Most tools confirm that a backup finished. DockNest is built to show that a site can be restored from it.
+
+| | DockNest | Server snapshot | restic / Borg | docker-volume-backup |
+| --- | --- | --- | --- | --- |
+| Back up and restore one site | Yes | No, the whole server | Yes, the paths you choose | Yes, the volumes you choose |
+| Captures images, mounts and writable layers | Yes | Yes, as part of the disk | No, files only | Volumes only |
+| Consistent database capture | Per-engine contracts; fails closed | Depends on the provider | Up to your own scripts | Can stop labeled containers |
+| Proves a restore works | Restores an isolated copy and checks it | No | Checks repository integrity | No |
+| Maintenance page during capture | Yes | No | No | No |
+| Storage | SFTP | Provider only | restic: many (S3, B2, SFTP, local, …); Borg: SSH or local | Many (S3, WebDAV, SSH, local, …) |
+| Dashboard | Yes | Provider console | No (CLI) | No (configuration) |
+
+DockNest is younger and narrower: it supports Linux hosts running Docker and SFTP storage only. The tools can work together, for example a server snapshot for the whole machine plus DockNest for verified per-site recovery.
+
 ## Quick start
 
 Install **Node.js 24+** and **Python 3**. Remote hosts need Linux, SSH and Python; Docker sites also need Docker. Connect an SFTP destination before running a backup.
