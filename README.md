@@ -20,21 +20,21 @@
 
 Most backup tools tell you a job finished. DockNest shows you can actually restore from it.
 
-It connects to your Linux servers over SSH, backs up each Docker or static nginx site to your own encrypted SFTP storage, and restores any backup into an isolated copy so you can check it, without touching the live site.
+It connects to your Linux servers over SSH, backs up each Docker or nginx site to your own SFTP storage (encrypted), and lets you restore any backup to a separate copy to check it. The live site stays untouched.
 
 > [!NOTE]
-> DockNest is in controlled beta. See the [support matrix](docs/support-matrix.md) for tested versions and known limits. Optional boot automation still needs a real reboot test before production use.
+> DockNest is still in beta. Check the [support matrix](docs/support-matrix.md) to see what's been tested. Automatic recovery after a server reboot isn't ready for production yet.
 
 ## Features
 
 - **Finds your sites.** Connect a server and DockNest discovers its Docker projects and static nginx sites.
 - **Backs up the whole site.** Images, volumes, bind mounts, writable layers and the database, captured safely for PostgreSQL, MySQL/MariaDB and Redis.
-- **Runs on a schedule.** Per-site schedules, a history of recovery points, and pins for the ones you want to keep.
-- **Proves backups work.** Restore any recovery point into an isolated copy and check it. DockNest never replaces a live site automatically.
-- **Keeps visitors informed.** Shows a maintenance page while a site is paused, with a visual editor for the page.
-- **Shows what's happening.** Live progress, a plain-language step timeline, and the real cause when something fails.
+- **Runs on a schedule.** Each site gets its own schedule and a history of backups. Pin the ones you want to keep.
+- **Proves backups work.** Restore any backup to a separate copy and check it. DockNest never overwrites a live site on its own.
+- **Keeps visitors informed.** Shows a maintenance page while a site is paused. You design it in a visual editor.
+- **Shows what's happening.** Live progress, each step as it runs, and the real reason when something fails.
 - **Lets you take your data.** Download any backup as an encrypted file or a ZIP.
-- **Stays secure.** Encrypted backups (AES-256-GCM), pinned SSH host keys, a password plus an authenticator for every user, and a dashboard that never mounts the Docker socket.
+- **Stays secure.** Backups are encrypted (AES-256-GCM), server identities are checked before connecting, and every user needs a password plus an authenticator app. The dashboard never touches the Docker socket.
 
 <p align="center">
   <img src="docs/media/job-details.png" width="640" alt="Job details for a synthetic site, with live transfer progress and a plain-language step timeline" />
@@ -53,14 +53,16 @@ It connects to your Linux servers over SSH, backs up each Docker or static nginx
 | Storage | SFTP | Provider | Many | Many |
 
 > [!NOTE]
-> ⚠️ means partly, or depending on your setup:
-> - **Server snapshot:** database safety depends on the provider, and you get the provider's console rather than a backup dashboard.
-> - **restic / Borg:** databases rely on your own scripts, and checks cover the repository, not a restored site.
-> - **docker-volume-backup:** can stop labeled containers while it backs up.
+> What each ⚠️ means:
+> - **Snapshot, database:** depends on your hosting provider.
+> - **Snapshot, dashboard:** you only get the provider's control panel.
+> - **restic / Borg, database:** you need to write your own scripts.
+> - **restic / Borg, restore check:** checks the backup files, not a running site.
+> - **docker-volume-backup, database:** can stop the containers you label.
 >
-> Storage: Borg uses SSH or local disks; restic and docker-volume-backup also support S3 and more.
+> **Storage:** restic and docker-volume-backup support S3 and more. Borg uses SSH or a local disk.
 
-DockNest is newer and focused: Linux servers with Docker, and SFTP storage. It works well alongside a server snapshot.
+DockNest is newer and does less: only Linux servers with Docker, and only SFTP storage. You can use it together with a server snapshot.
 
 ## Requirements
 
@@ -120,8 +122,8 @@ In a second terminal, start the worker with `npm run worker`, then open **http:/
 2. **Connect storage** under **Storage**.
 3. **Add a server** and confirm its SSH fingerprint. See [server connection](docs/server-connection.md).
 4. **Add a site** and review what DockNest found. See [site setup](docs/site-setup.md).
-5. **Check readiness**, including the maintenance page for Docker sites.
-6. **Run a backup and an isolated restore**, then turn on the schedule.
+5. **Run Check readiness.** For Docker sites, set up the maintenance page first.
+6. **Run a backup, restore it to a separate copy,** then turn on the schedule.
 
 To set or change the password on Windows, run `scripts\set-admin-password.ps1`. See [Security](docs/security.md).
 
@@ -154,8 +156,8 @@ Most sites need none of these. Example values:
 
 ## Good to know
 
-- **Back up DockNest itself.** **DockNest backup** saves an encrypted recovery kit of its own data to your storage. Keep the passphrase somewhere else. See [self-backup](docs/docknest-self-backup.md).
-- **ZIP downloads are not encrypted.** They can contain secrets, so keep them private. Database files in a ZIP need a matching database image; they are not SQL dumps.
+- **DockNest can back up itself.** Use **DockNest backup** to save its own data, encrypted, to your storage. Keep the passphrase somewhere other than the server. See [self-backup](docs/docknest-self-backup.md).
+- **ZIP downloads are not encrypted.** They can include passwords and keys, so keep them private. Database files inside are raw files, not an SQL export.
 - **New in 2.0:** reliable large SQLite backups, direct streaming, live job progress and more. See the [release notes](docs/releases/2026-10-17-v2.0.md).
 
 ## Documentation
