@@ -38,8 +38,6 @@ It connects to your Linux servers over SSH, backs up each Docker or static nginx
 
 <p align="center">
   <img src="docs/media/job-details.png" width="640" alt="Job details for a synthetic site, with live transfer progress and a plain-language step timeline" />
-  <br>
-  <sub>All screenshots use mock data.</sub>
 </p>
 
 ## How DockNest compares
@@ -54,7 +52,13 @@ It connects to your Linux servers over SSH, backs up each Docker or static nginx
 | Web dashboard | ✅ | ⚠️ | ❌ | ❌ |
 | Storage | SFTP | Provider | Many | Many |
 
-<sub>⚠️ means partly or depending on setup: snapshots of a running database depend on the provider; restic/Borg rely on your own scripts for databases and check repository integrity, not a restored site; docker-volume-backup can stop labeled containers; a snapshot has the provider's console, not a backup dashboard. Borg stores over SSH or locally; restic and docker-volume-backup support S3 and more.</sub>
+> [!NOTE]
+> ⚠️ means partly, or depending on your setup:
+> - **Server snapshot:** database safety depends on the provider, and you get the provider's console rather than a backup dashboard.
+> - **restic / Borg:** databases rely on your own scripts, and checks cover the repository, not a restored site.
+> - **docker-volume-backup:** can stop labeled containers while it backs up.
+>
+> Storage: Borg uses SSH or local disks; restic and docker-volume-backup also support S3 and more.
 
 DockNest is newer and focused: Linux servers with Docker, and SFTP storage. It works well alongside a server snapshot.
 
