@@ -48,11 +48,13 @@ json() { printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 status() { # status OK ERROR
   [ -n "$STATUS_FILE" ] || return 0
   ok=null; [ -n "${1:-}" ] && ok=$1
-  tmp="$STATUS_FILE.tmp.$$"
+  # mktemp creates a fresh random name exclusively, so a pre-planted link in a shared directory is never followed.
+  tmp=$(mktemp "$STATUS_FILE.XXXXXX")
   printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s}\n' \
     "$PHASE" "$(json "$FROM")" "$(json "$TO")" "$STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ok" \
     "$( [ -n "${2:-}" ] && printf '"%s"' "$(json "$2")" || printf null)" "$( [ -n "$HINT" ] && printf '"%s"' "$(json "$HINT")" || printf null)" > "$tmp"
-  mv -f "$tmp" "$STATUS_FILE"
+  # World-readable on purpose: no secrets, and the unprivileged API reads it when a root updater runs this script.
+  chmod 644 "$tmp"; mv -f "$tmp" "$STATUS_FILE"
 }
 phase() { PHASE=$1; echo "==> $2"; status; }
 fail() { # fail CODE MESSAGE

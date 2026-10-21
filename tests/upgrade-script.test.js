@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
@@ -54,6 +54,11 @@ test('upgrades to the newest final release, keeps a rollback copy and releases t
   const [saved] = await readdir(join(f.work, 'data/upgrade-backups'));
   assert.match(saved, /-2\.0\.0-to-2\.1\.0$/);
   assert.deepEqual((await readdir(join(f.work, 'data/upgrade-backups', saved))).sort(), ['.env', 'master.key', 'previous-release', 'setup.token']);
+  if (process.platform !== 'win32') {
+    assert.equal((await stat(join(f.work, 'data/upgrade-backups', saved))).mode & 0o777, 0o700, 'saved secrets stay private');
+    assert.equal((await stat(join(f.work, 'data/upgrade-backups', saved, 'previous-release'))).mode & 0o077, 0);
+    assert.equal((await stat(join(f.root, 'status.json'))).mode & 0o777, 0o644, 'status is readable by the unprivileged API');
+  }
   const calls = await f.read('calls');
   assert.ok(calls.indexOf('deployment-preflight.js hold') < calls.indexOf('compose stop worker'));
   assert.ok(calls.indexOf('compose build') < calls.indexOf('compose stop worker'), 'the old release keeps serving while the new image builds');
