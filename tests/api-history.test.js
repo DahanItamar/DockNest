@@ -53,5 +53,52 @@ test('state builds the backup list with a constant number of verification querie
  try{assert.equal((await request('/state')).status,200);}finally{after.restore();}
  assert.equal(after.count,before.count);
 });
+async function walk(route,limit){
+ const items=[],pages=[];let cursor=null;
+ do{const response=await request(`/${route}?limit=${limit}`+(cursor?'&cursor='+encodeURIComponent(cursor):''));assert.equal(response.status,200);const page=await response.json();assert.ok(page.items.length<=limit);pages.push(page);items.push(...page.items);cursor=page.nextCursor;}while(cursor);
+ return {items,pages};
+}
+const ordered=(table,time)=>db.prepare(`SELECT id FROM ${table} ORDER BY ${time} DESC,id DESC`).all().map(row=>row.id);
+test('backup history pages walk every backup once in stable keyset order without storage paths',async()=>{
+ const counter=countVerificationQueries();let result;
+ try{result=await walk('backups',37);}finally{counter.restore();}
+ const expected=ordered('backups','captured_at');
+ assert.deepEqual(result.items.map(item=>item.id),expected);assert.equal(new Set(result.items.map(item=>item.id)).size,expected.length);
+ assert.equal(result.pages.length,Math.ceil(expected.length/37));assert.equal(result.pages.at(-1).nextCursor,null);
+ assert.equal(counter.count,result.pages.length,'one verification query per page, not per backup');
+ for(const item of result.items){assert.equal(item.path,undefined);assert.equal(item.status,'Verified');assert.deepEqual(item.verification,backupVerification(item.id));}
+ assert.equal(result.items.find(item=>item.id==='list-001').verification.integrity.status,'passed');
+});
+test('a cursor stays stable when newer rows arrive between page requests',async()=>{
+ const first=await (await request('/backups?limit=5')).json();
+ backup('newest-arrival',stamp(59));
+ const second=await (await request('/backups?limit=5&cursor='+first.nextCursor)).json();
+ const expected=ordered('backups','captured_at');
+ assert.deepEqual([...first.items,...second.items].map(item=>item.id),expected.filter(name=>name!=='newest-arrival').slice(0,10));
+ assert.equal((await (await request('/backups?limit=1')).json()).items[0].id,'newest-arrival');
+});
+test('job, restore and audit history paginate with the same keyset contract',async()=>{
+ for(let index=0;index<25;index++){
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','completed','completed',?)").run('job-'+index,site,stamp(index%7));
+  db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,'fresh',?,'completed',?)").run('restore-'+index,'list-001',host,JSON.stringify({serverId:host}),stamp(index%7));
+  db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?)').run('audit-'+index,user,'fixture.event',null,JSON.stringify({index}),stamp(index%7));
+ }
+ for(const [route,table] of [['jobs','jobs'],['restores','restores'],['audit','audit_events']]){
+  const {items,pages}=await walk(route,4);
+  assert.deepEqual(items.map(item=>item.id),ordered(table,'created_at'));assert.ok(pages.length>1);
+  assert.ok(items.every(item=>item.createdAt&&!('verification' in item)));
+ }
+ const restore=(await walk('restores',200)).items.find(item=>item.id==='restore-3');assert.deepEqual(restore.plan,{serverId:host});
+ const event=(await walk('audit',200)).items.find(item=>item.id==='audit-3');assert.deepEqual(event.details,{index:3});
+});
+test('history endpoints validate limit and cursor and require a session',async()=>{
+ const forged=Buffer.from(JSON.stringify({at:'x'})).toString('base64url');
+ for(const query of ['limit=0','limit=201','limit=abc','limit=1.5','cursor=not-base64-json','cursor='+forged,'cursor='+'a'.repeat(600)]){
+  const response=await request('/backups?'+query);assert.equal(response.status,400,query);assert.match((await response.json()).error,/limit|cursor/i);
+ }
+ const largest=await request('/jobs?limit=200');assert.equal(largest.status,200);assert.ok((await largest.json()).items.length<=200);
+ const defaulted=await (await request('/backups')).json();assert.equal(defaulted.items.length,50);assert.equal(typeof defaulted.nextCursor,'string');
+ for(const route of ['backups','jobs','restores','audit']){const response=await fetch(`${base}/${route}`);assert.equal(response.status,401);await response.text();}
+});
 
 test.after(async()=>{server.close();db.close();await rm(directory,{recursive:true,force:true});});
