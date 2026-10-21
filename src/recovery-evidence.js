@@ -11,5 +11,7 @@ export function recordVerification(backupId,kind,evidence,jobId=null){
 export function backupVerification(backupId){
  const result=Object.fromEntries([...kinds].map(kind=>[kind,{status:'not-tested'}]));
  for(const row of db.prepare('SELECT * FROM backup_verifications WHERE backup_id=?').all(backupId))result[row.kind]={...JSON.parse(row.evidence),status:row.status,checkedAt:row.checked_at,jobId:row.job_id};
- return result;
+ return withLegacyIntegrity(result,db.prepare('SELECT verified FROM backups WHERE id=?').get(backupId)?.verified);
 }
+// Display-time only: packages published before per-kind evidence carry verified=1 and no integrity row. A recorded row always wins; nothing is written.
+export function withLegacyIntegrity(evidence,verified){return verified&&evidence?.integrity?.status==='not-tested'?{...evidence,integrity:{status:'passed',source:'legacy'}}:evidence;}

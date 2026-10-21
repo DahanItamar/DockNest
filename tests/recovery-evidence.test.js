@@ -10,8 +10,22 @@ const root=await mkdtemp(join(tmpdir(),'docknest-evidence-'));
 process.env.DATA_DIR=root;process.env.BACKUP_DIR=root;process.env.BACKUP_STORAGE='local';process.env.NODE_ENV='test';
 await writeFile(join(root,'master.key'),randomBytes(32).toString('base64'));
 const {db}=await import('../src/db.js');
-const {recordVerification,backupVerification}=await import('../src/recovery-evidence.js');
+const {recordVerification,backupVerification,withLegacyIntegrity}=await import('../src/recovery-evidence.js');
 const {encryptStream,verifyEncrypted,enqueueScrub,claimJob,executeJob}=await import('../src/engine.js');
+test('legacy verified packages report integrity passed at read time without writing evidence',()=>{
+ const at=new Date().toISOString();
+ db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run('legacy-server','Legacy','localhost',22,'root','encrypted','0'.repeat(64),at);
+ db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run('legacy-site','legacy-server','Legacy','{}',at);
+ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('legacy-capture','legacy-site','backup','completed','completed',?)").run(at);
+ const insert=(id,verified)=>db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,'legacy-site','legacy-capture',at,'/fixture/'+id,1,'0'.repeat(64),'{}',0,verified,at);
+ insert('legacy-ok',1);insert('legacy-unverified',0);insert('legacy-scrubbed',1);
+ for(let i=0;i<2;i++){const result=backupVerification('legacy-ok');assert.deepEqual(result.integrity,{status:'passed',source:'legacy'});for(const kind of ['consistency','isolatedRestore','application'])assert.equal(result[kind].status,'not-tested');}
+ assert.deepEqual(backupVerification('legacy-unverified').integrity,{status:'not-tested'});
+ recordVerification('legacy-scrubbed','integrity',{status:'failed',method:'scrub'});
+ assert.equal(backupVerification('legacy-scrubbed').integrity.status,'failed','A recorded failure is never masked by the legacy flag');
+ assert.equal(withLegacyIntegrity({integrity:{status:'not-tested'}},0).integrity.status,'not-tested');
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM backup_verifications WHERE backup_id IN ('legacy-ok','legacy-unverified')").get().n,0,'No evidence rows are written');
+});
 test('integrity, declared consistency and application evidence stay independent; failed scrub blocks package use',async()=>{
  const at=new Date().toISOString();
  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run('server','Fixture','localhost',22,'root','encrypted','0'.repeat(64),at);
