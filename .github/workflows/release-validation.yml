@@ -1,0 +1,59 @@
+name: Release validation
+# Upgrades a real v2.0.0 Docker Compose installation to a release, drains the worker, then downgrades and upgrades again with
+# scripts/upgrade.sh, checking data, configuration and secrets at every step. See docs/release-validation.md.
+# Informational: not a required check. Runs for each pushed release tag, or by hand for any tag (default: newest final tag).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Release tag to upgrade to, for example v2.1.0. Empty means the newest final vX.Y.Z tag.'
+        required: false
+        default: ''
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: release-validation-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0   # every release tag must be present: the validation clones this checkout
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Resolve target tag
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT: ${{ inputs.target }}
+        run: |
+          if [ "$EVENT" = push ]; then target=$REF_NAME; else target=$INPUT; fi
+          [ -n "$target" ] || target=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p)
+          printf '%s\n' "$target" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "::error::Not a release tag: $target"; exit 1; }
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+      - name: Validate v2.0.0 to ${{ steps.target.outputs.target }} on real Docker
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+        run: node scripts/release-validation.js --target "$TARGET" --out "$RUNNER_TEMP/release-validation"
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/release-validation/summary.md" ]; then cat "$RUNNER_TEMP/release-validation/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else echo '## Release validation: no evidence was produced (the job stopped before the driver ran).' >> "$GITHUB_STEP_SUMMARY"; fi
+      # The driver redacts every credential it generated or read and blanks any evidence file where one still appears.
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-validation-${{ steps.target.outputs.target || 'unresolved' }}
+          path: ${{ runner.temp }}/release-validation
+          if-no-files-found: ignore
+          retention-days: 30

@@ -4,6 +4,8 @@ This page covers upgrades and rollbacks for a server installed with `git clone`,
 
 Upgrades never move, rename or delete your volumes, secrets, certificates, site configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.
 
+Each release tag is also upgraded from a real v2.0.0 Compose installation in CI, then downgraded and upgraded again with `scripts/upgrade.sh`; see [Release validation](release-validation.md) for what that run proves and what it does not.
+
 ## Upgrade with one command
 
 From the DockNest checkout on the server:

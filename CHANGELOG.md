@@ -20,6 +20,7 @@ Release candidate for 2.1.0. See [docs/releases/2026-10-22-v2.1.md](docs/release
 - Worker lease and graceful drain when the worker is stopped.
 - Recovery verification levels.
 - S3-compatible backup storage.
+- `Release validation` workflow (informational): upgrades a real v2.0.0 Compose installation to a release tag, drains the worker, then downgrades and upgrades again with `scripts/upgrade.sh`, checking data, configuration and secrets. See [docs/release-validation.md](docs/release-validation.md).
 
 ### Changed
 
