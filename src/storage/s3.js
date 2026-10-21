@@ -106,8 +106,18 @@ async function copyObject(options,from,source,to,extra={}){
   await s3Request(client,{method:'POST',key:to,query:{uploadId},headers:{'content-type':'application/xml'},body:Buffer.from('<CompleteMultipartUpload>'+parts.join('')+'</CompleteMultipartUpload>'),timeoutMs:3600000});
  }catch(error){await s3Request(client,{method:'DELETE',key:to,query:{uploadId}}).catch(()=>{});throw error;}
 }
-async function deleteVersion(options,key,versionId){
- await s3Request(conn(options),{method:'DELETE',key,query:versionId?{versionId}:{}}).catch(error=>{if(error.s3Code==='AccessDenied'&&versionId)throw Object.assign(new Error('S3 refused deletion; the object may be under Object Lock retention or legal hold.'),{code:'EOBJECTLOCKED',retainUntil:null});throw error;});
+export async function deleteVersion(options,key,versionId){
+ try{await s3Request(conn(options),{method:'DELETE',key,query:versionId?{versionId}:{}});}
+ catch(error){
+  // Providers word a locked-version refusal differently (AWS: AccessDenied, MinIO: InvalidRequest), so
+  // classify by the object's own retention headers rather than by error code.
+  if(versionId&&[400,403].includes(error.s3Status)){
+   const attrs=await head(options,key).catch(()=>null);
+   if(attrs?.legalHold)throw Object.assign(new Error('S3 Object Lock legal hold prevents deletion.'),{code:'EOBJECTLOCKED',retainUntil:null});
+   if(attrs?.retainUntil&&Date.parse(attrs.retainUntil)>Date.now())throw lockedError(attrs.retainUntil);
+  }
+  throw error;
+ }
 }
 export async function renameFile(options,fromValue,toValue,{lock=true}={}){
  const from=keyOf(fromValue),to=keyOf(toValue),source=await head(options,from);

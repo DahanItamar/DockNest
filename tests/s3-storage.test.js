@@ -206,3 +206,21 @@ test('storage migration copies deferred Object-Locked backups instead of being b
  // The locked original stays until its lock ends; DockNest does not remove it.
  assert.ok(locking.objects.has(published.slice(published.indexOf(':/')+2)));
 });
+test('a refused locked-version delete is classified by retention headers, not by provider error wording',async()=>{
+ const options=adapterOptions(locking,{objectLock:{mode:'GOVERNANCE',days:1}});
+ for(const [wording,minio] of [['aws',false],['minio',true]]){
+  locking.faults.minioLockError=minio;
+  const key='/docknest/wording-'+wording;
+  await pipeline(Readable.from([Buffer.from('locked bytes')]),s3.openWrite(options,key+'.partial'));
+  await s3.renameFile(options,key+'.partial',key);
+  const object=locking.objects.get(key.slice(1));
+  // MinIO answers 400 InvalidRequest, AWS 403 AccessDenied; both are locked because retention is in the future.
+  await assert.rejects(s3.deleteVersion(options,key.slice(1),object.versionId),error=>error.code==='EOBJECTLOCKED'&&error.retainUntil===object.retainUntil);
+  // An unlocked object's refusal stays a real error.
+  object.retainUntil=new Date(Date.now()-1000).toISOString();
+  locking.faults.status={status:400,code:'InvalidRequest'};
+  try{await assert.rejects(s3.deleteVersion(options,key.slice(1),object.versionId),error=>error.code!=='EOBJECTLOCKED');}finally{locking.faults.status=null;}
+  await s3.removeFile(options,key);
+ }
+ locking.faults.minioLockError=false;
+});

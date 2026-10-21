@@ -10,7 +10,7 @@ const rfc3986=value=>encodeURIComponent(value).replace(/[!'()*]/g,c=>'%'+c.charC
 const xml=(status,code)=>({status,body:'<?xml version="1.0" encoding="UTF-8"?><Error><Code>'+code+'</Code><Message>synthetic</Message></Error>'});
 export async function startS3Fixture({bucket='docknest-fixture',region='us-east-1',objectLock=false,defaultRetention=false}={}){
  const credentials={accessKeyId:'AKIAFIXTURE'+randomBytes(4).toString('hex').toUpperCase(),secretAccessKey:randomBytes(30).toString('base64')};
- const objects=new Map(),uploads=new Map(),requests=[],faults={ignoreRange:false,copyError:false,status:null,delayMs:0};
+ const objects=new Map(),uploads=new Map(),requests=[],faults={ignoreRange:false,copyError:false,status:null,delayMs:0,minioLockError:false};
  const state={objectLock,defaultRetention};
  function verify(request,url,body){
   const auth=request.headers.authorization||'',match=auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=([a-f0-9]{64})$/);
@@ -90,7 +90,7 @@ export async function startS3Fixture({bucket='docknest-fixture',region='us-east-
   if(request.method==='DELETE'){
    if(!object)return {status:204,body:''};
    if(q.has('versionId')&&q.get('versionId')!==object.versionId)return {status:204,body:''};
-   if(locked(object))return xml(403,'AccessDenied');
+   if(locked(object))return faults.minioLockError?xml(400,'InvalidRequest'):xml(403,'AccessDenied');
    objects.delete(key);return {status:204,body:''};
   }
   return xml(405,'MethodNotAllowed');

@@ -53,7 +53,7 @@ await step('publish applies retention; delete is refused before it ends',async()
  const attrs=await s3.statFile(locked,'/ci/locked');
  assert.equal(attrs.lockMode,'GOVERNANCE');assert.ok(Date.parse(attrs.retainUntil)>Date.now()+86400000-120000);
  await assert.rejects(s3.removeFile(locked,'/ci/locked'),error=>error.code==='EOBJECTLOCKED');
- await assert.rejects(s3Request(locked,{method:'DELETE',key:'ci/locked',query:{versionId:attrs.versionId}}),error=>error.s3Code==='AccessDenied'||error.s3Status===403);
+ await assert.rejects(s3Request(locked,{method:'DELETE',key:'ci/locked',query:{versionId:attrs.versionId}}),error=>[400,403].includes(error.s3Status));
 });
 await step('a short lock expires and removal then succeeds',async()=>{
  const until=new Date(Date.now()+3000).toISOString().replace(/\.\d{3}Z$/,'Z');
