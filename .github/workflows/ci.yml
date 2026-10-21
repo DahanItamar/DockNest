@@ -52,6 +52,7 @@ jobs:
           npm run test:theme
           npm run test:design
           npm run test:self-backup
+          npm run test:storage
           npm run test:mobile
         env:
           TEST_BROWSER_CHANNEL: chromium

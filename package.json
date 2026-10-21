@@ -29,7 +29,7 @@
     "docs:screenshots": "node scripts/readme-screenshots.js",
     "test:health": "node scripts/system-health-browser.js",
     "test:self-backup": "node scripts/self-backup-browser.js",
-    "test:mobile": "node scripts/mobile-browser.js",
+    "test:storage": "node scripts/storage-browser.js",    "test:mobile": "node scripts/mobile-browser.js",
     "audit:repo": "node scripts/audit-repository.js",
     "test:theme": "node scripts/theme-browser.js"
   },
