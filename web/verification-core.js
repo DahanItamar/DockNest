@@ -2,6 +2,7 @@ import {formatDate} from './date-format.js';
 // Pure verification semantics shared by labels, dashboard aggregates and charts (no JSX).
 // Four independent evidence levels from src/recovery-evidence.js; `verified` alone means package integrity only.
 export const LEVELS=[['integrity','Integrity','Integrity checked'],['consistency','Consistency','Consistency verified'],['isolatedRestore','Isolated restore','Isolated restore tested'],['application','Application checks','Application checks passed']];
+export const DESCRIPTIONS={integrity:'The encrypted file is complete and unaltered.',consistency:'Data was captured in a consistent state.',isolatedRestore:'The site was restored to a separate copy and started.',application:'The restored app answered its own checks.'};
 const STATUS={declared:'declared by operator',partial:'partially checked',failed:'failed','not-tested':'not tested'};
 
 // Mirrors withLegacyIntegrity in src/recovery-evidence.js: a verified package without an integrity record was checked before per-kind evidence existed.
@@ -26,7 +27,7 @@ export function verificationSummary(backup,{beyondIntegrity=false}={}){
  const all=LEVELS.map(([kind])=>({kind,...levelEvidence(backup,kind)})),levels=beyondIntegrity?all.slice(1):all;
  const pick=(test,tone,strongest=true)=>{const hit=(strongest?[...levels].reverse():levels).find(test);return hit&&{...hit,text:levelText(hit.kind,hit),tone};};
  return pick(x=>levelTone(x)==='bad','bad',false)||pick(x=>x.status==='passed'&&(beyondIntegrity||x.kind!=='integrity'),'ok')||pick(x=>x.status==='partial','warn')||pick(x=>x.status==='declared','warn')||pick(isIncompleteAttempt,'warn',false)
-  ||(!beyondIntegrity&&all[0].status==='passed'?{...all[0],text:levelText('integrity',{status:'passed'}),tone:'ok'}:{status:'not-tested',text:beyondIntegrity?'Restore not tested':'Not tested',tone:'none'});
+  ||(!beyondIntegrity&&all[0].status==='passed'?{...all[0],text:levelText('integrity',{status:'passed'}),tone:'ok'}:{status:'not-tested',text:beyondIntegrity?'Restore not tested':'Nothing tested yet',tone:'none'});
 }
 // Library row and dashboard history: a failed level takes the badge (error tone via its text); otherwise the badge is integrity and the line is the strongest further evidence. Dates stay in the title and details so rows keep one line.
 export function recoveryStatus(backup){

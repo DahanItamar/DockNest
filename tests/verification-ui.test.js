@@ -46,6 +46,7 @@ test('partial and declared evidence stay visible and are never worded as passed'
  assert.equal(recoveryStatus(make({isolatedRestore:{status:'partial'},consistency:{status:'declared'}})).line,'Isolated restore partially checked','Partial outranks declared');
  assert.equal(recoveryStatus(make({isolatedRestore:checked,application:{status:'partial'}})).line,'Isolated restore tested','Strongest passed outranks partial');
  assert.equal(recoveryStatus(make({})).line,'Restore not tested');
+ assert.equal(verificationSummary({verified:false}).text,'Nothing tested yet');
  assert.deepEqual(restoreFact(make({})),{text:'restore not tested',tone:'stored'});
  assert.deepEqual(restoreFact(make({isolatedRestore:checked})),{text:'restore tested',tone:'stored'});
 });
