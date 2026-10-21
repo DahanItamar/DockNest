@@ -547,11 +547,11 @@ class ProbeSsrfTests(unittest.TestCase):
             self.assertEqual(fetch(base+'/start',5),(200,b'healthy'))
             self.assertEqual(fetch(base+'/away',5)[0],302)
             self.assertEqual(fetch(base+'/other',5),(301,b'moved'))
-            with self.assertRaises(ValueError):fetch(base+'/rebind',5,['site.example','www.site.example'])
+            self.assertEqual(fetch(base+'/rebind',5,['site.example','www.site.example'])[0],302,'A refused redirect target fails the probe')
             self.assertEqual(fetch(base+'/loop',5)[0],302)
             with patch('helper.inspect',return_value=[]):
                 self.assertFalse(health([],base+'/away'))
-                with self.assertRaises(ProbePolicyError):health([],base+'/rebind',['www.site.example'])
+                self.assertFalse(health([],base+'/rebind',['www.site.example'],fallback=True))
                 self.assertTrue(health([],base+'/start'))
         self.assertNotIn('/latest/meta-data/',[path for path,_ in seen])
         self.assertEqual(sum(path=='/loop' for path,_ in seen),6)
@@ -677,4 +677,42 @@ class ProbeDeadlineTests(unittest.TestCase):
         port=self.drip(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100000\r\n\r\n')
         with patch('helper.time.monotonic',side_effect=[0,9.5]+[11]*50):
             with self.assertRaises(TimeoutError):public_probe({'publicUrl':'http://example.invalid:%d/'%port,'probeOrigin':True})
+class ProbeRedirectPolicyTests(unittest.TestCase):
+    """Redirect hops keep scheme and port, and a refused redirect fails the probe instead of skipping it."""
+    def setUp(self):
+        import helper
+        helper.PROBE_POLICY_FALLBACKS.clear();self.addCleanup(helper.PROBE_POLICY_FALLBACKS.clear)
+    def follow(self,start,location,domains=('site.example',),answers=None):
+        from helper import fetch
+        visited=[]
+        def exchange(connection,path,headers,deadline):
+            visited.append((type(connection).__name__,connection.host,connection.port))
+            return (302,b'moved',location) if len(visited)==1 else (200,b'healthy',None)
+        resolve=lambda host,port,domains=():(answers or {}).get(host) or ['127.0.0.1']
+        def refuse(host,port,domains=()):
+            if host in (answers or {}):raise __import__('helper').ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
+            return ['127.0.0.1']
+        with patch('helper.exchange',side_effect=exchange),patch('helper.probe_addresses',side_effect=refuse):
+            result=fetch(start,5,domains)
+        return result,visited
+    def test_scheme_and_port_rules(self):
+        followed=[('http://site.example/a','https://site.example/b'),('http://site.example:8080/a','/b'),('https://site.example/a','https://site.example:443/b'),('http://site.example/a','http://www.site.example/'),('http://site.example:8080/a','https://www.site.example/'),('https://site.example:8443/a','https://site.example/')]
+        for start,location in followed:
+            result,visited=self.follow(start,location,('site.example','www.site.example'))
+            self.assertEqual((result,len(visited)),((200,b'healthy'),2),(start,location))
+        self.assertEqual(self.follow('http://site.example/a','https://site.example/b')[1][1][0],'PinnedHTTPSConnection')
+        refused=[('https://site.example/a','http://site.example/b'),('http://site.example/a','http://site.example:2375/'),('http://site.example:8080/a','http://site.example:8081/'),('http://site.example:8080/a','https://site.example:8443/'),('https://127.0.0.1:8443/a','https://127.0.0.1/'),('http://site.example/a','http://other.example/')]
+        for start,location in refused:
+            result,visited=self.follow(start,location,('site.example','www.site.example'))
+            self.assertEqual((result,len(visited)),((302,b'moved'),1),(start,location))
+    def test_refused_redirect_target_fails_the_probe_and_is_not_a_policy_skip(self):
+        for location in ['http://user:secret@site.example/ok','gopher://site.example/','http://cfg.example/','http://site.example:99999/']:
+            result,visited=self.follow('http://site.example/a',location,('site.example','cfg.example'),{'cfg.example':True})
+            self.assertEqual((result,len(visited)),((302,b'moved'),1),location)
+            with patch('helper.exchange',side_effect=lambda *a:(302,b'moved',location)),patch('helper.probe_addresses',side_effect=lambda host,*a:(_ for _ in ()).throw(__import__('helper').ProbePolicyError('refused')) if host=='cfg.example' else ['127.0.0.1']),patch('helper.inspect',return_value=[]):
+                self.assertFalse(health([],'http://site.example/a',['site.example','cfg.example'],fallback=True),location)
+        import helper;self.assertEqual(helper.PROBE_POLICY_FALLBACKS,[],'Only a refused stored URL may be skipped')
+        with patch('helper.inspect',return_value=[]):
+            self.assertTrue(health([],'http://169.254.169.254/',fallback=True))
+        self.assertEqual(helper.PROBE_POLICY_FALLBACKS,['health'])
 if __name__=='__main__':unittest.main()

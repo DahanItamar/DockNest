@@ -817,15 +817,31 @@ def probe_addresses(hostname,port,domains=()):
     return chosen
 def fetch(url,timeout,domains=(),redirects=5):
     """GET with every hop resolved, validated and pinned. Redirects are followed only to the same
-    host or to another configured site domain; otherwise the redirect response itself is returned.
-    timeout is a total budget for the whole probe: every connect attempt, redirect and body read."""
-    allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None;deadline=time.monotonic()+timeout
+    host or to another configured site domain, keeping the scheme (or upgrading HTTP to HTTPS) and the
+    port (or moving to the default port on an upgrade or for a configured domain); otherwise the redirect
+    response itself is returned. Only the stored URL can raise ProbePolicyError: a refused redirect target
+    returns the redirect, which callers treat as a failed probe, so a site cannot turn its own probe into
+    a policy skip. timeout is a total budget for the whole probe: every connect attempt, redirect and body read."""
+    allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None;previous=None;deadline=time.monotonic()+timeout
     for _ in range(redirects+1):
         parsed=urllib.parse.urlsplit(url)
-        if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
-        host=parsed.hostname.lower().rstrip('.');origin=origin or host
-        if host!=origin and host not in allowed:return status,body
-        port=parsed.port or (443 if parsed.scheme=='https' else 80);addresses=probe_addresses(host,port,domains)
+        try:
+            if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
+            host=parsed.hostname.lower().rstrip('.');origin=origin or host
+            port=parsed.port or (443 if parsed.scheme=='https' else 80)
+            if previous:
+                scheme,last_port=previous;upgrade=scheme=='http' and parsed.scheme=='https';default=port==(443 if parsed.scheme=='https' else 80)
+                if host!=origin and host not in allowed:return status,body
+                if parsed.scheme!=scheme and not upgrade:return status,body
+                if not ((parsed.scheme==scheme and port==last_port) or (default and (upgrade or host in allowed))):return status,body
+            addresses=probe_addresses(host,port,domains)
+        except ProbePolicyError:
+            if previous is None:raise
+            return status,body
+        except ValueError:
+            if previous is None:raise
+            return status,body
+        previous=(parsed.scheme,port)
         remaining=deadline-time.monotonic()
         if remaining<=0:raise TimeoutError('Probe exceeded its total time limit')
         if parsed.scheme=='https':connection=PinnedHTTPSConnection(parsed.hostname,port,addresses,timeout=remaining,context=ssl.create_default_context())
