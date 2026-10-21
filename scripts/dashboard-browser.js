@@ -70,6 +70,26 @@ assert.equal(await page.locator('.dash-site').count(),4,'A failed refresh retain
 await page.route('**/api/state',r=>r.fulfill({json:state}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
 await page.getByRole('alert').waitFor({state:'hidden'});
+// Restore facts: tested (green), helper-reported failure (amber + error badge), incomplete attempt (amber, never "failed").
+const passed={status:'passed',checkedAt:time(1)},untested={status:'not-tested'},levels=(isolatedRestore,application=untested)=>({integrity:passed,consistency:untested,isolatedRestore,application});
+const evidenceState={...state,jobs:[],backups:[{id:'tested',siteId:'DemoShop',createdAt:time(2),verified:true,size:1024**3,verification:levels(passed)},{id:'helper-failed',siteId:'store',createdAt:time(3),verified:true,size:1024**3,verification:levels({status:'failed',method:'helper health check',checkedAt:time(1)})},{id:'attempt',siteId:'journal',createdAt:time(4),verified:true,size:1024**3,verification:levels({status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)},{status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)})}]};
+await page.route('**/api/state',r=>r.fulfill({json:evidenceState}));
+await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
+await page.locator('.dash-state').filter({hasText:'restore tested'}).waitFor();
+const states=await page.locator('.dash-site .dash-state').evaluateAll(items=>items.map(item=>[item.className.replace('dash-state ',''),item.textContent]));
+assert.deepEqual(states,[['stored','Recovery point stored · restore tested'],['warning','Recovery point stored · restore test failed'],['warning','Recovery point stored · restore attempt did not complete'],['neutral','No integrity-checked backup']]);
+await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
+for(const group of await page.locator('.backup-group>summary').all())await group.click();
+const failedRow=page.locator('.recovery-row').filter({hasText:'helper-failed'});
+assert.equal(await failedRow.locator('.badge').textContent(),'Isolated restore failed');assert.match(await failedRow.locator('.badge').getAttribute('class'),/\bbad\b/);
+const attemptRow=page.locator('.recovery-row').filter({hasText:'attempt'});
+assert.doesNotMatch(await attemptRow.textContent(),/failed/,'An incomplete attempt is not shown as failed');
+const rowHeights=await page.locator('.recovery-row').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().height));
+assert.ok(Math.max(...rowHeights)-Math.min(...rowHeights)<4,'Library rows share one height: '+rowHeights.join(', '));
+await page.setViewportSize({width:390,height:844});
+assert.equal(await page.locator('.recovery-status small').evaluateAll(lines=>lines.every(line=>line.getBoundingClientRect().height<=2*parseFloat(getComputedStyle(line).lineHeight||'18')+1)),true,'Row status line stays within two lines on phones');
+await page.setViewportSize({width:1440,height:1100});
+await page.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();
 await page.route('**/api/state',r=>r.fulfill({json:{...state,servers:[],sites:[],policies:[],jobs:[],backups:[]}}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
 await page.getByRole('button',{name:'Connect a server',exact:true}).waitFor();

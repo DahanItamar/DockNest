@@ -6,7 +6,7 @@ import {describeSchedule} from './schedule.js';
 import './dashboard.css';
 import {Paginated} from './pagination.jsx';
 import {formatDate} from './date-format.js';
-import {integrityText,isIntegrityChecked,verificationSummary} from './verification.jsx';
+import {isIntegrityChecked,recoveryStatus,restoreFact} from './verification.jsx';
 
 const Layers=props=><BrandIcon name="sites" {...props}/>;
 const Archive=props=><BrandIcon name="backups" {...props}/>;
@@ -60,8 +60,8 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
             <div className="dash-site-columns" aria-hidden="true"><span>Site / server</span><span>Latest recovery point</span><span>Schedule</span><span/></div>
             <Paginated rows={s.sites} label="Dashboard sites" pageSize={5}>{visible=>visible.map(site=>{
               const history=backups.filter(b=>b.siteId===site.id),latest=history[0],job=latestJob(site.id),policy=s.policies.find(p=>p.siteId===site.id);
-              const state=job?.status==='recovery_required'?'Recovery required':job?.status==='failed'?'Last job failed':['running','queued'].includes(job?.status)?'In progress':isIntegrityChecked(latest)?'Recovery point stored':'No integrity-checked backup';
-              const tone=['failed','recovery_required'].includes(job?.status)?'warning':['running','queued'].includes(job?.status)?'neutral':isIntegrityChecked(latest)?'stored':'neutral';
+              const state=job?.status==='recovery_required'?'Recovery required':job?.status==='failed'?'Last job failed':['running','queued'].includes(job?.status)?'In progress':isIntegrityChecked(latest)?'Recovery point stored · '+restoreFact(latest).text:'No integrity-checked backup';
+              const tone=['failed','recovery_required'].includes(job?.status)?'warning':['running','queued'].includes(job?.status)?'neutral':isIntegrityChecked(latest)?restoreFact(latest).tone:'neutral';
               return <details className="dash-site" key={site.id}>
                 <summary><span className="dash-site-identity"><span className="dash-site-icon"><BrandIcon name="sites" size={18}/></span><span><b>{site.name}</b><small><BrandIcon name="server" size={12}/>{name(site.serverId,'servers')}</small></span></span>
                   <span className="dash-site-latest"><b>{shortDate(latest?.capturedAt||latest?.createdAt)}</b><small className={`dash-state ${tone}`}><span/>{state}</small></span>
@@ -70,7 +70,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
                 </summary>
                 <div className="dash-site-history"><div className="dash-history-heading"><span>Recovery history</span><button className="dash-link" onClick={()=>navigate('Backups')}>Open library <ArrowRight size={14}/></button></div>
                   {history.length?<Paginated rows={history} label={"Dashboard recovery points for "+site.name} pageSize={3}>{points=>points.map(backup=><div className="dash-backup" key={backup.id}>
-                    <BrandIcon name="backups" size={16}/><div className="dash-backup-date"><b>{shortDate(backup.capturedAt||backup.createdAt)}</b><small>{bytes(backup.size||backup.sizeBytes)}{backup.pinned?' · Pinned':''}{' · '+integrityText(backup)}{(summary=>summary.kind&&summary.kind!=='integrity'?' · '+summary.text:'')(verificationSummary(backup))}</small></div>
+                    <BrandIcon name="backups" size={16}/><div className="dash-backup-date"><b>{shortDate(backup.capturedAt||backup.createdAt)}</b><small><span>{bytes(backup.size||backup.sizeBytes)}{backup.pinned?' · Pinned':''}{(s=><> · <span className={s.failed?'dash-failed':undefined}>{s.badge}</span> · {s.line}</>)(recoveryStatus(backup))}</span></small></div>
                     <div className="dash-backup-actions">
                       <a className="dash-icon" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Download full ZIP"><BrandIcon name="download" size={22}/></a>
                       <a className="dash-icon" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted backup"><BrandIcon name="encrypted-download" size={22}/></a>
