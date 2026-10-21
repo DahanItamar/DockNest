@@ -786,6 +786,13 @@ class OriginHTTPSConnection(PinnedHTTPSConnection):
 PROBE_LIMIT=256*1024
 METADATA_ADDRESSES={ipaddress.ip_address(a) for a in ['169.254.169.254','169.254.170.2','fd00:ec2::254','100.100.100.200']}
 THIS_NETWORK=ipaddress.ip_network('0.0.0.0/8')
+# Decided explicitly rather than through is_global, whose IPv6 tables differ between Python releases.
+NAT64=ipaddress.ip_network('64:ff9b::/96')
+REFUSED_IPV6=[ipaddress.ip_network(n) for n in ['::/96','64:ff9b:1::/48','2001::/32','2001:db8::/32','100::/64']]
+def embedded_ipv4(address):
+    """IPv4 carried inside a 6to4 or NAT64 address; the probe would effectively reach it."""
+    if address.version!=6:return None
+    return address.sixtofour or (ipaddress.IPv4Address(int(address)&0xffffffff) if address in NAT64 else None)
 class ProbePolicyError(ValueError):
     """A probe target the address policy refuses. Unlike a network failure, retrying cannot fix it."""
 PROBE_POLICY_FALLBACKS=[]
@@ -810,6 +817,13 @@ def probe_addresses(hostname,port,domains=()):
     for address in answers:
         address=getattr(address,'ipv4_mapped',None) or address
         if not address.is_loopback: # ::1 sits inside the reserved ::/8 block.
+            embedded=embedded_ipv4(address)
+            if address.version==6 and any(address in network for network in REFUSED_IPV6):raise ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
+            if embedded is not None:
+                # Only a public IPv4 may be reached through 6to4 or NAT64; loopback and private never apply.
+                if embedded in METADATA_ADDRESSES or not embedded.is_global or embedded in THIS_NETWORK:raise ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
+                if str(address) not in chosen:chosen.append(str(address))
+                continue
             if address in METADATA_ADDRESSES or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved or getattr(address,'is_site_local',False) or (address.version==4 and address in THIS_NETWORK):raise ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
             if not address.is_global and not (configured and local_address(address)):raise ProbePolicyError('the URL resolves to a private address that does not belong to this server; use the site domain, a loopback port or a public address')
         if str(address) not in chosen:chosen.append(str(address))

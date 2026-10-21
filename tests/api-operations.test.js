@@ -141,14 +141,14 @@ test('origin probe preference survives configuration normalization and readiness
 });
 test('probe URLs refuse metadata, link-local and private literals while operators keep site edits with an audit trail',async()=>{
  const payload={serverId:host,name:'Probe fixture',config:{containers:['fixture'],domains:['www.example.org']}};
- const blocked=['http://169.254.169.254/latest/meta-data/','http://[fd00:ec2::254]/','http://[::ffff:169.254.169.254]/','http://0xa9fea9fe/','http://10.0.0.5/','http://172.17.0.2:8080/','http://192.168.1.1/','http://100.100.100.200/','http://[fe80::1]/','http://[fd12::1]/','http://224.0.0.1/','http://0.0.0.0:8080/','http://[::]/'];
+ const blocked=['http://169.254.169.254/latest/meta-data/','http://[fd00:ec2::254]/','http://[::ffff:169.254.169.254]/','http://0xa9fea9fe/','http://10.0.0.5/','http://172.17.0.2:8080/','http://192.168.1.1/','http://100.100.100.200/','http://[fe80::1]/','http://[fd12::1]/','http://224.0.0.1/','http://0.0.0.0:8080/','http://[::]/','http://[::169.254.169.254]/','http://[64:ff9b::169.254.169.254]/','http://[64:ff9b:1::1]/','http://[2002:a9fe:a9fe::1]/','http://[2002:7f00:1::1]/','http://[2001::1]/','http://[100::1]/','http://[2001:db8::1]/'];
  for(const url of blocked){
   for(const config of [{healthUrl:url},{maintenancePublicUrl:url},{maintenance:{required:true,directory:'/var/lib/docknest/maintenance/x',publicUrl:'https://www.example.org',healthUrl:url}}]){
    const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,...config}})});assert.equal(response.status,400,url);
   }
  }
  assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:['169.254.169.254']}})})).status,400,'A literal domain cannot become a metadata probe');
- for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
+ for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::93.184.216.34]/','http://[2002:5db8:d822::1]/','http://[2606:2800:220:1::1]/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
  const saved=await (await request('/sites',{method:'POST',body:JSON.stringify(payload)})).json();
  db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
  try{

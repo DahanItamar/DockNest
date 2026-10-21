@@ -715,4 +715,11 @@ class ProbeRedirectPolicyTests(unittest.TestCase):
         with patch('helper.inspect',return_value=[]):
             self.assertTrue(health([],'http://169.254.169.254/',fallback=True))
         self.assertEqual(helper.PROBE_POLICY_FALLBACKS,['health'])
+class ProbeIpv6SpecialRangeTests(unittest.TestCase):
+    """6to4 and NAT64 are judged by the IPv4 they carry; other special IPv6 ranges are refused on every Python."""
+    def test_embedded_and_special_ipv6_ranges(self):
+        from helper import probe_addresses
+        for address in ['::a9fe:a9fe','::10.0.0.1','64:ff9b::a9fe:a9fe','64:ff9b::a00:1','64:ff9b::7f00:1','64:ff9b:1::1','2002:a9fe:a9fe::1','2002:a00:1::1','2002:7f00:1::1','2002:6464:64c8::1','2001::1','2001:0:4136:e378::1','2001:db8::1','100::1']:
+            with self.assertRaises(ProbePolicyError,msg=address):probe_addresses(address,80,['site.example'])
+        for address in ['64:ff9b::5db8:d822','2002:5db8:d822::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
 if __name__=='__main__':unittest.main()
