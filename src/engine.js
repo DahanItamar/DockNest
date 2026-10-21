@@ -1,5 +1,5 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
-import { db, parse, id, audit } from './db.js';
+import { db, parse, id, audit, transaction } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
@@ -54,8 +54,8 @@ export function enqueueScrub(backupId,actor='administrator'){
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
- try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE id=?").run(now(),job.id);audit('worker','backup.scrub.completed',backupId,{job:job.id});}
- catch{if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.' WHERE id=?").run(now(),job.id);audit('worker','backup.scrub.failed',backupId,{job:job.id});}
+ try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
+ catch{transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}audit('worker','backup.scrub.failed',backupId,{job:job.id});});}
 }
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
@@ -122,7 +122,14 @@ async function inspectEncrypted(file,secret=key()){
  await pipeline(await openRead(file,{start:16,end:size-17}),new Transform({transform(chunk,_e,cb){hash.update(chunk);cb(null,chunk);}}),decipher,new Writable({write(chunk,_e,cb){plaintext.update(chunk);cb();}}));
  hash.update(tag);return {checksum:hash.digest('hex'),plaintextChecksum:plaintext.digest('hex'),size,header,tag};
 }
-function stage(job,value){db.prepare("UPDATE jobs SET stage=? WHERE id=?").run(value,job);}
+function stage(job,value){db.prepare("UPDATE jobs SET stage=? WHERE id=? AND status='running'").run(value,job);}
+// Terminal writes apply only while the job is still 'running'. If this worker lost its lease, the new holder has
+// already marked the job recovery_required; overwriting that would clear the per-server block in claimJob.
+function finishJob(jobId,set,...values){
+ if(db.prepare(`UPDATE jobs SET ${set} WHERE id=? AND status='running'`).run(...values,jobId).changes===1)return true;
+ console.error(`Job ${jobId} is no longer running (another worker marked it for recovery); its final status was not written.`);
+ audit('worker','job.superseded',jobId,{});return false;
+}
 const transferWrites=new Map();
 function recordTransferProgress(job,value){
  // Throttled: progress arrives often; persist at most every 2 seconds plus the final value.
@@ -168,18 +175,21 @@ async function executeRestoreJob(job){
   try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
   // Only invoke extraction after the complete GCM-authenticated stream finishes.
   stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint});
-  recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
-  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
-  db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
-  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({...details,result}),job.id);
-  audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});
+  // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
+  if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
+   recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
+   for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
+   db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
+   audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
  }catch(error){
-  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
-  db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
-  db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=?,error=? WHERE id=?").run(now(),String(error.message).slice(0,1000),job.id);
-  audit('worker','restore.failed',backup.id,{job:job.id});
+  if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
+   for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
+   db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
+   audit('worker','restore.failed',backup.id,{job:job.id});return true;}))supersedeRestore(restore.id);
  }
 }
+// The restore outcome of a superseded job is unknown to the new lease holder; leave it for recovery review.
+function supersedeRestore(restoreId){db.prepare("UPDATE restores SET status='recovery_required' WHERE id=? AND status IN ('queued','running')").run(restoreId);}
 
 export async function executeJob(job){
  if(job.type==='scrub')return executeScrub(job);
@@ -232,7 +242,8 @@ export async function executeJob(job){
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   await renameFile(temporary,published);finalizePublication(backupId);
   publishedBackup=true;
-  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds}),job.id);
+  // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
+  if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds})))return;
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
   await remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
@@ -245,8 +256,7 @@ export async function executeJob(job){
   details.failure={at:now(),lastStage:remoteStage,errorType:error.name||'Error',remoteReported:!!error.remoteReported};
   // Record the underlying transport/storage reason; strip paths and limit length.
   const cause=error.cause;if(cause&&typeof cause==='object')details.failure.cause={type:String(cause.name||'Error').slice(0,60),...(cause.code!=null?{code:String(cause.code).slice(0,40)}:{}),...(cause.level?{level:String(cause.level).slice(0,40)}:{}),message:String(cause.message||'').replace(/\/[^\s'"]+/g,'[path]').slice(0,240)};
-  db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,error=?,details=? WHERE id=?').run(recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details),job.id);
-  audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
+  if(finishJob(job.id,'status=?,stage=?,finished_at=?,error=?,details=?',recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details)))audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
  }
 }
 export function tickScheduler(currentDate=new Date()){

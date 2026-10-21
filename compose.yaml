@@ -26,6 +26,9 @@ services:
   worker:
     <<: *runtime
     command: ["node", "src/worker.js"]
+    # SIGTERM drains: no new jobs are claimed and the running job finishes before exit.
+    # Jobs still running after this period are SIGKILLed and become recovery_required on next start.
+    stop_grace_period: 5m
     depends_on: [api]
   proxy:
     image: caddy:2
