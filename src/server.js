@@ -19,7 +19,7 @@ import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification } from './recovery-evidence.js';
-import { installBootRecovery } from './engine.js';
+import { installBootRecovery, bootRecoveryStatus } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 await clearInterruptedExports();
@@ -106,7 +106,7 @@ app.get('/api/state', async (_req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -210,6 +210,7 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
 app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadiness(req.params.id)));
 app.post('/api/sites/:id/plan', async (req,res)=>res.json(await planBackup(req.params.id)));
+app.get('/api/sites/:id/boot-recovery', (req,res)=>{ const bootRecovery = bootRecoveryStatus(getSite(req.params.id).id); res.json({ ...bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }); });
 app.post('/api/sites/:id/boot-recovery', requireAdmin, async (req,res)=>res.json(await installBootRecovery(req.params.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {

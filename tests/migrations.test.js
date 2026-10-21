@@ -10,7 +10,7 @@ import { migrate, migrations, schemaVersion, listSnapshots, SchemaTooNewError } 
 
 const run = promisify(execFile), quiet = () => {};
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
-const addedSinceV2 = [];
+const addedSinceV2 = ['boot_recovery_installs'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;

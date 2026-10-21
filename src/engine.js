@@ -19,7 +19,16 @@ export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return remote(server,{operation:'plan',config:site.config});}
-export async function installBootRecovery(siteId){const {site,server}=siteInfo(siteId);if(busy(siteId))throw new Error('Finish active work before installing boot recovery');const helper=await readFile(new URL('../remote/helper.py',import.meta.url)),bootHelper=await readFile(new URL('../remote/boot_recovery.py',import.meta.url));const result=await remote(server,{operation:'install-boot-recovery',config:site.config,helper:helper.toString('base64'),bootHelper:bootHelper.toString('base64')});audit('administrator','boot_recovery.installed',siteId,{});return result;}
+// Boot recovery copies these files onto the host; other operations stream the current helper each time.
+const bootBundle=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
+export const bootRecoveryBundle=Object.freeze({sha256:createHash('sha256').update(bootBundle[0]).update('\0').update(bootBundle[1]).digest('hex'),helperVersion:Number(/^VERSION=(\d+)$/m.exec(bootBundle[0].toString())?.[1]||0)});
+export function bootRecoveryStatus(siteId){
+ const row=db.prepare('SELECT bundle_sha256,helper_version,installed_at FROM boot_recovery_installs WHERE site_id=?').get(siteId);
+ // Copies installed before fingerprints were recorded are only known from the audit trail and are treated as outdated.
+ if(!row)return db.prepare("SELECT 1 FROM audit_events WHERE action='boot_recovery.installed' AND target=?").get(siteId)?{installed:true,installedAt:null,helperVersion:null,outdated:true}:{installed:false,installedAt:null,helperVersion:null,outdated:false};
+ return {installed:true,installedAt:row.installed_at,helperVersion:row.helper_version,outdated:row.bundle_sha256!==bootRecoveryBundle.sha256};
+}
+export async function installBootRecovery(siteId){const {site,server}=siteInfo(siteId);if(busy(siteId))throw new Error('Finish active work before installing boot recovery');const [helper,bootHelper]=bootBundle;const result=await remote(server,{operation:'install-boot-recovery',config:site.config,helper:helper.toString('base64'),bootHelper:bootHelper.toString('base64')});db.prepare('INSERT INTO boot_recovery_installs VALUES(?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET bundle_sha256=excluded.bundle_sha256,helper_version=excluded.helper_version,installed_at=excluded.installed_at').run(siteId,bootRecoveryBundle.sha256,bootRecoveryBundle.helperVersion,now());audit('administrator','boot_recovery.installed',siteId,{bundleSha256:bootRecoveryBundle.sha256});return result;}
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});

@@ -73,6 +73,8 @@ function baseline(db) {
 }
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
+  // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
+  { version: 2, name: 'boot-recovery-installs', up: db => db.exec('CREATE TABLE IF NOT EXISTS boot_recovery_installs (site_id TEXT PRIMARY KEY REFERENCES sites(id),bundle_sha256 TEXT NOT NULL,helper_version INTEGER NOT NULL,installed_at TEXT NOT NULL)') },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
