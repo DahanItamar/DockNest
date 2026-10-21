@@ -61,6 +61,10 @@ try {
     CREATE TABLE IF NOT EXISTS enrollment_challenges (token_hash TEXT PRIMARY KEY,invitation_id TEXT NOT NULL REFERENCES invitations(id),expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS invitations_user ON invitations(user_id,created_at);
     CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS backups_captured ON backups(captured_at,id);
+    CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at,id);
+    CREATE INDEX IF NOT EXISTS restores_created ON restores(created_at,id);
+    CREATE INDEX IF NOT EXISTS audit_created ON audit_events(created_at,id);
   `);
   db.prepare("UPDATE users SET name=email WHERE name=''").run();
   const firstUser = db.prepare('SELECT * FROM users ORDER BY created_at,id LIMIT 1').get();
