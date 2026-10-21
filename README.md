@@ -103,6 +103,8 @@ docker compose --profile https up -d --build
 
 Already have an HTTPS reverse proxy? Leave out `--profile https`. More in [Deployment](docs/deployment.md).
 
+To upgrade later, run `scripts/upgrade.sh` from the checkout. It keeps your data, secrets and certificates and can roll back. See [Upgrading](docs/upgrading.md).
+
 ### Try it locally
 
 ```sh
@@ -165,7 +167,7 @@ Most sites need none of these. Example values:
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
+| Setup | [Deployment](docs/deployment.md) · [Upgrading](docs/upgrading.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |

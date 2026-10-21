@@ -14,11 +14,13 @@ Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents)
 | [UI Designer](https://github.com/msitarzewski/agency-agents/blob/main/design/design-ui-designer.md) | Equal card geometry, aligned navigation and clear system health states. |
 | [Database Optimizer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-database-optimizer.md) | Batched verification evidence for list endpoints (no per-row queries), `(timestamp, id)` indexes checked with `EXPLAIN QUERY PLAN`, and keyset pagination for history. |
 | [Brand Guardian](https://github.com/msitarzewski/agency-agents/blob/main/design/design-brand-guardian.md) | Preserve the approved identity and consistent application/browser assets. |
+| [Database Reliability Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-database-reliability-engineer.md) | Versioned forward-only migrations, consistent pre-migration snapshots, downgrade guards and tested rollback. |
 
 The project-readme-author skill informed README structure, current branding, setup instructions and synthetic screenshots. The motion-design skill informed the slow health sweep, sun/moon hover and toggle feedback, and reduced-motion behavior. UI Designer and Brand Guardian guidance informed semantic dark colors, consistent geometry and reuse of the blue wordmark. Source-specific operations, asset-generation identifiers and session notes are kept outside Git.
 
 The remote storage migration uses Backend Architect guidance for a durable journal and transactional metadata changes, and DevOps Automator guidance for stopped-service migration, integrity checks and retained rollback files. No subagents were used for this work.
 
+Upgrade safety uses DevOps Automator guidance for the one-command upgrade with automatic code rollback, signed release images and the CI upgrade job, and Database Reliability Engineer guidance for `user_version` migrations under a write lock, `VACUUM INTO` snapshots and the downgrade guard. No subagents were used for this work.
 ## Product planning (2026-10-21)
 
 The [Product Manager](https://github.com/msitarzewski/agency-agents/blob/main/product/product-manager.md) role informed the documents in [docs/product](../product/vision.md). It shaped:

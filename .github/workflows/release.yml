@@ -1,0 +1,93 @@
+name: Release
+# Publishes ghcr.io/<owner>/docknest for a version tag, signs it keylessly and attaches docknest-release.json.
+# Tags: X.Y.Z always; X.Y, X and latest only for final (non-prerelease) versions.
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # create the GitHub Release and upload its manifest
+      packages: write   # push to ghcr.io with GITHUB_TOKEN
+      id-token: write   # cosign keyless signing through GitHub OIDC
+      actions: read     # look up the CI run for the tagged commit
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      # Fail closed: nothing is built, pushed or signed unless the tagged commit is on main and the Verify workflow
+      # (privacy, check, browser, linux-integration, upgrade, gate) finished successfully for exactly that commit.
+      - name: Require tag on main with a green Verify run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1; }
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=50" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success" and .name == "Verify")] | length')
+          [ "${passed:-0}" -ge 1 ] || { echo "::error::No successful Verify run for $GITHUB_SHA; wait for CI on main to pass before tagging"; exit 1; }
+      - name: Resolve release
+        id: release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/release-manifest.js --version "$version" > /dev/null
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/docknest" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ${{ steps.release.outputs.image }}
+          # semver major/minor patterns are skipped for prereleases; latest=auto follows the same rule.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+          flavor: latest=auto
+          labels: |
+            org.opencontainers.image.title=DockNest
+            org.opencontainers.image.licenses=AGPL-3.0-only
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64   # arm64 is not published yet; build from source on ARM hosts
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+      - name: Sign image by digest
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE"
+      - name: Create GitHub Release with manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          node scripts/release-manifest.js --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" > docknest-release.json
+          notes=$(node -p "require('./docknest-release.json').notes || ''")
+          set -- "$GITHUB_REF_NAME" docknest-release.json --title "DockNest $VERSION" --verify-tag
+          if [ -n "$notes" ]; then set -- "$@" --notes-file "$notes"; else set -- "$@" --generate-notes; fi
+          if [ "$PRERELEASE" = true ]; then set -- "$@" --prerelease; else set -- "$@" --latest; fi
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then gh release upload "$GITHUB_REF_NAME" docknest-release.json --clobber; else gh release create "$@"; fi

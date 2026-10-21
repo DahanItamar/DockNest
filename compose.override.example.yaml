@@ -1,0 +1,24 @@
+# Copy to compose.override.yaml for local changes. Docker Compose merges it automatically, git ignores it,
+# and scripts/upgrade.sh never touches it, so upgrades do not conflict with your edits.
+# Keep settings such as APP_ORIGIN, HOST_PORT and APP_DOMAIN in .env instead.
+services:
+  api:
+    # Example: publish on another loopback port without editing compose.yaml.
+    # ports: !override ["127.0.0.1:3100:3000"]
+    environment: {}
+  worker:
+    environment: {}
+
+# Optional: run the signed published image instead of building from source (Docker Compose 2.24 or later).
+# Put an exact version in .env, for example DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0, and use:
+#
+# services:
+#   api:
+#     image: ${DOCKNEST_IMAGE:?Set DOCKNEST_IMAGE in .env}
+#     build: !reset null
+#   worker:
+#     image: ${DOCKNEST_IMAGE:?Set DOCKNEST_IMAGE in .env}
+#     build: !reset null
+#
+# To upgrade, run scripts/upgrade.sh --version vX.Y.Z. It pulls instead of building, switches only the tag for its own
+# commands, rolls back to the exact image it recorded, and updates DOCKNEST_IMAGE in .env once the release is healthy.
