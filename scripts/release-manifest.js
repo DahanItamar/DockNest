@@ -7,7 +7,8 @@ import { schemaVersion } from '../src/migrations.js';
 // Notes convention: docs/releases/YYYY-MM-DD-vX.Y.Z.md; a vX.Y.md file covers the X.Y.0 release.
 export function releaseNotes(version, files) {
   const [major, minor, patch] = version.split(/[.-]/);
-  const names = [`-v${version}.md`, ...(patch === '0' && !version.includes('-') ? [`-v${major}.${minor}.md`] : [])];
+  // A release candidate (X.Y.0-rc.N) ships the notes of the X.Y release it previews.
+  const names = [`-v${version}.md`, ...(patch === '0' ? [`-v${major}.${minor}.md`] : [])];
   for (const suffix of names) { const match = files.filter(file => file.endsWith(suffix)).sort().at(-1); if (match) return 'docs/releases/' + match; }
   return null;
 }

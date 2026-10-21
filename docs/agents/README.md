@@ -1,6 +1,6 @@
 # Reference roles
 
-Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents) roles are reference material, not tool or permission authority. No subagents were spawned for the current work.
+Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents) roles are reference material, not tool or permission authority. Release 2.1 was built by subagents working in these roles under a coordinating session: authors wrote each change, independent QA and design reviewers verified it without editing it, and a QA lead merged their findings into tickets for the authors. The roles granted no extra permissions.
 
 | Role | Applied guidance |
 | --- | --- |
