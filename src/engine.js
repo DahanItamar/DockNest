@@ -146,7 +146,8 @@ export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
  for(const backup of stale){
-  if(claimDeletion(backup.id))await finishDeletion(backup.id);
+  // Object Lock retention defers deletion; keep the intent and continue with other points.
+  try{if(claimDeletion(backup.id))await finishDeletion(backup.id);}catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;}
  }
 }
 
@@ -190,8 +191,9 @@ export async function executeJob(job){
   stage(job.id,'preflight');
   const plan=await planBackup(site.id);
   const capacity=await storageCapacity();
-  if(capacity.available===null)throw new Error('Backup storage available space could not be verified');
-  if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
+  // Object storage reports no fixed size (unbounded); other backends must prove free space.
+  if(capacity.available===null&&!capacity.unbounded)throw new Error('Backup storage available space could not be verified');
+  if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
   const backupId=id(),directory=backupDirectory(server,site);
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';

@@ -80,7 +80,8 @@ export async function reconcileArtifacts(verify,{checkCompleted=false}={}){
   }catch{result.pending++;audit('worker','publication.reconciliation_pending',operation.backup_id,{});}
  }
  for(const operation of db.prepare('SELECT * FROM retention_operations').all()){
-  try{await finishDeletion(operation.backup_id);result.deleted++;}catch{result.pending++;audit('worker','retention.reconciliation_pending',operation.backup_id,{});}
+  try{await finishDeletion(operation.backup_id);result.deleted++;}
+  catch(error){result.pending++;if(error?.code==='EOBJECTLOCKED')audit('worker','retention.object_locked',operation.backup_id,{retainUntil:error.retainUntil||null});else audit('worker','retention.reconciliation_pending',operation.backup_id,{});}
  }
  return result;
 }

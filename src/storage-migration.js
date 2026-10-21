@@ -3,23 +3,23 @@ import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { db,transaction } from './db.js';
 import { backupRoot,backupLayout,backupFilename,managerBackupFilename } from './backup-layout.js';
-import { targetOptions,openRead,openWrite,makeDirectory,statFile,syncFile,renameFile,removeFile } from './storage.js';
+import { targetOptions,parseRemote,isRemoteFile,targetPrefix,openRead,openWrite,makeDirectory,statFile,syncFile,renameFile,removeFile } from './storage.js';
 import { fileExists } from './artifact-journal.js';
 
 export function migrationPlan(){
  const entries=[];
  for(const row of db.prepare('SELECT b.*,s.name AS site_name,s.server_id,v.name AS server_name FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id').all()){
-  if(!row.path.startsWith('sftp:'))throw new Error('Local archives need a separate import');
-  const value=row.path.slice(5),separator=value.indexOf(':'),target=value.startsWith('/')?'env':value.slice(0,separator),options=targetOptions(target);
+  if(!isRemoteFile(row.path))throw new Error('Local archives need a separate import');
+  const {options}=parseRemote(row.path);
   const folders=backupLayout({id:row.server_id,name:row.server_name},{id:row.site_id,name:row.site_name});
-  const destination='sftp:'+target+':'+path.posix.join(backupRoot(options.root),...folders,backupFilename(row.id,new Date(row.captured_at)));
+  const destination=targetPrefix(options)+path.posix.join(backupRoot(options.root),...folders,backupFilename(row.id,new Date(row.captured_at)));
   if(destination!==row.path)entries.push({kind:'site',id:row.id,source:row.path,destination,checksum:row.checksum,size:row.size});
  }
  for(const row of db.prepare("SELECT * FROM manager_backups WHERE status='completed'").all()){
   if(!row.path)throw new Error('Local recovery kits need a separate import');
   const options=targetOptions(row.target_id),key=row.path.match(/\/docknest-manager\/([a-f0-9]{16})\//)?.[1]||path.posix.basename(row.path).match(/^docknest_([a-f0-9]{16})_/)?.[1];
   if(!key)throw new Error('Unknown recovery kit layout');
-  const destination='sftp:'+options.id+':'+path.posix.join(backupRoot(options.root),'docknest-recovery',managerBackupFilename(key,row.id,new Date(row.created_at)));
+  const destination=targetPrefix(options)+path.posix.join(backupRoot(options.root),'docknest-recovery',managerBackupFilename(key,row.id,new Date(row.created_at)));
   if(destination!==row.path)entries.push({kind:'manager',id:row.id,source:row.path,destination,checksum:row.checksum,size:row.size});
  }
  return entries;

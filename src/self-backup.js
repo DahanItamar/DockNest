@@ -10,7 +10,7 @@ import { config } from './config.js';
 import { seal,open,digest } from './crypto.js';
 import { exportRecoveryKit } from './recovery-kit.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
-import { activeStorage,targetOptions,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
+import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
 
 const now=()=>new Date().toISOString(),settingsKey='manager_backup_config';
 const packageInfo=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
@@ -18,10 +18,10 @@ const release=process.env.DOCKNEST_RELEASE||packageInfo.version;
 const schema=z.object({enabled:z.boolean(),schedule:z.string().trim().max(100).default('0 3 * * *'),timezone:z.string().max(100).default('UTC'),passphrase:z.string().min(24).max(4096).optional(),recoverySecretSaved:z.literal(true)});
 export const selfBackupConfig=()=>JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(settingsKey)?.value||'null');
 const active=()=>db.prepare("SELECT * FROM manager_backups WHERE status IN ('queued','running')").get();
-function destination(){try{const selected=activeStorage();return selected.mode==='sftp'?{id:selected.id,name:selected.name||'Deployment SFTP destination',root:selected.root,recoveryDirectory:backupRoot(selected.root)+'/docknest-recovery',available:true}:{available:false};}catch{return {available:false};}}
+function destination(){try{const selected=activeStorage();return remoteModes.includes(selected.mode)?{id:selected.id,mode:selected.mode,name:selected.name||'Deployment storage destination',root:selected.root,recoveryDirectory:backupRoot(selected.root)+'/docknest-recovery',available:true}:{available:false};}catch{return {available:false};}}
 function runStorage(row){
  if(!row?.path)return {mode:'local',name:'Local copy from before remote storage was enabled'};
- try{return {mode:'sftp',name:targetOptions(row.target_id).name||'Deployment SFTP destination'};}catch{return {mode:'sftp',name:'Original SFTP destination unavailable'};}
+ try{const target=targetOptions(row.target_id);return {mode:target.mode,name:target.name||'Deployment storage destination'};}catch{return {mode:'remote',name:'Original storage destination unavailable'};}
 }
 export function selfBackupStatus(){
  const saved=selfBackupConfig();
@@ -43,7 +43,7 @@ export function saveSelfBackupSettings(input,actor){
 function queue(actor){
  if(!selfBackupConfig()?.passphrase)throw Object.assign(new Error('Set up DockNest self-backup first.'),{status:409});
  if(active())throw Object.assign(new Error('A DockNest backup is already queued or running.'),{status:409});
- const selected=destination();if(!selected.available)throw Object.assign(new Error('Select a connected SFTP destination in Storage before backing up DockNest.'),{status:409});
+ const selected=destination();if(!selected.available)throw Object.assign(new Error('Select a connected SFTP or S3 destination in Storage before backing up DockNest.'),{status:409});
  const runId=id();db.prepare("INSERT INTO manager_backups(id,status,created_at,release,target_id) VALUES(?,'queued',?,?,?)").run(runId,now(),release,selected.id);
  audit(actor,'manager-backup.queued',runId,{targetId:selected.id});return {id:runId,status:'queued'};
 }
@@ -79,18 +79,18 @@ export async function pruneSelfBackups(){
  }
 }
 function validateRemotePath(row){
- const selected=targetOptions(row.target_id),prefix='sftp:'+selected.id+':',runId=z.uuid().parse(row.id);
+ const selected=targetOptions(row.target_id),prefix=targetPrefix(selected),runId=z.uuid().parse(row.id);
  const recovery=prefix+backupRoot(selected.root)+'/docknest-recovery/',legacy=prefix+selected.root.replace(/\/+$/,'')+'/docknest-manager/';
  const current=row.path.startsWith(recovery)&&new RegExp('^docknest_[a-f0-9]{16}_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}Z--'+runId+'\\.dkit$').test(row.path.slice(recovery.length));
  const previous=row.path.startsWith(legacy)&&new RegExp('^[a-f0-9]{16}/'+runId+'\\.dkit$').test(row.path.slice(legacy.length));
- if(selected.mode!=='sftp'||!(current||previous))throw new Error('Invalid manager backup path');
+ if(!remoteModes.includes(selected.mode)||!(current||previous))throw new Error('Invalid manager backup path');
 }
 async function remoteHash(file){const hash=createHash('sha256');for await(const chunk of await openRead(file))hash.update(chunk);return hash.digest('hex');}
 export async function executeSelfBackup(run){
  let temporary;
  try{
   const targetId=run.target_id||destination().id;
-  if(!targetId)throw new Error('Select a connected SFTP destination');
+  if(!targetId)throw new Error('Select a connected SFTP or S3 destination');
   const root=await directory(),saved=selfBackupConfig();temporary=await mkdtemp(join(root,'.pending-'));
   const file=join(temporary,'manager.dkit');
   const evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase:open(saved.passphrase),release});

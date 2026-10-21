@@ -113,7 +113,7 @@ function ReadableValue({value,field}){
  if(typeof value==='string'){
   if(field==='status')return value.replace(/[-_]+/g,' ').replace(/^./,c=>c.toUpperCase());
   if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)&&!Number.isNaN(new Date(value).getTime()))return dateTime(value,'medium');
-  return /^[0-9a-f-]{20,}$/i.test(value)||/^(sftp:|\/)/.test(value)?<code>{value}</code>:value;
+  return /^[0-9a-f-]{20,}$/i.test(value)||/^(sftp:|s3:|\/)/.test(value)?<code>{value}</code>:value;
  }
  return String(value);
 }

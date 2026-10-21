@@ -9,16 +9,25 @@ import { open } from '../crypto.js';
 import { backupLayout,backupRoot } from '../backup-layout.js';
 import * as local from './local.js';
 import * as sftp from './sftp.js';
+import * as s3 from './s3.js';
 
-export const adapters={sftp};
+export const adapters={sftp,s3};
 const schemes=Object.keys(adapters);
 export const remoteModes=schemes;
 export const targetPrefix=options=>options.mode+':'+options.id+':';
+// Rows store S3 settings beside the shared columns; the credential is sealed like SFTP secrets.
+export const targetMode=row=>row.auth_type==='s3-access-key'?'s3':'sftp';
 export const isRemoteFile=file=>schemes.some(scheme=>file.startsWith(scheme+':'));
 export function targetOptions(id){
  if(id==='env')return {...config.storage,id:'env'};
  const row=db.prepare('SELECT * FROM storage_targets WHERE id=?').get(id);
  if(!row)throw new Error('Storage destination is missing; restore its connection configuration before accessing its backups');
+ if(targetMode(row)==='s3'){
+  const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'null');
+  if(!settings)throw new Error('S3 destination settings are missing; reconnect the destination');
+  const {accessKeyId,secretAccessKey}=JSON.parse(open(row.credential));
+  return {id:row.id,mode:'s3',name:row.name,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,capacity:null,accessKeyId,secretAccessKey};
+ }
  return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
 }
 export function activeStorage(){
@@ -43,8 +52,8 @@ export async function checkStorageReadiness(){
  if(options.mode==='unconfigured')throw new Error('Storage is not configured');
  if(options.mode==='local')await local.readiness();else await remoteOf(options).readiness(options);
  const capacity=await storageCapacity();
- if(capacity.available===null)throw new Error('Storage available space could not be verified. Check the connection and filesystem capacity support.');
- if(capacity.available<1024**3)throw new Error('Insufficient storage capacity');
+ if(capacity.available===null&&!capacity.unbounded)throw new Error('Storage available space could not be verified. Check the connection and filesystem capacity support.');
+ if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Insufficient storage capacity');
  return {reachable:true,writeTested:false};
 }
 export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
