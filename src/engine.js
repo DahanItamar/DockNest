@@ -1,5 +1,5 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
-import { db, parse, id, audit } from './db.js';
+import { db, parse, id, audit, transaction } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
@@ -54,8 +54,8 @@ export function enqueueScrub(backupId,actor='administrator'){
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
- try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);if(finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))audit('worker','backup.scrub.completed',backupId,{job:job.id});}
- catch{if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}if(finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))audit('worker','backup.scrub.failed',backupId,{job:job.id});}
+ try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
+ catch{transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}audit('worker','backup.scrub.failed',backupId,{job:job.id});});}
 }
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
@@ -175,16 +175,17 @@ async function executeRestoreJob(job){
   try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
   // Only invoke extraction after the complete GCM-authenticated stream finishes.
   stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint});
-  recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
-  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
-  if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return supersedeRestore(restore.id);
-  db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
-  audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});
+  // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
+  if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
+   recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
+   for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
+   db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
+   audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
  }catch(error){
-  for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
-  if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return supersedeRestore(restore.id);
-  db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
-  audit('worker','restore.failed',backup.id,{job:job.id});
+  if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
+   for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
+   db.prepare("UPDATE restores SET status='failed' WHERE id=?").run(restore.id);
+   audit('worker','restore.failed',backup.id,{job:job.id});return true;}))supersedeRestore(restore.id);
  }
 }
 // The restore outcome of a superseded job is unknown to the new lease holder; leave it for recovery review.

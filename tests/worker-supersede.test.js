@@ -33,6 +33,17 @@ test('a superseded scrub keeps recovery_required',async()=>{
  const scrub=enqueueScrub('backup-z','test'),job=claimJob();assert.equal(job.id,scrub.id);
  db.prepare(takeover).run(job.id);await executeJob(job);
  assert.equal(status(job.id).status,'recovery_required');
+ assert.equal(db.prepare("SELECT COUNT(*) n FROM backup_verifications WHERE backup_id='backup-z'").get().n,0);
+ db.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(job.id);
+});
+test('a superseded restore records no verification evidence and leaves the restore for recovery review',async()=>{
+ db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES('restore-z','backup-z','server-x','new-copy','{}','queued',?)").run(at);
+ const job={id:'job-restore',site_id:'site-z',type:'restore',status:'running',details:JSON.stringify({restoreId:'restore-z',backupId:'backup-z'})};
+ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,?,?,?,?,?)").run(job.id,job.site_id,'restore','running','preflight',at,job.details);
+ db.prepare(takeover).run(job.id);await executeJob(job);
+ assert.equal(status(job.id).status,'recovery_required');
+ assert.equal(db.prepare("SELECT status FROM restores WHERE id='restore-z'").get().status,'recovery_required');
+ assert.equal(db.prepare("SELECT COUNT(*) n FROM backup_verifications WHERE backup_id='backup-z'").get().n,0);
 });
 test('a superseded DockNest self-backup keeps the outcome recorded by the new holder',async()=>{
  const insert=db.prepare("INSERT INTO manager_backups(id,status,created_at,error) VALUES(?,?,?,?)");
