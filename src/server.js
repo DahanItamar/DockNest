@@ -18,7 +18,7 @@ import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './aut
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
-import { backupVerification } from './recovery-evidence.js';
+import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
@@ -45,10 +45,11 @@ const notFound = message => { const error = new Error(message); error.status = 4
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
 const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
 const safeServer = row => { const { private_key, ...rest } = parse(row); return rest; };
-const view = row => {
+// List endpoints pass a preloaded Map so each backup row does not issue its own verification query.
+const view = (row, verifications) => {
   const parsed = parse(row), converted = { ...parsed };
   for (const [name, value] of Object.entries(parsed)) converted[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
-  if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=backupVerification(converted.id);}
+  if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=verifications instanceof Map&&verifications.has(converted.id)?verifications.get(converted.id):backupVerification(converted.id);}
   if (converted.manifest?.downtimeSeconds != null) converted.downtimeMs = converted.manifest.downtimeSeconds * 1000;
   if (converted.detail) converted.details = converted.detail;
   if (converted.target) converted.targetId = converted.target;
@@ -97,13 +98,24 @@ const serverSchema = z.object({
 });
 const fingerprint = value => value.startsWith('SHA256:') ? Buffer.from(value.slice(7), 'base64').toString('hex') : value.toLowerCase();
 app.get('/api/state', async (_req, res) => {
-  const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC LIMIT 1000').all().map(parse);
+  const backups = db.prepare('SELECT * FROM backups ORDER BY captured_at DESC,id DESC LIMIT 1000').all().map(parse), verifications = backupVerifications(backups.map(backup => backup.id));
   const storage = await storageCapacity({maxAgeMs:30000});
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup, verifications)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
+});
+// Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
+const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
+const historyQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: historyCursor.optional() });
+const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at' }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
+for (const [name, { table, time }] of Object.entries(histories)) app.get('/api/' + name, (req, res) => {
+  const { limit, cursor } = historyQuery.parse(req.query);
+  const rows = db.prepare(`SELECT * FROM ${table} ${cursor ? `WHERE (${time},id)<(?,?)` : ''} ORDER BY ${time} DESC,id DESC LIMIT ?`).all(...(cursor || []), limit + 1), page = rows.slice(0, limit), last = page.at(-1);
+  // Backup listings never expose storage paths, matching /api/state.
+  const backups = name === 'backups', verifications = backups ? backupVerifications(page.map(row => row.id)) : null;
+  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; row = rest; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
