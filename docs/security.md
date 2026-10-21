@@ -33,3 +33,24 @@ Existing installations migrate the earliest account to administrator and preserv
 Run `npm run check` for regression checks. Verify HTTPS, browser interaction/idle logout, authenticators, and revoke behavior on the actual deployment before granting access.
 
 New shared passwords must be 4-16 characters, including numeric passwords. Login still accepts previously configured longer passwords so the policy change does not lock out existing users. Password-only login never grants a session. Every private API route requires an enabled, enrolled account and a valid session; API data responses are never cached. Login/enrollment screens and static frontend assets remain public. Short passwords reduce resistance to guessing; mandatory personal MFA, rate limits, replay checks, and session revocation remain enforced.
+
+## Health and maintenance probe URLs (SSRF)
+
+Each site stores an application health URL and a public maintenance URL. The remote helper fetches them as root on the source server during readiness checks, maintenance activation and release, watchdog and boot recovery, and post-backup verification. Operators, not only administrators, can create and edit sites. Without limits, a probe URL could make the source server request cloud metadata (`169.254.169.254`, `fd00:ec2::254`), link-local or private services, either directly or through an HTTP redirect.
+
+The helper makes the authoritative decision, because names resolve on the source server:
+
+- It resolves the host once per request and connects only to the validated addresses, with no second DNS lookup. A domain cannot pass the check and then rebind to another address. TLS still verifies the original hostname.
+- Every resolved address must pass. Link-local, cloud metadata, multicast, unspecified, reserved and `0.0.0.0/8` addresses are always refused.
+- Loopback (`127.0.0.0/8`, `::1`) and public addresses are allowed. This covers published container ports such as `http://127.0.0.1:8080/`, a site domain mapped to `127.0.0.1` in `/etc/hosts`, and a domain that resolves to the server's own public IP.
+- Private, CGNAT and ULA addresses are allowed only when the URL host is one of the site's configured domains and the address belongs to the source server itself (the helper checks this by binding to it). Private IP literals, such as a container's bridge IP, are refused. Use the published loopback port or the site domain instead.
+- A redirect is followed only to the same host or to another configured site domain, for at most five hops. Each hop is validated and pinned again. A redirect to any other host is not followed, and the probe fails because the redirect status is not the expected result.
+- Timeouts (5 s for health, 10 s for public probes) and the 256 KB response read limit stay in place. The origin-probe mode still connects only to `127.0.0.1` with the original Host header and TLS name.
+
+The API checks these URLs earlier as well. Health URLs, maintenance URLs and the default public URL built from the first domain are refused when they contain an IP literal in a metadata, link-local, private, CGNAT, ULA, multicast, unspecified or reserved range. HTTP(S) is still required, and login details in the URL are still rejected. The API cannot resolve names the way the source server does, so the helper check remains authoritative.
+
+Decision: probe URLs stay editable by operators. Operators can already run backups, restores and maintenance changes, which stop and start services on these hosts. With the helper policy in place, a probe can reach only loopback, the server's own addresses or public sites. It sends a GET request and reports pass or fail; the response body is never returned to the user. Making probe URLs administrator-only would also block operators from creating sites. Each site update records which probe fields changed (field names only, not URL values) in the audit log, so these changes can be traced.
+
+Residual risk: a probe can still send GET requests to services listening on the source server's loopback or own addresses, such as a local admin port, and the pass/fail result reveals whether that service answers with HTTP 200. Restricting operators further would require per-site URL approval. Validation was covered by unit and API tests on a development host; it has not been exercised against real cloud metadata endpoints.
+
+Upstream role reference: [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md), used for the threat model and defense-in-depth approach. It was a reference, not tool or permission authority.
