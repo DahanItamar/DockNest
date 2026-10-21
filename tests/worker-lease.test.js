@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -49,4 +50,16 @@ test('worker:status reports lease, heartbeat and recovery_required jobs read-onl
  assert.match(output,/Recovery required jobs: 1/);assert.match(output,/job-r backup site=shop .*error=Worker interrupted\./);
  assert.doesNotMatch(output,/encrypted-key/);
  releaseLease(db,'worker-status-holder');
+});
+const status=dataDir=>spawnSync(process.execPath,[fileURLToPath(new URL('../src/worker-status.js',import.meta.url))],{encoding:'utf8',env:{...process.env,DATA_DIR:dataDir}});
+test('worker:status reports an uninitialised database clearly and exits 1',async()=>{
+ const empty=join(temporary,'empty');await mkdir(empty);await writeFile(join(empty,'state.sqlite'),'');
+ const result=status(empty);assert.equal(result.status,1);assert.match(result.stderr,/not initialised/);assert.doesNotMatch(result.stderr,/at .*worker-status/);
+});
+test('worker:status creates no WAL sidecar files for a closed, checkpointed database',async()=>{
+ const closed=join(temporary,'closed');
+ const created=spawnSync(process.execPath,['--input-type=module','-e',"const {db}=await import(process.argv[1]);db.close();",new URL('../src/db.js',import.meta.url).href],{encoding:'utf8',env:{...process.env,DATA_DIR:closed}});
+ assert.equal(created.status,0,created.stderr);assert.deepEqual(await readdir(closed),['state.sqlite']);
+ const result=status(closed);assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/Lease: free/);
+ assert.deepEqual(await readdir(closed),['state.sqlite']);
 });
