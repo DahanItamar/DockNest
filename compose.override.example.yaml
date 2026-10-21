@@ -8,3 +8,16 @@ services:
     environment: {}
   worker:
     environment: {}
+
+# Optional: run the signed published image instead of building from source (Docker Compose 2.24 or later).
+# Put an exact version in .env, for example DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0, and use:
+#
+# services:
+#   api:
+#     image: ${DOCKNEST_IMAGE:?Set DOCKNEST_IMAGE in .env}
+#     build: !reset null
+#   worker:
+#     image: ${DOCKNEST_IMAGE:?Set DOCKNEST_IMAGE in .env}
+#     build: !reset null
+#
+# To upgrade, change the tag in .env, then run scripts/upgrade.sh --version vX.Y.Z (it pulls instead of building).
