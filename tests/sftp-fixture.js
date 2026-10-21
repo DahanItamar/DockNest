@@ -1,10 +1,20 @@
 // Synthetic, loopback-only SFTP storage for transfer and browser verification.
 import ssh2 from 'ssh2';
 const {Server,utils}=ssh2,constants=utils.sftp;
-import { randomBytes,createHash } from 'node:crypto';
+import { randomBytes,createHash,generateKeyPairSync } from 'node:crypto';
 import path from 'node:path';
+// ssh2's generateKeyPairSync('ed25519') strips leading zero bytes from the public key, so about 1 in 256 keys
+// is "Malformed OpenSSH private key". Encode the OpenSSH container here from node:crypto key material instead.
+const field=value=>{const bytes=Buffer.from(value),length=Buffer.alloc(4);length.writeUInt32BE(bytes.length);return Buffer.concat([length,bytes]);};
+export function generateHostKey(){
+ const {d,x}=generateKeyPairSync('ed25519').privateKey.export({format:'jwk'}),seed=Buffer.from(d,'base64url'),publicKey=Buffer.from(x,'base64url'),name='ssh-ed25519';
+ const check=randomBytes(4),body=Buffer.concat([check,check,field(name),field(publicKey),field(Buffer.concat([seed,publicKey])),field('')]);
+ const padding=Buffer.from(Array.from({length:(8-body.length%8)%8},(_,index)=>index+1)),count=Buffer.alloc(4);count.writeUInt32BE(1);
+ const blob=Buffer.concat([Buffer.from('openssh-key-v1\0'),field('none'),field('none'),field(''),count,field(Buffer.concat([field(name),field(publicKey)])),field(Buffer.concat([body,padding]))]);
+ return '-----BEGIN OPENSSH PRIVATE KEY-----\n'+blob.toString('base64').match(/.{1,70}/g).join('\n')+'\n-----END OPENSSH PRIVATE KEY-----\n';
+}
 export async function startSftpFixture(){
- const host=utils.generateKeyPairSync('ed25519'),password=randomBytes(32).toString('base64url');
+ const host={private:generateHostKey()},password=randomBytes(32).toString('base64url');
  const files=new Map(),directories=new Set(['/']),clients=new Set(),events=[];
  const faults={writes:false,fsync:false,rename:false,remove:false,corruptReads:false};
  const attrs=file=>({mode:directories.has(file)?0o40700:0o100600,uid:1000,gid:1000,size:files.get(file)?.length||0,atime:1,mtime:1});
