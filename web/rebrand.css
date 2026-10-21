@@ -79,6 +79,7 @@
 .backup-group-content{border-top:1px solid var(--border-subtle);padding:0 24px;background:var(--background)}
 .recovery-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(100px,.8fr) minmax(100px,.7fr) auto;align-items:center;gap:24px;padding:20px 0;border-bottom:1px solid var(--border-subtle);font-size:13px}
 .recovery-row:last-child{border-bottom:0}
+.recovery-status{min-width:0}.recovery-status small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .recovery-point{display:flex;align-items:center;gap:12px;min-width:0}
 .recovery-point>div{min-width:0}
 .recovery-point b{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:400;line-height:1.5;display:block}

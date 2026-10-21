@@ -1,5 +1,6 @@
 import React, {useEffect,useRef,useState} from 'react';
 import './job-details.css';
+import {VerificationLevels,verificationSummary} from './verification.jsx';
 
 // Human labels for recorded result fields. Unknown keys fall back to sentence case.
 export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetServerId:'Target server ID',downtimeSeconds:'Service downtime',sourceReady:'Source ready',verification:'Verification',integrity:'Package integrity',isolatedRestore:'Isolated restore',application:'Application check',status:'Status',method:'Method',networkMode:'Network mode',containerIds:'Container IDs',result:'Result',error:'Error',scope:'Check scope',checks:'Checks',passed:'Passed',restoreTested:'Restore tested',diagnostics:'Diagnostics',failure:'Failure point',lastStage:'Last stage',errorType:'Error type',remoteReported:'Reported by server',at:'Recorded at'};
@@ -149,14 +150,14 @@ function Facts({items}){return <dl className="dn-facts">{items.map(([label,value
 
 export function BackupDetails({backup,siteName}){
  const [json,setJson]=useState(false);const manifest=backup.manifest&&typeof backup.manifest==='object'?backup.manifest:{};
- const containers=Array.isArray(manifest.containers)?manifest.containers:[],captured=backup.capturedAt||backup.captured_at,verified=!!backup.verified,text=JSON.stringify(backup,null,2);
+ const containers=Array.isArray(manifest.containers)?manifest.containers:[],captured=backup.capturedAt||backup.captured_at,summary=verificationSummary(backup),text=JSON.stringify(backup,null,2);
  const row=(label,value)=><div className="dn-rec-row" key={label}><dt>{label}</dt><dd>{value}</dd></div>;
  return <div className="dn-jd dn-bk">
-  <section className={'dn-hero '+(verified?'is-ok':'is-run')}><div className="dn-hero-text"><div className="dn-hero-title"><h3>Recovery point</h3><span className="dn-chip">{verified?'Verified':'Not verified'}</span></div><p>{siteName||backup.siteId||''}</p></div><JsonActions json={text} showing={json} onToggle={()=>setJson(!json)}/></section>
+  <section className={'dn-hero '+({ok:'is-ok',bad:'is-bad',warn:'is-warn'}[summary.tone]||'is-run')}><div className="dn-hero-text"><div className="dn-hero-title"><h3>Recovery point</h3><span className="dn-chip">{summary.text}</span></div><p>{siteName||backup.siteId||''}</p></div><JsonActions json={text} showing={json} onToggle={()=>setJson(!json)}/></section>
   {json?<pre className="dn-json" tabIndex={0}>{text}</pre>:<div className="dn-jd-body">
    <Facts items={[['Captured',dateTime(captured)],['Size',byteSize(backup.size)],['Site paused',manifest.downtimeSeconds!=null?duration(manifest.downtimeSeconds):manifest.kind==='static'?'Not paused':'—'],['Delivery',manifest.kind==='static'?'Static files':manifest.deliveryMode==='direct'?'Direct stream':'Staged copy']]}/>
    {containers.length>0&&<section className="dn-card"><h4>Contents</h4><dl className="dn-rec">{containers.map((c,i)=>row(String(c.name||`Container ${i+1}`).replace(/^\//,''),<span><code>{c.image||'—'}</code>{c.mounts?.length>0&&<span className="dn-muted"> · {c.mounts.length} {c.mounts.length>1?'folders':'folder'}</span>}</span>))}</dl></section>}
-   {backup.verification&&typeof backup.verification==='object'&&Object.keys(backup.verification).length>0&&<section className="dn-card"><h4>Checks</h4><ReadableFields value={backup.verification}/></section>}
+   <section className="dn-card"><h4>Verification</h4><VerificationLevels backup={backup} format={value=>dateTime(value)}/><p className="dn-muted dn-level-note">Integrity confirms the encrypted file is intact. Only a restore test proves the site starts again. Use Restore on this backup and keep the isolated copy option.</p>{backup.verification&&typeof backup.verification==='object'&&Object.keys(backup.verification).length>0&&<details className="dn-refs"><summary>Recorded evidence</summary><ReadableFields value={backup.verification}/></details>}</section>
    <section className="dn-card"><h4>Storage &amp; IDs</h4><dl className="dn-rec">{row('Checksum (SHA-256)',backup.checksum?<code>{backup.checksum}</code>:'—')}{row('Backup ID',<code>{backup.id}</code>)}{row('Job ID',backup.jobId||backup.job_id?<code>{backup.jobId||backup.job_id}</code>:'—')}{row('Pinned',backup.pinned?'Yes':'No')}</dl></section>
   </div>}
  </div>;
