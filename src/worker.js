@@ -7,6 +7,7 @@ import { claimJob, executeJob, tickScheduler,verifyEncrypted } from './engine.js
 import { reconcileArtifacts } from './artifact-journal.js';
 import { tickSelfBackup,claimSelfBackup,executeSelfBackup,recoverInterruptedSelfBackups,pruneSelfBackups } from './self-backup.js';
 import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-lease.js';
+import { runWorkerLoop } from './worker-loop.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
 // so a SIGKILLed worker cannot crash-loop its replacement. A legacy worker.lock is only reported: exclusion lives in the
@@ -32,7 +33,8 @@ let signals=0;
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){console.error(`${event} received again; exiting without draining. The lease expires in ${LEASE_TTL_MS/1000}s and interrupted jobs become recovery_required on next start.`);process.exit(1);}stopping=true;console.log(`${event} received; draining: no new jobs will be claimed, waiting for the current job to finish.`);});
 try{
  let reconcileAt=0;
- while(!stopping&&renew()){if(Date.now()>=reconcileAt){const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;}tickScheduler();tickSelfBackup();const managerJob=claimSelfBackup();if(managerJob)await executeSelfBackup(managerJob);else{const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,3000));}}
+ const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;};
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);
