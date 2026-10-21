@@ -159,6 +159,25 @@ test('probe URLs refuse metadata, link-local and private literals while operator
   assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='site.update' AND target=? ORDER BY rowid DESC").get(saved.id).detail),{});
  }finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
 });
+test('sites saved before the probe policy are refused before a backup job reaches the host',async()=>{
+ const {storedProbeProblem}=await import('../src/probe-url.js');const {tickScheduler}=await import('../src/engine.js');
+ const legacy={containers:['fixture'],domains:['www.example.org'],healthUrl:'http://172.17.0.2:8080/',maintenance:{required:true,directory:'/var/lib/docknest/maintenance/legacy',publicUrl:'https://www.example.org',healthUrl:'http://172.17.0.2:8080/'}};
+ assert.equal(storedProbeProblem(legacy).field,'health URL');
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'http://127.0.0.1:8080/',publicUrl:'http://169.254.169.254/'}}).field,'public maintenance URL');
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'',publicUrl:'http://10.0.0.9/',probeOrigin:true}}),null,'Origin probes only connect to loopback');
+ assert.equal(storedProbeProblem({...legacy,kind:'static'}),null);
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'http://127.0.0.1:8080/',maintenance:{...legacy.maintenance,healthUrl:'https://www.example.org/health'}}),null);
+ const legacySite=id();db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(legacySite,host,'Legacy probe site',JSON.stringify(legacy),new Date().toISOString());
+ const response=await request('/sites/'+legacySite+'/backup',{method:'POST',body:'{}'});assert.equal(response.status,409);
+ assert.match((await response.json()).error,/^Probe URL policy: the site's health URL .*before backing up\.$/);
+ assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE site_id=?').get(legacySite).n,0);
+ db.prepare("INSERT INTO policies VALUES (?,1,'0 2 * * *','UTC',7,?)").run(legacySite,new Date(Date.now()-60000).toISOString());
+ tickScheduler();tickScheduler();
+ assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE site_id=?').get(legacySite).n,0);
+ assert.ok(Date.parse(db.prepare('SELECT next_run FROM policies WHERE site_id=?').get(legacySite).next_run)>Date.now(),'A blocked run is skipped, not retried every tick');
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='backup.probe_policy_blocked' AND target=?").get(legacySite).n,1);
+ db.prepare('UPDATE policies SET enabled=0 WHERE site_id=?').run(legacySite);
+});
 
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);

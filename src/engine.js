@@ -7,6 +7,7 @@ import { key } from './crypto.js';
 import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
 import { backupFilename } from './backup-layout.js';
+import { storedProbeProblem } from './probe-url.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -24,6 +25,7 @@ export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
  const result=await remote(server,{operation:'readiness',config:site.config});
+ const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness();result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
  return result;
@@ -43,7 +45,8 @@ function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND
 function requireNoDeploymentHold(){if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
 export function enqueueBackup(siteId,actor='scheduler'){
  requireNoDeploymentHold();
- siteInfo(siteId);if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
+ const probe=storedProbeProblem(siteInfo(siteId).site.config);if(probe)throw Object.assign(new Error(probe.message),{status:409,code:'PROBE_URL_POLICY',field:probe.field});
+ if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
  const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
@@ -256,7 +259,8 @@ export function tickScheduler(currentDate=new Date()){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
-   if(next&&next<=currentDate){if(busy(policy.site_id))continue;enqueueBackup(policy.site_id);}
+   // A stored probe URL the helper would refuse skips this run (audited) instead of retrying every tick.
+   if(next&&next<=currentDate){if(busy(policy.site_id))continue;try{enqueueBackup(policy.site_id);}catch(error){if(error.code!=='PROBE_URL_POLICY')throw error;audit('scheduler','backup.probe_policy_blocked',policy.site_id,{field:error.field});}}
    if(!next||next<=currentDate){
     const upcoming=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate}).next().toISOString();
     db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run(upcoming,policy.site_id);

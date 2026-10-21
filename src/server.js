@@ -5,7 +5,7 @@ import { z, ZodError } from 'zod';
 import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { BlockList, isIP } from 'node:net';
+import { probeUrlAllowed, probeUrlMessage } from './probe-url.js';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
@@ -55,13 +55,6 @@ const view = row => {
   return converted;
 };
 const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.');
-// Probe URLs are fetched as root on the source server. The remote helper resolves names and is authoritative;
-// this early check refuses IP literals it would always refuse (metadata, link-local, private, multicast, reserved).
-const blockedProbeAddresses = new BlockList();
-for (const [address, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) blockedProbeAddresses.addSubnet(address, prefix, 'ipv4');
-for (const [address, prefix] of [['::', 128], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) blockedProbeAddresses.addSubnet(address, prefix, 'ipv6');
-const probeUrlAllowed = value => { try { const url = new URL(value), host = url.hostname.replace(/^\[|\]$/g, ''), family = isIP(host); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !(family && blockedProbeAddresses.check(host, family === 6 ? 'ipv6' : 'ipv4')); } catch { return false; } };
-const probeUrlMessage = 'Use an HTTP(S) URL without login details that points to the website domain, a loopback port such as http://127.0.0.1:8080/, or a public address. Private, link-local and cloud metadata addresses are refused.';
 const healthUrl = z.string().max(2048).refine(value => !value || probeUrlAllowed(value), probeUrlMessage);
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
