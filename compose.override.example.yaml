@@ -1,0 +1,10 @@
+# Copy to compose.override.yaml for local changes. Docker Compose merges it automatically, git ignores it,
+# and scripts/upgrade.sh never touches it, so upgrades do not conflict with your edits.
+# Keep settings such as APP_ORIGIN, HOST_PORT and APP_DOMAIN in .env instead.
+services:
+  api:
+    # Example: publish on another loopback port without editing compose.yaml.
+    # ports: !override ["127.0.0.1:3100:3000"]
+    environment: {}
+  worker:
+    environment: {}
