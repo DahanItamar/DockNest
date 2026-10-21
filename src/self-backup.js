@@ -101,11 +101,11 @@ export async function executeSelfBackup(run){
   if(await remoteHash(published+'.partial')!==evidence.sha256)throw new Error('Uploaded recovery kit checksum mismatch');
   await renameFile(published+'.partial',published);
   if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
-  transaction(()=>{db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=?").run(now(),evidence.sha256,bytes.length,run.id);audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});});
+  // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
+  transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes)audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});else console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);});
  }catch{
   // Exception text may contain credential or archive contents; never persist it.
-  db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=?").run(now(),'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id);
-  audit('worker','manager-backup.failed',run.id);
+  if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id);
  }finally{if(temporary)try{await rm(temporary,{recursive:true,force:true});}catch{/* Retry interrupted staging cleanup at worker startup. */}}
  try{await pruneSelfBackups();}catch{/* Cleanup failure must not prevent ordinary site jobs. */}
 }
