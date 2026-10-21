@@ -3,7 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import { z, ZodError } from 'zod';
 import { CronExpressionParser } from 'cron-parser';
-import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
+import { statfsSync, statSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
@@ -12,6 +12,7 @@ import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
+import { schemaVersion } from './migrations.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
@@ -33,6 +34,9 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.json({ status: 'ok' }); });
+// Public release identity for upgrade checks; deliberately nothing about hosts, users or configuration.
+const release = Object.freeze({ version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, schemaVersion });
+app.get('/api/version', (_req, res) => res.json(release));
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));

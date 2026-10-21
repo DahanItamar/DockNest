@@ -193,3 +193,8 @@ test('maintenance design persists composition and supports previous clients',asy
  response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({...design,layout:'unsafe'})});assert.equal(response.status,400);
  response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({title:'Legacy',message:'Compatible',color:'#123456'})});assert.equal(response.status,200);const legacy=await response.json();assert.equal(legacy.layout,'studio');assert.equal(legacy.theme,'light');assert.equal(legacy.typeScale,'balanced');
 });
+test('version endpoint is public and exposes only the release and schema versions',async()=>{
+ const {schemaVersion}=await import('../src/migrations.js'),{version}=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json',import.meta.url),'utf8'));
+ const response=await fetch(base+'/version');assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual(await response.json(),{version,schemaVersion});
+});
