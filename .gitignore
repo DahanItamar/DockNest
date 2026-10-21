@@ -21,3 +21,6 @@ __pycache__/
 *.enc
 *.dkit
 *.passphrase
+
+# Local Compose customisations (image mode, ports, extra mounts); never tracked so upgrades do not conflict.
+compose.override.yaml

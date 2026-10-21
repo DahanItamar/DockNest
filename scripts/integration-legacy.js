@@ -109,6 +109,8 @@ export async function runLegacyCompatibility({ run, until, hosts, servers, db, r
   const oldRow = db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
   assert.equal(backupVerification(backupId).consistency.status, 'not-tested');
   assert.equal(backupVerification(backupId).application.status, 'not-tested');
+  assert.deepEqual(backupVerification(backupId).integrity, { status: 'passed', source: 'legacy' }, 'Legacy verified packages read as integrity checked without new evidence rows');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backup_verifications WHERE backup_id=?').get(backupId).n, 0);
   await until(async () => {
     try { return Boolean((await remote(servers[0], { operation: 'cleanup', root: captured.root })).removed); }
     catch { return false; }

@@ -49,7 +49,7 @@ Run `docker compose logs --tail=100 api worker` and review dashboard jobs/recove
 
 The worker holds an expiring SQLite lease renewed every 15 seconds; a second worker waits for it instead of running. `docker compose stop` sends SIGTERM: the worker stops claiming, finishes the current job, releases the lease and exits. Compose allows 5 minutes (`stop_grace_period`) before SIGKILL. A second signal, SIGKILL or crash leaves the lease to expire 60 seconds after its last renewal; the next worker then takes over and marks any running job recovery_required, and that server accepts no new jobs until an operator reviews it. A leftover `worker.lock` from older releases is ignored with a warning and can be deleted once no older worker or migration runs.
 
-Before updating, stop API and worker and snapshot the metadata volume and remote backup inventory plus separately stored keys. Build and start the new version with `docker compose up -d --build`. Rollback requires the previous image and compatible saved metadata; do not blindly run old code against a migrated database.
+Use `scripts/upgrade.sh` to upgrade. It holds new work, waits for running jobs, saves configuration and secrets, and starts the new release. The new release snapshots the metadata before migrating it. The script also prints or performs the rollback. [Upgrading](upgrading.md) covers the script, the manual steps, rollback with pre-upgrade snapshots, the published image and the stability contract. Do not run old code against a migrated database; it refuses to start and names the snapshot to restore.
 
 ## Central-system recovery
 

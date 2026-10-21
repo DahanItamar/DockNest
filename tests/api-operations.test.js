@@ -139,6 +139,49 @@ test('origin probe preference survives configuration normalization and readiness
  assert.equal((await request('/sites/'+saved.id+'/readiness',{method:'POST',body:'{}'})).status,409);
  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(pending).status,'queued');
 });
+test('probe URLs refuse metadata, link-local and private literals while operators keep site edits with an audit trail',async()=>{
+ const payload={serverId:host,name:'Probe fixture',config:{containers:['fixture'],domains:['www.example.org']}};
+ const blocked=['http://169.254.169.254/latest/meta-data/','http://[fd00:ec2::254]/','http://[::ffff:169.254.169.254]/','http://0xa9fea9fe/','http://10.0.0.5/','http://172.17.0.2:8080/','http://192.168.1.1/','http://100.100.100.200/','http://[fe80::1]/','http://[fd12::1]/','http://224.0.0.1/','http://0.0.0.0:8080/','http://[::]/','http://[::169.254.169.254]/','http://[64:ff9b::169.254.169.254]/','http://[64:ff9b:1::1]/','http://[2002:a9fe:a9fe::1]/','http://[2002:7f00:1::1]/','http://[2001::1]/','http://[100::1]/','http://[2001:db8::1]/'];
+ for(const url of blocked){
+  for(const config of [{healthUrl:url},{maintenancePublicUrl:url},{maintenance:{required:true,directory:'/var/lib/docknest/maintenance/x',publicUrl:'https://www.example.org',healthUrl:url}}]){
+   const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,...config}})});assert.equal(response.status,400,url);
+  }
+ }
+ assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:['169.254.169.254']}})})).status,400,'A literal domain cannot become a metadata probe');
+ for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::1.1.1.1]/','http://[2002:101:101::1]/','http://[2606:2800:220:1::1]/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
+ const saved=await (await request('/sites',{method:'POST',body:JSON.stringify(payload)})).json();
+ db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
+ try{
+  const edited=await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:'http://127.0.0.1:8080/'}})});assert.equal(edited.status,200);
+  assert.equal(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='site.update' AND target=? ORDER BY rowid DESC").get(saved.id).detail).probeTargetsChanged.join(),'healthUrl,maintenanceHealthUrl');
+  assert.equal((await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:'http://169.254.169.254/'}})})).status,400);
+  assert.equal((await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,name:'Renamed probe fixture',config:{...payload.config,healthUrl:'http://127.0.0.1:8080/'}})})).status,200);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='site.update' AND target=? ORDER BY rowid DESC").get(saved.id).detail),{});
+ }finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
+});
+test('sites saved before the probe policy keep getting backups with a probe policy warning',async()=>{
+ const {storedProbeProblem}=await import('../src/probe-url.js');const {tickScheduler}=await import('../src/engine.js');
+ const legacy={containers:['fixture'],domains:['www.example.org'],healthUrl:'http://172.17.0.2:8080/',maintenance:{required:true,directory:'/var/lib/docknest/maintenance/legacy',publicUrl:'https://www.example.org',healthUrl:'http://172.17.0.2:8080/'}};
+ assert.equal(storedProbeProblem(legacy).field,'health URL');
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'http://127.0.0.1:8080/',publicUrl:'http://169.254.169.254/'}}).field,'public maintenance URL');
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'',publicUrl:'http://10.0.0.9/',probeOrigin:true}}),null,'Origin probes only connect to loopback');
+ assert.equal(storedProbeProblem({...legacy,kind:'static'}),null);
+ for(const required of [undefined,false])assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,required,healthUrl:'',publicUrl:'http://169.254.169.254/'}}),null,'Server and helper agree the public probe needs required === true');
+ assert.equal(storedProbeProblem({...legacy,healthUrl:'http://127.0.0.1:8080/',maintenance:{...legacy.maintenance,healthUrl:'https://www.example.org/health'}}),null);
+ const legacySite=id();db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(legacySite,host,'Legacy probe site',JSON.stringify(legacy),new Date().toISOString());
+ db.prepare("INSERT INTO policies VALUES (?,1,'0 2 * * *','UTC',7,?)").run(legacySite,new Date(Date.now()-60000).toISOString());
+ tickScheduler();tickScheduler();
+ const scheduled=db.prepare("SELECT * FROM jobs WHERE site_id=? AND type='backup'").all(legacySite);assert.equal(scheduled.length,1,'The scheduled backup still runs after the upgrade');
+ const [warning]=JSON.parse(scheduled[0].details).warnings;assert.match(warning,/^Probe URL policy: the site's health URL .*Backups continue with that probe skipped/);
+ assert.ok(Date.parse(db.prepare('SELECT next_run FROM policies WHERE site_id=?').get(legacySite).next_run)>Date.now());
+ const audits=db.prepare("SELECT detail FROM audit_events WHERE action='backup.enqueue' AND target=?").all(legacySite).map(row=>JSON.parse(row.detail));
+ assert.equal(audits.length,1,'One audit event per enqueued job, never per scheduler tick');assert.equal(audits[0].probePolicy,'health URL');
+ db.prepare("UPDATE jobs SET status='completed',stage='completed' WHERE site_id=?").run(legacySite);
+ const response=await request('/sites/'+legacySite+'/backup',{method:'POST',body:'{}'});assert.equal(response.status,202);
+ assert.deepEqual(JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get((await response.json()).id).details).warnings,[warning]);
+ db.prepare("UPDATE jobs SET status='completed',stage='completed' WHERE site_id=?").run(legacySite);
+ db.prepare('UPDATE policies SET enabled=0 WHERE site_id=?').run(legacySite);
+});
 
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);
@@ -192,4 +235,9 @@ test('maintenance design persists composition and supports previous clients',asy
  const state=await (await request('/state')).json();assert.deepEqual(state.maintenance,design);
  response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({...design,layout:'unsafe'})});assert.equal(response.status,400);
  response=await request('/maintenance',{method:'PATCH',body:JSON.stringify({title:'Legacy',message:'Compatible',color:'#123456'})});assert.equal(response.status,200);const legacy=await response.json();assert.equal(legacy.layout,'studio');assert.equal(legacy.theme,'light');assert.equal(legacy.typeScale,'balanced');
+});
+test('version endpoint is public and exposes only the release and schema versions',async()=>{
+ const {schemaVersion}=await import('../src/migrations.js'),{version}=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json',import.meta.url),'utf8'));
+ const response=await fetch(base+'/version');assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual(await response.json(),{version,schemaVersion});
 });

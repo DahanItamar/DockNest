@@ -3,6 +3,9 @@
   "version": "2.0.0",
   "license": "AGPL-3.0-only",
   "private": true,
+  "docknest": {
+    "minUpgradeFrom": "2.0.0"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
@@ -20,6 +23,7 @@
     "brand:export": "node scripts/export-brand.js",
     "test:browser": "node scripts/smoke-browser.js",
     "test:integration": "node --no-addons scripts/integration-linux.js",
+    "test:upgrade": "node --no-addons scripts/upgrade-compat.js",
     "test:dashboard": "node scripts/dashboard-browser.js",
     "test:servers": "node scripts/servers-browser.js",
     "test:rebrand": "node scripts/rebrand-browser.js",

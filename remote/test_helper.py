@@ -9,6 +9,7 @@ from helper import artifact_inventory, verify_artifacts, data_checks
 from helper import recover, complete_recovery
 from helper import database_query
 from helper import create_staging_root, sync_directory, capture
+from helper import ProbePolicyError, probe_policy_preflight
 from boot_recovery import recover_jobs
 
 class DatabaseSocketTests(unittest.TestCase):
@@ -405,9 +406,10 @@ class MaintenanceTests(unittest.TestCase):
     def test_maintenance_flag_is_synced_after_successful_public_probes(self):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch()
-            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            cfg={'containers':['fixture'],'domains':['fixture.example'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
             events=[]
-            def probe(m):
+            def probe(m,domains=()):
+                self.assertEqual(domains,['fixture.example'])
                 events.append(('probe',(base/'enabled').exists()))
                 return (503,b'dbm-maintenance-v1') if (base/'enabled').exists() else (200,b'healthy')
             with patch('helper.public_probe',side_effect=probe),patch('helper.health',return_value=True),patch('helper.sync_maintenance_flag',side_effect=lambda directory:events.append(('sync',(directory/'enabled').exists()))):
@@ -456,19 +458,14 @@ class MaintenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch()
             cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
-            with patch('helper.urllib.request.urlopen',side_effect=OSError('fixture offline')):
+            with patch('helper.fetch',side_effect=OSError('fixture offline')):
                 with self.assertRaises(OSError):maintenance(cfg,True)
                 self.assertFalse((base/'enabled').exists())
                 (base/'enabled').touch()
                 with self.assertRaises(OSError):maintenance(cfg,True)
                 self.assertTrue((base/'enabled').exists(),'An existing manual maintenance flag is retained')
     def test_http_200_maintenance_page_is_not_application_health(self):
-        class Response:
-            status=200
-            def __enter__(self):return self
-            def __exit__(self,*args):pass
-            def read(self,*args):return b'<meta content="dbm-maintenance-v1">'
-        with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.urllib.request.urlopen',return_value=Response()):
+        with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.fetch',return_value=(200,b'<meta content="dbm-maintenance-v1">')):
             self.assertFalse(health(['fixture'],'http://fixture/'))
     def test_health_failure_keeps_maintenance_enabled(self):
         with tempfile.TemporaryDirectory() as d:
@@ -477,4 +474,254 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.health',return_value=False):
                 with self.assertRaises(ValueError):maintenance(cfg,False)
                 self.assertTrue((base/'enabled').exists())
+class ProbeSsrfTests(unittest.TestCase):
+    """Health and public probes run as root on the source host; they must not reach internal services."""
+    @staticmethod
+    def resolver(table,calls=None):
+        import socket
+        real=socket.getaddrinfo
+        def resolve(host,port,*args,**kw):
+            if calls is not None:calls.append(host)
+            if host not in table:return real(host,port,*args,**kw)
+            return [(socket.AF_INET6 if ':' in a else socket.AF_INET,socket.SOCK_STREAM,6,'',(a,port)) for a in table[host]]
+        return resolve
+    def serve(self,routes):
+        import http.server,threading
+        seen=[]
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                seen.append((self.path,self.headers.get('Host')))
+                status,headers,body=routes.get(self.path,(404,{},b'missing'))
+                self.send_response(status)
+                for key,value in headers.items():self.send_header(key,value)
+                self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        return server.server_address[1],seen
+    def test_metadata_link_local_multicast_unspecified_and_private_literals_are_refused(self):
+        from helper import probe_addresses
+        for address in ['169.254.169.254','169.254.170.2','fd00:ec2::254','::ffff:169.254.169.254','fe80::1','100.100.100.200','224.0.0.1','ff02::1','0.0.0.0','0.1.2.3','::','240.0.0.1','255.255.255.255','10.0.0.5','172.17.0.2','192.168.1.1','fd12::1','100.64.0.1']:
+            with self.assertRaises(ValueError,msg=address):probe_addresses(address,80,['10.0.0.5','192.168.1.1'])
+        for address in ['127.0.0.1','127.0.1.1','::1','::ffff:127.0.0.1','1.1.1.1','2606:2800:220:1::1']:self.assertEqual(probe_addresses(address,80),[address.replace('::ffff:','')])
+    def test_names_are_resolved_on_the_host_and_every_answer_must_pass(self):
+        from helper import probe_addresses
+        table={'metadata.example':['169.254.169.254'],'mixed.example':['1.1.1.1','169.254.169.254'],'internal.example':['10.0.0.5'],'site.example':['10.0.0.5'],'loop.example':['127.0.0.1'],'dual.example':['2606:2800:220:1::1','1.1.1.1','1.1.1.1']}
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver(table)):
+            for host in ['metadata.example','mixed.example','internal.example']:
+                with self.assertRaises(ValueError,msg=host):probe_addresses(host,443,['metadata.example','mixed.example'])
+            self.assertEqual(probe_addresses('loop.example',443),['127.0.0.1'])
+            self.assertEqual(probe_addresses('dual.example',443),['2606:2800:220:1::1','1.1.1.1'])
+            with patch('helper.local_address',return_value=False):
+                with self.assertRaises(ValueError):probe_addresses('site.example',443,['site.example'])
+            with patch('helper.local_address',return_value=True) as local:
+                self.assertEqual(probe_addresses('SITE.example.',443,['site.example']),['10.0.0.5'])
+                with self.assertRaises(ValueError):probe_addresses('internal.example',443,['site.example'])
+                with self.assertRaises(ValueError):probe_addresses('metadata.example',443,['metadata.example'])
+            local.assert_called_once()
+        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):
+            with self.assertRaises(ValueError):probe_addresses('missing.example',443)
+    def test_local_address_only_accepts_addresses_owned_by_this_host(self):
+        import ipaddress
+        from helper import local_address
+        self.assertTrue(local_address(ipaddress.ip_address('127.0.0.1')))
+        self.assertFalse(local_address(ipaddress.ip_address('203.0.113.9')))
+    def test_connection_is_pinned_to_the_validated_address_with_original_host(self):
+        from helper import fetch
+        port,seen=self.serve({'/ok':(200,{},b'healthy')});calls=[]
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver({'site.example':['127.0.0.1']},calls)):
+            self.assertEqual(fetch('http://site.example:%d/ok'%port,5),(200,b'healthy'))
+        self.assertEqual(calls.count('site.example'),1,'One resolution per hop leaves no rebinding window')
+        self.assertEqual(seen,[('/ok','site.example:%d'%port)])
+        from helper import PinnedHTTPConnection
+        with patch('helper.socket.create_connection',side_effect=[OSError('no IPv6 route'),'socket']) as connect:
+            connection=PinnedHTTPConnection('site.example',80,['2606:2800:220:1::1','1.1.1.1'],timeout=5);connection.connect()
+        self.assertEqual([call.args[0] for call in connect.call_args_list],[('2606:2800:220:1::1',80),('1.1.1.1',80)])
+    def test_redirects_stay_on_the_same_host_or_configured_domains_and_are_revalidated(self):
+        from helper import fetch
+        port,seen=self.serve({'/start':(302,{'Location':'/ok'},b''),'/ok':(200,{},b'healthy'),'/away':(302,{'Location':'http://169.254.169.254/latest/meta-data/'},b''),'/other':(301,{'Location':'http://other.example/ok'},b'moved'),'/rebind':(302,{'Location':'http://www.site.example/'},b''),'/loop':(302,{'Location':'/loop'},b'')})
+        table={'site.example':['127.0.0.1'],'www.site.example':['169.254.169.254'],'other.example':['127.0.0.1']}
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver(table)):
+            base='http://site.example:%d'%port
+            self.assertEqual(fetch(base+'/start',5),(200,b'healthy'))
+            self.assertEqual(fetch(base+'/away',5)[0],302)
+            self.assertEqual(fetch(base+'/other',5),(301,b'moved'))
+            self.assertEqual(fetch(base+'/rebind',5,['site.example','www.site.example'])[0],302,'A refused redirect target fails the probe')
+            self.assertEqual(fetch(base+'/loop',5)[0],302)
+            with patch('helper.inspect',return_value=[]):
+                self.assertFalse(health([],base+'/away'))
+                self.assertFalse(health([],base+'/rebind',['www.site.example'],fallback=True))
+                self.assertTrue(health([],base+'/start'))
+        self.assertNotIn('/latest/meta-data/',[path for path,_ in seen])
+        self.assertEqual(sum(path=='/loop' for path,_ in seen),6)
+    def test_probe_body_is_capped_and_public_probe_is_validated(self):
+        from helper import fetch
+        port,_=self.serve({'/big':(200,{},b'x'*(300*1024))})
+        self.assertEqual(len(fetch('http://127.0.0.1:%d/big'%port,5)[1]),256*1024)
+        for url in ['http://169.254.169.254/','http://[fd00:ec2::254]/','http://10.1.2.3/','file:///etc/passwd','ftp://example.org/','https://user:secret@example.org/']:
+            with self.assertRaises(ProbePolicyError,msg=url):public_probe({'publicUrl':url})
+            with patch('helper.inspect',return_value=[]):
+                with self.assertRaises(ProbePolicyError,msg=url):health([],url)
+class ProbePolicyUpgradeTests(unittest.TestCase):
+    """Sites saved before the probe policy keep getting backups; refused probe targets are never contacted."""
+    def setUp(self):
+        import helper
+        helper.PROBE_POLICY_FALLBACKS.clear();self.addCleanup(helper.PROBE_POLICY_FALLBACKS.clear)
+    def legacy(self,directory='/var/lib/docknest/maintenance/x'):
+        return {'containers':['web'],'domains':['www.example.org'],'stagingRoot':'/var/lib/docknest','cleanShutdownConfirmed':True,'maintenance':{'required':True,'directory':directory,'publicUrl':'http://192.168.1.1/','healthUrl':'http://172.17.0.2:8080/'}}
+    def test_capture_runs_with_refused_probes_skipped_and_never_contacts_them(self):
+        import os,collections
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);maintenance_dir=base/'maintenance';maintenance_dir.mkdir();(maintenance_dir/'ready').touch()
+            cfg=self.legacy(str(maintenance_dir));cfg['stagingRoot']=str(base/'staging')
+            container={'Id':'web','Image':'image-web','State':{'Running':True},'Mounts':[],'SizeRw':0}
+            plan={'fingerprint':'plan','services':[{'container':'web','engine':'generic'}],'restartOrder':['web']}
+            events=[];flags=[]
+            def docker(*args):
+                events.append(args[0])
+                return b'[]' if args[:2]==('image','inspect') else b'snapshot' if args[0]=='commit' else b''
+            def staging(path):pathlib.Path(path).mkdir(parents=True)
+            def journal(path,value):
+                if pathlib.Path(path).name=='boot-recovery.json':flags.append(value['config']['_skippedProbes'])
+            fetch=Mock();connect=Mock();emitted=Mock()
+            with patch.multiple('helper',preflight=Mock(return_value=[container]),backup_plan=Mock(return_value=plan),online_sqlite_checks=Mock(),create_staging_root=Mock(side_effect=staging),docker=Mock(side_effect=docker),mount_exclusions=Mock(return_value={}),atomic_json=Mock(side_effect=journal),prepare_database_shutdown=Mock(),shutdown_evidence=Mock(return_value=[]),revalidate_sources=Mock(),restart_services=Mock(side_effect=lambda *a:events.append('restart')),inspect=Mock(return_value=[container]),complete_recovery=Mock(),sync_maintenance_flag=Mock(),artifact_inventory=Mock(return_value={}),run=Mock(),fetch=fetch,emit=emitted),\
+                 patch('helper.socket.create_connection',connect),patch('helper.shutil.disk_usage',return_value=collections.namedtuple('Usage','total used free')(1,0,1<<50)),\
+                 patch.object(pathlib.Path,'read_text',return_value='boot'),patch('helper.os.getpgrp',return_value=os.getpid(),create=True),patch('helper.os.fork',return_value=4242,create=True):
+                capture({'config':cfg,'job':'00000000-0000-4000-8000-000000000000','planFingerprint':'plan'})
+            fetch.assert_not_called();connect.assert_not_called()
+            self.assertIn('stop',events);self.assertLess(events.index('stop'),events.index('restart'))
+            self.assertEqual(flags,[['health','public']],'Watchdog and boot recovery inherit the skipped probes')
+            self.assertFalse((maintenance_dir/'enabled').exists(),'Maintenance is released on container health')
+            manifest=emitted.call_args.kwargs['result']['manifest']
+            self.assertEqual(manifest['probePolicyFallback'],['health','public'])
+    def test_preflight_lists_refused_probes_and_leaves_loopback_origin_and_dns_alone(self):
+        from helper import skip_refused_probes,probe_url
+        cfg=self.legacy()
+        self.assertEqual(sorted(probe_policy_preflight(cfg)),['health','public'])
+        for required in [None,1,'yes']:
+            self.assertEqual(list(probe_policy_preflight({**cfg,'maintenance':{**cfg['maintenance'],'required':required}})),['health'],'Public probe needs required is True, as on the server')
+        cfg['maintenance'].update(healthUrl='http://127.0.0.1:8080/',probeOrigin=True)
+        self.assertEqual(probe_policy_preflight(cfg),{})
+        cfg['maintenance'].update(probeOrigin=False,healthUrl='http://missing.example/')
+        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):self.assertEqual(list(probe_policy_preflight(cfg)),['public'])
+        cfg=self.legacy();self.assertEqual(sorted(skip_refused_probes(cfg)),['health','public'])
+        self.assertIsNone(probe_url(cfg,'health'));self.assertIsNone(probe_url(cfg,'public'))
+        self.assertNotIn('_skippedProbes',json.dumps({k:v for k,v in cfg.items() if not k.startswith('_')}),'Plan fingerprint ignores the skip marker')
+    def test_manual_maintenance_enable_is_refused_but_release_never_contacts_refused_targets(self):
+        from helper import main
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d)/'ready').touch()
+            with patch('helper.emit'):
+                with self.assertRaisesRegex(ValueError,r"^Probe URL policy: .*public maintenance URL before enabling maintenance\."):main({'operation':'maintenance','enabled':True,'config':self.legacy(d)})
+                self.assertFalse((pathlib.Path(d)/'enabled').exists())
+                (pathlib.Path(d)/'enabled').touch();fetch=Mock()
+                with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.sync_maintenance_flag'),patch('helper.fetch',fetch):
+                    main({'operation':'maintenance','enabled':False,'config':self.legacy(d)})
+                fetch.assert_not_called();self.assertFalse((pathlib.Path(d)/'enabled').exists())
+    def test_mid_job_policy_refusal_falls_back_to_container_health(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);(base/'ready').touch();(base/'enabled').touch()
+            cfg=self.legacy(d)
+            running=[{'State':{'Running':True}}]
+            with patch('helper.inspect',return_value=running),patch('helper.sync_maintenance_flag'):
+                with self.assertRaises(ProbePolicyError):health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'])
+                self.assertTrue(health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'],fallback=True))
+                with patch('helper.inspect',return_value=[{'State':{'Running':False}}]):self.assertFalse(health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'],fallback=True))
+                maintenance(cfg,False)
+            self.assertFalse((base/'enabled').exists(),'A refused probe must not hold the site in maintenance')
+            root=base/'job';root.mkdir()
+            def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
+            with patch('helper.os.getpgid',side_effect=ProcessLookupError,create=True),patch('helper.restart_services'),patch('helper.inspect',return_value=running),patch('helper.maintenance') as flags,patch('helper.atomic_json',side_effect=write_journal),patch('helper.time.sleep') as sleep:
+                recover(root,['web'],cfg,0,123)
+            flags.assert_called_once_with(cfg,False);sleep.assert_not_called()
+            journal=json.loads((root/'recovery.json').read_text())
+            self.assertTrue(journal['recovered']);self.assertEqual(journal['probePolicyFallback'],['health','public'])
+    def test_readiness_still_names_the_policy_problem(self):
+        with patch('helper.preflight',return_value=[]),patch('helper.backup_plan'),patch('helper.inspect',return_value=[]):
+            result=readiness({'containers':['web'],'healthUrl':'http://169.254.169.254/','maintenance':{}})
+        check={item['name']:item for item in result['checks']}['Application health']
+        self.assertFalse(check['ok']);self.assertTrue(check['message'].startswith('Probe URL policy: the URL resolves to a link-local'))
+class ProbeDeadlineTests(unittest.TestCase):
+    """A probe has one total time budget; a drip-feeding server cannot hold restart or recovery loops."""
+    def drip(self,prefix):
+        import socket,threading
+        listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(5);stop=threading.Event()
+        def serve():
+            while not stop.is_set():
+                try:client,_=listener.accept()
+                except OSError:return
+                def feed(client=client):
+                    try:
+                        client.recv(4096);client.sendall(prefix)
+                        while not stop.wait(0.2):client.sendall(b'x')
+                    except OSError:pass
+                    finally:client.close()
+                threading.Thread(target=feed,daemon=True).start()
+        threading.Thread(target=serve,daemon=True).start()
+        self.addCleanup(listener.close);self.addCleanup(stop.set)
+        return listener.getsockname()[1]
+    def test_drip_fed_headers_and_body_fail_at_the_total_deadline(self):
+        import time
+        from helper import fetch
+        for prefix in [b'HTTP/1.1 200 OK\r\nX-Slow: ',b'HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n']:
+            port=self.drip(prefix);started=time.monotonic()
+            with self.assertRaises(TimeoutError):fetch('http://127.0.0.1:%d/'%port,1)
+            self.assertLess(time.monotonic()-started,3)
+            started=time.monotonic()
+            with patch('helper.inspect',return_value=[]):self.assertFalse(health([],'http://127.0.0.1:%d/'%port,fallback=True),'A slow probe is a failed probe, not a policy skip')
+            self.assertLess(time.monotonic()-started,8)
+            import helper;self.assertEqual(helper.PROBE_POLICY_FALLBACKS,[])
+    def test_origin_probe_has_the_same_total_deadline(self):
+        import time
+        port=self.drip(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100000\r\n\r\n')
+        with patch('helper.time.monotonic',side_effect=[0,9.5]+[11]*50):
+            with self.assertRaises(TimeoutError):public_probe({'publicUrl':'http://example.invalid:%d/'%port,'probeOrigin':True})
+class ProbeRedirectPolicyTests(unittest.TestCase):
+    """Redirect hops keep scheme and port, and a refused redirect fails the probe instead of skipping it."""
+    def setUp(self):
+        import helper
+        helper.PROBE_POLICY_FALLBACKS.clear();self.addCleanup(helper.PROBE_POLICY_FALLBACKS.clear)
+    def follow(self,start,location,domains=('site.example',),answers=None):
+        from helper import fetch
+        visited=[]
+        def exchange(connection,path,headers,deadline):
+            visited.append((type(connection).__name__,connection.host,connection.port))
+            return (302,b'moved',location) if len(visited)==1 else (200,b'healthy',None)
+        resolve=lambda host,port,domains=():(answers or {}).get(host) or ['127.0.0.1']
+        def refuse(host,port,domains=()):
+            if host in (answers or {}):raise __import__('helper').ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
+            return ['127.0.0.1']
+        with patch('helper.exchange',side_effect=exchange),patch('helper.probe_addresses',side_effect=refuse):
+            result=fetch(start,5,domains)
+        return result,visited
+    def test_scheme_and_port_rules(self):
+        followed=[('http://site.example/a','https://site.example/b'),('http://site.example:8080/a','/b'),('https://site.example/a','https://site.example:443/b'),('http://site.example/a','http://www.site.example/'),('http://site.example:8080/a','https://www.site.example/'),('https://site.example:8443/a','https://site.example/')]
+        for start,location in followed:
+            result,visited=self.follow(start,location,('site.example','www.site.example'))
+            self.assertEqual((result,len(visited)),((200,b'healthy'),2),(start,location))
+        self.assertEqual(self.follow('http://site.example/a','https://site.example/b')[1][1][0],'PinnedHTTPSConnection')
+        refused=[('https://site.example/a','http://site.example/b'),('http://site.example/a','http://site.example:2375/'),('http://site.example:8080/a','http://site.example:8081/'),('http://site.example:8080/a','https://site.example:8443/'),('https://127.0.0.1:8443/a','https://127.0.0.1/'),('http://site.example/a','http://other.example/')]
+        for start,location in refused:
+            result,visited=self.follow(start,location,('site.example','www.site.example'))
+            self.assertEqual((result,len(visited)),((302,b'moved'),1),(start,location))
+    def test_refused_redirect_target_fails_the_probe_and_is_not_a_policy_skip(self):
+        for location in ['http://user:secret@site.example/ok','gopher://site.example/','http://cfg.example/','http://site.example:99999/']:
+            result,visited=self.follow('http://site.example/a',location,('site.example','cfg.example'),{'cfg.example':True})
+            self.assertEqual((result,len(visited)),((302,b'moved'),1),location)
+            with patch('helper.exchange',side_effect=lambda *a:(302,b'moved',location)),patch('helper.probe_addresses',side_effect=lambda host,*a:(_ for _ in ()).throw(__import__('helper').ProbePolicyError('refused')) if host=='cfg.example' else ['127.0.0.1']),patch('helper.inspect',return_value=[]):
+                self.assertFalse(health([],'http://site.example/a',['site.example','cfg.example'],fallback=True),location)
+        import helper;self.assertEqual(helper.PROBE_POLICY_FALLBACKS,[],'Only a refused stored URL may be skipped')
+        with patch('helper.inspect',return_value=[]):
+            self.assertTrue(health([],'http://169.254.169.254/',fallback=True))
+        self.assertEqual(helper.PROBE_POLICY_FALLBACKS,['health'])
+class ProbeIpv6SpecialRangeTests(unittest.TestCase):
+    """6to4 and NAT64 are judged by the IPv4 they carry; other special IPv6 ranges are refused on every Python."""
+    def test_embedded_and_special_ipv6_ranges(self):
+        from helper import probe_addresses
+        for address in ['::a9fe:a9fe','::10.0.0.1','64:ff9b::a9fe:a9fe','64:ff9b::a00:1','64:ff9b::7f00:1','64:ff9b:1::1','2002:a9fe:a9fe::1','2002:a00:1::1','2002:7f00:1::1','2002:6464:64c8::1','2001::1','2001:0:4136:e378::1','2001:db8::1','100::1']:
+            with self.assertRaises(ProbePolicyError,msg=address):probe_addresses(address,80,['site.example'])
+        for address in ['64:ff9b::101:101','2002:101:101::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
 if __name__=='__main__':unittest.main()

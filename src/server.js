@@ -3,8 +3,9 @@ import express from 'express';
 import helmet from 'helmet';
 import { z, ZodError } from 'zod';
 import { CronExpressionParser } from 'cron-parser';
-import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
+import { statfsSync, statSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { probeUrlAllowed, probeUrlMessage } from './probe-url.js';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
@@ -12,13 +13,14 @@ import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
+import { schemaVersion } from './migrations.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
-import { installBootRecovery } from './engine.js';
+import { installBootRecovery, bootRecoveryStatus } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 await clearInterruptedExports();
@@ -33,6 +35,9 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.json({ status: 'ok' }); });
+// Public release identity for upgrade checks; deliberately nothing about hosts, users or configuration.
+const release = Object.freeze({ version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, schemaVersion });
+app.get('/api/version', (_req, res) => res.json(release));
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
@@ -55,7 +60,7 @@ const view = (row, verifications) => {
   return converted;
 };
 const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.');
-const healthUrl = z.string().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Use an HTTP(S) URL without embedded credentials.');
+const healthUrl = z.string().max(2048).refine(value => !value || probeUrlAllowed(value), probeUrlMessage);
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
@@ -103,7 +108,7 @@ app.get('/api/state', async (_req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup, verifications)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup, verifications)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
@@ -175,7 +180,7 @@ function normalizedSite(data, siteId) {
   if(data.config.maintenancePublicUrl!==undefined)maintenance.publicUrl=data.config.maintenancePublicUrl;
   if(data.config.kind==='static')maintenance.required=false;
   for (const value of [maintenance.healthUrl, maintenance.publicUrl]) {
-    if (value && !['http:', 'https:'].includes(new URL(value).protocol)) throw new Error('Maintenance URLs must use HTTP or HTTPS.');
+    if (value && !probeUrlAllowed(value)) throw Object.assign(new Error(probeUrlMessage), { status: 400 });
   }
   return { ...data.config, ...(data.config.kind==='static'?{maintenanceRequired:false}:{}),maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
 }
@@ -193,8 +198,12 @@ app.patch('/api/sites/:id', (req, res) => {
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
   if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
-  db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(normalizedSite(data, site.id)), site.id);
-  audit(req.user.id, 'site.update', site.id); res.json(getSite(site.id));
+  const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
+  // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
+  const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
+  const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
+  db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
+  audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
@@ -218,6 +227,7 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
 app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadiness(req.params.id)));
 app.post('/api/sites/:id/plan', async (req,res)=>res.json(await planBackup(req.params.id)));
+app.get('/api/sites/:id/boot-recovery', (req,res)=>{ const bootRecovery = bootRecoveryStatus(getSite(req.params.id).id); res.json({ ...bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }); });
 app.post('/api/sites/:id/boot-recovery', requireAdmin, async (req,res)=>res.json(await installBootRecovery(req.params.id)));
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {

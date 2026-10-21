@@ -73,6 +73,51 @@ jobs:
         with:
           name: linux-integration-results
           path: data/qa/linux-integration.json
+  upgrade:
+    # Starts this commit on metadata written by every final release since minUpgradeFrom, then checks the downgrade
+    # guard and snapshot rollback. Not a required check unless branch protection adds it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Upgrade from released versions
+        run: |
+          minimum=$(node -p "require('./package.json').docknest.minUpgradeFrom")
+          tags=$(git tag -l 'v*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | awk -v min="$minimum" 'BEGIN{split(min,m,".")} {split(substr($0,2),v,"."); if (v[1]>m[1]||(v[1]==m[1]&&(v[2]>m[2]||(v[2]==m[2]&&v[3]>=m[3])))) print}')
+          test -n "$tags"
+          for tag in $tags; do echo "::group::$tag"; npm run --silent test:upgrade -- "$tag"; echo '::endgroup::'; done
+      - name: Upgrade script against a Compose test double
+        run: node --test tests/upgrade-script.test.js
+  controlled-beta-gate:
+    needs: [privacy, check, browser, linux-integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-integration-results
+          path: data/qa
+      - run: node scripts/aggregate-gate.js data/qa/linux-integration.json
+        env:
+          NODE_CHECKS: ${{ needs.check.result }}
+          PRIVACY_CHECKS: ${{ needs.privacy.result }}
+          BROWSER_CHECKS: ${{ needs.browser.result }}
+      - run: node scripts/beta-gate.js data/qa/controlled-beta.json "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controlled-beta-evidence
+          path: data/qa/controlled-beta.json
+
   # Real S3 semantics (multipart, ranges, conditional copy, Object Lock) against a
   # MinIO-compatible server. Informational while S3 is beta: not a required check
   # and not part of controlled-beta-gate. Upstream MinIO images and binaries are
@@ -113,25 +158,3 @@ jobs:
           name: s3-integration-results
           path: data/qa/s3-integration.json
           if-no-files-found: ignore
-  controlled-beta-gate:
-    needs: [privacy, check, browser, linux-integration]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux-integration-results
-          path: data/qa
-      - run: node scripts/aggregate-gate.js data/qa/linux-integration.json
-        env:
-          NODE_CHECKS: ${{ needs.check.result }}
-          PRIVACY_CHECKS: ${{ needs.privacy.result }}
-          BROWSER_CHECKS: ${{ needs.browser.result }}
-      - run: node scripts/beta-gate.js data/qa/controlled-beta.json "$GITHUB_SHA"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: controlled-beta-evidence
-          path: data/qa/controlled-beta.json
