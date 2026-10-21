@@ -18,7 +18,8 @@ export const probeUrlAllowed = value => { try { const url = new URL(value), host
 export function storedProbeProblem(config = {}) {
   if (config.kind === 'static') return null;
   const maintenance = config.maintenance || {}, targets = [['health URL', config.healthUrl], ['maintenance health URL', maintenance.healthUrl]];
-  if (maintenance.required !== false && !maintenance.probeOrigin) targets.push(['public maintenance URL', maintenance.publicUrl]);
+  // Same rule as the helper: the public probe runs only when maintenance is explicitly required.
+  if (maintenance.required === true && !maintenance.probeOrigin) targets.push(['public maintenance URL', maintenance.publicUrl]);
   const found = targets.find(([, url]) => url && !probeUrlAllowed(url));
   return found ? { field: found[0], message: `Probe URL policy: the site's ${found[0]} points to a private, link-local or cloud metadata address, or is not a plain HTTP(S) URL. Backups continue with that probe skipped and health checked from container state only. Edit the site to use its domain or a loopback port such as http://127.0.0.1:8080/.` } : null;
 }

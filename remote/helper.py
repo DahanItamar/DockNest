@@ -892,7 +892,8 @@ def probe_policy_preflight(cfg):
     decision and is left to the probe itself, as before the policy existed."""
     m=cfg.get('maintenance') or {};refused={}
     targets=[('health',m.get('healthUrl'))]
-    if m.get('required') and not m.get('probeOrigin'):targets.append(('public',m.get('publicUrl')))
+    # Same rule as src/probe-url.js: the public probe runs only when maintenance is explicitly required.
+    if m.get('required') is True and not m.get('probeOrigin'):targets.append(('public',m.get('publicUrl')))
     for probe,url in targets:
         if not url:continue
         parsed=urllib.parse.urlsplit(url)

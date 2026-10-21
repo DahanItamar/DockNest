@@ -166,6 +166,7 @@ test('sites saved before the probe policy keep getting backups with a probe poli
  assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'http://127.0.0.1:8080/',publicUrl:'http://169.254.169.254/'}}).field,'public maintenance URL');
  assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,healthUrl:'',publicUrl:'http://10.0.0.9/',probeOrigin:true}}),null,'Origin probes only connect to loopback');
  assert.equal(storedProbeProblem({...legacy,kind:'static'}),null);
+ for(const required of [undefined,false])assert.equal(storedProbeProblem({...legacy,healthUrl:'',maintenance:{...legacy.maintenance,required,healthUrl:'',publicUrl:'http://169.254.169.254/'}}),null,'Server and helper agree the public probe needs required === true');
  assert.equal(storedProbeProblem({...legacy,healthUrl:'http://127.0.0.1:8080/',maintenance:{...legacy.maintenance,healthUrl:'https://www.example.org/health'}}),null);
  const legacySite=id();db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(legacySite,host,'Legacy probe site',JSON.stringify(legacy),new Date().toISOString());
  db.prepare("INSERT INTO policies VALUES (?,1,'0 2 * * *','UTC',7,?)").run(legacySite,new Date(Date.now()-60000).toISOString());

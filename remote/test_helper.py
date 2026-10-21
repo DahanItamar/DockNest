@@ -600,6 +600,8 @@ class ProbePolicyUpgradeTests(unittest.TestCase):
         from helper import skip_refused_probes,probe_url
         cfg=self.legacy()
         self.assertEqual(sorted(probe_policy_preflight(cfg)),['health','public'])
+        for required in [None,1,'yes']:
+            self.assertEqual(list(probe_policy_preflight({**cfg,'maintenance':{**cfg['maintenance'],'required':required}})),['health'],'Public probe needs required is True, as on the server')
         cfg['maintenance'].update(healthUrl='http://127.0.0.1:8080/',probeOrigin=True)
         self.assertEqual(probe_policy_preflight(cfg),{})
         cfg['maintenance'].update(probeOrigin=False,healthUrl='http://missing.example/')
