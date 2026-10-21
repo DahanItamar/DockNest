@@ -642,4 +642,39 @@ class ProbePolicyUpgradeTests(unittest.TestCase):
             result=readiness({'containers':['web'],'healthUrl':'http://169.254.169.254/','maintenance':{}})
         check={item['name']:item for item in result['checks']}['Application health']
         self.assertFalse(check['ok']);self.assertTrue(check['message'].startswith('Probe URL policy: the URL resolves to a link-local'))
+class ProbeDeadlineTests(unittest.TestCase):
+    """A probe has one total time budget; a drip-feeding server cannot hold restart or recovery loops."""
+    def drip(self,prefix):
+        import socket,threading
+        listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(5);stop=threading.Event()
+        def serve():
+            while not stop.is_set():
+                try:client,_=listener.accept()
+                except OSError:return
+                def feed(client=client):
+                    try:
+                        client.recv(4096);client.sendall(prefix)
+                        while not stop.wait(0.2):client.sendall(b'x')
+                    except OSError:pass
+                    finally:client.close()
+                threading.Thread(target=feed,daemon=True).start()
+        threading.Thread(target=serve,daemon=True).start()
+        self.addCleanup(listener.close);self.addCleanup(stop.set)
+        return listener.getsockname()[1]
+    def test_drip_fed_headers_and_body_fail_at_the_total_deadline(self):
+        import time
+        from helper import fetch
+        for prefix in [b'HTTP/1.1 200 OK\r\nX-Slow: ',b'HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n']:
+            port=self.drip(prefix);started=time.monotonic()
+            with self.assertRaises(TimeoutError):fetch('http://127.0.0.1:%d/'%port,1)
+            self.assertLess(time.monotonic()-started,3)
+            started=time.monotonic()
+            with patch('helper.inspect',return_value=[]):self.assertFalse(health([],'http://127.0.0.1:%d/'%port,fallback=True),'A slow probe is a failed probe, not a policy skip')
+            self.assertLess(time.monotonic()-started,8)
+            import helper;self.assertEqual(helper.PROBE_POLICY_FALLBACKS,[])
+    def test_origin_probe_has_the_same_total_deadline(self):
+        import time
+        port=self.drip(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 100000\r\n\r\n')
+        with patch('helper.time.monotonic',side_effect=[0,9.5]+[11]*50):
+            with self.assertRaises(TimeoutError):public_probe({'publicUrl':'http://example.invalid:%d/'%port,'probeOrigin':True})
 if __name__=='__main__':unittest.main()

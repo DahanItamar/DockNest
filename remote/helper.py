@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -817,23 +817,43 @@ def probe_addresses(hostname,port,domains=()):
     return chosen
 def fetch(url,timeout,domains=(),redirects=5):
     """GET with every hop resolved, validated and pinned. Redirects are followed only to the same
-    host or to another configured site domain; otherwise the redirect response itself is returned."""
-    allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None
+    host or to another configured site domain; otherwise the redirect response itself is returned.
+    timeout is a total budget for the whole probe: every connect attempt, redirect and body read."""
+    allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None;deadline=time.monotonic()+timeout
     for _ in range(redirects+1):
         parsed=urllib.parse.urlsplit(url)
         if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
         host=parsed.hostname.lower().rstrip('.');origin=origin or host
         if host!=origin and host not in allowed:return status,body
         port=parsed.port or (443 if parsed.scheme=='https' else 80);addresses=probe_addresses(host,port,domains)
-        if parsed.scheme=='https':connection=PinnedHTTPSConnection(parsed.hostname,port,addresses,timeout=timeout,context=ssl.create_default_context())
-        else:connection=PinnedHTTPConnection(parsed.hostname,port,addresses,timeout=timeout)
-        try:
-            connection.request('GET',urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,'')),headers={'Cache-Control':'no-cache','User-Agent':'DockNest-helper/%d'%VERSION,'Accept':'*/*'})
-            response=connection.getresponse();status=response.status;body=response.read(PROBE_LIMIT);location=response.getheader('Location')
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise TimeoutError('Probe exceeded its total time limit')
+        if parsed.scheme=='https':connection=PinnedHTTPSConnection(parsed.hostname,port,addresses,timeout=remaining,context=ssl.create_default_context())
+        else:connection=PinnedHTTPConnection(parsed.hostname,port,addresses,timeout=remaining)
+        try:status,body,location=exchange(connection,urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,'')),{'Cache-Control':'no-cache','User-Agent':'DockNest-helper/%d'%VERSION,'Accept':'*/*'},deadline)
         finally:connection.close()
         if status not in (301,302,303,307,308) or not location:return status,body
         url=urllib.parse.urljoin(url,location)
     return status,body
+
+def exchange(connection,path,headers,deadline):
+    """One request/response under an absolute deadline. Socket timeouts only bound each read, so a server
+    dripping one byte per second would otherwise hold a probe (and the restart or recovery loop) for hours.
+    On expiry the socket is shut down to unblock the worker and the probe counts as failed, not refused."""
+    result={}
+    def work():
+        try:
+            connection.request('GET',path,headers=headers)
+            response=connection.getresponse();result['value']=(response.status,response.read(PROBE_LIMIT),response.getheader('Location'))
+        except BaseException as error:result['error']=error
+    worker=threading.Thread(target=work,daemon=True);worker.start();worker.join(max(0,deadline-time.monotonic()))
+    if worker.is_alive():
+        try:
+            if connection.sock:connection.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:pass
+        connection.close();raise TimeoutError('Probe exceeded its total time limit')
+    if 'error' in result:raise result['error']
+    return result['value']
 
 PROBE_LABELS={'health':'maintenance health URL','public':'public maintenance URL'}
 def probe_policy_preflight(cfg):
@@ -878,9 +898,7 @@ def public_probe(m,domains=()):
     else:connection=http.client.HTTPConnection('127.0.0.1',parsed.port or 80,timeout=10)
     try:
         path=urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,''))
-        connection.request('GET',path,headers={'Host':parsed.netloc,'Cache-Control':'no-cache'})
-        response=connection.getresponse()
-        return response.status,response.read(PROBE_LIMIT)
+        return exchange(connection,path,{'Host':parsed.netloc,'Cache-Control':'no-cache'},time.monotonic()+10)[:2]
     finally:connection.close()
 
 def health(containers,url=None,domains=(),fallback=False):
