@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrate, migrations, schemaVersion, listSnapshots, SchemaTooNewError } from '../src/migrations.js';
+import { migrate, migrations, schemaVersion, listSnapshots, SchemaTooNewError, SnapshotSpaceError } from '../src/migrations.js';
 
 const run = promisify(execFile), quiet = () => {};
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
@@ -101,4 +101,40 @@ test('API and worker starting together on a v2.0.0 database migrate once with on
   assert.equal(listSnapshots(join(directory, 'upgrade-snapshots')).length, 1);
   const db = new DatabaseSync(join(directory, 'state.sqlite'));
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM backups').get().count, 1); db.close();
+}));
+
+const future = (version, extra = {}) => ({ version, name: 'future' + version, up: target => target.exec(`CREATE TABLE IF NOT EXISTS future_${version} (id TEXT)`), ...extra });
+
+test('a crash loop on a failing migration reuses one snapshot and never evicts older history', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = legacy(file), snapshots = join(directory, 'upgrade-snapshots');
+  const old = migrate(db, { file, now: () => new Date('2026-10-20T08:00:00.000Z'), log: quiet });
+  db.exec('PRAGMA user_version=0');
+  const broken = [...migrations, future(schemaVersion + 1, { up: () => { throw new Error('broken migration'); } })];
+  for (let index = 0; index < 9; index++) assert.throws(() => migrate(db, { file, list: broken, now: () => new Date(Date.UTC(2026, 9, 21, 8, index)), log: quiet }), /broken migration/);
+  const names = listSnapshots(snapshots).map(item => item.name);
+  db.close();
+  assert.ok(names.some(name => old.snapshot.endsWith(name)), 'the earlier snapshot survives');
+  assert.equal(names.filter(name => name.includes(`-to-v${schemaVersion + 1}-`)).length, 1, 'identical-source failures reuse one snapshot');
+}));
+
+test('stale partial copies are removed and low disk space refuses before the database changes', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = legacy(file), snapshots = join(directory, 'upgrade-snapshots');
+  await mkdir(snapshots, { recursive: true }); await writeFile(join(snapshots, 'state-v0-to-v1-20200101T000000000Z.sqlite.partial'), 'stale');
+  assert.throws(() => migrate(db, { file, space: () => ({ bavail: 1, bsize: 1 }), log: quiet }), error => error instanceof SnapshotSpaceError && /database was not changed/.test(error.message));
+  assert.equal(version(db), 0); assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='boot_recovery_installs'").get(), undefined);
+  assert.deepEqual((await readdir(snapshots)).filter(name => name.endsWith('.partial')), [], 'cleaned before the space check');
+  migrate(db, { file, log: quiet });
+  assert.equal(version(db), schemaVersion);
+  db.close();
+}));
+
+test('older code keeps running on a database whose newer migrations are all compatible', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = legacy(file), additive = [...migrations, future(schemaVersion + 1, { compatible: true })];
+  migrate(db, { file, list: additive, log: quiet });
+  assert.equal(version(db), schemaVersion + 1);
+  assert.deepEqual(migrate(db, { file, log: quiet }), { from: schemaVersion + 1, to: schemaVersion + 1, snapshot: null });
+  assert.equal(version(db), schemaVersion + 1);
+  migrate(db, { file, list: [...additive, future(schemaVersion + 2)], log: quiet });
+  assert.throws(() => migrate(db, { file, log: quiet }), SchemaTooNewError);
+  db.close();
 }));

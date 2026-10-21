@@ -61,8 +61,8 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   db.close();
 
-  // Downgrade guard: a schema newer than this code refuses to start and leaves the database alone.
-  const future = new DatabaseSync(state); future.exec(`PRAGMA user_version=${schemaVersion + 1}`); future.close();
+  // Downgrade guard: a schema newer than this code that needs newer code (compat floor above ours) refuses to start and leaves the database alone.
+  const future = new DatabaseSync(state); future.exec(`PRAGMA user_version=${schemaVersion + 1}`); future.prepare("UPDATE settings SET value=? WHERE key='schema_compat_floor'").run(String(schemaVersion + 1)); future.close();
   assert.throws(() => node("await import('./src/db.js');", { cwd }), error => /newer than this release understands/.test(error.stderr) && /upgrade-snapshots/.test(error.stderr));
   assert.equal(version(state), schemaVersion + 1);
 
