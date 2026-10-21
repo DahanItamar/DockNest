@@ -20,4 +20,5 @@ services:
 #     image: ${DOCKNEST_IMAGE:?Set DOCKNEST_IMAGE in .env}
 #     build: !reset null
 #
-# To upgrade, change the tag in .env, then run scripts/upgrade.sh --version vX.Y.Z (it pulls instead of building).
+# To upgrade, run scripts/upgrade.sh --version vX.Y.Z. It pulls instead of building, switches only the tag for its own
+# commands, rolls back to the exact image it recorded, and updates DOCKNEST_IMAGE in .env once the release is healthy.

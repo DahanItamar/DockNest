@@ -34,8 +34,10 @@ The script:
 
 If the new release does not become healthy:
 
-- **Schema unchanged:** the script checks out the previous commit, starts it again, lifts the hold and exits with code 4. No data changed.
-- **Schema already migrated:** the script does not guess. It exits with code 5 and prints the exact [rollback](#rolling-back) commands.
+- **Schema unchanged:** the script checks out the previous commit, starts it again (image mode: the exact image recorded before the switch), lifts the hold and exits with code 4. No data changed.
+- **Schema already migrated:** the script does not guess. It exits with code 5, keeps the hold, and prints the exact [rollback](#rolling-back) commands.
+
+Any other failure after the hold is set (a step that errors, Ctrl-C, a signal) is handled the same way: the hold is released, the checkout and containers return to the previous release when the metadata is provably unchanged, and the status file ends with `ok: false`. It never stays at `ok: null`. A refusal after the hold (for example, no space for the configuration backup) also lifts the hold.
 
 Reinstall boot recovery afterwards, if you use it. See [Boot recovery after upgrades](#boot-recovery-after-upgrades).
 
@@ -49,7 +51,7 @@ Reinstall boot recovery afterwards, if you use it. See [Boot recovery after upgr
 | `--status-file PATH` | Write progress as JSON, replaced atomically at each phase. |
 | `--force` | Continue when jobs are still queued or running after `--wait`. |
 | `--wait SECONDS` / `--timeout SECONDS` | Idle wait (default 600) and health wait (default 300). |
-| `--dry-run` | Run all checks and print the plan without changing anything. |
+| `--dry-run` | Read-only plan: no fetch (it uses the tags already in the checkout), no hold, no status file, no containers started apart from reading the schema version. |
 
 | Code | Result |
 | --- | --- |
@@ -58,7 +60,7 @@ Reinstall boot recovery afterwards, if you use it. See [Boot recovery after upgr
 | 2 | Refused before changing anything (edited files, missing secrets, unknown tag, unsupported path, downgrade without a matching snapshot, cancelled). |
 | 3 | Jobs were still queued, running or awaiting recovery review. Nothing changed. |
 | 4 | Failed before the schema changed. The previous release was restored automatically. |
-| 5 | Failed after the schema migrated. Roll back manually with the printed commands. |
+| 5 | Failed after the schema migrated, or failed unexpectedly where the metadata could not be proven unchanged. The hold stays on. Roll back manually with the printed commands. |
 | 6 | The automatic return to the previous release also failed. |
 
 The status file is a single JSON object:
@@ -88,9 +90,9 @@ Do not run `git pull` on a release checkout. Releases are tags, so the checkout 
 
 ## Rolling back
 
-**Same schema.** Compare `schemaVersion` in the release manifests or `/api/version`. If it is equal, or the older release is v2.0.0 and the newer schema is 1, check out the previous tag and run `docker compose up -d --build`. The data stays compatible. v2.0.0 has no `/api/version`; use `/healthz` instead.
+**Compatible schema (no data loss).** A migration marked `compatible: true` only adds tables or indexes that older code ignores. Migration 2 (`boot_recovery_installs`) is one. When every migration newer than the target release is compatible, the older release runs on the migrated database as is: `scripts/upgrade.sh --version <older tag>` checks out the tag, rebuilds and starts it, with no snapshot restore and no `--allow-data-rollback`. This is how the common 2.1 to 2.0.0 rollback works. By hand: check out the previous tag and run `docker compose up -d --build`. v2.0.0 has no `/api/version`; use `/healthz` instead. Releases from 2.1 onward record the oldest usable schema (`schema_compat_floor` in `settings`) and start on a newer, compatible database; v2.0.0 has no schema check at all.
 
-**Newer schema.** An older release refuses to start on a newer schema. It logs `DockNest metadata schema vN is newer than this release understands` and names the snapshot to restore. Snapshots live in `DATA_DIR/upgrade-snapshots` (inside the `docker-backup-manager_state` volume) as `state-v<from>-to-v<to>-<UTC time>.sqlite`. The newest five are kept. Restoring a snapshot discards every job, backup record and setting change made after it. Backup files on storage are not touched, but backups taken since then are no longer listed. `scripts/upgrade.sh --version <older tag> --allow-data-rollback` does all of this for you. To do it by hand:
+**Incompatible schema.** If any newer migration is not compatible, an older release refuses to start. It logs `DockNest metadata schema vN is newer than this release understands` and names the snapshot to restore. Snapshots live in `DATA_DIR/upgrade-snapshots` (inside the `docker-backup-manager_state` volume) as `state-v<from>-to-v<to>-<UTC time>.sqlite`. The newest five, plus the newest of every distinct from/to pair, are kept. A failing migration under a restart policy reuses one snapshot instead of copying the database on every boot, and a snapshot needs 1.2 times the database size plus 64 MiB of free space, otherwise the upgrade stops before changing anything. Restoring a snapshot discards every job, backup record and setting change made after it. Backup files on storage are not touched, but backups taken since then are no longer listed. `scripts/upgrade.sh --version <older tag> --allow-data-rollback` does all of this for you. To do it by hand:
 
 ```sh
 docker compose stop api worker
@@ -107,7 +109,9 @@ Keep the `pre-rollback-*` folder until you have checked the result. The upgrade 
 
 ## Use the published image
 
-Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Pre-releases get only their exact tag. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Pin an exact version. To upgrade, change the tag in `.env`, then run `scripts/upgrade.sh --version v2.1.1`. The script pulls instead of building, and it refuses to run if the configured tag does not match the target.
+Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Pre-releases get only their exact tag. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.
+
+The release workflow runs only for a tag whose commit is on `main` and has a successful `Verify` run, and publishes `linux/amd64` only. On ARM hosts keep building from source.
 
 Every pushed digest is signed with cosign keyless signing from the release workflow. Verify an image before using it:
 
@@ -163,7 +167,7 @@ Not covered: internal module APIs, database table layout (use the API), the CSS 
 - A deprecated item keeps working for at least one minor release. While it is deprecated, DockNest logs a warning at startup or on use, and the CHANGELOG lists it under **Deprecated**.
 - Breaking changes happen only in a new major version. That release includes a migration guide in `docs/releases/` and sets `minUpgradeFrom` when intermediate releases are required.
 - Schema migrations only move forward. A release never edits or renumbers a migration that has already shipped. Patch releases add migrations only for urgent fixes, and the release notes say so.
-- A downgrade across a schema change needs the matching pre-upgrade snapshot. Within the same schema, downgrades are safe.
+- A downgrade across incompatible migrations needs the matching pre-upgrade snapshot. Across compatible (purely additive) migrations, and within the same schema, downgrades are safe.
 
 ## Schema migrations (contributors)
 
@@ -171,7 +175,7 @@ Not covered: internal module APIs, database table layout (use the API), the CSS 
 
 On startup, `src/db.js` takes `BEGIN IMMEDIATE` with a long busy timeout, so when the API and worker start together only one of them migrates. If any migrations are pending on a non-empty database, it first writes a `VACUUM INTO` snapshot through a second connection. It then applies the pending migrations, sets `user_version` and commits. A failed migration rolls back completely. A version higher than the code knows stops startup.
 
-Migration 1 (`baseline`) is the exact v2.0.0 startup schema. It is repeatable: it runs on every start, as v2.0.0 did. Only additive `CREATE ... IF NOT EXISTS` statements may be appended to it. Every other change needs a new numbered entry. Keep each entry on one line starting with `{ version: N,`, because `scripts/upgrade.sh` reads the highest number from that pattern. `scripts/release-manifest.js` imports `schemaVersion` directly. Tests: `tests/migrations.test.js` (unit) and `npm run test:upgrade -- vX.Y.Z` (the real released code against the current API, run by the CI `upgrade` job for every final tag).
+Migration 1 (`baseline`) is the exact v2.0.0 startup schema. It is repeatable: it runs on every start, as v2.0.0 did. Only additive `CREATE ... IF NOT EXISTS` statements may be appended to it. Every other change needs a new numbered entry. Add `compatible: true` only to an entry that creates new tables or indexes and changes nothing existing; anything that alters, drops, rewrites or reinterprets existing data must not carry it, because older releases would then misread the data. Keep each entry on one line starting with `{ version: N,`, because `scripts/upgrade.sh` reads the highest number and the compatible flags from that pattern (`tests/upgrade-script.test.js` checks it against the real file). A failed snapshot leaves no `.partial` file, and stale ones are removed at the next start. `scripts/release-manifest.js` imports `schemaVersion` directly. Tests: `tests/migrations.test.js` (unit) and `npm run test:upgrade -- vX.Y.Z` (the real released code against the current API, run by the CI `upgrade` job for every final tag).
 
 ## In-app updater request contract (planned)
 
@@ -183,5 +187,19 @@ The containers never get the Docker socket. A future in-app updater will use a h
 | Request | `updater/request.json`, mode 0600, written by the API as uid 1000. The API writes `request.json.<id>.tmp`, syncs it, then renames it so the file appears complete. The API accepts only one pending request, and only when `status.json` is absent or has ended (`ok` is not `null`). |
 | Fields | `{"schema":1,"id":"<uuid>","action":"upgrade"|"downgrade","version":"vX.Y.Z","allowDataRollback":false,"requestedBy":"<user id>","requestedAt":"<ISO time>"}`. No other fields. Values are never passed through a shell. |
 | Reader | A root systemd path unit and service. It opens the file with `O_NOFOLLOW` and requires a regular file owned by uid 1000. It rejects unknown fields, a `version` not matching `^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`, tags missing from `origin`, and versions below `minUpgradeFrom`. It moves the request to `updater/processing/<id>.json`, then runs `scripts/upgrade.sh --non-interactive --version <version> [--allow-data-rollback] --status-file DATA/updater/status.json` from the checkout, one request at a time. Afterwards it moves the request to `updater/done/<id>.json` with the exit code added. |
-| Status | `updater/status.json`, written only by the script (fresh temporary file, then rename), mode 0644, as described in [Options and exit codes](#options-and-exit-codes). The API only reads it. The API restarts during an upgrade, so the dashboard must poll `/api/version` and the status file through the new API. |
+| Status | The script writes the status file with an exclusive, unpredictable temporary name created together with its contents in a directory owned by the script's user, mode 0644, then renames it; it refuses to write if the file or its directory is a symlink or not owned by that user. So the directory must be owned by the account running the script (root for the host service), not by uid 1000; see the requirements below. The API only reads it. The API restarts during an upgrade, so the dashboard must poll `/api/version` and the status file through the new API. |
 | Trust | The request only asks for an upgrade; the host service decides. Treat the volume as writable by a possibly compromised API: never follow links, never run values from the request, and require `allowDataRollback` before any downgrade that restores a snapshot. |
+
+### Known requirements for the 2.2.0 updater
+
+An independent review found these gaps in the contract above. Treat everything in a directory owned by uid 1000 as attacker-controlled, including the directory, its parents under `_data/` and every name inside. The 2.2.0 implementation must close all of them.
+
+1. **Path components can be swapped for symlinks.** `O_NOFOLLOW` protects only the final component. `updater`, `processing/` and `done/` are owned by uid 1000, so the API could replace them with symlinks (for example to `/etc/cron.d`) between a check and a `rename`. Open the volume path through a descriptor chain (`O_PATH|O_DIRECTORY|O_NOFOLLOW`, or `openat2` with `RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH`) and do every operation with `*at()` calls relative to it.
+2. **Validate-then-use race.** The API owns the file and can rewrite it after the root reader validated it. Read once from the open descriptor into memory (size cap such as 4 KiB), validate that copy, write a root-owned record under a root-owned directory such as `/var/lib/docknest-updater/` (not the 1000-owned `processing/`), use only the in-memory values afterwards, then `unlinkat` the original.
+3. **Other file-type attacks.** After opening, check with `fstat`: a regular file, `st_uid == 1000`, `st_nlink == 1` (no hardlinks), size cap. Open with `O_NONBLOCK` so a FIFO cannot stall the service. Reject sparse or huge files.
+4. **`id` is not constrained.** Only `version` has a regex, yet `id` becomes a file name (`processing/<id>.json`, `done/<id>.json`), so `../` or an absolute path escapes. Require a canonical UUID and build names from the parsed value. Write results into a root-owned directory and let the API read them through a read-only view; writing `done/<id>.json` as root into a 1000-owned directory has the symlink problem of item 1.
+5. **`allowDataRollback` is attacker-supplied.** A compromised API sets it itself, so requiring it protects nothing. The root service should refuse any downgrade that restores a snapshot, or require a confirmation that never touches the volume (a local CLI step or a one-time token). Decide explicitly whether `action: "upgrade"` with an older version is allowed; `scripts/upgrade.sh` permits compatible downgrades silently.
+6. **Version trust.** The regex allows pre-release suffixes, so a request can select a pre-release tag if one exists on `origin`. The script trusts the `origin` in `.git/config` and does not check tag signatures, so a force-moved or rogue tag leads to building attacker-chosen code as root. Pin the expected remote URL in the service configuration, accept final releases only unless an administrator enabled pre-releases, require `git verify-tag` or a match with the signed `docknest-release.json` / cosign identity before building, and check that the tag commit is an ancestor of `origin/main`.
+7. **Least privilege.** The script needs only the Docker socket and the checkout. A dedicated user in the `docker` group that owns the checkout is better than root and removes the `safe.directory` relaxation and the root-follows-symlinks class of bugs. The docker group is root-equivalent anyway, so this is about not adding exposure, not a security boundary.
+8. **Denial of service and replay.** A path unit on a directory the API can modify can be triggered at will. Add `StartLimitBurst`, a single-instance lock and a cool-down. Add a monotonic `requestedAt` or nonce check against the last `done` record so a replayed old request cannot run again. The rule "only when `status.json` has ended" is enforced by the component the contract does not trust, so the root service must enforce its own queueing.
+9. **Status.** `status.json` must be written by the root service into a root-owned location, and the API must treat its contents as untrusted when rendering them.
