@@ -15,3 +15,14 @@ Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents)
 The project-readme-author skill informed README structure, current branding, setup instructions and synthetic screenshots. The motion-design skill informed the slow health sweep, sun/moon hover and toggle feedback, and reduced-motion behavior. UI Designer and Brand Guardian guidance informed semantic dark colors, consistent geometry and reuse of the blue wordmark. Source-specific operations, asset-generation identifiers and session notes are kept outside Git.
 
 The remote storage migration uses Backend Architect guidance for a durable journal and transactional metadata changes, and DevOps Automator guidance for stopped-service migration, integrity checks and retained rollback files. No subagents were used for this work.
+
+## Product planning (2026-10-21)
+
+The [Product Manager](https://github.com/msitarzewski/agency-agents/blob/main/product/product-manager.md) role informed the documents in [docs/product](../product/vision.md). It shaped:
+
+- an outcome-focused vision;
+- personas that mark which claims are evidence and which are assumptions;
+- a Now/Next/Later roadmap with RICE scoring and explicit non-goals;
+- a backlog in which every item has an owner role and acceptance criteria.
+
+The backlog also names further upstream roles (for example Database Reliability Engineer, Software Architect, SRE, API Tester, Performance Benchmarker, Technical Writer and UX Architect) as guidance for future work only. All of these roles are reference material, not tool or permission authority.
