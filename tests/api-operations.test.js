@@ -139,6 +139,26 @@ test('origin probe preference survives configuration normalization and readiness
  assert.equal((await request('/sites/'+saved.id+'/readiness',{method:'POST',body:'{}'})).status,409);
  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(pending).status,'queued');
 });
+test('probe URLs refuse metadata, link-local and private literals while operators keep site edits with an audit trail',async()=>{
+ const payload={serverId:host,name:'Probe fixture',config:{containers:['fixture'],domains:['www.example.org']}};
+ const blocked=['http://169.254.169.254/latest/meta-data/','http://[fd00:ec2::254]/','http://[::ffff:169.254.169.254]/','http://0xa9fea9fe/','http://10.0.0.5/','http://172.17.0.2:8080/','http://192.168.1.1/','http://100.100.100.200/','http://[fe80::1]/','http://[fd12::1]/','http://224.0.0.1/','http://0.0.0.0:8080/','http://[::]/'];
+ for(const url of blocked){
+  for(const config of [{healthUrl:url},{maintenancePublicUrl:url},{maintenance:{required:true,directory:'/var/lib/docknest/maintenance/x',publicUrl:'https://www.example.org',healthUrl:url}}]){
+   const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,...config}})});assert.equal(response.status,400,url);
+  }
+ }
+ assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:['169.254.169.254']}})})).status,400,'A literal domain cannot become a metadata probe');
+ for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
+ const saved=await (await request('/sites',{method:'POST',body:JSON.stringify(payload)})).json();
+ db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
+ try{
+  const edited=await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:'http://127.0.0.1:8080/'}})});assert.equal(edited.status,200);
+  assert.equal(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='site.update' AND target=? ORDER BY rowid DESC").get(saved.id).detail).probeTargetsChanged.join(),'healthUrl,maintenanceHealthUrl');
+  assert.equal((await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:'http://169.254.169.254/'}})})).status,400);
+  assert.equal((await request('/sites/'+saved.id,{method:'PATCH',body:JSON.stringify({...payload,name:'Renamed probe fixture',config:{...payload.config,healthUrl:'http://127.0.0.1:8080/'}})})).status,200);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='site.update' AND target=? ORDER BY rowid DESC").get(saved.id).detail),{});
+ }finally{db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user);}
+});
 
 test('dashboard reports absent, current and stale worker heartbeats accurately',async()=>{
  assert.equal((await (await request('/state')).json()).worker.online,false);

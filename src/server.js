@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod';
 import { CronExpressionParser } from 'cron-parser';
 import { statfsSync, statSync, realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { BlockList, isIP } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
@@ -54,7 +55,14 @@ const view = row => {
   return converted;
 };
 const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.');
-const healthUrl = z.string().max(2048).refine(value => { if (!value) return true; try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; } catch { return false; } }, 'Use an HTTP(S) URL without embedded credentials.');
+// Probe URLs are fetched as root on the source server. The remote helper resolves names and is authoritative;
+// this early check refuses IP literals it would always refuse (metadata, link-local, private, multicast, reserved).
+const blockedProbeAddresses = new BlockList();
+for (const [address, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) blockedProbeAddresses.addSubnet(address, prefix, 'ipv4');
+for (const [address, prefix] of [['::', 128], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) blockedProbeAddresses.addSubnet(address, prefix, 'ipv6');
+const probeUrlAllowed = value => { try { const url = new URL(value), host = url.hostname.replace(/^\[|\]$/g, ''), family = isIP(host); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !(family && blockedProbeAddresses.check(host, family === 6 ? 'ipv6' : 'ipv4')); } catch { return false; } };
+const probeUrlMessage = 'Use an HTTP(S) URL without login details that points to the website domain, a loopback port such as http://127.0.0.1:8080/, or a public address. Private, link-local and cloud metadata addresses are refused.';
+const healthUrl = z.string().max(2048).refine(value => !value || probeUrlAllowed(value), probeUrlMessage);
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
   config: z.object({
@@ -163,7 +171,7 @@ function normalizedSite(data, siteId) {
   if(data.config.maintenancePublicUrl!==undefined)maintenance.publicUrl=data.config.maintenancePublicUrl;
   if(data.config.kind==='static')maintenance.required=false;
   for (const value of [maintenance.healthUrl, maintenance.publicUrl]) {
-    if (value && !['http:', 'https:'].includes(new URL(value).protocol)) throw new Error('Maintenance URLs must use HTTP or HTTPS.');
+    if (value && !probeUrlAllowed(value)) throw Object.assign(new Error(probeUrlMessage), { status: 400 });
   }
   return { ...data.config, ...(data.config.kind==='static'?{maintenanceRequired:false}:{}),maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
 }
@@ -181,8 +189,12 @@ app.patch('/api/sites/:id', (req, res) => {
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
   if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
-  db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(normalizedSite(data, site.id)), site.id);
-  audit(req.user.id, 'site.update', site.id); res.json(getSite(site.id));
+  const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
+  // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
+  const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
+  const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
+  db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
+  audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
