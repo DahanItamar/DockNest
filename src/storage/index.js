@@ -1,0 +1,96 @@
+// Storage facade: resolves 'scheme:<targetId>:/path' references to a backend adapter.
+// Local paths are plain filesystem paths. Every remote adapter implements:
+// resolve(options,remote) test readiness makeDirectory statFile openRead openWrite
+// syncFile renameFile removeFile removeDirectory capacity — all taking (options,value).
+import path from 'node:path';
+import { config } from '../config.js';
+import { db } from '../db.js';
+import { open } from '../crypto.js';
+import { backupLayout,backupRoot } from '../backup-layout.js';
+import * as local from './local.js';
+import * as sftp from './sftp.js';
+
+export const adapters={sftp};
+const schemes=Object.keys(adapters);
+export const remoteModes=schemes;
+export const targetPrefix=options=>options.mode+':'+options.id+':';
+export const isRemoteFile=file=>schemes.some(scheme=>file.startsWith(scheme+':'));
+export function targetOptions(id){
+ if(id==='env')return {...config.storage,id:'env'};
+ const row=db.prepare('SELECT * FROM storage_targets WHERE id=?').get(id);
+ if(!row)throw new Error('Storage destination is missing; restore its connection configuration before accessing its backups');
+ return {id:row.id,mode:'sftp',name:row.name,host:row.host,port:row.port,username:row.username,hostKey:row.host_key,root:row.root,capacity:row.capacity_bytes,...(row.auth_type==='password'?{password:open(row.credential)}:{privateKey:open(row.credential)})};
+}
+export function activeStorage(){
+ const selected=db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get();
+ return selected?targetOptions(selected.value):{...config.storage,id:'env'};
+}
+// Parse a remote reference into its adapter, target options and normalized in-root value.
+export function parseRemote(file){
+ const scheme=schemes.find(name=>file.startsWith(name+':'));
+ if(!scheme)throw new Error('Expected an SFTP storage path');
+ const value=file.slice(scheme.length+1),separator=value.indexOf(':');
+ // Legacy environment destinations use 'sftp:/absolute/path' without an identifier.
+ const id=value.startsWith('/')?'env':value.slice(0,separator);
+ const options=targetOptions(id),remote=value.startsWith('/')?value:value.slice(separator+1);
+ if(options.mode!==scheme)throw new Error('Storage reference does not match its destination type');
+ const adapter=adapters[scheme];
+ return {adapter,options,value:adapter.resolve(options,remote)};
+}
+const remoteOf=options=>{const adapter=adapters[options.mode];if(!adapter)throw new Error('Unsupported storage destination type');return adapter;};
+export async function checkStorageReadiness(){
+ const options=activeStorage();
+ if(options.mode==='unconfigured')throw new Error('Storage is not configured');
+ if(options.mode==='local')await local.readiness();else await remoteOf(options).readiness(options);
+ const capacity=await storageCapacity();
+ if(capacity.available===null)throw new Error('Storage available space could not be verified. Check the connection and filesystem capacity support.');
+ if(capacity.available<1024**3)throw new Error('Insufficient storage capacity');
+ return {reachable:true,writeTested:false};
+}
+export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
+export function backupDirectory(server,site){
+ const options=activeStorage();
+ if(options.mode==='unconfigured')throw new Error('Connect a remote storage destination before backing up');
+ const folders=backupLayout(server,site);
+ return options.mode==='local'?local.backupDirectory(folders):targetPrefix(options)+path.posix.join(backupRoot(options.root),...folders);
+}
+export function storageJoin(directory,name){
+ if(!isRemoteFile(directory))return local.join(directory,name);
+ const {options,value}=parseRemote(directory);return targetPrefix(options)+path.posix.join(value,name);
+}
+export function managerBackupDirectory(targetId,keyId){
+ const options=targetOptions(targetId);
+ if(!adapters[options.mode])throw new Error('DockNest backup requires the selected SFTP destination');
+ if(!/^[a-f0-9]{16}$/.test(keyId))throw new Error('Invalid manager key identifier');
+ return targetPrefix(options)+path.posix.join(backupRoot(options.root),'docknest-recovery');
+}
+const route=(method,localMethod=method)=>async(file,...args)=>{
+ if(!isRemoteFile(file))return local[localMethod](file,...args);
+ const {adapter,options,value}=parseRemote(file);return adapter[method](options,value,...args);
+};
+export const makeDirectory=route('makeDirectory');
+export const statFile=route('statFile');
+export const openRead=route('openRead');
+export const openWrite=route('openWrite');
+export const syncFile=route('syncFile');
+export const removeFile=route('removeFile');
+export const removeDirectory=route('removeDirectory');
+export async function renameFile(from,to){
+ if(!isRemoteFile(from)&&!isRemoteFile(to))return local.renameFile(from,to);
+ const a=parseRemote(from),b=parseRemote(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');
+ return a.adapter.renameFile(a.options,a.value,b.value);
+}
+function managedBytes(options){
+ if(options.mode==='local')return db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE "+schemes.map(()=>'path NOT LIKE ?').join(' AND ')).get(...schemes.map(scheme=>scheme+':%')).bytes;
+ let bytes=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(targetPrefix(options)+'%').bytes;
+ bytes+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(options.id).bytes;
+ if(options.id==='env')bytes+=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(options.mode+':/%').bytes;
+ return bytes;
+}
+export async function storageCapacity({maxAgeMs=0}={}){
+ const options=activeStorage();
+ if(options.mode==='unconfigured')return {used:null,total:0,available:null,managedBytes:0,backend:'unconfigured',capacitySource:'none',name:'Connect a storage destination'};
+ if(options.mode==='local')return {...await local.capacity(),managedBytes:managedBytes(options)};
+ const bytes=managedBytes(options);
+ return {...await remoteOf(options).capacity(options,{maxAgeMs,managedBytes:bytes}),managedBytes:bytes};
+}
