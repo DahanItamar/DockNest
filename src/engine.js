@@ -45,9 +45,11 @@ function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND
 function requireNoDeploymentHold(){if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
 export function enqueueBackup(siteId,actor='scheduler'){
  requireNoDeploymentHold();
- const probe=storedProbeProblem(siteInfo(siteId).site.config);if(probe)throw Object.assign(new Error(probe.message),{status:409,code:'PROBE_URL_POLICY',field:probe.field});
+ // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
+ // (container health only) and the job carries a warning until the site is edited.
+ const probe=storedProbeProblem(siteInfo(siteId).site.config);
  if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),'{}');audit(actor,'backup.enqueue',siteId,{job});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify(probe?{warnings:[probe.message]}:{}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
@@ -137,6 +139,13 @@ function recordTransferProgress(job,value){
  details.transfer={done,total:Number.isFinite(total)?total:null,startedAt:previous.startedAt||now(),updatedAt:now()};
  db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
 }
+// Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
+function probeWarnings(job,skipped=[]){
+ let details={};try{details=JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job)?.details||'{}');}catch{}
+ const warnings=[...(details.warnings||[])];
+ if(skipped.length&&!warnings.some(warning=>warning.startsWith('Probe URL policy')))warnings.push(`Probe URL policy: the ${skipped.map(probe=>probe==='health'?'health':'public maintenance').join(' and ')} probe was skipped because its URL is refused; health was checked with container state only. Edit the site to use its domain or a loopback port such as http://127.0.0.1:8080/.`);
+ return warnings;
+}
 function recordBackupDiagnostic(job,value){
  const row=db.prepare('SELECT details FROM jobs WHERE id=?').get(job);if(!row)return;
  let details={};try{details=JSON.parse(row.details||'{}');}catch{}
@@ -222,6 +231,7 @@ export async function executeJob(job){
   if(result.manifest.backupScope)manifest.backupScope=result.manifest.backupScope;
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
+  if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
   const capturedAt=new Date(result.manifest.capturedAt*1000).toISOString();
   if(direct)completePreparedMetadata(backupId,manifest,capturedAt);
   else{
@@ -235,7 +245,8 @@ export async function executeJob(job){
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   await renameFile(temporary,published);finalizePublication(backupId);
   publishedBackup=true;
-  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds}),job.id);
+  const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
+  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})}),job.id);
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
   await remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
@@ -259,8 +270,7 @@ export function tickScheduler(currentDate=new Date()){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
-   // A stored probe URL the helper would refuse skips this run (audited) instead of retrying every tick.
-   if(next&&next<=currentDate){if(busy(policy.site_id))continue;try{enqueueBackup(policy.site_id);}catch(error){if(error.code!=='PROBE_URL_POLICY')throw error;audit('scheduler','backup.probe_policy_blocked',policy.site_id,{field:error.field});}}
+   if(next&&next<=currentDate){if(busy(policy.site_id))continue;enqueueBackup(policy.site_id);}
    if(!next||next<=currentDate){
     const upcoming=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate}).next().toISOString();
     db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run(upcoming,policy.site_id);

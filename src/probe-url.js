@@ -9,11 +9,11 @@ export const probeUrlMessage = 'Use an HTTP(S) URL without login details that po
 export const probeUrlAllowed = value => { try { const url = new URL(value), host = url.hostname.replace(/^\[|\]$/g, ''), family = isIP(host); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !(family && blocked.check(host, family === 6 ? 'ipv6' : 'ipv4')); } catch { return false; } };
 
 // Sites saved before the policy may still store refused URLs. Mirrors probe_policy_preflight in remote/helper.py
-// for what the server can see without DNS, so a backup never reaches the host with a URL the helper will refuse.
+// for what the server can see without DNS, so readiness and backup jobs can warn before the helper skips the probe.
 export function storedProbeProblem(config = {}) {
   if (config.kind === 'static') return null;
   const maintenance = config.maintenance || {}, targets = [['health URL', config.healthUrl], ['maintenance health URL', maintenance.healthUrl]];
   if (maintenance.required !== false && !maintenance.probeOrigin) targets.push(['public maintenance URL', maintenance.publicUrl]);
   const found = targets.find(([, url]) => url && !probeUrlAllowed(url));
-  return found ? { field: found[0], message: `Probe URL policy: the site's ${found[0]} points to a private, link-local or cloud metadata address, or is not a plain HTTP(S) URL. Edit the site to use its domain or a loopback port such as http://127.0.0.1:8080/ before backing up.` } : null;
+  return found ? { field: found[0], message: `Probe URL policy: the site's ${found[0]} points to a private, link-local or cloud metadata address, or is not a plain HTTP(S) URL. Backups continue with that probe skipped and health checked from container state only. Edit the site to use its domain or a loopback port such as http://127.0.0.1:8080/.` } : null;
 }
