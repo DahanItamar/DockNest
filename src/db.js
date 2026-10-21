@@ -4,10 +4,16 @@ import path from 'node:path';
 import { config } from './config.js';
 
 export const db = new DatabaseSync(path.join(config.dataDir, 'state.sqlite'));
-// busy_timeout first: switching a new database to WAL takes a lock that a concurrently starting process may hold.
+// busy_timeout first. Switching a new database to WAL needs an exclusive lock, and SQLite returns SQLITE_BUSY without
+// calling the busy handler when concurrently starting processes would otherwise deadlock, so retry that one pragma.
 db.exec('PRAGMA busy_timeout=5000');
+for(let attempt=0;;attempt++){
+  try { if (db.prepare('PRAGMA journal_mode=WAL').get().journal_mode === 'wal') break; }
+  catch (error) { if (!/locked|busy/i.test(error.message) || attempt >= 200) throw error; }
+  if (attempt >= 200) throw new Error('Could not enable SQLite WAL mode');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 + Math.floor(Math.random() * 25));
+}
 db.exec(`
-PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,totp_secret TEXT NOT NULL,totp_last_counter INTEGER NOT NULL DEFAULT -1,recovery_codes TEXT NOT NULL,enrolled INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf_token TEXT NOT NULL,expires_at INTEGER NOT NULL);

@@ -52,9 +52,12 @@ test('worker:status reports lease, heartbeat and recovery_required jobs read-onl
  releaseLease(db,'worker-status-holder');
 });
 test('API and worker can create a brand-new state database at the same moment',async()=>{
- const fresh=join(temporary,'fresh'),start=Date.now()+1000,script="const start=Number(process.argv[2]);while(Date.now()<start);await import(process.argv[1]);";
- const runs=await Promise.allSettled(Array.from({length:6},()=>promisify(execFile)(process.execPath,['--input-type=module','-e',script,new URL('../src/db.js',import.meta.url).href,String(start)],{env:{...process.env,DATA_DIR:fresh}})));
- assert.deepEqual(runs.map(r=>r.status==='fulfilled'?'ok':String(r.reason.stderr).match(/database is locked|Error[^\n]*/)?.[0]),Array(6).fill('ok'));
+ // Five fresh databases, six processes each: the WAL switch race failed a few percent of opens before the retry.
+ const script="const start=Number(process.argv[2]);while(Date.now()<start);await import(process.argv[1]);",outcomes=[];
+ for(let trial=0;trial<5;trial++){const fresh=join(temporary,`fresh-${trial}`),start=Date.now()+800;
+  const runs=await Promise.allSettled(Array.from({length:6},()=>promisify(execFile)(process.execPath,['--input-type=module','-e',script,new URL('../src/db.js',import.meta.url).href,String(start)],{env:{...process.env,DATA_DIR:fresh}})));
+  outcomes.push(...runs.map(r=>r.status==='fulfilled'?'ok':String(r.reason.stderr).match(/database is locked|Error[^\n]*/)?.[0]));}
+ assert.deepEqual(outcomes,Array(30).fill('ok'));
 });
 test('storage migration names the held worker lease as the reason it is blocked',()=>{
  acquireLease(db,'worker-busy');
