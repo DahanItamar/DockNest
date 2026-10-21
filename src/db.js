@@ -6,11 +6,16 @@ import { migrate } from './migrations.js';
 
 const file = path.join(config.dataDir, 'state.sqlite');
 export const db = new DatabaseSync(file);
-db.exec(`
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
-`);
+// busy_timeout first. Switching a new database to WAL needs an exclusive lock, and SQLite returns SQLITE_BUSY without
+// calling the busy handler when concurrently starting processes would otherwise deadlock, so retry that one pragma.
+db.exec('PRAGMA busy_timeout=5000');
+for(let attempt=0;;attempt++){
+  try { if (db.prepare('PRAGMA journal_mode=WAL').get().journal_mode === 'wal') break; }
+  catch (error) { if (!/locked|busy/i.test(error.message) || attempt >= 200) throw error; }
+  if (attempt >= 200) throw new Error('Could not enable SQLite WAL mode');
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 + Math.floor(Math.random() * 25));
+}
+db.exec('PRAGMA foreign_keys=ON');
 // Versioned, serialized migration preserves existing administrators, sessions and history (src/migrations.js).
 try { migrate(db, { file }); } catch (error) { db.close(); throw error; }
 export const id = () => randomUUID();

@@ -76,6 +76,14 @@ export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
   { version: 2, name: 'boot-recovery-installs', compatible: true, up: db => db.exec('CREATE TABLE IF NOT EXISTS boot_recovery_installs (site_id TEXT PRIMARY KEY REFERENCES sites(id),bundle_sha256 TEXT NOT NULL,helper_version INTEGER NOT NULL,installed_at TEXT NOT NULL)') },
+  // Single-worker lease (replaces worker.lock) and (timestamp,id) indexes for keyset-paginated history.
+  { version: 3, name: 'worker-lease-and-history-indexes', compatible: true, up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS worker_lease (name TEXT PRIMARY KEY,holder TEXT NOT NULL,acquired_at TEXT NOT NULL,renewed_at TEXT NOT NULL,expires_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS backups_captured ON backups(captured_at,id);
+    CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at,id);
+    CREATE INDEX IF NOT EXISTS restores_created ON restores(created_at,id);
+    CREATE INDEX IF NOT EXISTS audit_created ON audit_events(created_at,id);
+  `) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

@@ -12,7 +12,7 @@ Administrators can opt in with authenticated `POST /api/sites/:id/boot-recovery`
 
 On a later boot, recovery examines interrupted jobs from previous boots, rejects changed identities and unexpectedly running services that were originally stopped, restarts originally running databases before writers, and clears maintenance only after source/public health succeeds. A durable completion marker prevents replay on subsequent boots, including after an operator intentionally stops the recovered service. Same-boot jobs remain owned by their watchdog. A failed boot check exits nonzero for systemd monitoring and keeps maintenance/review evidence. Use `systemctl status docknest-source-recovery.service` for sanitized counts. Custom non-systemd hosts need a reviewed boot integration.
 
-The manager deliberately retains its worker lock after an unclean death. Stop the old worker and inspect source recovery before removing that lock. Do not treat a PID from another container namespace as proof that a worker is dead. Startup journal reconciliation happens once the operator has safely restarted the single worker.
+The manager uses an expiring SQLite worker lease instead of a lock file. After an unclean death the replacement worker waits until the lease is 60 seconds stale, takes it over and marks interrupted jobs recovery_required; the affected server accepts no new jobs until an operator inspects source recovery and clears them. Takeover shows only that the old worker stopped renewing, not that its source operation was rolled back. Startup journal reconciliation then runs in the single worker. `npm run worker:status` lists the lease and recovery_required jobs.
 
 ## Manager and key recovery kit
 
