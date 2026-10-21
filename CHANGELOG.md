@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-22
+
+Same code as 2.1.0-rc.1. The release candidate passed the real upgrade validation from 2.0.0 on a Linux Docker runner (install, upgrade as documented, worker drain, downgrade to 2.0.0 and upgrade again with `scripts/upgrade.sh`). See [docs/releases/2026-10-22-v2.1.md](docs/releases/2026-10-22-v2.1.md), including the upgrade notes.
+
 ## [2.1.0-rc.1] - 2026-10-22
 
 Release candidate for 2.1.0. See [docs/releases/2026-10-22-v2.1.md](docs/releases/2026-10-22-v2.1.md), including the upgrade notes.
@@ -48,6 +52,7 @@ Release candidate for 2.1.0. See [docs/releases/2026-10-22-v2.1.md](docs/release
 
 See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
 
-[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.1.0-rc.1...HEAD
+[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0
 [2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0

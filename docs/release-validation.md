@@ -44,3 +44,10 @@ The job summary shows one PASS, FAIL or SKIP line per phase. The artifact `relea
 ## Reading a failure
 
 Open the failing phase's log in the artifact. `FAIL` lines in the job log name the check. `Resolve release` fails early when the tag is missing, is not newer than 2.0.0, or its `minUpgradeFrom` excludes 2.0.0. If an upgrade phase fails after the schema migrated, the log shows the same rollback hints that `scripts/upgrade.sh` prints; nothing from a run is ever reused, because the runner is discarded.
+
+## Release order
+
+1. Merge the release PR (version bump, CHANGELOG, notes) after its required checks pass.
+2. Wait for the `Verify` run on `main` for that merge commit to succeed. `release.yml` refuses to publish a tag whose commit has no successful `Verify` run.
+3. Tag the merge commit: first `vX.Y.Z-rc.N` (pre-release, exact image tag only).
+4. Let this workflow validate the candidate. If it passes, merge a version-only PR for `X.Y.Z`, wait for `main` again, and tag `vX.Y.Z`, which gets the `X.Y`, `X` and `latest` image tags.
