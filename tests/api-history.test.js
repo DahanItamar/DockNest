@@ -100,5 +100,19 @@ test('history endpoints validate limit and cursor and require a session',async()
  const defaulted=await (await request('/backups')).json();assert.equal(defaulted.items.length,50);assert.equal(typeof defaulted.nextCursor,'string');
  for(const route of ['backups','jobs','restores','audit']){const response=await fetch(`${base}/${route}`);assert.equal(response.status,401);await response.text();}
 });
+test('state lists break equal timestamps by id descending, matching the history endpoints',async()=>{
+ const tied='2099-01-01T00:00:00.000Z',names=['tie-a','tie-c','tie-b'];
+ for(const name of names){
+  backup(name,tied);
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','completed','completed',?)").run(name,site,tied);
+  db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,'fresh','{}','completed',?)").run(name,'list-001',host,tied);
+  db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?)').run(name,user,'fixture.tie',null,'{}',tied);
+ }
+ const state=await (await request('/state')).json();
+ for(const [list,table,time] of [['backups','backups','captured_at'],['jobs','jobs','created_at'],['restores','restores','created_at'],['audit','audit_events','created_at']]){
+  assert.deepEqual(state[list].slice(0,3).map(item=>item.id),['tie-c','tie-b','tie-a'],list);
+  assert.deepEqual(state[list].map(item=>item.id),ordered(table,time),list);
+ }
+});
 
 test.after(async()=>{server.close();db.close();await rm(directory,{recursive:true,force:true});});

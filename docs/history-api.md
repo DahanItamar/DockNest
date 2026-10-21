@@ -1,6 +1,6 @@
 # History API
 
-`GET /api/state` still returns the latest 1000 backups, 500 jobs, 500 restores and 250 audit events, unchanged, for the current interface. For older entries, or to load history a page at a time, use these endpoints. They need the same signed-in session as `/api/state`:
+`GET /api/state` still returns the latest 1000 backups, 500 jobs, 500 restores and 250 audit events for the current interface, with the same fields as before. Rows with identical timestamps are now ordered by id, descending, the same way as the endpoints below. For older entries, or to load history a page at a time, use these endpoints. They need the same signed-in session as `/api/state`:
 
 | Endpoint | Ordered by (newest first) |
 | --- | --- |
