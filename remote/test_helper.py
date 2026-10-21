@@ -564,39 +564,65 @@ class ProbeSsrfTests(unittest.TestCase):
             with patch('helper.inspect',return_value=[]):
                 with self.assertRaises(ProbePolicyError,msg=url):health([],url)
 class ProbePolicyUpgradeTests(unittest.TestCase):
-    """Sites saved before the probe policy must fail before the host changes, and recovery must not hang on them."""
+    """Sites saved before the probe policy keep getting backups; refused probe targets are never contacted."""
     def setUp(self):
         import helper
         helper.PROBE_POLICY_FALLBACKS.clear();self.addCleanup(helper.PROBE_POLICY_FALLBACKS.clear)
     def legacy(self,directory='/var/lib/docknest/maintenance/x'):
-        return {'containers':['web'],'domains':['www.example.org'],'stagingRoot':'/var/lib/docknest','maintenance':{'required':True,'directory':directory,'publicUrl':'https://www.example.org','healthUrl':'http://172.17.0.2:8080/'}}
-    def test_capture_refuses_a_stored_private_health_url_before_any_host_change(self):
+        return {'containers':['web'],'domains':['www.example.org'],'stagingRoot':'/var/lib/docknest','cleanShutdownConfirmed':True,'maintenance':{'required':True,'directory':directory,'publicUrl':'http://192.168.1.1/','healthUrl':'http://172.17.0.2:8080/'}}
+    def test_capture_runs_with_refused_probes_skipped_and_never_contacts_them(self):
+        import os,collections
         from unittest.mock import Mock
-        spies={name:Mock() for name in ['docker','run','preflight','backup_plan','maintenance','create_staging_root','atomic_json','restart_services']}
-        with patch.multiple('helper',**spies),patch('helper.os.fork',create=True) as fork:
-            for cfg in [self.legacy(),{**self.legacy(),'maintenance':{**self.legacy()['maintenance'],'healthUrl':'http://127.0.0.1:8080/','publicUrl':'http://169.254.169.254/'}}]:
-                with self.assertRaisesRegex(ValueError,r"^Probe URL policy: .*Update the site's (maintenance health|public maintenance) URL before backing up\."):capture({'config':cfg,'job':'00000000-0000-4000-8000-000000000000'})
-        for name,spy in spies.items():spy.assert_not_called()
-        fork.assert_not_called()
-    def test_preflight_accepts_loopback_and_origin_probes_and_reports_unresolvable_hosts(self):
-        cfg=self.legacy();cfg['maintenance']={**cfg['maintenance'],'healthUrl':'http://127.0.0.1:8080/','publicUrl':'http://10.0.0.9/','probeOrigin':True}
-        probe_policy_preflight(cfg)
-        cfg['maintenance']['required']=False;cfg['maintenance']['probeOrigin']=False
-        probe_policy_preflight(cfg)
-        cfg['maintenance']['healthUrl']='http://missing.example/'
-        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):
-            with self.assertRaisesRegex(ValueError,'^Probe URL check: .*could not be resolved'):probe_policy_preflight(cfg)
-    def test_manual_maintenance_enable_is_refused_before_the_flag_is_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);maintenance_dir=base/'maintenance';maintenance_dir.mkdir();(maintenance_dir/'ready').touch()
+            cfg=self.legacy(str(maintenance_dir));cfg['stagingRoot']=str(base/'staging')
+            container={'Id':'web','Image':'image-web','State':{'Running':True},'Mounts':[],'SizeRw':0}
+            plan={'fingerprint':'plan','services':[{'container':'web','engine':'generic'}],'restartOrder':['web']}
+            events=[];flags=[]
+            def docker(*args):
+                events.append(args[0])
+                return b'[]' if args[:2]==('image','inspect') else b'snapshot' if args[0]=='commit' else b''
+            def staging(path):pathlib.Path(path).mkdir(parents=True)
+            def journal(path,value):
+                if pathlib.Path(path).name=='boot-recovery.json':flags.append(value['config']['_skippedProbes'])
+            fetch=Mock();connect=Mock();emitted=Mock()
+            with patch.multiple('helper',preflight=Mock(return_value=[container]),backup_plan=Mock(return_value=plan),online_sqlite_checks=Mock(),create_staging_root=Mock(side_effect=staging),docker=Mock(side_effect=docker),mount_exclusions=Mock(return_value={}),atomic_json=Mock(side_effect=journal),prepare_database_shutdown=Mock(),shutdown_evidence=Mock(return_value=[]),revalidate_sources=Mock(),restart_services=Mock(side_effect=lambda *a:events.append('restart')),inspect=Mock(return_value=[container]),complete_recovery=Mock(),sync_maintenance_flag=Mock(),artifact_inventory=Mock(return_value={}),run=Mock(),fetch=fetch,emit=emitted),\
+                 patch('helper.socket.create_connection',connect),patch('helper.shutil.disk_usage',return_value=collections.namedtuple('Usage','total used free')(1,0,1<<50)),\
+                 patch.object(pathlib.Path,'read_text',return_value='boot'),patch('helper.os.getpgrp',return_value=os.getpid(),create=True),patch('helper.os.fork',return_value=4242,create=True):
+                capture({'config':cfg,'job':'00000000-0000-4000-8000-000000000000','planFingerprint':'plan'})
+            fetch.assert_not_called();connect.assert_not_called()
+            self.assertIn('stop',events);self.assertLess(events.index('stop'),events.index('restart'))
+            self.assertEqual(flags,[['health','public']],'Watchdog and boot recovery inherit the skipped probes')
+            self.assertFalse((maintenance_dir/'enabled').exists(),'Maintenance is released on container health')
+            manifest=emitted.call_args.kwargs['result']['manifest']
+            self.assertEqual(manifest['probePolicyFallback'],['health','public'])
+    def test_preflight_lists_refused_probes_and_leaves_loopback_origin_and_dns_alone(self):
+        from helper import skip_refused_probes,probe_url
+        cfg=self.legacy()
+        self.assertEqual(sorted(probe_policy_preflight(cfg)),['health','public'])
+        cfg['maintenance'].update(healthUrl='http://127.0.0.1:8080/',probeOrigin=True)
+        self.assertEqual(probe_policy_preflight(cfg),{})
+        cfg['maintenance'].update(probeOrigin=False,healthUrl='http://missing.example/')
+        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):self.assertEqual(list(probe_policy_preflight(cfg)),['public'])
+        cfg=self.legacy();self.assertEqual(sorted(skip_refused_probes(cfg)),['health','public'])
+        self.assertIsNone(probe_url(cfg,'health'));self.assertIsNone(probe_url(cfg,'public'))
+        self.assertNotIn('_skippedProbes',json.dumps({k:v for k,v in cfg.items() if not k.startswith('_')}),'Plan fingerprint ignores the skip marker')
+    def test_manual_maintenance_enable_is_refused_but_release_never_contacts_refused_targets(self):
         from helper import main
+        from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as d:
             (pathlib.Path(d)/'ready').touch()
             with patch('helper.emit'):
-                with self.assertRaisesRegex(ValueError,'before enabling maintenance'):main({'operation':'maintenance','enabled':True,'config':self.legacy(d)})
-            self.assertFalse((pathlib.Path(d)/'enabled').exists())
-    def test_recovery_falls_back_to_container_health_and_releases_maintenance(self):
+                with self.assertRaisesRegex(ValueError,r"^Probe URL policy: .*public maintenance URL before enabling maintenance\."):main({'operation':'maintenance','enabled':True,'config':self.legacy(d)})
+                self.assertFalse((pathlib.Path(d)/'enabled').exists())
+                (pathlib.Path(d)/'enabled').touch();fetch=Mock()
+                with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.sync_maintenance_flag'),patch('helper.fetch',fetch):
+                    main({'operation':'maintenance','enabled':False,'config':self.legacy(d)})
+                fetch.assert_not_called();self.assertFalse((pathlib.Path(d)/'enabled').exists())
+    def test_mid_job_policy_refusal_falls_back_to_container_health(self):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch();(base/'enabled').touch()
-            cfg=self.legacy(d);cfg['maintenance']['publicUrl']='http://192.168.1.1/'
+            cfg=self.legacy(d)
             running=[{'State':{'Running':True}}]
             with patch('helper.inspect',return_value=running),patch('helper.sync_maintenance_flag'):
                 with self.assertRaises(ProbePolicyError):health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'])
@@ -611,7 +637,7 @@ class ProbePolicyUpgradeTests(unittest.TestCase):
             flags.assert_called_once_with(cfg,False);sleep.assert_not_called()
             journal=json.loads((root/'recovery.json').read_text())
             self.assertTrue(journal['recovered']);self.assertEqual(journal['probePolicyFallback'],['health','public'])
-    def test_readiness_names_the_policy_instead_of_a_generic_health_failure(self):
+    def test_readiness_still_names_the_policy_problem(self):
         with patch('helper.preflight',return_value=[]),patch('helper.backup_plan'),patch('helper.inspect',return_value=[]):
             result=readiness({'containers':['web'],'healthUrl':'http://169.254.169.254/','maintenance':{}})
         check={item['name']:item for item in result['checks']}['Application health']
