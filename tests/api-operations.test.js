@@ -148,7 +148,7 @@ test('probe URLs refuse metadata, link-local and private literals while operator
   }
  }
  assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:['169.254.169.254']}})})).status,400,'A literal domain cannot become a metadata probe');
- for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::93.184.216.34]/','http://[2002:5db8:d822::1]/','http://[2606:2800:220:1::1]/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
+ for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::1.1.1.1]/','http://[2002:101:101::1]/','http://[2606:2800:220:1::1]/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
  const saved=await (await request('/sites',{method:'POST',body:JSON.stringify(payload)})).json();
  db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
  try{

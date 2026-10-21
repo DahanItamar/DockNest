@@ -504,15 +504,15 @@ class ProbeSsrfTests(unittest.TestCase):
         from helper import probe_addresses
         for address in ['169.254.169.254','169.254.170.2','fd00:ec2::254','::ffff:169.254.169.254','fe80::1','100.100.100.200','224.0.0.1','ff02::1','0.0.0.0','0.1.2.3','::','240.0.0.1','255.255.255.255','10.0.0.5','172.17.0.2','192.168.1.1','fd12::1','100.64.0.1']:
             with self.assertRaises(ValueError,msg=address):probe_addresses(address,80,['10.0.0.5','192.168.1.1'])
-        for address in ['127.0.0.1','127.0.1.1','::1','::ffff:127.0.0.1','93.184.216.34','2606:2800:220:1::1']:self.assertEqual(probe_addresses(address,80),[address.replace('::ffff:','')])
+        for address in ['127.0.0.1','127.0.1.1','::1','::ffff:127.0.0.1','1.1.1.1','2606:2800:220:1::1']:self.assertEqual(probe_addresses(address,80),[address.replace('::ffff:','')])
     def test_names_are_resolved_on_the_host_and_every_answer_must_pass(self):
         from helper import probe_addresses
-        table={'metadata.example':['169.254.169.254'],'mixed.example':['93.184.216.34','169.254.169.254'],'internal.example':['10.0.0.5'],'site.example':['10.0.0.5'],'loop.example':['127.0.0.1'],'dual.example':['2606:2800:220:1::1','93.184.216.34','93.184.216.34']}
+        table={'metadata.example':['169.254.169.254'],'mixed.example':['1.1.1.1','169.254.169.254'],'internal.example':['10.0.0.5'],'site.example':['10.0.0.5'],'loop.example':['127.0.0.1'],'dual.example':['2606:2800:220:1::1','1.1.1.1','1.1.1.1']}
         with patch('helper.socket.getaddrinfo',side_effect=self.resolver(table)):
             for host in ['metadata.example','mixed.example','internal.example']:
                 with self.assertRaises(ValueError,msg=host):probe_addresses(host,443,['metadata.example','mixed.example'])
             self.assertEqual(probe_addresses('loop.example',443),['127.0.0.1'])
-            self.assertEqual(probe_addresses('dual.example',443),['2606:2800:220:1::1','93.184.216.34'])
+            self.assertEqual(probe_addresses('dual.example',443),['2606:2800:220:1::1','1.1.1.1'])
             with patch('helper.local_address',return_value=False):
                 with self.assertRaises(ValueError):probe_addresses('site.example',443,['site.example'])
             with patch('helper.local_address',return_value=True) as local:
@@ -536,8 +536,8 @@ class ProbeSsrfTests(unittest.TestCase):
         self.assertEqual(seen,[('/ok','site.example:%d'%port)])
         from helper import PinnedHTTPConnection
         with patch('helper.socket.create_connection',side_effect=[OSError('no IPv6 route'),'socket']) as connect:
-            connection=PinnedHTTPConnection('site.example',80,['2606:2800:220:1::1','93.184.216.34'],timeout=5);connection.connect()
-        self.assertEqual([call.args[0] for call in connect.call_args_list],[('2606:2800:220:1::1',80),('93.184.216.34',80)])
+            connection=PinnedHTTPConnection('site.example',80,['2606:2800:220:1::1','1.1.1.1'],timeout=5);connection.connect()
+        self.assertEqual([call.args[0] for call in connect.call_args_list],[('2606:2800:220:1::1',80),('1.1.1.1',80)])
     def test_redirects_stay_on_the_same_host_or_configured_domains_and_are_revalidated(self):
         from helper import fetch
         port,seen=self.serve({'/start':(302,{'Location':'/ok'},b''),'/ok':(200,{},b'healthy'),'/away':(302,{'Location':'http://169.254.169.254/latest/meta-data/'},b''),'/other':(301,{'Location':'http://other.example/ok'},b'moved'),'/rebind':(302,{'Location':'http://www.site.example/'},b''),'/loop':(302,{'Location':'/loop'},b'')})
@@ -723,5 +723,5 @@ class ProbeIpv6SpecialRangeTests(unittest.TestCase):
         from helper import probe_addresses
         for address in ['::a9fe:a9fe','::10.0.0.1','64:ff9b::a9fe:a9fe','64:ff9b::a00:1','64:ff9b::7f00:1','64:ff9b:1::1','2002:a9fe:a9fe::1','2002:a00:1::1','2002:7f00:1::1','2002:6464:64c8::1','2001::1','2001:0:4136:e378::1','2001:db8::1','100::1']:
             with self.assertRaises(ProbePolicyError,msg=address):probe_addresses(address,80,['site.example'])
-        for address in ['64:ff9b::5db8:d822','2002:5db8:d822::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
+        for address in ['64:ff9b::101:101','2002:101:101::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
 if __name__=='__main__':unittest.main()
