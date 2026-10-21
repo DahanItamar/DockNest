@@ -786,6 +786,9 @@ class OriginHTTPSConnection(PinnedHTTPSConnection):
 PROBE_LIMIT=256*1024
 METADATA_ADDRESSES={ipaddress.ip_address(a) for a in ['169.254.169.254','169.254.170.2','fd00:ec2::254','100.100.100.200']}
 THIS_NETWORK=ipaddress.ip_network('0.0.0.0/8')
+class ProbePolicyError(ValueError):
+    """A probe target the address policy refuses. Unlike a network failure, retrying cannot fix it."""
+PROBE_POLICY_FALLBACKS=[]
 def local_address(address):
     """True when the source host owns this address (bind succeeds only for local interfaces)."""
     try:
@@ -807,8 +810,8 @@ def probe_addresses(hostname,port,domains=()):
     for address in answers:
         address=getattr(address,'ipv4_mapped',None) or address
         if not address.is_loopback: # ::1 sits inside the reserved ::/8 block.
-            if address in METADATA_ADDRESSES or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved or getattr(address,'is_site_local',False) or (address.version==4 and address in THIS_NETWORK):raise ValueError('Probe URL resolves to a link-local, metadata or reserved address')
-            if not address.is_global and not (configured and local_address(address)):raise ValueError('Probe URL resolves to a private address; use the site domain, a loopback port or a public address')
+            if address in METADATA_ADDRESSES or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved or getattr(address,'is_site_local',False) or (address.version==4 and address in THIS_NETWORK):raise ProbePolicyError('the URL resolves to a link-local, cloud metadata or reserved address')
+            if not address.is_global and not (configured and local_address(address)):raise ProbePolicyError('the URL resolves to a private address that does not belong to this server; use the site domain, a loopback port or a public address')
         if str(address) not in chosen:chosen.append(str(address))
     if not chosen:raise ValueError('Probe host could not be resolved from the source server')
     return chosen
@@ -818,7 +821,7 @@ def fetch(url,timeout,domains=(),redirects=5):
     allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None
     for _ in range(redirects+1):
         parsed=urllib.parse.urlsplit(url)
-        if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ValueError('A valid HTTP or HTTPS probe URL is required')
+        if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
         host=parsed.hostname.lower().rstrip('.');origin=origin or host
         if host!=origin and host not in allowed:return status,body
         port=parsed.port or (443 if parsed.scheme=='https' else 80);addresses=probe_addresses(host,port,domains)
@@ -832,10 +835,28 @@ def fetch(url,timeout,domains=(),redirects=5):
         url=urllib.parse.urljoin(url,location)
     return status,body
 
+def probe_policy_preflight(cfg,action='backing up'):
+    """Checks the stored probe URLs this operation will fetch before anything on the host changes.
+    Only DNS is queried; no HTTP request is sent."""
+    m=cfg.get('maintenance') or {}
+    targets=[('maintenance health URL',m.get('healthUrl'))]
+    if m.get('required') and not m.get('probeOrigin'):targets.append(('public maintenance URL',m.get('publicUrl')))
+    for label,url in targets:
+        if not url:continue
+        parsed=urllib.parse.urlsplit(url)
+        try:
+            if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
+            probe_addresses(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80),cfg.get('domains',()))
+        except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's %s before %s."%(error,label,action))
+        except ValueError:raise ValueError("Probe URL check: the site's %s host could not be resolved from the source server. Check DNS before %s."%(label,action))
+def policy_fallback(probe):
+    # Recorded so the job result can say the probe was skipped rather than passed.
+    PROBE_POLICY_FALLBACKS.append(probe);diagnostic(phase='probe-policy-fallback',probe=probe)
+
 def public_probe(m,domains=()):
     url=m.get('publicUrl','')
     parsed=urllib.parse.urlsplit(url)
-    if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ValueError('A valid HTTP or HTTPS public probe URL is required')
+    if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ProbePolicyError('use an HTTP(S) URL without login details')
     if not m.get('probeOrigin'):return fetch(url,10,domains)
     # Same hostname and verified TLS identity; only the connection address changes to loopback.
     if parsed.scheme=='https':connection=OriginHTTPSConnection(parsed.hostname,parsed.port or 443,timeout=10,context=ssl.create_default_context())
@@ -847,7 +868,9 @@ def public_probe(m,domains=()):
         return response.status,response.read(PROBE_LIMIT)
     finally:connection.close()
 
-def health(containers,url=None,domains=()):
+def health(containers,url=None,domains=(),fallback=False):
+    """A policy-refused URL raises unless fallback is set; recovery paths then rely on container
+    health only (the same check used when no health URL is configured) instead of waiting forever."""
     for c in inspect(containers) if containers else []:
         if not c['State']['Running']: return False
         if c['State'].get('Health',{}).get('Status','healthy')!='healthy': return False
@@ -855,6 +878,9 @@ def health(containers,url=None,domains=()):
         try:
             status,body=fetch(url,5,domains)
             if status!=200 or b'dbm-maintenance-v1' in body:return False
+        except ProbePolicyError:
+            if not fallback:raise
+            policy_fallback('health')
         except Exception:return False
     return True
 def maintenance(cfg,enabled):
@@ -880,11 +906,12 @@ def maintenance(cfg,enabled):
                 sync_maintenance_flag(directory)
             raise
     else:
-        if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl'),cfg.get('domains',())):raise ValueError('Health probe failed; maintenance retained')
+        if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl'),cfg.get('domains',()),fallback=True):raise ValueError('Health probe failed; maintenance retained')
         (directory/'enabled').unlink(missing_ok=True)
         if m.get('publicUrl'):
             try:
-                status,body=public_probe(m,cfg.get('domains',()))
+                try:status,body=public_probe(m,cfg.get('domains',()))
+                except ProbePolicyError:policy_fallback('public');status,body=200,b''
                 if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access did not recover')
                 sync_maintenance_flag(directory)
             except Exception:
@@ -907,10 +934,10 @@ def recover(root,ids,cfg,deadline,parent):
     try:
         restart_services(ids,cfg.get('_serviceContracts'))
         until=time.time()+120
-        while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):time.sleep(2)
-        if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Recovery health failed')
+        while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()),fallback=True):time.sleep(2)
+        if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()),fallback=True):raise ValueError('Recovery health failed')
         maintenance(cfg,False)
-        atomic_json(root/'recovery.json',{'recovered':True,'at':time.time()})
+        atomic_json(root/'recovery.json',{'recovered':True,'at':time.time(),**({'probePolicyFallback':sorted(set(PROBE_POLICY_FALLBACKS))} if PROBE_POLICY_FALLBACKS else {})})
         complete_recovery(root)
     except Exception:
         atomic_json(root/'recovery.json',{'recovered':False,'at':time.time()})
@@ -1196,7 +1223,9 @@ def readiness(cfg):
             backup_plan(cfg,preflight(cfg))
         check('Per-service database consistency contracts',contracts)
     def direct_health():
-        if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
+        try:healthy=health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()))
+        except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's health URL."%error)
+        if not healthy:raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -1207,7 +1236,8 @@ def readiness(cfg):
         directory=pathlib.Path(m.get('directory',''))
         if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise ValueError('Deploy the maintenance page and integrate it with the source proxy. The proxy readiness marker is missing.')
         if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
-        status,body=public_probe(m,cfg.get('domains',()))
+        try:status,body=public_probe(m,cfg.get('domains',()))
+        except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's public maintenance URL."%error)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
     if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
@@ -1215,7 +1245,7 @@ def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
         return capture_static(req)
-    cfg=req['config'];cs=preflight(cfg);plan=backup_plan(cfg,cs)
+    cfg=req['config'];probe_policy_preflight(cfg);cs=preflight(cfg);plan=backup_plan(cfg,cs)
     if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts:raise ValueError('Staging path must be absolute')
@@ -1322,8 +1352,8 @@ def capture(req,output=None):
         try:
             restart_services(running,plan['services'])
             until=time.time()+120
-            while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):time.sleep(2)
-            if running and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
+            while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()),fallback=True):time.sleep(2)
+            if running and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()),fallback=True):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
@@ -1333,6 +1363,7 @@ def capture(req,output=None):
     if output is None:docker('save','-o',str(root/'images.tar'),*original_ids,*images)
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
+    if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
     manifest['backupPlan']=plan
     if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
     if exclusions:
@@ -1637,6 +1668,7 @@ def main(req):
     elif op=='deploy-maintenance':deploy_maintenance(req)
     elif op=='maintenance':
         req['config'].setdefault('maintenance',{})['required']=True
+        if req['enabled']:probe_policy_preflight(req['config'],'enabling maintenance')
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
     elif op=='cleanup':
         root=pathlib.Path(req['root']);uuid.UUID(root.name)

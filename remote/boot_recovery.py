@@ -37,7 +37,7 @@ def recover_jobs(roots,boot_id=None):
                 if any(c['State']['Running'] and c['Id'] not in record['running'] for c in states):raise ValueError('Originally stopped service is unexpectedly running')
                 cfg=record['config']
                 restart_services(record['running'],cfg.get('_serviceContracts'))
-                if not health(record['running'],cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Source health did not recover')
+                if not health(record['running'],cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()),fallback=True):raise ValueError('Source health did not recover')
                 maintenance(cfg,False)
                 atomic_json(root/'recovery.json',{'recovered':True,'bootRecovery':True,'at':time.time()})
                 # A retained successful journal must never restart an intentionally

@@ -9,6 +9,7 @@ from helper import artifact_inventory, verify_artifacts, data_checks
 from helper import recover, complete_recovery
 from helper import database_query
 from helper import create_staging_root, sync_directory, capture
+from helper import ProbePolicyError, probe_policy_preflight
 from boot_recovery import recover_jobs
 
 class DatabaseSocketTests(unittest.TestCase):
@@ -550,7 +551,7 @@ class ProbeSsrfTests(unittest.TestCase):
             self.assertEqual(fetch(base+'/loop',5)[0],302)
             with patch('helper.inspect',return_value=[]):
                 self.assertFalse(health([],base+'/away'))
-                self.assertFalse(health([],base+'/rebind',['www.site.example']))
+                with self.assertRaises(ProbePolicyError):health([],base+'/rebind',['www.site.example'])
                 self.assertTrue(health([],base+'/start'))
         self.assertNotIn('/latest/meta-data/',[path for path,_ in seen])
         self.assertEqual(sum(path=='/loop' for path,_ in seen),6)
@@ -559,6 +560,60 @@ class ProbeSsrfTests(unittest.TestCase):
         port,_=self.serve({'/big':(200,{},b'x'*(300*1024))})
         self.assertEqual(len(fetch('http://127.0.0.1:%d/big'%port,5)[1]),256*1024)
         for url in ['http://169.254.169.254/','http://[fd00:ec2::254]/','http://10.1.2.3/','file:///etc/passwd','ftp://example.org/','https://user:secret@example.org/']:
-            with self.assertRaises(ValueError,msg=url):public_probe({'publicUrl':url})
-            with patch('helper.inspect',return_value=[]):self.assertFalse(health([],url))
+            with self.assertRaises(ProbePolicyError,msg=url):public_probe({'publicUrl':url})
+            with patch('helper.inspect',return_value=[]):
+                with self.assertRaises(ProbePolicyError,msg=url):health([],url)
+class ProbePolicyUpgradeTests(unittest.TestCase):
+    """Sites saved before the probe policy must fail before the host changes, and recovery must not hang on them."""
+    def setUp(self):
+        import helper
+        helper.PROBE_POLICY_FALLBACKS.clear();self.addCleanup(helper.PROBE_POLICY_FALLBACKS.clear)
+    def legacy(self,directory='/var/lib/docknest/maintenance/x'):
+        return {'containers':['web'],'domains':['www.example.org'],'stagingRoot':'/var/lib/docknest','maintenance':{'required':True,'directory':directory,'publicUrl':'https://www.example.org','healthUrl':'http://172.17.0.2:8080/'}}
+    def test_capture_refuses_a_stored_private_health_url_before_any_host_change(self):
+        from unittest.mock import Mock
+        spies={name:Mock() for name in ['docker','run','preflight','backup_plan','maintenance','create_staging_root','atomic_json','restart_services']}
+        with patch.multiple('helper',**spies),patch('helper.os.fork',create=True) as fork:
+            for cfg in [self.legacy(),{**self.legacy(),'maintenance':{**self.legacy()['maintenance'],'healthUrl':'http://127.0.0.1:8080/','publicUrl':'http://169.254.169.254/'}}]:
+                with self.assertRaisesRegex(ValueError,r"^Probe URL policy: .*Update the site's (maintenance health|public maintenance) URL before backing up\."):capture({'config':cfg,'job':'00000000-0000-4000-8000-000000000000'})
+        for name,spy in spies.items():spy.assert_not_called()
+        fork.assert_not_called()
+    def test_preflight_accepts_loopback_and_origin_probes_and_reports_unresolvable_hosts(self):
+        cfg=self.legacy();cfg['maintenance']={**cfg['maintenance'],'healthUrl':'http://127.0.0.1:8080/','publicUrl':'http://10.0.0.9/','probeOrigin':True}
+        probe_policy_preflight(cfg)
+        cfg['maintenance']['required']=False;cfg['maintenance']['probeOrigin']=False
+        probe_policy_preflight(cfg)
+        cfg['maintenance']['healthUrl']='http://missing.example/'
+        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):
+            with self.assertRaisesRegex(ValueError,'^Probe URL check: .*could not be resolved'):probe_policy_preflight(cfg)
+    def test_manual_maintenance_enable_is_refused_before_the_flag_is_written(self):
+        from helper import main
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d)/'ready').touch()
+            with patch('helper.emit'):
+                with self.assertRaisesRegex(ValueError,'before enabling maintenance'):main({'operation':'maintenance','enabled':True,'config':self.legacy(d)})
+            self.assertFalse((pathlib.Path(d)/'enabled').exists())
+    def test_recovery_falls_back_to_container_health_and_releases_maintenance(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);(base/'ready').touch();(base/'enabled').touch()
+            cfg=self.legacy(d);cfg['maintenance']['publicUrl']='http://192.168.1.1/'
+            running=[{'State':{'Running':True}}]
+            with patch('helper.inspect',return_value=running),patch('helper.sync_maintenance_flag'):
+                with self.assertRaises(ProbePolicyError):health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'])
+                self.assertTrue(health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'],fallback=True))
+                with patch('helper.inspect',return_value=[{'State':{'Running':False}}]):self.assertFalse(health(['web'],cfg['maintenance']['healthUrl'],cfg['domains'],fallback=True))
+                maintenance(cfg,False)
+            self.assertFalse((base/'enabled').exists(),'A refused probe must not hold the site in maintenance')
+            root=base/'job';root.mkdir()
+            def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
+            with patch('helper.os.getpgid',side_effect=ProcessLookupError,create=True),patch('helper.restart_services'),patch('helper.inspect',return_value=running),patch('helper.maintenance') as flags,patch('helper.atomic_json',side_effect=write_journal),patch('helper.time.sleep') as sleep:
+                recover(root,['web'],cfg,0,123)
+            flags.assert_called_once_with(cfg,False);sleep.assert_not_called()
+            journal=json.loads((root/'recovery.json').read_text())
+            self.assertTrue(journal['recovered']);self.assertEqual(journal['probePolicyFallback'],['health','public'])
+    def test_readiness_names_the_policy_instead_of_a_generic_health_failure(self):
+        with patch('helper.preflight',return_value=[]),patch('helper.backup_plan'),patch('helper.inspect',return_value=[]):
+            result=readiness({'containers':['web'],'healthUrl':'http://169.254.169.254/','maintenance':{}})
+        check={item['name']:item for item in result['checks']}['Application health']
+        self.assertFalse(check['ok']);self.assertTrue(check['message'].startswith('Probe URL policy: the URL resolves to a link-local'))
 if __name__=='__main__':unittest.main()
