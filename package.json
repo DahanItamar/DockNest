@@ -22,6 +22,7 @@
     "brand:export": "node scripts/export-brand.js",
     "test:browser": "node scripts/smoke-browser.js",
     "test:integration": "node --no-addons scripts/integration-linux.js",
+    "test:upgrade": "node --no-addons scripts/upgrade-compat.js",
     "test:dashboard": "node scripts/dashboard-browser.js",
     "test:servers": "node scripts/servers-browser.js",
     "test:rebrand": "node scripts/rebrand-browser.js",
