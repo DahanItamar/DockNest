@@ -2,7 +2,7 @@ import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
-import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
+import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion,deletionDeferred } from './artifact-journal.js';
 import { key } from './crypto.js';
 import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
@@ -146,8 +146,9 @@ export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
  for(const backup of stale){
-  // Object Lock retention defers deletion; keep the intent and continue with other points.
-  try{if(claimDeletion(backup.id))await finishDeletion(backup.id);}catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;}
+  // Object-Locked points are deferred until their lock ends; they stay fully usable meanwhile.
+  if(deletionDeferred(backup.id))continue;
+  if(claimDeletion(backup.id))await finishDeletion(backup.id);
  }
 }
 

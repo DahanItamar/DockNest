@@ -76,3 +76,18 @@ test('retention preserves historical latest and currently passing recovery point
  assert.equal(claimDeletion('untested'),true,'An untested package gains no recovery protection');
  assert.equal(backupVerification('new-pass').application.status,'failed','Protection does not relabel the failed attempt');
 });
+test('local retention still deletes surplus points in the same call and never writes an Object Lock deferral',async()=>{
+ const {retain}=await import('../src/engine.js'),site='local-retention';
+ db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(site,'host','Local retention','{}',new Date().toISOString());
+ db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone,retention) VALUES(?,0,'0 2 * * *','UTC',1)").run(site);
+ for(const [backupId,capturedAt] of [['local-old','2026-10-01T00:00:00.000Z'],['local-mid','2026-10-02T00:00:00.000Z'],['local-new','2026-10-03T00:00:00.000Z']]){
+  await writeFile(join(root,backupId+'.enc'),'synthetic');
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','completed','completed',?)").run(backupId,site,capturedAt);
+  db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,9,?,\'{}\',0,1,?)').run(backupId,site,backupId,capturedAt,join(root,backupId+'.enc'),'a'.repeat(64),capturedAt);
+ }
+ await retain(site);
+ assert.deepEqual(db.prepare('SELECT id FROM backups WHERE site_id=? ORDER BY id').all(site).map(row=>row.id),['local-new']);
+ for(const backupId of ['local-old','local-mid'])await assert.rejects(stat(join(root,backupId+'.enc')));
+ assert.equal(db.prepare('SELECT COUNT(*) AS n FROM retention_deferrals').get().n,0);
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM retention_operations WHERE backup_id IN ('local-old','local-mid')").get().n,0);
+});

@@ -10,7 +10,7 @@ const rfc3986=value=>encodeURIComponent(value).replace(/[!'()*]/g,c=>'%'+c.charC
 const xml=(status,code)=>({status,body:'<?xml version="1.0" encoding="UTF-8"?><Error><Code>'+code+'</Code><Message>synthetic</Message></Error>'});
 export async function startS3Fixture({bucket='docknest-fixture',region='us-east-1',objectLock=false,defaultRetention=false}={}){
  const credentials={accessKeyId:'AKIAFIXTURE'+randomBytes(4).toString('hex').toUpperCase(),secretAccessKey:randomBytes(30).toString('base64')};
- const objects=new Map(),uploads=new Map(),requests=[],faults={ignoreRange:false,copyError:false};
+ const objects=new Map(),uploads=new Map(),requests=[],faults={ignoreRange:false,copyError:false,status:null,delayMs:0};
  const state={objectLock,defaultRetention};
  function verify(request,url,body){
   const auth=request.headers.authorization||'',match=auth.match(/^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=([a-f0-9]{64})$/);
@@ -100,8 +100,9 @@ export async function startS3Fixture({bucket='docknest-fixture',region='us-east-
   request.on('data',chunk=>chunks.push(chunk)).on('end',()=>{
    const body=Buffer.concat(chunks),url=new URL(request.url,'http://'+request.headers.host);
    requests.push({method:request.method,path:decodeURIComponent(url.pathname),query:Object.fromEntries(url.searchParams),headers:{...request.headers},size:body.length});
-   const denied=verify(request,url,body),result=denied?xml(denied==='XAmzContentSHA256Mismatch'?400:403,denied):handle(request,url,body);
-   response.writeHead(result.status,result.headers||{});response.end(request.method==='HEAD'?undefined:result.body);
+   const forced=faults.status&&{status:faults.status.status,body:faults.status.code?xml(faults.status.status,faults.status.code).body:''};
+   const denied=verify(request,url,body),result=forced?forced:denied?xml(denied==='XAmzContentSHA256Mismatch'?400:403,denied):handle(request,url,body);
+   const send=()=>{response.writeHead(result.status,result.headers||{});response.end(request.method==="HEAD"?undefined:result.body);};faults.delayMs?setTimeout(send,faults.delayMs):send();
   });
  });
  server.listen(0,'127.0.0.1');await new Promise((resolve,reject)=>server.once('listening',resolve).once('error',reject));

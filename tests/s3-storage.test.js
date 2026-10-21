@@ -15,7 +15,7 @@ const {db,id}=await import('../src/db.js'),{seal}=await import('../src/crypto.js
 const s3=await import('../src/storage/s3.js');
 const {backupDirectory,storageJoin,makeDirectory,openWrite,openRead,statFile,syncFile,storageCapacity,checkStorageReadiness}=await import('../src/storage.js');
 const {encryptStream,verifyEncrypted}=await import('../src/engine.js');
-const {preparePublication,authenticatePublication,reconcileArtifacts,claimDeletion,finishDeletion}=await import('../src/artifact-journal.js');
+const {preparePublication,authenticatePublication,reconcileArtifacts,claimDeletion,finishDeletion,deletionDeferred}=await import('../src/artifact-journal.js');
 const plain=await startS3Fixture(),locking=await startS3Fixture({bucket:'docknest-locked',objectLock:true});
 const at=new Date('2026-10-03T12:13:14Z');
 db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run('server-1','Production','localhost',22,'fixture','synthetic','0'.repeat(64),at.toISOString());
@@ -98,29 +98,57 @@ test('journal publication copies authenticated uploads to final keys and never p
  assert.deepEqual(await checkStorageReadiness(),{reachable:true,writeTested:false});
  assert.equal(claimDeletion('first'),true);await finishDeletion('first');assert.equal(plain.objects.size,0);
 });
-test('administrators connect and test S3 destinations without the API returning the access key pair',async()=>{
+// One authenticated API server for the route-level tests in this file.
+let adminApi;
+async function api(){
+ if(adminApi)return adminApi;
  const {app}=await import('../src/server.js'),{digest}=await import('../src/crypto.js');
  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
- try{
-  const token=randomBytes(32).toString('base64url'),user=id();
-  db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,?)").run(user,'s3@example.invalid','fixture','fixture','[]',at.toISOString(),'S3','admin');
-  db.prepare('INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,last_activity_at,created_at,authenticated_at) VALUES(?,?,?,?,?,?,?)').run(digest(token),user,'csrf',Date.now()+3600000,Date.now(),Date.now(),Date.now());
-  const request=(route,body)=>fetch('http://127.0.0.1:'+server.address().port+'/api/storage-targets'+route,{method:body?'POST':'GET',body:body&&JSON.stringify(body),headers:{Cookie:'dbm_session='+token,Origin:process.env.APP_ORIGIN,'x-csrf-token':'csrf','Content-Type':'application/json'}});
-  const payload={name:'Fixture R2',endpoint:plain.options.endpoint,region:'us-east-1',bucket:plain.options.bucket,prefix:'/api-prefix/',pathStyle:true,...plain.credentials};
-  assert.equal((await request('/s3/connect',{...payload,endpoint:'http://storage.example.invalid'})).status,400);
-  assert.equal((await request('/s3/connect',{...payload,prefix:'../escape'})).status,400);
-  const created=await request('/s3/connect',payload),text=await created.text();
-  assert.equal(created.status,201,text);
-  for(const secret of [plain.credentials.secretAccessKey,plain.credentials.accessKeyId])assert.ok(!text.includes(secret));
-  const body=JSON.parse(text);assert.equal(body.kind,'s3');assert.equal(body.root,'/api-prefix');assert.equal(body.bucket,plain.options.bucket);assert.equal(body.credential,undefined);
-  const listed=await (await request('/')).text();
-  for(const secret of [plain.credentials.secretAccessKey,plain.credentials.accessKeyId])assert.ok(!listed.includes(secret));
-  assert.equal((await request('/'+body.id+'/test',{})).status,200);
-  assert.ok(!JSON.stringify(db.prepare("SELECT * FROM audit_events WHERE action LIKE 'storage.%'").all()).includes(plain.credentials.secretAccessKey));
-  assert.equal(plain.objects.size,0);
- }finally{await new Promise(resolve=>server.close(resolve));}
+ const token=randomBytes(32).toString('base64url'),user=id();
+ db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,?)").run(user,'s3@example.invalid','fixture','fixture','[]',at.toISOString(),'S3','admin');
+ db.prepare('INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,last_activity_at,created_at,authenticated_at) VALUES(?,?,?,?,?,?,?)').run(digest(token),user,'csrf',Date.now()+3600000,Date.now(),Date.now(),Date.now());
+ const request=(route,body,method)=>fetch('http://127.0.0.1:'+server.address().port+'/api'+route,{method:method||(body?'POST':'GET'),body:body&&JSON.stringify(body),headers:{Cookie:'dbm_session='+token,Origin:process.env.APP_ORIGIN,'x-csrf-token':'csrf','Content-Type':'application/json'}});
+ adminApi={request,close:()=>new Promise(resolve=>server.close(resolve))};
+ return adminApi;
+}
+after(async()=>{await adminApi?.close();});
+test('administrators connect and test S3 destinations without the API returning the access key pair',async()=>{
+ const {request}=await api();
+ const payload={name:'Fixture R2',endpoint:plain.options.endpoint,region:'us-east-1',bucket:plain.options.bucket,prefix:'/api-prefix/',pathStyle:true,...plain.credentials};
+ assert.equal((await request('/storage-targets/s3/connect',{...payload,endpoint:'http://storage.example.invalid'})).status,400);
+ assert.equal((await request('/storage-targets/s3/connect',{...payload,prefix:'../escape'})).status,400);
+ const created=await request('/storage-targets/s3/connect',payload),text=await created.text();
+ assert.equal(created.status,201,text);
+ for(const secret of [plain.credentials.secretAccessKey,plain.credentials.accessKeyId])assert.ok(!text.includes(secret));
+ const body=JSON.parse(text);assert.equal(body.kind,'s3');assert.equal(body.root,'/api-prefix');assert.equal(body.bucket,plain.options.bucket);assert.equal(body.credential,undefined);
+ const listed=await (await request('/storage-targets')).text();
+ for(const secret of [plain.credentials.secretAccessKey,plain.credentials.accessKeyId])assert.ok(!listed.includes(secret));
+ assert.equal((await request('/storage-targets/'+body.id+'/test',{})).status,200);
+ assert.ok(!JSON.stringify(db.prepare("SELECT * FROM audit_events WHERE action LIKE 'storage.%'").all()).includes(plain.credentials.secretAccessKey));
+ assert.equal(plain.objects.size,0);
 });
-test('Object Lock retention is applied on publish, verified, and blocks deletion until it expires',async()=>{
+test('provider HTTP statuses never become DockNest API statuses',async()=>{
+ const {request}=await api();
+ const payload={name:'Fixture failure',endpoint:plain.options.endpoint,region:'us-east-1',bucket:plain.options.bucket,pathStyle:true,...plain.credentials};
+ const target=db.prepare("SELECT id FROM storage_targets WHERE name='Fixture R2'").get().id;
+ for(const [status,code,expected] of [[401,'',502],[403,'AccessDenied',400],[403,'',400],[404,'NoSuchBucket',400],[404,'',502],[500,'InternalError',502],[503,'SlowDown',502],[301,'PermanentRedirect',400]]){
+  plain.faults.status={status,code};db.prepare("DELETE FROM rate_limits").run();
+  try{
+   for(const route of ['/storage-targets/s3/connect','/storage-targets/'+target+'/test']){
+    const response=await request(route,route.endsWith('connect')?payload:{}),body=await response.json();
+    assert.equal(response.status,expected,route+' '+status+' '+code);
+    assert.ok(!/synthetic|RequestId|AKIA/.test(body.error),body.error);
+   }
+  }finally{plain.faults.status=null;}
+ }
+ // SFTP regression: non-S3 route errors keep the default 422 and the session survives.
+ const sftp=id(),now=at.toISOString();
+ db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(sftp,'Closed SFTP','127.0.0.1',1,'fixture','a'.repeat(64),'password',seal('fixture-not-a-real-credential'),'/backups',1e12,'connected',now,now);
+ assert.equal((await request('/storage-targets/'+sftp+'/test',{})).status,422);
+ assert.equal((await request('/storage-targets')).status,200);
+ db.prepare('DELETE FROM storage_targets WHERE id=?').run(sftp);
+});
+test('Object Lock retention is applied on publish; locked points chosen by retention are deferred and stay usable',async()=>{
  const options=adapterOptions(locking,{objectLock:{mode:'COMPLIANCE',days:1}});
  await assert.rejects(s3.test(adapterOptions(plain,{objectLock:{mode:'COMPLIANCE',days:1}})),/Object Lock is not enabled/);
  locking.state.defaultRetention=true;await assert.rejects(s3.test(options),/default retention/);locking.state.defaultRetention=false;
@@ -133,12 +161,48 @@ test('Object Lock retention is applied on publish, verified, and blocks deletion
  assert.equal(locking.objects.size,1);assert.ok(published.endsWith(key));
  assert.equal(object.lockMode,'COMPLIANCE');assert.ok(Date.parse(object.retainUntil)>Date.now()+86400000-60000);
  assert.equal(claimDeletion('locked'),true);
- await assert.rejects(finishDeletion('locked'),error=>error.code==='EOBJECTLOCKED'&&error.retainUntil===object.retainUntil);
+ assert.deepEqual(await finishDeletion('locked'),{deferred:true});
  assert.ok(locking.objects.has(key));assert.ok(db.prepare("SELECT 1 FROM backups WHERE id='locked'").get());
- const result=await reconcileArtifacts(verifyEncrypted);assert.equal(result.pending,1);
- assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='retention.object_locked' AND target='locked'").get());
- // Once retention expires the recorded deletion intent completes.
+ // No blocking retention row: download, pin and restore guards stay open while locked.
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM retention_operations WHERE backup_id='locked'").get().n,0);
+ assert.equal(db.prepare("SELECT retry_after FROM retention_deferrals WHERE backup_id='locked'").get().retry_after,Date.parse(object.retainUntil));
+ assert.equal(deletionDeferred('locked'),true);
+ const {request}=await api();
+ const download=await request('/backups/locked/download');assert.equal(download.status,200);assert.equal((await download.arrayBuffer()).byteLength,object.body.length);
+ for(let tick=0;tick<5;tick++)await reconcileArtifacts(verifyEncrypted);
+ const deferredAudits=()=>db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='retention.deferred' AND target='locked'").get().n;
+ assert.equal(deferredAudits(),1);
+ // Pinning removes the deferral; a pinned point is never deleted when the lock ends.
+ assert.equal((await request('/backups/locked/pin',{pinned:true})).status,200);
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM retention_deferrals").get().n,0);
+ assert.equal((await request('/backups/locked/pin',{pinned:false})).status,200);
+ assert.equal(claimDeletion('locked'),true);assert.deepEqual(await finishDeletion('locked'),{deferred:true});
+ assert.equal(deferredAudits(),2);
+ // An extended lock updates the deferral (one more audit); expiry lets reconciliation delete it.
+ object.retainUntil=new Date(Date.now()+2*86400000).toISOString();
+ db.prepare('UPDATE retention_deferrals SET retry_after=0').run();
+ assert.equal((await reconcileArtifacts(verifyEncrypted)).deleted,0);assert.equal(deferredAudits(),3);
+ assert.equal(db.prepare("SELECT retry_after FROM retention_deferrals WHERE backup_id='locked'").get().retry_after,Date.parse(object.retainUntil));
  object.retainUntil=new Date(Date.now()-1000).toISOString();
+ db.prepare('UPDATE retention_deferrals SET retry_after=0').run();
  assert.equal((await reconcileArtifacts(verifyEncrypted)).deleted,1);assert.equal(locking.objects.size,0);
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM retention_deferrals").get().n,0);
  void options;
+});
+test('storage migration copies deferred Object-Locked backups instead of being blocked by them',async()=>{
+ const {migrateStorage}=await import('../src/storage-migration.js');
+ const directory=backupDirectory({id:'server-1',name:'Production'},{id:'site-1',name:'Shop'});
+ const {published}=await publish(directory,'deferred');
+ assert.equal((await reconcileArtifacts(verifyEncrypted)).published,1);
+ assert.equal(claimDeletion('deferred'),true);assert.deepEqual(await finishDeletion('deferred'),{deferred:true});
+ db.prepare("UPDATE jobs SET status='completed' WHERE status='running'").run();
+ db.prepare("INSERT INTO settings VALUES('deployment_hold','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+ const result=await migrateStorage();
+ assert.equal(result.lockedOriginals,1);assert.ok(result.migrated>=1);
+ const moved=db.prepare("SELECT path FROM backups WHERE id='deferred'").get().path;
+ assert.notEqual(moved,published);assert.match(moved,/backup_2026-10-03_12-13-14Z--deferred\.tar\.gz\.enc$/);
+ assert.equal(db.prepare("SELECT COUNT(*) AS n FROM retention_deferrals").get().n,0);
+ assert.equal(await verifyEncrypted(moved),db.prepare("SELECT checksum FROM backups WHERE id='deferred'").get().checksum);
+ // The locked original stays until its lock ends; DockNest does not remove it.
+ assert.ok(locking.objects.has(published.slice(published.indexOf(':/')+2)));
 });

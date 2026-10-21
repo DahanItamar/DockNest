@@ -47,10 +47,23 @@ export function deletionBlocked(backupId){
 export function claimDeletion(backupId){
  return transaction(()=>{if(deletionBlocked(backupId))return false;db.prepare("INSERT OR IGNORE INTO retention_operations VALUES(?,'pending',?)").run(backupId,now());return true;});
 }
+// Object Lock: drop the blocking retention row (the backup stays usable) and retry at
+// retainUntil, or in 24 h when the provider gives no date. Audit only on change.
+export function deferDeletion(backupId,retainUntil=null,at=Date.now()){
+ const until=Date.parse(retainUntil),retryAfter=Number.isFinite(until)&&until>at?until:at+86400000;
+ transaction(()=>{
+  const previous=db.prepare('SELECT retain_until FROM retention_deferrals WHERE backup_id=?').get(backupId);
+  db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backupId);
+  db.prepare('INSERT INTO retention_deferrals VALUES(?,?,?,?) ON CONFLICT(backup_id) DO UPDATE SET retry_after=excluded.retry_after,retain_until=excluded.retain_until').run(backupId,retryAfter,retainUntil||null,at);
+  if(!previous||previous.retain_until!==(retainUntil||null))audit('worker','retention.deferred',backupId,{retainUntil:retainUntil||null});
+ });
+}
+export const deletionDeferred=(backupId,at=Date.now())=>Boolean(db.prepare('SELECT 1 FROM retention_deferrals WHERE backup_id=? AND retry_after>?').get(backupId,at));
 export async function finishDeletion(backupId){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)return;
  if(deletionBlocked(backupId)){db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backupId);return;}
- if(await fileExists(backup.path))await removeFile(backup.path);
+ try{if(await fileExists(backup.path))await removeFile(backup.path);}
+ catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};}
  transaction(()=>{db.prepare('DELETE FROM downloads WHERE backup_id=? AND expires_at<=?').run(backupId,Date.now());db.prepare('DELETE FROM backups WHERE id=?').run(backupId);});
 }
 export async function reconcileArtifacts(verify,{checkCompleted=false}={}){
@@ -80,8 +93,14 @@ export async function reconcileArtifacts(verify,{checkCompleted=false}={}){
   }catch{result.pending++;audit('worker','publication.reconciliation_pending',operation.backup_id,{});}
  }
  for(const operation of db.prepare('SELECT * FROM retention_operations').all()){
-  try{await finishDeletion(operation.backup_id);result.deleted++;}
-  catch(error){result.pending++;if(error?.code==='EOBJECTLOCKED')audit('worker','retention.object_locked',operation.backup_id,{retainUntil:error.retainUntil||null});else audit('worker','retention.reconciliation_pending',operation.backup_id,{});}
+  try{if(!(await finishDeletion(operation.backup_id))?.deferred)result.deleted++;}catch{result.pending++;audit('worker','retention.reconciliation_pending',operation.backup_id,{});}
+ }
+ // Deferred (Object Lock) deletions are retried once their retry date has passed.
+ for(const deferral of db.prepare('SELECT backup_id FROM retention_deferrals WHERE retry_after<=?').all(Date.now())){
+  try{
+   if(!claimDeletion(deferral.backup_id)){db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(deferral.backup_id);continue;}
+   if(!(await finishDeletion(deferral.backup_id))?.deferred)result.deleted++;
+  }catch{result.pending++;audit('worker','retention.reconciliation_pending',deferral.backup_id,{});}
  }
  return result;
 }

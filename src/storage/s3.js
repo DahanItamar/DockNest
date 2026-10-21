@@ -140,22 +140,22 @@ export async function list(options,value){
  }while(token);
  return files;
 }
-export async function readiness(options){try{await s3Request(conn(options),{method:'HEAD'});}catch(error){if(error.status===404)throw new Error('The S3 bucket does not exist at this endpoint.');throw error;}}
+export async function readiness(options){try{await s3Request(conn(options),{method:'HEAD'});}catch(error){if(error.s3Status===404)throw Object.assign(new Error('The S3 bucket does not exist at this endpoint.'),{status:400});throw error;}}
 // Bucket-level Object Lock state: {enabled, defaultRetention} or null when unsupported.
 async function lockConfiguration(options){
  try{const {text}=await s3Request(conn(options),{query:{'object-lock':''},text:true});return {enabled:xmlValue(text,'ObjectLockEnabled')==='Enabled',defaultRetention:/<DefaultRetention>/.test(text)};}
  catch(error){
-  if(error.s3Code==='ObjectLockConfigurationNotFoundError'||(error.status===404&&error.s3Code!=='NoSuchBucket'))return {enabled:false,defaultRetention:false};
+  if(error.s3Code==='ObjectLockConfigurationNotFoundError'||(error.s3Status===404&&error.s3Code!=='NoSuchBucket'))return {enabled:false,defaultRetention:false};
   // Providers without the API, or keys without permission to read it: unknown, not fatal unless requested.
-  if(error.status===501||['NotImplemented','AccessDenied','MethodNotAllowed'].includes(error.s3Code))return null;
+  if(error.s3Status===501||['NotImplemented','AccessDenied','MethodNotAllowed'].includes(error.s3Code))return null;
   throw error;
  }
 }
 export async function test(options){
  const lock=await lockConfiguration(options);
- if(options.objectLock&&!lock?.enabled)throw new Error(lock?'Object Lock is not enabled on this bucket. Create the bucket with Object Lock enabled or turn off immutable copies.':'Object Lock configuration could not be verified for this bucket.');
+ if(options.objectLock&&!lock?.enabled)throw Object.assign(new Error(lock?'Object Lock is not enabled on this bucket. Create the bucket with Object Lock enabled or turn off immutable copies.':'Object Lock configuration could not be verified for this bucket.'),{status:400});
  // Default retention would also lock temporary uploads and probes, making them undeletable.
- if(lock?.defaultRetention)throw new Error('Remove the bucket default retention rule. DockNest applies Object Lock retention to published backups only.');
+ if(lock?.defaultRetention)throw Object.assign(new Error('Remove the bucket default retention rule. DockNest applies Object Lock retention to published backups only.'),{status:400});
  const temporary=rootDir(options)+'/.docknest-probe-'+randomUUID(),published=temporary+'.verified',content=Buffer.from('DockNest storage probe');
  try{
   await new Promise((resolve,reject)=>{const output=openWrite(options,temporary,{forceMultipart:true});output.once('error',reject).once('finish',resolve);output.end(content);});

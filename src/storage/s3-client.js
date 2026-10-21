@@ -12,7 +12,7 @@ export const isLoopback=hostname=>['localhost','127.0.0.1','[::1]','::1'].includ
 export function endpointUrl(conn,key=''){
  const base=new URL(conn.endpoint),prefix=base.pathname.replace(/\/+$/,'');
  // Plain HTTP is accepted only on loopback (local MinIO and tests); signed requests and metadata need TLS elsewhere.
- if(base.protocol!=='https:'&&!(base.protocol==='http:'&&isLoopback(base.hostname)))throw new Error('S3 endpoints must use HTTPS (plain HTTP is allowed only on loopback).');
+ if(base.protocol!=='https:'&&!(base.protocol==='http:'&&isLoopback(base.hostname)))throw Object.assign(new Error('S3 endpoints must use HTTPS (plain HTTP is allowed only on loopback).'),{status:400});
  if(conn.pathStyle)return new URL(base.origin+prefix+'/'+encode(conn.bucket)+(key?'/'+encodeKey(key):''));
  return new URL(base.protocol+'//'+conn.bucket+'.'+base.host+prefix+'/'+encodeKey(key));
 }
@@ -31,11 +31,14 @@ export const xmlValue=(xml,tag)=>xml.match(new RegExp('<'+tag+'>([\\s\\S]*?)</'+
 export const xmlValues=(xml,tag)=>[...xml.matchAll(new RegExp('<'+tag+'>([\\s\\S]*?)</'+tag+'>','g'))].map(match=>match[1]);
 export const xmlText=value=>value?.replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 const messages={NoSuchBucket:'The S3 bucket does not exist at this endpoint.',AccessDenied:'S3 access was denied. Check the access key permissions for this bucket and prefix.',InvalidAccessKeyId:'S3 access key ID was not recognised by the endpoint.',SignatureDoesNotMatch:'S3 rejected the request signature. Check the secret access key and region.',AuthorizationHeaderMalformed:'S3 rejected the request region. Check the configured region.',PermanentRedirect:'The bucket is served from another endpoint or region. Check the endpoint and addressing style.',XAmzContentSHA256Mismatch:'S3 detected a corrupted upload body.',PreconditionFailed:'The S3 object changed during publication.',NoSuchUpload:'The S3 multipart upload no longer exists.'};
-export function s3Error(status,code){
+// Provider statuses never reach DockNest clients: configuration problems are 400, anything else 502.
+const configCodes=new Set(['NoSuchBucket','InvalidAccessKeyId','SignatureDoesNotMatch','AccessDenied','AuthorizationHeaderMalformed','PermanentRedirect','ObjectLockConfigurationNotFoundError','InvalidBucketName']);
+export function s3Error(s3Status,code){
  // HEAD responses carry no error body; a bare 403 is an authorization failure.
- if(!code&&status===403)code='AccessDenied';
- const error=new Error(messages[code]||'S3 request failed ('+(code||'HTTP '+status)+').');
- return Object.assign(error,{status,s3Code:code,code:status===404&&code!=='NoSuchBucket'?'ENOENT':code==='AccessDenied'?'EACCES':'ES3'});
+ if(!code&&s3Status===403)code='AccessDenied';
+ const safe=/^[A-Za-z]{1,64}$/.test(code||'')?code:undefined;
+ const error=new Error(messages[safe]||'S3 request failed ('+(safe||'HTTP '+s3Status)+').');
+ return Object.assign(error,{s3Status,s3Code:safe,status:configCodes.has(safe)?400:502,code:s3Status===404&&safe!=='NoSuchBucket'?'ENOENT':safe==='AccessDenied'?'EACCES':'ES3'});
 }
 const retryable=status=>status===500||status===502||status===503||status===504;
 // Sends one signed request. Responses are returned unread unless `text` is requested.
@@ -47,7 +50,7 @@ export async function s3Request(conn,{method='GET',key='',query={},headers={},bo
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);
   let response;
   try{response=await fetch(url,{method,headers:sign(conn,{method,url,headers,payloadHash}),body:['GET','HEAD'].includes(method)?undefined:payload,signal:controller.signal,redirect:'manual'});}
-  catch(error){clearTimeout(timer);if(attempt<attempts)continue;throw Object.assign(new Error(error?.name==='AbortError'?'S3 request timed out.':'S3 endpoint could not be reached. Check the endpoint URL and network access.'),{code:'ES3UNREACHABLE'});}
+  catch(error){clearTimeout(timer);if(attempt<attempts)continue;throw Object.assign(new Error(error?.name==='AbortError'?'S3 request timed out.':'S3 endpoint could not be reached. Check the endpoint URL and network access.'),{code:'ES3UNREACHABLE',s3Code:'Unreachable',status:error?.name==='AbortError'?504:400});}
   // Streams keep their own lifetime; only the time to response headers is bounded.
   if(stream&&response.ok){clearTimeout(timer);return response;}
   try{

@@ -43,7 +43,8 @@ export async function migrateStorage(){
  if(reconciliation.pending)throw new Error('Reconciliation blocks migration');
  const plan=migrationPlan();
  db.exec('CREATE TABLE IF NOT EXISTS storage_migrations(kind TEXT NOT NULL,id TEXT NOT NULL,source TEXT NOT NULL,destination TEXT NOT NULL,checksum TEXT NOT NULL,size INTEGER NOT NULL,state TEXT NOT NULL,PRIMARY KEY(kind,id))');
- let migrated=0;
+ // Deferred Object-Locked backups are copied like any other point; the locked original stays until its lock ends.
+ let migrated=0,lockedOriginals=0;
  for(const entry of plan){
   const saved=db.prepare('SELECT * FROM storage_migrations WHERE kind=? AND id=?').get(entry.kind,entry.id);
   if(saved&&['source','destination','checksum','size'].some(key=>saved[key]!==entry[key]))throw new Error('Migration journal changed');
@@ -66,8 +67,9 @@ export async function migrateStorage(){
    if(db.prepare('UPDATE '+table+' SET path=? WHERE id=? AND path=?').run(entry.destination,entry.id,entry.source).changes!==1)throw new Error('Migration metadata changed');
    if(entry.kind==='site')db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(entry.destination,entry.id);
    db.prepare("UPDATE storage_migrations SET state='completed' WHERE kind=? AND id=?").run(entry.kind,entry.id);
+   if(entry.kind==='site'&&db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(entry.id).changes)lockedOriginals++;
   });
   migrated++;
  }
- return {migrated,originalsRetained:true};
+ return {migrated,originalsRetained:true,...(lockedOriginals?{lockedOriginals}:{})};
 }
