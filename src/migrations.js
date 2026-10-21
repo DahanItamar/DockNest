@@ -84,6 +84,12 @@ export const migrations = [
     CREATE INDEX IF NOT EXISTS restores_created ON restores(created_at,id);
     CREATE INDEX IF NOT EXISTS audit_created ON audit_events(created_at,id);
   `) },
+  // Per-destination settings for non-SFTP backends (S3-compatible endpoint, bucket, prefix, Object Lock), and
+  // retention deferrals for packages a provider's Object Lock still protects.
+  { version: 4, name: 'storage-targets-and-retention-deferrals', compatible: true, up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS storage_target_settings (target_id TEXT PRIMARY KEY REFERENCES storage_targets(id) ON DELETE CASCADE,kind TEXT NOT NULL,settings TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS retention_deferrals (backup_id TEXT PRIMARY KEY REFERENCES backups(id) ON DELETE CASCADE,retry_after INTEGER NOT NULL,retain_until TEXT,first_seen INTEGER NOT NULL);
+  `) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

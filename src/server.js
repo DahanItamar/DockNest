@@ -280,6 +280,8 @@ app.post('/api/backups/:id/pin', (req, res) => {
   const data = z.object({ pinned: z.boolean() }).parse(req.body);
   const result = db.prepare('UPDATE backups SET pinned=? WHERE id=?').run(Number(data.pinned), req.params.id);
   if (!result.changes) notFound('Backup not found.');
+  // A pinned backup must never be removed when its Object Lock ends.
+  if (data.pinned) db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(req.params.id);
   audit(req.user.id, 'backup.pin', req.params.id, data); res.json(data);
 });
 app.post('/api/backups/:id/scrub', (req,res)=>res.status(202).json(enqueueScrub(req.params.id,req.user.id)));
@@ -311,7 +313,9 @@ app.use((error, req, res, _next) => {
   if (error instanceof ZodError) return res.status(400).json({ error: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') });
   // SSH and Docker errors can include remote output. Expose only errors intentionally sanitized by adapters.
   const message = error.expose === false ? 'Operation failed. Inspect the job status and source health.' : error.message;
-  res.status(error.status || (error instanceof SyntaxError ? 400 : 422)).json({ error: message || 'Operation failed.' });
+  // Object-storage failures map only to 400/502/504 so a provider 401 never ends the admin session.
+  const status = error.s3Code !== undefined || error.s3Status !== undefined ? ([400, 502, 504].includes(error.status) ? error.status : 502) : error.status || (error instanceof SyntaxError ? 400 : 422);
+  res.status(status).json({ error: message || 'Operation failed.' });
 });
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   app.listen(config.port, config.host, () => console.log(`DockNest listening on port ${config.port}`));

@@ -2,7 +2,7 @@ import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { config } from './config.js';
 import { recordVerification } from './recovery-evidence.js';
-import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion } from './artifact-journal.js';
+import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion,deletionDeferred } from './artifact-journal.js';
 import { key } from './crypto.js';
 import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
@@ -174,6 +174,8 @@ export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
  for(const backup of stale){
+  // Object-Locked points are deferred until their lock ends; they stay fully usable meanwhile.
+  if(deletionDeferred(backup.id))continue;
   if(claimDeletion(backup.id))await finishDeletion(backup.id);
  }
 }
@@ -221,8 +223,9 @@ export async function executeJob(job){
   stage(job.id,'preflight');
   const plan=await planBackup(site.id);
   const capacity=await storageCapacity();
-  if(capacity.available===null)throw new Error('Backup storage available space could not be verified');
-  if(capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
+  // Object storage reports no fixed size (unbounded); other backends must prove free space.
+  if(capacity.available===null&&!capacity.unbounded)throw new Error('Backup storage available space could not be verified');
+  if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
   const backupId=id(),directory=backupDirectory(server,site);
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';

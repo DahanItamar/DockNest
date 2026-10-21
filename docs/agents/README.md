@@ -18,6 +18,8 @@ Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents)
 
 The project-readme-author skill informed README structure, current branding, setup instructions and synthetic screenshots. The motion-design skill informed the slow health sweep, sun/moon hover and toggle feedback, and reduced-motion behavior. UI Designer and Brand Guardian guidance informed semantic dark colors, consistent geometry and reuse of the blue wordmark. Source-specific operations, asset-generation identifiers and session notes are kept outside Git.
 
+The storage adapter boundary and S3-compatible backend use Backend Architect guidance: one adapter interface behind the existing storage API, the publication journal mapped onto S3 operations (atomic completed uploads, ETag-pinned server-side copy, version-aware delete), and Object Lock retention applied and verified on publish. Security Engineer guidance kept the access keys sealed and out of API responses, logs and errors. Reality Checker guidance limits the S3 claims to a fake-endpoint test suite until Linux integration runs against a real provider.
+
 The remote storage migration uses Backend Architect guidance for a durable journal and transactional metadata changes, and DevOps Automator guidance for stopped-service migration, integrity checks and retained rollback files. No subagents were used for this work.
 
 Upgrade safety uses DevOps Automator guidance for the one-command upgrade with automatic code rollback, signed release images and the CI upgrade job, and Database Reliability Engineer guidance for `user_version` migrations under a write lock, `VACUUM INTO` snapshots and the downgrade guard. No subagents were used for this work.

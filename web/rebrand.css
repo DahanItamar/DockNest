@@ -207,3 +207,7 @@
 .viewport-page{position:relative}.rebrand-page .pagination-probe{position:absolute;left:0;right:0;visibility:hidden;pointer-events:none}
 .setup-review{display:grid;grid-template-columns:120px minmax(0,1fr);gap:12px 20px;margin:20px 0 24px;font-size:13px;line-height:1.6}.setup-review dt{color:var(--text-secondary)}.setup-review dd{margin:0;min-width:0;overflow-wrap:anywhere;white-space:pre-line}
 .stable-table{--table-row-height:76px}.stable-table .paged-content{min-height:max(var(--page-height,0px),calc(100dvh - 360px))}.stable-table tbody tr{height:var(--table-row-height)}.stable-table .paged-measure{min-width:0;max-width:100%}
+/* Storage page: busy buttons keep focus (aria-disabled), stacked S3 rows keep 24px rhythm. */
+:is(.storage-intro,.storage-card-actions,.storage-form) button[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
+.storage-form .form-grid{align-items:start}.storage-form .form-grid+.form-grid{margin-top:24px}.storage-card h3 .badge{margin-left:8px;flex:none}
+@media(max-width:599px){.storage-form .form-grid+.form-grid{margin-top:0}}

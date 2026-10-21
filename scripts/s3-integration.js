@@ -1,0 +1,70 @@
+// Real S3 semantics against a MinIO-compatible server (CI job s3-integration).
+// Env: S3_ENDPOINT (e.g. http://127.0.0.1:9000), S3_ACCESS_KEY, S3_SECRET_KEY, optional S3_REGION.
+// Credentials are throwaway CI values and are never printed. Results: data/qa/s3-integration.json.
+import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+
+const {S3_ENDPOINT:endpoint,S3_ACCESS_KEY:accessKeyId,S3_SECRET_KEY:secretAccessKey,S3_REGION:region='us-east-1'}=process.env;
+if(!endpoint||!accessKeyId||!secretAccessKey)throw new Error('Set S3_ENDPOINT, S3_ACCESS_KEY and S3_SECRET_KEY');
+const s3=await import('../src/storage/s3.js'),{s3Request}=await import('../src/storage/s3-client.js');
+const suffix=randomBytes(4).toString('hex'),lockBucket='docknest-lock-'+suffix,plainBucket='docknest-plain-'+suffix;
+const options=(bucket,extra={})=>({id:'ci',mode:'s3',name:'CI',endpoint,region,bucket,pathStyle:true,accessKeyId,secretAccessKey,root:'/ci',objectLock:null,...extra});
+const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+const readAll=async stream=>{const parts=[];for await(const chunk of stream)parts.push(chunk);return Buffer.concat(parts);};
+const results=[];
+async function step(name,fn){const started=Date.now();try{await fn();results.push({name,status:'passed',ms:Date.now()-started});console.log('PASS',name);}catch(error){results.push({name,status:'failed',ms:Date.now()-started,error:error.message});console.log('FAIL',name,'-',error.message);}}
+
+await step('create buckets (one with Object Lock)',async()=>{
+ await s3Request(options(lockBucket),{method:'PUT',headers:{'x-amz-bucket-object-lock-enabled':'true'}});
+ await s3Request(options(plainBucket),{method:'PUT'});
+});
+const plain=options(plainBucket),bytes=randomBytes(40*1024*1024);
+await step('multipart upload above 16 MiB streams and round-trips',async()=>{
+ const chunks=Array.from({length:40},(_,index)=>bytes.subarray(index*1024*1024,(index+1)*1024*1024));
+ await pipeline(Readable.from(chunks),s3.openWrite(plain,'/ci/large.bin.partial'));
+ assert.equal((await s3.statFile(plain,'/ci/large.bin.partial')).size,bytes.length);
+ assert.equal(sha(await readAll(await s3.openRead(plain,'/ci/large.bin.partial'))),sha(bytes));
+});
+await step('ranged reads: first byte, middle, last byte, inclusive span',async()=>{
+ for(const [start,end] of [[0,0],[20*1024*1024,20*1024*1024+4095],[bytes.length-1,bytes.length-1],[8*1024*1024-10,8*1024*1024+10]])
+  assert.deepEqual(await readAll(await s3.openRead(plain,'/ci/large.bin.partial',{start,end})),bytes.subarray(start,end+1));
+ assert.deepEqual(await readAll(await s3.openRead(plain,'/ci/large.bin.partial',{start:bytes.length-5})),bytes.subarray(bytes.length-5));
+});
+await step('conditional copy publish refuses an existing destination and a replaced source',async()=>{
+ await s3.renameFile(plain,'/ci/large.bin.partial','/ci/large.bin');
+ assert.equal(sha(await readAll(await s3.openRead(plain,'/ci/large.bin'))),sha(bytes));
+ await assert.rejects(s3.statFile(plain,'/ci/large.bin.partial'),error=>error.code==='ENOENT');
+ await pipeline(Readable.from([Buffer.from('second')]),s3.openWrite(plain,'/ci/second.partial'));
+ await assert.rejects(s3.renameFile(plain,'/ci/second.partial','/ci/large.bin'),/already exists/);
+ // The adapter pins copies with x-amz-copy-source-if-match; a stale ETag must be refused by the server.
+ await assert.rejects(s3Request(plain,{method:'PUT',key:'ci/third',headers:{'x-amz-copy-source':'/'+plainBucket+'/ci/second.partial','x-amz-copy-source-if-match':'"00000000000000000000000000000000"'}}),error=>error.s3Status===412||error.s3Code==='PreconditionFailed');
+});
+const locked=options(lockBucket,{objectLock:{mode:'GOVERNANCE',days:1}});
+await step('readiness probe passes with Object Lock and explains a bucket without it',async()=>{
+ assert.equal((await s3.test(locked)).objectLock,'enabled');
+ await assert.rejects(s3.test(options(plainBucket,{objectLock:{mode:'GOVERNANCE',days:1}})),/Object Lock is not enabled/);
+});
+await step('publish applies retention; delete is refused before it ends',async()=>{
+ await pipeline(Readable.from([randomBytes(1024)]),s3.openWrite(locked,'/ci/locked.partial'));
+ await s3.renameFile(locked,'/ci/locked.partial','/ci/locked');
+ const attrs=await s3.statFile(locked,'/ci/locked');
+ assert.equal(attrs.lockMode,'GOVERNANCE');assert.ok(Date.parse(attrs.retainUntil)>Date.now()+86400000-120000);
+ await assert.rejects(s3.removeFile(locked,'/ci/locked'),error=>error.code==='EOBJECTLOCKED');
+ await assert.rejects(s3Request(locked,{method:'DELETE',key:'ci/locked',query:{versionId:attrs.versionId}}),error=>[400,403].includes(error.s3Status));
+});
+await step('a short lock expires and removal then succeeds',async()=>{
+ const until=new Date(Date.now()+3000).toISOString().replace(/\.\d{3}Z$/,'Z');
+ await s3Request(locked,{method:'PUT',key:'ci/short',headers:{'x-amz-object-lock-mode':'GOVERNANCE','x-amz-object-lock-retain-until-date':until,'content-md5':createHash('md5').update('short').digest('base64')},body:Buffer.from('short')});
+ await assert.rejects(s3.removeFile(locked,'/ci/short'),error=>error.code==='EOBJECTLOCKED');
+ await new Promise(resolve=>setTimeout(resolve,5000));
+ await s3.removeFile(locked,'/ci/short');
+ await assert.rejects(s3.statFile(locked,'/ci/short'),error=>error.code==='ENOENT');
+});
+await mkdir('data/qa',{recursive:true});
+await writeFile('data/qa/s3-integration.json',JSON.stringify({kind:'s3-integration',server:process.env.S3_SERVER_IMAGE||'unknown',finishedAt:new Date().toISOString(),results},null,2)+'\n');
+const failed=results.filter(result=>result.status==='failed').length;
+console.log(failed?failed+' S3 integration step(s) failed.':'S3 integration passed against a MinIO-compatible server. Linux backup/restore over S3 is not covered here.');
+process.exitCode=failed?1:0;
