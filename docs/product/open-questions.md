@@ -3,6 +3,17 @@
 Date: 2026-10-21. Owner: Product Manager.
 These decisions belong to the owner. Each has a PM recommendation, the date by which it blocks work, and what would change the recommendation. None of them changes tools, permissions or licensing until the owner decides.
 
+## Decided by the owner (2026-10-21)
+
+| # | Decision |
+| --- | --- |
+| Q3 | **AGPL only + DCO sign-off; funded by GitHub Sponsors and paid setup/support. No open core.** |
+| Q4 | **Update check: ask once at first admin login ("Check GitHub daily for new versions?"); no outbound call until answered; toggle in Settings. No telemetry.** |
+| Q7 | **Click-to-update only; never install unattended.** |
+| Q8 | **Primary persona: the web agency owner.** |
+
+## Still open
+
 | # | Question | Decide by | PM recommendation (short) |
 | --- | --- | --- | --- |
 | Q1 | Offer a hosted DockNest? | Before 2.6.0 | **No** in 2.x |
