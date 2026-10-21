@@ -105,6 +105,17 @@ app.get('/api/state', async (_req, res) => {
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
   res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup, verifications)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC LIMIT 500').all().map(view), audit: db.prepare('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 250').all().map(view), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults });
 });
+// Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
+const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
+const historyQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), cursor: historyCursor.optional() });
+const histories = { backups: { table: 'backups', time: 'captured_at' }, jobs: { table: 'jobs', time: 'created_at' }, restores: { table: 'restores', time: 'created_at' }, audit: { table: 'audit_events', time: 'created_at' } };
+for (const [name, { table, time }] of Object.entries(histories)) app.get('/api/' + name, (req, res) => {
+  const { limit, cursor } = historyQuery.parse(req.query);
+  const rows = db.prepare(`SELECT * FROM ${table} ${cursor ? `WHERE (${time},id)<(?,?)` : ''} ORDER BY ${time} DESC,id DESC LIMIT ?`).all(...(cursor || []), limit + 1), page = rows.slice(0, limit), last = page.at(-1);
+  // Backup listings never expose storage paths, matching /api/state.
+  const backups = name === 'backups', verifications = backups ? backupVerifications(page.map(row => row.id)) : null;
+  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; row = rest; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
+});
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
   const result=await prepareServerKey();
