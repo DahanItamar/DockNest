@@ -26,8 +26,13 @@ function heartbeat(running=true){db.prepare("INSERT INTO settings VALUES ('worke
 function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');return false;}
 heartbeat();
 const heartbeatTimer=setInterval(()=>{if(renew())heartbeat();},LEASE_TTL_MS/4);
-for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{stopping=true;});
+// Drain: the first signal stops claiming and lets the current job finish, then the lease is released and the worker
+// exits 0. A second signal exits at once and leaves the lease to expire; the next worker marks the job recovery_required.
+let signals=0;
+for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){console.error(`${event} received again; exiting without draining. The lease expires in ${LEASE_TTL_MS/1000}s and interrupted jobs become recovery_required on next start.`);process.exit(1);}stopping=true;console.log(`${event} received; draining: no new jobs will be claimed, waiting for the current job to finish.`);});
 try{
  let reconcileAt=0;
  while(!stopping&&renew()){if(Date.now()>=reconcileAt){const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;}tickScheduler();tickSelfBackup();const managerJob=claimSelfBackup();if(managerJob)await executeSelfBackup(managerJob);else{const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,3000));}}
-}finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);}}
+}finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
+// Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
+process.exit(lost?1:0);
