@@ -17,6 +17,7 @@ COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/remote ./remote
 # Release notes ship with the image so the dashboard can show what changed without going online.
 COPY --from=build --chown=node:node /app/docs/releases ./docs/releases
+COPY --from=build --chown=node:node /app/CHANGELOG.md ./CHANGELOG.md
 USER node
 EXPOSE 3000
 CMD ["node", "src/server.js"]

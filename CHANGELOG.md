@@ -1,0 +1,39 @@
+# Changelog
+
+All notable changes to DockNest are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and DockNest uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). [docs/upgrading.md](docs/upgrading.md) describes what stays stable within a major version and the deprecation policy. Detailed notes for each release live in [docs/releases](docs/releases).
+
+## [Unreleased]
+
+### Added
+
+- Versioned metadata migrations tracked in `PRAGMA user_version`. Before migrating, DockNest writes a private snapshot to `DATA_DIR/upgrade-snapshots` and keeps the newest five. Startup is refused on a newer schema, with rollback instructions.
+- `scripts/upgrade.sh`: a one-command upgrade, rollback and downgrade with a deployment hold, configuration backup, health wait, automatic return when the schema is unchanged, and JSON progress for unattended runs.
+- Public `GET /api/version` endpoint (`{version, schemaVersion}`). The preferences drawer shows the running version and links to the releases page. There is no automatic update check.
+- Boot recovery reports `bootRecoveryOutdated` when the helper copied onto a host differs from the running release.
+- Signed container images on GitHub Container Registry (`ghcr.io/dahanitamar/docknest`) and a `docknest-release.json` manifest on each release. Release notes are bundled in the image.
+- `compose.override.yaml` (ignored by git) for local Compose changes, with an example file.
+- Paginated history API.
+- Worker lease and graceful drain when the worker is stopped.
+- Recovery verification levels.
+- S3-compatible backup storage.
+
+### Changed
+
+- Hardened website probe URL validation.
+
+## [2.0.0] - 2026-10-17
+
+### Added
+
+- Online integrity checks for large SQLite databases, per-site `sqliteIntegrityCheck`, and reuse of unchanged-database checks.
+- Delivery modes per site: a temporary copy then upload, or a direct stream to backup storage.
+- Live job progress, step diagnostics and clearer failure causes.
+
+### Changed
+
+- SSH and storage sessions tolerate about 100 seconds of silence.
+
+See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
+
+[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0

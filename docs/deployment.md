@@ -47,7 +47,7 @@ The central dashboard proxy is distinct from each site's maintenance proxy. A ma
 
 Run `docker compose logs --tail=100 api worker` and review dashboard jobs/recovery failures. A running API does not imply a running worker or a recoverable backup. Monitor disk space, worker activity, failed jobs, and sites requiring recovery. Use one worker until concurrency and crash-recovery behavior have passed the acceptance checks.
 
-Before updating, stop API and worker and snapshot the metadata volume and remote backup inventory plus separately stored keys. Build and start the new version with `docker compose up -d --build`. Rollback requires the previous image and compatible saved metadata; do not blindly run old code against a migrated database.
+Use `scripts/upgrade.sh` to upgrade. It holds new work, waits for running jobs, saves configuration and secrets, and starts the new release. The new release snapshots the metadata before migrating it. The script also prints or performs the rollback. [Upgrading](upgrading.md) covers the script, the manual steps, rollback with pre-upgrade snapshots, the published image and the stability contract. Do not run old code against a migrated database; it refuses to start and names the snapshot to restore.
 
 ## Central-system recovery
 
