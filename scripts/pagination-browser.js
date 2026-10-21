@@ -126,11 +126,12 @@ try{
    await page.locator(selector).first().waitFor().catch(async e=>{await page.screenshot({path:'data/pagination-failure.png',fullPage:true});console.log(route,errors);throw e});await settle();if(count!=null)assert.equal(await page.locator(selector).count(),count,route+' bounded record count');else assert.ok(await page.locator(selector).count()<22,'Backup groups fit the viewport');
    if(route==='Backups')await page.locator('.backup-group>summary').first().click();
    if(route==='Overview')await page.locator('.dash-site>summary').first().click();
-   if(route==='Audit')await page.locator('.audit-details>summary').first().click();
+   if(route==='Audit'){await page.getByRole('button',{name:'View details'}).first().click();await page.getByRole('dialog',{name:'Audit details'}).getByText('fixture.audit.0').waitFor();}
    await page.waitForFunction(()=>[...document.querySelectorAll('img[src^="/brand/"]')].every(img=>img.complete&&img.naturalWidth>0));
    await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:directory+'/'+slug+'-'+theme+'.png',fullPage:true});
    for(const width of [1920,1280,1024,768,390,320]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,route+' fits '+width);}
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:directory+'/'+slug+'-'+theme+'-mobile.png',fullPage:true});
+   if(route==='Audit')await page.getByRole('button',{name:'Close dialog'}).click();
   }
  }
  assert.deepEqual(errors,[]);

@@ -5,3 +5,7 @@ useDefault = true
 description = "Published RFC 6238 test vector, never a deployed authenticator"
 regexTarget = "secret"
 regexes = ['''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''']
+
+[[allowlists]]
+description = "Test fixture that encodes a throwaway ed25519 host key generated at runtime; the file contains only the PEM header text, never key material"
+paths = ['''^tests/sftp-fixture\.js$''']
