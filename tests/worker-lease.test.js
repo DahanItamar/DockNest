@@ -51,6 +51,11 @@ test('worker:status reports lease, heartbeat and recovery_required jobs read-onl
  assert.doesNotMatch(output,/encrypted-key/);
  releaseLease(db,'worker-status-holder');
 });
+test('API and worker can create a brand-new state database at the same moment',async()=>{
+ const fresh=join(temporary,'fresh'),start=Date.now()+1000,script="const start=Number(process.argv[2]);while(Date.now()<start);await import(process.argv[1]);";
+ const runs=await Promise.allSettled(Array.from({length:6},()=>promisify(execFile)(process.execPath,['--input-type=module','-e',script,new URL('../src/db.js',import.meta.url).href,String(start)],{env:{...process.env,DATA_DIR:fresh}})));
+ assert.deepEqual(runs.map(r=>r.status==='fulfilled'?'ok':String(r.reason.stderr).match(/database is locked|Error[^\n]*/)?.[0]),Array(6).fill('ok'));
+});
 const status=dataDir=>spawnSync(process.execPath,[fileURLToPath(new URL('../src/worker-status.js',import.meta.url))],{encoding:'utf8',env:{...process.env,DATA_DIR:dataDir}});
 test('worker:status reports an uninitialised database clearly and exits 1',async()=>{
  const empty=join(temporary,'empty');await mkdir(empty);await writeFile(join(empty,'state.sqlite'),'');

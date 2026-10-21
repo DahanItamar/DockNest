@@ -4,10 +4,11 @@ import path from 'node:path';
 import { config } from './config.js';
 
 export const db = new DatabaseSync(path.join(config.dataDir, 'state.sqlite'));
+// busy_timeout first: switching a new database to WAL takes a lock that a concurrently starting process may hold.
+db.exec('PRAGMA busy_timeout=5000');
 db.exec(`
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,totp_secret TEXT NOT NULL,totp_last_counter INTEGER NOT NULL DEFAULT -1,recovery_codes TEXT NOT NULL,enrolled INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf_token TEXT NOT NULL,expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS challenges (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);
