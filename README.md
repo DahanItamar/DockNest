@@ -62,7 +62,7 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
 >
 > **Storage:** restic and docker-volume-backup support S3 and more. Borg uses SSH or a local disk.
 
-DockNest is newer and does less: only Linux servers with Docker, and only SFTP or S3-compatible storage (S3 support is new and not yet validated end to end). You can use it together with a server snapshot.
+DockNest is newer and does less: only Linux servers with Docker, and only SFTP or S3-compatible storage (S3-compatible storage is in beta: it is tested against a simulated S3 endpoint, not yet against real providers). You can use it together with a server snapshot.
 
 ## Requirements
 
@@ -70,7 +70,7 @@ DockNest is newer and does less: only Linux servers with Docker, and only SFTP o
 | :-- | :-- |
 | **DockNest server** (runs the dashboard) | Linux with Docker and Docker Compose. Node.js 24 for the one-time setup. |
 | **Each server you back up** | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
-| **Backup storage** | One of these (see [storage backends](docs/storage-backends.md)):<br>• **SFTP:** any SFTP server the DockNest server can reach. It must support `fsync@openssh.com`.<br>• **S3-compatible:** a bucket on AWS S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or similar, optionally with Object Lock. New: real backup and restore on S3 still needs Linux Docker integration validation.<br>• **Local disk:** for testing only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). |
+| **Backup storage** | One of these (see [storage backends](docs/storage-backends.md)):<br>• **SFTP:** any SFTP server the DockNest server can reach. It must support `fsync@openssh.com`.<br>• **S3-compatible:** a bucket on AWS S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or similar, optionally with Object Lock. S3-compatible storage is in beta: it is tested against a simulated S3 endpoint, not yet against real providers.<br>• **Local disk:** for testing only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). |
 | **You** | A browser and an authenticator app. |
 
 Just trying it out? Node.js 24 and Python 3 on your own computer are enough.

@@ -5,11 +5,11 @@ DockNest writes encrypted backup packages (`DBM1`, see [backup format](backup-fo
 | Backend | Status | Requirements |
 | :-- | :-- | :-- |
 | SFTP | Supported. Real backup and restore validated by the Linux integration suite. | `fsync@openssh.com` file sync, atomic rename, a pinned SHA256 host key and a dedicated directory. |
-| S3-compatible | New. Tested against an in-process fake S3 endpoint only. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
+| S3-compatible | Beta. Backup, restore and Object Lock have been tested against an in-process fake S3 endpoint only. Not yet validated against a real provider or by the Linux integration suite. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
 | Local directory | Tests and explicitly allowed deployments only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). | A directory on the DockNest server. It is lost with that server. |
 
 > [!WARNING]
-> The S3 adapter has not been validated with real backup and restore. That needs the Linux Docker integration suite run against a real provider. Before you rely on it, run an isolated restore from an S3 destination and check the restored site.
+> S3 support is beta until the S3 integration job and the Linux backup/restore job pass. The S3 adapter has not been validated with real backup and restore. That needs the Linux Docker integration suite run against a real provider. Before you rely on it, run an isolated restore from an S3 destination and check the restored site.
 
 ## Adapter boundary
 
@@ -39,7 +39,7 @@ Recovery after a crash re-authenticates whichever file exists before adopting it
 
 - **Endpoint:** must be HTTPS. Plain HTTP is accepted only on loopback, for example a local MinIO.
 - **Addressing:** virtual-hosted (`bucket.endpoint`) by default. Use path-style for MinIO and for bucket names that contain dots.
-- **Region:** use `auto` for Cloudflare R2.
+- **Region:** filled in from the endpoint until you edit it: AWS and Wasabi use the part after `s3.` (bare endpoints mean `us-east-1`), Backblaze B2 uses the part after `s3.` (for example `us-west-004`), and Cloudflare R2 uses `auto`. Other endpoints keep what you type. The region is part of every request signature, so a wrong region fails authentication.
 - **Prefix:** an optional folder prefix inside the bucket. Backups go under `<prefix>/BACKUP/<server>/<site>/` and recovery kits under `<prefix>/BACKUP/docknest-recovery/`.
 - **Requests:** signed with AWS Signature Version 4, implemented with `node:crypto` and `fetch`, so there is no SDK dependency. Each request body is hashed into `x-amz-content-sha256`, and the provider rejects a body that changes in transit.
 - **Credentials:** the access key ID and secret are sealed together with the master key (AES-256-GCM), in the same way as SFTP passwords and keys. They are never returned by the API, written to audit events or included in error messages.
@@ -65,11 +65,16 @@ S3 has no fsync or rename. DockNest maps the journal steps like this:
 
 ### Object Lock (immutable copies)
 
-When you turn on immutable copies, set a mode (`GOVERNANCE` or `COMPLIANCE`) and a number of days.
+When you turn on immutable copies, backups cannot be deleted or overwritten until the date you choose, even by DockNest or by someone who steals its key. Set a mode and a number of days:
+
+- **Governance:** administrators with a special permission can remove locked backups early.
+- **Compliance:** nobody can remove locked backups early, not even the account owner. You pay for storage until the date passes. The form asks you to confirm this before connecting.
+- **Days:** each backup is locked this many days after it is created. Retention can only remove a backup after this date. The form warns when the lock is longer than the shortest site retention window (retention count times schedule interval), and again above 365 days.
 
 - **Bucket setup:** the bucket must be created with Object Lock enabled, which also enables versioning. It must have **no default retention rule**. A default rule would also lock temporary uploads and the connection probe, so they could not be deleted. The connection test checks both.
 - **When retention is applied:** only when a package is published. The copy request sets `x-amz-object-lock-mode` and `x-amz-object-lock-retain-until-date` to the publish time plus the configured days. DockNest then reads the published object's headers to confirm the lock. If they are missing, publication fails.
-- **Deletion:** before deleting, DockNest reads the object's retention and legal hold, and refuses with `EOBJECTLOCKED` while either applies. Retention keeps the deletion request, skips the locked backup, continues with the others and records a `retention.object_locked` audit event. Worker reconciliation retries every five minutes and finishes the deletion once the lock expires. A locked backup can therefore outlive the site's retention count.
+- **Deletion:** before deleting, DockNest reads the object's retention and legal hold, and refuses with `EOBJECTLOCKED` while either applies. Retention then records a deferral in `retention_deferrals` (`backup_id`, `retry_after`, `retain_until`, `first_seen`) instead of a blocking retention operation, so the backup stays fully usable: restore, download, integrity checks and pinning keep working. `retry_after` is the lock's retain-until date, or 24 hours later when the provider gives no date (legal hold). One `retention.deferred` audit event is written when the deferral is created, and another only if the date changes. Retention and reconciliation skip the backup until `retry_after`, then try again. Pinning removes the deferral, and a pinned backup is never deleted when the lock ends. A locked backup can therefore outlive the site's retention count.
+- **Storage migration:** deferred backups are copied like any other backup and their deferral is cleared. The old locked object stays on the old storage until its lock ends; DockNest does not remove it. The migration result reports `lockedOriginals`.
 - **Self-backup:** recovery kits published to the destination get the same retention.
 - **Governance mode:** DockNest never sends a bypass header. Only a privileged identity outside DockNest can remove governance retention early.
 
@@ -81,10 +86,10 @@ These notes are not verified against each live provider. Confirm them with the c
 
 | Provider | Endpoint example | Notes |
 | :-- | :-- | :-- |
-| AWS S3 | `https://s3.eu-central-1.amazonaws.com` | Region must match the bucket. |
-| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | Region `auto`. Check Object Lock support for your account before turning it on. |
-| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | Use an application key limited to the bucket. Object Lock must be enabled on the bucket. |
-| Wasabi | `https://s3.<region>.wasabisys.com` | Object Lock must be chosen when the bucket is created. |
+| AWS S3 | `https://s3.eu-central-1.amazonaws.com` | Region: filled from the endpoint. It must match the bucket. |
+| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | Region: filled from the endpoint (`auto`). Check Object Lock support for your account before turning it on. |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | Region: filled from the endpoint (for example `us-west-004`). Use an application key limited to the bucket. Object Lock must be enabled on the bucket. |
+| Wasabi | `https://s3.<region>.wasabisys.com` | Region: filled from the endpoint. Object Lock must be chosen when the bucket is created. |
 | MinIO | `https://minio.example.internal:9000` | Use path-style addressing. Plain HTTP works only on loopback. |
 
 ## Verification status
