@@ -7,9 +7,10 @@ const mode=process.argv[2]||'plan',holder=`migrate-storage:${randomUUID()}`;let 
 try{
  if(mode==='plan')console.log(JSON.stringify({pending:migrationPlan().length}));
  else if(mode==='apply'){
-  if(!acquireLease(db,holder).acquired)throw new Error('Worker lease held');
-  leased=true;timer=setInterval(()=>{if(!renewLease(db,holder))console.error('Storage migration lost the worker lease.');},LEASE_TTL_MS/4);
-  console.log(JSON.stringify(await migrateStorage()));
+  const attempt=acquireLease(db,holder);
+  // Report the lease specifically; the generic message below lists every other blocking cause.
+  if(!attempt.acquired){console.error(`Storage migration blocked: the worker lease is held by ${attempt.lease.holder} until ${new Date(attempt.lease.expires_at).toISOString()}. Stop the worker gracefully, or wait for the lease to expire after a crash (npm run worker:status). Originals are retained.`);process.exitCode=1;}
+  else{leased=true;timer=setInterval(()=>{if(!renewLease(db,holder))console.error('Storage migration lost the worker lease.');},LEASE_TTL_MS/4);console.log(JSON.stringify(await migrateStorage()));}
  }else throw new Error('Invalid mode');
 }catch{console.error('Storage migration blocked. Check stopped API/worker, worker lease, deployment hold, active operations, original file integrity and destination collisions. Originals are retained.');process.exitCode=1;}
 finally{clearInterval(timer);if(leased)releaseLease(db,holder);db.close();}

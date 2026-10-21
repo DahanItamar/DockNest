@@ -56,6 +56,12 @@ test('API and worker can create a brand-new state database at the same moment',a
  const runs=await Promise.allSettled(Array.from({length:6},()=>promisify(execFile)(process.execPath,['--input-type=module','-e',script,new URL('../src/db.js',import.meta.url).href,String(start)],{env:{...process.env,DATA_DIR:fresh}})));
  assert.deepEqual(runs.map(r=>r.status==='fulfilled'?'ok':String(r.reason.stderr).match(/database is locked|Error[^\n]*/)?.[0]),Array(6).fill('ok'));
 });
+test('storage migration names the held worker lease as the reason it is blocked',()=>{
+ acquireLease(db,'worker-busy');
+ const result=spawnSync(process.execPath,[fileURLToPath(new URL('../scripts/migrate-storage.js',import.meta.url)),'apply'],{encoding:'utf8',env:{...process.env}});
+ assert.equal(result.status,1);assert.match(result.stderr,/worker lease is held by worker-busy until/);
+ assert.equal(readLease(db).holder,'worker-busy');releaseLease(db,'worker-busy');
+});
 const status=dataDir=>spawnSync(process.execPath,[fileURLToPath(new URL('../src/worker-status.js',import.meta.url))],{encoding:'utf8',env:{...process.env,DATA_DIR:dataDir}});
 test('worker:status reports an uninitialised database clearly and exits 1',async()=>{
  const empty=join(temporary,'empty');await mkdir(empty);await writeFile(join(empty,'state.sqlite'),'');
