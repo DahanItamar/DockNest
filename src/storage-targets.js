@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, rateLimit } from './auth.js';
-import { testStorageTarget, targetOptions, activeStorage } from './storage.js';
+import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix } from './storage.js';
+import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
 
 export const storageTargets=Router();
@@ -15,16 +16,35 @@ const schema=z.object({
  root:z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value=>value!=='/'&&!value.split('/').includes('..'),'Use a dedicated absolute storage directory.'),
  capacityBytes:z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(1000000000000),
 }).superRefine((value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});});
+// S3 endpoints: HTTPS (plain HTTP only on loopback), no embedded credentials, query or fragment.
+const endpoint=z.string().trim().max(512).transform((value,ctx)=>{
+ let url;try{url=new URL(value);}catch{ctx.addIssue({code:'custom',message:'Enter the S3 endpoint as a URL, for example https://s3.eu-central-1.amazonaws.com.'});return z.NEVER;}
+ if(!(url.protocol==='https:'||(url.protocol==='http:'&&isLoopback(url.hostname)))||url.username||url.password||url.search||url.hash){ctx.addIssue({code:'custom',message:'Use an HTTPS endpoint without credentials, query or fragment.'});return z.NEVER;}
+ return url.origin+url.pathname.replace(/\/+$/,'');
+});
+const s3Schema=z.object({
+ name:z.string().trim().min(1).max(100),endpoint,region:z.string().trim().regex(/^[a-z0-9-]{1,40}$/,'Enter the bucket region, for example us-east-1 (auto for Cloudflare R2).'),
+ bucket:z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/,'Enter a valid bucket name.'),
+ prefix:z.string().trim().max(200).default('').transform(value=>value.replace(/^\/+|\/+$/g,'')).refine(value=>/^[a-zA-Z0-9_.\/-]*$/.test(value)&&!value.split('/').some(part=>part==='..'||part==='.'||(value&&!part)),'Use a simple folder prefix such as docknest or team/docknest.'),
+ pathStyle:z.boolean().default(false),
+ accessKeyId:z.string().trim().regex(/^[A-Za-z0-9+/=_.-]{1,128}$/,'Enter the access key ID.'),secretAccessKey:z.string().min(1).max(256),
+ objectLock:z.object({mode:z.enum(['GOVERNANCE','COMPLIANCE']),days:z.number().int().min(1).max(36500)}).nullable().default(null),
+});
 function safe(row){
- const {credential,...rest}=row;
- const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get('sftp:'+row.id+':%').bytes+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
- return {...rest,hasCredential:Boolean(credential),trackedBytes:used};
+ const {credential,...rest}=row,mode=targetMode(row);
+ const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(targetPrefix({mode,id:row.id})+'%').bytes+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
+ if(mode==='s3'){
+  // Never return the sealed access key pair; only public connection settings.
+  const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');
+  return {id:row.id,name:row.name,kind:'s3',status:row.status,created_at:row.created_at,last_tested_at:row.last_tested_at,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,hasCredential:Boolean(credential),trackedBytes:used};
+ }
+ return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used};
 }
 storageTargets.get('/',(_req,res)=>res.json({targets:db.prepare('SELECT * FROM storage_targets ORDER BY created_at').all().map(safe),activeTargetId:activeStorage().id}));
 storageTargets.get('/:id/tree',(req,res)=>{
- const target=db.prepare('SELECT id,root FROM storage_targets WHERE id=?').get(req.params.id);
+ const target=db.prepare('SELECT id,root,auth_type FROM storage_targets WHERE id=?').get(req.params.id);
  if(!target)return res.status(404).json({error:'Storage destination not found.'});
- const prefix='sftp:'+target.id+':';
+ const prefix=targetPrefix({mode:targetMode(target),id:target.id});
  const rows=db.prepare(`SELECT b.id,b.captured_at,b.size,b.pinned,b.verified,b.path,s.id AS site_id,s.name AS site_name,v.id AS server_id,v.name AS server_name
  FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id
  WHERE b.path LIKE ? ORDER BY b.captured_at DESC LIMIT 1001`).all(prefix+'%');
@@ -55,6 +75,19 @@ storageTargets.post('/connect',rateLimit('storage-connect',10),async(req,res)=>{
   db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,data.capacityBytes,'connected',now,now);
   db.prepare("INSERT OR IGNORE INTO settings VALUES('backup_storage_target',?)").run(targetId);
   audit(req.user.id,'storage.connected',targetId,{authType:data.authType});
+ });
+ res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
+});
+storageTargets.post('/s3/connect',rateLimit('storage-connect',10),async(req,res)=>{
+ const data=s3Schema.parse(req.body),targetId=id(),url=new URL(data.endpoint),root='/'+data.prefix;
+ const settings={endpoint:data.endpoint,region:data.region,bucket:data.bucket,pathStyle:data.pathStyle,objectLock:data.objectLock};
+ await testStorageTarget({mode:'s3',id:targetId,name:data.name,...settings,root,accessKeyId:data.accessKeyId,secretAccessKey:data.secretAccessKey});
+ const credential=seal(JSON.stringify({accessKeyId:data.accessKeyId,secretAccessKey:data.secretAccessKey})),now=new Date().toISOString();
+ transaction(()=>{
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,url.hostname,Number(url.port)||(url.protocol==='https:'?443:80),data.bucket,'','s3-access-key',credential,root,0,'connected',now,now);
+  db.prepare("INSERT INTO storage_target_settings VALUES(?,'s3',?)").run(targetId,JSON.stringify(settings));
+  db.prepare("INSERT OR IGNORE INTO settings VALUES('backup_storage_target',?)").run(targetId);
+  audit(req.user.id,'storage.connected',targetId,{authType:'s3-access-key',objectLock:data.objectLock?.mode||null});
  });
  res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
 });
