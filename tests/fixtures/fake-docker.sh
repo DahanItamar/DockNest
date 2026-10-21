@@ -12,7 +12,7 @@ case "$1" in
     case "$*" in *--quiet*) ;; *--images*) read_state images ;; *) [ -e "$S/image-mode" ] || echo '    context: /srv/docknest' ;; esac ;;
   ps) [ "$(read_state running)" = up ] && printf 'api\nworker\n' ;;
   build|pull) [ -e "$S/fail-build" ] && exit 1; [ -e "$S/fail-build-once" ] && { rm "$S/fail-build-once"; exit 1; }; exit 0 ;;
-  stop) echo down > "$S/running" ;;
+  stop) [ -e "$S/migrate-on-stop" ] && echo 2 > "$S/schema"; [ -e "$S/fail-stop" ] && exit 1; echo down > "$S/running" ;;
   logs) echo 'fake logs' ;;
   up)
     version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)
