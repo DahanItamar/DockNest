@@ -14,11 +14,13 @@ test('release manifest carries schema, upgrade floor, image digest and notes onl
   assert.throws(() => manifest({ version: pkg.version, digest: 'latest' }), /--digest/);
 });
 
-test('release notes resolve to the exact version file, or the minor file for X.Y.0', () => {
+test('release notes resolve to the exact version file, or the minor file for X.Y.0 and its release candidates', () => {
   const files = ['2026-10-03-dark-mode.md', '2026-10-17-v2.0.md', '2026-11-02-v2.1.0.md', '2026-11-09-v2.1.1.md'];
   assert.equal(releaseNotes('2.0.0', files), 'docs/releases/2026-10-17-v2.0.md');
   assert.equal(releaseNotes('2.0.1', files), null);
   assert.equal(releaseNotes('2.1.0', files), 'docs/releases/2026-11-02-v2.1.0.md');
   assert.equal(releaseNotes('2.1.1', files), 'docs/releases/2026-11-09-v2.1.1.md');
   assert.equal(releaseNotes('2.2.0-rc.1', files), null);
+  assert.equal(releaseNotes('2.0.0-rc.1', files), 'docs/releases/2026-10-17-v2.0.md');
+  assert.equal(releaseNotes('2.0.1-rc.1', files), null);
 });

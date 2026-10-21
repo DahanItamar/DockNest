@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.1.0-rc.1] - 2026-10-22
+
+Release candidate for 2.1.0. See [docs/releases/2026-10-22-v2.1.md](docs/releases/2026-10-22-v2.1.md), including the upgrade notes.
+
 ### Added
 
 - Versioned metadata migrations tracked in `PRAGMA user_version`. Before migrating, DockNest writes a private snapshot to `DATA_DIR/upgrade-snapshots` and keeps the newest five. Startup is refused on a newer schema, with rollback instructions.
@@ -19,7 +23,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Changed
 
-- Hardened website probe URL validation.
+- Hardened website probe URL validation: resolve once on the source server, refuse metadata, link-local and other internal addresses, pin connections, restrict redirects and apply one total time limit per probe. Sites whose stored URL is refused keep backing up with the probe skipped and a warning.
+- Backup status labels describe what was actually checked instead of a single "Verified" label.
+- Status marks use the shared icon set instead of text characters.
+
+### Fixed
+
+- A worker killed during a job no longer blocks its replacement after restart.
+- Concurrent first start of the API and worker no longer fails with "database is locked".
+- Flaky SFTP test fixtures caused by an ssh2 key-generation bug.
 
 ## [2.0.0] - 2026-10-17
 
@@ -35,5 +47,6 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the full notes.
 
-[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/DahanItamar/DockNest/compare/v2.1.0-rc.1...HEAD
+[2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0
