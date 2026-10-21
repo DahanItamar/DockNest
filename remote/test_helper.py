@@ -405,9 +405,10 @@ class MaintenanceTests(unittest.TestCase):
     def test_maintenance_flag_is_synced_after_successful_public_probes(self):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch()
-            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            cfg={'containers':['fixture'],'domains':['fixture.example'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
             events=[]
-            def probe(m):
+            def probe(m,domains=()):
+                self.assertEqual(domains,['fixture.example'])
                 events.append(('probe',(base/'enabled').exists()))
                 return (503,b'dbm-maintenance-v1') if (base/'enabled').exists() else (200,b'healthy')
             with patch('helper.public_probe',side_effect=probe),patch('helper.health',return_value=True),patch('helper.sync_maintenance_flag',side_effect=lambda directory:events.append(('sync',(directory/'enabled').exists()))):
@@ -456,19 +457,14 @@ class MaintenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch()
             cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
-            with patch('helper.urllib.request.urlopen',side_effect=OSError('fixture offline')):
+            with patch('helper.fetch',side_effect=OSError('fixture offline')):
                 with self.assertRaises(OSError):maintenance(cfg,True)
                 self.assertFalse((base/'enabled').exists())
                 (base/'enabled').touch()
                 with self.assertRaises(OSError):maintenance(cfg,True)
                 self.assertTrue((base/'enabled').exists(),'An existing manual maintenance flag is retained')
     def test_http_200_maintenance_page_is_not_application_health(self):
-        class Response:
-            status=200
-            def __enter__(self):return self
-            def __exit__(self,*args):pass
-            def read(self,*args):return b'<meta content="dbm-maintenance-v1">'
-        with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.urllib.request.urlopen',return_value=Response()):
+        with patch('helper.inspect',return_value=[{'State':{'Running':True}}]),patch('helper.fetch',return_value=(200,b'<meta content="dbm-maintenance-v1">')):
             self.assertFalse(health(['fixture'],'http://fixture/'))
     def test_health_failure_keeps_maintenance_enabled(self):
         with tempfile.TemporaryDirectory() as d:
@@ -477,4 +473,92 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.health',return_value=False):
                 with self.assertRaises(ValueError):maintenance(cfg,False)
                 self.assertTrue((base/'enabled').exists())
+class ProbeSsrfTests(unittest.TestCase):
+    """Health and public probes run as root on the source host; they must not reach internal services."""
+    @staticmethod
+    def resolver(table,calls=None):
+        import socket
+        real=socket.getaddrinfo
+        def resolve(host,port,*args,**kw):
+            if calls is not None:calls.append(host)
+            if host not in table:return real(host,port,*args,**kw)
+            return [(socket.AF_INET6 if ':' in a else socket.AF_INET,socket.SOCK_STREAM,6,'',(a,port)) for a in table[host]]
+        return resolve
+    def serve(self,routes):
+        import http.server,threading
+        seen=[]
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                seen.append((self.path,self.headers.get('Host')))
+                status,headers,body=routes.get(self.path,(404,{},b'missing'))
+                self.send_response(status)
+                for key,value in headers.items():self.send_header(key,value)
+                self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.server_close);self.addCleanup(server.shutdown)
+        return server.server_address[1],seen
+    def test_metadata_link_local_multicast_unspecified_and_private_literals_are_refused(self):
+        from helper import probe_addresses
+        for address in ['169.254.169.254','169.254.170.2','fd00:ec2::254','::ffff:169.254.169.254','fe80::1','100.100.100.200','224.0.0.1','ff02::1','0.0.0.0','0.1.2.3','::','240.0.0.1','255.255.255.255','10.0.0.5','172.17.0.2','192.168.1.1','fd12::1','100.64.0.1']:
+            with self.assertRaises(ValueError,msg=address):probe_addresses(address,80,['10.0.0.5','192.168.1.1'])
+        for address in ['127.0.0.1','127.0.1.1','::1','::ffff:127.0.0.1','93.184.216.34','2606:2800:220:1::1']:self.assertEqual(probe_addresses(address,80),[address.replace('::ffff:','')])
+    def test_names_are_resolved_on_the_host_and_every_answer_must_pass(self):
+        from helper import probe_addresses
+        table={'metadata.example':['169.254.169.254'],'mixed.example':['93.184.216.34','169.254.169.254'],'internal.example':['10.0.0.5'],'site.example':['10.0.0.5'],'loop.example':['127.0.0.1'],'dual.example':['2606:2800:220:1::1','93.184.216.34','93.184.216.34']}
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver(table)):
+            for host in ['metadata.example','mixed.example','internal.example']:
+                with self.assertRaises(ValueError,msg=host):probe_addresses(host,443,['metadata.example','mixed.example'])
+            self.assertEqual(probe_addresses('loop.example',443),['127.0.0.1'])
+            self.assertEqual(probe_addresses('dual.example',443),['2606:2800:220:1::1','93.184.216.34'])
+            with patch('helper.local_address',return_value=False):
+                with self.assertRaises(ValueError):probe_addresses('site.example',443,['site.example'])
+            with patch('helper.local_address',return_value=True) as local:
+                self.assertEqual(probe_addresses('SITE.example.',443,['site.example']),['10.0.0.5'])
+                with self.assertRaises(ValueError):probe_addresses('internal.example',443,['site.example'])
+                with self.assertRaises(ValueError):probe_addresses('metadata.example',443,['metadata.example'])
+            local.assert_called_once()
+        with patch('helper.socket.getaddrinfo',side_effect=OSError('no such host')):
+            with self.assertRaises(ValueError):probe_addresses('missing.example',443)
+    def test_local_address_only_accepts_addresses_owned_by_this_host(self):
+        import ipaddress
+        from helper import local_address
+        self.assertTrue(local_address(ipaddress.ip_address('127.0.0.1')))
+        self.assertFalse(local_address(ipaddress.ip_address('203.0.113.9')))
+    def test_connection_is_pinned_to_the_validated_address_with_original_host(self):
+        from helper import fetch
+        port,seen=self.serve({'/ok':(200,{},b'healthy')});calls=[]
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver({'site.example':['127.0.0.1']},calls)):
+            self.assertEqual(fetch('http://site.example:%d/ok'%port,5),(200,b'healthy'))
+        self.assertEqual(calls.count('site.example'),1,'One resolution per hop leaves no rebinding window')
+        self.assertEqual(seen,[('/ok','site.example:%d'%port)])
+        from helper import PinnedHTTPConnection
+        with patch('helper.socket.create_connection',side_effect=[OSError('no IPv6 route'),'socket']) as connect:
+            connection=PinnedHTTPConnection('site.example',80,['2606:2800:220:1::1','93.184.216.34'],timeout=5);connection.connect()
+        self.assertEqual([call.args[0] for call in connect.call_args_list],[('2606:2800:220:1::1',80),('93.184.216.34',80)])
+    def test_redirects_stay_on_the_same_host_or_configured_domains_and_are_revalidated(self):
+        from helper import fetch
+        port,seen=self.serve({'/start':(302,{'Location':'/ok'},b''),'/ok':(200,{},b'healthy'),'/away':(302,{'Location':'http://169.254.169.254/latest/meta-data/'},b''),'/other':(301,{'Location':'http://other.example/ok'},b'moved'),'/rebind':(302,{'Location':'http://www.site.example/'},b''),'/loop':(302,{'Location':'/loop'},b'')})
+        table={'site.example':['127.0.0.1'],'www.site.example':['169.254.169.254'],'other.example':['127.0.0.1']}
+        with patch('helper.socket.getaddrinfo',side_effect=self.resolver(table)):
+            base='http://site.example:%d'%port
+            self.assertEqual(fetch(base+'/start',5),(200,b'healthy'))
+            self.assertEqual(fetch(base+'/away',5)[0],302)
+            self.assertEqual(fetch(base+'/other',5),(301,b'moved'))
+            with self.assertRaises(ValueError):fetch(base+'/rebind',5,['site.example','www.site.example'])
+            self.assertEqual(fetch(base+'/loop',5)[0],302)
+            with patch('helper.inspect',return_value=[]):
+                self.assertFalse(health([],base+'/away'))
+                self.assertFalse(health([],base+'/rebind',['www.site.example']))
+                self.assertTrue(health([],base+'/start'))
+        self.assertNotIn('/latest/meta-data/',[path for path,_ in seen])
+        self.assertEqual(sum(path=='/loop' for path,_ in seen),6)
+    def test_probe_body_is_capped_and_public_probe_is_validated(self):
+        from helper import fetch
+        port,_=self.serve({'/big':(200,{},b'x'*(300*1024))})
+        self.assertEqual(len(fetch('http://127.0.0.1:%d/big'%port,5)[1]),256*1024)
+        for url in ['http://169.254.169.254/','http://[fd00:ec2::254]/','http://10.1.2.3/','file:///etc/passwd','ftp://example.org/','https://user:secret@example.org/']:
+            with self.assertRaises(ValueError,msg=url):public_probe({'publicUrl':url})
+            with patch('helper.inspect',return_value=[]):self.assertFalse(health([],url))
 if __name__=='__main__':unittest.main()

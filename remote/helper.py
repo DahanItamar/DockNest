@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -764,20 +764,79 @@ def verify_artifacts(root,manifest):
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
     if set(actual)!=names:raise ValueError('Artifact inventory does not cover all manifest dependencies')
     return True
-class OriginHTTPSConnection(http.client.HTTPSConnection):
+def pinned_socket(addresses,port,timeout):
+    """Connects only to addresses validated earlier, so a second DNS answer cannot redirect the probe."""
+    error=OSError('No validated probe address')
+    for address in addresses:
+        try:return socket.create_connection((address,port),timeout)
+        except OSError as failure:error=failure
+    raise error
+class PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self,host,port,addresses,**kw):super().__init__(host,port,**kw);self.addresses=addresses
+    def connect(self):self.sock=pinned_socket(self.addresses,self.port,self.timeout)
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self,host,port,addresses,**kw):super().__init__(host,port,**kw);self.addresses=addresses
     def connect(self):
-        sock=socket.create_connection(('127.0.0.1',self.port),self.timeout)
+        sock=pinned_socket(self.addresses,self.port,self.timeout)
         try:self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
         except Exception:sock.close();raise
+class OriginHTTPSConnection(PinnedHTTPSConnection):
+    def __init__(self,host,port,**kw):super().__init__(host,port,['127.0.0.1'],**kw)
 
-def public_probe(m):
+PROBE_LIMIT=256*1024
+METADATA_ADDRESSES={ipaddress.ip_address(a) for a in ['169.254.169.254','169.254.170.2','fd00:ec2::254','100.100.100.200']}
+THIS_NETWORK=ipaddress.ip_network('0.0.0.0/8')
+def local_address(address):
+    """True when the source host owns this address (bind succeeds only for local interfaces)."""
+    try:
+        with socket.socket(socket.AF_INET6 if address.version==6 else socket.AF_INET,socket.SOCK_STREAM) as probe:probe.bind((str(address),0))
+        return True
+    except OSError:return False
+def probe_addresses(hostname,port,domains=()):
+    """Resolve on the source host and return the addresses to pin, refusing internal targets.
+    Loopback and public addresses are allowed. Private, CGNAT and ULA addresses are allowed only
+    for a configured site domain name that resolves to an address of this host. Link-local, cloud
+    metadata, multicast, unspecified and reserved addresses are always refused. Every answer must pass."""
+    host=hostname.lower().rstrip('.')
+    try:literal=ipaddress.ip_address(host)
+    except ValueError:literal=None
+    try:answers=[literal] if literal else [ipaddress.ip_address(info[4][0].split('%')[0]) for info in socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)]
+    except (OSError,UnicodeError):raise ValueError('Probe host could not be resolved from the source server')
+    configured=not literal and host in {str(d).lower().rstrip('.') for d in domains or ()}
+    chosen=[]
+    for address in answers:
+        address=getattr(address,'ipv4_mapped',None) or address
+        if not address.is_loopback: # ::1 sits inside the reserved ::/8 block.
+            if address in METADATA_ADDRESSES or address.is_link_local or address.is_multicast or address.is_unspecified or address.is_reserved or getattr(address,'is_site_local',False) or (address.version==4 and address in THIS_NETWORK):raise ValueError('Probe URL resolves to a link-local, metadata or reserved address')
+            if not address.is_global and not (configured and local_address(address)):raise ValueError('Probe URL resolves to a private address; use the site domain, a loopback port or a public address')
+        if str(address) not in chosen:chosen.append(str(address))
+    if not chosen:raise ValueError('Probe host could not be resolved from the source server')
+    return chosen
+def fetch(url,timeout,domains=(),redirects=5):
+    """GET with every hop resolved, validated and pinned. Redirects are followed only to the same
+    host or to another configured site domain; otherwise the redirect response itself is returned."""
+    allowed={str(d).lower().rstrip('.') for d in domains or ()};origin=None
+    for _ in range(redirects+1):
+        parsed=urllib.parse.urlsplit(url)
+        if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ValueError('A valid HTTP or HTTPS probe URL is required')
+        host=parsed.hostname.lower().rstrip('.');origin=origin or host
+        if host!=origin and host not in allowed:return status,body
+        port=parsed.port or (443 if parsed.scheme=='https' else 80);addresses=probe_addresses(host,port,domains)
+        if parsed.scheme=='https':connection=PinnedHTTPSConnection(parsed.hostname,port,addresses,timeout=timeout,context=ssl.create_default_context())
+        else:connection=PinnedHTTPConnection(parsed.hostname,port,addresses,timeout=timeout)
+        try:
+            connection.request('GET',urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,'')),headers={'Cache-Control':'no-cache','User-Agent':'DockNest-helper/%d'%VERSION,'Accept':'*/*'})
+            response=connection.getresponse();status=response.status;body=response.read(PROBE_LIMIT);location=response.getheader('Location')
+        finally:connection.close()
+        if status not in (301,302,303,307,308) or not location:return status,body
+        url=urllib.parse.urljoin(url,location)
+    return status,body
+
+def public_probe(m,domains=()):
     url=m.get('publicUrl','')
     parsed=urllib.parse.urlsplit(url)
     if parsed.scheme not in ['http','https'] or not parsed.hostname or parsed.username or parsed.password:raise ValueError('A valid HTTP or HTTPS public probe URL is required')
-    if not m.get('probeOrigin'):
-        try:
-            with urllib.request.urlopen(url,timeout=10) as response:return response.status,response.read(256*1024)
-        except urllib.error.HTTPError as error:return error.code,error.read(256*1024)
+    if not m.get('probeOrigin'):return fetch(url,10,domains)
     # Same hostname and verified TLS identity; only the connection address changes to loopback.
     if parsed.scheme=='https':connection=OriginHTTPSConnection(parsed.hostname,parsed.port or 443,timeout=10,context=ssl.create_default_context())
     else:connection=http.client.HTTPConnection('127.0.0.1',parsed.port or 80,timeout=10)
@@ -785,17 +844,17 @@ def public_probe(m):
         path=urllib.parse.urlunsplit(('','',parsed.path or '/',parsed.query,''))
         connection.request('GET',path,headers={'Host':parsed.netloc,'Cache-Control':'no-cache'})
         response=connection.getresponse()
-        return response.status,response.read(256*1024)
+        return response.status,response.read(PROBE_LIMIT)
     finally:connection.close()
 
-def health(containers,url=None):
+def health(containers,url=None,domains=()):
     for c in inspect(containers) if containers else []:
         if not c['State']['Running']: return False
         if c['State'].get('Health',{}).get('Status','healthy')!='healthy': return False
     if url:
         try:
-            with urllib.request.urlopen(url,timeout=5) as r:
-                if r.status!=200 or b'dbm-maintenance-v1' in r.read(256*1024):return False
+            status,body=fetch(url,5,domains)
+            if status!=200 or b'dbm-maintenance-v1' in body:return False
         except Exception:return False
     return True
 def maintenance(cfg,enabled):
@@ -812,7 +871,7 @@ def maintenance(cfg,enabled):
         enable_flag()
         try:
             if not m.get('publicUrl'):raise ValueError('Public maintenance probe URL required')
-            status,body=public_probe(m)
+            status,body=public_probe(m,cfg.get('domains',()))
             if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Maintenance probe is not the deployed HTTP 503 page')
             sync_maintenance_flag(directory)
         except Exception:
@@ -821,11 +880,11 @@ def maintenance(cfg,enabled):
                 sync_maintenance_flag(directory)
             raise
     else:
-        if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl')):raise ValueError('Health probe failed; maintenance retained')
+        if not health(cfg.get('_runningContainers',cfg['containers']),m.get('healthUrl'),cfg.get('domains',())):raise ValueError('Health probe failed; maintenance retained')
         (directory/'enabled').unlink(missing_ok=True)
         if m.get('publicUrl'):
             try:
-                status,body=public_probe(m)
+                status,body=public_probe(m,cfg.get('domains',()))
                 if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access did not recover')
                 sync_maintenance_flag(directory)
             except Exception:
@@ -848,8 +907,8 @@ def recover(root,ids,cfg,deadline,parent):
     try:
         restart_services(ids,cfg.get('_serviceContracts'))
         until=time.time()+120
-        while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
-        if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Recovery health failed')
+        while time.time()<until and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):time.sleep(2)
+        if ids and not health(ids,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Recovery health failed')
         maintenance(cfg,False)
         atomic_json(root/'recovery.json',{'recovered':True,'at':time.time()})
         complete_recovery(root)
@@ -1137,7 +1196,7 @@ def readiness(cfg):
             backup_plan(cfg,preflight(cfg))
         check('Per-service database consistency contracts',contracts)
     def direct_health():
-        if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
+        if not health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -1148,7 +1207,7 @@ def readiness(cfg):
         directory=pathlib.Path(m.get('directory',''))
         if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise ValueError('Deploy the maintenance page and integrate it with the source proxy. The proxy readiness marker is missing.')
         if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
-        status,body=public_probe(m)
+        status,body=public_probe(m,cfg.get('domains',()))
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
     if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
@@ -1263,8 +1322,8 @@ def capture(req,output=None):
         try:
             restart_services(running,plan['services'])
             until=time.time()+120
-            while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl')):time.sleep(2)
-            if running and not health(running,cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
+            while running and time.time()<until and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):time.sleep(2)
+            if running and not health(running,cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('RESTART_FAILED: watchdog remains armed, maintenance retained')
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
@@ -1312,12 +1371,12 @@ def verify_recovery(req):
     if not (root/'watchdog.done').exists() or not ((root/'disarmed').exists() or recovered):raise ValueError('Local recovery has not finished successfully')
     states=inspect(plan['containers'])
     if any(bool(c['State']['Running'])!=(c['Id'] in plan['running']) for c in states):raise ValueError('Container states do not match the pre-backup state')
-    if not health(plan['running'],cfg.get('maintenance',{}).get('healthUrl')):raise ValueError('Application health has not recovered')
+    if not health(plan['running'],cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',())):raise ValueError('Application health has not recovered')
     m=cfg.get('maintenance',{})
     if m.get('required'):
         if (pathlib.Path(m['directory'])/'enabled').exists():raise ValueError('Maintenance remains enabled')
         if not m.get('publicUrl'):raise ValueError('Public health probe required')
-        status,body=public_probe(m)
+        status,body=public_probe(m,cfg.get('domains',()))
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access has not recovered')
     emit(result={'recoveryReviewed':True,'healthVerified':True,'originalStatesPreserved':True})
 
