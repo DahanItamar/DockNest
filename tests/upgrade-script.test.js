@@ -185,3 +185,27 @@ test('a status file path that is a link is never written through', { skip: !shel
   assert.equal(await readFile(victim, 'utf8'), 'keep');
   assert.deepEqual((await readdir(f.root)).filter(name => name.startsWith('.status.')), []);
 });
+
+test('image mode switches only the tag per command, rolls back to the recorded image and persists .env after success', { skip: !shell }, async t => {
+  const f = await fixture(t), env = join(f.work, '.env');
+  await writeFile(join(f.state, 'image-mode'), '');
+  await writeFile(env, 'APP_ORIGIN=https://docknest.example.invalid\nDOCKNEST_IMAGE=ghcr.io/example/docknest:2.0.0\n');
+  // The new image never becomes healthy and the metadata is untouched: roll back by image id, not by the .env tag.
+  await writeFile(join(f.state, 'unhealthy'), '2.1.0'); await writeFile(join(f.state, 'no-migrate'), '');
+  let result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 4, result.stderr + result.stdout);
+  let calls = await f.read('calls');
+  assert.match(calls, /pull api worker IMG=ghcr\.io\/example\/docknest:2\.1\.0/);
+  assert.match(calls, /up -d --pull never api worker IMG=sha256:fakeid-2\.0\.0/, 'rollback uses the recorded image id');
+  assert.equal(await f.read('version'), '2.0.0'); assert.match(await readFile(env, 'utf8'), /DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.0\.0/);
+  const [saved] = await readdir(join(f.work, 'data/upgrade-backups'));
+  assert.match(await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8'), /image=ghcr\.io\/example\/docknest:2\.0\.0\nimageId=sha256:fakeid-2\.0\.0/);
+  await rm(join(f.state, 'unhealthy')); await rm(join(f.state, 'no-migrate'));
+  result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(await readFile(env, 'utf8'), /^DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.1\.0$/m); assert.match(await readFile(env, 'utf8'), /APP_ORIGIN/);
+  assert.equal((await f.status()).rollbackHint.includes('sha256:fakeid-2.0.0'), true);
+  await writeFile(env, 'DOCKNEST_IMAGE=ghcr.io/example/docknest@sha256:' + 'a'.repeat(64) + '\n');
+  result = f.run('--version', 'v2.0.0');
+  assert.equal(result.status, 2); assert.match(result.stderr, /pinned by digest/);
+});

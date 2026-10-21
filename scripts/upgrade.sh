@@ -48,7 +48,7 @@ case "$TIMEOUT$WAIT" in *[!0-9]*) echo '--timeout and --wait take whole seconds'
 # git's ownership check is relaxed for this one checkout only, per command, so a root run of a user-owned checkout works.
 git_() { git -c "safe.directory=$ROOT" "$@"; }
 PHASE=init LAST_PHASE=init FROM='' TO='' STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ) HINT=''
-FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA=''
+FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA='' IMAGE_MODE=0 PREV_IMAGE='' PREV_ID='' NEW_IMAGE=''
 [ "$DRY_RUN" = 1 ] && STATUS_FILE=''
 json() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # Never aborts the upgrade: a status file that cannot be written is reported and skipped.
@@ -128,12 +128,37 @@ try_revert() {
   [ -z "$SNAPSHOT" ] || return 1
   if [ "$STOPPED" = 1 ]; then after=$(db_schema 2>/dev/null) || return 1; [ "$after" = "$DB_SCHEMA" ] || return 1; fi
   if [ "$CHECKED_OUT" = 1 ]; then git_ checkout --quiet "$FROM_REF" || return 1; CHECKED_OUT=0; fi
-  if [ "$STOPPED" = 1 ]; then build_and_start && docker compose up -d api worker && healthy "$(expect HEAD)" "$TIMEOUT" || return 1; STOPPED=0; fi
+  if [ "$STOPPED" = 1 ]; then start_previous && healthy "$(expect HEAD)" "$TIMEOUT" || return 1; STOPPED=0; fi
   [ "$HOLD" != 1 ] || { release_hold || echo 'WARNING: could not release the deployment hold; run: docker compose exec api node scripts/deployment-preflight.js release' >&2; HOLD=0; }
   return 0
 }
-build_and_start() { # build_and_start: image mode pulls the pinned image, source mode builds this checkout
-  if [ "$IMAGE_MODE" = 1 ]; then docker compose pull api worker; else docker compose build api worker; fi
+build_and_start() { # image mode pulls the target image, source mode builds this checkout
+  if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose pull api worker; else docker compose build api worker; fi
+}
+start_target() { if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose up -d api worker; else docker compose up -d api worker; fi; }
+# Back to the exact previous release: in image mode the image ID recorded before anything was switched (never the
+# tag from .env, which may have moved), already present locally, so this works offline and never pulls.
+start_previous() {
+  if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=${PREV_ID:-$PREV_IMAGE} docker compose up -d --pull never api worker
+  else docker compose build api worker && docker compose up -d api worker; fi
+}
+restart_previous_cmd() {
+  if [ "$IMAGE_MODE" = 1 ]; then echo "git checkout $FROM_REF && DOCKNEST_IMAGE=${PREV_ID:-$PREV_IMAGE} docker compose up -d --pull never   # and keep DOCKNEST_IMAGE=$PREV_IMAGE in .env"
+  else echo "git checkout $FROM_REF && docker compose up -d --build"; fi
+}
+# Image mode: DOCKNEST_IMAGE (environment or .env) names the image; the script switches only the tag, per command.
+image_setup() {
+  PREV_IMAGE=${DOCKNEST_IMAGE:-$(sed -n 's/^DOCKNEST_IMAGE=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"'")}
+  [ -n "$PREV_IMAGE" ] || fail 2 'Image mode needs DOCKNEST_IMAGE=<registry/name>:<tag> in .env (see compose.override.example.yaml).'
+  case "$PREV_IMAGE" in *@*) fail 2 'DOCKNEST_IMAGE is pinned by digest; edit it in .env yourself, or use a tag so the script can switch versions.' ;; esac
+  case "${PREV_IMAGE##*/}" in *:*) IMAGE_NAME=${PREV_IMAGE%:*} ;; *) IMAGE_NAME=$PREV_IMAGE ;; esac
+  NEW_IMAGE="$IMAGE_NAME:$TO"
+  PREV_ID=$(docker compose images --quiet api 2>/dev/null | head -n 1)
+}
+# Persist the new tag only after the new release is healthy; the previous .env was saved in the upgrade backup.
+image_persist() {
+  [ -f .env ] || : > .env
+  tmp=$(mktemp ".env.XXXXXX") && { grep -v '^DOCKNEST_IMAGE=' .env > "$tmp" || true; printf 'DOCKNEST_IMAGE=%s\n' "$NEW_IMAGE" >> "$tmp"; chmod --reference=.env "$tmp" 2>/dev/null || chmod 600 "$tmp"; mv -f "$tmp" .env; }
 }
 
 phase preflight 'Checking the installation'
@@ -164,9 +189,7 @@ TO=$(package_field "$TARGET" version)
 TARGET_REF=$(git_ rev-parse "$TARGET^{commit}")
 echo "Current: $FROM ($(git_ describe --tags --always HEAD))   Target: $TO ($TARGET)   Mode: $([ "$IMAGE_MODE" = 1 ] && echo published image || echo build from source)"
 if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; exit 0; fi
-if [ "$IMAGE_MODE" = 1 ] && ! docker compose config --images | grep -q ":$TO\$"; then
-  fail 2 "Image mode: set the api and worker image tag in compose.override.yaml to $TO first (see docs/upgrading.md)."
-fi
+[ "$IMAGE_MODE" != 1 ] || image_setup
 MIN=$(package_field "$TARGET" minUpgradeFrom)
 if [ -n "$MIN" ] && ! version_ge "$FROM" "$MIN"; then fail 2 "$TO supports upgrades from $MIN or later. Upgrade to an intermediate release first."; fi
 
@@ -213,13 +236,13 @@ mkdir -p "$SAVE" && chmod 700 data/upgrade-backups "$SAVE" || fail 2 "Could not 
 for file in .env compose.override.yaml data/master.key data/setup.token; do
   if [ -e "$file" ]; then cp -p "$file" "$SAVE/$(basename "$file")" || fail 2 "Could not copy $file to $SAVE; check free disk space. Nothing was changed."; fi
 done
-printf 'commit=%s\nversion=%s\nschema=%s\n' "$FROM_REF" "$FROM" "$DB_SCHEMA" > "$SAVE/previous-release" || fail 2 "Could not write $SAVE/previous-release. Nothing was changed."
+printf 'commit=%s\nversion=%s\nschema=%s\nimage=%s\nimageId=%s\n' "$FROM_REF" "$FROM" "$DB_SCHEMA" "${PREV_IMAGE:-}" "${PREV_ID:-}" > "$SAVE/previous-release" || fail 2 "Could not write $SAVE/previous-release. Nothing was changed."
 echo "Saved to $SAVE (never deleted automatically)."
 
 phase checkout "Checking out $TARGET"
 git_ -c advice.detachedHead=false checkout --quiet "$TARGET" || { release_hold; HOLD=0; fail 2 "git checkout $TARGET failed; nothing else changed."; }
 CHECKED_OUT=1
-HINT="git checkout $FROM_REF && docker compose up -d --build && docker compose exec api node scripts/deployment-preflight.js release"
+HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release"
 
 phase build "Preparing the $TO image"
 if ! build_and_start; then
@@ -238,7 +261,7 @@ if [ -n "$SNAPSHOT" ]; then
 fi
 
 phase start "Starting $TO"
-docker compose up -d api worker || true
+start_target || true
 phase health "Waiting up to ${TIMEOUT}s for $TO to report healthy"
 if ! healthy "$(expect HEAD)" "$TIMEOUT"; then
   docker compose logs --tail=60 api worker >&2 || true
@@ -252,14 +275,15 @@ if ! healthy "$(expect HEAD)" "$TIMEOUT"; then
   fi
   HINT="docker compose stop api worker
 # restore metadata (schema v$DB_SCHEMA) from the newest /data/upgrade-snapshots/state-v$DB_SCHEMA-to-v${AFTER:-?}-*.sqlite, see docs/upgrading.md#rolling-back
-git checkout $FROM_REF && docker compose up -d --build
+$(restart_previous_cmd)
 docker compose exec api node scripts/deployment-preflight.js release"
   fail 5 "$TO did not become healthy after migrating metadata to schema v${AFTER:-unknown}. Nothing was rolled back automatically."
 fi
 
 phase release 'Releasing the deployment hold'
 release_hold || echo 'WARNING: could not release the deployment hold; run: docker compose exec api node scripts/deployment-preflight.js release' >&2
-HOLD=0 FINISHED=1 PHASE=done HINT="git checkout $FROM_REF   # previous release; see docs/upgrading.md#rolling-back"
+[ "$IMAGE_MODE" != 1 ] || image_persist || echo "WARNING: could not update DOCKNEST_IMAGE in .env; set it to $NEW_IMAGE so later restarts keep this release." >&2
+HOLD=0 FINISHED=1 PHASE=done HINT="$(restart_previous_cmd)   # previous release; see docs/upgrading.md#rolling-back"
 status true
 echo "DockNest $TO is running. Configuration backup: $SAVE"
 echo 'If boot recovery is installed on any site, reinstall it from that site so hosts get the new helper (sites report bootRecoveryOutdated).'
