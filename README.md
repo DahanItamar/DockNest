@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/version-2.0-5E35B1?style=flat-square" alt="Version 2.0" />
   <img src="https://img.shields.io/badge/Node.js-24-339933?style=flat-square" alt="Node.js 24" />
   <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
-  <img src="https://img.shields.io/badge/storage-encrypted%20SFTP-1E88E5?style=flat-square" alt="Encrypted backups on SFTP" />
+  <img src="https://img.shields.io/badge/storage-SFTP%20%7C%20S3--compatible-1E88E5?style=flat-square" alt="Encrypted backups on SFTP or S3-compatible storage" />
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5E35B1?style=flat-square" alt="License: AGPL-3.0" /></a>
   <p>
@@ -20,7 +20,7 @@
 
 Most backup tools tell you a job finished. DockNest shows you can actually restore from it.
 
-It connects to your Linux servers over SSH, backs up each Docker or nginx site to your own SFTP storage (encrypted), and lets you restore any backup to a separate copy to check it. The live site stays untouched.
+It connects to your Linux servers over SSH, backs up each Docker or nginx site to your own SFTP server or S3-compatible bucket (encrypted), and lets you restore any backup to a separate copy to check it. The live site stays untouched.
 
 > [!NOTE]
 > DockNest is still in beta. Check the [support matrix](docs/support-matrix.md) to see what's been tested. Automatic recovery after a server reboot isn't ready for production yet.
@@ -50,7 +50,7 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
 | Proves the restore works | ✅ | ❌ | ⚠️ | ❌ |
 | Maintenance page | ✅ | ❌ | ❌ | ❌ |
 | Web dashboard | ✅ | ⚠️ | ❌ | ❌ |
-| Storage | SFTP | Provider | Many | Many |
+| Storage | SFTP, S3 | Provider | Many | Many |
 
 > [!NOTE]
 > What each ⚠️ means:
@@ -62,7 +62,7 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
 >
 > **Storage:** restic and docker-volume-backup support S3 and more. Borg uses SSH or a local disk.
 
-DockNest is newer and does less: only Linux servers with Docker, and only SFTP storage. You can use it together with a server snapshot.
+DockNest is newer and does less: only Linux servers with Docker, and only SFTP or S3-compatible storage (S3 support is new and not yet validated end to end). You can use it together with a server snapshot.
 
 ## Requirements
 
@@ -70,7 +70,7 @@ DockNest is newer and does less: only Linux servers with Docker, and only SFTP s
 | :-- | :-- |
 | **DockNest server** (runs the dashboard) | Linux with Docker and Docker Compose. Node.js 24 for the one-time setup. |
 | **Each server you back up** | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
-| **Backup storage** | Any SFTP server the DockNest server can reach. |
+| **Backup storage** | One of these (see [storage backends](docs/storage-backends.md)):<br>• **SFTP:** any SFTP server the DockNest server can reach. It must support `fsync@openssh.com`.<br>• **S3-compatible:** a bucket on AWS S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or similar, optionally with Object Lock. New: real backup and restore on S3 still needs Linux Docker integration validation.<br>• **Local disk:** for testing only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). |
 | **You** | A browser and an authenticator app. |
 
 Just trying it out? Node.js 24 and Python 3 on your own computer are enough.
@@ -166,7 +166,7 @@ Most sites need none of these. Example values:
 | :-- | :-- |
 | Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) |
-| Internals | [Backup format](docs/backup-format.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
+| Internals | [Backup format](docs/backup-format.md) · [Storage backends](docs/storage-backends.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |
 
 ## Contributing
