@@ -6,6 +6,7 @@ import {describeSchedule} from './schedule.js';
 import './dashboard.css';
 import {Paginated} from './pagination.jsx';
 import {formatDate} from './date-format.js';
+import {isIntegrityChecked,recoveryStatus,restoreFact} from './verification.jsx';
 
 const Layers=props=><BrandIcon name="sites" {...props}/>;
 const Archive=props=><BrandIcon name="backups" {...props}/>;
@@ -27,7 +28,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
   const week=backups.filter(b=>new Date(b.capturedAt||b.createdAt)>new Date(Date.now()-7*86400000));
   const latestJob=id=>jobs.find(j=>j.siteId===id);
   const attention=s.sites.filter(site=>['failed','recovery_required'].includes(latestJob(site.id)?.status));
-  const covered=s.sites.filter(site=>backups.some(b=>b.siteId===site.id&&b.verified));
+  const covered=s.sites.filter(site=>backups.some(b=>b.siteId===site.id&&isIntegrityChecked(b)));
   const storagePercent=s.storage?.total?Math.min(100,Math.round((s.storage.used||0)/s.storage.total*100)):null;
   const downtime=week.filter(b=>Number.isFinite(b.downtimeMs));
 
@@ -40,7 +41,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
     <div className="dash-layout">
         <section className="dash-panel dash-growth" aria-labelledby="growth-title"><header className="dash-panel-head"><div><span className="growth-subtitle">Capture activity</span><h2 id="growth-title">{activity.series.slice(0,2).reduce((sum,x)=>sum+x.values.reduce((a,b)=>a+b,0),0)} recovery points</h2></div><label className="chart-period"><span className="sr-only">Activity period</span><select aria-label="Activity period" value={period} onChange={event=>setPeriod(event.target.value)}><option value="week">Last 7 days</option><option value="month">Last 30 days</option><option value="year">Last 12 months</option></select></label></header><ActivityChart s={s} period={period}/></section>
         <section className="dash-panel dash-activity" aria-labelledby="dash-activity-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">OPERATIONS</span><h2 id="dash-activity-title">Recent activity</h2></div><IconButton label="View all jobs" onClick={()=>navigate('Jobs')}><ArrowRight size={17}/></IconButton></header>
-          <div className="activity-feature"><div><span>Verified captures<small>Last 7 days</small></span><b>{week.filter(x=>x.verified).length}</b></div><Sparkline values={bucketActivity(s,'week').series[0].values} color="#4527A0" area label="Verified captures in the last seven days"/></div>
+          <div className="activity-feature"><div><span>Integrity-checked captures<small>Last 7 days</small></span><b>{week.filter(isIntegrityChecked).length}</b></div><Sparkline values={bucketActivity(s,'week').series[0].values} color="#4527A0" area label="Integrity-checked captures in the last seven days"/></div>
           {jobs.length?<div className="dash-job-list">{jobs.slice(0,5).map(job=>{
             const failed=['failed','recovery_required'].includes(job.status),running=['running','queued'].includes(job.status);
             return <div className="dash-job" key={job.id}><span className={`dash-job-icon ${failed?'warning':running?'neutral':'stored'}`}>{failed?<TriangleAlert size={16}/>:running?<BrandIcon name="jobs" size={16}/>:<Check size={16}/>}</span><div><b>{name(job.siteId)}</b><span>{job.type==='restore'?'Restore':'Backup'} · {job.status.replaceAll('_',' ')}</span><small title={date(job.createdAt||job.startedAt)}>{shortDate(job.createdAt||job.startedAt)}</small>{job.status==='recovery_required'&&<button className="dash-link" onClick={()=>open({type:'recovery',item:job})}>Review recovery <ArrowRight size={12}/></button>}</div><IconButton label={`View job ${job.id}`} onClick={()=>open({type:'job',item:job})}><ArrowRight size={16}/></IconButton></div>;
@@ -59,8 +60,8 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
             <div className="dash-site-columns" aria-hidden="true"><span>Site / server</span><span>Latest recovery point</span><span>Schedule</span><span/></div>
             <Paginated rows={s.sites} label="Dashboard sites" pageSize={5}>{visible=>visible.map(site=>{
               const history=backups.filter(b=>b.siteId===site.id),latest=history[0],job=latestJob(site.id),policy=s.policies.find(p=>p.siteId===site.id);
-              const state=job?.status==='recovery_required'?'Recovery required':job?.status==='failed'?'Last job failed':['running','queued'].includes(job?.status)?'In progress':latest?.verified?'Recovery point stored':'No verified backup';
-              const tone=['failed','recovery_required'].includes(job?.status)?'warning':['running','queued'].includes(job?.status)?'neutral':latest?.verified?'stored':'neutral';
+              const state=job?.status==='recovery_required'?'Recovery required':job?.status==='failed'?'Last job failed':['running','queued'].includes(job?.status)?'In progress':isIntegrityChecked(latest)?'Recovery point stored · '+restoreFact(latest).text:'No integrity-checked backup';
+              const tone=['failed','recovery_required'].includes(job?.status)?'warning':['running','queued'].includes(job?.status)?'neutral':isIntegrityChecked(latest)?restoreFact(latest).tone:'neutral';
               return <details className="dash-site" key={site.id}>
                 <summary><span className="dash-site-identity"><span className="dash-site-icon"><BrandIcon name="sites" size={18}/></span><span><b>{site.name}</b><small><BrandIcon name="server" size={12}/>{name(site.serverId,'servers')}</small></span></span>
                   <span className="dash-site-latest"><b>{shortDate(latest?.capturedAt||latest?.createdAt)}</b><small className={`dash-state ${tone}`}><span/>{state}</small></span>
@@ -69,7 +70,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
                 </summary>
                 <div className="dash-site-history"><div className="dash-history-heading"><span>Recovery history</span><button className="dash-link" onClick={()=>navigate('Backups')}>Open library <ArrowRight size={14}/></button></div>
                   {history.length?<Paginated rows={history} label={"Dashboard recovery points for "+site.name} pageSize={3}>{points=>points.map(backup=><div className="dash-backup" key={backup.id}>
-                    <BrandIcon name="backups" size={16}/><div className="dash-backup-date"><b>{shortDate(backup.capturedAt||backup.createdAt)}</b><small>{bytes(backup.size||backup.sizeBytes)}{backup.pinned?' · Pinned':''}{backup.verified?' · Verified artifact':' · Unverified artifact'}</small></div>
+                    <BrandIcon name="backups" size={16}/><div className="dash-backup-date"><b>{shortDate(backup.capturedAt||backup.createdAt)}</b><small><span>{bytes(backup.size||backup.sizeBytes)}{backup.pinned?' · Pinned':''}{(s=><> · <span className={s.failed?'dash-failed':undefined}>{s.badge}</span> · {s.line}</>)(recoveryStatus(backup))}</span></small></div>
                     <div className="dash-backup-actions">
                       <a className="dash-icon" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Download full ZIP"><BrandIcon name="download" size={22}/></a>
                       <a className="dash-icon" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted backup"><BrandIcon name="encrypted-download" size={22}/></a>

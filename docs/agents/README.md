@@ -8,6 +8,7 @@ Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents)
 | [Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md) | Responsive layouts, accessible controls, measured pagination and mock-only documentation. |
 | [DevOps Automator](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-devops-automator.md) | Scoped rollouts, protected metadata, health checks and exact release cleanup. |
 | [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) | Pinned host keys, secret separation, authenticated packages, safe paths and repository privacy. |
+| [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md) | Probe URL SSRF threat model, address and redirect policy, pinned connections, and preflight before any host change. |
 | [SRE](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-sre.md) | Expiring worker lease instead of a PID lock, graceful drain within a stop grace period and a read-only status command. |
 | [Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md) | Distinguish UI fixtures from actual Linux capture/restore and record observed evidence. |
 | [UI Designer](https://github.com/msitarzewski/agency-agents/blob/main/design/design-ui-designer.md) | Equal card geometry, aligned navigation and clear system health states. |

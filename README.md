@@ -30,7 +30,7 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
 - **Finds your sites.** Connect a server and DockNest discovers its Docker projects and static nginx sites.
 - **Backs up the whole site.** Images, volumes, bind mounts, writable layers and the database, captured safely for PostgreSQL, MySQL/MariaDB and Redis.
 - **Runs on a schedule.** Each site gets its own schedule and a history of backups. Pin the ones you want to keep.
-- **Proves backups work.** Restore any backup to a separate copy and check it. DockNest never overwrites a live site on its own.
+- **Tests restores on demand.** Restore any backup to an isolated copy and record exactly what was checked. DockNest never overwrites a live site on its own.
 - **Keeps visitors informed.** Shows a maintenance page while a site is paused. You design it in a visual editor.
 - **Shows what's happening.** Live progress, each step as it runs, and the real reason when something fails.
 - **Lets you take your data.** Download any backup as an encrypted file or a ZIP.
@@ -47,13 +47,14 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
 | Restore a single site | ✅ | ❌ | ✅ | ✅ |
 | Images and writable layers | ✅ | ✅ | ❌ | ❌ |
 | Safe database capture | ✅ | ⚠️ | ⚠️ | ⚠️ |
-| Proves the restore works | ✅ | ❌ | ⚠️ | ❌ |
+| Proves the restore works | ⚠️ | ❌ | ⚠️ | ❌ |
 | Maintenance page | ✅ | ❌ | ❌ | ❌ |
 | Web dashboard | ✅ | ⚠️ | ❌ | ❌ |
 | Storage | SFTP | Provider | Many | Many |
 
 > [!NOTE]
 > What each ⚠️ means:
+> - **DockNest, restore check:** restore tests run when you start them, not on a schedule. Each one records what was checked.
 > - **Snapshot, database:** depends on your hosting provider.
 > - **Snapshot, dashboard:** you only get the provider's control panel.
 > - **restic / Borg, database:** you need to write your own scripts.
@@ -70,7 +71,7 @@ DockNest is newer and does less: only Linux servers with Docker, and only SFTP s
 | :-- | :-- |
 | **DockNest server** (runs the dashboard) | Linux with Docker and Docker Compose. Node.js 24 for the one-time setup. |
 | **Each server you back up** | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
-| **Backup storage** | Any SFTP server the DockNest server can reach. |
+| **Backup storage** | An SFTP server with fsync@openssh.com support (OpenSSH) that the DockNest server can reach. |
 | **You** | A browser and an authenticator app. |
 
 Just trying it out? Node.js 24 and Python 3 on your own computer are enough.
