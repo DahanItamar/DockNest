@@ -16,6 +16,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Worker lease and graceful drain when the worker is stopped.
 - Recovery verification levels.
 - S3-compatible backup storage.
+- `Release validation` workflow (informational): upgrades a real v2.0.0 Compose installation to a release tag, drains the worker, then downgrades and upgrades again with `scripts/upgrade.sh`, checking data, configuration and secrets. See [docs/release-validation.md](docs/release-validation.md).
 
 ### Changed
 

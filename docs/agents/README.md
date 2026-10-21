@@ -6,7 +6,7 @@ Selected upstream [agency-agents](https://github.com/msitarzewski/agency-agents)
 | --- | --- |
 | [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) | Separate API/worker, durable metadata, additive adapters and isolated recovery. |
 | [Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md) | Responsive layouts, accessible controls, measured pagination and mock-only documentation. |
-| [DevOps Automator](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-devops-automator.md) | Scoped rollouts, protected metadata, health checks and exact release cleanup. |
+| [DevOps Automator](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-devops-automator.md) | Scoped rollouts, protected metadata, health checks and exact release cleanup. The release validation workflow: least-privilege, SHA-pinned CI, a disposable real-Docker environment, sanitized evidence and guaranteed cleanup. |
 | [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) | Pinned host keys, secret separation, authenticated packages, safe paths and repository privacy. |
 | [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md) | Probe URL SSRF threat model, address and redirect policy, pinned connections, and preflight before any host change. |
 | [SRE](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-sre.md) | Expiring worker lease instead of a PID lock, graceful drain within a stop grace period and a read-only status command. |
