@@ -25,7 +25,9 @@ async function open({role='admin',width=1440,height=1000,scheme='light',appState
  const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme});
  const page=await context.newPage();
  page.on('pageerror',error=>errors.push(error.message));
- const local=[],github=[];let polls=0;
+ const local=[],github=[],offOrigin=[];let polls=0;
+ context.on('request',req=>{const u=new URL(req.url());if(!['data:','blob:'].includes(u.protocol)&&u.origin!==new URL(base).origin)offOrigin.push(u.origin);});
+ local.offOrigin=offOrigin;
  page.on('request',req=>{const u=new URL(req.url());if(u.origin===new URL(base).origin&&u.pathname.startsWith('/api/'))local.push({method:req.method(),path:u.pathname,body:req.postData()||''});});
  await context.route('https://github.com/**',route=>{github.push({url:route.request().url(),referer:route.request().headers().referer});return route.fulfill({status:200,contentType:'text/html',body:'<title>GitHub</title>'})});
  await context.route('**/api/**',route=>{
@@ -60,6 +62,7 @@ async function openGitHub(context,page,dialog,local,github){
  const after=local.slice(before);
  for(const r of after){assert.ok(!/github|issues|template|report/i.test(r.path+' '+r.body),'Nothing about the report reaches DockNest: '+r.method+' '+r.path);assert.ok(['/api/state','/api/auth/activity','/api/version','/api/updates/progress'].includes(r.path),'Unexpected request to DockNest while opening GitHub: '+r.method+' '+r.path);}
  await tab.close();
+ assert.deepEqual([...new Set(local.offOrigin)],['https://github.com'],'The only request off DockNest is GitHub, made by the browser');
  return href;
 }
 async function openJob(page){

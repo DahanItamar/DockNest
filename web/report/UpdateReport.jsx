@@ -7,7 +7,7 @@ import {AlertPanel} from '../system.jsx';
 // lost results. Administrators only. Usable wherever an update outcome is shown (lock view result, Update Center):
 // pass `status` (the admin GET /api/updates/status object of that run) or a `client` to read the latest one.
 export const REPORT_VIEWS=['rolled_back','not_changed','needs_action','lost','stale'];
-export function UpdateReportButton({client,status:given,view,version,progress,lastPhase,role='admin'}){
+export function UpdateReportButton({client,status:given,view,version,progress,lastPhase,role}){
  const [status,setStatus]=useState(given||null);
  useEffect(()=>{if(given){setStatus(given);return}if(!client)return;let off=false;client.status().then(r=>{if(!off)setStatus(r||null)},()=>{});return()=>{off=true}},[client,given,view]);
  // Without the admin status (an older API) the public progress still gives the versions, outcome and events.

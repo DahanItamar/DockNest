@@ -96,12 +96,12 @@ test('canary: planted host names, addresses, paths, emails, tokens, names, ids a
   const hostile = { version: CANARY, installMode: CANARY, env: hostileEnv, jobType: CANARY, outcome: CANARY, phase: CANARY, ended: CANARY, siteKind: CANARY, storage: CANARY, containers: CANARY, helperOutcome: CANARY, protocol: CANARY, errorClass: CANARY, check: CANARY, destination: CANARY, route: CANARY, area: CANARY, error: Object.assign(new Error(CANARY), { name: CANARY, stack: CANARY }), lastPhase: CANARY, view: CANARY,
     status: { ...Object.fromEntries(Object.keys(status).map(k => [k, CANARY])), events: [{ phase: CANARY, at: CANARY }] }, host: CANARY, siteName: CANARY, serverName: CANARY, message: CANARY, stack: CANARY, email: CANARY, requestId: CANARY, userId: CANARY, path: CANARY, logs: CANARY, title: CANARY, href: CANARY };
   const builders = [buildBugReport, buildJobReport, buildStorageReport, buildServerReport, buildSelfBackupReport, buildAppErrorReport, buildUpdateReport];
-  const outputs = [...builders.map(b => b(hostile)), ...all().map(([, r]) => r), ...all({ siteName: CANARY, host: CANARY, error: new RangeError(CANARY) }).map(([, r]) => r)];
+  const outputs = [...builders.map(b => b(hostile)), ...all().map(([, r]) => r), ...all({ siteName: CANARY, host: CANARY, error: new RangeError(CANARY) }).map(([, r]) => r), buildUpdateReport({ ...hostile, excerpt: undefined })];
   for (const r of outputs) {
     const decoded = decodeURIComponent(r.href.replace(/\+/g, ' '));
     for (const canary of CANARIES) {
       assert.ok(!r.href.includes(canary) && !decoded.includes(canary), 'canary in URL: ' + canary + ' via ' + r.template);
-      assert.ok(!JSON.stringify(r.shared).includes(canary), 'canary in review dialog: ' + canary);
+      assert.ok(!JSON.stringify([r.shared, r.environment, r.timeline ?? null, r.excerpt ?? null]).includes(canary), 'canary in review dialog, environment, timeline or excerpt: ' + canary);
     }
     assert.ok(!/canary/i.test(decoded), r.template + ' leaks ' + decoded);
   }
@@ -125,6 +125,52 @@ test('optional excerpt: redaction of IPs, emails, URLs and host names, paths, lo
   assert.equal(excerptFrom({ error: 'Failed at /srv/app', rollbackHint: 'run on 10.0.0.5', warning: null }), 'Failed at [redacted]\nrun on [redacted]');
 });
 
+// Security review of PR #46: each of these got past the first redaction rules. [input, secret parts that must go].
+const BYPASS = [
+  ['./data/alice/secret.txt', ['alice', 'secret.txt', 'data/']],
+  ['../home/alice/x', ['alice', 'home/']],
+  ['opt/docknest/sites/alice-blog/', ['alice-blog', 'docknest/']],
+  ['~alice/.ssh/id_rsa', ['alice', 'id_rsa', '.ssh']],
+  ['C:\\Users\\alice\\key.pem and \\\\fileserver\\share\\x', ['alice', 'key.pem', 'fileserver', 'share']],
+  ['Could not resolve hostname nas01', ['nas01']],
+  ['connect to my_host.lan failed', ['my_host']],
+  ['server db-primary refused; remote: backup-box; node=worker7', ['db-primary', 'backup-box', 'worker7']],
+  ['host bücher.example and xn--bcher-kva.example', ['bücher', 'xn--bcher-kva']],
+  ['fullwidth intranet\uFF0Ecorp and nas\u3002local', ['intranet', 'corp', 'nas']],
+  ['password=hunter2 POSTGRES_PASSWORD=S3cr3tPass! api_key: "abc def" token:xyz123', ['hunter2', 'S3cr3tPass', 'abc def', 'xyz123']],
+  ['aws AKIAIOSFODNN7EXAMPLE and ASIAABCDEFGHIJKLMNOP', ['AKIAIOSFODNN7EXAMPLE', 'ASIAABCDEFGHIJKLMNOP']],
+  ['Authorization: Bearer abcDEF123456789xyz and eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig', ['abcDEF123456789xyz', 'eyJhbGci', 'eyJzdWIi']],
+  ['github_pat_11ABCDEFG0123456789_abcdefghijklmnop and gho_abcdefghijklmnopqrstuvwx', ['github_pat_11ABCDEFG', 'gho_abcdefghijkl']],
+  ['listen on 2001:db8:abcd:: now', ['2001:db8:abcd']],
+  ['blob 0123456789abcdef0123456789abcdef01234567 leaked', ['0123456789abcdef0123456789abcdef01234567']],
+  ['path %2Fhome%2Falice%2Fsite and http%3A%2F%2Fintranet%2Fadmin and %252Fetc%252Fshadow', ['alice', 'intranet', 'shadow', '%2F', '%3A']],
+];
+test('redaction closes the reviewed bypasses: relative and home paths, dotless and IDN hosts, key=value secrets, tokens, IPv6, bare SHAs, URL encoding', () => {
+  for (const [input, secrets] of BYPASS) {
+    const out = redact(input);
+    for (const secret of secrets) assert.ok(!out.includes(secret), JSON.stringify(input) + ' -> ' + JSON.stringify(out) + ' still has ' + secret);
+    assert.match(out, /\[redacted\]/);
+    assert.equal(redact(out), out, 'redaction is stable when applied again before sending');
+  }
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  for (const context of ['commit ', 'sha: ', 'HEAD is ', 'sha1=', 'HEAD ']) assert.ok(redact(context + sha).includes(sha), 'kept after ' + context);
+  assert.equal(redact('Health check failed at 10:24:12, schema v5 to v6'), 'Health check failed at 10:24:12, schema v5 to v6', 'plain words, times and versions stay');
+});
+test('canary: hostile excerpt sources never reach the URL, the review values or the excerpt field', () => {
+  const sensitive = ['canary-host.example.com', '203.0.113.77', '2001:db8::77', '/home/canaryuser', '/srv/canary', 'C:\\canary', 'canary.user@example.org', 'ghp_CANARYtoken', 'AKIACANARY0123456789', 'https://canary.example.net', 's3://canary-bucket'];
+  const source = [CANARY, ...BYPASS.map(([input]) => input)].join('\n');
+  const reports = [
+    buildUpdateReport({ status: { ...status, error: source, rollbackHint: source, warning: source }, excerpt: excerptFrom({ error: source, rollbackHint: source, warning: source }) }),
+    buildUpdateReport({ status, excerpt: source }),
+  ];
+  for (const r of reports) {
+    const decoded = decodeURIComponent(r.href.replace(/\+/g, ' ')), shown = JSON.stringify([r.shared, r.environment, r.timeline, r.excerpt]);
+    for (const secret of [...sensitive, ...BYPASS.flatMap(([, s]) => s)]) {
+      assert.ok(!decoded.includes(secret), 'URL has ' + secret);
+      assert.ok(!shown.includes(secret), 'dialog values or excerpt have ' + secret);
+    }
+  }
+});
 test('optional excerpt: off by default, redacted again when sent, Copy excerpt fallback past the cap', () => {
   const r = buildUpdateReport({ status, excerpt: 'Edited by the admin: host canary-host.example.com at 203.0.113.77\nhealth-timeout-api' });
   const sent = new URL(r.href).searchParams.get('excerpt');
@@ -186,4 +232,25 @@ test('one builder module: no other web code builds GitHub issue URLs', async () 
     const source = await readFile(file, 'utf8');
     assert.ok(!/issues\/new/.test(source), file + ' builds an issue URL outside web/report');
   }
+});
+
+test('access: admin-only except Report a bug, no default role, one facts cache per user and role', async () => {
+  const { reportAllowed, createFactsLoader } = await import('../web/report/access.js');
+  assert.equal(reportAllowed(undefined, 'admin'), true); assert.equal(reportAllowed(undefined, 'operator'), false);
+  assert.equal(reportAllowed(undefined, 'operator', 'all'), true); assert.equal(reportAllowed(undefined, null, 'all'), false);
+  assert.equal(reportAllowed(null, 'admin'), false, 'an explicit null role (lock view, not an admin) wins');
+  assert.equal(reportAllowed('admin', null), true, 'the lock view passes the admin role explicitly');
+  assert.equal(reportAllowed(undefined, undefined), false, 'no role, no report');
+  const source = await readFile('web/report/UpdateReport.jsx', 'utf8');
+  assert.doesNotMatch(source, /role\s*=\s*['"]admin['"]/, 'UpdateReportButton has no default admin role');
+  assert.match(await readFile('web/updates/lock-view.jsx', 'utf8'), /UpdateReportButton[^>]*role=\{admin\?'admin':null\}/);
+  const calls = [], api = async path => { calls.push(path); return { updater: { installMode: 'image', env: { docker: '27.3' } } }; };
+  const fetchImpl = async () => ({ ok: true, json: async () => ({ version: '2.4.0' }) });
+  const admin = createFactsLoader({ api, role: 'admin', fetchImpl });
+  assert.deepEqual(await admin(), { version: '2.4.0', installMode: 'image', env: { docker: '27.3' } });
+  await admin(); assert.deepEqual(calls, ['/updates'], 'cached within one session');
+  const operator = createFactsLoader({ api, role: 'operator', fetchImpl });
+  assert.deepEqual(await operator(), { version: '2.4.0', installMode: null, env: null }, 'a new user or role starts with an empty cache');
+  assert.deepEqual(calls, ['/updates'], 'operators never read the Update Center state');
+  assert.ok((await readFile('web/report/ReportProblem.jsx', 'utf8')).includes('load:createFactsLoader({api,role})}),[api,role,userId])'),'the provider makes a new loader when the user or role changes');
 });

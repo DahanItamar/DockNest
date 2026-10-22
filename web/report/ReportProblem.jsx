@@ -2,6 +2,7 @@ import React,{createContext,useContext,useEffect,useMemo,useRef,useState} from '
 import {IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconAlertCircle,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
 import {createPortal} from 'react-dom';
 import {excerptFrom} from './redact.js';
+import {createFactsLoader,reportAllowed} from './access.js';
 import './report.css';
 
 // Who is signed in and the coarse install facts every report adds (docs/update-center.md section 13). The values are
@@ -9,16 +10,9 @@ import './report.css';
 // environment) for administrators. Nothing about a report itself is ever sent to DockNest's server.
 const ReportContext=createContext({role:null,load:async()=>({})});
 export function ReportProvider({api,user,children}){
- const cache=useRef(null),role=user?.role||null;
- const value=useMemo(()=>({role,load:()=>{
-  if(!cache.current)cache.current=(async()=>{
-   let version=null,installMode=null,env=null;
-   try{const r=await fetch('/api/version',{credentials:'same-origin'});if(r.ok)version=(await r.json())?.version??null}catch{}
-   if(role==='admin'&&api){try{const s=await api('/updates');installMode=s?.updater?.installMode??null;env=s?.updater?.env??null}catch{}}
-   return {version,installMode,env};
-  })();
-  return cache.current;
- }}),[api,role]);
+ const role=user?.role||null,userId=user?.id??null;
+ // A new cache per signed-in user and role: facts loaded for one session are never reused by another.
+ const value=useMemo(()=>({role,load:createFactsLoader({api,role})}),[api,role,userId]);
  return <ReportContext.Provider value={value}>{children}</ReportContext.Provider>;
 }
 export const useReportContext=()=>useContext(ReportContext);
@@ -70,9 +64,9 @@ export function ReviewDialog({build,facts,summary,excerptSource,onClose}){
 
 // The report button. audience "all" is only for Report a bug in About; every other report is admin-only.
 export function ReportProblem({build,label='Open GitHub',summary,audience='admin',role,excerptSource,className=''}){
- const ctx=useReportContext(),who=role!==undefined?role:ctx.role;
+ const ctx=useReportContext();
  const [open,setOpen]=useState(false),[facts,setFacts]=useState(null);
- if(!who||(audience!=='all'&&who!=='admin'))return null;
+ if(!reportAllowed(role,ctx.role,audience))return null;
  async function start(){const f=await ctx.load().catch(()=>({}));setFacts(f||{});setOpen(true)}
  return <>
   <button type="button" className={('rp-button '+className).trim()} onClick={start} aria-haspopup="dialog">{label}</button>
