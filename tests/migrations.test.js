@@ -178,13 +178,17 @@ test('Update Center constraints: single rows, length limits, states, references 
   db.exec("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at) VALUES('admin','admin@example.invalid','fixture-hash','fixture-totp','[]',1,'2026-01-01')");
   db.exec("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,1,'admin','2026-10-22')");
   assert.throws(() => db.exec("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(2,1,'admin','2026-10-22')"), constraint);
-  assert.throws(() => db.exec('UPDATE update_preferences SET check_enabled=2'), constraint);
+  db.exec("UPDATE update_preferences SET check_enabled=0,changed_by='admin',changed_at='2026-10-23'");
+  for (const value of [2, -1, "'yes'"]) assert.throws(() => db.exec(`UPDATE update_preferences SET check_enabled=${value}`), constraint, 'check_enabled is 0 or 1, not ' + value);
+  assert.equal(db.prepare('SELECT check_enabled FROM update_preferences').get().check_enabled, 0);
   assert.throws(() => db.exec("UPDATE update_preferences SET changed_by='nobody'"), constraint, 'changed_by must be a user');
   const check = db.prepare("INSERT OR IGNORE INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
   check.run(); check.run();
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM update_checks').get().count, 1, 'INSERT OR IGNORE keeps one check row');
   assert.throws(() => db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(2,'ok','2026-10-22',0)"), constraint);
-  assert.throws(() => db.exec("UPDATE update_checks SET status='unknown'"), constraint);
+  for (const status of ['failed', 'ok']) db.prepare('UPDATE update_checks SET status=?').run(status);
+  for (const status of ['unknown', '', 'OK', 'checking']) assert.throws(() => db.prepare('UPDATE update_checks SET status=?').run(status), constraint, `status ${JSON.stringify(status)} is refused`);
+  assert.throws(() => db.exec('UPDATE update_checks SET status=NULL'), constraint);
   for (const [column, max] of Object.entries({ latest_version: 32, manifest: 65536, release_notes: 65536, releases: 16384, etag: 256, error: 2048 })) {
     db.prepare(`UPDATE update_checks SET ${column}=?`).run(long(max));
     assert.throws(() => db.prepare(`UPDATE update_checks SET ${column}=?`).run(long(max + 1)), constraint, column + ' is capped at ' + max);
@@ -196,12 +200,23 @@ test('Update Center constraints: single rows, length limits, states, references 
   db.exec("UPDATE update_requests SET state='resolved',accepted_at='2026-10-22',finished_at='2026-10-22',to_schema=5,exit_code=5 WHERE id='first'");
   request.run('second', 'rolled_back', 'first'); request.run('third', 'submitted', 'second');
   for (const state of ['succeeded', 'refused', 'busy', 'lost']) request.run(state, state, null);
-  assert.throws(() => request.run('fourth', 'unknown', null), constraint);
+  for (const state of ['unknown', 'zzz', '', 'Submitted', 'needs-action']) assert.throws(() => request.run('fourth', state, null), constraint, `state ${JSON.stringify(state)} is refused`);
+  assert.throws(() => request.run('fourth', null, null), constraint);
+  assert.throws(() => db.exec("UPDATE update_requests SET state='zzz' WHERE id='first'"), constraint);
   assert.throws(() => request.run('fourth', 'refused', 'missing'), constraint, 'retry_of names an earlier request');
-  for (const [column, max] of Object.entries({ refusal: 64, warning: 1024, error: 2048, rollback_hint: 4096 })) {
+  for (const [column, max] of Object.entries({ refusal: 64, warning: 1024, error: 2048, rollback_hint: 4096, reason: 64, updater_version: 32, env: 1024 })) {
     db.prepare(`UPDATE update_requests SET ${column}=? WHERE id='first'`).run(long(max));
     assert.throws(() => db.prepare(`UPDATE update_requests SET ${column}=? WHERE id='first'`).run(long(max + 1)), constraint, column + ' is capped at ' + max);
   }
+  // The run's own report values (section 7.1) are optional: a run recorded before they were known keeps nulls.
+  db.exec("UPDATE update_requests SET reason='health-timeout-api',install_mode='image',updater_version='1.4.0',env='{\"arch\":\"amd64\"}' WHERE id='second'");
+  db.exec("UPDATE update_requests SET install_mode='source' WHERE id='third'");
+  for (const mode of ['docker', '', 'Image']) assert.throws(() => db.prepare("UPDATE update_requests SET install_mode=? WHERE id='third'").run(mode), constraint, `install_mode ${JSON.stringify(mode)} is refused`);
+  assert.deepEqual({ ...db.prepare("SELECT reason,install_mode,updater_version,env FROM update_requests WHERE id='succeeded'").get() }, { reason: null, install_mode: null, updater_version: null, env: null });
+  const history = db.prepare('INSERT INTO release_history VALUES(?,?,?,?)');
+  history.run(long(32), 0, '2026-10-22', '2026-10-22');
+  assert.throws(() => history.run(long(33), 5, '2026-10-22', '2026-10-22'), constraint, 'release_history.version is capped at 32');
+  for (const schemaValue of [-1, 'five', 4.5]) assert.throws(() => history.run('2.2.0', schemaValue, '2026-10-22', '2026-10-22'), constraint, `schema_version ${schemaValue} is refused`);
   const event = db.prepare("INSERT INTO update_events VALUES('third','2026-10-22T00:00:00.000Z',?)");
   event.run(long(32));
   assert.throws(() => event.run(long(32)), constraint, 'one row per phase and time');
@@ -215,7 +230,15 @@ test('Update Center constraints: single rows, length limits, states, references 
 test('a real 2.1.0 database migrates to schema 5 with its data intact, a v4-to-v5 snapshot and floor 1', { skip: noTag }, () => temporary(async directory => {
   const v2 = await v210Migrations(), file = join(directory, 'state.sqlite'), db = v210Database(file, v2), before = schema(db);
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
+  db.exec(`INSERT INTO audit_events VALUES('audit','user','site.created','site','{}','2026-10-20');
+    INSERT INTO worker_lease VALUES('worker','holder','2026-10-20','2026-10-20',1);
+    INSERT INTO retention_deferrals VALUES('backup',1,NULL,1);`);
+  // Every row of every pre-existing table, except the floor setting migrate() rewrites to its unchanged value.
+  const contents = () => Object.fromEntries(before.filter(row => row.type === 'table').map(({ name }) => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row })).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
+  const rows = contents();
+  assert.ok(Object.values(rows).filter(list => list.length).length >= 10, 'the fixture has rows in most tables');
   const result = migrate(db, { file, now: () => new Date('2026-10-22T08:00:00.000Z'), log: quiet });
+  assert.deepEqual(contents(), rows, 'migration 5 writes no rows to existing tables');
   assert.equal(result.from, 4); assert.equal(result.to, 5);
   assert.match(result.snapshot, /state-v4-to-v5-20261022T080000000Z\.sqlite$/);
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
