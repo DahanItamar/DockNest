@@ -57,4 +57,6 @@ Open the failing phase's log in the artifact. `FAIL` lines in the job log name t
 3. Run this workflow from `main` with `candidate` set to the merge commit's full SHA, and wait for it to pass. If it fails, fix on a new PR and start again at step 1 with the new merge commit; nothing was published.
 4. Tag the same merge commit `vX.Y.Z` and push the tag. `release.yml` checks that the commit is on `main`, has a successful `Verify` run and a successful candidate validation, then publishes the `X.Y.Z`, `X.Y`, `X` and `latest` image tags and the GitHub Release.
 
+Never push a final tag before the candidate run is green. If the release gate fails anyway (for example the tag was pushed early, or a GitHub API call failed), do not delete and re-tag: once the missing run has passed, re-run the failed `Release` workflow run (Re-run all jobs) for the same tag. `release.yml` runs a read-only `gate` job first; the `publish` job, the only one with write permissions, starts only after the gate succeeded.
+
 `release.yml` refuses any tag with a pre-release suffix (`vX.Y.Z-rc.N`) before it builds anything, so such a tag never creates a GitHub Release or an image tag. The `v2.1.0-rc.1` tag, pre-release and image from before this rule stay as they are.

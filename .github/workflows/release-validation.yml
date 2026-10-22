@@ -42,21 +42,23 @@ jobs:
           CANDIDATE: ${{ inputs.candidate }}
           INPUT: ${{ inputs.target }}
           DISPATCH_REF: ${{ github.ref }}
+        # Whole-string [[ =~ ]] matches: a multi-line value can never pass, so nothing unvalidated reaches $GITHUB_OUTPUT.
+        shell: bash
         run: |
           if [ -n "$CANDIDATE" ]; then
             [ -z "$INPUT" ] || { echo "::error::Set candidate or target, not both"; exit 1; }
-            printf '%s\n' "$CANDIDATE" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::candidate must be a full 40-character lowercase commit SHA"; exit 1; }
+            [[ $CANDIDATE =~ ^[0-9a-f]{40}$ ]] || { echo "::error::candidate must be a full 40-character lowercase commit SHA"; exit 1; }
             [ "$DISPATCH_REF" = refs/heads/main ] || { echo "::error::Run candidate validation from main (dispatched from $DISPATCH_REF)"; exit 1; }
             git cat-file -e "$CANDIDATE^{commit}" 2>/dev/null || { echo "::error::Commit $CANDIDATE is not in this repository"; exit 1; }
             git merge-base --is-ancestor "$CANDIDATE" origin/main || { echo "::error::$CANDIDATE is not on main"; exit 1; }
             version=$(git show "$CANDIDATE:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')
-            printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::package.json at $CANDIDATE is $version; a candidate carries the final X.Y.Z it will be tagged as"; exit 1; }
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::package.json at $CANDIDATE is $version; a candidate carries the final X.Y.Z it will be tagged as"; exit 1; }
             echo "mode=candidate" >> "$GITHUB_OUTPUT"; echo "value=$CANDIDATE" >> "$GITHUB_OUTPUT"
             echo "label=v$version-candidate-${CANDIDATE:0:12}" >> "$GITHUB_OUTPUT"
           else
             target=$INPUT
             [ -n "$target" ] || target=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p)
-            printf '%s\n' "$target" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "::error::Not a release tag: $target"; exit 1; }
+            [[ $target =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::Not a release tag: $target"; exit 1; }
             echo "mode=target" >> "$GITHUB_OUTPUT"; echo "value=$target" >> "$GITHUB_OUTPUT"
             echo "label=$target" >> "$GITHUB_OUTPUT"
           fi

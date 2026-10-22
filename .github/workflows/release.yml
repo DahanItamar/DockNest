@@ -12,35 +12,33 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  publish:
+  # Fail closed: nothing is built, pushed or signed unless this read-only job proves that the tag is a final vX.Y.Z, its
+  # commit is on main, the Verify workflow (privacy, check, browser, linux-integration, upgrade, gate) finished
+  # successfully for exactly that commit, and the Release validation workflow, dispatched from main with that commit as
+  # its candidate, succeeded. The write permissions exist only in the publish job, which needs this one.
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     permissions:
-      contents: write   # create the GitHub Release and upload its manifest
-      packages: write   # push to ghcr.io with GITHUB_TOKEN
-      id-token: write   # cosign keyless signing through GitHub OIDC
-      actions: read     # look up the CI run for the tagged commit
+      contents: read    # check out the tagged commit and main's history
+      actions: read     # look up the Verify and Release validation runs for the tagged commit
     steps:
       - name: Refuse anything but a final vX.Y.Z tag
         env:
           REF_NAME: ${{ github.ref_name }}
+        shell: bash
         run: |
-          printf '%s\n' "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          [[ $REF_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "::error::$REF_NAME is not a final vX.Y.Z tag. Release candidates are not published; validate the main commit with the Release validation workflow (candidate input) and tag vX.Y.Z instead."; exit 1; }
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '24'
-      # Fail closed: nothing is built, pushed or signed unless the tagged commit is on main, the Verify workflow
-      # (privacy, check, browser, linux-integration, upgrade, gate) finished successfully for exactly that commit, and the
-      # Release validation workflow, dispatched from main with that commit as its candidate, succeeded.
+          fetch-depth: 0   # all branches and tags: origin/main must be present for the ancestry checks
+          persist-credentials: false
       - name: Require tag on main with a green Verify run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch --quiet origin main
+          git rev-parse -q --verify refs/remotes/origin/main > /dev/null || { echo "::error::origin/main was not fetched"; exit 1; }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main"; exit 1; }
           passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=50" \
             --jq '[.workflow_runs[] | select(.conclusion == "success" and .name == "Verify")] | length')
@@ -53,10 +51,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-validation.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=100" \
-            --jq ".workflow_runs[] | select(.conclusion == \"success\" and .head_branch == \"main\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\" and .display_title == \"Release validation candidate $GITHUB_SHA\") | .head_sha")
+            --jq ".workflow_runs[] | select(.conclusion == \"success\" and .event == \"workflow_dispatch\" and .head_branch == \"main\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\" and .display_title == \"Release validation candidate $GITHUB_SHA\") | .head_sha")
           validated=0
           for run in $runs; do git merge-base --is-ancestor "$run" origin/main 2>/dev/null && validated=1; done
           [ "$validated" = 1 ] || { echo "::error::No successful Release validation run for candidate $GITHUB_SHA; run it from main with that commit as the candidate before tagging"; exit 1; }
+  publish:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # create the GitHub Release and upload its manifest
+      packages: write   # push to ghcr.io with GITHUB_TOKEN
+      id-token: write   # cosign keyless signing through GitHub OIDC
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
       - name: Resolve release
         id: release
         run: |
