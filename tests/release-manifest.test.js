@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -160,4 +160,49 @@ test('the command line prints notes without front matter and checks a written ma
   writeFileSync(file, JSON.stringify(manifest(release, fixture(t).root), null, 2));
   assert.match(run('--version', '2.2.0', '--commit', commit, '--repository', repository, '--digest', digest), /matches 2\.2\.0/);
   assert.throws(() => run('--version', '2.2.0', '--commit', 'e'.repeat(40), '--repository', repository), /commit is not/);
+});
+
+test('a UTF-8 byte order mark before the notes is refused instead of hiding the front matter', t => {
+  assert.throws(() => frontMatter('﻿' + highlights + '# Notes\n'), /byte order mark/);
+  assert.throws(() => frontMatter('﻿# Notes\n'), /byte order mark/);
+  assert.throws(() => manifest(release, fixture(t, { notes: '﻿' + highlights + '# DockNest 2.2\n' }).root), /^Error: docs\/releases\/2026-11-02-v2\.2\.md: front matter: the notes must not start with a UTF-8 byte order mark$/);
+});
+
+test('updater files and the notes file must be regular files whose real path stays inside the repository', t => {
+  const outside = mkdtempSync(path.join(tmpdir(), 'docknest-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(path.join(outside, 'broker.py'), 'outside');
+  // A directory link in the middle of the path: an lstat of the last component alone accepts it. A junction needs no
+  // privilege on Windows; elsewhere the type is ignored and it is a plain directory symlink.
+  const { dir, root, write } = fixture(t, { files: { 'updater/broker.py': 'inside' } });
+  symlinkSync(outside, path.join(dir, 'updater', 'linked'), 'junction');
+  write(UPDATER_LIST, JSON.stringify({ version: '1.0.0', files: ['updater/linked/broker.py'], units: [] }));
+  assert.throws(() => updaterBlock(root), /updater\/linked\/broker\.py resolves outside the repository/);
+  write(UPDATER_LIST, JSON.stringify({ version: '1.0.0', files: ['updater/broker.py'], units: [] }));
+  assert.equal(updaterBlock(root).files['updater/broker.py'], sha256('inside'));
+  // A notes path that is not a regular file fails the release with the notes file named.
+  const notes = fixture(t, { notes: null });
+  mkdirSync(path.join(notes.dir, 'docs/releases/2026-11-02-v2.2.md'), { recursive: true });
+  assert.throws(() => manifest(release, notes.root), /^Error: docs\/releases\/2026-11-02-v2\.2\.md: docs\/releases\/2026-11-02-v2\.2\.md is not a regular file$/);
+  const linkedNotes = fixture(t, { notes: null });
+  writeFileSync(path.join(outside, '2026-11-02-v2.2.md'), '# Outside\n');
+  mkdirSync(path.join(linkedNotes.dir, 'docs'));
+  symlinkSync(outside, path.join(linkedNotes.dir, 'docs/releases'), 'junction');
+  assert.throws(() => manifest(release, linkedNotes.root), /resolves outside the repository/);
+});
+
+test('the updater list version is independent of the release version', t => {
+  const result = manifest(release, fixture(t, { files: { [UPDATER_LIST]: '{"version":"1.4.2","files":[],"units":[]}' } }).root);
+  assert.equal(result.version, '2.2.0'); assert.equal(result.updater.version, '1.4.2');
+});
+
+test('a published manifest must carry exactly the manifest keys', t => {
+  const plain = manifest(release, fixture(t).root), expected = { version: '2.2.0', commit, repository, digest };
+  assert.equal(checkManifest(JSON.stringify(manifest(release, fixture(t, { notes: highlights }).root)), expected).highlights.fixes, 12, 'highlights is the one optional key');
+  assert.throws(() => checkManifest(JSON.stringify({ ...plain, extra: 1 }), expected), /unknown keys extra/);
+  for (const key of ['schemaVersion', 'minUpgradeFrom', 'image', 'notes', 'updater']) {
+    const { [key]: _, ...rest } = plain;
+    assert.throws(() => checkManifest(JSON.stringify(rest), expected), new RegExp(`missing keys ${key}(;|$)`), key);
+  }
+  for (const bad of ['[]', 'null', '"x"']) assert.throws(() => checkManifest(bad, expected), /not a JSON object/, bad);
 });

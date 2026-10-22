@@ -1,10 +1,11 @@
-FROM node:24-bookworm-slim AS build
+# The base image is pinned by digest (the multi-arch index of node:24-bookworm-slim); bump tag and digest together.
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data NODE_OPTIONS=--no-addons
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/* && mkdir -p /data && chown node:node /data
