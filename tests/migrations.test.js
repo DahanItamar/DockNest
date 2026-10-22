@@ -1,17 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, rm, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrate, migrations, schemaVersion, listSnapshots, SchemaTooNewError, SnapshotSpaceError } from '../src/migrations.js';
+import { pathToFileURL } from 'node:url';
+import { migrate, migrations, schemaVersion, listSnapshots, compatFloor, SchemaTooNewError, SnapshotSpaceError } from '../src/migrations.js';
 
-const run = promisify(execFile), quiet = () => {};
+const run = promisify(execFile), quiet = () => {}, shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
 // Sorted by name, matching schema().
-const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','restores_created','retention_deferrals','storage_target_settings','worker_lease'];
+const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;
@@ -138,4 +139,142 @@ test('older code keeps running on a database whose newer migrations are all comp
   migrate(db, { file, list: [...additive, future(schemaVersion + 2)], log: quiet });
   assert.throws(() => migrate(db, { file, log: quiet }), SchemaTooNewError);
   db.close();
+}));
+
+// Migration 5 (docs/update-center.md section 3). The documented SQL is the contract: the migrated schema must equal it.
+const updateCenter = ['release_history','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen'];
+const documented = (await readFile(new URL('../docs/update-center.md', import.meta.url), 'utf8')).split(/\r?\n## 3\. Data\r?\n/)[1].split(/```sql\r?\n/)[1].split('```')[0];
+const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+// Real released code from Git history. CI fetches every tag (fetch-depth 0), so there a missing tag fails instead of skipping.
+const released = (tag, file) => { try { return execFileSync('git', ['show', `${tag}:${file}`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024 }); } catch (error) { if (process.env.CI) throw new Error(`${tag}:${file} is not available; fetch the release tags`, { cause: error }); return null; } };
+const v210 = released('v2.1.0', 'src/migrations.js'), noTag = !v210 && 'v2.1.0 tag not fetched';
+const v210Migrations = () => temporary(async directory => { const file = join(directory, 'migrations-v2.1.0.mjs'); await writeFile(file, v210); return import(pathToFileURL(file).href); });
+// A real 2.1.0 metadata database: the v2.0.0 rows above, migrated by 2.1.0's own src/migrations.js to schema 4.
+function v210Database(file, v2) { const db = legacy(file); assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-20T08:00:00.000Z'), log: quiet }).to, 4); return db; }
+
+test('migration 5 is one compatible `{ version: 5,` line, so upgrade.sh and 2.1.0 keep the floor at 1', async () => {
+  const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/), lines = source.filter(line => /^\s*\{\s*version:\s*5\b/.test(line));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^ {2}\{ version: 5, name: 'update-center', compatible: true, up: .*\) \},$/);
+  assert.deepEqual(source.filter(line => /version:\s*5\b/.test(line)), lines, 'no other line names version 5');
+  assert.equal(schemaVersion, 5); assert.equal(migrations.at(-1).compatible, true); assert.equal(compatFloor(migrations), 1);
+});
+
+test('a fresh database gets exactly the documented Update Center schema and no rows', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = open(file), reference = new DatabaseSync(':memory:'), baselineOnly = new DatabaseSync(':memory:');
+  migrate(db, { file, log: quiet });
+  baselineOnly.exec(fixture); reference.exec(fixture); reference.exec(documented);
+  const expected = schema(reference).filter(row => !schema(baselineOnly).some(item => item.name === row.name));
+  assert.deepEqual(expected.map(row => row.name), updateCenter, 'the documented block creates exactly these objects');
+  for (const row of expected) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'migration 5 matches the doc for ' + row.name);
+  for (const table of updateCenter.filter(name => name !== 'update_requests_active')) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, table + ' starts empty');
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
+  db.close(); reference.close(); baselineOnly.close();
+}));
+
+test('Update Center constraints: single rows, length limits, states, references and one active request', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = open(file), long = length => 'x'.repeat(length), constraint = /constraint failed/i;
+  migrate(db, { file, log: quiet });
+  db.exec("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at) VALUES('admin','admin@example.invalid','fixture-hash','fixture-totp','[]',1,'2026-01-01')");
+  db.exec("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,1,'admin','2026-10-22')");
+  assert.throws(() => db.exec("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(2,1,'admin','2026-10-22')"), constraint);
+  db.exec("UPDATE update_preferences SET check_enabled=0,changed_by='admin',changed_at='2026-10-23'");
+  for (const value of [2, -1, "'yes'"]) assert.throws(() => db.exec(`UPDATE update_preferences SET check_enabled=${value}`), constraint, 'check_enabled is 0 or 1, not ' + value);
+  assert.equal(db.prepare('SELECT check_enabled FROM update_preferences').get().check_enabled, 0);
+  assert.throws(() => db.exec("UPDATE update_preferences SET changed_by='nobody'"), constraint, 'changed_by must be a user');
+  const check = db.prepare("INSERT OR IGNORE INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
+  check.run(); check.run();
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM update_checks').get().count, 1, 'INSERT OR IGNORE keeps one check row');
+  assert.throws(() => db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(2,'ok','2026-10-22',0)"), constraint);
+  for (const status of ['failed', 'ok']) db.prepare('UPDATE update_checks SET status=?').run(status);
+  for (const status of ['unknown', '', 'OK', 'checking']) assert.throws(() => db.prepare('UPDATE update_checks SET status=?').run(status), constraint, `status ${JSON.stringify(status)} is refused`);
+  assert.throws(() => db.exec('UPDATE update_checks SET status=NULL'), constraint);
+  for (const [column, max] of Object.entries({ latest_version: 32, manifest: 65536, release_notes: 65536, releases: 16384, etag: 256, error: 2048 })) {
+    db.prepare(`UPDATE update_checks SET ${column}=?`).run(long(max));
+    assert.throws(() => db.prepare(`UPDATE update_checks SET ${column}=?`).run(long(max + 1)), constraint, column + ' is capped at ' + max);
+  }
+  const request = db.prepare("INSERT INTO update_requests(id,from_version,to_version,from_schema,requested_by,requested_at,state,retry_of) VALUES(?,'2.2.0','2.2.1',5,'admin','2026-10-22',?,?)");
+  request.run('first', 'submitted', null);
+  assert.throws(() => request.run('second', 'submitted', null), constraint, 'only one active request');
+  for (const state of ['running', 'needs_action']) { db.prepare("UPDATE update_requests SET state=? WHERE id='first'").run(state); assert.throws(() => request.run('second', 'submitted', null), constraint, state + ' stays active'); }
+  db.exec("UPDATE update_requests SET state='resolved',accepted_at='2026-10-22',finished_at='2026-10-22',to_schema=5,exit_code=5 WHERE id='first'");
+  request.run('second', 'rolled_back', 'first'); request.run('third', 'submitted', 'second');
+  for (const state of ['succeeded', 'refused', 'busy', 'lost']) request.run(state, state, null);
+  for (const state of ['unknown', 'zzz', '', 'Submitted', 'needs-action']) assert.throws(() => request.run('fourth', state, null), constraint, `state ${JSON.stringify(state)} is refused`);
+  assert.throws(() => request.run('fourth', null, null), constraint);
+  assert.throws(() => db.exec("UPDATE update_requests SET state='zzz' WHERE id='first'"), constraint);
+  assert.throws(() => request.run('fourth', 'refused', 'missing'), constraint, 'retry_of names an earlier request');
+  for (const [column, max] of Object.entries({ refusal: 64, warning: 1024, error: 2048, rollback_hint: 4096, reason: 64, updater_version: 32, env: 1024 })) {
+    db.prepare(`UPDATE update_requests SET ${column}=? WHERE id='first'`).run(long(max));
+    assert.throws(() => db.prepare(`UPDATE update_requests SET ${column}=? WHERE id='first'`).run(long(max + 1)), constraint, column + ' is capped at ' + max);
+  }
+  // The run's own report values (section 7.1) are optional: a run recorded before they were known keeps nulls.
+  db.exec("UPDATE update_requests SET reason='health-timeout-api',install_mode='image',updater_version='1.4.0',env='{\"arch\":\"amd64\"}' WHERE id='second'");
+  db.exec("UPDATE update_requests SET install_mode='source' WHERE id='third'");
+  for (const mode of ['docker', '', 'Image']) assert.throws(() => db.prepare("UPDATE update_requests SET install_mode=? WHERE id='third'").run(mode), constraint, `install_mode ${JSON.stringify(mode)} is refused`);
+  assert.deepEqual({ ...db.prepare("SELECT reason,install_mode,updater_version,env FROM update_requests WHERE id='succeeded'").get() }, { reason: null, install_mode: null, updater_version: null, env: null });
+  const history = db.prepare('INSERT INTO release_history VALUES(?,?,?,?)');
+  history.run(long(32), 0, '2026-10-22', '2026-10-22');
+  assert.throws(() => history.run(long(33), 5, '2026-10-22', '2026-10-22'), constraint, 'release_history.version is capped at 32');
+  for (const schemaValue of [-1, 'five', 4.5]) assert.throws(() => history.run('2.2.0', schemaValue, '2026-10-22', '2026-10-22'), constraint, `schema_version ${schemaValue} is refused`);
+  const event = db.prepare("INSERT INTO update_events VALUES('third','2026-10-22T00:00:00.000Z',?)");
+  event.run(long(32));
+  assert.throws(() => event.run(long(32)), constraint, 'one row per phase and time');
+  assert.throws(() => event.run(long(33)), constraint);
+  assert.throws(() => db.exec("INSERT INTO update_events VALUES('missing','2026-10-22','idle')"), constraint);
+  db.exec("INSERT INTO whats_new_seen VALUES('admin','2.2.0','2026-10-22')");
+  assert.throws(() => db.exec("INSERT INTO whats_new_seen VALUES('nobody','2.2.0','2026-10-22')"), constraint);
+  db.close();
+}));
+
+test('a real 2.1.0 database migrates to schema 5 with its data intact, a v4-to-v5 snapshot and floor 1', { skip: noTag }, () => temporary(async directory => {
+  const v2 = await v210Migrations(), file = join(directory, 'state.sqlite'), db = v210Database(file, v2), before = schema(db);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
+  db.exec(`INSERT INTO audit_events VALUES('audit','user','site.created','site','{}','2026-10-20');
+    INSERT INTO worker_lease VALUES('worker','holder','2026-10-20','2026-10-20',1);
+    INSERT INTO retention_deferrals VALUES('backup',1,NULL,1);`);
+  // Every row of every pre-existing table, except the floor setting migrate() rewrites to its unchanged value.
+  const contents = () => Object.fromEntries(before.filter(row => row.type === 'table').map(({ name }) => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row })).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
+  const rows = contents();
+  assert.ok(Object.values(rows).filter(list => list.length).length >= 10, 'the fixture has rows in most tables');
+  const result = migrate(db, { file, now: () => new Date('2026-10-22T08:00:00.000Z'), log: quiet });
+  assert.deepEqual(contents(), rows, 'migration 5 writes no rows to existing tables');
+  assert.equal(result.from, 4); assert.equal(result.to, 5);
+  assert.match(result.snapshot, /state-v4-to-v5-20261022T080000000Z\.sqlite$/);
+  for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), updateCenter);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1, 'signed-in sessions survive');
+  assert.equal(db.prepare("SELECT role FROM users WHERE id='user'").get().role, 'admin');
+  assert.equal(db.prepare('SELECT path FROM backups').get().path, 'fixture.enc');
+  assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  assert.deepEqual(migrate(db, { file, log: quiet }), { from: 5, to: 5, snapshot: null }, 'a restart migrates nothing and takes no snapshot');
+  db.close();
+  const copy = new DatabaseSync(result.snapshot, { readOnly: true });
+  assert.equal(version(copy), 4); assert.equal(copy.prepare("SELECT 1 FROM sqlite_master WHERE name='update_requests'").get(), undefined);
+  copy.close();
+}));
+
+test('the real 2.1.0 code starts on a schema 5 database without changing it, and so does the 2.0.0 baseline', { skip: noTag }, () => temporary(async directory => {
+  const v2 = await v210Migrations(), file = join(directory, 'state.sqlite'), db = v210Database(file, v2), snapshots = () => listSnapshots(join(directory, 'upgrade-snapshots')).map(item => item.name);
+  try {
+    migrate(db, { file, log: quiet });
+    db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
+    const after = schema(db), taken = snapshots(), messages = [];
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 5, to: 5, snapshot: null });
+    assert.match(messages.join('\n'), /schema v5 is newer than this release \(v4\) but only adds compatible objects/);
+    assert.equal(version(db), 5); assert.deepEqual(schema(db), after); assert.equal(db.prepare('SELECT COUNT(*) AS count FROM update_checks').get().count, 1);
+    assert.deepEqual(snapshots(), taken, 'the rollback takes no snapshot');
+    // 2.1.0 keeps writing its own tables; 2.0.0 has no schema check and re-runs its baseline as CREATE ... IF NOT EXISTS.
+    db.exec("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job-2','site','backup','queued','queued','2026-10-22')");
+    db.exec(fixture.replace(/^CREATE (UNIQUE )?(TABLE|INDEX) /gm, 'CREATE $1$2 IF NOT EXISTS ')); assert.deepEqual(schema(db), after);
+  } finally { db.close(); }
+}));
+
+test('the real 2.1.0 upgrade.sh and this one read this migrations file as schema 5, floor 1', { skip: (!shell && 'needs sh') || noTag }, () => temporary(async directory => {
+  const script = join(directory, 'upgrade-v2.1.0.sh'); await writeFile(script, released('v2.1.0', 'scripts/upgrade.sh'));
+  for (const candidate of [script, join(root, 'scripts/upgrade.sh')]) {
+    const result = spawnSync('sh', [candidate, '--print-schema'], { cwd: root, encoding: 'utf8', env: { ...process.env, DOCKNEST_DIR: root } });
+    assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), '5 1', candidate);
+  }
 }));

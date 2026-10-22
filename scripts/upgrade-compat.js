@@ -59,6 +59,7 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare("SELECT schedule FROM policies WHERE site_id='site'").get().schedule, '0 3 * * *');
   assert.equal(db.prepare("SELECT pinned FROM backups WHERE id='backup'").get().pinned, 1);
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  assert.deepEqual({ ...db.prepare('SELECT version,schema_version FROM release_history WHERE version=?').get(release.version) }, { version: release.version, schema_version: schemaVersion }, 'the started API records its release');
   db.close();
 
   // Downgrade guard: a schema newer than this code that needs newer code (compat floor above ours) refuses to start and leaves the database alone.
