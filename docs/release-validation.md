@@ -1,8 +1,13 @@
 # Release validation
 
-The `Release validation` workflow replaces the manual upgrade test. For a release tag it builds and runs a real DockNest 2.0.0 installation on a GitHub-hosted Linux runner, upgrades it the way the release notes tell 2.0.0 users to, and checks that nothing was lost. It is informational: it is not a required check and does not block a release.
+The `Release validation` workflow replaces the manual upgrade test. It builds and runs a real DockNest 2.0.0 installation on a GitHub-hosted Linux runner, upgrades it the way the release notes tell 2.0.0 users to, and checks that nothing was lost. It is not a required pull request check, but it gates the release: `release.yml` publishes a final `vX.Y.Z` tag only when this workflow passed for exactly that commit.
 
-It runs on every pushed `vX.Y.Z` tag and on demand (Actions, Release validation, Run workflow). The `target` input takes a tag such as `v2.1.0`; empty means the newest final tag. Locally, `node scripts/release-validation.js --target v2.1.0 --allow-local` runs the same driver on a disposable Linux host with Docker. It removes the `docker-backup-manager_state` volume and all `docknest` containers, and refuses to start if either already exists.
+There are no public release candidates. A candidate is a commit on `main`, validated before anything is tagged:
+
+- **Candidate (before the release).** Actions, Release validation, Run workflow, from `main`, with `candidate` set to the full 40-character SHA of the release merge commit. The commit must be on `main` and its `package.json` must carry the final version (`X.Y.Z`, no suffix). The image is built from source inside the runner and nothing is pushed: no tag, no GitHub Release, no image. The version tag `vX.Y.Z` exists only inside the throwaway clone, so the documented `git checkout <tag>` and `scripts/upgrade.sh --version <tag>` steps run unchanged. The run is named `Release validation candidate <sha>`; `release.yml` looks for that name among successful runs dispatched from `main`.
+- **Existing tag (any time).** Leave `candidate` empty and set `target` to a tag such as `v2.1.0`; empty means the newest final tag. This re-checks a published release, for example the 2.0.0 to 2.1.0 path.
+
+Locally, `node scripts/release-validation.js --target v2.1.0 --allow-local` (or `--candidate <sha> --allow-local`) runs the same driver on a disposable Linux host with Docker. It removes the `docker-backup-manager_state` volume and all `docknest` containers, and refuses to start if either already exists. In candidate mode it never creates a tag in the repository it runs from.
 
 ## What it does
 
@@ -22,7 +27,7 @@ It runs on every pushed `vX.Y.Z` tag and on demand (Actions, Release validation,
 
 ## Evidence
 
-The job summary shows one PASS, FAIL or SKIP line per phase. The artifact `release-validation-<tag>` holds `summary.md`, `evidence.json` (versions, per-check results, per-table row counts and digests, drain time, status files) and one redacted log per phase with container logs. The run uses throwaway credentials, and the driver replaces every credential it generated or read (master key, setup token, password, TOTP secret, recovery codes, session and CSRF tokens) with `[redacted]`. It then scans the finished evidence and blanks any file that still contains one, failing the job. Secret files are compared by content hash inside the run and their hashes are not recorded.
+The job summary shows one PASS, FAIL or SKIP line per phase. The artifact `release-validation-<tag>` (for a candidate, `release-validation-vX.Y.Z-candidate-<first 12 characters of the SHA>`) holds `summary.md`, `evidence.json` (versions, per-check results, per-table row counts and digests, drain time, status files) and one redacted log per phase with container logs. The run uses throwaway credentials, and the driver replaces every credential it generated or read (master key, setup token, password, TOTP secret, recovery codes, session and CSRF tokens) with `[redacted]`. It then scans the finished evidence and blanks any file that still contains one, failing the job. Secret files are compared by content hash inside the run and their hashes are not recorded.
 
 ## What it proves
 
@@ -43,11 +48,15 @@ The job summary shows one PASS, FAIL or SKIP line per phase. The artifact `relea
 
 ## Reading a failure
 
-Open the failing phase's log in the artifact. `FAIL` lines in the job log name the check. `Resolve release` fails early when the tag is missing, is not newer than 2.0.0, or its `minUpgradeFrom` excludes 2.0.0. If an upgrade phase fails after the schema migrated, the log shows the same rollback hints that `scripts/upgrade.sh` prints; nothing from a run is ever reused, because the runner is discarded.
+Open the failing phase's log in the artifact. `FAIL` lines in the job log name the check. `Resolve release` fails early when the tag is missing, is not newer than 2.0.0, or its `minUpgradeFrom` excludes 2.0.0. For a candidate, the workflow's `Resolve what to validate` step fails first when the SHA is not a full SHA on `main`, the run was not started from `main`, or `package.json` has a pre-release version; the driver then refuses a version that is already tagged on a different commit (bump the version). If an upgrade phase fails after the schema migrated, the log shows the same rollback hints that `scripts/upgrade.sh` prints; nothing from a run is ever reused, because the runner is discarded.
 
 ## Release order
 
-1. Merge the release PR (version bump, CHANGELOG, notes) after its required checks pass.
-2. Wait for the `Verify` run on `main` for that merge commit to succeed. `release.yml` refuses to publish a tag whose commit has no successful `Verify` run.
-3. Tag the merge commit: first `vX.Y.Z-rc.N` (pre-release, exact image tag only).
-4. Let this workflow validate the candidate. If it passes, merge a version-only PR for `X.Y.Z`, wait for `main` again, and tag `vX.Y.Z`, which gets the `X.Y`, `X` and `latest` image tags.
+1. Merge the release PR (final version `X.Y.Z` in `package.json`, CHANGELOG, notes) after its required checks pass.
+2. Wait for the `Verify` run on `main` for that merge commit to succeed.
+3. Run this workflow from `main` with `candidate` set to the merge commit's full SHA, and wait for it to pass. If it fails, fix on a new PR and start again at step 1 with the new merge commit; nothing was published.
+4. Tag the same merge commit `vX.Y.Z` and push the tag. `release.yml` checks that the commit is on `main`, has a successful `Verify` run and a successful candidate validation, then publishes the `X.Y.Z`, `X.Y`, `X` and `latest` image tags and the GitHub Release.
+
+Never push a final tag before the candidate run is green. If the release gate fails anyway (for example the tag was pushed early, or a GitHub API call failed), do not delete and re-tag: once the missing run has passed, re-run the failed `Release` workflow run (Re-run all jobs) for the same tag. `release.yml` runs a read-only `gate` job first; the `publish` job, the only one with write permissions, starts only after the gate succeeded.
+
+`release.yml` refuses any tag with a pre-release suffix (`vX.Y.Z-rc.N`) before it builds anything, so such a tag never creates a GitHub Release or an image tag. The `v2.1.0-rc.1` tag, pre-release and image from before this rule stay as they are.
