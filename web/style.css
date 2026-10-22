@@ -55,3 +55,19 @@ select:disabled{cursor:default}
  .rebrand-page .chart-data .mobile-table td:last-child{grid-column:auto}
  .rebrand-page .stable-table .paged-content{min-height:0}
 }
+/* Switches (every role=switch): the button is a transparent 44px hit area; the 36x20 pill track and 16px thumb are its
+   pseudo-elements. The doubled attribute keeps any global button box style (min-height, radius, fill) from reaching it. */
+button[role=switch][role=switch]{position:relative;display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;box-sizing:border-box;width:44px;min-width:44px;height:44px;min-height:44px;max-height:44px;margin:0;padding:0;border:0;border-radius:9999px;background:transparent;box-shadow:none;transform:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button[role=switch][role=switch]:hover,button[role=switch][role=switch]:active{background:transparent;border:0;transform:none}
+button[role=switch][role=switch]:focus-visible{outline:none}
+button[role=switch][role=switch]>*{display:none}
+button[role=switch][role=switch]::before{content:'';display:block;box-sizing:border-box;width:36px;height:20px;border-radius:9999px;border:1px solid var(--border-control);background:var(--surface-muted);transition:background-color 150ms var(--dn-ease-out,cubic-bezier(.2,0,0,1)),border-color 150ms var(--dn-ease-out,cubic-bezier(.2,0,0,1))}
+button[role=switch][role=switch]::after{content:'';position:absolute;top:50%;left:6px;width:16px;height:16px;margin-top:-8px;border-radius:50%;background:var(--text-muted);transition:transform 150ms var(--dn-ease-out,cubic-bezier(.2,0,0,1)),background-color 150ms var(--dn-ease-out,cubic-bezier(.2,0,0,1))}
+button[role=switch][role=switch]:hover::before{background:var(--surface-hover)}
+button[role=switch][role=switch]:focus-visible::before{outline:2px solid var(--focus-ring);outline-offset:2px}
+button[role=switch][role=switch][aria-checked=true]::before{background:var(--button-primary);border-color:var(--button-primary)}
+button[role=switch][role=switch][aria-checked=true]:hover::before{background:var(--button-primary-hover);border-color:var(--button-primary-hover)}
+button[role=switch][role=switch][aria-checked=true]::after{transform:translateX(16px);background:var(--primary-foreground)}
+button[role=switch][role=switch]:disabled{opacity:.45;cursor:not-allowed}
+@media(prefers-reduced-motion:reduce){button[role=switch][role=switch]::before,button[role=switch][role=switch]::after{transition:none}}
+@media(forced-colors:active){button[role=switch][role=switch]::before{border-color:ButtonText}button[role=switch][role=switch]::after{background:ButtonText}button[role=switch][role=switch][aria-checked=true]::before{background:Highlight}}

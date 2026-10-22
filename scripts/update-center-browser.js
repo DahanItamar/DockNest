@@ -89,6 +89,11 @@ try{
   await noWrap(page,'.uc-page');
   const toggle=page.getByRole('switch',{name:'Automatic checks'});
   assert.equal(await toggle.getAttribute('aria-checked'),'true');
+  // A pill switch (36x20 track, 16px thumb) inside a 44px hit area, untouched by the global button box styles.
+  const sw=await toggle.evaluate(el=>{const r=el.getBoundingClientRect(),t=getComputedStyle(el,'::before'),k=getComputedStyle(el,'::after'),s=getComputedStyle(el);return {box:[Math.round(r.width),Math.round(r.height)],track:[t.width,t.height,t.borderTopLeftRadius],thumb:[k.width,k.height],fill:s.backgroundColor}});
+  assert.deepEqual(sw.box,[44,44],'44px touch target');
+  assert.deepEqual(sw.track,['36px','20px','9999px'],'pill track'); assert.deepEqual(sw.thumb,['16px','16px'],'16px thumb');
+  assert.equal(sw.fill,'rgba(0, 0, 0, 0)','the hit area itself is not filled');
   await toggle.click();
   await page.getByText('Automatic checks are off',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Check now'}).count(),0,'No Check now while checks are off');
