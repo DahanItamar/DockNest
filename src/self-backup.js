@@ -9,6 +9,7 @@ import { db,id,audit,transaction } from './db.js';
 import { config } from './config.js';
 import { seal,open,digest } from './crypto.js';
 import { exportRecoveryKit } from './recovery-kit.js';
+import { deploymentHeld,requireNoDeploymentHold,deploymentHoldMessage } from './deployment-hold.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
 import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
 
@@ -40,7 +41,9 @@ export function saveSelfBackupSettings(input,actor){
   audit(actor,'manager-backup.settings',null,{enabled:data.enabled,passphraseChanged:!!data.passphrase});return {saved:true};
  });
 }
+// Every caller runs this inside one BEGIN IMMEDIATE transaction, so the hold cannot be set between the check and the insert.
 function queue(actor){
+ requireNoDeploymentHold(db);
  if(!selfBackupConfig()?.passphrase)throw Object.assign(new Error('Set up DockNest self-backup first.'),{status:409});
  if(active())throw Object.assign(new Error('A DockNest backup is already queued or running.'),{status:409});
  const selected=destination();if(!selected.available)throw Object.assign(new Error('Select a connected SFTP or S3 destination in Storage before backing up DockNest.'),{status:409});
@@ -50,7 +53,8 @@ function queue(actor){
 export const enqueueSelfBackup=actor=>transaction(()=>queue(actor));
 export function tickSelfBackup(currentDate=new Date()){
  transaction(()=>{
-  const saved=selfBackupConfig();if(!saved?.enabled||active())return;
+  // Under the hold a due run stays due (nextRun unchanged) and is queued after the release, like site schedules.
+  const saved=selfBackupConfig();if(!saved?.enabled||active()||deploymentHeld(db))return;
   if(saved.nextRun&&new Date(saved.nextRun)>currentDate)return;
   if(!destination().available)return;
   queue('scheduler');saved.nextRun=CronExpressionParser.parse(saved.schedule,{tz:saved.timezone,currentDate}).next().toISOString();
@@ -58,7 +62,8 @@ export function tickSelfBackup(currentDate=new Date()){
  });
 }
 export function claimSelfBackup(){
- return transaction(()=>{const run=db.prepare("SELECT * FROM manager_backups WHERE status='queued'").get();if(!run)return null;db.prepare("UPDATE manager_backups SET status='running' WHERE id=?").run(run.id);return run;});
+ // A run queued before the hold (an older release did not check it) stays queued until the hold is released.
+ return transaction(()=>{if(deploymentHeld(db))return null;const run=db.prepare("SELECT * FROM manager_backups WHERE status='queued'").get();if(!run)return null;db.prepare("UPDATE manager_backups SET status='running' WHERE id=?").run(run.id);return run;});
 }
 async function directory(){
  const root=join(config.dataDir,'manager-backups');await mkdir(root,{recursive:true,mode:0o700});
@@ -103,9 +108,11 @@ export async function executeSelfBackup(run){
   if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
   // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
   transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes)audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});else console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);});
- }catch{
-  // Exception text may contain credential or archive contents; never persist it.
-  if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id);
+ }catch(error){
+  // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold
+  // set under a running backup, as by a forced upgrade) is recorded as it is.
+  const held=error?.message===deploymentHoldMessage;
+  if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),held?deploymentHoldMessage+' Your previous successful copy is kept.':'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id,held?{reason:'deployment-hold'}:{});
  }finally{if(temporary)try{await rm(temporary,{recursive:true,force:true});}catch{/* Retry interrupted staging cleanup at worker startup. */}}
  try{await pruneSelfBackups();}catch{/* Cleanup failure must not prevent ordinary site jobs. */}
 }

@@ -1,6 +1,7 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { config } from './config.js';
+import { deploymentHeld, requireNoDeploymentHold as requireNoHold } from './deployment-hold.js';
 import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion,deletionDeferred } from './artifact-journal.js';
 import { key } from './crypto.js';
@@ -51,7 +52,7 @@ export async function verifyRecovery(job){
 }
 function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
 function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(siteId);}
-function requireNoDeploymentHold(){if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
+const requireNoDeploymentHold=()=>requireNoHold(db);
 export function enqueueBackup(siteId,actor='scheduler'){
  requireNoDeploymentHold();
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
@@ -286,7 +287,7 @@ export async function executeJob(job){
  }
 }
 export function tickScheduler(currentDate=new Date()){
- if(db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true')return;
+ if(deploymentHeld(db))return;
  const policies=db.prepare('SELECT * FROM policies WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all();
  for(const policy of policies){
   try{
