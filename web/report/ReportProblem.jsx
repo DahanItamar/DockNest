@@ -1,5 +1,6 @@
 import React,{createContext,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import {IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconAlertCircle,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
+import {createPortal} from 'react-dom';
 import {excerptFrom} from './redact.js';
 import './report.css';
 
@@ -40,9 +41,9 @@ export function ReviewDialog({build,facts,summary,excerptSource,onClose}){
   <header className="rp-head">
    <div className="rp-head-row"><div className="rp-head-text"><h2 id={titleId}>Review what will be shared</h2><p>{summary?summary+' · ':''}The report opens on GitHub, where you add your own words.</p></div>
     <button type="button" className="icon-button rp-close" aria-label="Close review" title="Close review" onClick={onClose}><IconX size={20} stroke={1.75} aria-hidden="true"/></button></div>
-   <ol className="rp-steps" aria-label="Steps"><li aria-current="step"><span className="rp-step-bar"/><span><span className="rp-wide">1  Review here</span><span className="rp-narrow">Review</span></span></li><li><span className="rp-step-bar"/><span>2  Open GitHub</span></li><li><span className="rp-step-bar"/><span><span className="rp-wide">3  Describe and submit there</span><span className="rp-narrow">Submit there</span></span></li></ol>
+   <ol className="rp-steps" aria-label="Steps"><li aria-current="step"><span className="rp-step-bar"/><span><span className="rp-wide">1  Review here</span><span className="rp-narrow">Review</span></span></li><li><span className="rp-step-bar"/><span><span className="rp-wide">2  Open GitHub</span><span className="rp-narrow">Open GitHub</span></span></li><li><span className="rp-step-bar"/><span><span className="rp-wide">3  Describe and submit there</span><span className="rp-narrow">Submit there</span></span></li></ol>
   </header>
-  <div className="rp-body">
+  <div className="rp-main"><div className="rp-body">
    <section className="rp-shared" aria-labelledby={titleId+'-shared'}>
     <h3 id={titleId+'-shared'}><IconCircleCheck size={18} stroke={2} className="rp-ok" aria-hidden="true"/>Shared</h3>
     {report?<dl className="def-list rp-list">{report.shared.map(([k,v])=><div className="def-row" key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>:<p role="alert">This report could not be prepared.</p>}
@@ -59,7 +60,7 @@ export function ReviewDialog({build,facts,summary,excerptSource,onClose}){
     <p className="t-caption rp-server-note">DockNest{'’'}s server sends nothing. Your browser opens a pre-filled GitHub form; nothing is posted until you submit it there.</p>
    </section>
   </div>
-  <div className="rp-note" role="note"><IconAlertCircle size={20} stroke={2} aria-hidden="true"/><span>{PUBLIC_WARNING}</span></div>
+  <div className="rp-note" role="note"><IconAlertCircle size={20} stroke={2} aria-hidden="true"/><span>{PUBLIC_WARNING}</span></div></div>
   <footer className="rp-foot">
    <button type="button" onClick={onClose}>Cancel</button>
    {report?<a className="button primary rp-open" href={report.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={()=>setTimeout(onClose,0)}>Open GitHub<IconExternalLink size={16} stroke={2} aria-hidden="true"/><span className="sr-only"> (opens a new tab)</span></a>:<button type="button" className="primary" disabled>Open GitHub</button>}
@@ -75,6 +76,6 @@ export function ReportProblem({build,label='Open GitHub',summary,audience='admin
  async function start(){const f=await ctx.load().catch(()=>({}));setFacts(f||{});setOpen(true)}
  return <>
   <button type="button" className={('rp-button '+className).trim()} onClick={start} aria-haspopup="dialog">{label}</button>
-  {open&&facts&&<ReviewDialog build={build} facts={facts} summary={summary} excerptSource={excerptSource} onClose={()=>setOpen(false)}/>}
+  {open&&facts&&createPortal(<ReviewDialog build={build} facts={facts} summary={summary} excerptSource={excerptSource} onClose={()=>setOpen(false)}/>,document.body)}
  </>;
 }
