@@ -54,4 +54,8 @@ dialog[open]{animation:dn-enter var(--dur-slow) var(--ease) both}
  .card .card-footer.card-footer>button.text{align-self:flex-start;min-height:44px;margin:0}
  .card .card-footer.card-footer.server-card-actions .server-edit{margin-left:0;align-self:stretch}
  .card .card-footer.card-footer.site-card-actions{flex-direction:column-reverse}
+ /* A status or text beside a text link stays one 44px row; it wraps only when it cannot fit. */
+ .card .card-footer.card-footer.uc-footer{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:8px 16px;column-gap:16px}
+ .card .card-footer.uc-footer .link-btn{display:inline-flex;align-items:center;min-height:44px;align-self:center}
+ .card .card-footer.uc-footer .foot-status{flex:1 1 auto}
 }

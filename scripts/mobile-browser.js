@@ -17,6 +17,7 @@ const jobs=Array.from({length:12},(_,i)=>({id:'job-'+i,siteId:'site',type:i%2?'r
 const state={servers:[{id:'host',name:'Fixture host',host:'server.example.invalid',username:'fixture',port:22}],sites:[{id:'site',serverId:'host',name:longName,config:{domains:['long-website-name.example.invalid'],healthUrl:'https://long-website-name.example.invalid/health',containers:[]}}],policies:[],backups:Array.from({length:14},(_,i)=>({id:'backup-'+i,siteId:'site-'+i,status:'completed',createdAt:stamp,capturedAt:stamp,size:1e8,kind:'full'})),jobs,restores:[],audit:Array.from({length:12},(_,i)=>({id:'audit-'+i,createdAt:stamp,action:'backup.completed.for.long-website-name.example.invalid',actor:'administrator-with-long-name@example.invalid',details:{message:'Long detail '+('fixture-text-without-spaces'.repeat(12))}})),storage:{used:0,total:1e12},worker:{online:true},maintenance:{title:'Briefly under maintenance',message:'We will be back shortly.',color:'#147d73'}};
 const accounts={users:[{id:'admin',name:'Fixture administrator',email:'admin@example.invalid',role:'admin',status:'active',activeSessions:1},{id:'operator',name:'Operator with a long name to exercise wrapping',email:'operator-with-long-name@example.invalid',role:'operator',status:'active',activeSessions:2},{id:'pending',name:'Pending operator',role:'operator',status:'pending',invitationExpiresAt:stamp}],security:{idleMinutes:30,absoluteHours:8,invitationMinutes:15}};
 const selfBackup={latest:{finishedAt:stamp,size:592000,release:'0.1.0',checksum:'a'.repeat(64),storage:{mode:'remote',name:'Fixture SFTP storage'}},settings:{enabled:true,hasPassphrase:true,schedule:'0 3 * * *',timezone:'UTC',nextRun:stamp},destination:{name:'Fixture SFTP storage',available:true}};
+const updatesState={state:'up-to-date',current:{version:'2.3.0',schemaVersion:5,publishedAt:'2026-10-22T09:00:00.000Z'},consent:{checkEnabled:true,decidedBy:{id:'admin',name:'Fixture administrator'},decidedAt:stamp},check:{status:'ok',checkedAt:stamp,lastSuccessAt:stamp,error:null,latest:{version:'v2.3.0',publishedAt:'2026-10-22T09:00:00.000Z'}},updater:{present:false,supported:false,status:'not-installed',lastHeartbeatAt:null,installMode:'source'},offer:{update:null,cli:null,blocked:null},active:null};
 let browser;
 try{
  browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
@@ -25,7 +26,7 @@ try{
  await page.route('**/api/**',route=>{
   const endpoint=new URL(route.request().url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'admin',name:'Fixture administrator',role:'admin'},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
-  return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?state:endpoint==='/api/access'?accounts:endpoint==='/api/self-backup'?selfBackup:endpoint==='/api/storage-targets'?{targets:[{id:'t1',name:'Fixture SFTP storage',kind:'sftp',host:'storage.example.invalid',port:22,username:'fixture',root:'/backups',status:'connected'}],activeTargetId:'t1'}:endpoint==='/api/auth/activity'?auth:{}});
+  return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?state:endpoint==='/api/access'?accounts:endpoint==='/api/self-backup'?selfBackup:endpoint==='/api/updates'?updatesState:endpoint==='/api/storage-targets'?{targets:[{id:'t1',name:'Fixture SFTP storage',kind:'sftp',host:'storage.example.invalid',port:22,username:'fixture',root:'/backups',status:'connected'}],activeTargetId:'t1'}:endpoint==='/api/auth/activity'?auth:{}});
  });
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:'+server.address().port);
  await page.locator('.dash-metrics').waitFor();
@@ -81,6 +82,8 @@ try{
     const kids=[...footer.children].map(c=>c.getBoundingClientRect());for(let i=0;i<kids.length;i++){if(kids[i].top<f.top-.5||kids[i].bottom>f.bottom+.5)out.push('footer child outside footer');for(let j=i+1;j<kids.length;j++)if(hitTest(kids[i],kids[j]))out.push('footer children overlap');}}
     return out;});
    assert.deepEqual(bad,[],name+' card footers at '+width);
+   if(name==='Update Center'&&width>=390){const rows=await page.evaluate(()=>[...document.querySelectorAll('.uc-footer')].map(f=>{const k=[...f.children].map(c=>{const b=c.getBoundingClientRect();return (b.top+b.bottom)/2});return{aligned:Math.max(...k)-Math.min(...k)<2,h:Math.round(f.getBoundingClientRect().height)}}));assert.ok(rows.length>0&&rows.every(r=>r.aligned&&r.h<=62),'Update Center footers stay one row at '+width+' '+JSON.stringify(rows));}
+   if(name==='Update Center')assert.equal(await page.getByText(/^Versions*$/).count(),0,'No dangling Version label');
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,name+' no horizontal scroll at '+width);
   }
  }
