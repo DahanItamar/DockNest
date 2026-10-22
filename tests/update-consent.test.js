@@ -67,7 +67,7 @@ test('turning checks on checks once straight away; Check now within a minute is 
   await pendingCheck();
   assert.deepEqual(fetches, ['https://api.github.com/repos/DahanItamar/DockNest/releases?per_page=30', 'https://github.com/DahanItamar/DockNest/releases/download/v99.0.0/docknest-release.json']);
   const state = await (await request('')).json();
-  assert.equal(state.state, 'update-available'); assert.equal(state.check.latest.version, 'v99.0.0'); assert.equal(state.check.latest.releaseUrl, 'https://github.com/DahanItamar/DockNest/releases/tag/v99.0.0');
+  assert.equal(state.state, 'updater-not-installed'); assert.equal(state.check.latest.version, 'v99.0.0'); assert.equal(state.check.latest.releaseUrl, 'https://github.com/DahanItamar/DockNest/releases/tag/v99.0.0');
   const cached = await request('/check', { method: 'POST' });
   assert.equal(cached.status, 200); assert.equal(fetches.length, 2, 'within a minute the cached result is returned');
   const off = await (await request('/settings', { method: 'PATCH', body: { checkEnabled: false } })).json();
