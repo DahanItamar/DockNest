@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 
 // Node 24 loads .env without adding a runtime dependency.
 try { process.loadEnvFile(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -20,6 +21,18 @@ export function allowedOrigins(appOrigin, production = process.env.NODE_ENV === 
   return origins;
 }
 export const trustedOrigins = allowedOrigins(origin);
+// TRUST_PROXY (opt-in): comma-separated exact IPs or CIDRs of the reverse proxy in front of the API, for example the
+// bundled Caddy's address on the Compose network. Presets, hostnames, "true" and hop counts are refused, so no peer is
+// trusted by accident. Unset means no proxy is trusted and X-Forwarded-For is ignored.
+export function parseTrustProxy(value) {
+  if (value === undefined || String(value).trim() === '') return false;
+  const entries = String(value).split(',').map(entry => entry.trim());
+  for (const entry of entries) {
+    const [address, prefix, extra] = entry.split('/'), version = net.isIP(address);
+    if (!version || extra !== undefined || (prefix !== undefined && !(/^\d{1,3}$/.test(prefix) && Number(prefix) <= (version === 4 ? 32 : 128)))) throw new Error('TRUST_PROXY must be a comma-separated list of exact IP addresses or CIDR ranges');
+  }
+  return entries;
+}
 export const config = {
   dataDir,
   backupDir: path.resolve(process.env.BACKUP_DIR || path.join(dataDir, 'backups')),
@@ -35,6 +48,7 @@ export const config = {
     root:process.env.STORAGE_ROOT || '/home/docknest',capacity:Number(process.env.STORAGE_CAPACITY_BYTES || 1000000000000),
   },
   secureCookies: process.env.SECURE_COOKIES !== 'false',
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 };
 if (process.env.NODE_ENV === 'production' && (!config.secureCookies || url.protocol !== 'https:')) throw new Error('Production requires HTTPS APP_ORIGIN and Secure cookies');
 fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });

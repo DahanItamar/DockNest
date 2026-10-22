@@ -35,7 +35,7 @@ Then:
 docker compose --profile https up -d --build
 ```
 
-Caddy obtains and renews certificates and proxies to the API. Its profile is optional when you already have an HTTPS reverse proxy. Keep APP_ORIGIN equal to the browser origin and enable secure cookies for HTTPS. The loopback-only HTTP binding remains useful for diagnostics. Do not use the development cookie settings on a public HTTP endpoint.
+Caddy obtains and renews certificates and proxies to the API. Its profile is optional when you already have an HTTPS reverse proxy. Keep APP_ORIGIN equal to the browser origin and enable secure cookies for HTTPS. By default DockNest trusts no proxy: the client address used by its rate limiters is the socket peer, so behind Caddy every browser shares the proxy's address. To use the real client address, set `TRUST_PROXY` to the exact proxy address or CIDR (for example the bundled Caddy's address on the Compose network, found with `docker network inspect`); presets, hostnames and `true` are refused at start-up. Leave it unset when the API is reachable by anything other than that proxy. The loopback-only HTTP binding remains useful for diagnostics. Do not use the development cookie settings on a public HTTP endpoint.
 
 ## Remote preparation and maintenance
 
