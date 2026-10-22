@@ -39,11 +39,20 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   for (const tag of ['v2.1.0-rc.1', 'v2.2.0-beta', 'v2.2', 'v2.2.0' + '.1', /* split: not an IP address for the privacy audit */ '2.2.0', 'v2.2.0-rc.1+build']) assert.ok(!final.test(tag), tag);
 
   assert.doesNotMatch(text, /--prerelease|prerelease=/, 'no GitHub pre-release can be created');
-  assert.match(text, /actions\/workflows\/release-validation\.yml\/runs\?branch=main&event=workflow_dispatch&status=success/);
+  // Unfiltered listings (filtered queries lag and flip), filtered in jq, retried 6 times 20 s apart, at most 3 pages.
+  assert.doesNotMatch(text, /\/runs\?(?:[^"\n]*&)?(?:branch|event|status|head_sha)=/, 'no filter query parameters on the runs API');
+  assert.match(text, /actions\/workflows\/release-validation\.yml\/runs\?per_page=100&page=\$page"/);
+  assert.match(text, /actions\/workflows\/ci\.yml\/runs\?per_page=100&page=\$page"/);
+  assert.equal(text.split('for page in 1 2 3; do').length, 3); assert.equal(text.split('for attempt in 1 2 3 4 5 6; do').length, 3);
+  assert.equal(text.split('sleep 20').length, 3);
+  assert.match(text, /\.head_sha == \\"\$GITHUB_SHA\\" and \.name == \\"Verify\\" and \.status == \\"completed\\" and \.conclusion == \\"success\\" and \.event == \\"push\\" and \.head_repository\.full_name == \\"\$GITHUB_REPOSITORY\\"/);
   assert.match(text, /\.display_title == \\"Release validation candidate \$GITHUB_SHA\\"/);
-  assert.match(text, /\.event == \\"workflow_dispatch\\" and \.head_branch == \\"main\\"/);
+  assert.match(text, /\.conclusion == \\"success\\" and \.event == \\"workflow_dispatch\\" and \.head_branch == \\"main\\" and \.head_repository\.full_name == \\"\$GITHUB_REPOSITORY\\"/);
   assert.match(text, /for run in \$runs; do git merge-base --is-ancestor "\$run" origin\/main/, 'the validating run itself ran from a main commit');
-  assert.match(text, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$GITHUB_SHA/);
+  // Verify runs for branch pushes and pull requests only, never a tag push (a second run on the tagged SHA hid the first).
+  const ci = await workflow('ci.yml'), ciOn = ci.slice(ci.indexOf('\non:'), ci.indexOf('\npermissions:'));
+  assert.match(ciOn, /\n {2}push:\n {4}branches: \['\*\*'\]\n {2}pull_request:$/);
+  assert.doesNotMatch(ciOn, /tags/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);
 });
 
