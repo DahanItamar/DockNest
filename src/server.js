@@ -14,6 +14,7 @@ import { selfBackupRoutes } from './self-backup-routes.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { schemaVersion } from './migrations.js';
+import { recordRelease } from './updates/release-history.js';
 import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
 import { access } from './access.js';
@@ -37,6 +38,7 @@ app.use('/api', (req, res, next) => {
 app.get('/healthz', (_req, res) => { db.prepare('SELECT 1').get(); res.json({ status: 'ok' }); });
 // Public release identity for upgrade checks; deliberately nothing about hosts, users or configuration.
 const release = Object.freeze({ version: JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version, schemaVersion });
+recordRelease(db, release);
 app.get('/api/version', (_req, res) => res.json(release));
 app.use('/api', session);
 app.use('/api/auth', auth);

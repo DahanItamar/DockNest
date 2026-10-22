@@ -72,6 +72,18 @@ function baseline(db) {
   db.prepare('DELETE FROM sessions WHERE created_at=0').run();
   db.prepare('DELETE FROM challenges').run();
 }
+// Migration 5, kept verbatim with docs/update-center.md section 3 (tests compare both). Consent, the single-row check
+// cache, every version this database ran, in-app upgrade requests (at most one active; needs_action stays active until
+// resolved) with their phase timeline, and What's new. The CHECK limits back up the caps in code.
+const updateCenterSchema = `
+CREATE TABLE IF NOT EXISTS update_preferences (id INTEGER PRIMARY KEY CHECK (id = 1), check_enabled INTEGER NOT NULL CHECK (check_enabled IN (0,1)), decided_by TEXT NOT NULL REFERENCES users(id), decided_at TEXT NOT NULL, changed_by TEXT REFERENCES users(id), changed_at TEXT);
+CREATE TABLE IF NOT EXISTS update_checks (id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL CHECK (status IN ('ok','failed')), checked_at TEXT NOT NULL, last_success_at TEXT, next_check_at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0, latest_version TEXT CHECK (length(latest_version) <= 32), published_at TEXT, manifest TEXT CHECK (length(manifest) <= 65536), release_notes TEXT CHECK (length(release_notes) <= 65536), releases TEXT CHECK (length(releases) <= 16384), etag TEXT CHECK (length(etag) <= 256), error TEXT CHECK (length(error) <= 2048));
+CREATE TABLE IF NOT EXISTS release_history (version TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, first_started_at TEXT NOT NULL, last_started_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS update_requests (id TEXT PRIMARY KEY, from_version TEXT NOT NULL, to_version TEXT NOT NULL, from_schema INTEGER NOT NULL, to_schema INTEGER, requested_by TEXT NOT NULL REFERENCES users(id), requested_at TEXT NOT NULL, accepted_at TEXT, finished_at TEXT, state TEXT NOT NULL CHECK (state IN ('submitted','running','succeeded','refused','busy','rolled_back','needs_action','resolved','lost')), refusal TEXT CHECK (length(refusal) <= 64), exit_code INTEGER, retry_of TEXT REFERENCES update_requests(id), warning TEXT CHECK (length(warning) <= 1024), error TEXT CHECK (length(error) <= 2048), rollback_hint TEXT CHECK (length(rollback_hint) <= 4096));
+CREATE TABLE IF NOT EXISTS update_events (request_id TEXT NOT NULL REFERENCES update_requests(id), at TEXT NOT NULL, phase TEXT NOT NULL CHECK (length(phase) <= 32), PRIMARY KEY (request_id, at, phase));
+CREATE UNIQUE INDEX IF NOT EXISTS update_requests_active ON update_requests((1)) WHERE state IN ('submitted','running','needs_action');
+CREATE TABLE IF NOT EXISTS whats_new_seen (user_id TEXT PRIMARY KEY REFERENCES users(id), version TEXT NOT NULL, seen_at TEXT NOT NULL);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -90,6 +102,8 @@ export const migrations = [
     CREATE TABLE IF NOT EXISTS storage_target_settings (target_id TEXT PRIMARY KEY REFERENCES storage_targets(id) ON DELETE CASCADE,kind TEXT NOT NULL,settings TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS retention_deferrals (backup_id TEXT PRIMARY KEY REFERENCES backups(id) ON DELETE CASCADE,retry_after INTEGER NOT NULL,retain_until TEXT,first_seen INTEGER NOT NULL);
   `) },
+  // Update Center (docs/update-center.md section 3): tables and one partial unique index, no rows, nothing altered.
+  { version: 5, name: 'update-center', compatible: true, up: db => db.exec(updateCenterSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
