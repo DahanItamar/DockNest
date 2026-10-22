@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp,writeFile,readFile,rm,stat,mkdir,readdir } from 'node:fs/promises';
+import { mkdtemp,writeFile,readFile,rm,stat,mkdir,readdir,utimes,symlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes,scryptSync,createCipheriv,createDecipheriv,createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { exportRecoveryKit,restoreRecoveryKit,updaterRunActive,updateRunningMessage } from '../src/recovery-kit.js';
+import { exportRecoveryKit,restoreRecoveryKit,updaterRunActive,updateRunningMessage,updaterRunLimitMs } from '../src/recovery-kit.js';
 const root=await mkdtemp(join(tmpdir(),'docknest-kit-'));
 process.env.DATA_DIR=join(root,'manager');process.env.NODE_ENV='test';
 const {db}=await import('../src/db.js');
@@ -61,7 +62,7 @@ test('a kit taken during a hold restores with the hold cleared and its active up
   }finally{restored.close();}
  }
 });
-test('kit restore refuses while the updater status mount shows an active run, and ignores a missing mount',async()=>{
+test('kit restore refuses while the updater status mount shows an active run, and ignores a missing mount',async t=>{
  const mount=join(root,'updater-status'),write=(name,value)=>writeFile(join(mount,name),typeof value==='string'?value:JSON.stringify(value));
  const run={requestId:'4b0c9c1e-7d0f-4c55-9a0e-2a3c7b0d9f11',target:'v2.2.0',acceptedAt:'2026-10-22T10:00:00Z',events:[{phase:'verify',at:'2026-10-22T10:00:00Z'},{phase:'build',at:'2026-10-22T10:01:00Z'}],truncated:false};
  assert.equal(await updaterRunActive(join(root,'no-updater-mount')),false);assert.equal(await updaterRunActive(),false);
@@ -73,12 +74,38 @@ test('kit restore refuses while the updater status mount shows an active run, an
  await write('status.json',{requestId:'another-request',ok:true});assert.equal(await updaterRunActive(mount),true);
  await write('status.json',{requestId:run.requestId,ok:null});assert.equal(await updaterRunActive(mount),true);
  await write('status.json',{requestId:run.requestId,ok:false});assert.equal(await updaterRunActive(mount),false);
+ await write('status.json',{requestId:run.requestId,ok:true});assert.equal(await updaterRunActive(mount),false);
  await rm(join(mount,'status.json'));
+ // Bounded: a current.json untouched for longer than the broker's hard stop plus 5 minutes never blocks recovery.
+ assert.equal(await updaterRunActive(mount,Date.now()+updaterRunLimitMs+60000),false);
+ const old=new Date(Date.now()-3*3600000);await utimes(join(mount,'current.json'),old,old);assert.equal(await updaterRunActive(mount),false);
+ const stale=join(root,'stale-run-restored');await restoreRecoveryKit({input,directory:stale,passphrase:holdPassphrase,updaterStatus:mount});assert.ok((await stat(join(stale,'state.sqlite'))).isFile());
+ await write('current.json',run);assert.equal(await updaterRunActive(mount),true);
+ const ignored=join(root,'ignored-run-restored');await restoreRecoveryKit({input,directory:ignored,passphrase:holdPassphrase,updaterStatus:mount,ignoreUpdater:true});assert.ok((await stat(join(ignored,'state.sqlite'))).isFile());
+ // A symlinked current.json is not the broker's file: fail closed.
+ await write('real.json',{...run,events:[...run.events,{phase:'done',at:'2026-10-22T10:05:00Z'}]});await rm(join(mount,'current.json'));
+ let linked=true;try{await symlink(join(mount,'real.json'),join(mount,'current.json'),'file');}catch(error){if(error.code!=='EPERM')throw error;linked=false;}
+ if(linked){assert.equal(await updaterRunActive(mount),true);await rm(join(mount,'current.json'));}
+ else t.diagnostic('symlink creation is not permitted on this host; the symlinked current.json case runs on Linux CI');
  await write('current.json',{...run,events:[...run.events,{phase:'done',at:'2026-10-22T10:05:00Z'}]});assert.equal(await updaterRunActive(mount),false);
  await write('current.json',{...run,events:[...run.events,{phase:'failed',at:'2026-10-22T10:05:00Z'}]});assert.equal(await updaterRunActive(mount),false);
  for(const broken of ['{not json',JSON.stringify({events:[]}),JSON.stringify({requestId:run.requestId}),'x'.repeat(16385)]){await write('current.json',broken);assert.equal(await updaterRunActive(mount),true,broken.slice(0,20));}
  await rm(join(mount,'current.json'));await mkdir(join(mount,'current.json'));assert.equal(await updaterRunActive(mount),true);
  await rm(mount,{recursive:true});await restoreRecoveryKit({input,directory:target,passphrase:holdPassphrase,updaterStatus:mount});assert.ok((await stat(join(target,'state.sqlite'))).isFile());
+});
+test('the kit command line prints the hold and running-update refusals and honours --ignore-updater',async()=>{
+ const mount=join(root,'cli-updater-status'),secret=join(root,'cli.passphrase'),input=join(root,'cli.dkit');
+ await writeFile(secret,holdPassphrase,{mode:0o600});await mkdir(mount);
+ const cli=(...args)=>spawnSync(process.execPath,['scripts/recovery-kit.js',...args],{env:{...process.env,DATA_DIR:join(root,'manager'),MASTER_KEY_FILE:holdKey,DOCKNEST_UPDATER_STATUS:mount},encoding:'utf8'});
+ hold('true');
+ const held=cli('export',input,secret);assert.equal(held.status,1);assert.match(held.stderr,/Deployment verification is in progress\. Retry after it completes\./);await assert.rejects(stat(input));
+ hold('false');assert.equal(cli('export',input,secret).status,0);
+ assert.equal(cli('export','--ignore-updater',join(root,'cli-flag.dkit'),secret).status,1);await assert.rejects(stat(join(root,'cli-flag.dkit')));
+ await writeFile(join(mount,'current.json'),JSON.stringify({requestId:'cli-run',target:'v2.2.0',acceptedAt:new Date().toISOString(),events:[{phase:'build',at:new Date().toISOString()}],truncated:false}));
+ const refused=cli('restore',input,join(root,'cli-restored'),secret);assert.equal(refused.status,1);
+ assert.ok(refused.stderr.includes(updateRunningMessage+' If no update is running, retry with --ignore-updater.'),refused.stderr);await assert.rejects(stat(join(root,'cli-restored')));
+ const forced=cli('restore','--ignore-updater',input,join(root,'cli-restored'),secret);assert.equal(forced.status,0,forced.stderr);
+ assert.match(forced.stderr,/WARNING: --ignore-updater/);assert.equal(JSON.parse(forced.stdout).restored,true);assert.ok((await stat(join(root,'cli-restored','state.sqlite'))).isFile());
 });
 test('consistent WAL kit survives manager loss, wrong passphrases fail before writing, and live destinations cannot be overwritten',async()=>{
  const passphrase=randomBytes(32).toString('base64url'),masterKey=join(root,'master.key'),output=join(root,'manager.dkit');

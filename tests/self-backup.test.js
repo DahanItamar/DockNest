@@ -155,7 +155,11 @@ test('the deployment hold stops self-backup enqueue, schedules, claims, the work
 });
 test('deployment-preflight hold counts queued and running DockNest backups in the transaction that sets the hold',async()=>{
  const queued=enqueueSelfBackup(administrator);
- for(const mode of ['check','hold']){const result=preflight(mode);assert.equal(result.status,1);assert.match(result.stderr,/DockNest self-backup/);}
+ for(const mode of ['check','hold']){const result=preflight(mode);assert.equal(result.status,1);assert.equal(result.stderr.trim(),'Deployment blocked: a DockNest self-backup is queued or running. Retry when it finishes.');}
+ // Site work keeps its own message, and takes precedence when both block.
+ const jobId=id(),siteId=id();db.exec('PRAGMA foreign_keys=OFF');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(jobId,siteId,new Date().toISOString());db.exec('PRAGMA foreign_keys=ON');
+ assert.equal(preflight('hold').stderr.trim(),'Deployment blocked: queued/running/recovery work or pending artifact operations must be resolved first.');
+ db.prepare('DELETE FROM jobs WHERE id=?').run(jobId);
  assert.equal(holdValue(),'false');
  const run=claimSelfBackup();assert.equal(run.id,queued.id);assert.equal(preflight('hold').status,1);assert.equal(holdValue(),'false');
  await executeSelfBackup(run);assert.equal(preflight('hold').status,0);assert.equal(preflight('release').status,0);
@@ -176,5 +180,15 @@ test('deployment-preflight hold counts queued and running DockNest backups in th
  let raced;try{raced=enqueueSelfBackup(administrator);}finally{delete db.prepare;other.close();}
  assert.ok(probed);assert.equal(preflight('hold').status,1);assert.equal(holdValue(),'false');
  await executeSelfBackup(claimSelfBackup());assert.equal(db.prepare('SELECT status FROM manager_backups WHERE id=?').get(raced.id).status,'completed');
+});
+test('a hold forced under a running DockNest backup records the hold reason and keeps the previous copy',async()=>{
+ const latest=selfBackupStatus().latest,queued=enqueueSelfBackup(administrator),run=claimSelfBackup();assert.equal(run.id,queued.id);
+ // A forced upgrade, or an operator editing the database, sets the hold without the empty-queue check.
+ db.prepare("UPDATE settings SET value='true' WHERE key='deployment_hold'").run();
+ try{await executeSelfBackup(run);}finally{db.prepare("UPDATE settings SET value='false' WHERE key='deployment_hold'").run();}
+ const row=db.prepare('SELECT status,error FROM manager_backups WHERE id=?').get(run.id);
+ assert.equal(row.status,'failed');assert.equal(row.error,'Deployment verification is in progress. Retry after it completes. Your previous successful copy is kept.');
+ assert.equal(selfBackupStatus().latest.id,latest.id);
+ assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='manager-backup.failed' AND target=? ").get(run.id).detail),{reason:'deployment-hold'});
 });
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));await fixture.close();db.close();await rm(root,{recursive:true,force:true});});

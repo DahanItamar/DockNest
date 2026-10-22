@@ -221,7 +221,7 @@ until docker compose exec -T api node scripts/deployment-preflight.js hold >/dev
   if [ "$(date +%s)" -ge "$deadline" ]; then
     if [ "$FORCE" = 1 ]; then echo 'WARNING: --force: continuing with queued or running work; interrupted jobs will need recovery review.' >&2; break; fi
     release_hold; HOLD=0
-    fail 3 'Jobs are queued, running or need recovery review. Let them finish or resolve them in the dashboard, then retry (or use --force).'
+    fail 3 'Jobs or a DockNest self-backup are queued, running or need recovery review. Let them finish or resolve them in the dashboard, then retry (or use --force).'
   fi
   echo 'Work in progress; waiting...'; sleep 15
 done

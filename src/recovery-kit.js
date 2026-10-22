@@ -2,21 +2,24 @@ import { DatabaseSync,backup } from 'node:sqlite';
 import { createCipheriv,createDecipheriv,scryptSync,randomBytes,createHash } from 'node:crypto';
 import { mkdtemp,readFile,mkdir,rm,open,chmod,lstat,realpath } from 'node:fs/promises';
 import { join,resolve,dirname } from 'node:path';
+import { requireNoDeploymentHold } from './deployment-hold.js';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const names=['state.sqlite','master.key','recovery/decrypt-backup.js','recovery/helper.py','recovery/boot_recovery.py','recovery/export_zip.py','recovery/README.md'];
 const maximum=128*1024*1024;
 function derive(passphrase,salt){if(typeof passphrase!=='string'||passphrase.length<24||passphrase.length>4096)throw new Error('Use a separate recovery passphrase of at least 24 characters');return scryptSync(passphrase,salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024});}
 const hasTable=(database,name)=>!!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
-// The deployment hold (scripts/deployment-preflight.js) pauses new work, kit creation included; same 409 as site jobs.
-export const deploymentHeld=database=>hasTable(database,'settings')&&database.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true';
-export function requireNoDeploymentHold(database){if(deploymentHeld(database))throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
-// True while the host updater's current.json (read-only status mount) shows an unfinished run. No mount, no status
-// directory or no current.json means no run. A present file that cannot be read or validated fails closed.
-export const updaterStatusDirectory='/run/docknest-updater/status';
-export async function updaterRunActive(directory=updaterStatusDirectory){
+// True while the host updater's current.json shows an unfinished run. The status volume is mounted read-only at
+// /run/docknest-updater only inside the api container, so the guard applies only there (or where DOCKNEST_UPDATER_STATUS
+// points the command line); elsewhere the directory is absent and nothing is refused. No mount, no status directory
+// or no current.json means no run. A recent file that cannot be read or validated fails closed. The refusal is
+// bounded so it never blocks disaster recovery: the broker hard-stops every run after 2 h plus 15 min grace, so a
+// current.json untouched for that plus 5 min belongs to a dead run.
+export const updaterStatusDirectory='/run/docknest-updater/status',updaterRunLimitMs=(2*60+20)*60*1000;
+export async function updaterRunActive(directory=updaterStatusDirectory,now=Date.now()){
  const read=async name=>{const file=join(directory,name),info=await lstat(file);if(!info.isFile()||info.size>16384)throw new Error('Invalid updater status');return JSON.parse(await readFile(file,'utf8'));};
+ try{if(now-(await lstat(join(directory,'current.json'))).mtimeMs>updaterRunLimitMs)return false;}catch(error){return !['ENOENT','ENOTDIR'].includes(error.code);}
  let current;
- try{current=await read('current.json');}catch(error){return !['ENOENT','ENOTDIR'].includes(error.code);}
+ try{current=await read('current.json');}catch{return true;}
  if(typeof current?.requestId!=='string'||!Array.isArray(current.events))return true;
  if(['done','failed'].includes(current.events.at(-1)?.phase))return false;
  // An interrupted broker publishes ok:false for the request without adding a final event.
@@ -55,9 +58,10 @@ export async function exportRecoveryKit({database,masterKey,output,passphrase,re
  }finally{await rm(temporary,{recursive:true,force:true});}
 }
 export const updateRunningMessage='A DockNest update is running on this host. Restore the recovery kit after it finishes.';
-export async function restoreRecoveryKit({input,directory,passphrase,updaterStatus=updaterStatusDirectory}){
+export async function restoreRecoveryKit({input,directory,passphrase,updaterStatus=updaterStatusDirectory,ignoreUpdater=false}){
  // The restored state has its deployment hold cleared, so never prepare one underneath a running upgrade.
- if(await updaterRunActive(updaterStatus))throw Object.assign(new Error(updateRunningMessage),{status:409});
+ // ignoreUpdater (the CLI's --ignore-updater) is the operator's explicit override for disaster recovery.
+ if(!ignoreUpdater&&await updaterRunActive(updaterStatus))throw Object.assign(new Error(updateRunningMessage),{status:409});
  const info=await lstat(input);if(!info.isFile()||info.size>maximum+1024||info.size<48)throw new Error('Invalid recovery kit size/type');
  const envelope=await readFile(input),header=envelope.subarray(0,32);
  if(header.subarray(0,4).toString()!=='DKN1')throw new Error('Unsupported recovery kit');
