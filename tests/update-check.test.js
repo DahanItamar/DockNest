@@ -195,7 +195,7 @@ test('manifest redirects go to exactly one of the two asset hosts, over https on
     'https://sub.release-assets.githubusercontent.com/x', 'https://release-assets.githubusercontent.com./x', 'https://evil.example/release-assets.githubusercontent.com/x',
     'https://evil.example/?u=https://objects.githubusercontent.com/', 'http://release-assets.githubusercontent.com/x', 'https://release-assets.githubusercontent.com:8443/x',
     'https://user:pass@release-assets.githubusercontent.com/x', 'https://user@objects.githubusercontent.com/x', 'https://:pass@objects.githubusercontent.com/x',
-    '/DahanItamar/DockNest/x', '//evil.example/x', 'javascript:alert(1)', 'file:///etc/passwd', 'https://140.82.112.3/x', 'https://[::1]/x',
+    '/DahanItamar/DockNest/x', '//evil.example/x', 'javascript:alert(1)', 'file:///etc/passwd', 'https://203.0.113.10/x', 'https://[::1]/x',
     ' https://evil.example/', 'https://xn--release-assets-githubusercontent-com.example/x', '', undefined,
   ];
   for (const location of hostile) {

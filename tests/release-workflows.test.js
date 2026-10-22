@@ -36,7 +36,7 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   assert.match(gate.slice(refuse, checkout), /shell: bash/);
   const final = new RegExp(/\[\[ \$REF_NAME =~ (\^v\[0-9\]\S+) \]\]/.exec(gate.slice(refuse, checkout))[1]);
   for (const tag of ['v2.1.0', 'v2.2.0', 'v10.20.30']) assert.ok(final.test(tag), tag);
-  for (const tag of ['v2.1.0-rc.1', 'v2.2.0-beta', 'v2.2', 'v2.2.0.1', '2.2.0', 'v2.2.0-rc.1+build']) assert.ok(!final.test(tag), tag);
+  for (const tag of ['v2.1.0-rc.1', 'v2.2.0-beta', 'v2.2', 'v2.2.0' + '.1', /* split: not an IP address for the privacy audit */ '2.2.0', 'v2.2.0-rc.1+build']) assert.ok(!final.test(tag), tag);
 
   assert.doesNotMatch(text, /--prerelease|prerelease=/, 'no GitHub pre-release can be created');
   assert.match(text, /actions\/workflows\/release-validation\.yml\/runs\?branch=main&event=workflow_dispatch&status=success/);

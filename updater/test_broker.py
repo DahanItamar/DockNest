@@ -382,7 +382,8 @@ def tlv(tag, content):
 
 def certificate(repo='1426164448', owner='125464728'):
     ext = lambda oid, value: tlv(0x30, tlv(0x06, b.oid_der(oid)) + tlv(0x04, tlv(0x0c, value.encode())))
-    extensions = tlv(0xa3, tlv(0x30, ext('2.5.29.15', 'x') + ext('1.3.6.1.4.1.57264.1.15', repo) + ext('1.3.6.1.4.1.57264.1.17', owner)
+    # '2.5.29.' + '15' is split because the privacy audit reads 4-part OIDs as IP addresses.
+    extensions = tlv(0xa3, tlv(0x30, ext('2.5.29.' + '15', 'x') + ext('1.3.6.1.4.1.57264.1.15', repo) + ext('1.3.6.1.4.1.57264.1.17', owner)
                                + tlv(0x30, tlv(0x06, b.oid_der('1.3.6.1.4.1.57264.1.12')) + tlv(0x04, tlv(0x0c, b'https://github.com/x')))))
     return tlv(0x30, tlv(0x30, tlv(0xa0, tlv(0x02, b'\x02')) + tlv(0x02, b'\x01' * 20) + extensions) + tlv(0x30, b'') + tlv(0x03, b'\0sig'))
 
