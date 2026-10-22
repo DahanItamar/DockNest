@@ -7,7 +7,7 @@ import {recoveryStatus} from './verification.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
-function Control({label,icon,className='',...props}){return <button type="button" className={`recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={22}/></button>;}
+function Control({label,icon,className='',...props}){return <button type="button" className={`icon-button recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={20}/></button>;}
 
 export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onReady,onSchedule,onRemove,onBackup,query}){
  if(!allSites.length)return <section className="panel"><Empty icon={SiteIcon} title="Choose the sites to protect">Connect a server, discover Docker containers, and group the containers that make up each site.</Empty></section>;
@@ -46,11 +46,11 @@ export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onC
    <summary><span className="backup-site-name"><BrandIcon name="sites" size={28}/><span><b>{name(siteId)}</b><small>Recovery history</small></span></span><span className="backup-group-count"><b>{history.length} recovery {history.length===1?'point':'points'}</b><small>{bytes(history.reduce((sum,b)=>sum+(b.size||b.sizeBytes||0),0))} stored</small></span><span className="backup-latest"><small>Latest capture</small><b>{date(history[0].capturedAt||history[0].createdAt)}</b></span><ChevronDown size={20}/></summary>
    <div className="backup-group-content"><Paginated rows={history} label={"Recovery points for "+name(siteId)} pageSize={3} stableHeight resetKey={query}>{points=>points.map(backup=><div className="recovery-row" key={backup.id}>
     <div className="recovery-point"><BrandIcon name="backups" size={22}/><div><b>{date(backup.capturedAt||backup.createdAt)}</b><code>{backup.id}</code></div></div>
-    <div className="recovery-status">{(s=>[<Badge key="badge" value={s.badge}/>,<small key="level" title={s.title}>{s.line}{backup.pinned?' · Pinned':''}</small>])(recoveryStatus(backup))}</div>
+    <div className="recovery-status">{(s=>[<Badge key="badge" value={s.badge}/>,<small key="level" title={s.title}>{s.line}{backup.pinned?', pinned':''}</small>])(recoveryStatus(backup))}</div>
     <div className="recovery-size"><b>{bytes(backup.size||backup.sizeBytes)}</b><small>{backup.downtimeMs!=null?(backup.downtimeMs/1000).toFixed(1)+' s offline':'Downtime not reported'}</small></div>
     <div className="recovery-actions">
-     <a className="recovery-action" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={22}/></a>
-     <a className="recovery-action" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted original"><BrandIcon name="encrypted-download" size={22}/></a>
+     <a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={20}/></a>
+     <a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted original"><BrandIcon name="encrypted-download" size={20}/></a>
      <Control label={`${backup.pinned?'Unpin':'Pin'} backup ${backup.id}`} icon="pin" aria-pressed={!!backup.pinned} disabled={busy} onClick={()=>onPin(backup)}/>
      <Control label={`Restore backup ${backup.id}`} icon="restore" onClick={()=>onRestore(backup)}/>
      <Control label={`Backup details ${backup.id}`} icon="details" onClick={()=>onDetails(backup)}/>

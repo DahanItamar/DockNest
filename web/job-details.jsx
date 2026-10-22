@@ -1,6 +1,7 @@
 import React, {useEffect,useRef,useState} from 'react';
 import './job-details.css';
 import {VerificationLevels,verificationSummary} from './verification.jsx';
+import {StatusLabel,AlertPanel} from './system.jsx';
 
 // Human labels for recorded result fields. Unknown keys fall back to sentence case.
 export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetServerId:'Target server ID',downtimeSeconds:'Service downtime',sourceReady:'Source ready',verification:'Verification',integrity:'Package integrity',isolatedRestore:'Isolated restore',application:'Application check',status:'Status',method:'Method',networkMode:'Network mode',containerIds:'Container IDs',result:'Result',error:'Error',scope:'Check scope',checks:'Checks',passed:'Passed',restoreTested:'Restore tested',diagnostics:'Diagnostics',failure:'Failure point',lastStage:'Last stage',errorType:'Error type',remoteReported:'Reported by server',at:'Recorded at'};
@@ -104,7 +105,7 @@ export function TransferProgress({job}){
 
 function FailurePoint({failure}){
  const stage=String(failure.lastStage||'').replace(/[_-]+/g,' ').replace(/^./,c=>c.toUpperCase());
- return <div className="dn-fail"><p className="dn-fail-main">Stopped during <b>{stage||'an unknown stage'}</b>{failure.errorType&&<span> · {failure.errorType}</span>}</p><p className="dn-fail-meta">{failure.remoteReported?'Reported by the source server':'Detected by DockNest'}{failure.at&&<span> · <time dateTime={failure.at}>{dateTime(failure.at,'medium')}</time></span>}{failure.cause?.message&&<span> · {failure.cause.code?failure.cause.code+': ':''}{failure.cause.message}</span>}</p></div>;
+ return <span className="dn-fail"><span className="dn-fail-main">Stopped during <b>{stage||'an unknown stage'}</b>{failure.errorType&&<span> · {failure.errorType}</span>}</span><span className="dn-fail-meta">{failure.remoteReported?'Reported by the source server':'Detected by DockNest'}{failure.at&&<span> · <time dateTime={failure.at}>{dateTime(failure.at,'medium')}</time></span>}{failure.cause?.message&&<span> · {failure.cause.code?failure.cause.code+': ':''}{failure.cause.message}</span>}</span></span>;
 }
 
 function ReadableValue({value,field}){
@@ -146,7 +147,7 @@ export function ReadableRecord({value,title}){
  return <div className="dn-record"><div className="dn-record-head">{title?<h4>{title}</h4>:<span/>}<JsonActions json={text} showing={json} onToggle={()=>setJson(!json)}/></div>{json?<pre className="dn-json" tabIndex={0}>{text}</pre>:<ReadableFields value={value}/>}</div>;
 }
 
-function Facts({items}){return <dl className="dn-facts">{items.map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;}
+function Facts({items}){return <dl className="def-list dn-facts">{items.map(([label,value])=><div className="def-row" key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;}
 
 export function BackupDetails({backup,siteName}){
  const [json,setJson]=useState(false);const manifest=backup.manifest&&typeof backup.manifest==='object'?backup.manifest:{};
@@ -177,19 +178,18 @@ export function JobDetails({job,siteName,onRefresh}){
  async function refresh(){setRefreshing(true);setFailure('');setFeedback('');try{await onRefresh();setFeedback('Refreshed.');}catch(e){setFailure(e.message||'Could not refresh this job. Try again.');}finally{setRefreshing(false);}}
  async function copy(){try{await navigator.clipboard.writeText(json);setFeedback('JSON copied.');}catch{setFeedback('Could not copy. Select the JSON text and copy it manually.');}}
  const type=job.type==='scrub'?'Integrity check':sentence(job.type||'Job');
- const status=sentence(job.status||'Unknown').replace(/ required$/,' required');
  return <div className="job-details dn-jd">
   {failure&&<p className="job-refresh-error" role="alert">{failure}</p>}{feedback&&<div className="job-feedback" role="status">{feedback}</div>}
-  <section className={'dn-hero '+(bad?'is-bad':done?'is-ok':'is-run')} aria-label="Job outcome"><div className="dn-hero-text"><div className="dn-hero-title"><h3>{type}</h3><span className="dn-chip">{status}</span></div><p>{siteName||siteId||'Site not recorded'}</p></div>
+  <section className={'dn-hero '+(bad?'is-bad':done?'is-ok':'is-run')} aria-label="Job outcome"><div className="dn-hero-text"><div className="dn-hero-title"><h3>{type}</h3><StatusLabel value={job.status}/></div><p>{siteName||siteId||'Site not recorded'}</p></div>
    <div className="dn-actions"><button type="button" onClick={refresh} disabled={refreshing} aria-busy={refreshing}>{refreshing?'Refreshing…':'Refresh'}</button>{view==='json'&&<button type="button" onClick={copy}>Copy</button>}<button type="button" onClick={()=>setView(view==='json'?'readable':'json')}>{view==='json'?'Back to summary':'View JSON'}</button></div></section>
   {view==='json'?<pre className="dn-json" tabIndex={0} aria-label="Original job JSON">{json}</pre>:<div className="dn-jd-body">
    <Facts items={[['Started',dateTime(times.startedAt||times.createdAt)],['Duration',running&&times.startedAt?<Elapsed from={times.startedAt}/>:times.startedAt&&times.finishedAt?duration((Date.parse(times.finishedAt)-Date.parse(times.startedAt))/1000):'—'],['Site paused',paused?<PausedFor window={paused}/>:'Not paused'],['Stage',sentence(job.stage||'—')]]}/>
-   {job.error&&<section className="dn-card dn-err"><h4>What happened</h4><p>{explanation.meaning}</p><p className="dn-err-msg">{job.error}</p>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}<p className="dn-next"><b>Next step</b>{explanation.next}</p></section>}
+   {job.error&&<AlertPanel variant="error" title="What happened" action={<span className="dn-next"><b>Next step</b> {explanation.next}</span>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
    <TransferProgress job={job}/>
    {Array.isArray(details.diagnostics)&&details.diagnostics.length>0&&<section className="dn-card"><h4>Steps</h4><StepTimeline items={details.diagnostics}/></section>}
    {Object.keys(result).length>0&&<section className="dn-card"><h4>Result</h4><ReadableFields value={result}/></section>}
    {Object.keys(other).length>0&&<section className="dn-card"><h4>Other fields</h4><ReadableFields value={other}/></section>}
-   <details className="dn-refs"><summary>Reference IDs &amp; times</summary><dl className="dn-refs-list">{[['Job ID',<code>{job.id}</code>],['Site ID',<code>{siteId||'—'}</code>],['Queued',dateTime(times.createdAt)],['Started',dateTime(times.startedAt)],['Finished',dateTime(times.finishedAt)]].map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
+   <details className="dn-refs"><summary>Reference IDs &amp; times</summary><dl className="def-list dn-refs-list">{[['Job ID',<code>{job.id}</code>],['Site ID',<code>{siteId||'—'}</code>],['Queued',dateTime(times.createdAt)],['Started',dateTime(times.startedAt)],['Finished',dateTime(times.finishedAt)]].map(([label,value])=><div className="def-row" key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
   </div>}
  </div>;
 }

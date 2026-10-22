@@ -11,11 +11,6 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-hero-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .dn-hero-title h3{margin:0;font-size:17px;font-weight:600}
 .dn-hero-text p{margin:0;font-size:13px;color:var(--text-secondary);overflow-wrap:anywhere}
-.dn-chip{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--text-secondary)}
-.dn-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.dn-hero.is-bad .dn-chip{color:var(--error)}
-.dn-hero.is-ok .dn-chip{color:var(--success)}
-.dn-hero.is-run .dn-chip{color:var(--link)}
 .dn-bk .dn-hero{margin-bottom:24px}
 
 .dn-actions{display:flex;align-items:center;gap:4px;margin-left:auto}
@@ -27,19 +22,10 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-link-button{justify-self:start;padding:0;font-size:12px}
 .dn-link-button:hover{text-decoration:underline}
 
-.dn-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
-.dn-facts>div{display:grid;gap:6px;padding:16px 16px 16px 0;min-width:0}
-.dn-facts>div+div{padding-left:20px;border-left:1px solid var(--border-subtle)}
-.dn-facts dt{font-size:11px;color:var(--text-muted)}
-.dn-facts dd{margin:0;font-size:15px;font-weight:500;color:var(--text-primary);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 
 .dn-card{display:grid;gap:14px;min-width:0}
 .dn-card h4{margin:0;font-size:13px;font-weight:600;color:var(--text-secondary)}
 .dn-card p{margin:0}
-.dn-err{gap:12px;padding:18px 20px;border-left:3px solid var(--error);border-radius:var(--radius);background:var(--error-surface)}
-.dn-err h4{color:var(--error)}
-.dn-err>p{font-size:13px;color:var(--text-primary)}
-.dn-err-msg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;padding:8px 10px;border-radius:calc(var(--radius) - 2px);background:var(--surface);color:var(--text-secondary);overflow-wrap:anywhere}
 .dn-next{display:grid;gap:2px}
 .dn-next b{font-size:12px;font-weight:600}
 .dn-fail{display:grid;gap:4px}
@@ -105,10 +91,6 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-refs{border-top:1px solid var(--border-subtle);padding-top:16px}
 .dn-refs summary{cursor:pointer;font-size:13px;color:var(--text-secondary);list-style:none}
 .dn-refs summary::-webkit-details-marker{display:none}
-.dn-refs-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 16px;margin:12px 0 0}
-.dn-refs-list div{display:grid;gap:2px;min-width:0}
-.dn-refs-list dt{font-size:11px;color:var(--text-muted)}
-.dn-refs-list dd{margin:0;font-size:12px;color:var(--text-primary);overflow-wrap:anywhere}
 
 /* Verification levels: status is spelled out in text; the mark and tone only reinforce it. */
 .dn-levels{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr;gap:10px}
@@ -124,7 +106,6 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-level-text small{font-size:12px;color:var(--text-muted)}
 .dn-level-text time{white-space:nowrap}
 .dn-level.is-none .dn-level-text b{color:var(--text-secondary)}
-.dn-hero.is-warn .dn-chip{color:var(--warning)}
 .dn-card p.dn-level-note{font-size:12px}
 
 .field select.dn-zone-select{min-height:44px;font-size:13px;padding:10px 14px}
@@ -132,11 +113,20 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 @media(prefers-reduced-motion:reduce){.dn-bar>div{transition:none}.dn-tl-item.is-running .dn-tl-dot{animation:none}}
 @media(max-width:680px){
  .job-details.dn-jd{padding:16px}
- .dn-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
- .dn-facts>div{padding:12px 12px 12px 0}.dn-facts>div+div{padding-left:12px}
- .dn-facts>div:nth-child(3){padding-left:0;border-left:0;border-top:1px solid var(--border-subtle)}.dn-facts>div:nth-child(4){border-top:1px solid var(--border-subtle)}
  .dn-tl-item{grid-template-columns:16px minmax(0,1fr) 72px;gap:10px}.dn-tl-time{display:none}
  .dn-tl-raw li{grid-template-columns:72px minmax(0,1fr) 64px}.dn-tl-raw li>span:last-child{display:none}
  .dn-rec-row{grid-template-columns:1fr;gap:2px}
  .dn-levels{grid-template-columns:1fr;grid-auto-rows:auto}
 }
+
+/* 2.3.0: status label, def-list rows and error alert */
+.dn-hero-title h3{font-size:var(--fs-card);line-height:var(--lh-card)}
+.dn-hero-text p{font-size:var(--fs-body);line-height:var(--lh-body)}
+.dn-facts,.dn-refs-list{border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+.dn-refs-list{margin-top:12px}
+.dn-facts .def-row:last-child,.dn-refs-list .def-row:last-child{border-bottom:0}
+.dn-jd .alert-panel-body{gap:8px}
+.dn-err-line,.dn-fail,.dn-fail-main,.dn-fail-meta,.dn-next{display:block}
+.dn-err-msg{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-wrap:anywhere}
+.dn-fail-meta{font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-wrap:anywhere}
+.dn-next{font-size:var(--fs-body)}.dn-next b{font-size:var(--fs-body);margin-right:4px}
