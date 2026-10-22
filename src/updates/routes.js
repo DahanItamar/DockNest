@@ -159,6 +159,12 @@ export function updateRoutes({ release, fetch, service } = {}) {
     service.rebuild();
     res.status(202).json({ requestId });
   });
+  // Admin status of one past request, for its problem report (docs/update-center.md section 7.1). Read-only, additive.
+  router.get('/requests/:id', (req, res) => {
+    const status = service?.statusOf(req.params.id);
+    if (!status) return res.status(404).json({ error: 'No such update request.', code: 'NO_UPDATE_REQUEST' });
+    res.json(status);
+  });
   // No step-up (the lock view may have no fresh authentication). Only the active, running, stale request; never needs_action.
   router.post('/requests/:id/acknowledge', async (req, res) => {
     if (!await service.acknowledge(req.params.id, req.user)) return res.status(409).json({ error: 'Only the active request, when the updater has stopped reporting progress, can be closed.', code: 'NOT_ACKNOWLEDGEABLE' });

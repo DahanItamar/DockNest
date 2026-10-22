@@ -181,6 +181,8 @@ export function createUpdateService({ release, transport = createTransport(), no
   }
   return {
     sync, rebuild, create, send, refuse, acknowledge, updaterInfo, transport, activeRow, latestRow,
+    // The admin status of any one request (Recent updates reports); same fields as GET /status.
+    statusOf(requestId) { const row = typeof requestId === 'string' ? db.prepare(`${select} WHERE r.id=?`).get(requestId) : null; if (!row) return null; const events = eventsOf(row.id); return adminStatus(row, events, staleOf(row, events)); },
     snapshot: () => snapshot, locked: () => snapshot.locked, progress: () => snapshot.progress,
     start() { const timer = setInterval(() => { sync(); }, timing.syncMs); timer.unref(); rebuild(); sync(); return timer; },
   };

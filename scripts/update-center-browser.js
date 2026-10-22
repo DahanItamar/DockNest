@@ -13,7 +13,7 @@ const server=createServer(async(req,res)=>{
  try{res.setHeader('Content-Type',mime[path.extname(file)]||'application/octet-stream');res.end(await readFile(file));}catch{res.writeHead(404).end();}
 });
 server.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
-const base='http://127.0.0.1:'+server.address().port,iso=()=>new Date().toISOString();
+const base=process.env.TEST_BASE_URL||'http://127.0.0.1:'+server.address().port,iso=()=>new Date().toISOString();
 const hostileNotes='---\nhighlights:\n  security: true\n---\n# Release notes\n\n## Security\n- Tightened **validation** of enrollment links.\n- [bad](javascript:alert(1)) and <img src=x onerror=alert(1)> and [evil](https://evil.example/x)\n\n## New features\n- See [the guide](docs/upgrading.md) and [the repo](https://github.com/DahanItamar/DockNest/pull/1).\n';
 const updateState=(over={})=>({state:'update-available',current:{version:'2.2.0',schemaVersion:4},consent:{checkEnabled:true,decidedBy:{id:'admin',name:'Fixture administrator'},decidedAt:iso()},check:{status:'ok',checkedAt:iso(),lastSuccessAt:iso(),nextCheckAt:null,error:null,latest:{version:'v2.3.0',publishedAt:iso(),releaseUrl:'https://github.com/DahanItamar/DockNest/releases/tag/v2.3.0',minUpgradeFrom:null}},updater:{present:true,version:'1.4',supported:true,selfUpdateFailed:false,blocked:false,status:'connected',lastHeartbeatAt:iso(),installMode:'source'},offer:{update:{version:'v2.3.0',releaseUrl:'https://github.com/DahanItamar/DockNest/releases/tag/v2.3.0'},cli:null,blocked:null},active:null,...over});
 const running={active:true,phase:'build',to:'v2.3.0',state:'running',stale:false,updatedAt:iso(),events:[]};
@@ -45,6 +45,7 @@ function handler(mock){
   if(p==='/api/updates/whats-new/seen')return route.fulfill({status:204});
   if(p==='/api/updates/requests'&&m==='POST')return json(mock.request.body,mock.request.status);
   if(/\/acknowledge$/.test(p))return json(mock.state);
+  if(p==='/api/updates/requests/r0'&&m==='GET')return json({requestId:'r0',requestedBy:{id:'admin',name:'Fixture admin'},from:'v2.1.0',to:'v2.1.5',state:'rolled_back',exitCode:4,phase:'rollback',startedAt:'2026-10-01T10:00:00Z',updatedAt:'2026-10-01T10:08:02Z',acceptedAt:'2026-10-01T10:00:00Z',reason:'health-timeout-api',refusal:null,installMode:'image',updaterVersion:'2.2.0',env:{docker:'27.3.1'},fromSchema:4,toSchema:4,events:[{phase:'verify',at:'2026-10-01T10:00:00Z'},{phase:'health',at:'2026-10-01T10:02:00Z'}],error:'Health check failed on 203.0.113.9 (fixture-host.example.com)',rollbackHint:null,warning:null});
   return json({});
  };
 }
@@ -73,8 +74,8 @@ try{
   await nav.click();
   await page.getByRole('heading',{name:'Update Center',level:1}).waitFor();
   assert.equal(await page.evaluate(()=>location.hash),'#/update-center');
-  await page.getByRole('tab').nth(2).waitFor();
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['Overview','What\u2019s new','History'],'No Full changelog tab in 2.2.0');
+  await page.getByRole('tab').nth(1).waitFor();
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['Overview','What\u2019s new'],'2.3.1: tabs are Overview and What is new only');
   await page.getByRole('heading',{name:'DockNest 2.3.0'}).waitFor();
   await page.getByRole('heading',{name:'Before you update'}).waitFor();
   await page.getByText('Yes, schema v4 to v5',{exact:true}).waitFor();
@@ -86,8 +87,9 @@ try{
   assert.equal(await heightOf(update),40);
   const cards=await page.locator('.uc-split>.card').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().height)));
   assert.equal(cards[0],cards[1],'Sibling cards mirror each other');
-  const feet=await page.locator('.uc-split .card-footer').evaluateAll(els=>els.map(el=>{const b=el.getBoundingClientRect();return Math.round(b.y+b.height)}));
-  assert.equal(feet[0],feet[1],'Both card footers end on one line');
+  // 2.3.1: Automatic checks has only the switch (no footer row); the Host updater footer stays.
+  assert.equal(await page.locator('.uc-split .card-footer').count(),1,'Only the Host updater card has a footer');
+  assert.equal(await page.getByRole('button',{name:/^Turn (on|off)$/}).count(),0,'No Turn on/off link');
   await noWrap(page,'.uc-page');
   const toggle=page.getByRole('switch',{name:'Automatic checks'});
   assert.equal(await toggle.getAttribute('aria-checked'),'true');
@@ -97,7 +99,7 @@ try{
   assert.deepEqual(sw.track,['36px','20px','9999px'],'pill track'); assert.deepEqual(sw.thumb,['16px','16px'],'16px thumb');
   assert.equal(sw.fill,'rgba(0, 0, 0, 0)','the hit area itself is not filled');
   await toggle.click();
-  await page.getByText('Automatic checks are off',{exact:true}).waitFor();
+  await page.locator('[role=switch][aria-checked=false]').waitFor();
   assert.equal(await page.getByRole('button',{name:'Check now'}).count(),0,'No Check now while checks are off');
   assert.ok(mock.calls.includes('PATCH /api/updates/settings'));
   await page.getByRole('tab',{name:'What\u2019s new'}).click();
@@ -109,11 +111,31 @@ try{
   const hrefs=await rendered.locator('a').evaluateAll(els=>els.map(el=>el.href));
   assert.deepEqual(hrefs,['https://github.com/DahanItamar/DockNest/blob/v2.3.0/docs/upgrading.md','https://github.com/DahanItamar/DockNest/pull/1']);
   assert.ok(!(await rendered.textContent()).includes('highlights'),'Front matter is stripped');
-  await page.getByRole('tab',{name:'History'}).click();
-  await page.getByRole('columnheader',{name:'Source'}).waitFor();
-  assert.equal(await page.locator('.hist tbody tr').count(),3);
-  assert.equal(await page.getByRole('button',{name:/View details/}).count(),0,'No details page in 2.2.0');
+  // 2.3.1: History is a closed-by-default disclosure at the bottom of the Overview; old #/update-center/history links open the Overview.
+  await page.getByRole('tab',{name:'Overview'}).click();
+  const recent=page.getByRole('button',{name:'Recent updates',exact:true});
+  assert.equal(await recent.getAttribute('aria-expanded'),'false');assert.equal(await page.locator('.uc-recent-list').count(),0);
+  await recent.click();
+  assert.equal(await recent.getAttribute('aria-expanded'),'true');
+  await page.locator('.uc-recent-list li').first().waitFor();
+  assert.equal(await page.locator('.uc-recent-list li').count(),3);assert.equal(await page.locator('table.hist').count(),0,'No history table');
   await page.getByText('Rolled back',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Open GitHub',exact:true}).count(),1,'Report entry on the rolled-back row only');
+  // 2.4.0: the row opens the update-failure review for that run (GET /api/updates/requests/r0), not Report a bug.
+  await page.getByRole('button',{name:'Open GitHub',exact:true}).click();
+  {const dialog=page.getByRole('dialog',{name:'Review what will be shared'});await dialog.waitFor();
+   await dialog.getByText('Update failed: v2.1.0 to v2.1.5 (rolled back)').first().waitFor();
+   assert.equal(await dialog.getByRole('checkbox',{name:/Include the last error lines/}).isChecked(),false,'Excerpt off by default');
+   const u=new URL(await dialog.getByRole('link',{name:/Open GitHub/}).getAttribute('href'));
+   assert.equal(u.searchParams.get('template'),'update-failure.yml');assert.equal(u.searchParams.get('to_version'),'v2.1.5');assert.equal(u.searchParams.get('result'),'exit-4');assert.equal(u.searchParams.get('reason'),'health-timeout-api');
+   assert.ok(!/203\.0\.113\.9|fixture-host/.test(decodeURIComponent(u.href)),'No error text in the report');
+   assert.ok(mock.calls.includes('GET /api/updates/requests/r0'));
+   await dialog.getByRole('button',{name:'Cancel'}).click();await dialog.waitFor({state:'detached'});}
+  assert.equal(await page.getByRole('link',{name:/Rolling back/}).count()>=1,true);
+  for(const width of [320,402]){await page.setViewportSize({width,height:874});assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.uc-recent-list *')].every(el=>el.scrollWidth<=el.clientWidth+1)&&document.documentElement.scrollWidth<=innerWidth+1),true,'Recent updates not truncated at '+width);}
+  await page.setViewportSize({width:1280,height:900});
+  await page.evaluate(()=>{location.hash='#/update-center/history'});
+  await page.getByRole('tab',{name:'Overview'}).waitFor();assert.equal(await page.getByRole('tab',{name:'Overview'}).getAttribute('aria-selected'),'true');
   await context.close();
  }
 
@@ -163,6 +185,18 @@ try{
   await page.getByRole('heading',{name:'Updating DockNest to v2.3.0',level:1}).waitFor();
   assert.deepEqual(JSON.parse(mock.bodies['POST /api/updates/requests']),{version:'v2.3.0'});
   assert.equal(await page.locator('.berry-sidebar').count(),0,'The lock view replaces the whole app');
+  await context.close();
+ }
+
+ // Blocked hero: its Recent updates link opens the disclosure (no dead control), which also starts open.
+ {
+  const mock=newMock({state:updateState({state:'updater-blocked',offer:{update:null,cli:null,blocked:{code:'needs-host-ack',message:'Blocked fixture'}}})}),{context,page}=await open(mock,{hash:'#/update-center'});
+  await page.getByRole('heading',{name:'Updates are blocked'}).waitFor();
+  const toggle=page.locator('#uc-recent-toggle');
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true','Recent updates starts open while updates are blocked');
+  await page.locator('.uc-hero-state').getByRole('button',{name:'Recent updates'}).click();
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(await page.evaluate(()=>document.activeElement?.id),'uc-recent-toggle','Focus moves to Recent updates');
   await context.close();
  }
 

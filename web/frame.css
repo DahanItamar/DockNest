@@ -46,3 +46,16 @@ dialog[open]{animation:dn-enter var(--dur-slow) var(--ease) both}
 @media(max-width:480px){.auth-card{padding:24px 16px}.auth-header{padding:16px}}
 
 @media(prefers-reduced-motion:reduce){dialog[open]{animation:none}}
+
+/* 2.3.1 phone card footers: auto height, 16px padding, stacked buttons with an 8px gap under the border. */
+@media(max-width:480px){
+ .card .card-footer.card-footer{height:auto;min-height:0;padding:16px;gap:8px;flex-direction:column;align-items:stretch;justify-content:flex-start;border-top:1px solid var(--border-subtle)}
+ .card .card-footer.card-footer>button:not(.icon-button,.text){width:100%;min-height:44px;margin:0}
+ .card .card-footer.card-footer>button.text{align-self:flex-start;min-height:44px;margin:0}
+ .card .card-footer.card-footer.server-card-actions .server-edit{margin-left:0;align-self:stretch}
+ .card .card-footer.card-footer.site-card-actions{flex-direction:column-reverse}
+ /* A status or text beside a text link stays one 44px row; it wraps only when it cannot fit. */
+ .card .card-footer.card-footer.uc-footer{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:8px 16px;column-gap:16px}
+ .card .card-footer.uc-footer .link-btn{display:inline-flex;align-items:center;min-height:44px;align-self:center}
+ .card .card-footer.uc-footer .foot-status{flex:1 1 auto}
+}

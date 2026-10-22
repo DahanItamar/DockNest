@@ -57,10 +57,13 @@ try{
   const y=await pagerY(pager),next=pager.getByRole('button',{name:label+' next page',exact:true});
   while(!await next.isDisabled())await next.click();
   await settle();const finalCount=await page.locator(selector).count();assert.ok(finalCount>=1&&finalCount<=fullCount);
-  assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place on a one-item last page');
+  // 2.3.1 phone (<768px): collections flow naturally, so no empty height is reserved and the pager follows the content.
+  const phone=page.viewportSize().width<768;
+  if(phone){const gap=await pager.evaluate(el=>{const content=el.parentElement.querySelector(':scope>.paged-content');return Math.round(el.getBoundingClientRect().top-content.getBoundingClientRect().bottom)});assert.ok(gap<=24,label+' reserves no empty height on phones ('+gap+'px)');}
+  else assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place on a one-item last page');
   if(label==='Backup sites')await page.screenshot({path:directory+'/backup-last-'+page.viewportSize().width+'x'+page.viewportSize().height+'.png',fullPage:true});
   while(!await pager.getByRole('button',{name:label+' previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:label+' previous page',exact:true}).click();
-  await settle();assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place returning to the full page');
+  await settle();if(!phone)assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place returning to the full page');
  }
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:1000});

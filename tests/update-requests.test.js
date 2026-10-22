@@ -381,6 +381,11 @@ test('history lists in-app runs and command-line versions, newest first, with a 
   const second = await (await upd('/history?limit=1&cursor=' + first.next)).json();
   assert.equal(second.items[0].id, a);
   assert.equal((await upd('/history?cursor=garbage')).status, 400); assert.equal((await upd('/history', { as: 2 })).status, 403);
+  // One past request's admin status, for its Recent updates report: same fields as /status, admin only.
+  const one = await (await upd('/requests/' + a)).json(), latest = await (await upd('/status')).json();
+  assert.equal(one.requestId, a); assert.equal(one.state, 'rolled_back'); assert.equal(one.to, 'v2.5.0');
+  assert.deepEqual(Object.keys(one).sort(), Object.keys(latest).sort());
+  assert.equal((await upd('/requests/no-such-request')).status, 404); assert.equal((await upd('/requests/' + a, { as: 2 })).status, 403);
   await reset();
 });
 

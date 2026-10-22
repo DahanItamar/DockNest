@@ -1,18 +1,20 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {IconRefresh,IconCircleCheck,IconAlertTriangle,IconShieldCheck,IconClipboardCheck,IconShieldLock,IconPackageImport,IconPlugConnected,IconInfoCircle,IconChevronDown} from '@tabler/icons-react';
+import {IconRefresh,IconCircleCheck,IconAlertTriangle,IconShieldCheck,IconClipboardCheck,IconShieldLock,IconPackageImport,IconPlugConnected,IconInfoCircle,IconChevronDown,IconChevronUp} from '@tabler/icons-react';
 import {StatusLabel,AlertPanel} from '../system.jsx';
 import {createUpdatesClient,LOCKED_EVENT} from './client.js';
 import {UCDialog,ExtLink,CodeBlock,Notes,DOCS_ROLLBACK,DOCS_UPGRADE} from './parts.jsx';
 import {ConsentDialog} from './dialogs.jsx';
-import {LastUpdateFailure} from '../report/UpdateReport.jsx';
+import {UpdateReportButton} from '../report/UpdateReport.jsx';
 import {highlightChips,HISTORY_STATUS,submitMessage,tagUrl,vv} from './model.js';
 import './updates.css';
 
 export const fmt=(value,dateOnly)=>{if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString(undefined,dateOnly?{day:'numeric',month:'short',year:'numeric'}:{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})};
 const clock=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'unknown':d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})};
-const TABS=[['overview','Overview',''],['whats-new','What’s new','/whats-new'],['history','History','/history']];
+const TABS=[['overview','Overview',''],['whats-new','What’s new','/whats-new']]; // #/update-center/history (old links) falls back to the Overview
 export const ucTabFromHash=()=>{const m=/^#\/update-center(?:\/([a-z-]+))?/.exec(location.hash);return TABS.some(t=>t[0]===m?.[1])?m[1]:'overview'};
-const goTab=id=>{location.hash='#/update-center'+TABS.find(t=>t[0]===id)[2]};
+const goTab=id=>{location.hash='#/update-center'+(TABS.find(t=>t[0]===id)?.[2]??'')};
+// Opens the Recent updates disclosure at the bottom of the Overview and moves focus to it.
+const showRecent=()=>{const t=document.getElementById('uc-recent-toggle');if(!t)return;if(t.getAttribute('aria-expanded')!=='true')t.click();t.scrollIntoView({block:'start'});t.focus();};
 const sameTag=v=>/^v\d+\.\d+\.\d+$/.test(v||'');
 
 const summaryOf=meta=>highlightChips(meta?.highlights).map(c=>c.label).join(' · ');
@@ -70,9 +72,9 @@ function HostUpdaterCard({up,status,busy,onCheck}){
 function AutoChecksCard({data,busy,checking,onToggle}){
  const on=data.consent?.checkEnabled===true,pending=data.consent?.checkEnabled==null,who=data.consent?.decidedBy?.name;
  return <article className="card uc-card" aria-labelledby="uc-auto-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-auto-title">Automatic checks</h2><button type="button" role="switch" className="switch" aria-checked={on} aria-labelledby="uc-auto-title" aria-describedby="uc-auto-desc" disabled={busy} onClick={onToggle}></button></div>
-  <p className="t-body uc-quiet" id="uc-auto-desc">DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
+  <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
   {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div>
-  <div className="card-footer uc-footer"><p className="foot-status t-body">{on?'Checks run once a day':'Automatic checks are off'}</p><button type="button" className="text link-btn" disabled={busy} onClick={onToggle}>{on?'Turn off':'Turn on'}</button></div></article>;
+</article>;
 }
 function SetupCard({connected}){
  return <section className="setup" aria-labelledby="uc-setup-title"><h2 className="sg-title" id="uc-setup-title">Set up the host updater</h2><p className="setup-lead">You do this once per server. After that, every update is one click.</p>
@@ -85,13 +87,13 @@ function AdvancedCli(){return <details className="advanced more"><summary><IconC
 function Hero({data,offer,meta,up,status,openConfirm,checking,onConsent}){
  const st=data.state,cur=vv(data.current?.version),latest=data.check?.latest,blocked=data.offer?.blocked;
  if(st==='updater-state-mismatch')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">DockNest cannot confirm which version is installed</h2><p>The version in package.json, the release tag and the running image disagree. Nothing was changed. Check the server with these commands.</p>{['git status','git describe --tags --exact-match','docker compose images'].map(c=><CodeBlock key={c} command={c}/>)}</div></article>;
- if((st==='updater-blocked'||(blocked&&!offer))&&st!=='update-in-progress')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Updates are blocked</h2><p>{blocked?.message||'The last update needs manual action on the DockNest host. Updates stay blocked until the server operator resolves it: first the release command from the rollback hint, then sudo scripts/install-updater.sh --ack. The acknowledgement alone does not release the hold.'}</p><p className="code-label">Confirm on the server</p><CodeBlock command="sudo scripts/install-updater.sh --ack"/><div className="rel-links"><ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink><button type="button" className="text" onClick={()=>goTab('history')}>View history</button></div></div></article>;
+ if((st==='updater-blocked'||(blocked&&!offer))&&st!=='update-in-progress')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Updates are blocked</h2><p>{blocked?.message||'The last update needs manual action on the DockNest host. Updates stay blocked until the server operator resolves it: first the release command from the rollback hint, then sudo scripts/install-updater.sh --ack. The acknowledgement alone does not release the hold.'}</p><p className="code-label">Confirm on the server</p><CodeBlock command="sudo scripts/install-updater.sh --ack"/><div className="rel-links"><ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink><button type="button" className="text" onClick={showRecent}>Recent updates</button></div></div></article>;
  if(st==='consent-pending')return <article className="card uc-hero uc-hero-state"><span className="rel-sym muted"><IconInfoCircle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Update checks are not set up</h2><p>DockNest has not contacted GitHub and will not until you choose. Updates are never installed unless an administrator starts them.</p><div className="hero-actions"><button type="button" className="primary" onClick={onConsent}>Turn on checks</button></div></div></article>;
  if(st==='checks-off')return <article className="card uc-hero uc-hero-state"><span className="rel-sym muted"><IconInfoCircle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Automatic update checks are off</h2><p>DockNest makes no requests to GitHub. Turn on automatic checks below to be told about new versions.</p><AdvancedCli/></div></article>;
  if(st==='checking'||(checking&&!offer))return <article className="card uc-hero uc-hero-state"><span className="rel-sym"><IconRefresh size={32} className="dn-spin" aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Checking GitHub for new versions</h2><p role="status">This usually takes a few seconds. You can leave this page.</p></div></article>;
  if(!offer&&st==='check-failed')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">DockNest could not check for new versions</h2><p>The request to GitHub did not complete{data.check?.error?': '+data.check.error:''}. Your installation is not affected and keeps running normally.{data.check?.lastSuccessAt?' The last successful check was '+fmt(data.check.lastSuccessAt)+'.':''}</p></div></article>;
  if(!offer&&data.offer?.cli)return <article className="card uc-hero uc-hero-state"><span className="rel-sym"><IconInfoCircle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">DockNest {latest?.version||'update'} needs an earlier update first</h2><p>{latest?.minUpgradeFrom?`This release needs DockNest ${latest.minUpgradeFrom} or later. `:''}Follow the section on updating with one command in the update guide; it describes the steps without a version taken from GitHub.</p><p><ExtLink href={DOCS_UPGRADE}>Update guide</ExtLink></p></div></article>;
- if(!offer){const rel=data.current?.publishedAt||(latest&&vv(latest.version)===cur?latest.publishedAt:null);return <article className="card uc-hero uc-hero-ok"><IconCircleCheck className="uc-ok-icon" size={24} aria-hidden="true"/><div className="uc-hero-text"><h2 className="t-card">DockNest is up to date</h2><span className="t-body uc-quiet">Version {cur}{rel?' · released '+fmt(rel,true):''}</span></div></article>}
+ if(!offer){const rel=data.current?.publishedAt||(latest&&vv(latest.version)===cur?latest.publishedAt:null);return <article className="card uc-hero uc-hero-ok"><IconCircleCheck className="uc-ok-icon" size={24} aria-hidden="true"/><div className="uc-hero-text"><h2 className="t-card">DockNest is up to date</h2>{(cur||rel)&&<span className="t-body uc-quiet">{[cur&&'Version '+cur,rel&&'released '+fmt(rel,true)].filter(Boolean).join(' · ')}</span>}</div></article>}
  // An offer exists.
  const version=offer.version,summary=summaryOf(meta);
  const needsEarlier=data.offer?.cli,tooOld=up.present&&up.supported===false,notResponding=status==='not-responding',notInstalled=status==='not-installed'||(!up.present&&status!=='connected'&&status!=='blocked');
@@ -100,7 +102,7 @@ function Hero({data,offer,meta,up,status,openConfirm,checking,onConsent}){
  else if(notInstalled){alert=<AlertPanel variant="warning" title="The host updater is not set up">Set up the host updater once below to install this version from here.</AlertPanel>;canStart=false}
  else if(tooOld){alert=<AlertPanel variant="warning" title="The host updater needs an update first">The host updater on this server is too old to install DockNest {version}.</AlertPanel>;canStart=false}
  else if(notResponding){alert=<AlertPanel variant="error" title="The host updater is not responding" action={<a href="#/update-center">Follow the steps below</a>}>Updates cannot start until it answers. Run the commands below on the DockNest host, then check the connection again.</AlertPanel>;canStart=false}
- else if(blocked){alert=<AlertPanel variant="error" title="Update blocked" action={<a href="#/update-center/history" onClick={e=>{e.preventDefault();goTab('history')}}>View history</a>}>{blocked.message||'Updates cannot start right now.'}</AlertPanel>;canStart=false}
+ else if(blocked){alert=<AlertPanel variant="error" title="Update blocked">{blocked.message||'Updates cannot start right now.'}</AlertPanel>;canStart=false}
  const date=meta?.publishedAt||latest?.publishedAt;
  return <article className="card uc-hero"><div className="uc-hero-row"><div className="uc-hero-text">
    <span className="t-caption">{canStart?'Ready to install':'Update available'}</span>
@@ -126,14 +128,20 @@ function FixUpdater({up}){
 
 const OUTCOME_STATE={Installed:'success','Rolled back':'needs-review','Needs manual action':'failed','Resolved on the host':'success'};
 function OutcomeIcon({outcome}){const k=HISTORY_STATUS[outcome];return <StatusLabel state={OUTCOME_STATE[k]||'queued'}>{k||(String(outcome).startsWith('updater')?'Host updater updated':'Unknown')}</StatusLabel>}
-function HistoryTab({client}){
- const [items,setItems]=useState(null),[next,setNext]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- const load=async cursor=>{setBusy(true);try{const r=await client.history(cursor);setItems(v=>[...(cursor?v||[]:[]),...(Array.isArray(r.items)?r.items:[])]);setNext(r.next||null);setError('')}catch(e){setError(e.message)}finally{setBusy(false)}};
- useEffect(()=>{load()},[]);
- return <article className="card"><div className="card-body"><h2 className="card-title">Update history</h2>{error&&<AlertPanel variant="error">{error}</AlertPanel>}
-  {items===null&&!error?<p role="status">Loading history{'…'}</p>:items?.length?<div className="data-table-wrap hist-wrap"><table className="hist data-table"><caption className="sr-only">Update history</caption><colgroup><col className="c-ver"/><col className="c-date"/><col className="c-src"/><col className="c-status"/></colgroup><thead><tr><th scope="col">Version</th><th scope="col">Date</th><th scope="col">Source</th><th scope="col">Status</th></tr></thead><tbody>{items.map((r,i)=><tr key={(r.id||'cli')+r.version+r.at+i}><th scope="row" className="h-ver">{sameTag(r.version)?r.version:'—'}</th><td className="h-date">{fmt(r.at)}</td><td className="h-src">{r.source==='cli'?'Command line':'In-app update'}</td><td className="h-status"><OutcomeIcon outcome={r.outcome}/></td></tr>)}</tbody></table></div>:!error&&<p>No updates yet. Installed versions appear here.</p>}
-  {next&&<div className="hero-actions"><button type="button" disabled={busy} onClick={()=>load(next)}>Load more</button></div>}
-  <p className="t-caption uc-foot">Older versions are restored from the server command line. <ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink></p></div></article>;
+// Recent updates: a closed-by-default disclosure at the bottom of the Overview; stacked rows, no table (readable at 320px).
+function RecentUpdates({client,version,installMode,startOpen=false}){
+ const [open,setOpen]=useState(startOpen),[items,setItems]=useState(null),[error,setError]=useState('');
+ useEffect(()=>{if(!open||items)return;let off=false;client.history().then(r=>{if(!off)setItems((Array.isArray(r.items)?r.items:[]).slice(0,5))},e=>{if(!off)setError(e.message)});return()=>{off=true}},[open,items,client]);
+ const Chevron=open?IconChevronUp:IconChevronDown;
+ return <article className="card uc-recent"><button type="button" id="uc-recent-toggle" className="uc-recent-toggle" aria-expanded={open} aria-controls="uc-recent-list" onClick={()=>setOpen(!open)}><Chevron size={20} aria-hidden="true"/>Recent updates</button>
+  {open&&<div className="uc-recent-body" id="uc-recent-list">{error&&<AlertPanel variant="error">{error}</AlertPanel>}
+   {items===null&&!error?<p role="status" className="t-body">Loading recent updates{'…'}</p>:items?.length?<ul className="uc-recent-list">{items.map((r,i)=>{const k=HISTORY_STATUS[r.outcome],failed=k==='Rolled back'||k==='Needs manual action';return <li key={(r.id||'cli')+r.version+r.at+i}>
+    <div className="uc-recent-line"><span className="uc-recent-ver">{sameTag(r.version)?r.version:'Version unknown'}</span><span className="uc-recent-date">{fmt(r.at,true)}</span></div>
+    <div className="uc-recent-line"><OutcomeIcon outcome={r.outcome}/><span className="t-caption">{r.source==='cli'?'Command line':'In-app'}</span></div>
+    {failed&&r.id&&<UpdateReportButton client={client} requestId={r.id} view={r.outcome==='needs_action'?'needs_action':'rolled_back'} version={version} className="text link-btn uc-recent-report"/>}
+   </li>})}</ul>:!error&&<p className="t-body">No updates yet. Installed versions appear here.</p>}
+   <p className="t-caption uc-foot">Older versions are restored from the server command line. <ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink></p></div>}
+ </article>;
 }
 function WhatsNewTab({client,offer,meta,current}){
  const [own,setOwn]=useState(null),[failed,setFailed]=useState(false);
@@ -178,15 +186,13 @@ export function UpdateCenter({api,activeJobs=[],retry,onRetryHandled}){
   {TABS.map(([id])=><div key={id} role="tabpanel" id={'uc-panel-'+id} aria-labelledby={'uc-tab-'+id} tabIndex={0} hidden={tab!==id}>
    {tab===id&&id==='overview'&&<div className="uc-stack">
     {data.consent?.checkEnabled===true&&<p className="t-body uc-meta" id="uc-meta">{data.check?.checkedAt?'Last checked '+clock(data.check.checkedAt):'Not checked yet'} {'·'} <button type="button" className="text link-btn" aria-disabled={(checking||data.state==='checking')||undefined} onClick={()=>{if(!(checking||data.state==='checking'))checkNow()}}>{checking||data.state==='checking'?'Checking…':'Check now'}</button></p>}
-    <LastUpdateFailure client={client}/>
     <Hero data={data} offer={offer} meta={meta} up={up} status={status} checking={checking} openConfirm={v=>setConfirm({version:v})} onConsent={()=>setConsentOpen(true)}/>
     {showSetup&&<article className="card uc-setup"><SetupCard connected={status==='connected'}/></article>}
     {offer&&!data.offer?.cli&&status!=='not-installed'&&!(up.present&&up.supported===false)&&status!=='not-responding'&&<BeforeYouUpdate meta={meta}/>}
     <div className="card-grid uc-split"><AutoChecksCard data={data} busy={busy} checking={checking||data.state==='checking'} onToggle={toggle}/><HostUpdaterCard up={up} status={status} busy={connecting} onCheck={checkConnection}/></div>
-    {status==='not-responding'&&<FixUpdater up={up}/>}
+    {status==='not-responding'&&<FixUpdater up={up}/>}<RecentUpdates client={client} version={vv(data.current?.version)} installMode={up.installMode} startOpen={data.state==='updater-blocked'||!!data.offer?.blocked}/>
    </div>}
    {tab===id&&id==='whats-new'&&<WhatsNewTab client={client} offer={offer} meta={meta} current={vv(data.current?.version)}/>}
-   {tab===id&&id==='history'&&<HistoryTab client={client}/>}
   </div>)}
   {confirm&&<ConfirmUpdateDialog client={client} from={vv(data.current?.version)} version={confirm.version} retryOf={confirm.retryOf} releasedAt={meta?.publishedAt||data.check?.latest?.publishedAt} jobs={activeJobs} onClose={()=>setConfirm(null)} onStarted={()=>{setConfirm(null);dispatchEvent(new Event(LOCKED_EVENT))}}/>}
   {consentOpen&&<ConsentDialog client={client} onClose={()=>setConsentOpen(false)} onAnswered={s=>{if(s)setData(s);else load()}}/>}
