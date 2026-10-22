@@ -141,6 +141,10 @@ test('the public progress shows only the allowed fields and never the request id
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before, 'serving progress writes nothing');
   const admin = await (await upd('/status')).json();
   assert.equal(admin.requestId, requestId); assert.equal(admin.state, 'running'); assert.equal(admin.warning, 'SECRET-WARNING'); assert.equal(admin.error, null);
+  // Additive report fields (docs/update-center.md section 7.1): typed values only, events as {phase, at}.
+  assert.deepEqual(admin.events.map(event => Object.keys(event).sort()), admin.events.map(() => ['at', 'phase']));
+  for (const key of ['reason', 'refusal', 'installMode', 'updaterVersion', 'env', 'fromSchema', 'toSchema', 'acceptedAt']) assert.ok(key in admin, key);
+  assert.equal(admin.secret, undefined);
   assert.equal(row(requestId).state, 'running');
   assert.deepEqual(db.prepare('SELECT phase FROM update_events WHERE request_id=? ORDER BY at').all(requestId).map(event => event.phase), ['verify', 'fetch']);
 });
@@ -377,6 +381,11 @@ test('history lists in-app runs and command-line versions, newest first, with a 
   const second = await (await upd('/history?limit=1&cursor=' + first.next)).json();
   assert.equal(second.items[0].id, a);
   assert.equal((await upd('/history?cursor=garbage')).status, 400); assert.equal((await upd('/history', { as: 2 })).status, 403);
+  // One past request's admin status, for its Recent updates report: same fields as /status, admin only.
+  const one = await (await upd('/requests/' + a)).json(), latest = await (await upd('/status')).json();
+  assert.equal(one.requestId, a); assert.equal(one.state, 'rolled_back'); assert.equal(one.to, 'v2.5.0');
+  assert.deepEqual(Object.keys(one).sort(), Object.keys(latest).sort());
+  assert.equal((await upd('/requests/no-such-request')).status, 404); assert.equal((await upd('/requests/' + a, { as: 2 })).status, 403);
   await reset();
 });
 

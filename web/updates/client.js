@@ -15,6 +15,7 @@ export function createUpdatesClient(api) {
     whatsNew: () => api('/updates/whats-new'),
     whatsNewSeen: version => api('/updates/whats-new/seen', { version }),
     submit: (version, retryOf) => api('/updates/requests', retryOf ? { version, retryOf } : { version }),
+    request: id => api('/updates/requests/' + encodeURIComponent(id)),
     acknowledge: id => api('/updates/requests/' + encodeURIComponent(id) + '/acknowledge', {}),
     reauth: (password, code) => api('/auth/reauth', { password, code }),
     authStatus: () => api('/auth/status'),

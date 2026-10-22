@@ -45,6 +45,7 @@ function handler(mock){
   if(p==='/api/updates/whats-new/seen')return route.fulfill({status:204});
   if(p==='/api/updates/requests'&&m==='POST')return json(mock.request.body,mock.request.status);
   if(/\/acknowledge$/.test(p))return json(mock.state);
+  if(p==='/api/updates/requests/r0'&&m==='GET')return json({requestId:'r0',requestedBy:{id:'admin',name:'Fixture admin'},from:'v2.1.0',to:'v2.1.5',state:'rolled_back',exitCode:4,phase:'rollback',startedAt:'2026-10-01T10:00:00Z',updatedAt:'2026-10-01T10:08:02Z',acceptedAt:'2026-10-01T10:00:00Z',reason:'health-timeout-api',refusal:null,installMode:'image',updaterVersion:'2.2.0',env:{docker:'27.3.1'},fromSchema:4,toSchema:4,events:[{phase:'verify',at:'2026-10-01T10:00:00Z'},{phase:'health',at:'2026-10-01T10:02:00Z'}],error:'Health check failed on 203.0.113.9 (fixture-host.example.com)',rollbackHint:null,warning:null});
   return json({});
  };
 }
@@ -120,6 +121,16 @@ try{
   assert.equal(await page.locator('.uc-recent-list li').count(),3);assert.equal(await page.locator('table.hist').count(),0,'No history table');
   await page.getByText('Rolled back',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Open GitHub',exact:true}).count(),1,'Report entry on the rolled-back row only');
+  // 2.4.0: the row opens the update-failure review for that run (GET /api/updates/requests/r0), not Report a bug.
+  await page.getByRole('button',{name:'Open GitHub',exact:true}).click();
+  {const dialog=page.getByRole('dialog',{name:'Review what will be shared'});await dialog.waitFor();
+   await dialog.getByText('Update failed: v2.1.0 to v2.1.5 (rolled back)').first().waitFor();
+   assert.equal(await dialog.getByRole('checkbox',{name:/Include the last error lines/}).isChecked(),false,'Excerpt off by default');
+   const u=new URL(await dialog.getByRole('link',{name:/Open GitHub/}).getAttribute('href'));
+   assert.equal(u.searchParams.get('template'),'update-failure.yml');assert.equal(u.searchParams.get('to_version'),'v2.1.5');assert.equal(u.searchParams.get('result'),'exit-4');assert.equal(u.searchParams.get('reason'),'health-timeout-api');
+   assert.ok(!/203\.0\.113\.9|fixture-host/.test(decodeURIComponent(u.href)),'No error text in the report');
+   assert.ok(mock.calls.includes('GET /api/updates/requests/r0'));
+   await dialog.getByRole('button',{name:'Cancel'}).click();await dialog.waitFor({state:'detached'});}
   assert.equal(await page.getByRole('link',{name:/Rolling back/}).count()>=1,true);
   for(const width of [320,402]){await page.setViewportSize({width,height:874});assert.equal(await page.evaluate(()=>[...document.querySelectorAll('.uc-recent-list *')].every(el=>el.scrollWidth<=el.clientWidth+1)&&document.documentElement.scrollWidth<=innerWidth+1),true,'Recent updates not truncated at '+width);}
   await page.setViewportSize({width:1280,height:900});
@@ -268,7 +279,9 @@ try{
   assert.equal(await heightOf(back),await heightOf(retry),'Identical buttons per row');
   await noWrap(page,'.progress-view');
   assert.equal(await retry.getAttribute('aria-disabled'),null);
-  assert.equal(await page.getByRole('button',{name:/Open GitHub/}).count(),0,'Failure reports are a 2.3.0 feature');
+  const report=page.locator('.progress-actions').getByRole('button',{name:'Open GitHub',exact:true});
+  assert.equal(await report.count(),1,'Administrators get the update-failure report (2.4.0)');
+  assert.equal(await heightOf(report),await heightOf(back),'Identical buttons per row');
   await retry.click();
   await page.getByRole('dialog',{name:'Start the update to DockNest v2.3.0?'}).waitFor();
   assert.equal(mock.calls.includes('POST /api/updates/requests'),false);
@@ -338,10 +351,10 @@ try{
   await context.route('https://github.com/**',route=>{github.push({url:route.request().url(),referer:route.request().headers().referer});return route.fulfill({status:200,contentType:'text/html',body:'<title>GitHub</title>'})});
   await page.getByRole('button',{name:'Open account preferences'}).click();
   const settings=page.getByRole('dialog',{name:'Settings'});
-  await settings.getByRole('button',{name:/Open GitHub/}).click();
+  await settings.getByRole('button',{name:'Report a bug',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Review what will be shared'});
   await dialog.waitFor();
-  await dialog.getByText('This issue will be public on GitHub and linked to your GitHub account.',{exact:false}).waitFor();
+  await dialog.getByText('Issues on the DockNest repository are public and linked to your GitHub account.',{exact:false}).waitFor();
   const link=dialog.getByRole('link',{name:/Open GitHub/});
   assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');assert.equal(await link.getAttribute('referrerpolicy'),'no-referrer');
   const url=new URL(await link.getAttribute('href'));

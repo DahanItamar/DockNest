@@ -61,6 +61,7 @@ jobs:
           npm run test:self-backup
           npm run test:storage
           npm run test:mobile
+          npm run test:reports
         env:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000

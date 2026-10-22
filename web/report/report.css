@@ -1,0 +1,77 @@
+/* Problem reports: the review dialog and report buttons. Tokens only; type scale only; 8 px geometry. */
+.rp-button{white-space:nowrap}
+:root dialog.rp-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 32px));max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 104px);margin:72px auto auto;padding:0;border:0;border-radius:12px;background:var(--surface);color:var(--text-primary);box-shadow:0 24px 64px var(--shadow);overflow:hidden;font-size:var(--fs-body);line-height:var(--lh-body)}
+.rp-dialog[open]{display:flex;flex-direction:column;animation:dn-enter var(--dur-slow) var(--ease) both}
+.rp-dialog::backdrop{background:var(--backdrop)}
+.rp-grabber{display:none}
+.rp-main{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
+.rp-head{flex:none;display:flex;flex-direction:column;gap:16px;padding:24px 24px 20px;border-bottom:1px solid var(--border-subtle)}
+.rp-head-row{display:flex;align-items:flex-start;gap:16px}
+.rp-head-text{flex:1 1 auto;display:flex;flex-direction:column;gap:4px;min-width:0}
+.rp-head h2{margin:0;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--heading)}
+.rp-head p{margin:0;color:var(--text-secondary)}
+.rp-dialog .rp-close{flex:none;width:var(--control-height);min-width:var(--control-height);height:var(--control-height);padding:0;border:0;border-radius:var(--radius);background:var(--transparent);color:var(--text-secondary);display:inline-flex;align-items:center;justify-content:center}
+.rp-dialog .rp-close:hover,.rp-dialog .rp-close:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.rp-steps{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.rp-steps li{display:flex;flex-direction:column;gap:8px;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);white-space:pre}
+.rp-steps li[aria-current=step]{color:var(--heading);font-weight:500}
+.rp-step-bar{height:4px;border-radius:2px;background:var(--border-subtle)}
+.rp-steps li[aria-current=step] .rp-step-bar{background:var(--button-primary)}
+.rp-narrow{display:none}
+.rp-body{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:24px;padding:24px}
+.rp-body section{display:flex;flex-direction:column;gap:12px;min-width:0}
+.rp-body h3{margin:0;display:flex;align-items:center;gap:8px;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--heading)}
+.rp-ok{color:var(--success)}
+.rp-dialog .rp-list{border:1px solid var(--border-subtle);border-radius:var(--radius);padding:0 16px}
+.rp-dialog .rp-list .def-row{padding:10px 0}
+.rp-list .def-row dd{font-variant-numeric:tabular-nums}
+.rp-timeline{display:flex;flex-direction:column;gap:4px}
+.rp-timeline-line{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-secondary);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.rp-check{display:flex;align-items:flex-start;gap:12px;padding:12px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);cursor:pointer}
+.rp-check input{flex:none;width:16px;height:16px;margin:2px 0 0;accent-color:var(--button-primary)}
+.rp-check>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.rp-check-title{font-weight:500;color:var(--heading)}
+.rp-excerpt{display:flex;flex-direction:column;gap:8px}
+.rp-excerpt textarea{box-sizing:border-box;width:100%;min-height:120px;padding:8px 12px;border:1px solid var(--border-control);border-radius:var(--radius-input,var(--radius));background:var(--surface);color:var(--text-primary);font:var(--fs-caption)/var(--lh-caption) ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical}
+.rp-excerpt p{margin:0}
+.rp-warn-text{color:var(--alert-warning-text)}
+.rp-copy{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.rp-never-list{margin:0;padding:16px;list-style:none;display:flex;flex-direction:column;gap:10px;background:var(--surface-muted);border-radius:var(--radius);color:var(--text-primary)}
+.rp-never-list li{display:flex;align-items:center;gap:8px}
+.rp-never-list svg,.rp-never h3 svg{color:var(--text-muted);flex:none}
+.rp-never-line{display:none}
+.rp-never p{margin:0}
+.rp-note{display:flex;gap:12px;margin:0 24px;padding:12px 16px;border:1px solid var(--alert-warning-border);border-radius:var(--radius);background:var(--warning-surface);color:var(--alert-warning-text)}
+.rp-note svg{flex:none;color:var(--warning)}
+.rp-foot{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:24px;min-height:72px;box-sizing:border-box;padding:0 24px;border-top:1px solid var(--border-subtle)}
+.rp-dialog .rp-foot>:is(button,a){box-sizing:border-box;flex:0 0 auto;min-width:144px;height:var(--control-height);min-height:var(--control-height);margin:0;padding:0 16px;gap:8px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;border-radius:var(--radius)}
+.rp-dialog a.rp-open{border:1px solid var(--button-primary);background:var(--button-primary);color:var(--primary-foreground);text-decoration:none}
+.rp-dialog a.rp-open:hover{background:var(--button-primary-hover);border-color:var(--button-primary-hover)}
+.rp-dialog a.rp-open:focus-visible,.rp-check input:focus-visible,.rp-excerpt textarea:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+/* Report buttons inside red failure panels sit next to the primary next action. */
+.rp-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.rp-actions>:is(button,a){min-width:120px;white-space:nowrap}
+/* App error boundary */
+.rp-crash{display:flex;flex-direction:column;align-items:flex-start;gap:16px;max-width:560px;margin:48px auto;padding:32px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface)}
+.rp-crash h2{margin:0;font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading)}
+.rp-crash p{margin:0}
+.rp-crash .rp-actions{margin-top:0}
+@media(max-width:767px){.rp-body{grid-template-columns:minmax(0,1fr)}}
+/* Phone: a bottom sheet with full-width 44 px buttons, Open GitHub first. */
+@media(max-width:480px){
+ :root dialog.rp-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:16px 16px 0 0}
+ .rp-grabber{display:block;flex:none;width:40px;height:4px;margin:8px auto 0;border-radius:2px;background:var(--border-control)}
+ .rp-head{padding:12px 16px 16px;gap:12px}
+ .rp-head p{display:none}
+ .rp-wide{display:none}.rp-narrow{display:inline}
+ .rp-body{padding:16px;gap:16px}
+ .rp-never h3,.rp-never-list,.rp-server-note{display:none}
+ .rp-never-line{display:flex;gap:8px;align-items:flex-start;margin:0;padding:12px 16px;background:var(--surface-muted);border-radius:var(--radius);font-size:var(--fs-caption);line-height:var(--lh-caption)}
+ .rp-never-line svg{flex:none;margin-top:0;color:var(--text-muted)}
+ .rp-note{margin:0 16px}
+ .rp-foot{flex-direction:column-reverse;align-items:stretch;margin-top:16px;padding:16px;gap:8px}
+ .rp-dialog .rp-foot>:is(button,a){width:100%;height:44px;min-height:44px}
+ .rp-actions{flex-direction:column;align-items:stretch}.rp-actions>:is(button,a){width:100%;height:44px;min-height:44px}
+ .rp-crash{margin:24px 0;padding:24px 16px}.rp-crash .rp-actions{align-self:stretch}
+}
+@media(prefers-reduced-motion:reduce){.rp-dialog[open]{animation:none}}

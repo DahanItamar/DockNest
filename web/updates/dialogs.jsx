@@ -1,9 +1,8 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconCircleCheck,IconX,IconBrandGithub} from '@tabler/icons-react';
+import {IconCircleCheck,IconX} from '@tabler/icons-react';
 import {AlertPanel} from '../system.jsx';
 import {UCDialog,ExtLink,Notes,DOCS_SECURITY} from './parts.jsx';
 import {createUpdatesClient} from './client.js';
-import {buildBugReport} from './report.js';
 import {tagUrl,vv} from './model.js';
 
 export const UPDATED_KEY='docknest-updated-to';
@@ -33,17 +32,6 @@ export function WhatsNewDialog({data,onClose}){
 }
 export function UpdateToast({version,onNotes,onDismiss}){
  return <div className="toast-wrap"><div className="dn-toast" role="status"><IconCircleCheck size={20} aria-hidden="true"/><span className="dn-toast-text">DockNest updated to {version}</span>{onNotes&&<button type="button" onClick={onNotes}>What{'’'}s new</button>}<button type="button" className="icon" onClick={onDismiss} aria-label="Dismiss message"><IconX size={18}/></button></div></div>;
-}
-// "Review what will be shared": the exact allow-listed values, then GitHub in a new tab (no opener, no referrer).
-export function ReportBugDialog({version,installMode,onClose}){
- const report=useMemo(()=>buildBugReport({version,installMode}),[version,installMode]);
- return <UCDialog title="Review what will be shared" onClose={onClose} label="dialog">
-  <p>DockNest prepares a GitHub issue with only the version and the install mode. This issue will be public on GitHub and linked to your GitHub account. Nothing is sent until you submit it there.</p>
-  <h3>Issue title</h3><p className="report-text">{report.title}</p>
-  <h3>Issue text</h3><dl className="report-fields">{report.fields.map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}<div><dt>What happened</dt><dd>(Describe it here after GitHub opens.)</dd></div></dl>
-  <p className="notes-foot">DockNest never adds host names, addresses, paths, user names, request IDs, site names or logs.</p>
-  <div className="modal-foot"><button type="button" onClick={onClose}>Cancel</button><a className="button primary" href={report.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={()=>setTimeout(onClose,0)}><IconBrandGithub size={18} aria-hidden="true"/>Open GitHub<span className="sr-only"> (opens a new tab)</span></a></div>
- </UCDialog>;
 }
 // First admin sign-in: consent first, then What's new (dialog, or the toast after an in-app update).
 export function UpdateGate({api}){

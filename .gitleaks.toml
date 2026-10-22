@@ -9,3 +9,9 @@ regexes = ['''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''']
 [[allowlists]]
 description = "Test fixture that encodes a throwaway ed25519 host key generated at runtime; the file contains only the PEM header text, never key material"
 paths = ['''^tests/sftp-fixture\.js$''']
+
+[[allowlists]]
+description = "Fake credential canaries in the problem-report redaction tests (AWS's documented example key id and made-up token shapes); only these exact values, only in that test file"
+condition = "AND"
+paths = ['''^tests/problem-reports\.test\.js$''']
+regexes = ['''AKIAIOSFODNN7EXAMPLE''', '''ASIAABCDEFGHIJKLMNOP''', '''github_pat_11ABCDEFG0123456789_abcdefghijklmnop''', '''gho_abcdefghijklmnopqrstuvwx''', '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0\.sig''', '''abcDEF123456789xyz''', '''AKIACANARY0123456789''', '''ghp_CANARYtoken''']

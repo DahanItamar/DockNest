@@ -27,6 +27,7 @@ import { backupVerification, backupVerifications } from './recovery-evidence.js'
 import { installBootRecovery, bootRecoveryStatus } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
+import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -174,7 +175,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
     const result = await testServer(server);
     db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify(result), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
-  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw error; }
+  } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id));
@@ -328,7 +329,7 @@ app.use((error, req, res, _next) => {
   const message = error.expose === false ? 'Operation failed. Inspect the job status and source health.' : error.message;
   // Object-storage failures map only to 400/502/504 so a provider 401 never ends the admin session.
   const status = error.s3Code !== undefined || error.s3Status !== undefined ? ([400, 502, 504].includes(error.status) ? error.status : 502) : error.status || (error instanceof SyntaxError ? 400 : 422);
-  res.status(status).json({ error: message || 'Operation failed.' });
+  res.status(status).json({ error: message || 'Operation failed.', ...reportErrorFields(error) });
 });
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   app.listen(config.port, config.host, () => console.log(`DockNest listening on port ${config.port}`));

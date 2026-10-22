@@ -3,7 +3,7 @@
 // The snapshot is refreshed by sync(): read the updater's status files, reconcile the active row, rebuild. Only the API
 // writes these rows; the broker's own history stays authoritative. Everything read from the updater is untrusted text.
 import { db, audit, transaction, id as newId } from '../db.js';
-import { createTransport, PHASES, REASONS } from './transport.js';
+import { createTransport, PHASES, REASONS, REFUSALS } from './transport.js';
 
 export const timing = Object.freeze({
   syncMs: 2000, heartbeatMs: 120_000, neverRanMs: 10 * 60_000, phaseMs: 15 * 60_000, buildMs: 45 * 60_000,
@@ -57,6 +57,19 @@ export function createUpdateService({ release, transport = createTransport(), no
       phase: running ? (status?.phase ?? events.at(-1)?.phase ?? null) : (events.at(-1)?.phase ?? null), startedAt,
       updatedAt: running ? (status?.updatedAt ?? events.at(-1)?.at ?? startedAt) : (row.finished_at ?? startedAt), stale, state: row.state, exitCode: row.exit_code,
       error: running ? null : row.error, rollbackHint: running ? null : row.rollback_hint, warning: running ? clip(status?.warning, 1024) : row.warning,
+      // Additive, for the admin's update-failure report (docs/update-center.md section 7.1): typed values of this run,
+      // falling back to the current service.json only where the run recorded none.
+      ...reportFields(row, events, status),
+    };
+  }
+  function reportFields(row, events, status) {
+    let env = null;
+    try { const parsed = row.env ? JSON.parse(row.env) : null; if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) env = parsed; } catch { /* stored by this API; unreadable means none */ }
+    const service = files.service, int = value => (Number.isInteger(value) && value >= 0 ? value : null);
+    return {
+      reason: REASONS.includes(row.reason) ? row.reason : null, refusal: REFUSALS.includes(row.refusal) ? row.refusal : null,
+      installMode: row.install_mode ?? service?.installMode ?? null, updaterVersion: row.updater_version ?? service?.version ?? null, env: env ?? service?.env ?? null,
+      fromSchema: int(row.from_schema), toSchema: int(row.to_schema) ?? int(status?.schemaTo), acceptedAt: row.accepted_at ?? null, events: events.map(({ phase, at }) => ({ phase, at })),
     };
   }
 
@@ -168,6 +181,8 @@ export function createUpdateService({ release, transport = createTransport(), no
   }
   return {
     sync, rebuild, create, send, refuse, acknowledge, updaterInfo, transport, activeRow, latestRow,
+    // The admin status of any one request (Recent updates reports); same fields as GET /status.
+    statusOf(requestId) { const row = typeof requestId === 'string' ? db.prepare(`${select} WHERE r.id=?`).get(requestId) : null; if (!row) return null; const events = eventsOf(row.id); return adminStatus(row, events, staleOf(row, events)); },
     snapshot: () => snapshot, locked: () => snapshot.locked, progress: () => snapshot.progress,
     start() { const timer = setInterval(() => { sync(); }, timing.syncMs); timer.unref(); rebuild(); sync(); return timer; },
   };

@@ -1,0 +1,123 @@
+name: App error from DockNest
+description: "Opened from the \"This page stopped working\" screen."
+labels: [bug, app-error]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opened from DockNest (app error screen). DockNest filled in only fixed, typed values; your browser opened this form and nothing was posted.
+        Issues on this repository are public and linked to your GitHub account. Anyone can read what you share.
+        Remove anything private before you submit: never paste host names, addresses, paths, user names, emails,
+        site or server names, credentials, keys, logs or backup contents into any field.
+        For security problems, use private reporting instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: DockNest version
+      description: "Filled in by DockNest."
+      placeholder: "v2.4.0"
+    validations:
+      required: false
+  - type: input
+    id: install_mode
+    attributes:
+      label: Install mode
+      description: "image (published release image) or source (git checkout). Filled in by DockNest."
+      placeholder: "image"
+    validations:
+      required: false
+  - type: input
+    id: route
+    attributes:
+      label: Page
+      description: "The page id, for example jobs or update-center."
+      placeholder: "jobs"
+    validations:
+      required: false
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: "page, dialog or shell."
+      placeholder: "page"
+    validations:
+      required: false
+  - type: input
+    id: error_name
+    attributes:
+      label: Error type
+      description: "The error name only (for example TypeError). DockNest never includes the message or stack."
+      placeholder: "TypeError"
+    validations:
+      required: false
+  - type: input
+    id: docker
+    attributes:
+      label: Docker Engine
+      description: "major.minor, filled in by DockNest when the environment section was included."
+      placeholder: "27.3"
+    validations:
+      required: false
+  - type: input
+    id: compose
+    attributes:
+      label: Docker Compose
+      description: "major.minor."
+      placeholder: "2.29"
+    validations:
+      required: false
+  - type: input
+    id: git
+    attributes:
+      label: git
+      description: "major.minor."
+      placeholder: "2.51"
+    validations:
+      required: false
+  - type: input
+    id: cosign
+    attributes:
+      label: cosign
+      description: "The pinned version."
+      placeholder: "v2.4.1"
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: "OS id and major version, or other."
+      placeholder: "ubuntu-24"
+    validations:
+      required: false
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel
+      description: "major.minor."
+      placeholder: "6.8"
+    validations:
+      required: false
+  - type: input
+    id: arch
+    attributes:
+      label: Architecture
+      description: "amd64, arm64 or other."
+      placeholder: "amd64"
+    validations:
+      required: false
+  - type: input
+    id: free_disk
+    attributes:
+      label: Free disk
+      description: "Bucket: <2GiB, 2-10GiB, 10-50GiB or >50GiB."
+      placeholder: ">50GiB"
+    validations:
+      required: false
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: "In your own words: what you did and what you expected. Do not paste logs, host names or secrets."
+    validations:
+      required: true

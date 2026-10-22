@@ -2,6 +2,8 @@ import React, {useEffect,useRef,useState} from 'react';
 import './job-details.css';
 import {VerificationLevels,verificationSummary} from './verification.jsx';
 import {StatusLabel,AlertPanel} from './system.jsx';
+import {ReportProblem} from './report/ReportProblem.jsx';
+import {buildJobReport} from './report/builders.js';
 
 // Human labels for recorded result fields. Unknown keys fall back to sentence case.
 export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetServerId:'Target server ID',downtimeSeconds:'Service downtime',sourceReady:'Source ready',verification:'Verification',integrity:'Package integrity',isolatedRestore:'Isolated restore',application:'Application check',status:'Status',method:'Method',networkMode:'Network mode',containerIds:'Container IDs',result:'Result',error:'Error',scope:'Check scope',checks:'Checks',passed:'Passed',restoreTested:'Restore tested',diagnostics:'Diagnostics',failure:'Failure point',lastStage:'Last stage',errorType:'Error type',remoteReported:'Reported by server',at:'Recorded at'};
@@ -63,6 +65,15 @@ function groupSteps(steps){
   previousEnd=Math.max(previousEnd||0,end);
  }
  return rows;
+}
+// Structured facts for a job problem report (docs/update-center.md section 13): the failing phase key from PHASES and
+// the helper outcome class of that step. Never the error text, command output, names or ids.
+export function jobFailureFacts(job){
+ const details=job?.details&&typeof job.details==='object'&&!Array.isArray(job.details)?job.details:{};
+ const rows=Array.isArray(details.diagnostics)?groupSteps(stepsFrom(details.diagnostics)):[];
+ const bad=[...rows].reverse().find(row=>!row.gap&&row.status==='bad'),last=[...rows].reverse().find(row=>!row.gap);
+ const row=bad||last,outcome=row?.step?.outcome,recovery=job?.status==='recovery_required';
+ return {jobType:job?.type,outcome:recovery?'recovery-required':'failed',phase:row?.key||null,helperOutcome:['timeout','failure','exit'].includes(outcome)?outcome:null,ended:recovery?(details.failure&&typeof details.failure==='object'?'helper-stopped':'worker-interrupted'):null};
 }
 function failureText(step){return step.outcome==='timeout'?'Timed out'+(step.limit?` after ${step.limit} s`:''):step.type||'Failed';}
 
@@ -164,7 +175,7 @@ export function BackupDetails({backup,siteName}){
  </div>;
 }
 
-export function JobDetails({job,siteName,onRefresh}){
+export function JobDetails({job,siteName,onRefresh,siteKind,containers,storageType}){
  const [view,setView]=useState('readable'),[refreshing,setRefreshing]=useState(false),[feedback,setFeedback]=useState(''),[failure,setFailure]=useState('');
  const times={createdAt:job.createdAt??job.created_at,startedAt:job.startedAt??job.started_at,finishedAt:job.finishedAt??job.finished_at},siteId=job.siteId??job.site_id;
  const bad=['failed','recovery_required'].includes(job.status),done=job.status==='completed',running=['running','queued'].includes(job.status);
@@ -184,7 +195,7 @@ export function JobDetails({job,siteName,onRefresh}){
    <div className="dn-actions"><button type="button" onClick={refresh} disabled={refreshing} aria-busy={refreshing}>{refreshing?'Refreshing…':'Refresh'}</button>{view==='json'&&<button type="button" onClick={copy}>Copy</button>}<button type="button" onClick={()=>setView(view==='json'?'readable':'json')}>{view==='json'?'Back to summary':'View JSON'}</button></div></section>
   {view==='json'?<pre className="dn-json" tabIndex={0} aria-label="Original job JSON">{json}</pre>:<div className="dn-jd-body">
    <Facts items={[['Started',dateTime(times.startedAt||times.createdAt)],['Duration',running&&times.startedAt?<Elapsed from={times.startedAt}/>:times.startedAt&&times.finishedAt?duration((Date.parse(times.finishedAt)-Date.parse(times.startedAt))/1000):'—'],['Site paused',paused?<PausedFor window={paused}/>:'Not paused'],['Stage',sentence(job.stage||'—')]]}/>
-   {job.error&&<AlertPanel variant="error" title="What happened" action={<span className="dn-next"><b>Next step</b> {explanation.next}</span>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
+   {job.error&&<AlertPanel variant="error" title="What happened" action={<><span className="dn-next"><b>Next step</b> {explanation.next}</span>{bad&&<div className="rp-actions"><ReportProblem summary={job.status==='recovery_required'?'Recovery review':'Failed '+type.toLowerCase()} build={(facts,opts)=>buildJobReport({...facts,...opts,...jobFailureFacts(job),siteKind,containers,storage:storageType})}/></div>}</>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
    <TransferProgress job={job}/>
    {Array.isArray(details.diagnostics)&&details.diagnostics.length>0&&<section className="dn-card"><h4>Steps</h4><StepTimeline items={details.diagnostics}/></section>}
    {Object.keys(result).length>0&&<section className="dn-card"><h4>Result</h4><ReadableFields value={result}/></section>}

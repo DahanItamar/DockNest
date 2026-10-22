@@ -3,7 +3,8 @@ import {IconRefresh,IconCircleCheck,IconAlertTriangle,IconShieldCheck,IconClipbo
 import {StatusLabel,AlertPanel} from '../system.jsx';
 import {createUpdatesClient,LOCKED_EVENT} from './client.js';
 import {UCDialog,ExtLink,CodeBlock,Notes,DOCS_ROLLBACK,DOCS_UPGRADE} from './parts.jsx';
-import {ConsentDialog,ReportBugDialog} from './dialogs.jsx';
+import {ConsentDialog} from './dialogs.jsx';
+import {UpdateReportButton} from '../report/UpdateReport.jsx';
 import {highlightChips,HISTORY_STATUS,submitMessage,tagUrl,vv} from './model.js';
 import './updates.css';
 
@@ -129,7 +130,7 @@ const OUTCOME_STATE={Installed:'success','Rolled back':'needs-review','Needs man
 function OutcomeIcon({outcome}){const k=HISTORY_STATUS[outcome];return <StatusLabel state={OUTCOME_STATE[k]||'queued'}>{k||(String(outcome).startsWith('updater')?'Host updater updated':'Unknown')}</StatusLabel>}
 // Recent updates: a closed-by-default disclosure at the bottom of the Overview; stacked rows, no table (readable at 320px).
 function RecentUpdates({client,version,installMode,startOpen=false}){
- const [open,setOpen]=useState(startOpen),[items,setItems]=useState(null),[error,setError]=useState(''),[report,setReport]=useState(null);
+ const [open,setOpen]=useState(startOpen),[items,setItems]=useState(null),[error,setError]=useState('');
  useEffect(()=>{if(!open||items)return;let off=false;client.history().then(r=>{if(!off)setItems((Array.isArray(r.items)?r.items:[]).slice(0,5))},e=>{if(!off)setError(e.message)});return()=>{off=true}},[open,items,client]);
  const Chevron=open?IconChevronUp:IconChevronDown;
  return <article className="card uc-recent"><button type="button" id="uc-recent-toggle" className="uc-recent-toggle" aria-expanded={open} aria-controls="uc-recent-list" onClick={()=>setOpen(!open)}><Chevron size={20} aria-hidden="true"/>Recent updates</button>
@@ -137,10 +138,9 @@ function RecentUpdates({client,version,installMode,startOpen=false}){
    {items===null&&!error?<p role="status" className="t-body">Loading recent updates{'…'}</p>:items?.length?<ul className="uc-recent-list">{items.map((r,i)=>{const k=HISTORY_STATUS[r.outcome],failed=k==='Rolled back'||k==='Needs manual action';return <li key={(r.id||'cli')+r.version+r.at+i}>
     <div className="uc-recent-line"><span className="uc-recent-ver">{sameTag(r.version)?r.version:'Version unknown'}</span><span className="uc-recent-date">{fmt(r.at,true)}</span></div>
     <div className="uc-recent-line"><OutcomeIcon outcome={r.outcome}/><span className="t-caption">{r.source==='cli'?'Command line':'In-app'}</span></div>
-    {failed&&<button type="button" className="text link-btn uc-recent-report" onClick={()=>setReport(sameTag(r.version)?r.version:version)}>Open GitHub</button>}
+    {failed&&r.id&&<UpdateReportButton client={client} requestId={r.id} view={r.outcome==='needs_action'?'needs_action':'rolled_back'} version={version} className="text link-btn uc-recent-report"/>}
    </li>})}</ul>:!error&&<p className="t-body">No updates yet. Installed versions appear here.</p>}
    <p className="t-caption uc-foot">Older versions are restored from the server command line. <ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink></p></div>}
-  {report&&<ReportBugDialog version={report} installMode={installMode} onClose={()=>setReport(null)}/>}
  </article>;
 }
 function WhatsNewTab({client,offer,meta,current}){

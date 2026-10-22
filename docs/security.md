@@ -81,9 +81,31 @@ With checks on, the API asks GitHub once a day (and when an administrator select
 
 What GitHub can see: the server's IP address, as for any web request, and the DockNest version in the `User-Agent` header. Nothing about servers, sites, users, backups or storage is sent. Responses are size-capped and treated as untrusted display data; the host updater verifies every release independently before anything is installed.
 
-## Problem reports (Report a bug)
+<a id="problem-reports-report-a-bug"></a>
 
-**Settings > About > Report a bug** opens a review dialog, then a pre-filled GitHub issue form (`bug-report.yml`) in a new tab. The server sends nothing: the browser builds the link itself from two allow-listed values, the DockNest version (`vX.Y.Z`) and the install mode (`image` or `source`). A value that does not match its pattern is dropped, never copied, and no free text, host name, address, path, user name, request id, site name or log can reach the link. The dialog shows exactly what will be shared, and you add the description on GitHub. The issue is public and linked to your GitHub account, so do not paste private details. Report security problems privately instead ([SECURITY.md](../SECURITY.md)).
+## Problem reports
+
+DockNest never sends a problem report itself. Every **Open GitHub** button (and **Report a bug** in Settings > About) first opens "Review what will be shared", which lists the exact issue title and every value that will be filled in. **Open GitHub** then opens a pre-filled GitHub issue form in a new tab, with no opener and no referrer. Your browser opens github.com; DockNest's server makes no call for it and nothing is posted until you submit the form on GitHub. The issue is public and linked to your GitHub account, so read it before submitting and do not add private details. Report security problems privately instead ([SECURITY.md](../SECURITY.md)).
+
+One module in the browser (`web/report/`) builds every link, on the constant base `https://github.com/DahanItamar/DockNest/issues/new`, with a constant template and constant field names. Each value is checked against its own pattern or fixed list and dropped if it does not match; the whole link is capped at 4000 characters.
+
+| Report | Who | Fields |
+| --- | --- | --- |
+| Report a bug (`bug-report.yml`) | every signed-in user | DockNest version, install mode |
+| Failed or recovery-required job (`job-failure.yml`) | administrators | job type, failing phase key, how a recovery-required job ended, site kind, storage type, container-count bucket, helper outcome class |
+| Storage test (`storage-failure.yml`) | administrators | protocol; error class (SFTP: a fixed class; S3: the provider code from a fixed list, else `other`) |
+| Server connection test (`server-connection.yml`) | administrators | failed check (`ssh`, `host-key`, `python`, `docker`), error class |
+| DockNest backup (`self-backup-failure.yml`) | administrators | destination type, how it ended |
+| Unexpected app error (`app-error.yml`) | administrators | page id, area, error name (for example `TypeError`) |
+| Update failure (`update-failure.yml`) | administrators | versions, outcome, result class, failed stage and phase, timeline (phase ids and relative seconds), reason code, schema, install mode, updater version |
+
+Every report except Report a bug adds the DockNest version and install mode, and an **environment** section (Docker, Compose and git `major.minor`, cosign version, OS id and major version, kernel `major.minor`, architecture, free-disk bucket) that is included by default and that you can untick.
+
+**Never included:** host names, IP addresses, URLs, paths, user names, emails, site or server names, request or user ids, error text, logs and stack traces.
+
+**Optional error excerpt (update failures only).** Off by default; you tick "Include the last error lines" for each report. Its only source is that run's error, rollback hint and warning. DockNest keeps at most 40 lines and 2 KiB and replaces IP addresses, emails, URLs and host names, absolute paths and long hex or base64 strings (public commit SHAs excepted) with `[redacted]`, before it is shown and again before it is sent. You can edit it. Redaction is automatic and not perfect: it may still contain private text, so read it before sharing. When it does not fit in the link, **Copy excerpt** copies it for pasting into the issue by hand.
+
+The API adds `errorClass` (and, for server tests, `check`) next to the existing error message of storage and server connection tests; these values come from fixed lists, never from error text.
 
 ## Client address and TRUST_PROXY
 
