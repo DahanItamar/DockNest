@@ -2,35 +2,41 @@
 import {Paginated} from './pagination.jsx';
 import {ChevronDown} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
+import {StatusLabel,IconButton} from './system.jsx';
+import './sites.css';
 import {describeSchedule} from './schedule.js';
 import {recoveryStatus} from './verification.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
+const SiteIcons=Object.fromEntries(['edit','readiness','schedule','remove'].map(n=>[n,({size})=><BrandIcon name={n} size={size}/>]));
 function Control({label,icon,className='',...props}){return <button type="button" className={`icon-button recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={20}/></button>;}
 
 export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onReady,onSchedule,onRemove,onBackup,query}){
  if(!allSites.length)return <section className="panel"><Empty icon={SiteIcon} title="Choose the sites to protect">Connect a server, discover Docker containers, and group the containers that make up each site.</Empty></section>;
  if(!sites.length)return <section className="panel"><Empty icon={SiteIcon} title="No matching sites" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another site name, server or container.</Empty></section>;
- return <Paginated rows={sites} label="Sites" pageSize={4} stableHeight resetKey={query}>{visible=><div className="site-grid" aria-label="Sites and schedules">{visible.map(site=>{
+ return <Paginated rows={sites} label="Sites" pageSize={4} stableHeight resetKey={query}>{visible=><div className="card-grid site-grid" aria-label="Sites and schedules">{visible.map(site=>{
   const policy=policies.find(p=>p.siteId===site.id)||{};
-  return <article className="site-card" key={site.id} aria-labelledby={`site-title-${site.id}`}>
-   <div className="site-card-body">
-    <header className="site-card-head"><BrandIcon name="sites" size={36}/><h2 id={`site-title-${site.id}`} title={site.name}>{site.name}</h2><span className={`schedule-badge ${policy.enabled?'enabled':''}`}>{policy.enabled?'Enabled':policy.schedule?'Paused':'Not scheduled'}</span></header>
-    <dl className="site-metadata">
-     <div><dt>Server</dt><dd><BrandIcon name="server" size={18}/><span>{name(site.serverId,'servers')}</span></dd></div>
-     <div><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
-     <div><dt>Schedule</dt><dd><BrandIcon name="schedule" size={18}/><span>{describeSchedule(policy.schedule)}<small>{policy.timezone||'Time zone not set'}</small></span></dd></div>
-     <div><dt>Retention</dt><dd>{policy.retention!=null?`${policy.retention} successful backups`:'Not configured'}</dd></div>
+  return <article className="card site-card" key={site.id} aria-labelledby={`site-title-${site.id}`}>
+   <div className="card-body site-card-body">
+    <header className="site-card-head"><BrandIcon name="sites" size={24}/><h2 className="card-title" id={`site-title-${site.id}`} title={site.name}>{site.name}</h2></header>
+    {policy.enabled?<StatusLabel state="success">Enabled</StatusLabel>:<StatusLabel state="queued">{policy.schedule?'Paused':'Not scheduled'}</StatusLabel>}
+    <dl className="def-list site-metadata">
+     <div className="def-row"><dt>Server</dt><dd>{name(site.serverId,'servers')}</dd></div>
+     <div className="def-row"><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
+     <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
+     <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${policy.retention} successful backups`:'Not configured'}</dd></div>
     </dl>
    </div>
-   <div className="site-card-actions">
-    <Control label="Edit configuration" icon="edit" onClick={()=>onEdit(site)}/>
-    <Control label="Check readiness" icon="readiness" disabled={busy} onClick={()=>onReady(site)}/>
-    <Control label="Schedule" icon="schedule" onClick={()=>onSchedule(site,policy)}/>
-    {user?.role==='admin'&&<Control label="Remove site" icon="remove" className="site-remove" onClick={()=>onRemove(site)}/>}
-    <button className="primary" disabled={busy} onClick={()=>onBackup(site)}><BrandIcon inverse name="backups" size={20}/> Back up now</button>
-   </div>
+   <footer className="card-footer site-card-actions">
+    <div className="site-card-tools">
+     <IconButton label="Edit configuration" icon={SiteIcons.edit} onClick={()=>onEdit(site)}/>
+     <IconButton label="Check readiness" icon={SiteIcons.readiness} disabled={busy} onClick={()=>onReady(site)}/>
+     <IconButton label="Schedule" icon={SiteIcons.schedule} onClick={()=>onSchedule(site,policy)}/>
+     {user?.role==='admin'&&<IconButton className="site-remove" label="Remove site" icon={SiteIcons.remove} onClick={()=>onRemove(site)}/>}
+    </div>
+    <button className="primary" disabled={busy} onClick={()=>onBackup(site)}>Back up now</button>
+   </footer>
   </article>;
  })}</div>}</Paginated>;
 }
