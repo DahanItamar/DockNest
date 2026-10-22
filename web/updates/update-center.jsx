@@ -4,6 +4,7 @@ import {StatusLabel,AlertPanel} from '../system.jsx';
 import {createUpdatesClient,LOCKED_EVENT} from './client.js';
 import {UCDialog,ExtLink,CodeBlock,Notes,DOCS_ROLLBACK,DOCS_UPGRADE} from './parts.jsx';
 import {ConsentDialog} from './dialogs.jsx';
+import {LastUpdateFailure} from '../report/UpdateReport.jsx';
 import {highlightChips,HISTORY_STATUS,submitMessage,tagUrl,vv} from './model.js';
 import './updates.css';
 
@@ -177,6 +178,7 @@ export function UpdateCenter({api,activeJobs=[],retry,onRetryHandled}){
   {TABS.map(([id])=><div key={id} role="tabpanel" id={'uc-panel-'+id} aria-labelledby={'uc-tab-'+id} tabIndex={0} hidden={tab!==id}>
    {tab===id&&id==='overview'&&<div className="uc-stack">
     {data.consent?.checkEnabled===true&&<p className="t-body uc-meta" id="uc-meta">{data.check?.checkedAt?'Last checked '+clock(data.check.checkedAt):'Not checked yet'} {'·'} <button type="button" className="text link-btn" aria-disabled={(checking||data.state==='checking')||undefined} onClick={()=>{if(!(checking||data.state==='checking'))checkNow()}}>{checking||data.state==='checking'?'Checking…':'Check now'}</button></p>}
+    <LastUpdateFailure client={client}/>
     <Hero data={data} offer={offer} meta={meta} up={up} status={status} checking={checking} openConfirm={v=>setConfirm({version:v})} onConsent={()=>setConsentOpen(true)}/>
     {showSetup&&<article className="card uc-setup"><SetupCard connected={status==='connected'}/></article>}
     {offer&&!data.offer?.cli&&status!=='not-installed'&&!(up.present&&up.supported===false)&&status!=='not-responding'&&<BeforeYouUpdate meta={meta}/>}

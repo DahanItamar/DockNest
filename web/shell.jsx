@@ -4,8 +4,8 @@ import {Brand,BrandIcon,ThemeToggle,ThemePreferences,NotificationSymbol,useTheme
 import './shell.css';
 import {SystemHealth} from './system-health.jsx';
 import {CompactStorage} from './sidebar-storage.jsx';
-import {ReportBugDialog} from './updates/dialogs.jsx';
-import {createUpdatesClient} from './updates/client.js';
+import {ReportProblem} from './report/ReportProblem.jsx';
+import {buildBugReport} from './report/builders.js';
 
 function MenuSymbol({open}){
  return <svg className={'menu-symbol'+(open?' open':'')} width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line className="menu-bar menu-bar-top" x1="4" y1="12" x2="20" y2="12"/><line className="menu-bar menu-bar-middle" x1="4" y1="12" x2="20" y2="12"/><line className="menu-bar menu-bar-bottom" x1="4" y1="12" x2="20" y2="12"/></svg>;
@@ -17,9 +17,8 @@ export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLo
  const drawer=useRef(null),label=user?.name||user?.email||'Administrator';
  useEffect(()=>{localStorage.setItem('docknest-sidebar',collapsed?'collapsed':'expanded')},[collapsed]);
  useEffect(()=>{if(customizer)drawer.current?.showModal();else drawer.current?.close()},[customizer]);
- const [release,setRelease]=useState(null),[installMode,setInstallMode]=useState(null),[report,setReport]=useState(false);
+ const [release,setRelease]=useState(null);
  useEffect(()=>{if(customizer&&!release)fetch('/api/version').then(r=>r.ok?r.json():null).then(setRelease,()=>{})},[customizer]);
- useEffect(()=>{if(customizer&&api&&user?.role==='admin')createUpdatesClient(api).state().then(s=>setInstallMode(s?.updater?.installMode||null),()=>{})},[customizer]);
  useEffect(()=>{const close=e=>{if(e.key==='Escape'){setMobile(false);setNotifications(false)}};addEventListener('keydown',close);return()=>removeEventListener('keydown',close)},[]);
  function go(next){navigate(next);setMobile(false);setSearch('')}
  const matches=routes.filter(([name])=>name.toLowerCase().includes(search.toLowerCase()));
@@ -41,7 +40,6 @@ export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLo
    <CompactStorage active={collapsed} storage={storage} bytes={bytes}/>
   </aside>
   <div className="workspace">{children}</div>
-  <dialog className="berry-customizer" ref={drawer} aria-labelledby="customizer-title" onCancel={()=>setCustomizer(false)} onClick={e=>{if(e.target===drawer.current)setCustomizer(false)}}><header><h2 id="customizer-title">Settings</h2><button className="icon" aria-label="Close preferences" onClick={()=>setCustomizer(false)}><IconX size={20}/></button></header><section><h3>NAVIGATION</h3><button onClick={()=>setCollapsed(!collapsed)}>{collapsed?'Expand sidebar':'Collapse sidebar'}</button></section><section><ThemePreferences/></section><section><h3>DESIGN SYSTEM</h3><p>Light and dark palettes, Roboto typography, 8 px surfaces, purple and blue accents. Light, Dark and System preferences are saved for your account in this browser. Motion follows your device's reduced motion setting.</p></section><section><h3>ACCOUNT</h3><p>{label}</p><small>{user?.role==='admin'?'Administrator':'Operator'}</small><button onClick={onLogout}><IconLogout size={18}/> End session</button></section><section><h3>ABOUT</h3><p>DockNest {release?.version?'v'+release.version:'version unavailable'}</p><small>Licence: AGPL-3.0-only</small><p><a href="https://github.com/DahanItamar/DockNest/releases" target="_blank" rel="noopener noreferrer">Release notes and upgrades</a></p><div className="about-report"><div><b>Report a bug</b><small>Opens a review first. Only the DockNest version and the install mode are included.</small></div><button type="button" onClick={()=>setReport(true)}>Open GitHub<span className="sr-only"> (opens a review of what will be shared first)</span></button></div></section></dialog>
-  {report&&<ReportBugDialog version={release?.version} installMode={installMode} onClose={()=>setReport(false)}/>}
+  <dialog className="berry-customizer" ref={drawer} aria-labelledby="customizer-title" onCancel={()=>setCustomizer(false)} onClick={e=>{if(e.target===drawer.current)setCustomizer(false)}}><header><h2 id="customizer-title">Settings</h2><button className="icon" aria-label="Close preferences" onClick={()=>setCustomizer(false)}><IconX size={20}/></button></header><section><h3>NAVIGATION</h3><button onClick={()=>setCollapsed(!collapsed)}>{collapsed?'Expand sidebar':'Collapse sidebar'}</button></section><section><ThemePreferences/></section><section><h3>DESIGN SYSTEM</h3><p>Light and dark palettes, Roboto typography, 8 px surfaces, purple and blue accents. Light, Dark and System preferences are saved for your account in this browser. Motion follows your device's reduced motion setting.</p></section><section><h3>ACCOUNT</h3><p>{label}</p><small>{user?.role==='admin'?'Administrator':'Operator'}</small><button onClick={onLogout}><IconLogout size={18}/> End session</button></section><section><h3>ABOUT</h3><p>DockNest {release?.version?'v'+release.version:'version unavailable'}</p><small>Licence: AGPL-3.0-only</small><p><a href="https://github.com/DahanItamar/DockNest/releases" target="_blank" rel="noopener noreferrer">Release notes and upgrades</a></p><div className="about-report"><div><b>Found something wrong?</b><small>Tell us on GitHub. A review opens first; only the DockNest version and the install mode are included.</small></div><ReportProblem audience="all" label="Report a bug" summary="Bug report" build={(facts)=>buildBugReport(facts)}/></div></section></dialog>
  </div>;
 }

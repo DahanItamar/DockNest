@@ -5,6 +5,7 @@ import {AlertPanel} from '../system.jsx';
 import {createUpdatesClient} from './client.js';
 import {CodeBlock,ExtLink,DOCS_ROLLBACK,REPO} from './parts.jsx';
 import {UPDATED_KEY} from './dialogs.jsx';
+import {UpdateReportButton,REPORT_VIEWS} from '../report/UpdateReport.jsx';
 import {vv,STAGES,PHASES,PHASE_LABEL,FINAL_STATES,isLocking,retryDelay,formatElapsed,trackFor,phaseStatuses,liveFor,stageOf,safeVersion,STATUS_LABEL} from './model.js';
 
 const ICONS=[IconShieldCheck,IconClipboardCheck,IconShieldLock,IconPackageImport,IconCircleCheck];
@@ -106,6 +107,7 @@ export function LockView({api,reason,onExit,onRetry}){
     {view==='succeeded'&&<button type="button" className="primary" onClick={reload}>Reload DockNest</button>}
     {(view==='rolled_back'||view==='not_changed'||view==='lost')&&<button type="button" className={view==='rolled_back'&&admin?'':'primary'} onClick={onExit}>Back to DockNest</button>}
     {view==='rolled_back'&&admin&&<button type="button" className="primary" aria-disabled={!retry?.can||undefined} aria-describedby={retryReason?'lock-retry-reason':undefined} onClick={()=>{if(retry?.can)onRetry({requestId:reqId})}}>Retry update</button>}
+    {admin&&REPORT_VIEWS.includes(view)&&<UpdateReportButton client={client} view={view} version={from} progress={p} lastPhase={lastPhase.current}/>}
     {retryReason&&view==='rolled_back'&&admin&&<p className="why" id="lock-retry-reason">{retryReason}</p>}
    </div>
   </section></main></div>;

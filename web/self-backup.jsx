@@ -4,6 +4,14 @@ import { StatusLabel, AlertPanel } from './system.jsx';
 import { ScheduleFields } from './schedule-fields.jsx';
 import { formatDate } from './date-format.js';
 import './self-backup.css';
+import { ReportProblem } from './report/ReportProblem.jsx';
+import { buildSelfBackupReport } from './report/builders.js';
+
+// The server records one of three fixed messages (src/self-backup.js); only which one it was is reported, never the text.
+export function selfBackupFailureFacts(run){
+ const text=typeof run?.error==='string'?run.error:'';
+ return {destination:run?.storage?.mode,ended:text.startsWith('Worker interrupted.')?'worker-interrupted':/deployment/i.test(text)&&!text.startsWith('DockNest backup failed.')?'deployment-hold':'failed'};
+}
 
 function RecoverySettings({settings,Field,busy,onSave}){
  const [enabled,setEnabled]=useState(settings?.enabled||false),[error,setError]=useState('');
@@ -41,7 +49,7 @@ export function SelfBackup({api,Field,onSessionExpired}){
   {!data?<p role="status">Loading DockNest backup settings…</p>:<>
    <div className="card-grid sb-grid"><section className="card backup-summary" aria-labelledby="sb-latest-title"><div className="card-body sb-stack"><h2 className="card-title" id="sb-latest-title">Latest recovery kit</h2>
     <span className="sb-state">{data.active?<StatusLabel state="running">{data.active.status==='queued'?'Queued for backup':'Creating recovery kit'}</StatusLabel>:latest?<StatusLabel state="success">Ready to download</StatusLabel>:<StatusLabel state="queued">No backup yet</StatusLabel>}</span>
-    {data.active&&<p className="t-body sb-quiet" role="status">{data.active.status==='queued'?'The worker will create your encrypted kit.':'Creating your encrypted DockNest recovery kit…'}</p>}{data.lastAttempt?.status==='failed'&&<AlertPanel variant="error" title="The last backup failed">{data.lastAttempt.error}</AlertPanel>}
+    {data.active&&<p className="t-body sb-quiet" role="status">{data.active.status==='queued'?'The worker will create your encrypted kit.':'Creating your encrypted DockNest recovery kit…'}</p>}{data.lastAttempt?.status==='failed'&&<AlertPanel variant="error" title="The last backup failed" action={<div className="rp-actions"><ReportProblem summary="DockNest backup" build={(facts,opts)=>buildSelfBackupReport({...facts,...opts,...selfBackupFailureFacts(data.lastAttempt)})}/></div>}>{data.lastAttempt.error}</AlertPanel>}
     {latest?<dl className="def-list backup-facts"><div className="def-row"><dt>Last saved</dt><dd>{formatDate(latest.finishedAt)}</dd></div><div className="def-row"><dt>File size</dt><dd>{(latest.size/1024).toFixed(1)} KB</dd></div><div className="def-row"><dt>App version</dt><dd>{latest.release}</dd></div><div className="def-row"><dt>Integrity</dt><dd>Checksum checked</dd></div>
      <div className="def-row backup-location"><dt>Stored on</dt><dd>{latest?.storage?.mode==='local'?'Previous local copy':latest?.storage?.name||data.destination?.name||'Connect storage first'}</dd></div></dl>:<><p className="t-body sb-quiet backup-empty-copy">Set your recovery passphrase, then create your first DockNest backup.</p>
      <dl className="def-list"><div className="def-row backup-location"><dt>Stored on</dt><dd>{data.destination?.name||'Connect storage first'}</dd></div></dl></>}
