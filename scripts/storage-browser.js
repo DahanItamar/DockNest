@@ -32,6 +32,9 @@ try{
  page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>consoleMessages.push(message.text()));
  page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/api/storage-targets'))posts.push(new URL(request.url()).pathname);});
  await page.goto(base);
+ // A first administrator sign-in asks about update checks before anything else; answer it as a user would.
+ await page.getByRole('dialog',{name:'Check GitHub daily for new versions?'}).getByRole('button',{name:'No, keep checks off'}).click();
+ await page.getByRole('dialog').waitFor({state:'detached'});
  await page.getByRole('button',{name:'Storage',exact:true}).first().click();
  // S5: the live region exists before any action.
  assert.equal(await page.locator('p.sr-only[role="status"]').count(),1);

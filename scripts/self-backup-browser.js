@@ -29,6 +29,9 @@ try{
  await context.addCookies([{name:'dbm_session',value:token,url:`http://127.0.0.1:${server.address().port}`}]);
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(`http://127.0.0.1:${server.address().port}`);
+ // A first administrator sign-in asks about update checks before anything else; answer it as a user would.
+ await page.getByRole('dialog',{name:'Check GitHub daily for new versions?'}).getByRole('button',{name:'No, keep checks off'}).click();
+ await page.getByRole('dialog').waitFor({state:'detached'});
  await page.getByRole('button',{name:'DockNest backup',exact:true}).click();
  await page.getByRole('heading',{name:'Recovery settings'}).waitFor();
  await page.locator('.backup-location').getByText('Connected backups',{exact:true}).waitFor();
