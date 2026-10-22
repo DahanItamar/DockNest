@@ -78,3 +78,14 @@ test('turning checks on checks once straight away; Check now within a minute is 
   assert.equal(fetches.length, 2);
   assert.deepEqual(db.prepare("SELECT action,detail FROM audit_events WHERE action='update.settings' ORDER BY created_at").all().map(row => row.detail), ['{"checkEnabled":true}', '{"checkEnabled":false}']);
 });
+
+test('the audit entry is written in the same transaction as the settings change', async () => {
+  const before = db.prepare('SELECT check_enabled FROM update_preferences WHERE id=1').get().check_enabled, count = fetches.length;
+  db.exec("CREATE TRIGGER fail_settings_audit BEFORE INSERT ON audit_events WHEN NEW.action='update.settings' BEGIN SELECT RAISE(ABORT,'audit failed'); END");
+  try {
+    const response = await request('/settings', { method: 'PATCH', body: { checkEnabled: before !== 1 } });
+    assert.ok(response.status >= 400, "the request fails when the audit cannot be written");
+  } finally { db.exec('DROP TRIGGER fail_settings_audit'); }
+  assert.equal(db.prepare('SELECT check_enabled FROM update_preferences WHERE id=1').get().check_enabled, before, 'the change rolled back with the failed audit');
+  assert.equal(fetches.length, count);
+});

@@ -16,9 +16,10 @@ const FINAL_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SEMVER = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 // C0, DEL, C1, zero-width and bidirectional controls: a release name is one line of plain text that reads as it is.
-const NAME_CONTROLS = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁩﻿]/g;
+const NAME_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u2028\u2029​-‏‪-‮⁠-⁩﻿]/g;
 // Notes keep tabs and newlines (Markdown) and lose every other control and the bidirectional overrides.
-const NOTES_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
+const NOTES_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u2028\u2029‪-‮⁦-⁩]/g;
+const JSON_TYPE = /^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i;
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const finalTag = tag => typeof tag === 'string' && tag.length <= 32 && FINAL_TAG.test(tag);
@@ -137,7 +138,7 @@ export async function fetchReleases({ fetch: fetchImpl, etag = null, version = p
     throw at ? new CheckError('rate-limited', { retryAt: at }) : new CheckError('http', { status: response.status });
   }
   if (response.status !== 200) { await discard(response); throw new CheckError('http', { status: response.status }); }
-  if (!/^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i.test(response.headers.get('content-type') || '')) { await discard(response); throw new CheckError('invalid'); }
+  if (!JSON_TYPE.test(response.headers.get('content-type') || '')) { await discard(response); throw new CheckError('invalid'); }
   const list = parseJson(await readCapped(response, limits.releasesBytes, signal));
   if (!Array.isArray(list)) throw new CheckError('invalid');
   return { notModified: false, etag: validEtag(response.headers.get('etag')), list };
@@ -183,6 +184,7 @@ export async function fetchManifest({ fetch: fetchImpl, tag, version = packageVe
     response = await get(fetchImpl, target.href, headers, signal);
   }
   if (response.status !== 200) { await discard(response); throw new CheckError('manifest-http'); }
+  if (!JSON_TYPE.test(response.headers.get('content-type') || '')) { await discard(response); throw new CheckError('invalid'); }
   return manifestFields(parseJson(await readCapped(response, limits.manifestBytes, signal)), tag);
 }
 
@@ -195,8 +197,8 @@ export function claimCheck(db, { manual = false, now = Date.now() } = {}) {
   if (!checksEnabled(db)) return false;
   ensureCheckRow(db, now);
   const at = new Date(now).toISOString(), lease = now + limits.claimMs;
-  const sql = manual ? 'UPDATE update_checks SET checked_at=?,next_check_at=? WHERE id=1 AND (next_check_at<=? OR checked_at<=?)' : 'UPDATE update_checks SET checked_at=?,next_check_at=? WHERE id=1 AND next_check_at<=?';
-  return db.prepare(sql).run(...[at, lease, now, ...(manual ? [new Date(now - limits.manualIntervalMs).toISOString()] : [])]).changes === 1;
+  const sql = manual ? 'UPDATE update_checks SET checked_at=?,next_check_at=? WHERE id=1 AND (next_check_at<=? OR checked_at<=?) AND NOT (status=\'failed\' AND error LIKE \'GitHub rate limit reached%\' AND next_check_at>?)' : 'UPDATE update_checks SET checked_at=?,next_check_at=? WHERE id=1 AND next_check_at<=?';
+  return db.prepare(sql).run(...[at, lease, now, ...(manual ? [new Date(now - limits.manualIntervalMs).toISOString(), now] : [])]).changes === 1;
 }
 export const nextAfterSuccess = (now, random = Math.random) => now + DAY + Math.min(Math.floor(Math.max(random(), 0) * (limits.jitterMs + 1)), limits.jitterMs);
 export const nextAfterFailure = (now, failures, retry = null) => retry ?? now + BACKOFF_HOURS[Math.min(Math.max(failures, 1), BACKOFF_HOURS.length) - 1] * HOUR;
@@ -240,9 +242,14 @@ let inFlight = null;
 export const pendingCheck = () => inFlight;
 function track(promise) { inFlight = promise.finally(() => { inFlight = null; }); return inFlight; }
 // "Check now": at most once a minute (otherwise the cached row stays), within the caller's budget.
-// A check this process is already running is awaited instead of starting a second one.
+// A check this process is already running is awaited instead of starting a second one, for at most the same budget.
+// A manual check also respects a rate-limit retry time stored in next_check_at.
 export async function checkNow(options) {
-  if (inFlight) { await inFlight; return { claimed: false }; }
+  if (inFlight) {
+    let timer;
+    await Promise.race([inFlight.catch(() => {}), new Promise(resolve => { timer = setTimeout(resolve, options.timeoutMs ?? limits.timeoutMs); })]).finally(() => clearTimeout(timer));
+    return { claimed: false };
+  }
   if (!claimCheck(options.db, { manual: true, now: (options.now || Date.now)() })) return { claimed: false };
   return { claimed: true, ...(await track(runCheck(options))) };
 }
