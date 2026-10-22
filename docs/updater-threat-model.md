@@ -192,7 +192,7 @@ Rules enforced by the broker, from its own code and `/etc/docknest-updater/confi
 
 ### Verification command (both bundle and image)
 
-`--certificate-identity https://github.com/DahanItamar/DockNest/.github/workflows/release.yml@refs/tags/vX.Y.Z`, `--certificate-oidc-issuer https://token.actions.githubusercontent.com`, `--certificate-github-workflow-repository DahanItamar/DockNest`, `--certificate-github-workflow-trigger push`, `--certificate-github-workflow-ref refs/tags/vX.Y.Z`, `--certificate-github-workflow-sha <manifest.commit>`. cosign has no flag for the numeric source repository id and owner id (Fulcio OIDs 1.3.6.1.4.1.57264.1.15 and .17), so the broker reads them from the verified certificate and compares them with values pinned in the installer (P9). This defeats repo-jacking after a rename (F9).
+`--certificate-identity https://github.com/DahanItamar/DockNest/.github/workflows/release.yml@refs/tags/vX.Y.Z`, `--certificate-oidc-issuer https://token.actions.githubusercontent.com`, `--certificate-github-workflow-repository DahanItamar/DockNest`, `--certificate-github-workflow-trigger push`, `--certificate-github-workflow-ref refs/tags/vX.Y.Z`, `--certificate-github-workflow-sha <manifest.commit>`. cosign has no flag for the numeric source repository id and owner id (the Fulcio certificate extensions "Source Repository Identifier" and "Source Repository Owner Identifier", numbered .15 and .17 under Fulcio's OID arc), so the broker reads them from the verified certificate and compares them with values pinned in the installer (P9). This defeats repo-jacking after a rename (F9).
 
 ### Steps before anything runs for the target
 

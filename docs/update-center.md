@@ -406,7 +406,9 @@ These cannot be shown in a static mockup; implementation reviews check them.
 
 Nothing here, in the mockup or in browser tests proves real update, rollback or reconnect behaviour; only the Linux Docker runs of PRs 7 and 12 can.
 
-## 12. Open questions for the owner
+## 12. Owner decisions
+
+On 2026-10-22 the owner approved this design and accepted every recommendation below (A1, A2, A4, A5, A7, A8, A10, A11, A13, A17, A20), together with the threat model's D10, D16 and D17. Implementation follows section 11.
 
 Updater decisions D1 to D23 are in the [threat model](updater-threat-model.md#owner-decisions), and its implementation checklist I1 to I46 (section 9) applies to every implementation review; D4 (downgrade scope) is superseded by the decision to offer no downgrade in the UI. These are the remaining ones.
 
