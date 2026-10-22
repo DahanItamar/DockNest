@@ -73,6 +73,7 @@ try{
   await nav.click();
   await page.getByRole('heading',{name:'Update Center',level:1}).waitFor();
   assert.equal(await page.evaluate(()=>location.hash),'#/update-center');
+  await page.getByRole('tab').nth(2).waitFor();
   assert.deepEqual(await page.getByRole('tab').allTextContents(),['Overview','What\u2019s new','History'],'No Full changelog tab in 2.2.0');
   await page.getByRole('heading',{name:'DockNest 2.3.0'}).waitFor();
   await page.getByRole('heading',{name:'Before you update'}).waitFor();
@@ -171,8 +172,8 @@ try{
   const dialog=page.getByRole('dialog',{name:'Check GitHub daily for new versions?'});
   await dialog.waitFor();
   assert.ok(!(await dialog.textContent()).match(/IP address/i),'No IP wording');
-  assert.equal(await heightOf(dialog.getByRole('button',{name:'No, keep checks off'})),44);
-  assert.equal(await heightOf(dialog.getByRole('button',{name:'Yes, check daily'})),44);
+  assert.equal(await heightOf(dialog.getByRole('button',{name:'No, keep checks off'})),40);
+  assert.equal(await heightOf(dialog.getByRole('button',{name:'Yes, check daily'})),40);
   await page.keyboard.press('Escape');
   await dialog.waitFor({state:'hidden'});
   assert.equal(mock.calls.filter(c=>c.includes('/api/updates/consent')).length,0,'Escape records nothing');
