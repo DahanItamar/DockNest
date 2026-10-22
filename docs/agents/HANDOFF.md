@@ -26,13 +26,9 @@ State of the project after release 2.1.0 (2026-10-22), for the next working sess
 
 ## Next: 2.2.0, the update center
 
-Settings shows the running version, checks GitHub releases (after the one-time consent), and offers Update and, when safe, Downgrade. A full-screen progress view follows each step and survives the server restart: the open page reads a status file written by a host-side updater and reconnects automatically; other signed-in admins see a banner and backup actions pause. After success a "What's new" dialog opens once per admin. Containers keep no Docker socket: the API writes a validated request file, a host service installed once verifies the release signature and manifest, then runs `scripts/upgrade.sh --non-interactive`.
+The design is in [update-center.md](../update-center.md), the threat model in [updater-threat-model.md](../updater-threat-model.md) and the mockup in [design/update-center](../design/update-center/README.md). Implementation follows the PR sequence in section 11 of the design, once the owner approves it.
 
-Start with a threat model and a design mockup for the owner to approve. Requirements already known:
-
-- The nine updater requirements in [upgrading.md](../upgrading.md) (request file ownership, link refusal, official tags only, and others).
-- The status directory must be owned by the user that writes it.
-- Release validation must also cover upgrading from 2.1.0.
+In short: Settings, opened from the header gear, gains an Updates tab. It shows the running version, checks GitHub releases after the one-time consent, and offers Update only. Downgrades stay a command-line task (owner decision, 2026-10-22). A full-screen progress view in five stages survives the restart. A host-side updater, installed once, receives requests over a socket, verifies the signed release and runs `scripts/upgrade.sh --upgrade-only`. Repeated upgrades never fill the disk: old update files and images are pruned after success.
 
 ## Backlog
 

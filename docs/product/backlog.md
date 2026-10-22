@@ -129,7 +129,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
 
 ### PM-10 — Update and downgrade path tests with forced failures
 - **Acceptance criteria:**
-  - Paths N-2→N and N-1→N, and a downgrade N→N-1 from the pre-upgrade snapshot.
+  - Paths N-2→N and N-1→N, and a command-line downgrade N→N-1 from the pre-upgrade snapshot (the update center itself never downgrades).
   - Failure is injected at download, verify, snapshot, drain, switch and health. Each leaves the previous version running with identical state, using the PM-01 comparison.
   - Runs in CI on Linux.
 - **Owner role:** [Test Automation Engineer](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-test-automation-engineer.md) · **Tier:** sonnet-medium · **Depends on:** PM-08 · **Target:** 2.2.0

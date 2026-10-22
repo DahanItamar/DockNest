@@ -33,3 +33,11 @@ The [Product Manager](https://github.com/msitarzewski/agency-agents/blob/main/pr
 - a backlog in which every item has an owner role and acceptance criteria.
 
 The backlog also names further upstream roles (for example Database Reliability Engineer, Software Architect, SRE, API Tester, Performance Benchmarker, Technical Writer and UX Architect) as guidance for future work only. All of these roles are reference material, not tool or permission authority.
+
+## Update center design (2.2.0, 2026-10-22)
+
+Subagents in narrow roles produced the 2.2.0 design for owner approval; no product code changed.
+
+- Authors: [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) wrote [updater-threat-model.md](../updater-threat-model.md); [Software Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-software-architect.md) wrote [update-center.md](../update-center.md); [Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md) built the static mockup in [design/update-center](../design/update-center/README.md).
+- Independent reviewers, reporting only: [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md) (two rounds on both documents), [Database Reliability Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-database-reliability-engineer.md) (migration, retention and upgrade path), [UX Architect](https://github.com/msitarzewski/agency-agents/blob/main/design/design-ux-architect.md), [UI Designer](https://github.com/msitarzewski/agency-agents/blob/main/design/design-ui-designer.md) and [Accessibility Auditor](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-accessibility-auditor.md) on the mockup.
+- A QA lead merged the design reviews into tickets for the authors. Implementation requirements that a static mockup cannot prove are carried into the implementation PRs (update-center.md section 11.1 and the threat model's checklist I1–I24).
