@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-22
+
+See [docs/releases/2026-10-22-v2.2.0.md](docs/releases/2026-10-22-v2.2.0.md), including the upgrade notes.
+
 Planned as 2.2.0 (the version bump belongs to the release pull request). Draft notes: [docs/releases/2026-10-22-v2.2.0.md](docs/releases/2026-10-22-v2.2.0.md). Not yet validated on a Linux Docker host.
 
 ### Added
