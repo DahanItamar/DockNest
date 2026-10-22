@@ -61,6 +61,23 @@ It connects to your Linux servers over SSH, backs up each Docker or nginx site t
   <img src="docs/media/job-details.png" width="640" alt="Job details for a synthetic site, with live transfer progress and a plain-language step timeline" />
 </p>
 
+## Update Center (coming in 2.2.0)
+
+The latest release is still v2.1.0. This describes what is on the 2.2.0 development branch; it is not validated on a real Linux Docker host yet.
+
+- **Opt-in update check.** Nothing contacts GitHub until an administrator agrees once. Then DockNest checks the public release list daily, and you can check on demand. See [outbound requests](docs/security.md#update-checks-outbound-requests).
+- **Updates only when you click.** Administrators get an **Update Center** page. An update starts only after an administrator confirms with the password and an authenticator code, never unattended, and never through the Docker socket: a small root service on the host, the host updater, verifies the signed release and runs the upgrade script. While it runs, DockNest shows only an update screen. Downgrades stay a command-line task.
+- **Report a bug.** Settings > About opens a pre-filled public GitHub issue with only the version and install mode; the server sends nothing ([details](docs/security.md#problem-reports-report-a-bug)).
+- **Safer upgrade script.** `scripts/upgrade.sh` now checks that the target is on `main` and signed, takes a lock so two upgrades cannot overlap, and removes old upgrade files after a successful run. Details in [Upgrading](docs/upgrading.md).
+
+One-time setup for in-app updates, on the DockNest host (Linux with systemd and rootful Docker; not Docker Desktop or rootless Docker):
+
+```sh
+sudo scripts/install-updater.sh            # once; also --status, --ack, --repair, --uninstall
+```
+
+The updater is optional. Without it, upgrade from the command line with `scripts/upgrade.sh`. The Update Center page shows this setup step and notices when the updater connects. See [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center).
+
 ## How DockNest compares
 
 | | DockNest | Server snapshot | restic / Borg | docker-volume-backup |
@@ -190,6 +207,7 @@ Most sites need none of these. Example values:
 | Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Storage backends](docs/storage-backends.md) · [Security model](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
+| Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |
 
 ## Contributing

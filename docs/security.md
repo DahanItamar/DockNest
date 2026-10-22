@@ -80,3 +80,15 @@ With checks on, the API asks GitHub once a day (and when an administrator select
 - `github.com`, the release's `docknest-release.json`, followed by at most one redirect to exactly `release-assets.githubusercontent.com` or `objects.githubusercontent.com` (HTTPS on port 443 only).
 
 What GitHub can see: the server's IP address, as for any web request, and the DockNest version in the `User-Agent` header. Nothing about servers, sites, users, backups or storage is sent. Responses are size-capped and treated as untrusted display data; the host updater verifies every release independently before anything is installed.
+
+## Problem reports (Report a bug)
+
+**Settings > About > Report a bug** opens a review dialog, then a pre-filled GitHub issue form (`bug-report.yml`) in a new tab. The server sends nothing: the browser builds the link itself from two allow-listed values, the DockNest version (`vX.Y.Z`) and the install mode (`image` or `source`). A value that does not match its pattern is dropped, never copied, and no free text, host name, address, path, user name, request id, site name or log can reach the link. The dialog shows exactly what will be shared, and you add the description on GitHub. The issue is public and linked to your GitHub account, so do not paste private details. Report security problems privately instead ([SECURITY.md](../SECURITY.md)).
+
+## Client address and TRUST_PROXY
+
+By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. See [Deployment](deployment.md).
+
+## Host updater
+
+The containers never get the Docker socket. The optional host updater ([upgrading](upgrading.md#host-updater-and-update-center), [threat model](updater-threat-model.md)) is a root systemd service reached over a Unix socket in the `docknest_updater` volume, which only the `api` container mounts, read-only. It treats the volume as writable by a possibly compromised API: it reads one small request, accepts upgrades to final releases only, checks the signed `docknest-release.json` with a cosign it pinned by SHA-256 (as an unprivileged account), requires the tag to be on `main`, and runs the upgrade as the checkout's owner, not as root. It never adds anyone to the `docker` group. The pre-existing exposure remains: whoever is in the `docker` group, or root, controls the host. An update request needs an administrator who has just re-entered the shared password and an authenticator code. The public progress endpoint returns only the phase, target version, state and timestamps. This design is covered by unit tests only; it has not been validated on a real Linux Docker host.

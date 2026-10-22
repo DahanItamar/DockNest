@@ -1,12 +1,12 @@
 # Handoff
 
-State of the project after release 2.1.0 (2026-10-22), for the next working session. Product direction lives in [docs/product](../product/roadmap.md); how upgrades and releases work lives in [docs/upgrading.md](../upgrading.md) and [docs/release-validation.md](../release-validation.md).
+State of the project on 2026-10-22: release 2.1.0 is out and 2.2.0 is in integration. For the next working session. Product direction lives in [docs/product](../product/roadmap.md); how upgrades and releases work lives in [docs/upgrading.md](../upgrading.md) and [docs/release-validation.md](../release-validation.md).
 
 ## Where things stand
 
 - 2.1.0 is released: signed image `ghcr.io/dahanitamar/docknest` (`2.1.0`, `2.1`, `2`, `latest`), metadata schema 4, `minUpgradeFrom` 2.0.0.
 - The release candidate passed the real upgrade validation from 2.0.0 (93/93 checks) on a Linux Docker runner.
-- No open pull requests.
+- 2.2.0 work is in pull requests against `integration/2.2.0` (see below).
 
 ## How the work is organised
 
@@ -24,11 +24,22 @@ State of the project after release 2.1.0 (2026-10-22), for the next working sess
 - Primary user: the web agency owner managing several client servers.
 - Licence: AGPL-3.0 with DCO sign-off; funding through sponsors and paid setup or support.
 
-## Next: 2.2.0, the update center
+## Current state: 2.2.0 in integration
 
-The design is in [update-center.md](../update-center.md), the threat model in [updater-threat-model.md](../updater-threat-model.md) and the mockup in [design/update-center](../design/update-center/README.md). Implementation follows the PR sequence in section 11 of the design, once the owner approves it.
+2.2.0 is being built on `integration/2.2.0`; feature pull requests merge there after a combined independent review, and one `integration/2.2.0` to `main` pull request runs every required check. Nothing is tagged. `main` and the latest release are still 2.1.0.
 
-In short: Settings, opened from the header gear, gains an Updates tab. It shows the running version, checks GitHub releases after the one-time consent, and offers Update only. Downgrades stay a command-line task (owner decision, 2026-10-22). A full-screen progress view in five stages survives the restart. A host-side updater, installed once, receives requests over a socket, verifies the signed release and runs `scripts/upgrade.sh --upgrade-only`. Repeated upgrades never fill the disk: old update files and images are pruned after success.
+- On the branch: migration 5 and release history, the self-backup hold, disk retention and exit 4 after compatible migrations in `scripts/upgrade.sh`, the signed release manifest, the opt-in update check, the verify flags and the on-`main` and signature check, the host updater (`updater/broker.py`, `scripts/install-updater.sh`, the `docknest_updater` volume), upgrade requests with the public progress endpoint and the 423 update lock, the Update Center page, Report a bug and `TRUST_PROXY`.
+- Docs written from the code: [upgrading.md](../upgrading.md) (host updater, lock, retention, flags, the 2.1.x hop), [security.md](../security.md), the draft [2.2.0 release notes](../releases/2026-10-22-v2.2.0.md) and the CHANGELOG `[Unreleased]` section. The version bump and the README "Latest version" row belong to the release pull request.
+- Still to do for 2.2.0: the read-only API routes the page already calls (`releases/:version`, `whats-new`, `whats-new/seen`), the release-validation changes that start from 2.1.0 and exercise the updater and retention (update-center.md section 11, PR 12), the release pull request, then the private release validation on a Linux Docker runner. Until that run passes, no document may call the updater, the cleanup or the 2.1.x to 2.2.0 hop validated, and real backup and restore stay unvalidated without Linux Docker integration.
+- Design: [update-center.md](../update-center.md), [updater-threat-model.md](../updater-threat-model.md), mockup in [design/update-center](../design/update-center/README.md). Downgrades stay a command-line task (owner decision, 2026-10-22).
+
+## Next: 2.3.0 scope (deferred from 2.2.0)
+
+- The broker `check` action and the Pre-update checks page (D19).
+- Broker self-update (D6, I38 to I44) from the signed `updater` block; until then `sudo scripts/install-updater.sh --repair` reinstalls the broker.
+- Full changelog tab and History details, and the Activity timeline.
+- **Open GitHub** reports for failed updates (reason, environment, excerpt) and problem reports across DockNest (update-center.md section 13).
+- Rollout: the owner upgrades 2.1.x to 2.2.0 with `scripts/upgrade.sh` after taking a recovery kit, runs `sudo scripts/install-updater.sh` once, then installs 2.3.0 from the Update Center as the first real in-app update.
 
 ## Backlog
 
