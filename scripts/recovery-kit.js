@@ -11,4 +11,4 @@ try{
  if(operation==='export'){const {db}=await import('../src/db.js'),{config}=await import('../src/config.js');try{result=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:path,passphrase,release:process.env.DOCKNEST_RELEASE||'unknown'});}finally{db.close();}}
  else{if(!passphraseFile)throw new Error('New recovery directory required');result=await restoreRecoveryKit({input:path,directory:passphraseFile,passphrase});}
  console.log(JSON.stringify(result));
-}catch(error){console.error(['Recovery kit authentication failed','Manager snapshot validation failed'].includes(error.message)?error.message:'Recovery kit operation failed. Check arguments, private paths, passphrase and storage capacity.');process.exitCode=1;}
+}catch(error){console.error(['Recovery kit authentication failed','Manager snapshot validation failed'].includes(error.message)||error.status===409?error.message:'Recovery kit operation failed. Check arguments, private paths, passphrase and storage capacity.');process.exitCode=1;}

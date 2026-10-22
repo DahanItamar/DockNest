@@ -6,6 +6,23 @@ const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const names=['state.sqlite','master.key','recovery/decrypt-backup.js','recovery/helper.py','recovery/boot_recovery.py','recovery/export_zip.py','recovery/README.md'];
 const maximum=128*1024*1024;
 function derive(passphrase,salt){if(typeof passphrase!=='string'||passphrase.length<24||passphrase.length>4096)throw new Error('Use a separate recovery passphrase of at least 24 characters');return scryptSync(passphrase,salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024});}
+const hasTable=(database,name)=>!!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+// The deployment hold (scripts/deployment-preflight.js) pauses new work, kit creation included; same 409 as site jobs.
+export const deploymentHeld=database=>hasTable(database,'settings')&&database.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value==='true';
+export function requireNoDeploymentHold(database){if(deploymentHeld(database))throw Object.assign(new Error('Deployment verification is in progress. Retry after it completes.'),{status:409});}
+// True while the host updater's current.json (read-only status mount) shows an unfinished run. No mount, no status
+// directory or no current.json means no run. A present file that cannot be read or validated fails closed.
+export const updaterStatusDirectory='/run/docknest-updater/status';
+export async function updaterRunActive(directory=updaterStatusDirectory){
+ const read=async name=>{const file=join(directory,name),info=await lstat(file);if(!info.isFile()||info.size>16384)throw new Error('Invalid updater status');return JSON.parse(await readFile(file,'utf8'));};
+ let current;
+ try{current=await read('current.json');}catch(error){return !['ENOENT','ENOTDIR'].includes(error.code);}
+ if(typeof current?.requestId!=='string'||!Array.isArray(current.events))return true;
+ if(['done','failed'].includes(current.events.at(-1)?.phase))return false;
+ // An interrupted broker publishes ok:false for the request without adding a final event.
+ try{const status=await read('status.json');if(status?.requestId===current.requestId&&typeof status.ok==='boolean')return false;}catch{/* No final status for this request. */}
+ return true;
+}
 async function durableWrite(file,bytes){const handle=await open(file,'wx',0o600);try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}}
 function validateKey(database,secret){
  for(const [table,field] of [['servers','private_key'],['storage_targets','credential'],['users','totp_secret']]){
@@ -17,13 +34,15 @@ function validateKey(database,secret){
  }
 }
 export async function exportRecoveryKit({database,masterKey,output,passphrase,release='unknown'}){
+ requireNoDeploymentHold(database);
  const parent=dirname(resolve(output));if(await realpath(parent)!==parent)throw new Error('Kit output parent cannot contain a symlink');
  const temporary=await mkdtemp(join(parent,'.docknest-kit-'));await chmod(temporary,0o700);
  try{
   const snapshot=join(temporary,'snapshot.sqlite');await backup(database,snapshot);await chmod(snapshot,0o600);
   const files={'state.sqlite':await readFile(snapshot),'master.key':await readFile(masterKey)};
   if(Buffer.from(files['master.key'].toString().trim(),'base64').length!==32)throw new Error('Invalid manager key');
-  const snapshotDb=new DatabaseSync(snapshot,{readOnly:true});try{validateKey(snapshotDb,Buffer.from(files['master.key'].toString().trim(),'base64'));if(snapshotDb.prepare('PRAGMA quick_check').get().quick_check!=='ok'||snapshotDb.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Manager snapshot validation failed');}finally{snapshotDb.close();}
+  // Checked again on the consistent snapshot, so a hold set while the export was starting never lands in a new kit.
+  const snapshotDb=new DatabaseSync(snapshot,{readOnly:true});try{requireNoDeploymentHold(snapshotDb);validateKey(snapshotDb,Buffer.from(files['master.key'].toString().trim(),'base64'));if(snapshotDb.prepare('PRAGMA quick_check').get().quick_check!=='ok'||snapshotDb.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Manager snapshot validation failed');}finally{snapshotDb.close();}
   for(const [name,url] of [['recovery/decrypt-backup.js','../scripts/decrypt-backup.js'],['recovery/helper.py','../remote/helper.py'],['recovery/boot_recovery.py','../remote/boot_recovery.py'],['recovery/export_zip.py','../remote/export_zip.py']])files[name]=await readFile(new URL(url,import.meta.url));
   files['recovery/README.md']=Buffer.from('Private recovery kit. Keep the recovery passphrase separately and a copy of the matching DockNest release image/source and environment configuration offline. Restore into a new private DATA_DIR; do not overwrite a live manager. Sessions and schedules are disabled during import. Reconnect storage with independently verified host keys; environment-mounted credentials are not embedded. Decrypt packages using node decrypt-backup.js PACKAGE MASTER_KEY NEW_TAR, then use the bundled helper and manifest for reviewed isolated restore. No production replacement is automatic.\n');
   const payload=Buffer.from(JSON.stringify({version:1,createdAt:new Date().toISOString(),release,node:process.version,keyId:hash(files['master.key']).slice(0,16),files:Object.fromEntries(Object.entries(files).map(([name,bytes])=>[name,{sha256:hash(bytes),body:bytes.toString('base64')}]))}));
@@ -35,7 +54,10 @@ export async function exportRecoveryKit({database,masterKey,output,passphrase,re
   return {formatVersion:1,sha256:hash(envelope),release,keyId:hash(files['master.key']).slice(0,16)};
  }finally{await rm(temporary,{recursive:true,force:true});}
 }
-export async function restoreRecoveryKit({input,directory,passphrase}){
+export const updateRunningMessage='A DockNest update is running on this host. Restore the recovery kit after it finishes.';
+export async function restoreRecoveryKit({input,directory,passphrase,updaterStatus=updaterStatusDirectory}){
+ // The restored state has its deployment hold cleared, so never prepare one underneath a running upgrade.
+ if(await updaterRunActive(updaterStatus))throw Object.assign(new Error(updateRunningMessage),{status:409});
  const info=await lstat(input);if(!info.isFile()||info.size>maximum+1024||info.size<48)throw new Error('Invalid recovery kit size/type');
  const envelope=await readFile(input),header=envelope.subarray(0,32);
  if(header.subarray(0,4).toString()!=='DKN1')throw new Error('Unsupported recovery kit');
@@ -57,8 +79,11 @@ export async function restoreRecoveryKit({input,directory,passphrase}){
    const saved=state.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get();
    if(saved){const settings=JSON.parse(saved.value);settings.enabled=false;settings.nextRun=null;state.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(JSON.stringify(settings));}
   }
-  for(const table of ['sessions','challenges','login_challenges','enrollment_challenges','downloads','leases'])if(state.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))state.exec('DELETE FROM '+table);
-  state.exec("UPDATE policies SET enabled=0,next_run=NULL; UPDATE jobs SET status='failed',stage='failed',error='Queued work cancelled during independent manager recovery' WHERE status='queued'; UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Independent manager recovery: review source state before unlocking' WHERE status='running'; UPDATE restores SET status='failed' WHERE status='queued'; UPDATE restores SET status='recovery_required' WHERE status='running'; DELETE FROM settings WHERE key IN ('worker_heartbeat','artifact_reconciliation');");
+  for(const table of ['sessions','challenges','login_challenges','enrollment_challenges','downloads','leases'])if(hasTable(state,table))state.exec('DELETE FROM '+table);
+  // A kit taken during a deployment hold would otherwise restore a manager that refuses all new work (the hold is
+  // cleared below), and in-app update requests belong to the old host's updater (update_requests from schema 5).
+  if(hasTable(state,'update_requests'))state.prepare("UPDATE update_requests SET state='lost',finished_at=COALESCE(finished_at,?) WHERE state IN ('submitted','running','needs_action')").run(new Date().toISOString());
+  state.exec("UPDATE policies SET enabled=0,next_run=NULL; UPDATE jobs SET status='failed',stage='failed',error='Queued work cancelled during independent manager recovery' WHERE status='queued'; UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Independent manager recovery: review source state before unlocking' WHERE status='running'; UPDATE restores SET status='failed' WHERE status='queued'; UPDATE restores SET status='recovery_required' WHERE status='running'; DELETE FROM settings WHERE key IN ('worker_heartbeat','artifact_reconciliation','deployment_hold');");
   state.exec('COMMIT');state.close();state=null;
   return {restored:true,release:decoded.release,keyId:decoded.keyId,schedulesPaused:true,sessionsRevoked:true,sourceRecoveryReviewRequired:true};
  }catch(error){state?.close();await rm(target,{recursive:true,force:true});throw error;}

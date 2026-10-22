@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { db,id,audit,transaction } from './db.js';
 import { config } from './config.js';
 import { seal,open,digest } from './crypto.js';
-import { exportRecoveryKit } from './recovery-kit.js';
+import { exportRecoveryKit,deploymentHeld,requireNoDeploymentHold } from './recovery-kit.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
 import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
 
@@ -40,7 +40,9 @@ export function saveSelfBackupSettings(input,actor){
   audit(actor,'manager-backup.settings',null,{enabled:data.enabled,passphraseChanged:!!data.passphrase});return {saved:true};
  });
 }
+// Every caller runs this inside one BEGIN IMMEDIATE transaction, so the hold cannot be set between the check and the insert.
 function queue(actor){
+ requireNoDeploymentHold(db);
  if(!selfBackupConfig()?.passphrase)throw Object.assign(new Error('Set up DockNest self-backup first.'),{status:409});
  if(active())throw Object.assign(new Error('A DockNest backup is already queued or running.'),{status:409});
  const selected=destination();if(!selected.available)throw Object.assign(new Error('Select a connected SFTP or S3 destination in Storage before backing up DockNest.'),{status:409});
@@ -50,7 +52,8 @@ function queue(actor){
 export const enqueueSelfBackup=actor=>transaction(()=>queue(actor));
 export function tickSelfBackup(currentDate=new Date()){
  transaction(()=>{
-  const saved=selfBackupConfig();if(!saved?.enabled||active())return;
+  // Under the hold a due run stays due (nextRun unchanged) and is queued after the release, like site schedules.
+  const saved=selfBackupConfig();if(!saved?.enabled||active()||deploymentHeld(db))return;
   if(saved.nextRun&&new Date(saved.nextRun)>currentDate)return;
   if(!destination().available)return;
   queue('scheduler');saved.nextRun=CronExpressionParser.parse(saved.schedule,{tz:saved.timezone,currentDate}).next().toISOString();
@@ -58,7 +61,8 @@ export function tickSelfBackup(currentDate=new Date()){
  });
 }
 export function claimSelfBackup(){
- return transaction(()=>{const run=db.prepare("SELECT * FROM manager_backups WHERE status='queued'").get();if(!run)return null;db.prepare("UPDATE manager_backups SET status='running' WHERE id=?").run(run.id);return run;});
+ // A run queued before the hold (an older release did not check it) stays queued until the hold is released.
+ return transaction(()=>{if(deploymentHeld(db))return null;const run=db.prepare("SELECT * FROM manager_backups WHERE status='queued'").get();if(!run)return null;db.prepare("UPDATE manager_backups SET status='running' WHERE id=?").run(run.id);return run;});
 }
 async function directory(){
  const root=join(config.dataDir,'manager-backups');await mkdir(root,{recursive:true,mode:0o700});

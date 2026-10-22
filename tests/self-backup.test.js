@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn,spawnSync } from 'node:child_process';
 import { startSftpFixture } from './sftp-fixture.js';
 const root=await mkdtemp(join(tmpdir(),'docknest-self-backup-'));
 Object.assign(process.env,{DATA_DIR:root,MASTER_KEY_FILE:join(root,'master.key'),NODE_ENV:'test',BACKUP_STORAGE:'unconfigured',SECURE_COOKIES:'false',APP_ORIGIN:'http://127.0.0.1:3000'});
@@ -15,6 +16,7 @@ const {digest,seal}=await import('../src/crypto.js');
 const {saveSelfBackupSettings,enqueueSelfBackup,tickSelfBackup,claimSelfBackup,executeSelfBackup,selfBackupStatus,readLatestSelfBackup,recoverInterruptedSelfBackups,pruneSelfBackups}=await import('../src/self-backup.js');
 const {restoreRecoveryKit,exportRecoveryKit}=await import('../src/recovery-kit.js');
 const {testStorageTarget,storageCapacity}=await import('../src/storage.js');
+const {runWorkerLoop}=await import('../src/worker-loop.js');
 const fixture=await startSftpFixture(),target=id(),secondTarget=id();
 function seedTarget(targetId,name,root){const options=fixture.options;db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,name,options.host,options.port,options.username,options.hostKey,'password',seal(options.password),root,1e12,'connected',new Date().toISOString(),new Date().toISOString());}
 const passphrase=randomBytes(32).toString('base64url');
@@ -126,5 +128,53 @@ test('interrupted runs keep the last kit and tampered downloads fail closed',asy
  assert.equal(selfBackupStatus().latest.id,latest.id);assert.equal(selfBackupStatus().active,null);
  const row=db.prepare('SELECT path FROM manager_backups WHERE id=?').get(latest.id),file=row.path.slice(row.path.indexOf(':/')+1),bytes=fixture.files.get(file);bytes[50]^=1;
  await assert.rejects(readLatestSelfBackup(),/file integrity/);assert.equal((await request('/download')).status,503);
+});
+const preflight=mode=>spawnSync(process.execPath,['scripts/deployment-preflight.js',mode],{env:process.env,encoding:'utf8'});
+const holdValue=()=>db.prepare("SELECT value FROM settings WHERE key='deployment_hold'").get()?.value;
+const pendingRuns=()=>db.prepare("SELECT COUNT(*) AS n FROM manager_backups WHERE status IN ('queued','running')").get().n;
+test('the deployment hold stops self-backup enqueue, schedules, claims, the worker loop and kit creation',async()=>{
+ assert.equal(pendingRuns(),0);assert.equal(preflight('hold').status,0);assert.equal(holdValue(),'true');
+ assert.throws(()=>enqueueSelfBackup(administrator),error=>error.status===409&&/Deployment verification is in progress/.test(error.message));
+ const refused=await request('/run',{body:{}});assert.equal(refused.status,409);assert.match((await refused.json()).error,/Deployment verification is in progress/);
+ // A due schedule stays due under the hold and runs once after the release.
+ const nextRun=selfBackupStatus().settings.nextRun,later=new Date(Date.parse(nextRun)+60000);
+ tickSelfBackup(later);assert.equal(pendingRuns(),0);assert.equal(selfBackupStatus().settings.nextRun,nextRun);
+ // A run queued by an older release before its hold is never claimed, by claimSelfBackup or the worker loop.
+ const legacy=id();db.prepare("INSERT INTO manager_backups(id,status,created_at,release,target_id) VALUES(?,'queued',?,?,?)").run(legacy,new Date().toISOString(),'2.1.0',secondTarget);
+ assert.equal(claimSelfBackup(),null);
+ let rounds=0;const calls=[];
+ await runWorkerLoop({active:()=>rounds<1,maintain:async()=>{},tick:()=>tickSelfBackup(later),claimSelfBackup:()=>{const run=claimSelfBackup();calls.push(run?'claimed':'none');return run;},executeSelfBackup:async()=>calls.push('executed'),claimJob:()=>null,executeJob:async()=>{},idle:async()=>{rounds++;}});
+ assert.deepEqual(calls,['none']);assert.equal(db.prepare('SELECT status FROM manager_backups WHERE id=?').get(legacy).status,'queued');
+ await assert.rejects(exportRecoveryKit({database:db,masterKey:process.env.MASTER_KEY_FILE,output:join(root,'held.dkit'),passphrase}),/Deployment verification is in progress/);
+ // Releasing never waits for DockNest backups; afterwards the queued run is claimed and the held schedule fires.
+ assert.equal(preflight('release').status,0);assert.equal(holdValue(),'false');
+ const run=claimSelfBackup();assert.equal(run.id,legacy);await executeSelfBackup(run);
+ assert.equal(db.prepare('SELECT status FROM manager_backups WHERE id=?').get(legacy).status,'completed');
+ tickSelfBackup(later);assert.equal(pendingRuns(),1);assert.notEqual(selfBackupStatus().settings.nextRun,nextRun);
+ await executeSelfBackup(claimSelfBackup());assert.equal(pendingRuns(),0);
+});
+test('deployment-preflight hold counts queued and running DockNest backups in the transaction that sets the hold',async()=>{
+ const queued=enqueueSelfBackup(administrator);
+ for(const mode of ['check','hold']){const result=preflight(mode);assert.equal(result.status,1);assert.match(result.stderr,/DockNest self-backup/);}
+ assert.equal(holdValue(),'false');
+ const run=claimSelfBackup();assert.equal(run.id,queued.id);assert.equal(preflight('hold').status,1);assert.equal(holdValue(),'false');
+ await executeSelfBackup(run);assert.equal(preflight('hold').status,0);assert.equal(preflight('release').status,0);
+ // Race, enqueue first: the hold transaction waits on the enqueue's write lock and then sees the queued run.
+ const runId=id();db.exec('BEGIN IMMEDIATE');
+ let child;
+ try{
+  db.prepare("INSERT INTO manager_backups(id,status,created_at,release,target_id) VALUES(?,'queued',?,?,?)").run(runId,new Date().toISOString(),'fixture',target);
+  child=spawn(process.execPath,['scripts/deployment-preflight.js','hold'],{env:process.env,stdio:'ignore'});
+  await new Promise(resolve=>setTimeout(resolve,1500));
+ }finally{db.exec('COMMIT');}
+ assert.equal(await new Promise(resolve=>child.once('close',resolve)),1);assert.equal(holdValue(),'false');
+ db.prepare('DELETE FROM manager_backups WHERE id=?').run(runId);
+ // Race, hold first: between the hold check and the insert no other writer (the hold transaction) can begin.
+ const other=new DatabaseSync(join(root,'state.sqlite'));other.exec('PRAGMA busy_timeout=0');
+ const prepare=db.prepare;let probed=false;
+ db.prepare=function(sql){if(sql.startsWith('INSERT INTO manager_backups')){probed=true;assert.throws(()=>other.exec('BEGIN IMMEDIATE'),/locked|busy/i);}return prepare.call(this,sql);};
+ let raced;try{raced=enqueueSelfBackup(administrator);}finally{delete db.prepare;other.close();}
+ assert.ok(probed);assert.equal(preflight('hold').status,1);assert.equal(holdValue(),'false');
+ await executeSelfBackup(claimSelfBackup());assert.equal(db.prepare('SELECT status FROM manager_backups WHERE id=?').get(raced.id).status,'completed');
 });
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));await fixture.close();db.close();await rm(root,{recursive:true,force:true});});
