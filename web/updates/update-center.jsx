@@ -62,8 +62,8 @@ function HostUpdaterCard({up,status,busy,onCheck}){
  else if(status==='not-installed')foot=<span className="t-body">Not installed</span>;
  else foot=<StatusLabel state="success">Connected{up.version?` · v${String(up.version).replace(/^v/,'')}`:''}</StatusLabel>;
  const disabled=status==='not-installed'||busy;
- return <article className="card uc-card" aria-labelledby="uc-host-title"><div className="card-body"><h2 className="card-title" id="uc-host-title">Host updater</h2><p className="t-body uc-quiet">{desc}</p></div>
-  <div className="card-footer uc-footer"><p className="foot-status">{foot}</p><button type="button" aria-disabled={disabled||undefined} aria-describedby={status==='not-installed'?'uc-host-reason':undefined} onClick={()=>{if(!disabled)onCheck()}}>{busy?'Checking…':'Check connection'}</button></div>
+ return <article className="card uc-card" aria-labelledby="uc-host-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-host-title">Host updater</h2></div><p className="t-body uc-quiet">{desc}</p></div>
+  <div className="card-footer uc-footer"><p className="foot-status">{foot}</p><button type="button" className="text link-btn" aria-disabled={disabled||undefined} aria-describedby={status==='not-installed'?'uc-host-reason':undefined} onClick={()=>{if(!disabled)onCheck()}}>{busy?'Checking…':'Check connection'}</button></div>
   {status==='not-installed'&&<span className="sr-only" id="uc-host-reason">Set up the host updater first.</span>}</article>;
 }
 function AutoChecksCard({data,busy,checking,onToggle}){
@@ -71,7 +71,7 @@ function AutoChecksCard({data,busy,checking,onToggle}){
  return <article className="card uc-card" aria-labelledby="uc-auto-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-auto-title">Automatic checks</h2><button type="button" role="switch" className="switch" aria-checked={on} aria-labelledby="uc-auto-title" aria-describedby="uc-auto-desc" disabled={busy} onClick={onToggle}></button></div>
   <p className="t-body uc-quiet" id="uc-auto-desc">DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
   {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div>
-  <div className="card-footer uc-footer"><p className="foot-status t-body">{on?'Checks run once a day':'Automatic checks are off'}</p></div></article>;
+  <div className="card-footer uc-footer"><p className="foot-status t-body">{on?'Checks run once a day':'Automatic checks are off'}</p><button type="button" className="text link-btn" disabled={busy} onClick={onToggle}>{on?'Turn off':'Turn on'}</button></div></article>;
 }
 function SetupCard({connected}){
  return <section className="setup" aria-labelledby="uc-setup-title"><h2 className="sg-title" id="uc-setup-title">Set up the host updater</h2><p className="setup-lead">You do this once per server. After that, every update is one click.</p>

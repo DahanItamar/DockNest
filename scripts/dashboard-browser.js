@@ -69,7 +69,7 @@ await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).w
 assert.equal(await page.locator('.dash-site').count(),4,'A failed refresh retains previous state');
 await page.route('**/api/state',r=>r.fulfill({json:state}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
-await page.getByRole('alert').waitFor({state:'hidden'});
+await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor({state:'hidden'});
 // Restore facts: tested (green), helper-reported failure (amber + error badge), incomplete attempt (amber, never "failed").
 const passed={status:'passed',checkedAt:time(1)},untested={status:'not-tested'},levels=(isolatedRestore,application=untested)=>({integrity:passed,consistency:untested,isolatedRestore,application});
 const evidenceState={...state,jobs:[],backups:[{id:'tested',siteId:'DemoShop',createdAt:time(2),verified:true,size:1024**3,verification:levels(passed)},{id:'helper-failed',siteId:'store',createdAt:time(3),verified:true,size:1024**3,verification:levels({status:'failed',method:'helper health check',checkedAt:time(1)})},{id:'attempt',siteId:'journal',createdAt:time(4),verified:true,size:1024**3,verification:levels({status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)},{status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)})}]};

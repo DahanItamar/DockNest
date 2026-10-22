@@ -28,6 +28,10 @@ button.danger,.button.danger,.destructive{color:var(--primary-foreground);backgr
 td button,td .button{min-height:var(--control-height);height:var(--control-height);padding:0 16px;font-size:var(--fs-button)}
 .icon-button,button.icon,.icon-button:hover,button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;background:var(--transparent);color:var(--text-secondary)}
 .icon-button,button.icon{flex:none}
+/* Icon-only buttons are frameless at every width on every page (beats page-scoped button rules) */
+.rebrand-page .icon-button,.rebrand-page button.icon,.rebrand-page a.icon-button,.rebrand-page .icon-button:hover,.rebrand-page button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;border-radius:var(--radius);background:var(--transparent);color:var(--text-secondary);justify-content:center}
+.rebrand-page .icon-button:hover,.rebrand-page .icon-button:focus-visible,.rebrand-page button.icon:hover{background:var(--surface-hover);color:var(--heading)}
+.rebrand-page .icon-button[aria-pressed=true]{background:var(--accent-soft);color:var(--link)}
 .icon-button:hover,.icon-button:focus-visible,button.icon:hover{background:var(--surface-hover);color:var(--heading)}
 .alert .icon,.notice .icon{height:var(--control-height)}
 

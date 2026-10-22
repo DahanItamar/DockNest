@@ -14,7 +14,6 @@
 .server-empty-panel .empty{padding:40px 24px}
 @media(max-width:767px){
  .card-footer.server-card-actions{flex-direction:column;align-items:stretch;height:auto;padding:16px}
- .server-card-actions button{width:100%}
- .card-footer.server-card-actions .server-edit{margin-left:0;border:1px solid var(--border-control);width:100%;gap:8px}
- .card-footer.server-card-actions .server-edit::after{content:attr(aria-label);font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500}
+ .server-card-actions button:not(.icon-button){width:100%}
+ .card-footer.server-card-actions .server-edit{margin-left:auto;align-self:flex-end}
 }

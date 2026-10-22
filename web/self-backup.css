@@ -24,7 +24,7 @@
 .backup-feedback{margin:0}
 .backup-guide{padding:16px 24px}
 .backup-guide summary{display:flex;align-items:center;gap:12px;cursor:pointer;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;list-style:none;min-height:var(--control-height)}
-.backup-guide summary::after{content:'+';margin-left:auto;font-size:20px;color:var(--text-secondary)}
+.backup-guide summary::after{content:'+';margin-left:auto;font-size:var(--fs-card);color:var(--text-secondary)}
 .backup-guide details[open]>summary::after{content:'−'}
 .backup-guide summary::-webkit-details-marker{display:none}
 .backup-guide-body{margin-top:16px;padding-top:16px;border-top:1px solid var(--border-subtle)}
