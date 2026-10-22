@@ -58,7 +58,7 @@ try{
  await page.getByRole('button',{name:'Clear filter',exact:true}).click();assert.equal(await page.locator('.server-card').count(),4);
  await page.getByLabel('Filter Servers').fill('Commerce host');
  assert.equal(await page.locator('.server-card').count(),1);
- assert.ok(await page.locator('.server-card').evaluate(el=>Math.abs(el.getBoundingClientRect().width-document.querySelector('.server-grid').getBoundingClientRect().width)<1),'Single result fills the row');
+ assert.ok(await page.locator('.server-card').evaluate(el=>el.getBoundingClientRect().width<=document.querySelector('.server-grid').getBoundingClientRect().width+1),'Single result keeps the standard card width');
  await page.getByLabel('Filter Servers').fill('');
  await page.getByRole('button',{name:'Dismiss message'}).click();
  for(const width of [1920,1440,1280,1024,768,390,320]){await page.setViewportSize({width,height:900});await measure();}

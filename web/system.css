@@ -1,0 +1,78 @@
+/* DockNest 2.3.0 system primitives. Tokens come from tokens.css; no hex values here. Loaded after style.css and rebrand.css. */
+@keyframes dn-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes dn-spin{to{transform:rotate(360deg)}}
+
+/* Type roles */
+.t-title{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading)}
+.t-card{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--heading)}
+.t-section{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--heading)}
+.t-body{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:400}
+.t-caption{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--text-muted)}
+body{font-size:var(--fs-body);line-height:var(--lh-body)}
+
+/* Layout: page content edge and card grid */
+main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inline:auto}
+.card-grid{display:grid;grid-template-columns:repeat(var(--grid-columns),minmax(0,1fr));gap:var(--edge);align-items:stretch}
+
+/* Status label: icon plus text in the semantic colour; no pill, border or dot */
+.status{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;white-space:nowrap;background:none;border:0;padding:0}
+.status-icon{flex:none;width:16px;height:16px}
+.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
+.status-running .status-icon{animation:dn-spin 1s linear infinite}
+
+/* Buttons: one height, one type size, label never wraps */
+button,.button{min-height:var(--control-height);height:var(--control-height);padding-block:0;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;white-space:nowrap;transition:background-color var(--dur-base) var(--ease),border-color var(--dur-base) var(--ease),color var(--dur-base) var(--ease)}
+button:active{transform:none}
+button.danger,.button.danger,.destructive{color:var(--primary-foreground);background:var(--error);border-color:var(--error)}
+:root[data-theme=dark] button.danger,:root[data-theme=dark] .destructive{color:var(--surface);}
+td button,td .button{min-height:var(--control-height);height:var(--control-height);padding:0 16px;font-size:var(--fs-button)}
+.icon-button,button.icon,.icon-button:hover,button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;background:var(--transparent);color:var(--text-secondary)}
+.icon-button,button.icon{flex:none}
+/* Icon-only buttons are frameless at every width on every page (beats page-scoped button rules) */
+.rebrand-page .icon-button,.rebrand-page button.icon,.rebrand-page a.icon-button,.rebrand-page .icon-button:hover,.rebrand-page button.icon:hover{width:var(--control-height);min-width:var(--control-height);padding:0;border:0;border-radius:var(--radius);background:var(--transparent);color:var(--text-secondary);justify-content:center}
+.rebrand-page .icon-button:hover,.rebrand-page .icon-button:focus-visible,.rebrand-page button.icon:hover{background:var(--surface-hover);color:var(--heading)}
+.rebrand-page .icon-button[aria-pressed=true]{background:var(--accent-soft);color:var(--link)}
+.icon-button:hover,.icon-button:focus-visible,button.icon:hover{background:var(--surface-hover);color:var(--heading)}
+.alert .icon,.notice .icon{height:var(--control-height)}
+
+/* Switch timing follows the motion tokens (geometry lives in style.css) */
+
+/* Alert panel */
+.alert-panel{display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);font-size:var(--fs-body);line-height:var(--lh-body);animation:dn-enter var(--dur-slow) var(--ease) both}
+.alert-panel-icon{flex:none;margin-top:0}
+.alert-panel-body{display:flex;flex-direction:column;gap:4px;min-width:0}
+.alert-panel-body b{font-weight:600}
+.alert-panel-body a{font-weight:500;color:inherit}
+.alert-error{background:var(--error-surface);border-color:var(--alert-error-border);color:var(--alert-error-text)}.alert-error .alert-panel-icon{color:var(--error)}
+.alert-warning{background:var(--warning-surface);border-color:var(--alert-warning-border);color:var(--alert-warning-text)}.alert-warning .alert-panel-icon{color:var(--warning)}
+.alert-info{background:var(--info-surface);border-color:var(--alert-info-border);color:var(--alert-info-text)}.alert-info .alert-panel-icon{color:var(--info)}
+
+/* Card with optional pinned footer */
+.card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);animation:dn-enter var(--dur-slow) var(--ease) both}
+.card-body{flex:1 1 auto;padding:24px;min-width:0}
+.card-footer{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:var(--card-footer-height);height:var(--card-footer-height);padding:0 24px;border-top:1px solid var(--border-subtle)}
+.card-title{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--heading)}
+
+/* Definition rows */
+.def-list{margin:0;padding:0}
+.def-row{display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}
+.def-row:last-child{border-bottom:0}
+.def-row dt{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);flex:none}
+.def-row dd{margin:0;min-width:0;text-align:right;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-primary);overflow-wrap:anywhere}
+
+/* Data table: fixed layout, 40px header, 56px rows */
+.data-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:var(--fs-body);line-height:var(--lh-body);font-variant-numeric:tabular-nums}
+.data-table th{height:var(--header-row-height);padding:0 16px;background:var(--surface-muted);color:var(--text-muted);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.data-table td{height:var(--row-height);padding:0 16px;border-bottom:1px solid var(--border-subtle);vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.data-table tbody tr:last-child td{border-bottom:0}
+.data-table .num{text-align:right}
+.data-table-wrap{overflow-x:auto;max-width:100%;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface)}
+@media(max-width:767px){.data-table{min-width:640px}}
+
+/* Enter motion for existing panels */
+.panel{animation:dn-enter var(--dur-slow) var(--ease) both}
+
+/* Focus ring for the new primitives */
+.icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+
+@media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
