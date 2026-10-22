@@ -36,3 +36,7 @@ Primitives:
 - Definition rows (`.def-list > .def-row > dt + dd`): caption label left, value right, full-width separators.
 
 Motion: durations `--dur-fast` 120ms, `--dur-base` 160ms, `--dur-slow` 240ms and one easing `--ease`. Cards, panels and alert panels enter with opacity and a 4px rise. All animation and transitions in the primitives are off under `prefers-reduced-motion`.
+
+## Problem reports (2.4.0)
+
+`web/report/` (`ReportProblem.jsx`, `report.css`) follows the approved design. **Open GitHub** is a secondary button inside red failure `AlertPanel`s, next to the primary next action (`.rp-actions`, identical 40px buttons, stacked full width at 480px and below); About uses **Report a bug**. The "Review what will be shared" dialog has a three-step strip (Review here, Open GitHub, Describe and submit there), a **Shared** definition list with the exact title and values, the environment checkbox (on by default), a **Never shared** list, the amber public-issue note and a footer with Cancel and Open GitHub (external-link icon). It renders at the document root; its body scrolls between a fixed header and footer; at 480px and below it becomes a bottom sheet with 44px full-width buttons, Open GitHub first. The app error boundary shows "This page stopped working" with Reload page and Open GitHub. Tokens and the type scale only; light and dark; the enter motion is off under reduced motion.
