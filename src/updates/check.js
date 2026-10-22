@@ -20,6 +20,8 @@ const NAME_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u2028\u2029
 // Notes keep tabs and newlines (Markdown) and lose every other control and the bidirectional overrides.
 const NOTES_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u2028\u2029‪-‮⁦-⁩]/g;
 const JSON_TYPE = /^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i;
+// GitHub serves release assets as application/octet-stream; the manifest is still capped, parsed and tag-checked.
+const MANIFEST_TYPE = /^application\/(?:(?:[\w.+-]*\+)?json|octet-stream)\s*(?:;|$)/i;
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const finalTag = tag => typeof tag === 'string' && tag.length <= 32 && FINAL_TAG.test(tag);
@@ -184,7 +186,7 @@ export async function fetchManifest({ fetch: fetchImpl, tag, version = packageVe
     response = await get(fetchImpl, target.href, headers, signal);
   }
   if (response.status !== 200) { await discard(response); throw new CheckError('manifest-http'); }
-  if (!JSON_TYPE.test(response.headers.get('content-type') || '')) { await discard(response); throw new CheckError('invalid'); }
+  if (!MANIFEST_TYPE.test(response.headers.get('content-type') || '')) { await discard(response); throw new CheckError('invalid'); }
   return manifestFields(parseJson(await readCapped(response, limits.manifestBytes, signal)), tag);
 }
 

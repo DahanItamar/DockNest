@@ -309,9 +309,10 @@ test('Check now and the check after turn-on do not bypass a stored rate-limit re
   assert.equal(claimCheck(db, { manual: true, now: retry }), true, 'once the retry time has passed the check may run');
 });
 
-test('the manifest must be served as JSON', async t => {
+test('the manifest must be served as JSON or as a GitHub release asset', async t => {
   const db = await consented(t), body = JSON.stringify(manifest());
-  for (const type of ['text/plain', 'application/octet-stream', '']) {
+  for (const type of ['application/octet-stream', 'application/octet-stream; charset=binary']) assert.equal((await fetchManifest({ fetch: network(new Response(body, { headers: { 'content-type': type } })).fetch, tag: RELEASE, signal: AbortSignal.timeout(200) })).tag, RELEASE);
+  for (const type of ['text/plain', 'text/html', '']) {
     const response = new Response(body, { headers: type ? { 'content-type': type } : {} });
     await assert.rejects(fetchManifest({ fetch: network(response).fetch, tag: RELEASE, signal: AbortSignal.timeout(200) }), { code: 'invalid' });
   }
