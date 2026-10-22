@@ -128,3 +128,78 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
  .berry-popover header button{flex-shrink:0}
 }
 @media(prefers-reduced-motion:reduce){.menu-symbol .menu-bar{transition:none}}
+
+/* 2.3.0 frame: header, sidebar and workspace follow the approved screen sizes. Sizes come from tokens.css/system.css. */
+:root{--header-height:88px}
+@media(max-width:767px){:root{--header-height:64px}}
+.berry-header{height:var(--header-height);padding:0 var(--edge);gap:16px;border-bottom:1px solid var(--border-subtle)}
+.berry-header>.brand{width:var(--sidebar-width)}
+.berry-sidebar{top:var(--header-height);border-right:1px solid var(--border-subtle);padding-top:16px}
+.berry-shell .workspace{margin:var(--header-height) 0 0 var(--rail);min-height:calc(100dvh - var(--header-height));border-radius:8px 0 0 0}
+.berry-global-search{height:var(--control-height);padding:0 12px;font-size:var(--fs-body);line-height:var(--lh-body);gap:8px}
+.berry-global-search input{font-size:var(--fs-body);line-height:var(--lh-body)}
+.berry-search-results button{height:var(--control-height)}
+.berry-nav-group{padding:0 0 16px;margin-bottom:16px}
+.berry-nav-group h2{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--text-muted);margin:0 0 8px;padding:0 16px}
+.berry-nav-group button{min-height:var(--control-height);height:var(--control-height);padding:0 16px;margin-bottom:4px;gap:12px;font-size:var(--fs-body);line-height:var(--lh-body)}
+.berry-nav-group button.selected{font-weight:500}
+.berry-nav-group .berry-nav-toggle{min-height:var(--control-height);height:var(--control-height);margin:0 0 4px;font-size:var(--fs-body)}
+.count{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;background:none;padding:0;border-radius:0}
+.berry-nav-group .count{background:none}
+.berry-sidebar-storage{padding:16px;background:var(--surface-muted);border:1px solid var(--border-subtle)}
+.berry-sidebar-storage:before{content:none}
+.berry-sidebar-storage b{font-size:var(--fs-body);line-height:var(--lh-body)}
+.berry-sidebar-storage small,.berry-sidebar-storage p,.berry-sidebar-storage p b{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.berry-sidebar-storage small{margin-top:0}
+.berry-sidebar-storage p{margin:16px 0 8px}
+.berry-storage-icon{width:var(--control-height);height:var(--control-height);border:1px solid var(--border-subtle)}
+.berry-sidebar-storage progress{height:8px}
+.berry-version{background:none;padding:0;border-radius:0;font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.berry-profile{border-radius:var(--radius);min-height:var(--control-height);height:var(--control-height);padding:0 8px;background:var(--transparent);gap:8px}
+.berry-profile:hover{background:var(--surface-hover)}
+.avatar{width:32px;height:32px;font-size:var(--fs-body)}
+.berry-header-tools{gap:8px}
+.berry-header-tools .icon,.berry-header-tools .berry-bell,.berry-header-tools>.theme-toggle,.berry-menu{width:var(--control-height);min-width:var(--control-height);height:var(--control-height);min-height:var(--control-height)}
+.berry-popover{top:calc(var(--control-height) + 8px);padding:16px;border:1px solid var(--border-subtle);font-size:var(--fs-body)}
+.berry-popover header{margin-bottom:8px}
+.berry-popover h2{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500}
+.berry-popover p{font-size:var(--fs-body);line-height:var(--lh-body)}
+.system-health-label b,.system-health-label span{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.system-health-label span{color:var(--text-muted)}
+.health-short{font-size:var(--fs-caption)}
+.compact-storage-details{border-radius:var(--radius);padding:16px}
+.compact-storage-details h2{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500}
+.compact-storage-details p,.compact-storage-details dl>div{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.compact-storage-details strong{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600}
+.compact-storage-button b,.compact-storage-button small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.compact-storage-button small{letter-spacing:0}
+.berry-customizer{border-left:1px solid var(--border-subtle)}
+.berry-customizer>header{padding:16px 24px;min-height:var(--header-height)}
+.berry-customizer>header h2{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600}
+.berry-customizer>section{padding:24px}
+.berry-customizer h3{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;letter-spacing:.04em;color:var(--text-muted);margin-bottom:16px}
+.berry-customizer p,.theme-preferences legend{font-size:var(--fs-body);line-height:var(--lh-body)}
+.berry-customizer small,.theme-preferences p{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.theme-options label{font-size:var(--fs-body);line-height:var(--lh-body)}
+@media(min-width:900px){
+ .collapsed .berry-nav-group button,.collapsed .berry-nav-group .berry-nav-toggle{min-height:var(--control-height);height:var(--control-height);padding:0;margin-bottom:4px}
+ .collapsed .berry-nav-group{padding:8px 0;margin-bottom:8px}
+}
+@media(max-width:899px){
+ .berry-shell .workspace{margin-left:0;border-radius:0}
+ .berry-sidebar{top:var(--header-height);transition:transform var(--dur-slow) var(--ease)}
+ .mobile-open .berry-nav-backdrop{inset:var(--header-height) 0 0}
+ .berry-header{gap:12px}
+}
+@media(max-width:767px){
+ .berry-header{height:var(--header-height);padding:0 8px 0 4px;gap:4px}
+ .berry-header>.brand{width:auto;min-width:0;flex:1 1 auto}
+ .berry-menu{width:48px;min-width:48px;height:48px;min-height:48px}
+ .berry-header-tools{gap:0}
+ .berry-header-tools .icon,.berry-header-tools .berry-bell,.berry-header-tools>.theme-toggle{width:44px;min-width:44px;height:44px;min-height:44px}
+ .berry-profile{width:44px;min-width:44px;height:44px;padding:0;justify-content:center}
+ .berry-profile>svg{display:none}
+ .berry-sidebar{padding-top:8px}
+}
+@media(max-width:599px){.berry-header{height:var(--header-height)}.berry-header .brand-lockup .brand-image{width:108px}}
+@media(prefers-reduced-motion:reduce){.berry-sidebar,.berry-shell .workspace{transition:none!important}}
