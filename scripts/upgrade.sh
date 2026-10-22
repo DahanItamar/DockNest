@@ -113,19 +113,22 @@ cleanup_files() {
   case "$COPY" in */docknest-upgrade.*) rm -f "$COPY" ;; esac
 }
 # One run at a time: a lock folder (mkdir is atomic) holding the owner's PID. A lock whose process is gone is taken
-# over by renaming it away first, so two runs can never both take it over.
+# over only while holding a second mkdir mutex, and only after its PID is read again under that mutex: a run that saw
+# the same stale lock earlier then finds the new owner's live PID and refuses, so two runs can never both own it.
+lock_pid() { _pid=$(cat "$LOCK/pid" 2>/dev/null || true); case "$_pid" in ''|*[!0-9]*) return 1 ;; esac; echo "$_pid"; }
+pid_alive() { kill -0 "$1" 2>/dev/null || [ -d "/proc/$1" ]; }
 take_lock() {
   [ -d "$ROOT/data" ] && [ ! -L "$ROOT/data" ] || return 0 # nothing to protect yet; preflight refuses without data/
-  for attempt in 1 2 3; do
-    if mkdir "$LOCK" 2>/dev/null; then LOCKED=1; echo "$$" > "$LOCK/pid"; return 0; fi
-    [ ! -L "$LOCK" ] || break
-    pid=$(cat "$LOCK/pid" 2>/dev/null || true)
-    case "$pid" in ''|*[!0-9]*) break ;; esac
-    if kill -0 "$pid" 2>/dev/null || [ -d "/proc/$pid" ]; then break; fi
-    stale="$LOCK.stale.$$"; mv "$LOCK" "$stale" 2>/dev/null && rm -rf "$stale"
-  done
+  pid='' mutex="$LOCK.takeover"
+  if mkdir "$LOCK" 2>/dev/null; then LOCKED=1; echo "$$" > "$LOCK/pid"; return 0; fi
+  if [ ! -L "$LOCK" ] && pid=$(lock_pid) && ! pid_alive "$pid" && mkdir "$mutex" 2>/dev/null; then
+    if [ "$(lock_pid || true)" = "$pid" ] && rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null; then
+      LOCKED=1; echo "$$" > "$LOCK/pid"; rmdir "$mutex"; return 0
+    fi
+    rmdir "$mutex"
+  fi
   STATUS_FILE='' # the status file belongs to the run that holds the lock
-  fail 2 "Another upgrade.sh run holds data/.upgrade.lock (PID ${pid:-unknown}). Wait for it to finish; if none is running, remove data/.upgrade.lock."
+  fail 2 "Another upgrade.sh run holds data/.upgrade.lock (PID ${pid:-unknown}). Wait for it to finish; if none is running, remove data/.upgrade.lock and data/.upgrade.lock.takeover."
 }
 # The exit code of this run, appended to its upgrade backup's result marker: retention never removes the backup of a
 # run that ended 5 or 6, or of one that has no recorded exit code (interrupted).
@@ -246,43 +249,67 @@ semver_gt() {
       return n > m ? 1 : (n < m ? -1 : 0) }
     BEGIN { exit !(cmp(a, b) > 0) }'
 }
-SEMVER='[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?'
+# Versions used in folder names and URLs: X.Y.Z with an optional pre-release suffix, nothing else.
+SEMVER='[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?'
 # Manual runs (AR2-N1): the target tag's commit must be on origin/main and, with cosign present, a 2.2.0-or-later
 # target's signed docknest-release.json must verify with the release workflow's identity and name that commit.
-RELEASE_REPO=DahanItamar/DockNest PINNED_COSIGN=/usr/local/lib/docknest-updater/bin/cosign
-download() { # download URL FILE: HTTPS only, at most 64 KiB
-  if command -v curl >/dev/null 2>&1; then curl -fsSL --proto '=https' --proto-redir '=https' --max-filesize 65536 --max-time 60 -o "$2" "$1" || return 1
-  elif command -v wget >/dev/null 2>&1; then wget -q --https-only --timeout=60 -O "$2" "$1" || return 1
-  else return 1; fi
+# Residual for manual runs: cosign has no flag for the numeric repository and owner ids (F9); only the host updater's
+# broker compares them, so a manual run trusts the repository name after a rename.
+RELEASE_REPO=DahanItamar/DockNest PINNED_COSIGN=/usr/local/lib/docknest-updater/bin/cosign MANIFEST_IMAGE=''
+with_timeout() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }
+fetch_once() { with_timeout 60 curl -sS --proto '=https' --max-filesize 65536 --max-time 60 -o "$2" -w '%{http_code} %{redirect_url}' "$1"; }
+# download URL FILE: curl over HTTPS, at most 64 KiB, and at most one redirect, only to GitHub's two asset hosts.
+download() {
+  command -v curl >/dev/null 2>&1 || return 1
+  answer=$(fetch_once "$1" "$2") || return 1
+  case "$answer" in
+    '200 '*) ;;
+    30[1278]' https://release-assets.githubusercontent.com/'*|30[1278]' https://objects.githubusercontent.com/'*)
+      answer=$(fetch_once "${answer#* }" "$2") || return 1; case "$answer" in '200 '*) ;; *) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
   [ "$(wc -c < "$2")" -le 65536 ]
 }
 manifest_field() { sed -n "s/^  \"$2\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$1" | head -n 1; }
+manifest_image() { sed -n "/^  \"image\": {\$/,/^  }/ s/^    \"$2\": \"\([^\"]*\)\",\{0,1\}\$/\1/p" "$1" | head -n 1; }
 verify_target() {
   git_ rev-parse -q --verify refs/remotes/origin/main >/dev/null || fail 2 "Cannot verify $TARGET: this checkout has no origin/main. Run git fetch origin, or pass --no-verify for a fork or mirror without main." verify-not-on-main
   git_ merge-base --is-ancestor "$TARGET_REF" refs/remotes/origin/main || fail 2 "$TARGET is not on origin/main, so it is not an official release. Nothing was changed. Pass --no-verify only if you trust this tag (a fork or a mirror)." verify-not-on-main
   echo "$TARGET is on origin/main."
-  if semver_gt 2.2.0 "$TO"; then return 0; fi # releases before 2.2.0 have no signed manifest
+  # Whether a signature is required follows the tag name (already checked to equal v$TO), never package.json alone.
+  if semver_gt 2.2.0 "${TARGET#v}"; then return 0; fi # releases before 2.2.0 have no signed manifest
   cosign=$(command -v cosign 2>/dev/null || true); [ -n "$cosign" ] || { [ ! -x "$PINNED_COSIGN" ] || cosign=$PINNED_COSIGN; }
-  if [ -z "$cosign" ]; then echo "cosign is not installed: the signed release manifest of $TARGET was not checked."; return 0; fi
-  case "$TARGET" in *[!0-9A-Za-z.+-]*) fail 2 "$TARGET is not a release tag name." verify-manifest-mismatch ;; esac
+  if [ -z "$cosign" ]; then echo "WARNING: cosign is not installed: the signed release manifest of $TARGET was not checked." >&2; return 0; fi
   VERIFY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/docknest-verify.XXXXXX") || fail 2 'Could not create a temporary folder to verify the release.'
   for file in docknest-release.json docknest-release.json.sigstore.json; do
     download "https://github.com/$RELEASE_REPO/releases/download/$TARGET/$file" "$VERIFY_DIR/$file" \
-      || fail 2 "Could not download $file of $TARGET to verify its signature. Nothing was changed. Offline, pass --no-verify." fetch-failed
+      || fail 2 "Could not download $file of $TARGET (curl is needed) to verify its signature. Nothing was changed. Offline, --no-verify skips this and the origin/main check." fetch-failed
   done
-  ref="refs/tags/$TARGET"
-  "$cosign" verify-blob --certificate-identity "https://github.com/$RELEASE_REPO/.github/workflows/release.yml@$ref" \
+  ref="refs/tags/$TARGET" manifest="$VERIFY_DIR/docknest-release.json"
+  with_timeout 300 "$cosign" verify-blob --certificate-identity "https://github.com/$RELEASE_REPO/.github/workflows/release.yml@$ref" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-github-workflow-repository "$RELEASE_REPO" \
     --certificate-github-workflow-trigger push --certificate-github-workflow-ref "$ref" --certificate-github-workflow-sha "$TARGET_REF" \
-    --bundle "$VERIFY_DIR/docknest-release.json.sigstore.json" "$VERIFY_DIR/docknest-release.json" >/dev/null \
+    --bundle "$VERIFY_DIR/docknest-release.json.sigstore.json" "$manifest" >/dev/null \
     || fail 2 "The signed release manifest of $TARGET did not verify. Nothing was changed." verify-signature-invalid
   for pair in "commit $TARGET_REF" "tag $TARGET" "version $TO" "repository $RELEASE_REPO"; do
-    [ "$(manifest_field "$VERIFY_DIR/docknest-release.json" "${pair%% *}")" = "${pair#* }" ] \
+    [ "$(manifest_field "$manifest" "${pair%% *}")" = "${pair#* }" ] \
       || fail 2 "The signed release manifest of $TARGET does not match its ${pair%% *}. Nothing was changed." verify-manifest-mismatch
   done
+  grep -qx '  "prerelease": false,\{0,1\}' "$manifest" || fail 2 "The signed release manifest of $TARGET is not a final release. Nothing was changed." verify-manifest-mismatch
+  # Image mode pulls the signed digest and pins it in .env (F4), exactly as the updater does with --expect-image-digest.
+  if [ "$IMAGE_MODE" = 1 ]; then
+    MANIFEST_IMAGE=$(manifest_image "$manifest" name) digest=$(manifest_image "$manifest" digest)
+    [ -n "$MANIFEST_IMAGE" ] && matches "$digest" 'sha256:[0-9a-f]{64}' || fail 2 "The signed release manifest of $TARGET names no image digest. Nothing was changed." verify-manifest-mismatch
+    [ -z "$EXPECT_DIGEST" ] || [ "$EXPECT_DIGEST" = "$digest" ] || fail 2 "--expect-image-digest differs from the signed digest of $TARGET. Nothing was changed." verify-manifest-mismatch
+    EXPECT_DIGEST=$digest
+  fi
   echo "Verified the signed release manifest of $TARGET."
 }
-start_target() { if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose up -d api worker; else docker compose up -d api worker; fi; }
+start_target() {
+  if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose up -d api worker
+  elif [ -n "$EXPECT_COMMIT" ]; then docker compose up -d --no-build api worker # the image built from the verified archive
+  else docker compose up -d api worker; fi
+}
 # Back to the exact previous release: the image ID recorded before anything was switched (never the tag from .env or
 # docknest:local, which may have moved), already present locally, so this works offline and never pulls. Source mode
 # points the local tag back at that ID and starts without building; it rebuilds only when the ID is unknown.
@@ -474,12 +501,7 @@ docker compose config --quiet || fail 2 'docker compose config failed. Fix .env 
 IMAGE_MODE=1; docker compose config 2>/dev/null | grep -q '^ *context:' && IMAGE_MODE=0
 FROM_REF=$(git_ rev-parse HEAD)
 FROM=$(package_field HEAD version)
-if [ -n "$EXPECT_COMMIT" ]; then
-  # A replace ref, a graft or a shallow history could make the verified SHA name other content (F3).
-  [ -z "$(git_ for-each-ref refs/replace/)" ] || fail 2 'refs/replace/ exists in this checkout; remove it (git replace -d) before an updater run.' checkout-failed
-  [ ! -e "$(git_ rev-parse --git-path info/grafts)" ] || fail 2 'This checkout has .git/info/grafts; remove it before an updater run.' checkout-failed
-  [ ! -e "$(git_ rev-parse --git-path shallow)" ] && [ "$(git_ rev-parse --is-shallow-repository)" != true ] || fail 2 'This checkout is a shallow clone; run git fetch --unshallow first.' checkout-failed
-fi
+matches "$FROM" "$SEMVER" || fail 2 "package.json at HEAD has no valid version (${FROM:-none}). Check the checkout."
 [ -z "$EXPECT_DIGEST" ] || [ "$IMAGE_MODE" = 1 ] || fail 2 '--expect-image-digest is for installs that run the published image.'
 # --upgrade-only (F2): the installed version comes from package.json at HEAD and the exact release tag at HEAD.
 if [ "$UPGRADE_ONLY" = 1 ] && ! { matches "$FROM" "$SEMVER" && git_ tag --points-at HEAD | grep -Fqx "v$FROM"; }; then
@@ -496,9 +518,18 @@ fi
 if [ -z "$TARGET" ]; then TARGET=$(git_ tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1); fi
 case "$TARGET" in v*) ;; *) TARGET="v$TARGET" ;; esac
 git_ rev-parse -q --verify "refs/tags/$TARGET" >/dev/null || fail 2 "Release tag $TARGET does not exist locally$([ "$DRY_RUN" = 1 ] || echo ' or on origin')." "$([ "$FETCH_FAILED" = 0 ] || echo fetch-failed)"
-TO=$(package_field "$TARGET" version)
-[ -n "$TO" ] || fail 2 "Could not read the version of $TARGET."
-TARGET_REF=$(git_ rev-parse "$TARGET^{commit}")
+# Checked after the fetch, so a fetch cannot add what the check refused.
+if [ -n "$EXPECT_COMMIT" ]; then
+  # A replace ref, a graft or a shallow history could make the verified SHA name other content (F3).
+  [ -z "$(git_ for-each-ref refs/replace/)" ] || fail 2 'refs/replace/ exists in this checkout; remove it (git replace -d) before an updater run.' checkout-failed
+  [ ! -e "$(git_ rev-parse --git-path info/grafts)" ] || fail 2 'This checkout has .git/info/grafts; remove it before an updater run.' checkout-failed
+  [ ! -e "$(git_ rev-parse --git-path shallow)" ] && [ "$(git_ rev-parse --is-shallow-repository)" != true ] || fail 2 'This checkout is a shallow clone; run git fetch --unshallow first.' checkout-failed
+fi
+# The tag, never a branch of the same name; its name must be exactly v plus the version it contains, so the name that
+# decides whether a signature is required cannot differ from the release that is built.
+TARGET_REF=$(git_ rev-parse "refs/tags/$TARGET^{commit}")
+TO=$(package_field "$TARGET_REF" version)
+{ matches "$TO" "$SEMVER" && [ "$TARGET" = "v$TO" ]; } || fail 2 "Tag $TARGET contains version ${TO:-none}; a release tag must be v<its package.json version>. Nothing was changed." verify-manifest-mismatch
 echo "Current: $FROM ($(git_ describe --tags --always HEAD))   Target: $TO ($TARGET)   Mode: $([ "$IMAGE_MODE" = 1 ] && echo published image || echo build from source)"
 if [ -n "$EXPECT_COMMIT" ] && [ "$TARGET_REF" != "$EXPECT_COMMIT" ]; then fail 2 "$TARGET points to $TARGET_REF, not the verified commit $EXPECT_COMMIT. Nothing was changed." verify-manifest-mismatch; fi
 if [ "$UPGRADE_ONLY" = 1 ] && ! { matches "$TO" "$SEMVER" && semver_gt "$TO" "$FROM"; }; then fail 2 "--upgrade-only: $TO is not newer than the installed $FROM. Nothing was changed."; fi
@@ -507,6 +538,8 @@ if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=
 if [ "$NO_VERIFY" = 1 ]; then echo "WARNING: --no-verify: $TARGET was not checked against origin/main or a release signature." >&2
 elif [ -z "$EXPECT_COMMIT" ]; then verify_target; fi
 [ "$IMAGE_MODE" != 1 ] || image_setup
+[ -z "$MANIFEST_IMAGE" ] || [ "$IMAGE_NAME" = "$MANIFEST_IMAGE" ] || fail 2 "DOCKNEST_IMAGE names $IMAGE_NAME but the signed release is $MANIFEST_IMAGE. Nothing was changed. For a mirror, pass --no-verify." verify-manifest-mismatch
+[ "$IMAGE_MODE" != 1 ] || [ -n "$EXPECT_DIGEST" ] || echo "WARNING: image mode without a verified digest: $NEW_IMAGE is pulled by its tag, unverified." >&2
 [ "$IMAGE_MODE" = 1 ] || LOCAL_IMAGE=$(local_image)
 [ -z "$EXPECT_COMMIT" ] || [ "$IMAGE_MODE" = 1 ] || [ -n "$LOCAL_IMAGE" ] || fail 2 'api and worker must use one image name (check compose.override.yaml) to build the verified commit.'
 # The exact image the previous release runs, in both modes: rollback starts it again without pulling or building.
@@ -515,12 +548,12 @@ PREV_DIGESTS=$(repo_digests "$PREV_ID")
 if [ "$UPGRADE_ONLY" = 1 ] && [ "$IMAGE_MODE" = 1 ] && ! image_state_ok; then
   fail 2 "The running api image does not match the installed version $FROM (image label, digest or the tag in DOCKNEST_IMAGE). Check the host; nothing was changed." state-mismatch
 fi
-MIN=$(package_field "$TARGET" minUpgradeFrom)
+MIN=$(package_field "$TARGET_REF" minUpgradeFrom)
 if [ -n "$MIN" ] && ! version_ge "$FROM" "$MIN"; then fail 2 "$TO supports upgrades from $MIN or later. Upgrade to an intermediate release first."; fi
 
 DB_SCHEMA=$(db_schema); case "$DB_SCHEMA" in ''|*[!0-9]*) DB_SCHEMA=''; fail 2 'Could not read the metadata schema version from the state volume.' ;; esac
 SCHEMA_TO=$DB_SCHEMA
-TARGET_SCHEMA=$(schema_at "$TARGET")
+TARGET_SCHEMA=$(schema_at "$TARGET_REF")
 # v2.0.0 predates user_version; its schema is identical to migration 1.
 COMPATIBLE=$TARGET_SCHEMA; [ "$COMPATIBLE" -lt 1 ] && COMPATIBLE=1
 if [ "$DB_SCHEMA" -gt "$COMPATIBLE" ]; then
@@ -581,13 +614,13 @@ printf 'commit=%s\nversion=%s\nschema=%s\nimage=%s\nimageId=%s\nrepoDigests=%s\n
 echo "Saved to $SAVE (later successful upgrades keep the newest 5 backups and every backup of a run that needs manual action)."
 
 phase checkout "Checking out $TARGET"
-# The updater's verified commit is checked out detached, so a local branch named like the tag cannot win (F3).
-if [ -n "$EXPECT_COMMIT" ]; then set -- --detach "$EXPECT_COMMIT"; else set -- "$TARGET"; fi
-git_ -c advice.detachedHead=false checkout --quiet "$@" || { release_hold; HOLD=0; fail 2 "git checkout $TARGET failed; nothing else changed." checkout-failed; }
+# The verified commit is checked out detached, so a local branch named like the tag cannot win (F3).
+WANT=${EXPECT_COMMIT:-$TARGET_REF}
+git_ -c advice.detachedHead=false checkout --quiet --detach "$WANT" || { release_hold; HOLD=0; fail 2 "git checkout $TARGET failed; nothing else changed." checkout-failed; }
 CHECKED_OUT=1
-if [ -n "$EXPECT_COMMIT" ] && [ "$(git_ rev-parse HEAD)" != "$EXPECT_COMMIT" ]; then
-  git_ checkout --quiet "$FROM_REF" || fail 5 "HEAD is not $EXPECT_COMMIT after the checkout, and returning to $FROM_REF failed." checkout-failed
-  CHECKED_OUT=0; release_hold; HOLD=0; fail 2 "HEAD was not $EXPECT_COMMIT after the checkout; the previous checkout was restored." checkout-failed
+if [ "$(git_ rev-parse HEAD)" != "$WANT" ]; then
+  git_ checkout --quiet "$FROM_REF" || fail 5 "HEAD is not $WANT after the checkout, and returning to $FROM_REF failed." checkout-failed
+  CHECKED_OUT=0; release_hold; HOLD=0; fail 2 "HEAD was not $WANT after the checkout; the previous checkout was restored." checkout-failed
 fi
 HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release"
 
