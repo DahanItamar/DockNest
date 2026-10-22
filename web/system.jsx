@@ -15,7 +15,7 @@ export function statusState(value){
  if(/recovery|review/i.test(v))return 'needs-review';
  if(/fail|error|denied|invalid|revoked/i.test(v))return 'failed';
  if(/running|progress|^active$/i.test(v))return 'running';
- if(/complete|success|succeeded|ready|healthy|verified|online/i.test(v))return 'success';
+ if(/complete|success|succeeded|ready|healthy|verified|online|connected/i.test(v))return 'success';
  return 'queued';
 }
 const humanise=v=>{const t=String(v).replace(/[_-]+/g,' ').trim();return t.charAt(0).toUpperCase()+t.slice(1)};
