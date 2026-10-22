@@ -1,11 +1,11 @@
 #!/bin/sh
 # DockNest upgrade/rollback for a git-clone + Docker Compose installation. POSIX sh; needs git and docker compose.
 # Usage: scripts/upgrade.sh [--version vX.Y.Z] [--non-interactive] [--force] [--allow-data-rollback]
-#                           [--status-file PATH] [--timeout SECONDS] [--wait SECONDS] [--dry-run]
-# --dry-run is read-only: no fetch, no status file, no hold; it plans from the tags already in the checkout.
+#                           [--status-file PATH] [--timeout SECONDS] [--wait SECONDS] [--dry-run] [--no-prune]
+# --dry-run is read-only (no fetch, status file or hold) and lists what retention would remove; --no-prune keeps it all.
 # Exit codes: 0 done or already current; 1 usage; 2 precondition refused, nothing changed; 3 work still running;
-# 4 failed before the database changed, previous release restored; 5 failed after the database migrated or
-# unexpectedly, manual rollback needed (commands printed); 6 automatic rollback failed. See docs/upgrading.md.
+# 4 failed, previous release restored (metadata unchanged or only compatibly migrated); 5 failed after an incompatible
+# migration or unexpectedly, manual rollback needed (commands printed); 6 automatic rollback failed. See docs/upgrading.md.
 set -eu
 umask 077
 # Locate the checkout: DOCKNEST_DIR, this script's checkout, or the current directory (for a copy run from /tmp).
@@ -24,7 +24,9 @@ else
 fi
 cd "$DOCKNEST_DIR"
 ROOT=$(pwd)
-TARGET='' INTERACTIVE=1 FORCE=0 DATA_ROLLBACK=0 STATUS_FILE='' TIMEOUT=300 WAIT=600 DRY_RUN=0 PRINT_SCHEMA=0
+TARGET='' INTERACTIVE=1 FORCE=0 DATA_ROLLBACK=0 STATUS_FILE='' TIMEOUT=300 WAIT=600 DRY_RUN=0 PRINT_SCHEMA=0 NO_PRUNE=0 CLEANUP_TIMEOUT=120
+# Format of the result marker in every upgrade backup; bumped only when the meaning of that file changes.
+MARKER_FORMAT=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) [ $# -ge 2 ] || { echo 'Missing value for --version' >&2; exit 1; }; TARGET=$2; shift ;;
@@ -37,18 +39,22 @@ while [ $# -gt 0 ]; do
     --timeout) [ $# -ge 2 ] || { echo 'Missing value for --timeout' >&2; exit 1; }; TIMEOUT=$2; shift ;;
     --wait) [ $# -ge 2 ] || { echo 'Missing value for --wait' >&2; exit 1; }; WAIT=$2; shift ;;
     --dry-run) DRY_RUN=1 ;;
+    --no-prune) NO_PRUNE=1 ;;
+    --cleanup-timeout) [ $# -ge 2 ] || { echo 'Missing value for --cleanup-timeout' >&2; exit 1; }; CLEANUP_TIMEOUT=$2; shift ;; # tests: retention time limit
     --print-schema) PRINT_SCHEMA=1 ;; # tests: schema and compatibility floor parsed from src/migrations.js
-    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 1 ;;
   esac
   shift
 done
 case "$TIMEOUT$WAIT" in *[!0-9]*) echo '--timeout and --wait take whole seconds' >&2; exit 1 ;; esac
+case "$CLEANUP_TIMEOUT" in ''|*[!0-9]*) echo '--cleanup-timeout takes whole seconds' >&2; exit 1 ;; esac
 [ -t 0 ] || INTERACTIVE=0
 # git's ownership check is relaxed for this one checkout only, per command, so a root run of a user-owned checkout works.
 git_() { git -c "safe.directory=$ROOT" "$@"; }
 PHASE=init LAST_PHASE=init FROM='' TO='' STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ) HINT=''
 FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA='' IMAGE_MODE=0 PREV_IMAGE='' PREV_ID='' NEW_IMAGE=''
+SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
 [ "$DRY_RUN" = 1 ] && STATUS_FILE=''
 json() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # Never aborts the upgrade: a status file that cannot be written is reported and skipped.
@@ -60,33 +66,53 @@ status() { # status OK ERROR
   # The temporary name is unpredictable and created exclusively (noclobber = O_EXCL, never follows a planted link)
   # together with its contents, and mode 0644 comes from the umask, so nothing is ever opened by path twice.
   STATUS_TMP="$dir/.status.$$.$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-  if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s}\n' \
+  # warning: set only by the cleanup phase, from fixed messages plus validated folder names and image IDs.
+  if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s,"warning":%s}\n' \
     "$PHASE" "$(json "$FROM")" "$(json "$TO")" "$STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ok" \
-    "$( [ -n "${2:-}" ] && printf '"%s"' "$(json "$2")" || printf null)" "$( [ -n "$HINT" ] && printf '"%s"' "$(json "$HINT")" || printf null)" > "$STATUS_TMP" ) 2>/dev/null \
+    "$( [ -n "${2:-}" ] && printf '"%s"' "$(json "$2")" || printf null)" "$( [ -n "$HINT" ] && printf '"%s"' "$(json "$HINT")" || printf null)" \
+    "$( [ -n "$WARNING" ] && printf '"%s"' "$(json "$WARNING" | tr -d '\\"' | cut -c1-1024)" || printf null)" > "$STATUS_TMP" ) 2>/dev/null \
     && mv -f "$STATUS_TMP" "$STATUS_FILE" 2>/dev/null; then STATUS_TMP=''; else echo "WARNING: could not write $STATUS_FILE" >&2; rm -f "$STATUS_TMP"; STATUS_TMP=''; fi
   return 0
 }
 phase() { PHASE=$1 LAST_PHASE=$1; echo "==> $2"; status; }
-cleanup_files() { [ -z "$STATUS_TMP" ] || rm -f "$STATUS_TMP"; case "$COPY" in */docknest-upgrade.*) rm -f "$COPY" ;; esac; }
+cleanup_files() { [ -z "$STATUS_TMP" ] || rm -f "$STATUS_TMP"; [ -z "$WARN_FILE" ] || rm -f "$WARN_FILE"; case "$COPY" in */docknest-upgrade.*) rm -f "$COPY" ;; esac; }
+# The exit code of this run, appended to its upgrade backup's result marker: retention never removes the backup of a
+# run that ended 5 or 6, or of one that has no recorded exit code (interrupted).
+record_result() { if [ -n "$SAVE" ] && [ -d "$SAVE" ] && [ ! -L "$SAVE" ] && [ ! -L "$SAVE/result" ]; then printf 'exit=%s\n' "$1" >> "$SAVE/result" 2>/dev/null || true; fi; }
 fail() { # fail CODE MESSAGE
   FINISHED=1 PHASE=failed; echo "ERROR: $2" >&2
   [ -n "$HINT" ] && printf '\nRollback:\n%s\n' "$HINT" >&2
   # A refusal or a clean failure must not leave new work blocked; only codes 5 and 6 keep the hold for the operator.
   if [ "$HOLD" = 1 ] && [ "$1" -lt 5 ]; then release_hold || true; HOLD=0; fi
-  status false "$2"; exit "$1"
+  record_result "$1"; status false "$2"
+  [ "$1" != 4 ] || drop_new_image || true
+  exit "$1"
 }
 # Runs for every exit that did not go through fail or a success path (a command aborted under set -e, a signal):
 # put the previous release back when the metadata is provably unchanged, always release the hold, never leave ok:null.
+# Once success is recorded (cleanup), any end is still a success: exit 0, status done, never a revert.
 on_exit() {
   code=$?; trap - EXIT; set +e
+  if [ "$CLEANUP" = 1 ]; then
+    grep -q '^exit=' "$SAVE/result" 2>/dev/null || record_result 0
+    if [ "$code" != 0 ]; then
+      for pid in $CLEANUP_PID $WATCHDOG_PID; do kill "$pid" 2>/dev/null; done
+      echo "WARNING: removing old upgrade files was interrupted (exit $code). DockNest $TO is running; nothing needs to be done." >&2
+      WARNING='Removing old upgrade files was interrupted; some may remain until the next successful upgrade.'
+      PHASE=done; status true
+    fi
+    cleanup_files; exit 0
+  fi
   if [ "$FINISHED" != 1 ]; then
     msg="Unexpected failure (exit $code) during phase $LAST_PHASE."; rc=5
     echo "ERROR: $msg" >&2
     if [ "$HOLD" = 1 ] || [ "$CHECKED_OUT" = 1 ]; then
-      if try_revert; then HINT=''; rc=4; msg="$msg The previous release was restored; no data was changed."; else msg="$msg Nothing was rolled back automatically."; fi
+      if try_revert; then HINT='' rc=4; msg="$msg The previous release was restored; $( [ -n "$COMPAT_AFTER" ] && echo 'it runs on the compatibly migrated metadata.' || echo 'no data was changed.')"; else msg="$msg Nothing was rolled back automatically."; fi
     fi
     [ -n "$HINT" ] && printf '\nRollback:\n%s\n' "$HINT" >&2
-    PHASE=failed; status false "$msg"; cleanup_files; exit "$rc"
+    record_result "$rc"; PHASE=failed; status false "$msg"
+    [ "$rc" != 4 ] || drop_new_image
+    cleanup_files; exit "$rc"
   fi
   cleanup_files
 }
@@ -124,9 +150,10 @@ expect() { if [ "$(schema_at "$1")" = 0 ]; then echo legacy; else package_field 
 release_hold() { docker compose exec -T api node scripts/deployment-preflight.js release >/dev/null 2>&1; }
 [ "$PRINT_SCHEMA" = 1 ] && { echo "$(schema_of < src/migrations.js) $(floor_of < src/migrations.js)"; FINISHED=1; exit 0; }
 # Put the previous release back after a failure; only when the metadata is provably untouched. Then lift the hold.
+# COMPAT_AFTER is set only by the health check (A10) once the migrated schema was proven compatible with $FROM.
 try_revert() {
   [ -z "$SNAPSHOT" ] || return 1
-  if [ "$STOPPED" = 1 ]; then after=$(db_schema 2>/dev/null) || return 1; [ "$after" = "$DB_SCHEMA" ] || return 1; fi
+  if [ "$STOPPED" = 1 ]; then after=$(db_schema 2>/dev/null) || return 1; [ "$after" = "$DB_SCHEMA" ] || { [ -n "$COMPAT_AFTER" ] && [ "$after" = "$COMPAT_AFTER" ]; } || return 1; fi
   if [ "$CHECKED_OUT" = 1 ]; then git_ checkout --quiet "$FROM_REF" || return 1; CHECKED_OUT=0; fi
   if [ "$STOPPED" = 1 ]; then start_previous && healthy "$(expect HEAD)" "$TIMEOUT" || return 1; STOPPED=0; fi
   [ "$HOLD" != 1 ] || { release_hold || echo 'WARNING: could not release the deployment hold; run: docker compose exec api node scripts/deployment-preflight.js release' >&2; HOLD=0; }
@@ -136,15 +163,34 @@ build_and_start() { # image mode pulls the target image, source mode builds this
   if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose pull api worker; else docker compose build api worker; fi
 }
 start_target() { if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=$NEW_IMAGE docker compose up -d api worker; else docker compose up -d api worker; fi; }
-# Back to the exact previous release: in image mode the image ID recorded before anything was switched (never the
-# tag from .env, which may have moved), already present locally, so this works offline and never pulls.
+# Back to the exact previous release: the image ID recorded before anything was switched (never the tag from .env or
+# docknest:local, which may have moved), already present locally, so this works offline and never pulls. Source mode
+# points the local tag back at that ID and starts without building; it rebuilds only when the ID is unknown.
 start_previous() {
   if [ "$IMAGE_MODE" = 1 ]; then DOCKNEST_IMAGE=${PREV_ID:-$PREV_IMAGE} docker compose up -d --pull never api worker
+  elif [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ] && docker tag "$PREV_ID" "$LOCAL_IMAGE"; then docker compose up -d --no-build api worker
   else docker compose build api worker && docker compose up -d api worker; fi
 }
 restart_previous_cmd() {
   if [ "$IMAGE_MODE" = 1 ]; then echo "git checkout $FROM_REF && DOCKNEST_IMAGE=${PREV_ID:-$PREV_IMAGE} docker compose up -d --pull never   # and keep DOCKNEST_IMAGE=$PREV_IMAGE in .env"
+  elif [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ]; then echo "git checkout $FROM_REF && docker tag $PREV_ID $LOCAL_IMAGE && docker compose up -d --no-build"
   else echo "git checkout $FROM_REF && docker compose up -d --build"; fi
+}
+# Full image IDs only (sha256 plus 64 hex digits): anything else could be read by Docker as a repository name.
+valid_id() { case "$1" in sha256:*) ;; *) return 1 ;; esac; case "${1#sha256:}" in *[!0-9a-f]*) return 1 ;; esac; [ "${#1}" -eq 71 ]; }
+image_id() { [ -n "$1" ] || return 0; _id=$(docker image inspect --format '{{.Id}}' -- "$1" 2>/dev/null | head -n 1) || return 0; if valid_id "$_id"; then echo "$_id"; fi; }
+running_id() { image_id "$(docker compose images --quiet "$1" 2>/dev/null | head -n 1)"; }
+# Source mode: the one image name api and worker use (docknest:local unless an override renames it), else empty.
+local_image() { _name=$(docker compose config --images api worker 2>/dev/null | sort -u); case "$_name" in ''|-*|*[!A-Za-z0-9._/:-]*) ;; *) echo "$_name" ;; esac; }
+# After exit 4: remove the image this run built or pulled, best effort and never with --force (Docker refuses one a
+# container still uses). Never the previous image or one a service runs.
+drop_new_image() {
+  [ -n "$NEW_ID" ] && [ "$NEW_ID" != "$PREV_ID" ] || return 0
+  for service in api worker; do [ "$(running_id "$service")" != "$NEW_ID" ] || return 0; done
+  ! grep -Fqx "imageId=$NEW_ID" "$ROOT"/data/upgrade-backups/*/previous-release 2>/dev/null || return 0
+  if docker image rm "$NEW_ID" >/dev/null 2>&1; then echo "Removed the $TO image $NEW_ID."
+  else echo "WARNING: could not remove the $TO image $NEW_ID; when it is unused, run: docker image rm $NEW_ID" >&2; fi
+  return 0
 }
 # Image mode: DOCKNEST_IMAGE (environment or .env) names the image; the script switches only the tag, per command.
 image_setup() {
@@ -153,12 +199,132 @@ image_setup() {
   case "$PREV_IMAGE" in *@*) fail 2 'DOCKNEST_IMAGE is pinned by digest; edit it in .env yourself, or use a tag so the script can switch versions.' ;; esac
   case "${PREV_IMAGE##*/}" in *:*) IMAGE_NAME=${PREV_IMAGE%:*} ;; *) IMAGE_NAME=$PREV_IMAGE ;; esac
   NEW_IMAGE="$IMAGE_NAME:$TO"
-  PREV_ID=$(docker compose images --quiet api 2>/dev/null | head -n 1)
 }
 # Persist the new tag only after the new release is healthy; the previous .env was saved in the upgrade backup.
 image_persist() {
   [ -f .env ] || : > .env
   tmp=$(mktemp ".env.XXXXXX") && { grep -v '^DOCKNEST_IMAGE=' .env > "$tmp" || true; printf 'DOCKNEST_IMAGE=%s\n' "$NEW_IMAGE" >> "$tmp"; chmod --reference=.env "$tmp" 2>/dev/null || chmod 600 "$tmp"; mv -f "$tmp" .env; }
+}
+# A10: after a failed health check the previous release may still run on the migrated database when its own schema is
+# at or above the migrated database's compatibility floor (the rule of the compatible-rollback check below). Migrations
+# run in one transaction, so the database is either unchanged or at the target's schema.
+compatible_after() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -gt "$DB_SCHEMA" ] && [ "$1" = "$TARGET_SCHEMA" ] || return 1
+  target_file=$(git_ show "$TARGET_REF:src/migrations.js" 2>/dev/null) || return 1
+  floor=$(printf '%s\n' "$target_file" | floor_of); previous=$(schema_at "$FROM_REF"); [ "$previous" -lt 1 ] && previous=1
+  [ "$previous" -ge "$floor" ]
+}
+
+# ---- Disk retention (docs/update-center.md section 9): after a recorded success only; it never changes the outcome. ----
+warn() { echo "WARNING: $1" >&2; [ -z "$WARN_FILE" ] || printf '%s\n' "$1" >> "$WARN_FILE"; }
+# Prints "KEY NAME STATE" for each upgrade backup, newest first. Only exact-pattern names of real directories (links are
+# skipped, never followed). KEY is the UTC time in the name, or the modification time (capped at now) for a name dated
+# in the future. STATE is "keep" for a run that ended 5 or 6, a run with no recorded exit code (interrupted) or an
+# unreadable marker, "free" otherwise; folders written before 2.2.0 have no marker and are "free".
+backup_list() {
+  set +f # retention runs with globbing off; this listing is the one glob (always in a pipeline subshell)
+  now=$(date -u +%Y%m%d%H%M%S)
+  for path in "$1"/*; do
+    name=${path##*/}
+    case "$name" in *[!0-9A-Za-z.-]*) continue ;; esac
+    printf '%s\n' "$name" | grep -Eqx '[0-9]{8}T[0-9]{6}Z-[0-9A-Za-z.-]+-to-[0-9A-Za-z.-]+' || continue
+    if [ -L "$path" ] || [ ! -d "$path" ]; then continue; fi
+    key=$(printf '%s' "$name" | cut -c1-8,10-15) state=free
+    if [ "$key" -gt "$now" ]; then key=$(date -u -r "$path" +%Y%m%d%H%M%S 2>/dev/null) || key=''; fi
+    case "$key" in ''|*[!0-9]*) key=0 state=keep ;; *) [ "$key" -le "$now" ] || key=$now ;; esac
+    marker="$path/result"
+    if [ -L "$marker" ]; then state=keep
+    elif [ -f "$marker" ]; then case "$(sed -n 's/^exit=\([0-9][0-9]*\)$/\1/p' "$marker" 2>/dev/null | tail -n 1)" in ''|5|6) state=keep ;; esac
+    elif [ -e "$marker" ]; then state=keep; fi
+    echo "$key $name $state"
+  done | sort -r
+}
+# Keeps the newest KEEP upgrade backups, this run's own ($SAVE, by identity, never by its place in the order) and every
+# "keep" one; removes the rest with rm -rf -- on the absolute path built from the checked parent.
+prune_backups() {
+  parent="$ROOT/data/upgrade-backups"
+  case "$parent" in /*) ;; *) return 0 ;; esac
+  if [ -L "$parent" ]; then warn 'data/upgrade-backups is a symbolic link; old upgrade backups were not removed.'; return 0; fi
+  [ -d "$parent" ] || return 0
+  backup_list "$parent" | { n=0; while read -r key name state; do
+    n=$((n + 1)); path="$parent/$name"
+    [ "$n" -gt "$1" ] || continue
+    if [ -n "$SAVE" ] && { [ "$name" = "${SAVE##*/}" ] || [ "$path" -ef "$ROOT/$SAVE" ] 2>/dev/null; }; then continue; fi
+    if [ "$state" != free ]; then echo "Keeping data/upgrade-backups/$name: its run needs manual action or did not finish."; continue; fi
+    if [ "$DRY_RUN" = 1 ]; then echo "Would remove data/upgrade-backups/$name"; continue; fi
+    if [ -L "$path" ] || [ ! -d "$path" ]; then continue; fi
+    if rm -rf -- "$path"; then echo "Removed data/upgrade-backups/$name"; else warn "Could not remove data/upgrade-backups/$name."; fi
+  done; }
+}
+# own_image ID: every tag and digest of the image belongs to this install's repository (image mode: the name in
+# DOCKNEST_IMAGE; source mode: the local image name, or untagged). Exit 2 when the image no longer exists.
+own_image() {
+  refs=$(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' -- "$1" 2>/dev/null) || return 2
+  [ -n "$refs" ] || [ "$IMAGE_MODE" != 1 ] || return 1
+  for ref in $refs; do
+    if [ "$IMAGE_MODE" = 1 ]; then
+      case "$ref" in *@*) repo=${ref%%@*} ;; *) case "${ref##*/}" in *:*) repo=${ref%:*} ;; *) repo=$ref ;; esac ;; esac
+      [ "$repo" = "$IMAGE_NAME" ] || return 1
+    else [ "$ref" = "$LOCAL_IMAGE" ] || return 1; fi
+  done
+}
+# Removes only image IDs this install recorded itself (imageId in its previous-release files) that belong to its
+# repository, minus the images api and worker run, the previous one and those recorded by runs that are kept for manual
+# action. Skipped entirely when any of those IDs is unknown. docker image rm without --force; never any prune command.
+prune_images() {
+  parent="$ROOT/data/upgrade-backups"
+  if [ -L "$parent" ] || [ ! -d "$parent" ]; then return 0; fi
+  api=$(running_id api) worker=$(running_id worker)
+  if [ -z "$api" ] || [ -z "$worker" ] || [ -z "$PREV_ID" ]; then echo 'Image cleanup skipped: the running or the previous DockNest image ID is unknown.'; return 0; fi
+  if [ "$IMAGE_MODE" != 1 ] && [ -z "$LOCAL_IMAGE" ]; then echo 'Image cleanup skipped: the local image name is unknown.'; return 0; fi
+  keep=" $api $worker $PREV_ID " recorded='' untracked=0
+  for entry in $(backup_list "$parent" | sed 's/^[0-9]* //; s/ /:/'); do
+    name=${entry%:*}; file="$parent/$name/previous-release"
+    if [ -L "$file" ] || [ ! -f "$file" ]; then continue; fi
+    id=$(sed -n 's/^imageId=//p' "$file" 2>/dev/null | tail -n 1)
+    if ! valid_id "$id"; then
+      # A run kept for manual action without a recorded image: its rollback image is unknown, so remove no image at all.
+      if [ "${entry##*:}" != free ]; then echo "Image cleanup skipped: data/upgrade-backups/$name needs manual action and recorded no image ID."; return 0; fi
+      untracked=$((untracked + 1)); continue
+    fi
+    if [ "${entry##*:}" = free ]; then recorded="$recorded $id"; else keep="$keep$id "; fi
+  done
+  for id in $(printf '%s\n' $recorded | sort -u); do
+    case "$keep" in *" $id "*) continue ;; esac
+    own_image "$id"; owned=$?
+    [ "$owned" != 2 ] || continue
+    if [ "$owned" != 0 ]; then echo "Keeping image $id: it is also tagged outside this installation's repository."; continue; fi
+    if [ "$DRY_RUN" = 1 ]; then echo "Would remove image $id"; continue; fi
+    if docker image rm "$id" >/dev/null 2>&1; then echo "Removed image $id"; else warn "Could not remove image $id (still used by a container or tagged more than once)."; fi
+  done
+  [ "$untracked" = 0 ] || echo "$untracked older upgrade backup(s) recorded no image ID; remove unused DockNest images by hand with docker image ls and docker image rm <id>."
+}
+# Rollback folders in the state volume: pruned by the running release's own script, when it has one.
+prune_snapshots() {
+  if ! docker compose exec -T api test -f scripts/prune-upgrade-artifacts.js >/dev/null 2>&1; then echo 'Rollback folders in the state volume: the running release has no pruning script; none removed.'; return 0; fi
+  if [ "$DRY_RUN" = 1 ]; then set -- --dry-run; else set --; fi
+  docker compose exec -T api node scripts/prune-upgrade-artifacts.js "$@" || warn 'Some rollback folders in the state volume (upgrade-snapshots/pre-downgrade-* or pre-rollback-*) could not be removed.'
+}
+# Images first: they are found through the imageId records of folders that the folder step may remove.
+retention() {
+  if [ "$NO_PRUNE" = 1 ]; then echo 'Retention skipped (--no-prune): old upgrade files were kept.'; return 0; fi
+  prune_images; prune_snapshots; prune_backups "$1"
+}
+# Runs retention in a guarded background subshell with its own time limit; nothing in it can change the outcome.
+run_cleanup() {
+  WARN_FILE=$(mktemp "${TMPDIR:-/tmp}/docknest-warnings.XXXXXX" 2>/dev/null) || WARN_FILE=''
+  ( trap - EXIT INT TERM; set +e -f; retention 5 ) &
+  CLEANUP_PID=$!
+  ( trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM; sleep "$CLEANUP_TIMEOUT" & sleeper=$!; wait "$sleeper" && kill "$CLEANUP_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  WATCHDOG_PID=$!
+  rc=0; wait "$CLEANUP_PID" || rc=$?
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  CLEANUP_PID='' WATCHDOG_PID=''
+  if [ "$rc" -gt 128 ]; then warn "Removing old upgrade files was stopped after ${CLEANUP_TIMEOUT}s; some may remain until the next successful upgrade."
+  elif [ "$rc" != 0 ]; then warn 'Removing old upgrade files ended early; some may remain until the next successful upgrade.'; fi
+  if [ -n "$WARN_FILE" ]; then WARNING=$(tr '\n' ' ' < "$WARN_FILE" | sed 's/ *$//'); fi
+  return 0
 }
 
 phase preflight 'Checking the installation'
@@ -190,6 +356,9 @@ TARGET_REF=$(git_ rev-parse "$TARGET^{commit}")
 echo "Current: $FROM ($(git_ describe --tags --always HEAD))   Target: $TO ($TARGET)   Mode: $([ "$IMAGE_MODE" = 1 ] && echo published image || echo build from source)"
 if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; exit 0; fi
 [ "$IMAGE_MODE" != 1 ] || image_setup
+[ "$IMAGE_MODE" = 1 ] || LOCAL_IMAGE=$(local_image)
+# The exact image the previous release runs, in both modes: rollback starts it again without pulling or building.
+PREV_ID=$(running_id api)
 MIN=$(package_field "$TARGET" minUpgradeFrom)
 if [ -n "$MIN" ] && ! version_ge "$FROM" "$MIN"; then fail 2 "$TO supports upgrades from $MIN or later. Upgrade to an intermediate release first."; fi
 
@@ -210,7 +379,13 @@ if [ "$DB_SCHEMA" -gt "$COMPATIBLE" ]; then
     [ "$INTERACTIVE" = 1 ] || [ "$DATA_ROLLBACK" = 1 ] || fail 2 'Restoring an older metadata snapshot requires --allow-data-rollback in non-interactive mode.'
   fi
 fi
-[ "$DRY_RUN" = 1 ] && { FINISHED=1; echo "Dry run: would upgrade $FROM to $TO. Nothing was fetched, held, written or changed."; exit 0; }
+if [ "$DRY_RUN" = 1 ]; then
+  FINISHED=1; echo "Dry run: would upgrade $FROM to $TO. Nothing was fetched, held, written or changed."
+  # The plan for after a successful upgrade: this run adds one backup and the running image becomes the previous one.
+  echo 'Dry run: after a successful upgrade, retention would do the following (nothing is removed now):'
+  ( trap - EXIT INT TERM; set +e -f; retention 4 ) || true
+  exit 0
+fi
 confirm "Upgrade DockNest from $FROM to $TO?"
 [ -n "$SNAPSHOT" ] && confirm "Restore $SNAPSHOT and discard newer metadata?"
 
@@ -231,13 +406,22 @@ fi
 HINT="docker compose exec api node scripts/deployment-preflight.js release   # lifts the hold set by this script"
 
 phase backup 'Saving configuration and secrets for rollback'
-SAVE="data/upgrade-backups/$(date -u +%Y%m%dT%H%M%SZ)-$FROM-to-$TO"
-mkdir -p "$SAVE" && chmod 700 data/upgrade-backups "$SAVE" || fail 2 "Could not create $SAVE; check permissions and free disk space. Nothing was changed."
+mkdir -p data/upgrade-backups && chmod 700 data/upgrade-backups || fail 2 'Could not create data/upgrade-backups; check permissions and free disk space. Nothing was changed.'
+# A folder of its own, never an existing one (two runs in one second get -2, -3, ...; the names still match retention's
+# pattern), with the result marker written first so even an interrupted run's backup is recognised and kept.
+base="data/upgrade-backups/$(date -u +%Y%m%dT%H%M%SZ)-$FROM-to-$TO" try=1
+while [ -z "$SAVE" ]; do
+  candidate=$base; [ "$try" = 1 ] || candidate="$base-$try"
+  if mkdir -m 700 "$candidate" 2>/dev/null; then SAVE=$candidate; break; fi
+  { [ -e "$candidate" ] || [ -L "$candidate" ]; } && [ "$try" -lt 50 ] || fail 2 "Could not create $candidate; check permissions and free disk space. Nothing was changed."
+  try=$((try + 1))
+done
+printf 'format=%s\n' "$MARKER_FORMAT" > "$SAVE/result" || fail 2 "Could not write $SAVE/result. Nothing was changed."
 for file in .env compose.override.yaml data/master.key data/setup.token; do
   if [ -e "$file" ]; then cp -p "$file" "$SAVE/$(basename "$file")" || fail 2 "Could not copy $file to $SAVE; check free disk space. Nothing was changed."; fi
 done
 printf 'commit=%s\nversion=%s\nschema=%s\nimage=%s\nimageId=%s\n' "$FROM_REF" "$FROM" "$DB_SCHEMA" "${PREV_IMAGE:-}" "${PREV_ID:-}" > "$SAVE/previous-release" || fail 2 "Could not write $SAVE/previous-release. Nothing was changed."
-echo "Saved to $SAVE (never deleted automatically)."
+echo "Saved to $SAVE (later successful upgrades keep the newest 5 backups and every backup of a run that needs manual action)."
 
 phase checkout "Checking out $TARGET"
 git_ -c advice.detachedHead=false checkout --quiet "$TARGET" || { release_hold; HOLD=0; fail 2 "git checkout $TARGET failed; nothing else changed."; }
@@ -245,10 +429,17 @@ CHECKED_OUT=1
 HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release"
 
 phase build "Preparing the $TO image"
+# Every image present before the build or pull: exit 4 removes only an image that was not among them.
+if IMAGES_BEFORE=$(docker image ls -aq --no-trunc 2>/dev/null); then IMAGES_LISTED=1; fi
 if ! build_and_start; then
   git_ checkout --quiet "$FROM_REF" && CHECKED_OUT=0; release_hold; HOLD=0
+  # A partial source build may have moved the local tag: point it back at the image the services still run.
+  if [ "$IMAGE_MODE" != 1 ] && [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ]; then docker tag "$PREV_ID" "$LOCAL_IMAGE" || true; fi
   HINT=''; fail 4 "Building or pulling $TO failed. The previous release kept running and the checkout was restored."
 fi
+# The image this run built or pulled; exit 4 removes it again. Unknown when the earlier list could not be read.
+if [ "$IMAGE_MODE" = 1 ]; then NEW_ID=$(image_id "$NEW_IMAGE"); else NEW_ID=$(image_id "$LOCAL_IMAGE"); fi
+if [ "$IMAGES_LISTED" != 1 ] || printf '%s\n' "$IMAGES_BEFORE" | grep -Fqx -- "$NEW_ID"; then NEW_ID=''; fi
 
 phase stop 'Stopping the worker (it finishes in-flight work first)'
 STOPPED=1
@@ -273,6 +464,14 @@ if ! healthy "$(expect HEAD)" "$TIMEOUT"; then
     fi
     fail 6 "$TO did not become healthy and the automatic return to $FROM also failed."
   fi
+  if [ -z "$SNAPSHOT" ] && compatible_after "$AFTER"; then
+    COMPAT_AFTER=$AFTER
+    phase rollback "Metadata schema v$AFTER only adds compatible objects that $FROM ignores; restoring $FROM"
+    if try_revert; then
+      HINT=''; fail 4 "$TO did not become healthy. $FROM was restored automatically and runs on the migrated metadata (schema v$AFTER only adds compatible objects); no data was discarded."
+    fi
+    fail 6 "$TO did not become healthy and the automatic return to $FROM also failed."
+  fi
   HINT="docker compose stop api worker
 # restore metadata (schema v$DB_SCHEMA) from the newest /data/upgrade-snapshots/state-v$DB_SCHEMA-to-v${AFTER:-?}-*.sqlite, see docs/upgrading.md#rolling-back
 $(restart_previous_cmd)
@@ -283,7 +482,14 @@ fi
 phase release 'Releasing the deployment hold'
 release_hold || echo 'WARNING: could not release the deployment hold; run: docker compose exec api node scripts/deployment-preflight.js release' >&2
 [ "$IMAGE_MODE" != 1 ] || image_persist || echo "WARNING: could not update DOCKNEST_IMAGE in .env; set it to $NEW_IMAGE so later restarts keep this release." >&2
-HOLD=0 FINISHED=1 PHASE=done HINT="$(restart_previous_cmd)   # previous release; see docs/upgrading.md#rolling-back"
+HINT="$(restart_previous_cmd)   # previous release; see docs/upgrading.md#rolling-back"
+# Success is recorded before anything is removed. From here on every end, even an abort or a signal, is exit 0 with
+# status done and ok:true (on_exit), so retention can never revert a good upgrade.
+HOLD=0 CHECKED_OUT=0 STOPPED=0 FINISHED=1 CLEANUP=1 PHASE=cleanup LAST_PHASE=cleanup
+record_result 0
+echo '==> Removing old upgrade files'
 status true
+run_cleanup
+PHASE=done; status true
 echo "DockNest $TO is running. Configuration backup: $SAVE"
 echo 'If boot recovery is installed on any site, reinstall it from that site so hosts get the new helper (sites report bootRecoveryOutdated).'
