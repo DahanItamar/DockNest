@@ -10,3 +10,77 @@
 @media(max-width:899px){.dash-layout{grid-template-columns:1fr}.dash-sites{grid-column:auto}.dash-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-stack{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:1fr}.dash-job-list{padding-bottom:16px}.activity-chart-canvas{height:340px}}
 @media(max-width:599px){.dash-metrics{grid-template-columns:1fr;gap:16px}.metric-stack{grid-column:auto;grid-template-columns:1fr;grid-template-rows:repeat(2,1fr);gap:16px}.dash-layout{gap:16px}.dash-panel-head{padding:20px 16px;gap:12px}.berry-chart{padding:0 16px 20px}.chart-period select{width:144px;min-height:44px;font-size:13px}.dash-growth h2{font-size:18px}.activity-chart-canvas{height:300px}.activity-feature{margin-inline:16px}.dash-job-list{padding-inline:16px}.dash-site-columns{display:none}.dash-site>summary{grid-template-columns:minmax(0,1fr) 20px;gap:12px;padding:20px 16px}.dash-site-identity{grid-column:1}.dash-site-latest{grid-column:1;grid-row:2;padding-left:48px}.dash-site-schedule{grid-column:1;grid-row:3;padding-left:48px}.dash-chevron{grid-column:2;grid-row:1}.dash-summary{padding:16px}.dash-site-history{padding-inline:16px}.dash-backup{flex-wrap:wrap}.dash-backup-actions{width:100%;display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}.dash-backup-actions .dash-icon{width:100%}.chart-legend{gap:4px 12px}}
 .dash .dash-failed{color:var(--error)}
+
+/* 2.3.0 dashboard: metric and chart cards share columns, heights and header/footer alignment. */
+.dash{font-size:var(--fs-body);line-height:var(--lh-body)}
+.dash-metrics{grid-template-columns:repeat(var(--grid-columns),minmax(0,1fr));gap:var(--edge);margin-bottom:var(--edge)}
+.dash-metric{padding:24px;min-height:192px;border-radius:var(--radius);animation:dn-enter var(--dur-slow) var(--ease) both}
+.berry-metric-purple:before,.berry-metric-purple:after,.berry-metric-blue:before,.berry-metric-blue:after{content:none}
+.berry-metric-purple,.berry-metric-blue{color:var(--primary-foreground);display:flex;flex-direction:column}
+.metric-tile{width:var(--control-height);height:var(--control-height)}
+.dash-metric strong{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;margin:16px 0 4px}
+.metric-data strong{margin:0 0 4px}
+.metric-data{margin-top:16px;align-items:start}
+.metric-label,.berry-metric-blue .metric-label,.berry-metric-purple .metric-label{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:inherit}
+.berry-metric-purple small{font-size:var(--fs-caption);line-height:var(--lh-caption);color:inherit;opacity:.9;margin-top:4px}
+.metric-period button{height:var(--control-height);min-height:var(--control-height);padding:0 12px;font-size:var(--fs-button);line-height:var(--lh-button);color:var(--primary-foreground)}
+.metric-period button:hover{background:rgb(255 255 255 / 12%);border:0}
+.metric-stack{gap:var(--edge)}
+.berry-metric-compact{min-height:0;padding:16px 24px;gap:16px}
+.berry-metric-compact strong{margin:0;font-size:var(--fs-card);line-height:var(--lh-card)}
+.berry-metric-compact .metric-label,.berry-metric-compact.blue .metric-label{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:inherit;opacity:.85}
+.berry-metric-compact:not(.blue) .metric-label{color:var(--text-muted);opacity:1}
+.berry-metric-compact.blue{color:var(--primary-foreground)}
+.dash-layout{grid-template-columns:minmax(0,1fr);gap:var(--edge)}
+.dash-panel{border:1px solid var(--border-subtle);animation:dn-enter var(--dur-slow) var(--ease) both}
+.dash-panel-head{padding:24px;min-height:96px;box-sizing:border-box}
+.dash-panel-head h2,.dash-growth h2{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600}
+.growth-subtitle,.dash-eyebrow{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);margin-bottom:4px}
+.dash-count{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;background:none;padding:0;color:var(--text-muted);margin-left:8px}
+.chart-period select{font-size:var(--fs-body)}
+.dash-icon{width:var(--control-height);height:var(--control-height);min-height:var(--control-height)}
+.dash-link{height:var(--control-height);min-height:var(--control-height);padding:0 8px;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;color:var(--link)}
+.chart-export{height:var(--control-height);margin-bottom:0}
+.chart-export>.icon{width:var(--control-height);min-height:var(--control-height);height:var(--control-height);font-size:var(--fs-body)}
+.chart-export-menu{top:var(--control-height)}
+.chart-export-menu button,.chart-legend button{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.chart-legend button{height:32px;min-height:32px;padding:0 4px}
+.chart-data,.chart-data th,.chart-data td{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.activity-feature{margin:0 24px 16px}
+.activity-feature span{font-size:var(--fs-body);line-height:var(--lh-body)}
+.activity-feature b{font-size:var(--fs-section);line-height:var(--lh-section)}
+.activity-feature small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.dash-job b,.dash-site b,.dash-summary strong{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500}
+.dash-job span,.dash-job small,.dash-site small,.dash-summary p,.dash-history-heading,.dash-site-columns{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.dash-job{padding:16px 0}
+.dash-job-icon{width:var(--control-height);height:var(--control-height)}
+.dash-site-columns,.dash-site>summary{padding:16px 24px}
+.dash-site-columns{padding-block:12px}
+.dash-state span{display:none}
+.dash-site-history{padding:16px 24px}
+.dash-history-empty{font-size:var(--fs-body);line-height:var(--lh-body)}
+.dash-site[open] .dash-site-history{animation:dn-enter var(--dur-base) var(--ease) both}
+.dash-chevron{transition:transform var(--dur-base) var(--ease)}
+@media(min-width:768px){.metric-stack{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:1fr}}
+@media(min-width:1440px){
+ .metric-stack{grid-column:auto;grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}
+ .dash-layout{grid-template-columns:repeat(var(--grid-columns),minmax(0,1fr))}
+ .dash-growth{grid-column:span 2}
+ .dash-sites{grid-column:1/-1}
+}
+@media(min-width:1920px){
+ .metric-stack{display:contents}
+ .metric-stack>.dash-metric{min-height:192px;flex-direction:row}
+ .dash-growth{grid-column:span 3}
+ .activity-chart-canvas{height:440px}
+}
+@media(min-width:2560px){.activity-chart-canvas{height:520px}}
+@media(max-width:767px){
+ .dash-metric{padding:16px}
+ .berry-metric-compact{padding:16px}
+ .dash-panel-head{padding:16px;min-height:80px}
+ .activity-feature{margin-inline:16px}
+ .dash-site-columns,.dash-site>summary{padding-inline:16px}
+ .dash-site-history{padding-inline:16px}
+}
+@media(prefers-reduced-motion:reduce){.dash-metric,.dash-panel,.dash-site[open] .dash-site-history{animation:none!important}.dash-chevron{transition:none}}
