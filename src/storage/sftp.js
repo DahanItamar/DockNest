@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sftpWriteStream } from '../sftp-streams.js';
 import { sftpReadStream } from '../sftp-read-stream.js';
-import { storageConnectionError } from '../storage-errors.js';
+import { storageConnectionError, storageErrorClass } from '../storage-errors.js';
 import { filesystemCapacity } from '../storage-capacity.js';
 
 export const scheme='sftp',label='SFTP';
@@ -28,7 +28,7 @@ async function session(options){
   phase='sftp';
   const sftp=await new Promise((resolve,reject)=>client.sftp((error,value)=>error?reject(error):resolve(value)));
   return {client,sftp};
- }catch(error){client.end();throw new Error(storageConnectionError(error,{hostRejected,phase}));}
+ }catch(error){client.end();throw Object.assign(new Error(storageConnectionError(error,{hostRejected,phase})),{errorClass:storageErrorClass(error,{hostRejected,phase})});}
 }
 const call=(sftp,name,...args)=>new Promise((resolve,reject)=>sftp[name](...args,(error,result)=>error?reject(error):resolve(result)));
 async function withSession(options,fn){const {client,sftp}=await session(options);try{return await fn(sftp);}finally{client.end();}}

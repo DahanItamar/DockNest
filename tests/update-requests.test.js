@@ -141,6 +141,10 @@ test('the public progress shows only the allowed fields and never the request id
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n, before, 'serving progress writes nothing');
   const admin = await (await upd('/status')).json();
   assert.equal(admin.requestId, requestId); assert.equal(admin.state, 'running'); assert.equal(admin.warning, 'SECRET-WARNING'); assert.equal(admin.error, null);
+  // Additive report fields (docs/update-center.md section 7.1): typed values only, events as {phase, at}.
+  assert.deepEqual(admin.events.map(event => Object.keys(event).sort()), admin.events.map(() => ['at', 'phase']));
+  for (const key of ['reason', 'refusal', 'installMode', 'updaterVersion', 'env', 'fromSchema', 'toSchema', 'acceptedAt']) assert.ok(key in admin, key);
+  assert.equal(admin.secret, undefined);
   assert.equal(row(requestId).state, 'running');
   assert.deepEqual(db.prepare('SELECT phase FROM update_events WHERE request_id=? ORDER BY at').all(requestId).map(event => event.phase), ['verify', 'fetch']);
 });

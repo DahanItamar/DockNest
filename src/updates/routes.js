@@ -23,8 +23,9 @@ export function updateState(database, release, service = null) {
   const info = service.updaterInfo(), snapshot = service.snapshot(), last = service.latestRow();
   const offer = eligibility({ base: base.state, current: release.version, latest: base.check?.latest ?? null, minUpgradeFrom: base.check?.latest?.minUpgradeFrom ?? null, updater: info, active: service.activeRow(), lastRequest: last, hold: deploymentHeld(database), recoveryPending: recoveryReviewPending(database) });
   const retry = last?.state === 'rolled_back' && offer.offer.update?.version === last.to_version ? { requestId: last.id, version: last.to_version, allowed: (info.consecutiveExit4[last.to_version] ?? 0) < 2 } : null;
-  const { present, version, supported, selfUpdateFailed, blocked, status, lastHeartbeatAt } = info;
-  return { ...base, state: offer.state, updater: { present, version, supported, selfUpdateFailed, blocked, status, lastHeartbeatAt }, offer: offer.offer, active: snapshot.active, retry };
+  const { present, version, supported, selfUpdateFailed, blocked, status, lastHeartbeatAt, installMode, env } = info;
+  // installMode and the coarse env (already regex-checked by the transport) feed the admin's problem reports.
+  return { ...base, state: offer.state, updater: { present, version, supported, selfUpdateFailed, blocked, status, lastHeartbeatAt, installMode, env }, offer: offer.offer, active: snapshot.active, retry };
 }
 // The admin-only update.available field of /api/state: the cached latest release when it is newer and checks are on. Never a network call.
 export function cachedOffer(database, release) {

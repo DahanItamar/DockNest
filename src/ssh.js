@@ -8,12 +8,12 @@ import { pipeline } from 'node:stream/promises';
 const helper = new URL('../remote/helper.py', import.meta.url);
 export function connect(server) {
   return new Promise((resolve,reject)=>{
-    const client=new Client();
-    // SSH can emit a second error while closing a rejected handshake.
-    client.on('error',reject).once('ready',()=>resolve(client));
+    const client=new Client();let hostKeyRejected=false;
+    // SSH can emit a second error while closing a rejected handshake. hostKeyRejected only classifies a failed test.
+    client.on('error',error=>reject(hostKeyRejected&&error&&typeof error==='object'?Object.assign(error,{hostKeyRejected}):error)).once('ready',()=>resolve(client));
     if (!/^[a-f0-9]{64}$/i.test(server.host_key||'')) return reject(new Error('A verified SHA256 SSH host-key fingerprint is required'));
     client.connect({host:server.host,port:server.port||22,username:server.username,
-      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>hash.toLowerCase()===server.host_key.toLowerCase(),readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
+      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>{const ok=hash.toLowerCase()===server.host_key.toLowerCase();hostKeyRejected=!ok;return ok;},readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
   });
 }
 export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}) {
@@ -35,7 +35,7 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
-    stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError})));
+    stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null})));
     stream.end(encoded+'\n'+JSON.stringify(request)+'\n');
    });
   });
