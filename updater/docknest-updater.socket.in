@@ -1,0 +1,23 @@
+# DockNest host updater socket (docs/updater-threat-model.md section 3, D1). Rendered by scripts/install-updater.sh.
+# The socket lives in the docknest_updater named volume, which compose.yaml mounts read-only into the api container only.
+[Unit]
+Description=DockNest host updater socket
+Documentation=https://github.com/DahanItamar/DockNest/blob/main/docs/updater-threat-model.md
+RequiresMountsFor=@DOCKER_ROOT@
+# After `docker compose down -v` the volume is gone: the socket does not start and nothing is created under the Docker
+# data root outside Docker's metadata; `sudo scripts/install-updater.sh --repair` re-creates it after `docker compose up`.
+ConditionPathIsDirectory=@VOLUME@
+
+[Socket]
+ListenStream=@VOLUME@/updater.sock
+SocketUser=root
+SocketGroup=@API_GID@
+SocketMode=0660
+Accept=no
+Backlog=8
+RemoveOnStop=yes
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=10
+
+[Install]
+WantedBy=sockets.target

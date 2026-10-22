@@ -1,0 +1,2 @@
+# DockNest host updater: the run step's status directory, owned by the checkout owner (F1, AR2-N4).
+d /run/docknest-updater-work 0750 @OWNER@ @GROUP@ -

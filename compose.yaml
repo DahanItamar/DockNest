@@ -23,6 +23,13 @@ services:
   api:
     <<: *runtime
     ports: ["127.0.0.1:${HOST_PORT:-3000}:3000"]
+    # This list replaces the x-runtime anchor's volumes (a merge key does not combine lists): it must repeat every
+    # anchor mount (tests/host-updater.test.js checks it).
+    volumes:
+      - state:/data
+      # Host updater socket and status (docs/updater-threat-model.md D1): read-only and api only. Without the updater
+      # the volume stays empty and DockNest shows the manual upgrade command.
+      - {type: volume, source: updater, target: /run/docknest-updater, read_only: true, volume: {nocopy: true}}
   worker:
     <<: *runtime
     command: ["node", "src/worker.js"]
@@ -57,3 +64,5 @@ volumes:
     name: docker-backup-manager_caddy_data
   caddy_config:
     name: docker-backup-manager_caddy_config
+  updater:
+    name: docknest_updater
