@@ -74,7 +74,7 @@ test('upgrades to the newest final release, keeps a rollback copy and releases t
   const [saved] = await readdir(join(f.work, 'data/upgrade-backups'));
   assert.match(saved, /-2\.0\.0-to-2\.1\.0$/);
   assert.deepEqual((await readdir(join(f.work, 'data/upgrade-backups', saved))).sort(), ['.env', 'master.key', 'previous-release', 'result', 'setup.token']);
-  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', saved, 'result'), 'utf8'), 'writer=2.2.0\nexit=0\n', 'writer version, then the exit code');
+  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', saved, 'result'), 'utf8'), 'format=1\nexit=0\n', 'marker format, then the exit code');
   assert.match(await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8'), new RegExp(`imageId=${fakeId('2.0.0')}\n`), 'source mode records the previous image ID too');
   assert.equal(status.warning, null);
   if (process.platform !== 'win32') {
@@ -131,7 +131,7 @@ test('an unhealthy start after an incompatible migration stops with exact rollba
   assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.1.0^{commit}')} && docker tag ${fakeId('2.1.0')} docknest:local && docker compose up -d --no-build`), status.rollbackHint);
   assert.equal(await f.read('restores'), ''); assert.equal(await f.read('removed'), '', 'nothing is pruned after exit 5');
   const failed = (await f.backups()).find(name => name.endsWith('-2.1.0-to-2.2.0-rc.1'));
-  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', failed, 'result'), 'utf8'), 'writer=2.2.0\nexit=5\n');
+  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', failed, 'result'), 'utf8'), 'format=1\nexit=5\n');
 });
 
 test('A10: an unhealthy start after a compatible-only migration returns to the previous release with exit 4', { skip: !shell }, async t => {
@@ -265,13 +265,13 @@ test('retention after a success keeps the newest 5 backups and every run that ne
   await writeFile(join(f.state, 'in-use'), fakeId('1.3.0') + '\n'); // a stopped container still uses it
   const old = {
     '20200101T000000Z-1.0.0-to-1.1.0': { imageId: fakeId('1.0.0') }, // written before 2.2.0: no result marker
-    '20200102T000000Z-1.1.0-to-1.2.0': { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('busybox') },
-    '20200103T000000Z-1.2.0-to-1.3.0': { result: 'writer=2.2.0\nexit=5\n', imageId: fakeId('1.2.0') },
-    '20200104T000000Z-1.3.0-to-1.4.0': { result: 'writer=2.2.0\nexit=6\n' },
-    '20200105T000000Z-1.4.0-to-1.5.0': { result: 'writer=2.2.0\n' }, // interrupted: no exit code
-    '20200106T000000Z-1.5.0-to-1.6.0': { result: 'writer=2.2.0\nexit=4\n', imageId: fakeId('1.3.0') },
-    '20200107T000000Z-1.6.0-to-1.7.0': { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.1.0') },
-    '20200108T000000Z-1.7.0-to-2.0.0': { result: 'writer=2.2.0\nexit=2\n', imageId: fakeId('2.0.0') }
+    '20200102T000000Z-1.1.0-to-1.2.0': { result: 'format=1\nexit=0\n', imageId: fakeId('busybox') },
+    '20200103T000000Z-1.2.0-to-1.3.0': { result: 'format=1\nexit=5\n', imageId: fakeId('1.2.0') },
+    '20200104T000000Z-1.3.0-to-1.4.0': { result: 'format=1\nexit=6\n', imageId: fakeId('1.2.0') },
+    '20200105T000000Z-1.4.0-to-1.5.0': { result: 'format=1\n', imageId: fakeId('1.2.0') }, // interrupted: no exit code
+    '20200106T000000Z-1.5.0-to-1.6.0': { result: 'format=1\nexit=4\n', imageId: fakeId('1.3.0') },
+    '20200107T000000Z-1.6.0-to-1.7.0': { result: 'format=1\nexit=0\n', imageId: fakeId('1.1.0') },
+    '20200108T000000Z-1.7.0-to-2.0.0': { result: 'format=1\nexit=2\n', imageId: fakeId('2.0.0') }
   };
   for (const [name, options] of Object.entries(old)) await seed(f, name, options);
   // Canaries: names that do not match exactly, a plain file and (where links work) a link to a folder elsewhere.
@@ -295,14 +295,14 @@ test('retention after a success keeps the newest 5 backups and every run that ne
   assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.ok(status.warning.includes(`Could not remove image ${fakeId('1.3.0')}`), status.warning);
   assert.match(calls, /^compose exec -T api node scripts\/prune-upgrade-artifacts\.js IMG=$/m); assert.doesNotMatch(calls, forbidden);
   assert.ok(!calls.includes(`image rm ${fakeId('busybox')}`) && !calls.includes(`image rm ${fakeId('1.2.0')}`) && !calls.includes(`image rm ${fakeId('9.9.9')}`));
-  assert.equal(await readFile(join(dir, save, 'result'), 'utf8'), 'writer=2.2.0\nexit=0\n');
+  assert.equal(await readFile(join(dir, save, 'result'), 'utf8'), 'format=1\nexit=0\n');
 });
 
 test('failed and refused runs, --dry-run and --no-prune remove nothing; the dry run lists what retention would remove', { skip: !shell }, async t => {
   const f = await fixture(t);
   await writeFile(join(f.state, 'has-prune'), '');
   await images(f, [['1.0.0']]);
-  for (let day = 1; day <= 6; day++) await seed(f, `2020010${day}T000000Z-1.0.${day}-to-1.0.${day + 1}`, { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.0.0') });
+  for (let day = 1; day <= 6; day++) await seed(f, `2020010${day}T000000Z-1.0.${day}-to-1.0.${day + 1}`, { result: 'format=1\nexit=0\n', imageId: fakeId('1.0.0') });
   const seeded = await f.backups();
   await writeFile(join(f.state, 'busy'), '');
   assert.equal(f.run('--version', 'v2.1.0').status, 3);
@@ -334,7 +334,7 @@ test("this run's backup is kept by identity; names dated in the future are order
   const f = await fixture(t), future = Date.now() / 1000 + 3600;
   const names = [1, 2, 3, 4, 5, 6, 7].map(day => `2099010${day}T000000Z-a-to-b`);
   for (const [index, name] of names.entries()) {
-    const dir = await seed(f, name, { result: 'writer=2.2.0\nexit=0\n' });
+    const dir = await seed(f, name, { result: 'format=1\nexit=0\n' });
     // 1 to 5 look newer than this run (a clock that went back); 6 and 7 are old despite their later names.
     const time = index < 5 ? future : Date.UTC(2014 + index, 0, 1) / 1000;
     await utimes(dir, time, time);
@@ -349,7 +349,7 @@ test("this run's backup is kept by identity; names dated in the future are order
 test('image cleanup is skipped when the running or previous image ID is unknown; source rollback then rebuilds', { skip: !shell }, async t => {
   const f = await fixture(t);
   await images(f, [['1.0.0']]);
-  await seed(f, '20200101T000000Z-1.0.0-to-2.0.0', { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.0.0') });
+  await seed(f, '20200101T000000Z-1.0.0-to-2.0.0', { result: 'format=1\nexit=0\n', imageId: fakeId('1.0.0') });
   await writeFile(join(f.state, 'no-images'), '');
   await writeFile(join(f.state, 'unhealthy'), '2.1.0'); await writeFile(join(f.state, 'no-migrate'), '');
   let result = f.run('--version', 'v2.1.0');
@@ -406,9 +406,26 @@ test('a symlinked data/upgrade-backups is never pruned through', { skip: !shell 
   assert.match((await f.status()).warning, /symbolic link/);
 });
 
-test('the writer version recorded in upgrade backups is never older than the release', async () => {
-  const writer = (await readFile(script, 'utf8')).match(/^WRITER=(\d+\.\d+\.\d+)$/m)?.[1], { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.ok(writer);
-  const [a, b] = [writer, version].map(value => value.split('-')[0].split('.').map(Number)), order = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  assert.ok(order >= 0, `WRITER=${writer} in scripts/upgrade.sh is older than package.json ${version}`);
+test('a run never reuses an existing backup folder; a kept run without an image ID stops image cleanup', { skip: !shell }, async t => {
+  const f = await fixture(t), stamp = ms => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z'), taken = [];
+  await images(f, [['1.0.0']]);
+  await seed(f, '20200101T000000Z-1.0.0-to-2.0.0', { result: 'format=1\nexit=0\n', imageId: fakeId('1.0.0') });
+  // Every name this run could pick in the next minute already exists, as the backup of a run that needs manual action.
+  for (let second = 0; second < 60; second++) taken.push(await seed(f, `${stamp(Date.now() + second * 1000)}-2.0.0-to-2.1.0`, { result: 'format=1\nexit=5\n' }));
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  for (const dir of taken) assert.equal(await readFile(join(dir, 'result'), 'utf8'), 'format=1\nexit=5\n', 'never written into');
+  const own = (await f.backups()).filter(name => /-2\.0\.0-to-2\.1\.0-2$/.test(name));
+  assert.equal(own.length, 1); assert.equal(await readFile(join(f.work, 'data/upgrade-backups', own[0], 'result'), 'utf8'), 'format=1\nexit=0\n');
+  assert.match(result.stdout, /Image cleanup skipped: data\/upgrade-backups\/\S+ needs manual action and recorded no image ID/);
+  assert.equal(await f.read('removed'), '');
+});
+
+test('exit 4 never removes an image that existed before the run', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await images(f, [['2.1.0']]); // built earlier, for example by a previous attempt
+  await writeFile(join(f.state, 'unhealthy'), '2.1.0'); await writeFile(join(f.state, 'no-migrate'), '');
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 4, result.stderr);
+  assert.equal(await f.read('removed'), ''); assert.doesNotMatch(await f.read('calls'), /^image rm /m);
 });

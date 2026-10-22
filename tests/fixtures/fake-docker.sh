@@ -20,6 +20,7 @@ case "$1" in
   image)
     shift; op=$1; shift
     case "$op" in
+      ls) [ -e "$S/fail-ls" ] && exit 1; awk '{print $1}' "$S/store" 2>/dev/null || true ;;
       inspect)
         format=$2; shift 2; [ "${1:-}" = -- ] && shift
         id=$(resolve "$1"); [ -n "$id" ] || exit 1
