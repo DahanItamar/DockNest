@@ -1,0 +1,42 @@
+# DockNest host updater broker (docs/updater-threat-model.md section 7, D2). Rendered by scripts/install-updater.sh.
+# Root broker with bounded capabilities; the verifier (docknest-verify) and the run step (checkout owner) are started
+# with setpriv and hold no capabilities. Hardening is defence in depth: Docker access is still root-equivalent.
+[Unit]
+Description=DockNest host updater broker
+Documentation=https://github.com/DahanItamar/DockNest/blob/main/docs/updater-threat-model.md
+Requires=docknest-updater.socket
+After=docknest-updater.socket docker.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/docknest-updater/current/broker.py serve
+User=root
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Paths that can vanish (the volume after `docker compose down -v`, the owner's ~/.docker) carry the - prefix.
+ReadWritePaths=@CHECKOUT@ /run/docknest-updater-work -@VOLUME@/status /var/lib/docknest-updater -@OWNER_HOME@/.docker
+# read-only, with the checkout and ~/.docker writable above (ReadWritePaths applies inside home too).
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+# Exactly yes: private or strict would hide the caller's cgroup that the peer check reads.
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+UMask=0077
+Restart=no
+KillMode=mixed
+TimeoutStopSec=15min
+# No RuntimeMaxSec: it limits the unit, not a run (AR2-N3). The broker enforces 2 h per run plus 15 min grace.
