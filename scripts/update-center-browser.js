@@ -74,18 +74,19 @@ try{
   await page.getByRole('heading',{name:'Update Center',level:1}).waitFor();
   assert.equal(await page.evaluate(()=>location.hash),'#/update-center');
   assert.deepEqual(await page.getByRole('tab').allTextContents(),['Overview','What\u2019s new','History'],'No Full changelog tab in 2.2.0');
-  await page.getByRole('heading',{name:'A new version is available'}).waitFor();
+  await page.getByRole('heading',{name:'DockNest 2.3.0'}).waitFor();
   await page.getByRole('heading',{name:'Before you update'}).waitFor();
   await page.getByText('Yes, schema v4 to v5',{exact:true}).waitFor();
   await page.getByText('Estimate: about 4 min (based on your last update)',{exact:true}).waitFor();
   await page.getByText('Connected \u00b7 v1.4').waitFor();
-  assert.equal(await page.getByRole('link',{name:'3 new features'}).count(),1);
-  const update=page.getByRole('button',{name:'Update to v2.3.0'}),notes=page.getByRole('button',{name:'What\u2019s new',exact:true});
-  assert.equal(await heightOf(update),44);assert.equal(await heightOf(notes),44);
-  const cards=await page.locator('.uc-split>.uc-card').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().height)));
+  assert.equal(await page.getByRole('link',{name:/3 new features/}).count(),1);
+  assert.equal(await page.locator('.dn-chip').count(),0,'No highlight chips');
+  const update=page.getByRole('button',{name:'Update now'});
+  assert.equal(await heightOf(update),40);
+  const cards=await page.locator('.uc-split>.card').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().height)));
   assert.equal(cards[0],cards[1],'Sibling cards mirror each other');
-  const acts=await page.locator('.foot-act').evaluateAll(els=>els.map(el=>{const b=el.getBoundingClientRect();return [Math.round(b.y+b.height/2),Math.round(b.height)]}));
-  assert.deepEqual(acts[0],acts[1],'Both footer actions share one row and height');
+  const feet=await page.locator('.uc-split .card-footer').evaluateAll(els=>els.map(el=>{const b=el.getBoundingClientRect();return Math.round(b.y+b.height)}));
+  assert.equal(feet[0],feet[1],'Both card footers end on one line');
   await noWrap(page,'.uc-page');
   const toggle=page.getByRole('switch',{name:'Automatic checks'});
   assert.equal(await toggle.getAttribute('aria-checked'),'true');
@@ -121,16 +122,16 @@ try{
   await page.getByRole('heading',{name:'Set up the host updater'}).waitFor();
   await page.getByText('sudo scripts/install-updater.sh',{exact:true}).waitFor();
   await page.getByText('Waiting for the updater\u2026').waitFor();
-  assert.equal(await page.getByRole('button',{name:'Update to v2.3.0'}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Update now'}).count(),0);
   assert.equal(await page.locator('details.advanced').getAttribute('open'),null,'Command line disclosure is closed by default');
   mock.state=updateState();
   await page.getByText('Connected. The updater is ready, no reload needed.').waitFor({timeout:8000});
-  await page.getByRole('button',{name:'Update to v2.3.0'}).waitFor();
+  await page.getByRole('button',{name:'Update now'}).waitFor();
   mock.state=updateState({updater:{present:true,version:'1.4',supported:true,status:'not-responding',lastHeartbeatAt:new Date(Date.now()-3600e3).toISOString()}});
   await page.getByRole('button',{name:'Check connection'}).click();
-  await page.getByRole('heading',{name:'The host updater is not responding'}).waitFor();
+  await page.getByText('The host updater is not responding',{exact:true}).first().waitFor();
   await page.getByText(/Not responding \u00b7 last seen/).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Update to v2.3.0'}).getAttribute('aria-disabled'),'true');
+  assert.equal(await page.getByRole('button',{name:'Update now'}).getAttribute('aria-disabled'),'true');
   await page.getByText('sudo scripts/install-updater.sh --repair',{exact:true}).waitFor();
   await context.close();
  }
@@ -138,7 +139,7 @@ try{
  // 3. Confirm dialog: re-authentication errors keep the values, then the lock view takes over.
  {
   const mock=newMock(),{context,page}=await open(mock,{hash:'#/update-center'});
-  await page.getByRole('button',{name:'Update to v2.3.0'}).click();
+  await page.getByRole('button',{name:'Update now'}).click();
   const dialog=page.getByRole('dialog',{name:'Start the update to DockNest v2.3.0?'});
   await dialog.waitFor();
   assert.ok((await dialog.textContent()).includes('If the new version fails before DockNest changes its own data, DockNest returns to v2.2.0 by itself. If it fails after that, DockNest stops and a server administrator has to finish the rollback. Backups stay paused until then.'));
@@ -337,14 +338,14 @@ try{
  // 8. Mobile 390 px, light and dark: no horizontal scroll, stacked full-width actions, one row of tabs.
  for(const width of [390,320]){
   const mock=newMock(),{context,page}=await open(mock,{width,height:844,hash:'#/update-center'});
-  await page.getByRole('heading',{name:'A new version is available'}).waitFor();
+  await page.getByRole('heading',{name:'DockNest 2.3.0'}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'No horizontal scroll '+width);
   const tabs=await page.getByRole('tab').evaluateAll(els=>els.map(el=>Math.round(el.getBoundingClientRect().y)));
   assert.equal(new Set(tabs).size,1,'Tabs stay in one row');
-  const [a,b]=await page.locator('.hero-actions>button').evaluateAll(els=>els.map(el=>{const r=el.getBoundingClientRect();return [Math.round(r.x),Math.round(r.width),Math.round(r.height)]}));
-  assert.deepEqual(a.slice(0,2),b.slice(0,2),'Hero actions stack at the same width');assert.equal(a[2],b[2]);
+  const [a]=await page.locator('.uc-hero-row>button').evaluateAll(els=>els.map(el=>{const r=el.getBoundingClientRect(),p=el.parentElement.getBoundingClientRect();return [Math.round(r.width),Math.round(p.width),Math.round(r.height)]}));
+  assert.equal(a[0],a[1],'Update action fills the card width');assert.equal(a[2],44);
   await noWrap(page,'.uc-page');
-  await page.getByRole('button',{name:'Update to v2.3.0'}).click();
+  await page.getByRole('button',{name:'Update now'}).click();
   const dialog=page.getByRole('dialog',{name:'Start the update to DockNest v2.3.0?'});
   await dialog.waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

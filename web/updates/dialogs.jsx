@@ -1,5 +1,6 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {IconCircleCheck,IconX,IconBrandGithub} from '@tabler/icons-react';
+import {AlertPanel} from '../system.jsx';
 import {UCDialog,ExtLink,Notes,DOCS_SECURITY} from './parts.jsx';
 import {createUpdatesClient} from './client.js';
 import {buildBugReport} from './report.js';
@@ -22,7 +23,7 @@ export function ConsentDialog({client,onClose,onAnswered}){
   <p>DockNest can look for new versions and tell administrators when one is available. You decide whether it does.</p>
   <h3>What is sent</h3><p>DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.</p><p><ExtLink href={DOCS_SECURITY}>What is sent</ExtLink></p><p>A check runs right after you choose Yes, then once a day.</p>
   <h3>What stays the same</h3><ul className="plain-list"><li>Until you choose Yes, DockNest makes no requests to GitHub.</li><li>DockNest never installs an update by itself. An administrator must start it.</li><li>You can change this later in the Update Center.</li></ul>
-  {error&&<p className="form-error" role="alert">{error}</p>}
+  {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   <div className="modal-foot"><button type="button" disabled={busy} onClick={()=>answer(false)}>No, keep checks off</button><button type="button" className="primary" disabled={busy} onClick={()=>answer(true)}>Yes, check daily</button></div>
  </UCDialog>;
 }

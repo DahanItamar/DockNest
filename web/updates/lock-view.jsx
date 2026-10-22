@@ -1,6 +1,7 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconCheck,IconX,IconRotate,IconShieldCheck,IconClipboardCheck,IconShieldLock,IconPackageImport,IconCircleCheck,IconRefresh,IconMinus,IconChevronDown,IconArrowRight} from '@tabler/icons-react';
+import {IconCheck,IconX,IconRotate,IconShieldCheck,IconClipboardCheck,IconShieldLock,IconPackageImport,IconCircleCheck,IconRefresh,IconMinus,IconChevronDown} from '@tabler/icons-react';
 import {Brand,ThemeToggle} from '../brand.jsx';
+import {AlertPanel} from '../system.jsx';
 import {createUpdatesClient} from './client.js';
 import {CodeBlock,ExtLink,DOCS_ROLLBACK,REPO} from './parts.jsx';
 import {UPDATED_KEY} from './dialogs.jsx';
@@ -78,7 +79,7 @@ export function LockView({api,reason,onExit,onRetry}){
  return <div className="progress-view" data-view={view}>
   <header className="progress-top"><div className="brand"><Brand/></div><ThemeToggle/></header>
   <main className="progress-main"><section className="progress-card" aria-labelledby="lock-title">
-   <p className="vchange eyebrow">{from&&to&&from!==to?<><span className="vtok">{from}</span><IconArrowRight size={16} aria-hidden="true"/><span className="sr-only"> to </span><span className="vtok new">{to}</span></>:to&&<span className="vtok new">{to}</span>}</p>
+   {to&&<p className="t-caption eyebrow">{from&&from!==to?from+' to '+to:to}</p>}
    <h1 id="lock-title" ref={h1} tabIndex={-1}>{heading}</h1>
    <p className="sr-only" role="status" aria-live="polite">{announce}</p>
    {running&&view!=='stale'&&<p className="lead">Backups and restores pause at the Protect stage and resume when the update finishes.{p?.events?.[0]?.at?` Started ${clock(t0)}.`:''} The update continues if you leave this page. Reopen DockNest to check status.</p>}
@@ -99,7 +100,7 @@ export function LockView({api,reason,onExit,onRetry}){
    {view==='needs_action'&&<><h2>Next steps</h2><p>A server administrator must finish this on the DockNest host. They can check the state with this command.</p><CodeBlock command="sudo scripts/install-updater.sh --status"/><p><ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink></p><p className="next-step">DockNest unlocks automatically when the host confirms.</p></>}
    {(view==='stale'||view==='lost')&&<><h2>{view==='stale'?'Check the host':'What to do'}</h2><p>{view==='stale'?'Run these on the DockNest host. They show whether the updater is still working.':'Check on the DockNest host whether the new version runs, with these commands. Closing the record does not unblock updates or release the hold.'}</p>{HOST_COMMANDS.map(c=><CodeBlock key={c} command={c}/>)}</>}
    {view==='stale'&&admin&&reqId&&<div className="progress-actions"><button type="button" aria-disabled={ack.busy||undefined} onClick={()=>{if(!ack.busy)acknowledge()}}>Close this record</button><p className="why">Only after you checked the host. Closing the record does not unblock updates.</p></div>}
-   {ack.error&&<p className="form-error" role="alert">{ack.error}</p>}
+   {ack.error&&<AlertPanel variant="error">{ack.error}</AlertPanel>}
    {track&&<Details statuses={statuses} to={toText} from={fromText}/>}
    <div className="progress-actions">
     {view==='succeeded'&&<button type="button" className="primary" onClick={reload}>Reload DockNest</button>}
