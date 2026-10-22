@@ -1,6 +1,8 @@
 name: Release
-# Publishes ghcr.io/<owner>/docknest for a version tag, signs it keylessly and attaches docknest-release.json.
-# Tags: X.Y.Z always; X.Y, X and latest only for final (non-prerelease) versions.
+# Publishes ghcr.io/<owner>/docknest for a final vX.Y.Z tag, signs it keylessly and attaches docknest-release.json.
+# Image tags: X.Y.Z, X.Y, X and latest. There are no public release candidates: a tag with a pre-release suffix
+# (vX.Y.Z-rc.N) fails before anything is built, so it never creates a GitHub Release or an image tag. A candidate is
+# validated privately by release-validation.yml (candidate input) on its main commit before the final tag is pushed.
 on:
   push:
     tags: ['v*.*.*']
@@ -19,14 +21,21 @@ jobs:
       id-token: write   # cosign keyless signing through GitHub OIDC
       actions: read     # look up the CI run for the tagged commit
     steps:
+      - name: Refuse anything but a final vX.Y.Z tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          printf '%s\n' "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::$REF_NAME is not a final vX.Y.Z tag. Release candidates are not published; validate the main commit with the Release validation workflow (candidate input) and tag vX.Y.Z instead."; exit 1; }
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-      # Fail closed: nothing is built, pushed or signed unless the tagged commit is on main and the Verify workflow
-      # (privacy, check, browser, linux-integration, upgrade, gate) finished successfully for exactly that commit.
+      # Fail closed: nothing is built, pushed or signed unless the tagged commit is on main, the Verify workflow
+      # (privacy, check, browser, linux-integration, upgrade, gate) finished successfully for exactly that commit, and the
+      # Release validation workflow, dispatched from main with that commit as its candidate, succeeded.
       - name: Require tag on main with a green Verify run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,14 +45,24 @@ jobs:
           passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=50" \
             --jq '[.workflow_runs[] | select(.conclusion == "success" and .name == "Verify")] | length')
           [ "${passed:-0}" -ge 1 ] || { echo "::error::No successful Verify run for $GITHUB_SHA; wait for CI on main to pass before tagging"; exit 1; }
+      # The run name carries the candidate SHA (run-name in release-validation.yml). Only successful runs dispatched from
+      # main in this repository count, and the commit each ran from must be on main, so the workflow file that did the
+      # validation is the protected one on main (a tag named "main" would also report head_branch main).
+      - name: Require a successful release validation of this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-validation.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=100" \
+            --jq ".workflow_runs[] | select(.conclusion == \"success\" and .head_branch == \"main\" and .head_repository.full_name == \"$GITHUB_REPOSITORY\" and .display_title == \"Release validation candidate $GITHUB_SHA\") | .head_sha")
+          validated=0
+          for run in $runs; do git merge-base --is-ancestor "$run" origin/main 2>/dev/null && validated=1; done
+          [ "$validated" = 1 ] || { echo "::error::No successful Release validation run for candidate $GITHUB_SHA; run it from main with that commit as the candidate before tagging"; exit 1; }
       - name: Resolve release
         id: release
         run: |
           version="${GITHUB_REF_NAME#v}"
           node scripts/release-manifest.js --version "$version" > /dev/null
-          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/docknest" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
       - uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
@@ -55,7 +74,7 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
           images: ${{ steps.release.outputs.image }}
-          # semver major/minor patterns are skipped for prereleases; latest=auto follows the same rule.
+          # Only final versions get this far, so every pattern applies and latest=auto adds latest.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -83,11 +102,10 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           IMAGE: ${{ steps.release.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           node scripts/release-manifest.js --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" > docknest-release.json
           notes=$(node -p "require('./docknest-release.json').notes || ''")
           set -- "$GITHUB_REF_NAME" docknest-release.json --title "DockNest $VERSION" --verify-tag
           if [ -n "$notes" ]; then set -- "$@" --notes-file "$notes"; else set -- "$@" --generate-notes; fi
-          if [ "$PRERELEASE" = true ]; then set -- "$@" --prerelease; else set -- "$@" --latest; fi
+          set -- "$@" --latest
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then gh release upload "$GITHUB_REF_NAME" docknest-release.json --clobber; else gh release create "$@"; fi

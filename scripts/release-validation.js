@@ -1,7 +1,9 @@
 // Real end-to-end release validation: a DockNest 2.0.0 installation (the repo's own compose.yaml, read-only containers,
 // the real named volume) is upgraded to TARGET exactly as the release notes say, drained, downgraded and upgraded again
 // with scripts/upgrade.sh, and its data and configuration are compared at every step. Linux with Docker only.
-// Usage: node scripts/release-validation.js [--target vX.Y.Z] [--out DIR] [--allow-local]   (default target: newest final tag)
+// Usage: node scripts/release-validation.js [--target vX.Y.Z | --candidate <commit sha>] [--out DIR] [--allow-local]
+// (default target: newest final tag). --candidate validates an untagged commit as the release its package.json names: the
+// version tag is created only inside the throwaway clone, never in this repository, and nothing is pushed anywhere.
 // Needs the release tags in the repository it runs from (fetch-depth 0). Throwaway credentials only; nothing secret is
 // printed, written to the evidence directory or kept after the run (containers, volume and temp checkout are removed).
 // Compose runs NODE_ENV=production, which refuses an http origin, so the instance uses APP_ORIGIN=https://test.invalid
@@ -13,7 +15,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const FROM_TAG = 'v2.0.0', VOLUME = 'docker-backup-manager_state', TAG = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+const FROM_TAG = 'v2.0.0', VOLUME = 'docker-backup-manager_state', TAG = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/, SHA = /^[0-9a-f]{40}$/;
+
+// The tag a candidate commit will be released as: v + its package.json version, which must be a final X.Y.Z.
+export function candidateTag(candidate, packageJson) {
+  if (!SHA.test(candidate || '')) throw new Error(`--candidate must be a full 40-character lowercase commit SHA, got "${candidate}".`);
+  let version = ''; try { version = JSON.parse(packageJson).version; } catch { throw new Error(`Cannot read package.json at ${candidate} (is the commit fetched?).`); }
+  if (!/^\d+\.\d+\.\d+$/.test(version || '')) throw new Error(`package.json at ${candidate} is "${version}"; a candidate must carry the final X.Y.Z it will be tagged as.`);
+  return 'v' + version;
+}
 const ORIGIN = process.env.RV_ORIGIN || 'https://test.invalid', BASE = process.env.RV_BASE_URL || 'http://127.0.0.1:3000';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), sha = data => createHash('sha256').update(data).digest('hex');
 
@@ -78,6 +88,8 @@ async function main() {
   const root = path.resolve(import.meta.dirname, '..'), out = path.resolve(opt('out') || 'release-validation-evidence');
   const phases = [], tables = {}, evidence = { schema: 1, startedAt: new Date().toISOString(), capture: 'seeded rows written through v2.0.0 db.js (no real SSH capture)', phases, tables, versions: {} };
   const transcript = []; let baselineFiles = {}, clone = '', work = '', failed = false, current = null, lastCounter = -1;
+  // In candidate mode the target tag does not exist in this repository: everything read from it here uses the commit.
+  let target = '', candidate = '';
   const admin = { email: 'admin@release-validation.invalid', password: secret(randomBytes(12).toString('base64url')), totp: '', session: null };
 
   const note = text => transcript.push(redact(text));
@@ -90,7 +102,8 @@ async function main() {
   }
   const compose = (argv, options) => sh('docker', ['compose', ...argv], options);
   const inApi = (script, ...argv) => compose(['exec', '-T', 'api', 'node', '-e', script, ...argv], { quiet: true }).out.trim();
-  const gitShow = (ref, file) => sh('git', ['show', `${ref}:${file}`], { cwd: root, fail: false, quiet: true });
+  const rev = ref => (candidate && ref === target ? candidate : ref);
+  const gitShow = (ref, file) => sh('git', ['show', `${rev(ref)}:${file}`], { cwd: root, fail: false, quiet: true });
   const pkgVersion = ref => JSON.parse(gitShow(ref, 'package.json').out).version;
   const migrationLines = ref => [...gitShow(ref, 'src/migrations.js').out.matchAll(/^ *\{ *version: *(\d+),(.*)$/gm)];
   const schemaOf = ref => Math.max(0, ...migrationLines(ref).map(match => Number(match[1])));
@@ -149,7 +162,7 @@ async function main() {
     if (legacyApi) { const response = await http('GET', '/api/version'); check(`${tag} has no public /api/version (answers 401)`, response.status === 401, `HTTP ${response.status}`); }
     else { const response = await http('GET', '/api/version'); check(`/api/version reports ${version} schema v${schemaOf(tag)}`, response.data?.version === version && response.data?.schemaVersion === schemaOf(tag), JSON.stringify(response.data)); }
     check(`container runs package version ${version}`, inApi('console.log(require("./package.json").version)') === version);
-    check(`checkout is ${tag}`, sh('git', ['describe', '--tags', '--exact-match', 'HEAD']).out.trim() === tag);
+    check(`checkout is ${tag}`, sh('git', ['tag', '--points-at', 'HEAD']).out.split('\n').map(line => line.trim()).includes(tag));
   };
   const verifyRelease = async (label, tag) => {
     const legacyApi = schemaOf(tag) === 0;
@@ -176,20 +189,28 @@ async function main() {
 
   mkdirSync(out, { recursive: true });
   try {
-    const target = (() => { const wanted = opt('target') || process.env.RV_TARGET || ''; if (wanted) return wanted; return sh('git', ['tag', '-l', 'v*', '--sort=-v:refname'], { cwd: root }).out.split('\n').find(tag => /^v\d+\.\d+\.\d+$/.test(tag)) || ''; })();
+    candidate = opt('candidate') || process.env.RV_CANDIDATE || '';
+    if (candidate && (opt('target') || process.env.RV_TARGET)) throw new Error('Pass --target or --candidate, not both.');
+    if (candidate) target = candidateTag(candidate, SHA.test(candidate) ? gitShow(candidate, 'package.json').out : '');
+    else target = (() => { const wanted = opt('target') || process.env.RV_TARGET || ''; if (wanted) return wanted; return sh('git', ['tag', '-l', 'v*', '--sort=-v:refname'], { cwd: root }).out.split('\n').find(tag => /^v\d+\.\d+\.\d+$/.test(tag)) || ''; })();
     if (!TAG.test(target)) throw new Error(`Invalid or missing target tag "${target}". Pass --target vX.Y.Z.`);
     if (process.platform !== 'linux') throw new Error('Real Docker validation runs on Linux only.');
     if (!process.env.CI && !args.includes('--allow-local')) throw new Error('Refusing to run outside CI: this removes the docker-backup-manager_state volume and docknest containers on this machine. Use --allow-local on a disposable host.');
-    evidence.versions.target = target;
+    evidence.versions.target = target; evidence.versions.candidate = candidate || null;
     await phase('Resolve release', async () => {
       check(`tag ${FROM_TAG} exists`, sh('git', ['rev-parse', '-q', '--verify', `refs/tags/${FROM_TAG}`], { cwd: root, fail: false }).status === 0);
-      check(`tag ${target} exists (fetch tags first)`, sh('git', ['rev-parse', '-q', '--verify', `refs/tags/${target}`], { cwd: root, fail: false }).status === 0);
+      if (candidate) {
+        check(`candidate commit ${candidate} exists`, sh('git', ['cat-file', '-e', `${candidate}^{commit}`], { cwd: root, fail: false }).status === 0);
+        // Re-validating an already tagged commit is fine; a version tagged on another commit means the version was not bumped.
+        const tagged = sh('git', ['rev-parse', '-q', '--verify', `refs/tags/${target}^{commit}`], { cwd: root, fail: false, quiet: true }).out.trim();
+        check(`${target} is not already tagged on another commit`, !tagged || tagged === candidate, tagged && `${target} is ${tagged}`);
+      } else check(`tag ${target} exists (fetch tags first)`, sh('git', ['rev-parse', '-q', '--verify', `refs/tags/${target}`], { cwd: root, fail: false }).status === 0);
       const from = pkgVersion(FROM_TAG), to = pkgVersion(target), minimum = JSON.parse(gitShow(target, 'package.json').out).docknest?.minUpgradeFrom;
       const newer = (a, b) => { const x = a.split('-')[0].split('.').map(Number), y = b.split('-')[0].split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
       check(`${target} (${to}) is newer than ${FROM_TAG}`, newer(to, from));
       check(`${target} supports upgrades from ${from} (minUpgradeFrom ${minimum || 'unset'})`, !minimum || !newer(minimum, from));
       check('upgrade.sh exists in the target release', gitShow(target, 'scripts/upgrade.sh').status === 0);
-      Object.assign(evidence.versions, { target, targetVersion: to, targetSchema: schemaOf(target), targetCompatFloor: floorOf(target), from: FROM_TAG, fromVersion: from, targetCommit: sh('git', ['rev-parse', `${target}^{commit}`], { cwd: root }).out.trim(), validatorCommit: sh('git', ['rev-parse', 'HEAD'], { cwd: root }).out.trim() });
+      Object.assign(evidence.versions, { target, targetVersion: to, targetSchema: schemaOf(target), targetCompatFloor: floorOf(target), from: FROM_TAG, fromVersion: from, targetCommit: sh('git', ['rev-parse', `${rev(target)}^{commit}`], { cwd: root }).out.trim(), validatorCommit: sh('git', ['rev-parse', 'HEAD'], { cwd: root }).out.trim() });
       Object.assign(evidence.versions, { node: process.version, docker: sh('docker', ['version', '--format', '{{.Server.Version}}'], { cwd: root }).out.trim(), compose: sh('docker', ['compose', 'version', '--short'], { cwd: root }).out.trim() });
       check('no docker-backup-manager_state volume exists yet', sh('docker', ['volume', 'inspect', VOLUME], { cwd: root, fail: false, quiet: true }).status !== 0);
       check('no docknest containers exist yet', sh('docker', ['ps', '-aq', '--filter', 'label=com.docker.compose.project=docknest'], { cwd: root }).out.trim() === '');
@@ -198,7 +219,11 @@ async function main() {
 
     await phase(`Install ${FROM_TAG} with Compose`, async () => {
       work = mkdtempSync(path.join(tmpdir(), 'docknest-release-validation-')); clone = path.join(work, 'docknest');
-      sh('git', ['clone', '--quiet', root, clone], { cwd: work }); sh('git', ['-c', 'advice.detachedHead=false', 'checkout', '--quiet', FROM_TAG]);
+      sh('git', ['clone', '--quiet', root, clone], { cwd: work });
+      // A candidate gets its version tag in this throwaway clone only, so the documented `git checkout <tag>` and
+      // `upgrade.sh --version <tag>` steps run unchanged. `git fetch --tags` from the clone's origin does not remove it.
+      if (candidate && sh('git', ['rev-parse', '-q', '--verify', `refs/tags/${target}`], { fail: false, quiet: true }).status !== 0) sh('git', ['tag', target, candidate]);
+      sh('git', ['-c', 'advice.detachedHead=false', 'checkout', '--quiet', FROM_TAG]);
       sh('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error']);
       // The production container refuses http, so the instance claims a documentation-only https origin and the client sends it.
       writeFileSync(path.join(clone, '.env'), ['APP_DOMAIN=test.invalid', 'APP_ORIGIN=' + ORIGIN, 'SECURE_COOKIES=true', ''].join('\n'), { mode: 0o600 });
@@ -285,7 +310,7 @@ async function main() {
     if (transcript.length) { mkdirSync(path.join(out, 'logs'), { recursive: true }); writeFileSync(path.join(out, 'logs', '99-cleanup.log'), redact(transcript.splice(0).join('\n\n')) + '\n'); }
     delete evidence.baseline; delete evidence.preUpgradeSession; evidence.finishedAt = new Date().toISOString(); evidence.passed = !failed && phases.length > 0 && phases.every(entry => entry.status === 'passed');
     const icon = { passed: 'PASS', failed: 'FAIL', skipped: 'SKIP' }, seconds = ms => `${Math.round(ms / 1000)}s`;
-    const summary = [`## Release validation: ${evidence.versions.from || FROM_TAG} to ${evidence.versions.target || '(unresolved)'} - ${evidence.passed ? 'PASS' : 'FAIL'}`, '', '| Phase | Result | Time | Checks |', '| --- | --- | --- | --- |',
+    const summary = [`## Release validation: ${evidence.versions.from || FROM_TAG} to ${evidence.versions.target || '(unresolved)'}${candidate ? ` (candidate ${candidate}, not tagged)` : ''} - ${evidence.passed ? 'PASS' : 'FAIL'}`, '', '| Phase | Result | Time | Checks |', '| --- | --- | --- | --- |',
       ...phases.map(entry => `| ${entry.name} | ${icon[entry.status]} | ${seconds(entry.ms)} | ${entry.checks.filter(item => item.ok).length}/${entry.checks.length}${entry.error ? ' - ' + entry.error.replace(/\|/g, '/').slice(0, 160) : ''} |`), '',
       `Data: ${evidence.capture}. Docker ${evidence.versions.docker || '?'}, Compose ${evidence.versions.compose || '?'}, Node ${process.version}.`, ''].join('\n');
     writeFileSync(path.join(out, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n'); writeFileSync(path.join(out, 'summary.md'), summary);

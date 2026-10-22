@@ -4,7 +4,7 @@ This page covers upgrades and rollbacks for a server installed with `git clone`,
 
 Upgrades never move, rename or delete your volumes, secrets, certificates, site configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.
 
-Each release tag is also upgraded from a real v2.0.0 Compose installation in CI, then downgraded and upgraded again with `scripts/upgrade.sh`; see [Release validation](release-validation.md) for what that run proves and what it does not.
+Before a release is tagged, its commit is upgraded from a real v2.0.0 Compose installation in CI, then downgraded and upgraded again with `scripts/upgrade.sh`; see [Release validation](release-validation.md) for what that run proves and what it does not.
 
 ## Upgrade with one command
 
@@ -111,9 +111,9 @@ Keep the `pre-rollback-*` folder until you have checked the result. The upgrade 
 
 ## Use the published image
 
-Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Pre-releases get only their exact tag. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.
+Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Only final releases are published; release candidates are validated privately and get no image or GitHub Release. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.
 
-The release workflow runs only for a tag whose commit is on `main` and has a successful `Verify` run, and publishes `linux/amd64` only. On ARM hosts keep building from source.
+The release workflow runs only for a final `vX.Y.Z` tag whose commit is on `main` and has a successful `Verify` run and a successful [release validation](release-validation.md#release-order), and publishes `linux/amd64` only. On ARM hosts keep building from source.
 
 Every pushed digest is signed with cosign keyless signing from the release workflow. Verify an image before using it:
 
