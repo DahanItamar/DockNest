@@ -6,7 +6,7 @@ import { db, audit, transaction, id as newId } from '../db.js';
 import { createTransport, PHASES, REASONS } from './transport.js';
 
 export const timing = Object.freeze({
-  syncMs: 2000, heartbeatMs: 120_000, phaseMs: 15 * 60_000, buildMs: 45 * 60_000,
+  syncMs: 2000, heartbeatMs: 120_000, neverRanMs: 10 * 60_000, phaseMs: 15 * 60_000, buildMs: 45 * 60_000,
   // The broker's per-run hard stop (2 h), its 15 min grace, then 5 min more, measured from acceptedAt.
   lostMs: (2 * 3600 + 15 * 60 + 5 * 60) * 1000, recentMs: 24 * 3600 * 1000, settleMs: 10_000,
 });
@@ -36,7 +36,10 @@ export function createUpdateService({ release, transport = createTransport(), no
   const latestRow = () => db.prepare(`${select} ORDER BY r.requested_at DESC,r.rowid DESC LIMIT 1`).get() ?? null;
   const eventsOf = requestId => db.prepare('SELECT phase,at FROM update_events WHERE request_id=? ORDER BY at,rowid LIMIT 32').all(requestId).map(({ phase, at }) => ({ phase, at }));
 
+  // The broker is alive when service.json is readable and either idle (no run, so no heartbeat by design) or running with a fresh heartbeat.
+  const brokerAlive = () => { const service = files.service; return Boolean(service) && (service.requestId === null || (service.heartbeatAt !== null && now() - ms(service.heartbeatAt) <= timing.heartbeatMs)); };
   function staleOf(row, events) {
+    if (row.state === 'submitted') return !brokerAlive() && now() - ms(row.requested_at) > timing.heartbeatMs;
     if (row.state !== 'running') return false;
     const t = now(), mine = files.current?.requestId === row.id ? files.current : null, service = files.service, status = files.status?.requestId === row.id ? files.status : null;
     const base = ms(mine?.acceptedAt ?? row.accepted_at ?? row.requested_at);
@@ -105,6 +108,9 @@ export function createUpdateService({ release, transport = createTransport(), no
     // Reconciliation: no trace of the request, but the running release is the target (the new API answers /api/version).
     if (!mine && !status && !brokerActive && 'v' + release.version === row.to_version) return finalize(row, 'succeeded', { code: 0 });
     // The API closes a dead request itself once it is stale and past the broker's hard stop plus 5 minutes since acceptedAt.
+    // Submitted and never seen by the broker: a live broker that has not carried the id for 10 minutes never ran it; a dead one
+    // cannot run it past its hard stop plus 5 minutes (the run step dies with the broker). Both measured from requested_at.
+    if (row.state === 'submitted' && !mine && !status && !brokerActive && t - ms(row.requested_at) > (brokerAlive() ? timing.neverRanMs : timing.lostMs)) return finalize(row, 'lost');
     if (row.state === 'running' && mine && staleOf(row, eventsOf(row.id)) && t - ms(mine.acceptedAt) > timing.lostMs) return finalize(row, 'lost');
   }
 
@@ -155,8 +161,8 @@ export function createUpdateService({ release, transport = createTransport(), no
   async function acknowledge(requestId, user) {
     await sync();
     const row = activeRow();
-    if (!row || row.id !== requestId || row.state !== 'running' || !snapshot.stale) return false;
-    db.prepare("UPDATE update_requests SET state='lost',finished_at=? WHERE id=? AND state='running'").run(iso(now()), requestId);
+    if (!row || row.id !== requestId || !['running', 'submitted'].includes(row.state) || !snapshot.stale) return false;
+    db.prepare("UPDATE update_requests SET state='lost',finished_at=? WHERE id=? AND state IN ('running','submitted')").run(iso(now()), requestId);
     audit(user.id, 'updater.acknowledged', requestId, {}); rebuild();
     return true;
   }
