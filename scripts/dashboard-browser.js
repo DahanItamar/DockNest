@@ -81,7 +81,7 @@ assert.deepEqual(states,[['stored','Recovery point stored · restore tested'],['
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
 for(const group of await page.locator('.backup-group>summary').all())await group.click();
 const failedRow=page.locator('.recovery-row').filter({hasText:'helper-failed'});
-assert.equal(await failedRow.locator('.badge').textContent(),'Isolated restore failed');assert.match(await failedRow.locator('.badge').getAttribute('class'),/\bbad\b/);
+assert.equal(await failedRow.locator('.status').textContent(),'Isolated restore failed');assert.match(await failedRow.locator('.status').getAttribute('class'),/\bstatus-failed\b/);
 const attemptRow=page.locator('.recovery-row').filter({hasText:'attempt'});
 assert.doesNotMatch(await attemptRow.textContent(),/failed/,'An incomplete attempt is not shown as failed');
 const rowHeights=await page.locator('.recovery-row').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().height));
