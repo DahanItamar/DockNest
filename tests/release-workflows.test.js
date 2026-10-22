@@ -82,11 +82,57 @@ test('release.yml signs the manifest with a pinned cosign and verifies it before
   const step = publish.slice(publish.indexOf('Create the GitHub Release as a draft'));
   assert.match(step, /assets=\(docknest-release\.json docknest-release\.json\.sigstore\.json\)/);
   assert.match(step, /set -- "\$GITHUB_REF_NAME" "\$\{assets\[@\]\}" --draft --title/);
-  assert.match(step, /if \[ "\$draft" = false \]; then echo "::error::[^"]*"; exit 1; fi/);
+  assert.match(step, /\n {12}false\) echo "::error::[^"]*"; exit 1 ;;\n/);
   assert.match(step, /--pattern docknest-release\.json --pattern docknest-release\.json\.sigstore\.json/);
   assert.match(step, /release-manifest\.js --notes-body "\$notes"/, 'front matter never reaches the release page');
   assert.doesNotMatch(step, /--notes-file "\$notes"/);
   assert.equal(text.split('gh release create').length, 2);
+});
+
+test('release.yml pushes only a commit tag and moves the version tags by digest after the draft verifies', async () => {
+  const text = await workflow('release.yml'), publish = text.slice(text.indexOf('\n  publish:\n'));
+  const at = needle => { const index = publish.indexOf(needle); assert.ok(index >= 0, needle); return index; };
+  // The build pushes one non-version tag; the metadata tags reach only the retag step.
+  const build = publish.slice(at('docker/build-push-action@'), at('sigstore/cosign-installer@'));
+  assert.match(build, /\n {10}tags: \$\{\{ steps\.release\.outputs\.image \}\}:sha-\$\{\{ github\.sha \}\}\n/);
+  assert.equal(publish.split('steps.meta.outputs.tags').length, 2, 'the version tags are used once, by the retag step');
+  const verifyPublished = at('bash "$RUNNER_TEMP/verify.sh" "$RUNNER_TEMP/published"'), retag = at('docker buildx imagetools create "$@" "$SOURCE"');
+  const tags = at('TAGS: ${{ steps.meta.outputs.tags }}'), readBack = at('docker buildx imagetools inspect "$tag"'), release = at('gh release edit "$GITHUB_REF_NAME" --draft=false --latest');
+  assert.ok(verifyPublished < tags && tags < retag && retag < readBack && readBack < release, 'verify the draft, retag by digest, read the tags back, then publish');
+  assert.match(publish, /SOURCE: \$\{\{ steps\.release\.outputs\.image \}\}@\$\{\{ steps\.build\.outputs\.digest \}\}/);
+  assert.match(publish, /\[ "\$\{#tags\[@\]\}" -eq 4 \]/, 'exactly X.Y.Z, X.Y, X and latest');
+  assert.match(publish, /\[ "\$got" = "\$DIGEST" \] \|\| \{ echo "::error::/);
+  assert.equal(publish.split('cosign sign --yes').length, 2); assert.match(publish, /cosign sign --yes "\$IMAGE"/);
+
+  // The release lookup fails on any unexpected error instead of treating it as "no release".
+  assert.doesNotMatch(text, /\|\| echo none|gh release view "\$GITHUB_REF_NAME" --json isDraft/);
+  assert.match(publish, /draft=\$\(gh release list --limit 1000 --json tagName,isDraft --jq '[^']*select\(\.tagName == \$ENV\.GITHUB_REF_NAME\)[^']*error\("more than one release for the tag"\)[^']*'\)/);
+  assert.match(publish, /\*\) echo "::error::unexpected release state \$draft"; exit 1 ;;/);
+  for (const step of publish.split('\n      - ').filter(step => /gh release (list|view)|imagetools inspect/.test(step))) assert.match(step, /set -o pipefail|set -euo pipefail/);
+
+  // A reused draft keeps only the two signed files, and the draft is checked to carry exactly those.
+  assert.match(publish, /case "\$name" in docknest-release\.json\|docknest-release\.json\.sigstore\.json\) ;; \*\) gh release delete-asset "\$GITHUB_REF_NAME" "\$name" --yes ;; esac/);
+  assert.match(publish, /\[ "\$names" = "docknest-release\.json docknest-release\.json\.sigstore\.json" \]/);
+  // After publishing, the public assets are compared byte for byte (SHA-256) with the signed local files.
+  const final = publish.slice(release);
+  assert.match(final, /gh release download "\$GITHUB_REF_NAME" --dir "\$RUNNER_TEMP\/final"/);
+  assert.match(final, /\[ "\$\(sha256sum < "\$asset"\)" = "\$\(sha256sum < "\$RUNNER_TEMP\/final\/\$asset"\)" \] \|\| \{ echo "::error::/);
+});
+
+test('the image build pins its base by digest and sends only an allow-listed context', async () => {
+  const dockerfile = (await readFile(new URL('../Dockerfile', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const froms = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map(match => match[1]);
+  assert.equal(froms.length, 2);
+  for (const from of froms) assert.match(from, /^node:24-bookworm-slim@sha256:[a-f0-9]{64}$/);
+  const ignore = (await readFile(new URL('../.dockerignore', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').split('\n').filter(line => line && !line.startsWith('#'));
+  assert.equal(ignore[0], '*', 'everything is excluded first');
+  const allowed = ignore.filter(line => line.startsWith('!')).map(line => line.slice(1).replace(/\/$/, ''));
+  // Every path the Dockerfile copies from the build stage, and the integration host's start script, is allowed.
+  const copied = [...dockerfile.matchAll(/^COPY --from=build \S+ \/app\/(\S+)/gm)].map(match => match[1].replace(/\*.*$/, '').replace(/\/$/, ''));
+  for (const need of [...copied.filter(name => !['package', 'node_modules', 'dist'].includes(name)), 'package.json', 'package-lock.json', 'index.html', 'vite.config.js', 'web', 'public', 'tests/integration/start.sh'])
+    assert.ok(allowed.includes(need), need);
+  for (const secret of ['.env', '.git', '.ssh', 'data', 'backups', 'node_modules', 'dist', 'tests', 'docs']) assert.ok(!allowed.includes(secret), secret);
+  for (const rule of ['**/node_modules', '**/.env', '**/.env.*']) assert.ok(ignore.indexOf(rule) > ignore.findLastIndex(line => line.startsWith('!')), rule);
 });
 
 test('release-validation.yml validates a main commit privately and names the run after it', async () => {

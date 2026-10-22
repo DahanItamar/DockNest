@@ -5,7 +5,9 @@
 //        node scripts/release-manifest.js --check FILE <same options>   refuse a written manifest that does not match
 //        node scripts/release-manifest.js --notes-body FILE             print release notes without their front matter
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { schemaVersion } from '../src/migrations.js';
 
@@ -13,9 +15,13 @@ import { schemaVersion } from '../src/migrations.js';
 const MAX_BYTES = 65536;
 // Highlights front matter: every key is required, in any order (docs/releases/TEMPLATE.md).
 const HIGHLIGHTS = ['security', 'features', 'improvements', 'fixes'];
+// Every key a manifest carries; highlights is the only optional one (absent when the notes have no front matter).
+const KEYS = ['version', 'tag', 'commit', 'repository', 'prerelease', 'schemaVersion', 'minUpgradeFrom', 'image', 'notes', 'highlights', 'updater'];
 // Files of the host updater whose SHA-256 the signed manifest carries for its self-update. The list is absent until
 // the updater ships; then it is { "version": "X.Y.Z", "files": [paths], "units": [paths], "cosign"?: { "version":
-// "vX.Y.Z", "sha256": { "linux-amd64": hex, "linux-arm64": hex } } } with repository-relative paths.
+// "vX.Y.Z", "sha256": { "linux-amd64": hex, "linux-arm64": hex } } } with repository-relative paths. Its version is the
+// host updater's own version and is deliberately independent of the DockNest release version: the updater changes far
+// less often, and a host compares it with the updater it runs to decide whether to self-update, never with the release.
 export const UPDATER_LIST = 'updater/release-files.json';
 
 // Notes convention: docs/releases/YYYY-MM-DD-vX.Y.Z.md; a vX.Y.md file covers the X.Y.0 release.
@@ -29,6 +35,8 @@ export function releaseNotes(version, files) {
 
 // Strict front matter: absent (the file does not start with ---) gives no highlights; anything malformed throws.
 export function frontMatter(text) {
+  // A BOM would hide the opening --- and silently drop the highlights, so it is refused rather than skipped.
+  if (text.startsWith('\uFEFF')) throw new Error('front matter: the notes must not start with a UTF-8 byte order mark');
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   if (lines[0].trim() !== '---') return { highlights: null, body: lines.join('\n') };
   if (lines[0] !== '---') throw new Error('front matter must open with a line of exactly ---');
@@ -48,6 +56,17 @@ export function frontMatter(text) {
   return { highlights: Object.fromEntries(HIGHLIGHTS.map(key => [key, highlights[key]])), body: lines.slice(end + 1).join('\n').replace(/^\n+/, '') };
 }
 
+// A repository file the release reads: a regular file (not a symlink) whose real path, every directory included, stays
+// inside the repository root.
+export function repositoryFile(root, relative) {
+  const url = new URL(relative, root); let stat, real;
+  try { stat = lstatSync(url); real = realpathSync(url); } catch (error) { if (error.code === 'ENOENT') throw new Error(`${relative} is listed but does not exist`); throw error; }
+  if (!stat.isFile()) throw new Error(`${relative} is not a regular file`);
+  const inside = path.relative(realpathSync(fileURLToPath(root)), real);
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) throw new Error(`${relative} resolves outside the repository`);
+  return url;
+}
+
 // SHA-256 of each listed updater file. An absent list gives an empty block (no updater yet, so no self-update); a list
 // that names a missing, non-regular or repeated file fails the release.
 export function updaterBlock(root) {
@@ -63,9 +82,7 @@ export function updaterBlock(root) {
     return Object.fromEntries(list[name].map(path => {
       if (typeof path !== 'string' || !/^[\w.@-]+(\/[\w.@-]+)*$/.test(path) || path.split('/').some(part => part === '.' || part === '..')) fail(`${JSON.stringify(path)} is not a relative path`);
       if (seen.has(path)) fail(`${path} is listed twice`); seen.add(path);
-      const url = new URL(path, root); let stat;
-      try { stat = lstatSync(url); } catch (error) { if (error.code === 'ENOENT') fail(`${path} is listed but does not exist`); throw error; }
-      if (!stat.isFile()) fail(`${path} is not a regular file`);
+      let url; try { url = repositoryFile(root, path); } catch (error) { fail(error.message); }
       return [path, createHash('sha256').update(readFileSync(url)).digest('hex')];
     }));
   };
@@ -93,7 +110,8 @@ export function manifest({ version, tag, commit, repository, image = '', digest 
   const notes = releaseNotes(version, files);
   let highlights = null;
   if (notes) {
-    const text = readFileSync(new URL(notes, root));
+    let url; try { url = repositoryFile(root, notes); } catch (error) { throw new Error(`${notes}: ${error.message}`); }
+    const text = readFileSync(url);
     if (text.length > MAX_BYTES) throw new Error(`${notes} is larger than 64 KiB`);
     try { ({ highlights } = frontMatter(text.toString('utf8'))); } catch (error) { throw new Error(`${notes}: ${error.message}`); }
   }
@@ -106,6 +124,10 @@ export function manifest({ version, tag, commit, repository, image = '', digest 
 // What the host verifier checks after the signature (threat model section 5, step 4), run on the published copy.
 export function checkManifest(text, { version, commit, repository, digest = '' }) {
   const value = JSON.parse(text), problems = [];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('manifest refused: not a JSON object');
+  const unknown = Object.keys(value).filter(key => !KEYS.includes(key)), missing = KEYS.filter(key => key !== 'highlights' && !(key in value));
+  if (unknown.length) problems.push(`unknown keys ${unknown.join(', ')}`);
+  if (missing.length) problems.push(`missing keys ${missing.join(', ')}`);
   if (value.version !== version || value.tag !== `v${version}`) problems.push(`version or tag is not ${version}`);
   if (value.commit !== commit) problems.push(`commit is not ${commit}`);
   if (value.repository !== repository) problems.push(`repository is not ${repository}`);
