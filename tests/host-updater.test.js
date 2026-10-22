@@ -28,7 +28,7 @@ test('compose mounts the docknest_updater volume read-only, without copy, into a
 
 test('systemd units carry the threat model hardening and limits', () => {
  const socketUnit = read('updater/docknest-updater.socket.in'), service = read('updater/docknest-updater.service.in'), tmpfiles = read('updater/docknest-updater.tmpfiles.in');
- for (const line of ['ListenStream=@VOLUME@/updater.sock', 'SocketUser=root', 'SocketGroup=@API_GID@', 'SocketMode=0660', 'Accept=no', 'Backlog=8',
+ for (const line of ['ListenStream=@VOLUME@/updater.sock', 'SocketUser=root', 'SocketGroup=@API_GROUP@', 'SocketMode=0660', 'Accept=no', 'Backlog=8',
   'TriggerLimitIntervalSec=60', 'TriggerLimitBurst=10', 'ConditionPathIsDirectory=@VOLUME@', 'RequiresMountsFor=@DOCKER_ROOT@']) assert.match(socketUnit, new RegExp(`^${line}$`, 'm'), line);
  for (const line of ['CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_READ_SEARCH', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=read-only',
   'PrivateTmp=yes', 'PrivateDevices=yes', 'ProtectKernelTunables=yes', 'ProtectKernelModules=yes', 'ProtectKernelLogs=yes', 'ProtectControlGroups=yes', 'ProtectClock=yes',
@@ -52,6 +52,14 @@ test('installer pins cosign to the release workflow version and refuses unsuppor
  assert.doesNotMatch(installer, /usermod|gpasswd|adduser [^\n]*docker|chown -R|chmod -R/, 'never adds group members or changes checkout ownership');
  assert.doesNotMatch(installer, /setpriv[^\n]*--bounding-set/);
  assert.doesNotMatch(installer, /node scripts\/deployment-preflight\.js check/, '--ack reads the hold on its own, not the queue check');
+ // SocketGroup names a real group for the api GID (systemd 259 refuses an unknown group, status=216/GROUP).
+ assert.match(installer, /API_GROUP=\$\(getent group "\$API_GID" \| cut -d: -f1\)/);
+ assert.match(installer, /groupadd --system --gid "\$API_GID" "\$API_GROUP_NAME" \|\| die "Could not create/);
+ assert.match(installer, /^API_GROUP_NAME=docknest-api API_GROUP_MARK=\/var\/lib\/docknest-updater\/api-group-created$/m, 'creation is recorded in the kept state');
+ assert.match(installer, /echo "\$API_GROUP_NAME" > "\$API_GROUP_MARK"/);
+ const uninstall = installer.slice(installer.indexOf('\n  uninstall)'), installer.indexOf('\n# ------'));
+ assert.match(uninstall, /if \[ -f "\$API_GROUP_MARK" \]; then[\s\S]*groupdel "\$API_GROUP_NAME"[\s\S]*rm -f "\$API_GROUP_MARK"/, 'uninstall removes only a group it created');
+ assert.match(installer, /-e "s\|@API_GROUP@\|\$API_GROUP\|g"/); assert.doesNotMatch(installer, /@API_GID@/);
  const syntax = spawnSync('sh', ['-n', 'scripts/install-updater.sh'], { encoding: 'utf8' });
  if (syntax.error?.code !== 'ENOENT') assert.equal(syntax.status, 0, syntax.stderr);
 });

@@ -57,10 +57,6 @@
 .card-foot2 .foot-act{height:40px;min-height:40px;padding:0 8px;margin:0 -8px 0 0;gap:8px;font-size:14px;font-weight:500;line-height:1.5;border-radius:var(--radius);white-space:nowrap;align-self:center}.card-foot2 .foot-act:hover{background:var(--surface-muted)}
 .card-foot2 .foot-act[aria-disabled=true]{opacity:.55;cursor:not-allowed}
 .hs-ok svg{color:var(--success)}.hs-warn svg{color:var(--warning)}
-.switch{position:relative;flex-shrink:0;width:44px;min-width:44px;height:24px;min-height:24px;padding:0;border-radius:12px;border:1px solid var(--border-control);background:var(--surface-muted);transition:background-color 150ms var(--dn-ease-out),border-color 150ms var(--dn-ease-out)}
-.switch:hover{background:var(--surface-hover)}.switch .knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--text-muted);transition:transform 150ms var(--dn-ease-out),background-color 150ms var(--dn-ease-out)}
-.switch[aria-checked=true]{background:var(--button-primary);border-color:var(--button-primary)}.switch[aria-checked=true]:hover{background:var(--button-primary-hover)}.switch[aria-checked=true] .knob{transform:translateX(20px);background:var(--primary-foreground)}
-.switch:active{transform:none}
 .setup{margin:0}.setup .sg-title{font-size:16px;font-weight:600;line-height:1.3;margin:0 0 4px}.setup-lead{font-size:14px;color:var(--text-secondary);margin:0 0 16px;max-width:none}
 .setup-steps{list-style:none;margin:0;padding:0;display:grid;gap:20px}.setup-steps li{display:grid;grid-template-columns:24px minmax(0,1fr);gap:12px;align-items:start}
 .step-n{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:500}
