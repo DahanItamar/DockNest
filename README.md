@@ -1,13 +1,14 @@
 <div align="center">
   <img src="docs/media/logo-blue.png" alt="DockNest" width="360" />
   <p><strong>Back up Docker sites. Verify recovery points. Restore a private copy.</strong></p>
-  <img src="https://img.shields.io/badge/version-2.0-5E35B1?style=flat-square" alt="Version 2.0" />
+  <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=5E35B1&sort=semver&display_name=tag" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/Node.js-24-339933?style=flat-square" alt="Node.js 24" />
   <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
   <img src="https://img.shields.io/badge/storage-SFTP%20%7C%20S3--compatible-1E88E5?style=flat-square" alt="Encrypted backups on SFTP or S3-compatible storage" />
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5E35B1?style=flat-square" alt="License: AGPL-3.0" /></a>
   <p>
+    <a href="#at-a-glance">At a glance</a> ·
     <a href="#features">Features</a> ·
     <a href="#requirements">Requirements</a> ·
     <a href="#installation">Installation</a> ·
@@ -15,6 +16,26 @@
     <a href="#documentation">Docs</a>
   </p>
 </div>
+
+## At a glance
+
+| | |
+| :-- | :-- |
+| **Latest version** | **v2.1.0**, released 2026-10-22. [Release notes](docs/releases/2026-10-22-v2.1.md) · [Changelog](CHANGELOG.md) |
+| **What it does** | Backs up Docker and static nginx sites from your Linux servers to your own encrypted SFTP or S3-compatible storage, and restores any backup to a separate copy to check it. |
+| **Status** | Beta. See the [support matrix](docs/support-matrix.md) for what has been tested. |
+| **Needs** | A Linux machine with Docker and Docker Compose for the dashboard. Each backed-up server needs Linux, Docker, Python 3 and SSH with a key. Storage is SFTP or S3-compatible (S3-compatible is beta). Details in [Requirements](#requirements). |
+| **Install** | **Build from source** with Docker Compose (the default), or use the **published image** `ghcr.io/dahanitamar/docknest` (signed, `linux/amd64`). See [Installation](#installation) and [Upgrading](docs/upgrading.md#use-the-published-image). |
+
+### What's new in v2.1.0
+
+- **Safe upgrades.** Versioned migrations, a private snapshot before every schema change, and `scripts/upgrade.sh` for one-command upgrade and rollback.
+- **S3-compatible storage (beta).** AWS S3, Cloudflare R2, Backblaze B2, Wasabi and MinIO, next to SFTP.
+- **Honest verification levels.** Each backup shows what was actually checked: integrity, consistency, isolated restore and application checks.
+- **A worker that recovers by itself,** and stricter checks on health and maintenance probe URLs.
+- **Signed container images** on GitHub Container Registry.
+
+Upgrading from 2.0.0? Read the [upgrade notes](docs/releases/2026-10-22-v2.1.md#upgrade-notes) first. Full details: [DockNest 2.1 release notes](docs/releases/2026-10-22-v2.1.md).
 
 ![DockNest dashboard with synthetic sites, activity and storage metrics](docs/media/dashboard.png)
 
@@ -102,6 +123,8 @@ docker compose --profile https up -d --build
 
 Already have an HTTPS reverse proxy? Leave out `--profile https`. More in [Deployment](docs/deployment.md).
 
+Prefer a prebuilt image? Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest`. See [Use the published image](docs/upgrading.md#use-the-published-image).
+
 ### Try it locally
 
 ```sh
@@ -158,7 +181,7 @@ Most sites need none of these. Example values:
 
 - **DockNest can back up itself.** Use **DockNest backup** to save its own data, encrypted, to your storage. Keep the passphrase somewhere other than the server. See [self-backup](docs/docknest-self-backup.md).
 - **ZIP downloads are not encrypted.** They can include passwords and keys, so keep them private. Database files inside are raw files, not an SQL export.
-- **New in 2.0:** reliable large SQLite backups, direct streaming, live job progress and more. See the [release notes](docs/releases/2026-10-17-v2.0.md).
+- **Release notes.** What changed in each version is in [docs/releases](docs/releases) and the [changelog](CHANGELOG.md). Latest: [DockNest 2.1](docs/releases/2026-10-22-v2.1.md).
 
 ## Documentation
 
