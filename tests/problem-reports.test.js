@@ -143,6 +143,11 @@ const BYPASS = [
   ['github_pat_11ABCDEFG0123456789_abcdefghijklmnop and gho_abcdefghijklmnopqrstuvwx', ['github_pat_11ABCDEFG', 'gho_abcdefghijkl']],
   ['listen on 2001:db8:abcd:: now', ['2001:db8:abcd']],
   ['blob 0123456789abcdef0123456789abcdef01234567 leaked', ['0123456789abcdef0123456789abcdef01234567']],
+  // Re-review of #46: credentials in user:pass@host, space-separated secrets and names, full-width @ and :.
+  ['mount bob:hunter2@nas failed', ['bob', 'hunter2', 'nas']],
+  ['run --password hunter2 then -p hunter3 and --token=abc123 and password s3cret', ['hunter2', 'hunter3', 'abc123', 's3cret']],
+  ['user=alice login: bobby username carol owner dave account=erin', ['alice', 'bobby', 'carol', 'dave', 'erin']],
+  ['mail alice＠example．com and user：frank', ['alice', 'example', 'frank']],
   ['path %2Fhome%2Falice%2Fsite and http%3A%2F%2Fintranet%2Fadmin and %252Fetc%252Fshadow', ['alice', 'intranet', 'shadow', '%2F', '%3A']],
 ];
 test('redaction closes the reviewed bypasses: relative and home paths, dotless and IDN hosts, key=value secrets, tokens, IPv6, bare SHAs, URL encoding', () => {
