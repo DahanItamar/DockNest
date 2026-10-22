@@ -21,7 +21,7 @@
 
 | | |
 | :-- | :-- |
-| **Latest version** | **v2.2.1**, released 2026-10-22. [Release notes](docs/releases/2026-10-22-v2.2.1.md) · [Changelog](CHANGELOG.md) |
+| **Latest version** | **v2.2.2**, released 2026-10-22. [Release notes](docs/releases/2026-10-22-v2.2.2.md) · [Changelog](CHANGELOG.md) |
 | **What it does** | Backs up Docker and static nginx sites from your Linux servers to your own encrypted SFTP or S3-compatible storage, and restores any backup to a separate copy to check it. |
 | **Status** | Beta. See the [support matrix](docs/support-matrix.md) for what has been tested. |
 | **Needs** | A Linux machine with Docker and Docker Compose for the dashboard. Each backed-up server needs Linux, Docker, Python 3 and SSH with a key. Storage is SFTP or S3-compatible (S3-compatible is beta). Details in [Requirements](#requirements). |

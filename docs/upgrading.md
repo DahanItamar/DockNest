@@ -151,7 +151,7 @@ git checkout v2.0.0 && docker compose up -d --build
 docker compose exec api node scripts/deployment-preflight.js release
 ```
 
-Keep the `pre-rollback-*` folder until you have checked the result. The upgrade backup folder holds the `.env` and secrets that belong to the previous release.
+Keep the `pre-rollback-*` folder until you have checked the result. The upgrade backup folder holds the `.env` and secrets that belong to the previous release. Copies made by the host updater can belong to root; after copying `master.key` or `setup.token` back, give them their original owner again (`sudo chown 1000:1000 data/master.key data/setup.token`, the api container's user) or the api cannot read them.
 
 ## Use the published image
 

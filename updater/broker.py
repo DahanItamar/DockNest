@@ -687,10 +687,15 @@ class Host:
     def verifier(self, payload, timeout=900):
         account = pwd.getpwnam('docknest-verify')
         env = git_env(os.path.join(STATE_DIR, 'verify-home')); env['TUF_ROOT'] = os.path.join(STATE_DIR, 'sigstore')
-        code, out, _ = run(as_user(account.pw_uid, account.pw_gid, env, ['/usr/bin/python3', '-I', '-B', os.path.abspath(__file__), 'verify']),
-                           timeout=timeout, stdin=json.dumps(payload).encode())
-        try: return json.loads(out[-65536:] or b'null')
-        except ValueError: return {'ok': False, 'reason': 'verify-unavailable'}
+        code, out, err = run(as_user(account.pw_uid, account.pw_gid, env, ['/usr/bin/python3', '-I', '-B', os.path.abspath(__file__), 'verify']),
+                             timeout=timeout, stdin=json.dumps(payload).encode())
+        try: result = json.loads(out[-65536:] or b'null')
+        except ValueError: result = None
+        if isinstance(result, dict): return result
+        # the verifier never started or crashed: keep its last stderr line (printable, 200 characters) for the host
+        last = (err.strip().splitlines() or [b''])[-1].decode('ascii', 'replace')
+        journal('verifier did not answer', exit_code=code, detail=re.sub(r'[^ -~]', '?', last)[:200] or None, result='verify-unavailable')
+        return {'ok': False, 'reason': 'verify-unavailable'}
 
     def environment(self):
         def text(argv):

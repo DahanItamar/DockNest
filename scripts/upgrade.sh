@@ -608,7 +608,9 @@ while [ -z "$SAVE" ]; do
 done
 printf 'format=%s\n' "$MARKER_FORMAT" > "$SAVE/result" || fail 2 "Could not write $SAVE/result. Nothing was changed." low-disk
 for file in .env compose.override.yaml data/master.key data/setup.token; do
-  if [ -e "$file" ]; then cp -p "$file" "$SAVE/$(basename "$file")" || fail 2 "Could not copy $file to $SAVE; check free disk space. Nothing was changed." low-disk; fi
+  # Mode and timestamps only: keeping the owner needs CAP_CHOWN, which the host updater's run step does not hold when the
+  # checkout belongs to root (the copies stay 0600 inside the 0700 folder).
+  if [ -e "$file" ]; then cp --preserve=mode,timestamps "$file" "$SAVE/$(basename "$file")" || fail 2 "Could not copy $file to $SAVE; check free disk space and permissions. Nothing was changed." low-disk; fi
 done
 printf 'commit=%s\nversion=%s\nschema=%s\nimage=%s\nimageId=%s\nrepoDigests=%s\n' "$FROM_REF" "$FROM" "$DB_SCHEMA" "${PREV_IMAGE:-}" "${PREV_ID:-}" "$PREV_DIGESTS" > "$SAVE/previous-release" || fail 2 "Could not write $SAVE/previous-release. Nothing was changed." low-disk
 echo "Saved to $SAVE (later successful upgrades keep the newest 5 backups and every backup of a run that needs manual action)."
