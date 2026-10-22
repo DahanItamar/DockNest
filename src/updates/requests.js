@@ -6,7 +6,7 @@ import { db, audit, transaction, id as newId } from '../db.js';
 import { createTransport, PHASES, REASONS } from './transport.js';
 
 export const timing = Object.freeze({
-  syncMs: 2000, submittedMs: 120_000, heartbeatMs: 120_000, phaseMs: 15 * 60_000, buildMs: 45 * 60_000,
+  syncMs: 2000, heartbeatMs: 120_000, phaseMs: 15 * 60_000, buildMs: 45 * 60_000,
   // The broker's per-run hard stop (2 h), its 15 min grace, then 5 min more, measured from acceptedAt.
   lostMs: (2 * 3600 + 15 * 60 + 5 * 60) * 1000, recentMs: 24 * 3600 * 1000, settleMs: 10_000,
 });
@@ -104,9 +104,8 @@ export function createUpdateService({ release, transport = createTransport(), no
     if (final && status.updatedAt && t - ms(status.updatedAt) >= timing.settleMs) return finalize(row, status.ok ? 'succeeded' : 'needs_action', { code: status.ok ? 0 : null, status });
     // Reconciliation: no trace of the request, but the running release is the target (the new API answers /api/version).
     if (!mine && !status && !brokerActive && 'v' + release.version === row.to_version) return finalize(row, 'succeeded', { code: 0 });
-    if (row.state === 'submitted' && !mine && !status && !brokerActive && t - ms(row.requested_at) > timing.submittedMs) return finalize(row, 'lost');
     // The API closes a dead request itself once it is stale and past the broker's hard stop plus 5 minutes since acceptedAt.
-    if (row.state === 'running' && staleOf(row, eventsOf(row.id)) && t - ms(mine?.acceptedAt ?? row.accepted_at ?? row.requested_at) > timing.lostMs) return finalize(row, 'lost');
+    if (row.state === 'running' && mine && staleOf(row, eventsOf(row.id)) && t - ms(mine.acceptedAt) > timing.lostMs) return finalize(row, 'lost');
   }
 
   async function run() {
@@ -135,7 +134,7 @@ export function createUpdateService({ release, transport = createTransport(), no
     try {
       transaction(() => {
         db.prepare('INSERT INTO update_requests(id,from_version,to_version,from_schema,requested_by,requested_at,retry_of,install_mode,updater_version,env,state) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-          .run(requestId, release.version, version, release.schemaVersion, user.id, iso(now()), retryOf, service?.installMode ?? null, service?.version ?? null, service ? JSON.stringify(service.env).slice(0, 1024) : null, 'submitted');
+          .run(requestId, release.version, version, release.schemaVersion, user.id, iso(now()), retryOf, service?.installMode ?? null, service?.version ?? null, service && JSON.stringify(service.env).length <= 1024 ? JSON.stringify(service.env) : null, 'submitted');
         audit(user.id, 'updater.requested', requestId, { from: release.version, to: version, retryOf });
       });
     } catch (error) { if (/UNIQUE|constraint/i.test(error.message)) return null; throw error; }

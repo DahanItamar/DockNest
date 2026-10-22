@@ -112,3 +112,23 @@ test('the progress limiter is per key and per window, and its table is bounded',
   for (const key of ['c', 'd', 'e', 'f', 'g', 'h']) limit(key);
   assert.equal(limit('i'), 0, 'a full table is cleared rather than growing or locking everyone out');
 });
+
+test('TRUST_PROXY is opt-in and exact; without it X-Forwarded-For never changes the limiter key, with it only a listed peer is believed', async () => {
+  process.env.DATA_DIR = await mkdtemp(join(tmpdir(), 'docknest-trust-'));
+  const { parseTrustProxy } = await import('../src/config.js'), { default: express } = await import('express'), { progressHandler } = await import('../src/updates/lock.js');
+  assert.equal(parseTrustProxy(undefined), false); assert.equal(parseTrustProxy('  '), false);
+  assert.deepEqual(parseTrustProxy('127.0.0.1, 10.0.0.0/8,::1,fd00::/8'), ['127.0.0.1', '10.0.0.0/8', '::1', 'fd00::/8']);
+  for (const bad of ['true', '1', 'loopback', 'uniquelocal', 'caddy', '10.0.0.0/33', '10.0.0.1/8/8', '::1/129', '10.0.0.1,', '0.0.0.0/x']) assert.throws(() => parseTrustProxy(bad), /TRUST_PROXY/, bad);
+  const keys = [];
+  const run = async trust => {
+    keys.length = 0;
+    const app = express(); app.set('trust proxy', trust);
+    app.get('/p', progressHandler({ progress: () => ({ active: false, phase: null, to: null, state: null, stale: false, updatedAt: null, events: [] }) }, key => { keys.push(key); return 0; }));
+    const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+    try { await fetch(`http://127.0.0.1:${server.address().port}/p`, { headers: { 'X-Forwarded-For': '203.0.113.9' } }); } finally { server.close(); }
+    return keys[0];
+  };
+  assert.match(await run(parseTrustProxy(undefined)), /127\.0\.0\.1$/, 'no TRUST_PROXY: the socket peer is the key');
+  assert.match(await run(parseTrustProxy('10.9.9.9')), /127\.0\.0\.1$/, 'a forwarded header from an unlisted peer is ignored');
+  assert.equal(await run(parseTrustProxy('127.0.0.1')), '203.0.113.9', 'a listed peer: the forwarded address is used');
+});

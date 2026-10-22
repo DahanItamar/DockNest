@@ -244,11 +244,10 @@ test('stale: no heartbeat for 2 minutes or no phase change for 15 (45 in build);
   assert.equal(closed.status, 200); assert.equal(row(requestId).state, 'lost'); assert.equal((await call('/api/state')).status, 200); assert.equal((await progress()).state, 'lost');
 });
 
-test('lost on its own: a submitted request with no trace after 2 minutes, and a stale one past the hard stop plus 5 minutes from acceptedAt', async () => {
+test('lost on its own only past the hard stop plus 5 minutes from the broker acceptedAt; never from requested_at', async () => {
   await reset(); await put('service.json', service()); let requestId = await start();
-  await updates.sync(); assert.equal(row(requestId).state, 'submitted');
-  db.prepare('UPDATE update_requests SET requested_at=? WHERE id=?').run(new Date(Date.now() - 150000).toISOString(), requestId); await updates.sync();
-  assert.equal(row(requestId).state, 'lost'); assert.equal((await call('/api/state')).status, 200);
+  db.prepare('UPDATE update_requests SET requested_at=?,accepted_at=? WHERE id=?').run(new Date(Date.now() - 20 * 3600000).toISOString(), new Date(Date.now() - 20 * 3600000).toISOString(), requestId); await updates.sync();
+  assert.equal(row(requestId).state, 'submitted', 'a submitted request is never closed by age; without current.json there is no acceptedAt'); assert.equal((await call('/api/state')).status, 423);
   await reset(); await put('service.json', service()); requestId = await start();
   const current = (accepted, last) => put('current.json', { requestId, target: TARGET, acceptedAt: stamp(accepted), events: [{ phase: 'verify', at: stamp(accepted) }, { phase: 'build', at: stamp(last) }], truncated: false });
   await put('service.json', service({ requestId, heartbeatAt: stamp(Date.now() - 600000) }));

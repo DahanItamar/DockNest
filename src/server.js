@@ -31,8 +31,8 @@ await clearInterruptedExports();
 
 export const app = express();
 app.disable('x-powered-by');
-// Narrow: only private (Compose network) peers are trusted proxies, i.e. the bundled Caddy, so req.ip is the browser's address.
-app.set('trust proxy', 'uniquelocal');
+// Default: trust no proxy (req.ip is the socket peer). TRUST_PROXY lists the exact proxy addresses (see src/config.js).
+app.set('trust proxy', config.trustProxy);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"] } }, strictTransportSecurity: config.secureCookies ? undefined : false }));
 app.use(express.json({ limit: '128kb' }));
 app.use('/api', (req, res, next) => {
