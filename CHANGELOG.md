@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Interface foundation for 2.3.0: one type scale, layout tokens, plain status labels with an icon instead of pills, frameless icon buttons, and shared alert, card and table styles (web/system.css).
+
+
 ## [2.2.2] - 2026-10-22
 
 See [docs/releases/2026-10-22-v2.2.2.md](docs/releases/2026-10-22-v2.2.2.md).
