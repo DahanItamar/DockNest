@@ -22,6 +22,7 @@ import './rebrand.css';
 import {StatusLabel,IconButton} from './system.jsx';
 import './system.css';
 import './tables.css';
+import './frame.css';
 import {Paginated} from './pagination.jsx';
 import {DataTable} from './data-table.jsx';
 import {JobDetails,BackupDetails,ReadableRecord} from './job-details.jsx';
