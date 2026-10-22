@@ -6,7 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [2.1.0] - 2026-10-22
 
-Release notes: [docs/releases/2026-10-22-v2.1.md](docs/releases/2026-10-22-v2.1.md), including the upgrade notes. 2.1.0 is the same code as the pre-release 2.1.0-rc.1 (listed below), which passed the real upgrade validation from 2.0.0 on a Linux Docker runner (install, upgrade as documented, worker drain, downgrade to 2.0.0 and upgrade again with `scripts/upgrade.sh`). The entries below were first listed under 2.1.0-rc.1 and apply to 2.1.0.
+Release notes: [docs/releases/2026-10-22-v2.1.md](docs/releases/2026-10-22-v2.1.md), including the upgrade notes. 2.1.0 has the same application code as the pre-release 2.1.0-rc.1 (listed below; `src/` and `web/` unchanged), which passed the real upgrade validation from 2.0.0 on a Linux Docker runner (install, upgrade as documented, worker drain, downgrade to 2.0.0 and upgrade again with `scripts/upgrade.sh`). The v2.1.0 tag itself also passed Release validation. The entries below were first listed under 2.1.0-rc.1 and apply to 2.1.0.
 
 ## [2.1.0-rc.1] - 2026-10-22
 
