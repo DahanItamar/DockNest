@@ -46,7 +46,7 @@
 .hero-main{min-width:0}
 .hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}.hero-actions>:is(button,a){flex:1 1 0;min-width:0;max-width:184px;justify-content:center}
 .rel-links{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:12px}
-.uc-split{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card-grid.uc-split{grid-template-columns:repeat(2,minmax(0,1fr))}
 .uc-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.uc-card-head .card-title{flex:1}
 .uc-footer{justify-content:space-between}.uc-footer .foot-status{margin:0;min-width:0;color:var(--text-secondary)}
 button[aria-disabled=true]:not(.link-btn){opacity:.55;cursor:not-allowed}
@@ -118,7 +118,7 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .dn-stage.is-failed .dn-node,.dn-stage.is-failed .dn-stage-status{color:var(--error)}.dn-stage.is-failed .dn-node{box-shadow:inset 0 0 0 1.5px var(--error)}
 .dn-stage.is-rolled-back .dn-node,.dn-stage.is-rolled-back .dn-stage-status{color:var(--warning)}.dn-stage.is-rolled-back .dn-node{box-shadow:inset 0 0 0 1.5px var(--warning)}
 /* Small screens: rows stack full width at 480 px and below. */
-@media(max-width:767px){.uc-split{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:767px){.card-grid.uc-split{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:599px){
  .uc-hero{padding:24px 16px}.uc-hero-state{grid-template-columns:minmax(0,1fr);gap:12px}.uc-hero-row{flex-direction:column;align-items:stretch;gap:16px}.uc-hero-row>button{width:100%}.uc-setup{padding:20px 16px}
  .uc-page>.tabs{overflow-x:auto}.tabs [role=tab]{padding:8px 12px}
