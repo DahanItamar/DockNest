@@ -38,7 +38,8 @@
     "test:s3": "node --no-addons scripts/s3-integration.js",
     "test:mobile": "node scripts/mobile-browser.js",
     "audit:repo": "node scripts/audit-repository.js",
-    "test:theme": "node scripts/theme-browser.js"
+    "test:theme": "node scripts/theme-browser.js",
+    "test:updates": "node scripts/update-center-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
