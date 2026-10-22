@@ -23,6 +23,8 @@ services:
   api:
     <<: *runtime
     ports: ["127.0.0.1:${HOST_PORT:-3000}:3000"]
+    # This list replaces the x-runtime anchor's volumes (a merge key does not combine lists): it must repeat every
+    # anchor mount (tests/host-updater.test.js checks it).
     volumes:
       - state:/data
       # Host updater socket and status (docs/updater-threat-model.md D1): read-only and api only. Without the updater

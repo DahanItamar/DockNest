@@ -15,7 +15,10 @@ test('host updater broker: request parsing, allow-lists, path handling and state
 test('compose mounts the docknest_updater volume read-only, without copy, into api only (D1)', () => {
  const compose = read('compose.yaml'), services = compose.slice(compose.indexOf('\nservices:'), compose.indexOf('\nsecrets:'));
  const block = name => { const rest = services.slice(services.indexOf(`\n  ${name}:\n`) + 1), end = rest.search(/\n  [a-z]+:\n/); return end < 0 ? rest : rest.slice(0, end + 1); };
- assert.match(block('api'), /- state:\/data\n/, 'api keeps its state volume when it overrides the shared list');
+ // api's own volumes list replaces the x-runtime anchor's, so it must repeat every anchor mount.
+ const anchor = compose.slice(compose.indexOf('x-runtime:'), compose.indexOf('\nservices:')).match(/\n  volumes: \[([^\]]*)\]/)[1].split(',').map(item => item.trim().replace(/^"|"$/g, ''));
+ assert.ok(anchor.length >= 1 && anchor.includes('state:/data'));
+ for (const mount of anchor) assert.match(block('api'), new RegExp(`\\n      - ${mount.replace(/[/.]/g, '\\$&')}\\n`), `api must repeat the anchor mount ${mount}`);
  assert.match(block('api'), /- \{type: volume, source: updater, target: \/run\/docknest-updater, read_only: true, volume: \{nocopy: true\}\}/);
  for (const name of ['worker', 'proxy']) assert.doesNotMatch(block(name), /updater/, name);
  assert.equal(compose.match(/source: updater/g).length, 1);

@@ -55,7 +55,7 @@ REASONS = ('tracked-files-edited', 'secret-missing', 'min-upgrade-from', 'compos
            'signature-invalid', 'jobs-active', 'backup-failed', 'checkout-failed', 'build-failed', 'pull-failed', 'health-timeout',
            'snapshot-restore-failed', 'revert-failed', 'interrupted', 'low-disk', 'state-mismatch', 'tag-moved',
            'verify-unavailable', 'time-limit', 'unknown')
-BLOCK_REASONS = ('exit-5', 'exit-6', 'interrupted', 'repeated-rollback')
+BLOCK_REASONS = ('exit-5', 'exit-6', 'interrupted', 'unexpected-exit', 'repeated-rollback')
 # Flags the run step needs; an upgrade.sh whose --capabilities lacks one is refused with state-mismatch (F18, N15).
 REQUIRED_FLAGS = ('--non-interactive', '--upgrade-only', '--no-fetch', '--expect-commit', '--request-id', '--status-file', '--version')
 FORBIDDEN_FLAGS = ('--force', '--allow-data-rollback', '--wait', '--timeout', '--dry-run', '--no-verify')
@@ -72,7 +72,7 @@ SHA_RE = re.compile(r'[0-9a-f]{40}\Z')
 DIGEST_RE = re.compile(r'sha256:[0-9a-f]{64}\Z')
 HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 NOTES_RE = re.compile(r'docs/releases/\d{4}-\d{2}-\d{2}-v\d+\.\d+(\.\d+)?\.md\Z')
-CONTROL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
+CONTROL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f-\x9f]')  # C0 except tab and newline, DEL and C1
 REQUEST_KEYS = frozenset(('schema', 'id', 'action', 'version', 'requestedBy', 'requestedAt'))
 
 
@@ -191,11 +191,12 @@ def new_state():
             'active': None, 'lastResult': None, 'ids': []}
 
 
-def admit(state, request, now, current):
-    """The refusal code for a parsed request, or None. Checked before anything is fetched."""
+def admit(state, request, now, current, recorded=lambda request_id: False):
+    """The refusal code for a parsed request, or None. Checked before anything is fetched. recorded(id) is true when a
+    history record exists, so trimming the id list can never let a request overwrite an audit record."""
     if state['blocked']: return 'needs-host-ack'
     if state['active']: return 'busy'
-    if request['id'] in state['ids']: return 'duplicate'
+    if request['id'] in state['ids'] or recorded(request['id']): return 'duplicate'
     last = state['lastAccepted']
     if abs(request['at'] - now) > CLOCK_SKEW or (last and request['at'] <= last['at']): return 'stale'
     try:
@@ -230,8 +231,9 @@ def finish(state, code, now, reason=None):
     elif code == 4:
         state['exit4'][target] = state['exit4'].get(target, 0) + 1
         if state['exit4'][target] >= 2: block(state, 'repeated-rollback')
-    elif code in (5, 6): block(state, 'exit-%d' % code)
-    elif code is None: block(state, 'interrupted')
+    # Once the run step started, every end other than 0, 2, 3 or 4 blocks (fail closed); before it, nothing ran.
+    elif active and active.get('runStepStarted') and code not in (2, 3):
+        block(state, 'exit-%d' % code if code in (5, 6) else 'interrupted' if code is None else 'unexpected-exit')
     return state['lastResult']
 
 
@@ -407,33 +409,11 @@ def git_config_refusal(listing):
     return None
 
 
-def dockerignore_rules(text):
-    rules = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'): continue
-        negate = line.startswith('!')
-        pattern = line[1:].strip() if negate else line
-        pattern = pattern[2:] if pattern.startswith('./') else pattern
-        rules.append((negate, pattern.strip('/') or '*'))
-    return rules
-
-
-def in_build_context(path, rules):
-    """Docker's .dockerignore semantics, simplified: the last matching rule wins and a match on a parent directory counts."""
-    import fnmatch
-    parts, included = path.strip('/').split('/'), True
-    for negate, pattern in rules:
-        for i in range(1, len(parts) + 1):
-            if fnmatch.fnmatchcase('/'.join(parts[:i]), pattern): included = negate; break
-    return included
-
-
-def build_input_refusal(dockerignore, porcelain):
-    """F10, I15: an untracked or ignored file that would enter the source build context refuses the run."""
-    rules = dockerignore_rules(dockerignore)
+def tracked_change_refusal(porcelain):
+    """F10, I15: a modified tracked file refuses the run. Untracked and ignored files (compose.override.yaml, .env, data/)
+    are the operator's and stay allowed: with --expect-commit, upgrade.sh builds from `git archive <sha>`."""
     for entry in porcelain.split('\0'):
-        if entry[:3] in ('?? ', '!! ') and in_build_context(entry[3:], rules): return entry[3:]
+        if len(entry) > 3 and entry[2] == ' ' and entry[:2] not in ('??', '!!'): return entry[3:]
     return None
 
 
@@ -677,14 +657,6 @@ def journal(message, **fields):
         print('docknest-updater: %s %s' % (message, json.dumps(fields, default=str)), file=sys.stderr, flush=True)
 
 
-def pdeathsig_hook():
-    """preexec_fn: PR_SET_PDEATHSIG SIGTERM through ctypes (A11, I27) for the moment before setpriv, which re-arms it with
-    --pdeathsig after the uid change (a credential change clears it). libc is loaded before the fork."""
-    import ctypes
-    prctl = ctypes.CDLL(None, use_errno=True).prctl
-    return lambda: prctl(1, int(signal.SIGTERM), 0, 0, 0)
-
-
 class Host:
     """Everything that touches the host. Kept thin so the policy above stays unit-testable."""
     def __init__(self, config):
@@ -807,7 +779,7 @@ class Broker:
         with StateFile() as state:
             if self.running: raise Refused('busy', 'a run is active')
             current = self.current_version()
-            code = admit(state, request, now, current)
+            code = admit(state, request, now, current, lambda rid: os.path.lexists(os.path.join(STATE_DIR, 'history', rid + '.json')))
             if code: raise Refused(code, 'policy')
             self.refresh()
             try: reason = self.preconditions(state, current, api)
@@ -850,11 +822,9 @@ class Broker:
         containers = [self.host.docker_json('inspect', cid)[0] for cid in run([DOCKER, 'ps', '-aq', '--no-trunc', '--filter', 'volume=' + VOLUME])[1].decode().split()]
         reason = mount_refusal(containers, api['Id'])
         if reason: return reason
-        if self.mode == 'source':
-            ignore = host.owner_git('show', 'HEAD:.dockerignore')[1].decode('utf-8', 'replace')
-            code, out, _ = host.owner_git('status', '--porcelain', '--ignored', '--untracked-files=all', '-z')
-            path = build_input_refusal(ignore, out.decode('utf-8', 'replace')) if code == 0 else 'git status failed'
-            if path: return 'untracked or ignored file %s would enter the build' % path
+        code, out, _ = host.owner_git('status', '--porcelain', '--untracked-files=no', '-z')
+        path = tracked_change_refusal(out.decode('utf-8', 'replace')) if code == 0 else 'git status failed'
+        if path: return 'tracked file %s is modified' % path
         code, out, _ = host.owner(['/bin/sh', 'scripts/upgrade.sh', '--capabilities'], timeout=30)
         reason = capabilities_refusal(out.decode('utf-8', 'replace') if code == 0 else '', self.mode)
         if reason: return reason
@@ -891,13 +861,21 @@ class Broker:
             if info.st_uid != self.host.uid or info.st_mode & 0o022: os.close(dir_fd); raise ValueError(WORK_DIR)
         except (OSError, ValueError):
             return self.end(rid, current, target, started, cur, 2, 'state-mismatch', '%s is missing or is not the 0750 directory of the checkout owner; run --repair.' % WORK_DIR)
-        hook = pdeathsig_hook()
-        with StateFile() as state:  # written and fsynced before the run step exists (F8)
-            state['active']['runStepStarted'] = True
-        log = os.open(os.path.join(STATE_DIR, 'history', rid + '.out'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try: log = os.open(os.path.join(STATE_DIR, 'history', rid + '.out'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            os.close(dir_fd); return self.end(rid, current, target, started, cur, 2, 'state-mismatch', 'Could not create the run log; nothing was changed.')
+        # Parent death (A11, I27): setpriv --pdeathsig=SIGTERM arms it after the uid change (which would clear an earlier
+        # one), so no preexec_fn runs in the forked child. If the broker dies in the moments between fork and that prctl,
+        # the child gets no signal; systemd's stop (KillMode=mixed) then kills what is left in the unit's cgroup (P10).
         try:
-            child = subprocess.Popen(as_user(self.host.uid, self.host.gid, env, argv), cwd=self.host.checkout, stdin=subprocess.DEVNULL, stdout=log,
-                                     stderr=log, start_new_session=True, preexec_fn=hook, close_fds=True)
+            with StateFile() as state:  # written and fsynced right before the run step exists (F8)
+                state['active']['runStepStarted'] = True
+            try:
+                child = subprocess.Popen(as_user(self.host.uid, self.host.gid, env, argv), cwd=self.host.checkout, stdin=subprocess.DEVNULL, stdout=log,
+                                         stderr=log, start_new_session=True, close_fds=True)
+            except OSError:  # nothing ran: never an interrupted block
+                with StateFile() as state: state['active']['runStepStarted'] = False
+                os.close(dir_fd); return self.end(rid, current, target, started, cur, 2, 'state-mismatch', 'The run step could not start; nothing was changed.')
         finally: os.close(log)
         journal('run step started', request_id=rid, target=target, result='running')
         try: code, last = self.follow(child, dir_fd, rid, current, target, started, cur)
@@ -1095,8 +1073,9 @@ def status_text(state, history):
     if last:
         lines.append('Last result: request %s, exit %s, reason %s, finished %s' % (last['requestId'], last['exitCode'], last['reason'], last['finishedAt']))
         final = (history or {}).get('finalStatus') or {}
-        if final.get('error'): lines.append('Error: ' + clean_text(final['error'], 4096))
-        if final.get('rollbackHint'): lines.append('Rollback:\n' + clean_text(final['rollbackHint'], 4096))
+        indent = lambda text: '\n'.join('  ' + line for line in clean_text(text, 4096).split('\n'))  # no embedded line can pose as a field
+        if final.get('error'): lines.append('Error:\n' + indent(final['error']))
+        if final.get('rollbackHint'): lines.append('Rollback:\n' + indent(final['rollbackHint']))
     return '\n'.join(lines)
 
 

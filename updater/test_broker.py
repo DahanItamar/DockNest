@@ -103,6 +103,8 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(b.admit({**state, 'blocked': True}, self.req(), NOW, '2.2.0'), 'needs-host-ack')
         self.assertEqual(b.admit({**state, 'active': {'id': 'x'}}, self.req(), NOW, '2.2.0'), 'busy')
         self.assertEqual(b.admit({**state, 'ids': [RID]}, self.req(), NOW, '2.2.0'), 'duplicate')
+        # an id trimmed from the list but with a history record can never overwrite that audit record
+        self.assertEqual(b.admit(state, self.req(), NOW, '2.2.0', lambda rid: rid == RID), 'duplicate')
         self.assertEqual(b.admit(state, self.req(at=NOW - 301), NOW, '2.2.0'), 'stale')
         self.assertEqual(b.admit(state, self.req(at=NOW + 301), NOW, '2.2.0'), 'stale')
         self.assertEqual(b.admit({**state, 'lastAccepted': {'id': 'y', 'at': NOW}}, self.req(), NOW, '2.2.0'), 'stale')
@@ -145,8 +147,12 @@ class PolicyTests(unittest.TestCase):
             state = b.new_state(); result = self.run_once(state, code, reason='revert-failed')
             self.assertEqual((state['blocked'], state['blockedReason']), (True, reason))
             self.assertEqual(result['exitCode'], code); self.assertEqual(result['reason'], 'revert-failed')
-        for code in (0, 1, 2, 3):
+        for code in (0, 2, 3):
             state = b.new_state(); self.run_once(state, code); self.assertFalse(state['blocked'], code)
+        for code in (1, 7, 130, 255):  # once the run step started, anything unexpected fails closed
+            state = b.new_state(); self.run_once(state, code); self.assertEqual((state['blocked'], state['blockedReason']), (True, 'unexpected-exit'), code)
+        state = b.new_state(); state['active'] = {'id': RID, 'target': 'v2.3.0', 'acceptedAt': NOW, 'runStepStarted': False}
+        b.finish(state, None, NOW, 'interrupted'); self.assertFalse(state['blocked'])  # nothing ran: no block
         state = b.new_state(); self.assertEqual(self.run_once(state, 2, reason='made-up')['reason'], 'unknown')
 
     def test_ack_refused_while_a_run_is_active(self):
@@ -289,17 +295,12 @@ class HostCheckTests(unittest.TestCase):
                     'http.proxy', 'credential.helper', 'core.fsmonitor', 'remote.origin.uploadpack', 'remote.origin.pushurl', 'core.pager', 'diff.external'):
             self.assertEqual(b.git_config_refusal('core.bare\nfalse\0%s\nvalue\0' % key), key)
 
-    def test_build_inputs(self):
-        deny = '.git\nnode_modules\ndata\nbackups\n.env\n.env.*\n!.env.example\n*.log\n'
-        clean = '!! data/state.sqlite\0!! node_modules/x/y.js\0!! .env\0?? .env.local\0!! npm-debug.log\0 M src/a.js\0'
-        self.assertIsNone(b.build_input_refusal(deny, clean))
-        self.assertEqual(b.build_input_refusal(deny, clean + '!! compose.override.yaml\0'), 'compose.override.yaml')
-        self.assertEqual(b.build_input_refusal(deny, '?? keys/id.pem\0'), 'keys/id.pem')
-        self.assertEqual(b.build_input_refusal(deny, '?? .env.example\0'), '.env.example')
-        allow = '*\n!src\n!web\n!package.json\n!./package-lock.json\n'
-        self.assertIsNone(b.build_input_refusal(allow, '!! compose.override.yaml\0!! data/master.key\0'))
-        self.assertEqual(b.build_input_refusal(allow, '?? src/evil.key\0'), 'src/evil.key')
-        self.assertEqual(b.build_input_refusal(allow, '?? package-lock.json\0'), 'package-lock.json')
+    def test_only_modified_tracked_files_refuse(self):
+        operator = '?? compose.override.yaml\0!! .env\0!! data/state.sqlite\0?? keys/id.pem\0'
+        self.assertIsNone(b.tracked_change_refusal(operator)); self.assertIsNone(b.tracked_change_refusal(''))
+        for entry, path in ((' M src/a.js\0', 'src/a.js'), ('M  compose.yaml\0', 'compose.yaml'), (' D Dockerfile\0', 'Dockerfile'),
+                            ('R  new.js\0old.js\0', 'new.js'), ('UU package.json\0', 'package.json')):
+            self.assertEqual(b.tracked_change_refusal(operator + entry), path, entry)
 
     def test_host_state_agreement(self):
         pin = {'commit': SHA, 'digest': DIGEST}
@@ -448,8 +449,13 @@ class TrustTests(unittest.TestCase):
     def test_status_text_for_the_operator(self):
         state = b.new_state(); state['active'] = {'id': RID, 'target': 'v2.3.0', 'acceptedAt': NOW, 'runStepStarted': True}
         b.finish(state, 5, NOW, 'health-timeout')
-        text = b.status_text(state, {'finalStatus': {'error': 'Health check failed', 'rollbackHint': 'git checkout v2.2.0 && docker compose up -d'}})
-        self.assertIn('Blocked: yes (exit-5)', text); self.assertIn('--ack', text); self.assertIn('Rollback:\ngit checkout v2.2.0', text)
+        text = b.status_text(state, {'finalStatus': {'error': 'Health check failed\nBlocked: no', 'rollbackHint': 'git checkout v2.2.0 && docker compose up -d\nstep 2\x85\x9b'}})
+        self.assertIn('Blocked: yes (exit-5)', text); self.assertIn('--ack', text)
+        self.assertIn('Rollback:\n  git checkout v2.2.0 && docker compose up -d\n  step 2', text)
+        self.assertIn('Error:\n  Health check failed\n  Blocked: no', text)
+        self.assertEqual([line for line in text.split('\n') if line.startswith('Blocked:')], ['Blocked: yes (exit-5) - after checking the host, run: sudo scripts/install-updater.sh --ack'])
+        self.assertNotIn('\x85', text); self.assertNotIn('\x9b', text)
+        self.assertEqual(b.clean_text('a\x00b\x1bc\x7fd\x80e\x9ff g\n\th', 99), 'abcdef g\n\th')
         self.assertIn('Blocked: no', b.status_text(b.new_state(), None))
 
 
