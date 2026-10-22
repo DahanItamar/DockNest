@@ -146,3 +146,4 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .uc-recent-date{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .uc-recent-report{min-height:44px;display:inline-flex;align-items:center}
 @media(max-width:480px){.uc-recent-body{padding:12px 16px 16px}}
+@media(max-width:480px){.uc-page .switch{position:relative}.uc-page .switch::after{content:"";position:absolute;inset:-12px -4px}}

@@ -11,7 +11,9 @@ export const fmt=(value,dateOnly)=>{if(!value)return '—';const d=new Date(valu
 const clock=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'unknown':d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})};
 const TABS=[['overview','Overview',''],['whats-new','What’s new','/whats-new']]; // #/update-center/history (old links) falls back to the Overview
 export const ucTabFromHash=()=>{const m=/^#\/update-center(?:\/([a-z-]+))?/.exec(location.hash);return TABS.some(t=>t[0]===m?.[1])?m[1]:'overview'};
-const goTab=id=>{location.hash='#/update-center'+TABS.find(t=>t[0]===id)[2]};
+const goTab=id=>{location.hash='#/update-center'+(TABS.find(t=>t[0]===id)?.[2]??'')};
+// Opens the Recent updates disclosure at the bottom of the Overview and moves focus to it.
+const showRecent=()=>{const t=document.getElementById('uc-recent-toggle');if(!t)return;if(t.getAttribute('aria-expanded')!=='true')t.click();t.scrollIntoView({block:'start'});t.focus();};
 const sameTag=v=>/^v\d+\.\d+\.\d+$/.test(v||'');
 
 const summaryOf=meta=>highlightChips(meta?.highlights).map(c=>c.label).join(' · ');
@@ -70,7 +72,8 @@ function AutoChecksCard({data,busy,checking,onToggle}){
  const on=data.consent?.checkEnabled===true,pending=data.consent?.checkEnabled==null,who=data.consent?.decidedBy?.name;
  return <article className="card uc-card" aria-labelledby="uc-auto-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-auto-title">Automatic checks</h2><button type="button" role="switch" className="switch" aria-checked={on} aria-labelledby="uc-auto-title" aria-describedby="uc-auto-desc" disabled={busy} onClick={onToggle}></button></div>
   <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
-  {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div></article>;
+  {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div>
+</article>;
 }
 function SetupCard({connected}){
  return <section className="setup" aria-labelledby="uc-setup-title"><h2 className="sg-title" id="uc-setup-title">Set up the host updater</h2><p className="setup-lead">You do this once per server. After that, every update is one click.</p>
@@ -83,7 +86,7 @@ function AdvancedCli(){return <details className="advanced more"><summary><IconC
 function Hero({data,offer,meta,up,status,openConfirm,checking,onConsent}){
  const st=data.state,cur=vv(data.current?.version),latest=data.check?.latest,blocked=data.offer?.blocked;
  if(st==='updater-state-mismatch')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">DockNest cannot confirm which version is installed</h2><p>The version in package.json, the release tag and the running image disagree. Nothing was changed. Check the server with these commands.</p>{['git status','git describe --tags --exact-match','docker compose images'].map(c=><CodeBlock key={c} command={c}/>)}</div></article>;
- if((st==='updater-blocked'||(blocked&&!offer))&&st!=='update-in-progress')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Updates are blocked</h2><p>{blocked?.message||'The last update needs manual action on the DockNest host. Updates stay blocked until the server operator resolves it: first the release command from the rollback hint, then sudo scripts/install-updater.sh --ack. The acknowledgement alone does not release the hold.'}</p><p className="code-label">Confirm on the server</p><CodeBlock command="sudo scripts/install-updater.sh --ack"/><div className="rel-links"><ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink><button type="button" className="text" onClick={()=>goTab('history')}>View history</button></div></div></article>;
+ if((st==='updater-blocked'||(blocked&&!offer))&&st!=='update-in-progress')return <article className="card uc-hero uc-hero-state"><span className="rel-sym warn"><IconAlertTriangle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Updates are blocked</h2><p>{blocked?.message||'The last update needs manual action on the DockNest host. Updates stay blocked until the server operator resolves it: first the release command from the rollback hint, then sudo scripts/install-updater.sh --ack. The acknowledgement alone does not release the hold.'}</p><p className="code-label">Confirm on the server</p><CodeBlock command="sudo scripts/install-updater.sh --ack"/><div className="rel-links"><ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink><button type="button" className="text" onClick={showRecent}>Recent updates</button></div></div></article>;
  if(st==='consent-pending')return <article className="card uc-hero uc-hero-state"><span className="rel-sym muted"><IconInfoCircle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Update checks are not set up</h2><p>DockNest has not contacted GitHub and will not until you choose. Updates are never installed unless an administrator starts them.</p><div className="hero-actions"><button type="button" className="primary" onClick={onConsent}>Turn on checks</button></div></div></article>;
  if(st==='checks-off')return <article className="card uc-hero uc-hero-state"><span className="rel-sym muted"><IconInfoCircle size={32} aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Automatic update checks are off</h2><p>DockNest makes no requests to GitHub. Turn on automatic checks below to be told about new versions.</p><AdvancedCli/></div></article>;
  if(st==='checking'||(checking&&!offer))return <article className="card uc-hero uc-hero-state"><span className="rel-sym"><IconRefresh size={32} className="dn-spin" aria-hidden="true"/></span><div className="hero-main"><h2 className="rel-title t-card">Checking GitHub for new versions</h2><p role="status">This usually takes a few seconds. You can leave this page.</p></div></article>;
@@ -125,11 +128,11 @@ function FixUpdater({up}){
 const OUTCOME_STATE={Installed:'success','Rolled back':'needs-review','Needs manual action':'failed','Resolved on the host':'success'};
 function OutcomeIcon({outcome}){const k=HISTORY_STATUS[outcome];return <StatusLabel state={OUTCOME_STATE[k]||'queued'}>{k||(String(outcome).startsWith('updater')?'Host updater updated':'Unknown')}</StatusLabel>}
 // Recent updates: a closed-by-default disclosure at the bottom of the Overview; stacked rows, no table (readable at 320px).
-function RecentUpdates({client,version,installMode}){
- const [open,setOpen]=useState(false),[items,setItems]=useState(null),[error,setError]=useState(''),[report,setReport]=useState(null);
+function RecentUpdates({client,version,installMode,startOpen=false}){
+ const [open,setOpen]=useState(startOpen),[items,setItems]=useState(null),[error,setError]=useState(''),[report,setReport]=useState(null);
  useEffect(()=>{if(!open||items)return;let off=false;client.history().then(r=>{if(!off)setItems((Array.isArray(r.items)?r.items:[]).slice(0,5))},e=>{if(!off)setError(e.message)});return()=>{off=true}},[open,items,client]);
  const Chevron=open?IconChevronUp:IconChevronDown;
- return <article className="card uc-recent"><button type="button" className="uc-recent-toggle" aria-expanded={open} aria-controls="uc-recent-list" onClick={()=>setOpen(!open)}><Chevron size={20} aria-hidden="true"/>Recent updates</button>
+ return <article className="card uc-recent"><button type="button" id="uc-recent-toggle" className="uc-recent-toggle" aria-expanded={open} aria-controls="uc-recent-list" onClick={()=>setOpen(!open)}><Chevron size={20} aria-hidden="true"/>Recent updates</button>
   {open&&<div className="uc-recent-body" id="uc-recent-list">{error&&<AlertPanel variant="error">{error}</AlertPanel>}
    {items===null&&!error?<p role="status" className="t-body">Loading recent updates{'…'}</p>:items?.length?<ul className="uc-recent-list">{items.map((r,i)=>{const k=HISTORY_STATUS[r.outcome],failed=k==='Rolled back'||k==='Needs manual action';return <li key={(r.id||'cli')+r.version+r.at+i}>
     <div className="uc-recent-line"><span className="uc-recent-ver">{sameTag(r.version)?r.version:'Version unknown'}</span><span className="uc-recent-date">{fmt(r.at,true)}</span></div>
@@ -187,7 +190,7 @@ export function UpdateCenter({api,activeJobs=[],retry,onRetryHandled}){
     {showSetup&&<article className="card uc-setup"><SetupCard connected={status==='connected'}/></article>}
     {offer&&!data.offer?.cli&&status!=='not-installed'&&!(up.present&&up.supported===false)&&status!=='not-responding'&&<BeforeYouUpdate meta={meta}/>}
     <div className="card-grid uc-split"><AutoChecksCard data={data} busy={busy} checking={checking||data.state==='checking'} onToggle={toggle}/><HostUpdaterCard up={up} status={status} busy={connecting} onCheck={checkConnection}/></div>
-    {status==='not-responding'&&<FixUpdater up={up}/>}<RecentUpdates client={client} version={vv(data.current?.version)} installMode={up.installMode}/>
+    {status==='not-responding'&&<FixUpdater up={up}/>}<RecentUpdates client={client} version={vv(data.current?.version)} installMode={up.installMode} startOpen={data.state==='updater-blocked'||!!data.offer?.blocked}/>
    </div>}
    {tab===id&&id==='whats-new'&&<WhatsNewTab client={client} offer={offer} meta={meta} current={vv(data.current?.version)}/>}
   </div>)}

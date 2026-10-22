@@ -177,6 +177,18 @@ try{
   await context.close();
  }
 
+ // Blocked hero: its Recent updates link opens the disclosure (no dead control), which also starts open.
+ {
+  const mock=newMock({state:updateState({state:'updater-blocked',offer:{update:null,cli:null,blocked:{code:'needs-host-ack',message:'Blocked fixture'}}})}),{context,page}=await open(mock,{hash:'#/update-center'});
+  await page.getByRole('heading',{name:'Updates are blocked'}).waitFor();
+  const toggle=page.locator('#uc-recent-toggle');
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true','Recent updates starts open while updates are blocked');
+  await page.locator('.uc-hero-state').getByRole('button',{name:'Recent updates'}).click();
+  assert.equal(await toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(await page.evaluate(()=>document.activeElement?.id),'uc-recent-toggle','Focus moves to Recent updates');
+  await context.close();
+ }
+
  // 4. Consent: asked once, Escape records nothing, ALREADY_DECIDED, no dialog afterwards.
  {
   const mock=newMock({state:updateState({state:'consent-pending',consent:{checkEnabled:null,decidedBy:null,decidedAt:null},check:null,offer:{update:null,cli:null,blocked:null}})}),{context,page}=await open(mock);
