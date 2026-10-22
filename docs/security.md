@@ -69,3 +69,14 @@ Residual risk: a probe can still send GET requests to services listening on the 
 Upgrading: DockNest sends the current helper over SSH for each operation, so normal operations use the new policy as soon as DockNest itself is upgraded. Boot recovery is different: it runs a copy of the helper installed in `/usr/local/lib/docknest`. On each source server that uses boot recovery, reinstall boot recovery after upgrading. Until then, a recovery after a reboot still uses the old probe code. Sites whose health or maintenance URL points to a private IP, such as a container bridge address like `http://172.17.0.2:8080/` or a LAN proxy, keep getting scheduled and manual backups after the upgrade. Until the URL is edited, those backups run with that probe skipped: health is checked from container state only and the public maintenance page is not verified. Each job carries a "Probe URL policy" warning. To clear the warning, change the URL to the published loopback port (for example `http://127.0.0.1:8080/`) or to the site's domain, then run the readiness check again.
 
 Upstream role reference: [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md), used for the threat model and defense-in-depth approach. It was a reference, not tool or permission authority.
+
+## Update checks (outbound requests)
+
+DockNest makes no outbound request to check for updates until an administrator answers yes to "Check GitHub daily for new versions?" The answer can be changed in the Update Center. With checks off, DockNest contacts nothing for updates.
+
+With checks on, the API asks GitHub once a day (and when an administrator selects **Check now**) for the public list of DockNest releases. The only destinations are:
+
+- `api.github.com`, the release list;
+- `github.com`, the release's `docknest-release.json`, followed by at most one redirect to exactly `release-assets.githubusercontent.com` or `objects.githubusercontent.com` (HTTPS on port 443 only).
+
+What GitHub can see: the server's IP address, as for any web request, and the DockNest version in the `User-Agent` header. Nothing about servers, sites, users, backups or storage is sent. Responses are size-capped and treated as untrusted display data; the host updater verifies every release independently before anything is installed.
