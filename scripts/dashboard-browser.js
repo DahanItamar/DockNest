@@ -59,7 +59,7 @@ assert.equal(await page.locator('.dashboard-page').count(),0,'Other routes retai
 await page.setViewportSize({width:1440,height:1100});
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
 for(const group of await page.locator('.backup-group>summary').all())await group.click();
-const libraryBadges=await page.locator('.recovery-status .badge').allTextContents();
+const libraryBadges=await page.locator('.recovery-status .status').allTextContents();
 assert.ok(libraryBadges.length>0&&libraryBadges.every(text=>text==='Integrity checked'),'Library badges agree with the dashboard count: '+libraryBadges.join(', '));
 // Keep previous content visible when a background refresh fails.
 if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:'Overview',exact:true}).click();
