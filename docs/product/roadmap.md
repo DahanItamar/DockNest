@@ -42,7 +42,7 @@ Work on branches as of 2026-10-21: `perf/api-state-batching`, `fix/worker-lease-
 
 ## Next — 2.2.0 "Safe in-app updates" (planned)
 
-The owner plans: Settings checks GitHub releases, a one-click update through a **host-side systemd updater** (containers keep no Docker socket), a "What's new" modal and safe downgrade.
+The owner plans: Settings checks GitHub releases, a one-click update through a **host-side systemd updater** (containers keep no Docker socket), and a "What's new" modal. The owner later decided (2026-10-22) that downgrades stay command-line only; the update center offers upgrades only. Design: [update-center.md](../update-center.md).
 
 - **Goal:** let non-expert operators stay current without SSH sessions or risk to data.
 - **User outcome:** "I see an update, read what changes, click once, and either it works or it rolls back automatically, with my data unchanged."
