@@ -4,9 +4,31 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+Planned as 2.2.0 (the version bump belongs to the release pull request). Draft notes: [docs/releases/2026-10-22-v2.2.0.md](docs/releases/2026-10-22-v2.2.0.md). Not yet validated on a Linux Docker host.
+
+### Added
+
+- Update Center for administrators: an opt-in update check (answered once; with yes, the worker checks the GitHub release list daily and administrators can check on demand; nothing is sent before the answer), upgrade requests confirmed with the password and an authenticator code (`POST /api/updates/requests`), history, and an update lock that answers `423 UPDATE_IN_PROGRESS` to everything but a short list of routes while an update runs. Public `GET /api/updates/progress` returns only phase, target, state and timestamps. Metadata migration 5 (`update-center`, compatible) adds the tables.
+- Report a bug (Settings > About): a pre-filled public GitHub issue built in the browser from the version and install mode only; the server sends nothing.
+- `TRUST_PROXY` (optional, unset by default): the exact address or CIDR of the reverse proxy whose `X-Forwarded-For` DockNest may trust. Without it no proxy is trusted.
+- Optional host updater: `sudo scripts/install-updater.sh` (also `--status`, `--ack`, `--repair`, `--uninstall`) installs a root socket service that verifies a signed release and runs `scripts/upgrade.sh`. It refuses rootless Docker, Docker Desktop and a second install. New `docknest_updater` volume, mounted read-only in the `api` container.
+- `scripts/upgrade.sh` flags: `--no-prune`, `--no-verify`, `--capabilities`, and for the host updater `--no-fetch`, `--expect-commit`, `--expect-image-digest`, `--upgrade-only`, `--request-id`. The status file gains `warning`, `reason`, `schemaFrom`, `schemaTo` and `requestId`.
+- `docknest-release.json` names the tag, commit, repository and pre-release flag, optional highlights from the release notes front matter, and the updater file hashes; it is signed and the release workflow verifies the signature before publishing.
+- `scripts/recovery-kit.js restore --ignore-updater` for disaster recovery.
+
 ### Changed
 
+- `scripts/upgrade.sh` requires the target tag to be on `origin/main` and, for 2.2.0 and later, verifies the signed release manifest (needs `curl` and `cosign`; `--no-verify` skips both).
+- After a successful upgrade the script keeps the newest 5 upgrade backups, the newest 2 `pre-downgrade-*` and `pre-rollback-*` copies and removes only old images this installation recorded. Runs that failed or were interrupted are kept. Earlier releases never deleted these automatically. `--no-prune` disables it.
+- A failed health check after only compatible migrations now restores the previous release automatically (exit 4, no data discarded) instead of exit 5, and the image built for the failed target is removed.
+- One `upgrade.sh` run at a time, through `data/.upgrade.lock`.
+
 - No public release candidates. The release workflow refuses any tag with a pre-release suffix (`vX.Y.Z-rc.N`) before it builds anything, so GitHub Releases and image tags show final releases only. A candidate is the release merge commit on `main`: the `Release validation` workflow, run from `main` with that commit as `candidate`, validates it privately (built inside the runner, nothing pushed or tagged). A final `vX.Y.Z` tag is published only when its commit has a successful `Verify` run and a successful candidate validation. The workflow no longer runs on pushed tags; re-validating an existing release such as `v2.1.0` stays available by hand. See the release order in [docs/release-validation.md](docs/release-validation.md#release-order).
+
+### Fixed
+
+- The deployment hold waits for a queued or running DockNest self-backup before an upgrade proceeds.
+- A recovery kit taken during a deployment hold no longer restores a manager that refuses all work: export is refused while the hold is on, restore clears it, and restore refuses while the host updater reports a running update.
 
 ## [2.1.0] - 2026-10-22
 
