@@ -1,3 +1,9 @@
+---
+security: false
+features: 0
+improvements: 0
+fixes: 0
+---
 # DockNest X.Y.Z
 
 <!--
@@ -5,6 +11,13 @@ Copy this file to docs/releases/YYYY-MM-DD-vX.Y.Z.md (a vX.Y.md file also covers
 scripts/release-manifest.js finds the notes by that file-name suffix and the image bundles them, so keep the name.
 Keep the sections in this order. Write "None." for a section with nothing to say instead of deleting it.
 Only state what the code, CHANGELOG.md and the docs prove. Use mock data in examples.
+
+The front matter above becomes the signed `highlights` in docknest-release.json, shown as chips in the Update Center.
+It is parsed strictly, and the release fails on any mistake: the first line is exactly ---, then exactly these four
+lines in any order, then a closing ---. security is true or false (true when the Security section lists a fix);
+features, improvements and fixes are whole numbers from 0 to 99 (the number of bullets in What's new, Improved and
+Fixed). No other keys, comments, quotes or blank lines. Delete the whole block, both --- lines included, to publish
+without highlights. The front matter is removed from the GitHub release text.
 -->
 
 Released YYYY-MM-DD. [Full changelog](../../CHANGELOG.md).

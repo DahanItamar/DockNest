@@ -129,6 +129,14 @@ Each GitHub Release also includes `docknest-release.json`:
 {"version":"2.1.0","schemaVersion":2,"minUpgradeFrom":"2.0.0","image":{"name":"ghcr.io/dahanitamar/docknest","digest":"sha256:…"},"notes":"docs/releases/2026-10-22-v2.1.md"}
 ```
 
+From 2.2.0 the manifest also names the release's `tag`, full `commit` SHA, `repository` and `prerelease` (always `false`), the optional `highlights` taken from the notes front matter ([template](releases/TEMPLATE.md)), and an `updater` block with the SHA-256 of each host updater file (empty until the updater ships). It is signed keylessly as well: the release carries `docknest-release.json.sigstore.json`, and the workflow verifies both signatures before it publishes the release. Verify the manifest yourself with:
+
+```sh
+cosign verify-blob docknest-release.json --bundle docknest-release.json.sigstore.json \
+  --certificate-identity https://github.com/DahanItamar/DockNest/.github/workflows/release.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
 Release notes are also bundled in the image under `docs/releases/`. Name new notes `YYYY-MM-DD-vX.Y.Z.md`. A `vX.Y.md` file also covers the `X.Y.0` release.
 
 DockNest never checks for updates on its own. The **About** section in preferences shows the running version and links to the releases page.

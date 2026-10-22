@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { candidateTag } from '../scripts/release-validation.js';
+import { UPDATER_LIST } from '../scripts/release-manifest.js';
 
 const workflow = async name => (await readFile(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 const sha = 'a'.repeat(40);
@@ -44,6 +45,48 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   assert.match(text, /for run in \$runs; do git merge-base --is-ancestor "\$run" origin\/main/, 'the validating run itself ran from a main commit');
   assert.match(text, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$GITHUB_SHA/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);
+});
+
+test('release.yml signs the manifest with a pinned cosign and verifies it before the release is published', async () => {
+  const text = await workflow('release.yml'), publish = text.slice(text.indexOf('\n  publish:\n'));
+  // One cosign-installer, with cosign-release pinned explicitly to an exact version (F6): signing and both
+  // verifications run with that one binary.
+  const installers = [...text.matchAll(/uses: sigstore\/cosign-installer@\S+[^\n]*\n {8}with:\n {10}cosign-release: '([^']+)'\n/g)];
+  assert.equal(installers.length, 1); assert.equal(text.split('sigstore/cosign-installer@').length, 2);
+  const pinned = installers[0][1];
+  assert.match(pinned, /^v\d+\.\d+\.\d+$/);
+  // When the updater's file list names a cosign pin for hosts, it is the same version (I4).
+  const list = await readFile(new URL(`../${UPDATER_LIST}`, import.meta.url), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (list && JSON.parse(list).cosign) assert.equal(JSON.parse(list).cosign.version, pinned);
+
+  const at = needle => { const index = publish.indexOf(needle); assert.ok(index >= 0, needle); return index; };
+  const install = at('sigstore/cosign-installer@'), signImage = at('cosign sign --yes "$IMAGE"');
+  const write = at('node scripts/release-manifest.js --version "$VERSION" --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"');
+  const signBlob = at('cosign sign-blob --yes --bundle docknest-release.json.sigstore.json docknest-release.json');
+  const verifyLocal = at('bash "$RUNNER_TEMP/verify.sh" .'), create = at('gh release create "$@"'), download = at('gh release download "$GITHUB_REF_NAME"');
+  const verifyPublished = at('bash "$RUNNER_TEMP/verify.sh" "$RUNNER_TEMP/published"'), release = at('gh release edit "$GITHUB_REF_NAME" --draft=false --latest');
+  assert.ok(install < signImage && signImage < write && write < signBlob && signBlob < verifyLocal, 'install, sign the image, write and sign the manifest, verify');
+  assert.ok(verifyLocal < create && create < download && download < verifyPublished && verifyPublished < release, 'verify, draft, verify the uploaded copy, then publish');
+  assert.equal(publish.split('cosign sign-blob').length, 2); assert.equal(publish.split('gh release edit').length, 2);
+
+  // Verification pins the identity a host verifier pins: this workflow at this tag, pushed, at this commit.
+  const verify = publish.slice(publish.indexOf("cat > \"$RUNNER_TEMP/verify.sh\" <<'EOF'"), publish.indexOf('\n          EOF\n'));
+  for (const flag of ['--certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF"', '--certificate-oidc-issuer https://token.actions.githubusercontent.com',
+    '--certificate-github-workflow-repository "$GITHUB_REPOSITORY"', '--certificate-github-workflow-trigger push', '--certificate-github-workflow-ref "$GITHUB_REF"', '--certificate-github-workflow-sha "$GITHUB_SHA"']) assert.ok(verify.includes(flag), flag);
+  assert.match(verify, /set -euo pipefail/);
+  assert.match(verify, /cosign verify "\$\{identity\[@\]\}" "\$IMAGE"/);
+  assert.match(verify, /cosign verify-blob "\$\{identity\[@\]\}" --bundle "\$1\/docknest-release\.json\.sigstore\.json" "\$1\/docknest-release\.json"/);
+  assert.match(verify, /release-manifest\.js --check "\$1\/docknest-release\.json" --version "\$VERSION" --commit "\$GITHUB_SHA" --repository "\$GITHUB_REPOSITORY" --digest "\$DIGEST"/);
+
+  // The release is only ever created as a draft with both signed files; a published release is never rewritten.
+  const step = publish.slice(publish.indexOf('Create the GitHub Release as a draft'));
+  assert.match(step, /assets=\(docknest-release\.json docknest-release\.json\.sigstore\.json\)/);
+  assert.match(step, /set -- "\$GITHUB_REF_NAME" "\$\{assets\[@\]\}" --draft --title/);
+  assert.match(step, /if \[ "\$draft" = false \]; then echo "::error::[^"]*"; exit 1; fi/);
+  assert.match(step, /--pattern docknest-release\.json --pattern docknest-release\.json\.sigstore\.json/);
+  assert.match(step, /release-manifest\.js --notes-body "\$notes"/, 'front matter never reaches the release page');
+  assert.doesNotMatch(step, /--notes-file "\$notes"/);
+  assert.equal(text.split('gh release create').length, 2);
 });
 
 test('release-validation.yml validates a main commit privately and names the run after it', async () => {
