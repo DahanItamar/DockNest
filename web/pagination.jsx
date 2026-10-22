@@ -1,10 +1,18 @@
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {ChevronLeft,ChevronRight} from './icons.jsx';
 
-export function Paginated({rows,label,pageSize=5,resetKey='',children,className='',stableHeight=false,fitViewport=false}) {
+// Phones scroll naturally: no reserved empty height and more groups per page (2.3.1).
+const PHONE='(max-width:767px)',PHONE_GROUPS=6;
+function usePhone(){
+ const [phone,setPhone]=useState(()=>typeof matchMedia==='function'&&matchMedia(PHONE).matches);
+ useEffect(()=>{if(typeof matchMedia!=='function')return;const query=matchMedia(PHONE),sync=()=>setPhone(query.matches);sync();query.addEventListener('change',sync);return()=>query.removeEventListener('change',sync);},[]);
+ return phone;
+}
+export function Paginated({rows,label,pageSize=5,resetKey='',children,className='',stableHeight:stableRequested=false,fitViewport:fitRequested=false}) {
+ const phone=usePhone(),stableHeight=stableRequested&&!phone,fitViewport=fitRequested&&!phone;
  const [page,setPage]=useState(1),[reservedHeight,setReservedHeight]=useState(0),measure=useRef(null),last=useRef({width:0,height:0});
  const pager=useRef(null),[viewport,setViewport]=useState({size:1,height:0});
- const size=fitViewport?viewport.size:pageSize;
+ const size=fitViewport?viewport.size:(fitRequested&&phone?PHONE_GROUPS:pageSize);
  // Measure collapsed site summaries and the actual surrounding chrome, rather than
  // assigning a desktop row count. Open histories retain their normal document flow.
  useLayoutEffect(()=>{
