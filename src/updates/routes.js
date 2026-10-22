@@ -1,12 +1,14 @@
 // Update Center routes (docs/update-center.md section 4). Mounted behind the /api chain in src/server.js: session,
 // requireAuth, CSRF, the APP_ORIGIN check on every non-GET, no-store and the global rate limit; admin-only here.
 // Consent, settings and the check (PR 6), then the updater, offer, upgrade requests, status and history (PR 8).
+import { readdirSync, readFileSync } from 'node:fs';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAdmin, requireRecentAuth } from '../auth.js';
 import { db, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
-import { checksEnabled, ensureCheckRow, checkNow, startCheck, compareSemver, finalTag, releaseUrl, limits } from './check.js';
+import { checksEnabled, ensureCheckRow, checkNow, startCheck, compareSemver, finalTag, releaseUrl, limits, highlights, releaseNotes as cleanNotes } from './check.js';
+import { releaseNotes as noteFile, frontMatter } from '../../scripts/release-manifest.js';
 import { eligibility } from './eligibility.js';
 import { recoveryReviewPending } from './requests.js';
 import { TransportError } from './transport.js';
@@ -66,10 +68,57 @@ export function updateHistory(database, { limit = 50, cursor = null } = {}) {
   return { items: page.map(({ key: _key, ...item }) => item), next: more ? Buffer.from(JSON.stringify([page.at(-1).at, page.at(-1).key])).toString('base64url') : null };
 }
 
+const releasesDir = new URL('../../docs/releases/', import.meta.url);
+const seenBody = z.strictObject({ version: z.string().regex(/^v?\d{1,6}\.\d{1,6}\.\d{1,6}$/) });
+// Notes text for display: front matter stripped, control characters removed, 64 KiB cap. Malformed front matter shows nothing.
+function plainNotes(text) { try { return cleanNotes(frontMatter(text).body) || null; } catch { return null; } }
+// The notes file shipped in the running image (section 8), chosen with the release-manifest naming rule. Never fetched.
+export function imageNotes(version, dir = releasesDir) {
+  try {
+    const name = noteFile(version, readdirSync(dir));
+    return name ? plainNotes(readFileSync(new URL(name.slice('docs/releases/'.length), dir), 'utf8')) : null;
+  } catch { return null; }
+}
+// Once per admin: accounts that existed before this version first started, and who have not closed it yet.
+export function whatsNewFor(database, release, user, dir = releasesDir) {
+  const markdown = imageNotes(release.version, dir), tag = 'v' + release.version;
+  if (!markdown) return { show: false, version: tag, markdown: '' };
+  const first = database.prepare('SELECT first_started_at FROM release_history WHERE version=?').get(release.version)?.first_started_at;
+  const created = database.prepare('SELECT created_at FROM users WHERE id=?').get(user.id)?.created_at;
+  const seen = database.prepare('SELECT version FROM whats_new_seen WHERE user_id=?').get(user.id)?.version === release.version;
+  return { show: Boolean(first && created && created < first && !seen), version: tag, markdown };
+}
+function releaseDetails(database, release, latest) {
+  const row = database.prepare('SELECT release_notes,manifest FROM update_checks WHERE id=1').get(), manifest = cachedManifest({ ...row, latest_version: latest.version });
+  const to = Number.isInteger(manifest?.schemaVersion) ? manifest.schemaVersion : null, from = release.schemaVersion;
+  let minimumMet = true; try { minimumMet = !latest.minUpgradeFrom || compareSemver(release.version, latest.minUpgradeFrom) >= 0; } catch { /* Unparsable: eligibility decides. */ }
+  const run = database.prepare("SELECT accepted_at,requested_at,finished_at FROM update_requests WHERE state='succeeded' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1").get();
+  const seconds = run ? Math.round((Date.parse(run.finished_at) - Date.parse(run.accepted_at ?? run.requested_at)) / 1000) : NaN;
+  const notes = plainNotes(row?.release_notes ?? '');
+  return { version: latest.version, publishedAt: latest.publishedAt, releaseUrl: latest.releaseUrl, highlights: highlights(manifest?.highlights), highlightsVerified: false,
+    compatibility: { minimumMet, updatesDatabase: to === null ? 'unknown' : to !== from ? 'yes' : 'no', fromSchema: from, toSchema: to },
+    downtime: Number.isFinite(seconds) && seconds >= 0 ? { seconds, basis: 'last-run' } : { seconds: null, basis: null }, pauses: ['Backups and restores'],
+    // 2.2.0: the cached GitHub body, always labelled unverified. Verified notes come with the broker check (D20).
+    notesMarkdown: notes, notesSource: notes ? 'github-unverified' : null };
+}
+
 export function updateRoutes({ release, fetch, service } = {}) {
   const router = Router(), options = () => ({ db, fetch, version: release.version }), state = () => updateState(db, release, service);
   router.use(requireAdmin);
   router.get('/', async (_req, res) => { await service?.sync(); res.json(state()); });
+  // Only the current offer: cached data, never a network call.
+  router.get('/releases/:version', (req, res) => {
+    const latest = baseState(db, release).check?.latest;
+    if (!latest || !cachedOffer(db, release) || req.params.version.replace(/^v/, '') !== latest.version.replace(/^v/, '')) return res.status(404).json({ error: 'That version is not the current offer.', code: 'NOT_OFFERED' });
+    res.json(releaseDetails(db, release, latest));
+  });
+  router.get('/whats-new', (req, res) => res.json(whatsNewFor(db, release, req.user)));
+  router.post('/whats-new/seen', (req, res) => {
+    const { version } = seenBody.parse(req.body);
+    if (version.replace(/^v/, '') !== release.version) return res.status(400).json({ error: 'That is not the running version.', code: 'NOT_RUNNING_VERSION' });
+    db.prepare('INSERT INTO whats_new_seen(user_id,version,seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,seen_at=excluded.seen_at').run(req.user.id, release.version, new Date().toISOString());
+    res.status(204).end();
+  });
   router.get('/status', async (_req, res) => {
     await service.sync();
     const snapshot = service.snapshot(), status = snapshot.active ?? snapshot.latest;
