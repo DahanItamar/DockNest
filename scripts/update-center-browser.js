@@ -245,7 +245,9 @@ try{
   assert.equal(await heightOf(back),await heightOf(retry),'Identical buttons per row');
   await noWrap(page,'.progress-view');
   assert.equal(await retry.getAttribute('aria-disabled'),null);
-  assert.equal(await page.getByRole('button',{name:/Open GitHub/}).count(),0,'Failure reports are a 2.3.0 feature');
+  const report=page.locator('.progress-actions').getByRole('button',{name:'Open GitHub',exact:true});
+  assert.equal(await report.count(),1,'Administrators get the update-failure report (2.4.0)');
+  assert.equal(await heightOf(report),await heightOf(back),'Identical buttons per row');
   await retry.click();
   await page.getByRole('dialog',{name:'Start the update to DockNest v2.3.0?'}).waitFor();
   assert.equal(mock.calls.includes('POST /api/updates/requests'),false);
@@ -315,10 +317,10 @@ try{
   await context.route('https://github.com/**',route=>{github.push({url:route.request().url(),referer:route.request().headers().referer});return route.fulfill({status:200,contentType:'text/html',body:'<title>GitHub</title>'})});
   await page.getByRole('button',{name:'Open account preferences'}).click();
   const settings=page.getByRole('dialog',{name:'Settings'});
-  await settings.getByRole('button',{name:/Open GitHub/}).click();
+  await settings.getByRole('button',{name:'Report a bug',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Review what will be shared'});
   await dialog.waitFor();
-  await dialog.getByText('This issue will be public on GitHub and linked to your GitHub account.',{exact:false}).waitFor();
+  await dialog.getByText('Issues on the DockNest repository are public and linked to your GitHub account.',{exact:false}).waitFor();
   const link=dialog.getByRole('link',{name:/Open GitHub/});
   assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');assert.equal(await link.getAttribute('referrerpolicy'),'no-referrer');
   const url=new URL(await link.getAttribute('href'));

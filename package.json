@@ -39,7 +39,8 @@
     "test:mobile": "node scripts/mobile-browser.js",
     "audit:repo": "node scripts/audit-repository.js",
     "test:theme": "node scripts/theme-browser.js",
-    "test:updates": "node scripts/update-center-browser.js"
+    "test:updates": "node scripts/update-center-browser.js",
+    "test:reports": "node scripts/problem-reports-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
