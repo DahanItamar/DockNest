@@ -12,7 +12,8 @@ StartLimitBurst=5
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 -I -B /usr/local/lib/docknest-updater/current/broker.py serve
-User=root
+# No User= line: the unit runs as root by default, and on systemd 259 an explicit User=root with NoNewPrivileges=yes
+# leaves CAP_SETUID out of the permitted set, so setpriv cannot start the verifier (verify-unavailable).
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_READ_SEARCH
 AmbientCapabilities=
 NoNewPrivileges=yes

@@ -30,6 +30,7 @@ test('systemd units carry the threat model hardening and limits', () => {
  const socketUnit = read('updater/docknest-updater.socket.in'), service = read('updater/docknest-updater.service.in'), tmpfiles = read('updater/docknest-updater.tmpfiles.in');
  for (const line of ['ListenStream=@VOLUME@/updater.sock', 'SocketUser=root', 'SocketGroup=@API_GROUP@', 'SocketMode=0660', 'Accept=no', 'Backlog=8',
   'TriggerLimitIntervalSec=60', 'TriggerLimitBurst=10', 'ConditionPathIsDirectory=@VOLUME@', 'RequiresMountsFor=@DOCKER_ROOT@']) assert.match(socketUnit, new RegExp(`^${line}$`, 'm'), line);
+ assert.doesNotMatch(service, /^User=/m, 'an explicit User=root drops CAP_SETUID on systemd 259');
  for (const line of ['CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_READ_SEARCH', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=read-only',
   'PrivateTmp=yes', 'PrivateDevices=yes', 'ProtectKernelTunables=yes', 'ProtectKernelModules=yes', 'ProtectKernelLogs=yes', 'ProtectControlGroups=yes', 'ProtectClock=yes',
   'ProtectHostname=yes', 'RestrictNamespaces=yes', 'RestrictSUIDSGID=yes', 'LockPersonality=yes', 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',

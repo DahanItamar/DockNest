@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-10-22
+
+See [docs/releases/2026-10-22-v2.2.2.md](docs/releases/2026-10-22-v2.2.2.md).
+
 ## [2.2.1] - 2026-10-22
 
 See [docs/releases/2026-10-22-v2.2.1.md](docs/releases/2026-10-22-v2.2.1.md).
