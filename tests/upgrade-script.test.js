@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile, readdir, stat, symlink } from 'node:fs/promises';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, writeFile, copyFile, readdir, stat, symlink, utimes } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
@@ -12,6 +13,7 @@ const shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 const script = new URL('../scripts/upgrade.sh', import.meta.url), fake = new URL('./fixtures/fake-docker.sh', import.meta.url);
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8' }).trim();
 const pkg = (version, min) => JSON.stringify({ name: 'docknest', version, private: true, ...(min ? { docknest: { minUpgradeFrom: min } } : {}) }, null, 2) + '\n';
+const fakeId = version => 'sha256:' + createHash('sha256').update(version).digest('hex'); // the test double's image IDs
 const migrations = versions => 'export const migrations = [\n' + versions.map(version => `  { version: ${Math.abs(version)}, name: 'm${Math.abs(version)}',${version < 0 ? ' compatible: true,' : ''} up: () => {} },\n`).join('') + '];\n';
 
 async function fixture(t) {
@@ -37,12 +39,29 @@ async function fixture(t) {
   await writeFile(join(work, '.env'), 'APP_ORIGIN=https://docknest.example.invalid\n');
   await writeFile(join(bin, 'docker'), `#!/bin/sh\nexec sh '${new URL(fake).pathname.replace(/^\/([A-Za-z]:)/, '$1')}' "$@"\n`, { mode: 0o755 });
   await writeFile(join(state, 'running'), 'up\n'); await writeFile(join(state, 'version'), '2.0.0\n'); await writeFile(join(state, 'schema'), '0\n');
-  const exec = (args, extra = {}) => spawnSync('sh', [join(work, 'scripts/upgrade.sh'), '--non-interactive', '--timeout', '0', '--wait', '0', '--status-file', join(root, 'status.json'), ...args], { cwd: work, encoding: 'utf8', env: { ...process.env, PATH: bin + delimiter + process.env.PATH, FAKE_STATE: state, DOCKNEST_DIR: '', ...extra } });
+  const argv = args => [join(work, 'scripts/upgrade.sh'), '--non-interactive', '--timeout', '0', '--wait', '0', '--status-file', join(root, 'status.json'), ...args];
+  const env = { ...process.env, PATH: bin + delimiter + process.env.PATH, FAKE_STATE: state, DOCKNEST_DIR: '' };
+  const exec = (args, extra = {}) => spawnSync('sh', argv(args), { cwd: work, encoding: 'utf8', env: { ...env, ...extra } });
+  const start = args => spawn('sh', argv(args), { cwd: work, env });
   const run = (...args) => exec(args);
   const read = async name => (await readFile(join(state, name), 'utf8').catch(() => '')).trim();
   const status = async () => JSON.parse(await readFile(join(root, 'status.json'), 'utf8'));
-  return { root, work, state, run, exec, bin, read, status, head: () => git(work, 'describe', '--tags', '--always') };
+  const backups = async () => (await readdir(join(work, 'data/upgrade-backups')).catch(() => [])).sort();
+  return { root, work, state, run, exec, start, bin, read, status, backups, head: () => git(work, 'describe', '--tags', '--always') };
 }
+// An upgrade backup as earlier runs leave it: previous-release with an image ID, and a result marker unless legacy.
+async function seed(f, name, { result, imageId = '' } = {}) {
+  const dir = join(f.work, 'data/upgrade-backups', name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'previous-release'), `commit=0\nversion=1.0.0\nschema=1\nimage=\nimageId=${imageId}\n`);
+  if (result !== undefined) await writeFile(join(dir, 'result'), result);
+  return dir;
+}
+// Images the test double already holds: [version, ...tags].
+const images = (f, list) => Promise.all([
+  writeFile(join(f.state, 'store'), list.map(([version]) => `${fakeId(version)} ${version}\n`).join('')),
+  writeFile(join(f.state, 'tags'), list.flatMap(([version, ...tags]) => tags.map(tag => `${tag} ${fakeId(version)}\n`)).join(''))
+]);
 
 test('upgrades to the newest final release, keeps a rollback copy and releases the hold', { skip: !shell }, async t => {
   const f = await fixture(t), result = f.run();
@@ -54,7 +73,10 @@ test('upgrades to the newest final release, keeps a rollback copy and releases t
   assert.equal(status.from, '2.0.0'); assert.equal(status.to, '2.1.0'); assert.match(status.startedAt, /^\d{4}-\d\d-\d\dT/);
   const [saved] = await readdir(join(f.work, 'data/upgrade-backups'));
   assert.match(saved, /-2\.0\.0-to-2\.1\.0$/);
-  assert.deepEqual((await readdir(join(f.work, 'data/upgrade-backups', saved))).sort(), ['.env', 'master.key', 'previous-release', 'setup.token']);
+  assert.deepEqual((await readdir(join(f.work, 'data/upgrade-backups', saved))).sort(), ['.env', 'master.key', 'previous-release', 'result', 'setup.token']);
+  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', saved, 'result'), 'utf8'), 'writer=2.2.0\nexit=0\n', 'writer version, then the exit code');
+  assert.match(await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8'), new RegExp(`imageId=${fakeId('2.0.0')}\n`), 'source mode records the previous image ID too');
+  assert.equal(status.warning, null);
   if (process.platform !== 'win32') {
     assert.equal((await stat(join(f.work, 'data/upgrade-backups', saved))).mode & 0o777, 0o700, 'saved secrets stay private');
     assert.equal((await stat(join(f.work, 'data/upgrade-backups', saved, 'previous-release'))).mode & 0o077, 0);
@@ -97,23 +119,44 @@ test('a failed build or an unhealthy start before migration returns to the previ
   const status = await f.status(); assert.equal(status.ok, false); assert.equal(status.phase, 'failed');
 });
 
-test('an unhealthy start after migration stops with exact rollback commands instead of guessing', { skip: !shell }, async t => {
+test('an unhealthy start after an incompatible migration stops with exact rollback commands instead of guessing', { skip: !shell }, async t => {
   const f = await fixture(t);
-  await writeFile(join(f.state, 'unhealthy'), '2.1.0');
-  const result = f.run('--version', 'v2.1.0');
-  assert.equal(result.status, 5);
-  assert.equal(f.head(), 'v2.1.0', 'code stays on the migrated release');
+  assert.equal(f.run('--version', 'v2.1.0').status, 0);
+  await writeFile(join(f.state, 'unhealthy'), '2.2.0-rc.1');
+  const result = f.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 5, result.stderr);
+  assert.equal(f.head(), 'v2.2.0-rc.1', 'code stays on the migrated release'); assert.equal(await f.read('schema'), '3');
   const status = await f.status();
-  assert.equal(status.ok, false); assert.match(status.rollbackHint, /state-v0-to-v2-\*\.sqlite/); assert.match(status.rollbackHint, /git checkout [0-9a-f]{40}/);
-  assert.equal(await f.read('restores'), '');
+  assert.equal(status.ok, false); assert.match(status.rollbackHint, /state-v2-to-v3-\*\.sqlite/);
+  assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.1.0^{commit}')} && docker tag ${fakeId('2.1.0')} docknest:local && docker compose up -d --no-build`), status.rollbackHint);
+  assert.equal(await f.read('restores'), ''); assert.equal(await f.read('removed'), '', 'nothing is pruned after exit 5');
+  const failed = (await f.backups()).find(name => name.endsWith('-2.1.0-to-2.2.0-rc.1'));
+  assert.equal(await readFile(join(f.work, 'data/upgrade-backups', failed, 'result'), 'utf8'), 'writer=2.2.0\nexit=5\n');
 });
 
-test('downgrades across additive migrations need no snapshot; incompatible ones need an accepted matching snapshot', { skip: !shell }, async t => {
+test('A10: an unhealthy start after a compatible-only migration returns to the previous release with exit 4', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.state, 'unhealthy'), '2.1.0'); // v2.0.0 runs on schema 2: migration 1 is its own schema, 2 is compatible
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 4, result.stderr + result.stdout);
+  assert.match(result.stderr, /2\.0\.0 was restored automatically and runs on the migrated metadata/);
+  assert.equal(f.head(), 'v2.0.0'); assert.equal(await f.read('version'), '2.0.0'); assert.equal(await f.read('hold'), 'false');
+  assert.equal(await f.read('schema'), '2', 'the migrated metadata is kept, nothing is restored'); assert.equal(await f.read('restores'), '');
+  // Source mode: back to the recorded image by re-tagging it, without a rebuild; then the failed build is removed.
+  const calls = await f.read('calls');
+  assert.match(calls, new RegExp(`^tag ${fakeId('2.0.0')} docknest:local `, 'm')); assert.match(calls, /^compose up -d --no-build api worker /m);
+  assert.equal(calls.match(/^compose build /gm).length, 1, 'no rebuild of the previous release');
+  assert.equal(await f.read('removed'), fakeId('2.1.0'), 'exit 4 removes the image this run built');
+  const status = await f.status(); assert.equal(status.ok, false); assert.equal(status.phase, 'failed'); assert.equal(status.warning, null);
+});
+
+test('manual CLI downgrade still works: additive migrations need no snapshot; incompatible ones need an accepted matching snapshot', { skip: !shell }, async t => {
   const f = await fixture(t);
   assert.equal(f.run('--version', 'v2.1.0').status, 0);
   let result = f.run('--version', 'v2.0.0');
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(result.stdout, /only adds compatible objects/); assert.equal(f.head(), 'v2.0.0'); assert.equal(await f.read('restores'), '');
+  assert.equal((await f.status()).phase, 'done'); assert.equal(await f.read('version'), '2.0.0'); assert.equal((await f.backups()).length, 2, 'retention after a downgrade keeps the recent backups');
   assert.equal(f.run('--version', 'v2.1.0').status, 0);
   assert.equal(f.run('--version', 'v2.2.0-rc.1').status, 0);
   assert.equal(await f.read('schema'), '3');
@@ -196,16 +239,176 @@ test('image mode switches only the tag per command, rolls back to the recorded i
   assert.equal(result.status, 4, result.stderr + result.stdout);
   let calls = await f.read('calls');
   assert.match(calls, /pull api worker IMG=ghcr\.io\/example\/docknest:2\.1\.0/);
-  assert.match(calls, /up -d --pull never api worker IMG=sha256:fakeid-2\.0\.0/, 'rollback uses the recorded image id');
+  assert.ok(calls.includes(`up -d --pull never api worker IMG=${fakeId('2.0.0')}`), 'rollback uses the recorded image id');
   assert.equal(await f.read('version'), '2.0.0'); assert.match(await readFile(env, 'utf8'), /DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.0\.0/);
+  assert.equal(await f.read('removed'), fakeId('2.1.0'), 'exit 4 removes the image this run pulled');
   const [saved] = await readdir(join(f.work, 'data/upgrade-backups'));
-  assert.match(await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8'), /image=ghcr\.io\/example\/docknest:2\.0\.0\nimageId=sha256:fakeid-2\.0\.0/);
+  assert.ok((await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8')).includes(`image=ghcr.io/example/docknest:2.0.0\nimageId=${fakeId('2.0.0')}\n`));
   await rm(join(f.state, 'unhealthy')); await rm(join(f.state, 'no-migrate'));
   result = f.run('--version', 'v2.1.0');
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(await readFile(env, 'utf8'), /^DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.1\.0$/m); assert.match(await readFile(env, 'utf8'), /APP_ORIGIN/);
-  assert.equal((await f.status()).rollbackHint.includes('sha256:fakeid-2.0.0'), true);
+  assert.equal((await f.status()).rollbackHint.includes(fakeId('2.0.0')), true);
+  assert.equal(await f.read('removed'), fakeId('2.1.0'), 'the running and the previous image are never removed');
   await writeFile(env, 'DOCKNEST_IMAGE=ghcr.io/example/docknest@sha256:' + 'a'.repeat(64) + '\n');
   result = f.run('--version', 'v2.0.0');
   assert.equal(result.status, 2); assert.match(result.stderr, /pinned by digest/);
+});
+
+const forbidden = /image prune|system prune|builder prune|image rm (-f|--force)/;
+const win32 = process.platform === 'win32';
+
+test('retention after a success keeps the newest 5 backups and every run that needs manual action, and removes only recorded images of this repository', { skip: !shell }, async t => {
+  const f = await fixture(t), dir = join(f.work, 'data/upgrade-backups');
+  await writeFile(join(f.state, 'has-prune'), '');
+  await images(f, [['1.0.0'], ['1.1.0', 'docknest:old'], ['1.2.0'], ['1.3.0'], ['busybox', 'busybox:latest'], ['9.9.9']]);
+  await writeFile(join(f.state, 'in-use'), fakeId('1.3.0') + '\n'); // a stopped container still uses it
+  const old = {
+    '20200101T000000Z-1.0.0-to-1.1.0': { imageId: fakeId('1.0.0') }, // written before 2.2.0: no result marker
+    '20200102T000000Z-1.1.0-to-1.2.0': { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('busybox') },
+    '20200103T000000Z-1.2.0-to-1.3.0': { result: 'writer=2.2.0\nexit=5\n', imageId: fakeId('1.2.0') },
+    '20200104T000000Z-1.3.0-to-1.4.0': { result: 'writer=2.2.0\nexit=6\n' },
+    '20200105T000000Z-1.4.0-to-1.5.0': { result: 'writer=2.2.0\n' }, // interrupted: no exit code
+    '20200106T000000Z-1.5.0-to-1.6.0': { result: 'writer=2.2.0\nexit=4\n', imageId: fakeId('1.3.0') },
+    '20200107T000000Z-1.6.0-to-1.7.0': { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.1.0') },
+    '20200108T000000Z-1.7.0-to-2.0.0': { result: 'writer=2.2.0\nexit=2\n', imageId: fakeId('2.0.0') }
+  };
+  for (const [name, options] of Object.entries(old)) await seed(f, name, options);
+  // Canaries: names that do not match exactly, a plain file and (where links work) a link to a folder elsewhere.
+  const canaries = ['notes', '20190101T000000Z-x-from-y', '20190101T000000Z-file-to-x', '.20190101T000000Z-a-to-b', ...(win32 ? [] : ['20190101T000000Z-link-to-x'])];
+  const outside = join(f.root, 'outside'); await mkdir(outside); await writeFile(join(outside, 'canary'), 'keep');
+  await mkdir(join(dir, 'notes')); await mkdir(join(dir, '20190101T000000Z-x-from-y')); await mkdir(join(dir, '.20190101T000000Z-a-to-b'));
+  await writeFile(join(dir, '20190101T000000Z-file-to-x'), 'keep');
+  if (!win32) await symlink(outside, join(dir, '20190101T000000Z-link-to-x'));
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const kept = await f.backups(), save = kept.find(name => name.endsWith('-2.0.0-to-2.1.0') && !name.startsWith('2020'));
+  assert.ok(save);
+  assert.deepEqual(kept.filter(name => name.startsWith('2020')), Object.keys(old).slice(2), 'newest 5 with this run, plus the 5, 6 and interrupted runs');
+  for (const name of canaries) assert.ok(kept.includes(name), name);
+  assert.equal(await readFile(join(outside, 'canary'), 'utf8'), 'keep'); assert.equal(await readFile(join(dir, '20190101T000000Z-file-to-x'), 'utf8'), 'keep');
+  assert.match(result.stdout, /Removed data\/upgrade-backups\/20200101T000000Z-1\.0\.0-to-1\.1\.0/); assert.match(result.stdout, /Keeping data\/upgrade-backups\/20200103T000000Z/);
+  // Only the recorded, untagged 1.0.0 image goes: busybox and docknest:old are other repositories, 1.2.0 belongs to a
+  // run that needs manual action, 1.3.0 is in use (reported), 2.0.0 is the previous and 2.1.0 the running image.
+  assert.equal(await f.read('removed'), fakeId('1.0.0'));
+  const status = await f.status(), calls = await f.read('calls');
+  assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.ok(status.warning.includes(`Could not remove image ${fakeId('1.3.0')}`), status.warning);
+  assert.match(calls, /^compose exec -T api node scripts\/prune-upgrade-artifacts\.js IMG=$/m); assert.doesNotMatch(calls, forbidden);
+  assert.ok(!calls.includes(`image rm ${fakeId('busybox')}`) && !calls.includes(`image rm ${fakeId('1.2.0')}`) && !calls.includes(`image rm ${fakeId('9.9.9')}`));
+  assert.equal(await readFile(join(dir, save, 'result'), 'utf8'), 'writer=2.2.0\nexit=0\n');
+});
+
+test('failed and refused runs, --dry-run and --no-prune remove nothing; the dry run lists what retention would remove', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.state, 'has-prune'), '');
+  await images(f, [['1.0.0']]);
+  for (let day = 1; day <= 6; day++) await seed(f, `2020010${day}T000000Z-1.0.${day}-to-1.0.${day + 1}`, { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.0.0') });
+  const seeded = await f.backups();
+  await writeFile(join(f.state, 'busy'), '');
+  assert.equal(f.run('--version', 'v2.1.0').status, 3);
+  await rm(join(f.state, 'busy'));
+  await writeFile(join(f.state, 'unhealthy'), '2.1.0'); await writeFile(join(f.state, 'no-migrate'), '');
+  assert.equal(f.run('--version', 'v2.1.0').status, 4);
+  await rm(join(f.state, 'unhealthy')); await rm(join(f.state, 'no-migrate'));
+  const after = await f.backups();
+  assert.equal(after.length, 7); assert.ok(seeded.every(name => after.includes(name)));
+  assert.equal(await f.read('removed'), fakeId('2.1.0'), 'exit 4 removes only the image that run built');
+  const dry = f.run('--version', 'v2.1.0', '--dry-run');
+  assert.equal(dry.status, 0, dry.stderr);
+  // Seven folders; a real run adds one and keeps five, so the three oldest would go, and the recorded 1.0.0 image.
+  for (const day of [1, 2, 3]) assert.match(dry.stdout, new RegExp(`Would remove data/upgrade-backups/2020010${day}T`));
+  assert.doesNotMatch(dry.stdout, /Would remove data\/upgrade-backups\/20200104T/); assert.ok(dry.stdout.includes(`Would remove image ${fakeId('1.0.0')}`));
+  assert.deepEqual(await f.backups(), after); assert.match(await f.read('calls'), /prune-upgrade-artifacts\.js --dry-run/);
+  let result = f.run('--version', 'v2.1.0', '--no-prune');
+  assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /Retention skipped \(--no-prune\)/);
+  assert.equal((await f.backups()).length, 8); assert.equal(await f.read('removed'), fakeId('2.1.0'));
+  await writeFile(join(f.state, 'unhealthy'), '2.2.0-rc.1'); // incompatible migration, then unhealthy: exit 5
+  result = f.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 5, result.stderr);
+  assert.equal((await f.backups()).length, 9); assert.equal(await f.read('removed'), fakeId('2.1.0'));
+  const calls = await f.read('calls');
+  assert.doesNotMatch(calls, forbidden); assert.ok(!calls.includes('node scripts/prune-upgrade-artifacts.js IMG='), 'the state volume is pruned only after a success');
+});
+
+test("this run's backup is kept by identity; names dated in the future are ordered by modification time", { skip: !shell }, async t => {
+  const f = await fixture(t), future = Date.now() / 1000 + 3600;
+  const names = [1, 2, 3, 4, 5, 6, 7].map(day => `2099010${day}T000000Z-a-to-b`);
+  for (const [index, name] of names.entries()) {
+    const dir = await seed(f, name, { result: 'writer=2.2.0\nexit=0\n' });
+    // 1 to 5 look newer than this run (a clock that went back); 6 and 7 are old despite their later names.
+    const time = index < 5 ? future : Date.UTC(2014 + index, 0, 1) / 1000;
+    await utimes(dir, time, time);
+  }
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const kept = await f.backups();
+  assert.deepEqual(kept.filter(name => name.startsWith('2099')), names.slice(0, 5));
+  assert.equal(kept.filter(name => name.endsWith('-2.0.0-to-2.1.0')).length, 1, "this run's backup survives although five others sort before it");
+});
+
+test('image cleanup is skipped when the running or previous image ID is unknown; source rollback then rebuilds', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await images(f, [['1.0.0']]);
+  await seed(f, '20200101T000000Z-1.0.0-to-2.0.0', { result: 'writer=2.2.0\nexit=0\n', imageId: fakeId('1.0.0') });
+  await writeFile(join(f.state, 'no-images'), '');
+  await writeFile(join(f.state, 'unhealthy'), '2.1.0'); await writeFile(join(f.state, 'no-migrate'), '');
+  let result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 4, result.stderr);
+  const calls = await f.read('calls');
+  assert.equal(calls.match(/^compose build /gm).length, 2, 'without a recorded ID the previous release is rebuilt'); assert.doesNotMatch(calls, /^tag /m);
+  assert.equal(await f.read('version'), '2.0.0');
+  await rm(join(f.state, 'unhealthy')); await rm(join(f.state, 'no-migrate'));
+  result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Image cleanup skipped/);
+  assert.ok(!(await f.read('calls')).includes(`image rm ${fakeId('1.0.0')}`)); assert.ok(!(await f.read('removed')).includes(fakeId('1.0.0')));
+});
+
+test('a cleanup that hangs or fails still ends with exit 0, status done and the new release kept', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.state, 'has-prune'), ''); await writeFile(join(f.state, 'hang-prune'), '4');
+  let result = f.run('--version', 'v2.1.0', '--cleanup-timeout', '1');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  let status = await f.status();
+  assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.match(status.warning, /stopped after 1s/);
+  assert.equal(f.head(), 'v2.1.0'); assert.equal(await f.read('version'), '2.1.0'); assert.equal(await f.read('hold'), 'false');
+  await rm(join(f.state, 'hang-prune')); await writeFile(join(f.state, 'fail-prune'), ''); await writeFile(join(f.state, 'fail-rm'), '');
+  result = f.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  status = await f.status();
+  assert.equal(status.ok, true); assert.match(status.warning, /could not be removed/); assert.ok(status.warning.length <= 1024);
+  assert.doesNotMatch(status.warning, /upgrade-snapshots\/pre-rollback-1/, 'the warning never carries container output');
+  assert.equal(await f.read('version'), '2.2.0-rc.1');
+});
+
+test('a signal during cleanup is still a success: exit 0, status done, never a revert', { skip: !shell || win32 }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.state, 'has-prune'), ''); await writeFile(join(f.state, 'hang-prune'), '3');
+  const child = f.start(['--version', 'v2.1.0']), exited = new Promise(resolve => child.on('exit', code => resolve(code)));
+  child.stdout.resume(); child.stderr.resume();
+  for (const deadline = Date.now() + 60000; !existsSync(join(f.state, 'in-cleanup')) && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 50));
+  child.kill('SIGTERM');
+  assert.equal(await exited, 0);
+  const status = await f.status();
+  assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.match(status.warning, /interrupted/);
+  assert.equal(f.head(), 'v2.1.0'); assert.equal(await f.read('version'), '2.1.0'); assert.equal(await f.read('hold'), 'false');
+  assert.doesNotMatch(await f.read('calls'), /up -d --no-build/, 'nothing was reverted');
+});
+
+test('a symlinked data/upgrade-backups is never pruned through', { skip: !shell || win32 }, async t => {
+  const f = await fixture(t), real = join(f.root, 'elsewhere');
+  await mkdir(real);
+  for (let day = 1; day <= 6; day++) await mkdir(join(real, `2020010${day}T000000Z-a-to-b`));
+  await symlink(real, join(f.work, 'data/upgrade-backups'));
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal((await readdir(real)).length, 7);
+  assert.match((await f.status()).warning, /symbolic link/);
+});
+
+test('the writer version recorded in upgrade backups is never older than the release', async () => {
+  const writer = (await readFile(script, 'utf8')).match(/^WRITER=(\d+\.\d+\.\d+)$/m)?.[1], { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(writer);
+  const [a, b] = [writer, version].map(value => value.split('-')[0].split('.').map(Number)), order = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  assert.ok(order >= 0, `WRITER=${writer} in scripts/upgrade.sh is older than package.json ${version}`);
 });
