@@ -3,7 +3,9 @@
 # State lives in $FAKE_STATE. Images: "store" lists "<id> <version>" with id = sha256 of the version (fake_id), "tags"
 # lists "<ref> <id>" and "digests" "<name@sha256:...> <id>". Source mode runs the version docknest:local points to (or
 # package.json before anything was built); image mode ("image-mode" file) runs $DOCKNEST_IMAGE (environment first, then
-# ./.env), either name:tag or an image id.
+# ./.env), either name:tag[@sha256:...] or an image id. `docker build -t NAME -` (the --expect-commit source build) reads
+# the tar context from stdin, lists it in "context" and tags the package.json version it contains. "label" overrides the
+# org.opencontainers.image.version label, which is otherwise the image's version.
 set -eu
 S=$FAKE_STATE
 echo "$* IMG=${DOCKNEST_IMAGE:-}" >> "$S/calls"
@@ -12,7 +14,7 @@ image_ref() { echo "${DOCKNEST_IMAGE:-$(sed -n 's/^DOCKNEST_IMAGE=//p' .env 2>/d
 fake_id() { printf 'sha256:%s' "$(printf '%s' "$1" | sha256sum | cut -c1-64)"; }
 ensure() { id=$(fake_id "$1"); awk -v i="$id" '$1==i{f=1}END{exit !f}' "$S/store" 2>/dev/null || echo "$id $1" >> "$S/store"; echo "$id"; }
 version_of() { awk -v i="$1" '$1==i{print $2; exit}' "$S/store" 2>/dev/null; }
-resolve() { case "$1" in sha256:*) awk -v i="$1" '$1==i{print $1; exit}' "$S/store" 2>/dev/null ;; *) awk -v r="$1" '$1==r{print $2}' "$S/tags" 2>/dev/null | tail -n 1 ;; esac; }
+resolve() { case "$1" in sha256:*) awk -v i="$1" '$1==i{print $1; exit}' "$S/store" 2>/dev/null ;; *) cat "$S/tags" "$S/digests" 2>/dev/null | awk -v r="$1" '$1==r{print $2}' | tail -n 1 ;; esac; }
 retag() { { awk -v r="$1" '$1!=r' "$S/tags" 2>/dev/null || true; echo "$1 $2"; } > "$S/tags.new"; mv "$S/tags.new" "$S/tags"; }
 pkg_version() { sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' package.json | head -n 1; }
 running_version() { read_state version; }
@@ -26,6 +28,8 @@ case "$1" in
         id=$(resolve "$1"); [ -n "$id" ] || exit 1
         case "$format" in
           *RepoTags*) awk -v i="$id" '$2==i{print $1}' "$S/tags" "$S/digests" 2>/dev/null || true ;;
+          *RepoDigests*) awk -v i="$id" '$2==i{print $1}' "$S/digests" 2>/dev/null || true ;;
+          *Labels*) read_state label "$(version_of "$id")" ;;
           *) echo "$id" ;;
         esac ;;
       rm)
@@ -43,6 +47,10 @@ case "$1" in
     esac
     exit 0 ;;
   tag) id=$(resolve "$2"); [ -n "$id" ] || exit 1; retag "$3" "$id"; exit 0 ;;
+  build)
+    [ -e "$S/fail-build" ] && exit 1
+    rm -rf "$S/ctx"; mkdir "$S/ctx"; (cd "$S/ctx" && tar -xf -); ls -A "$S/ctx" > "$S/context"
+    retag "$3" "$(ensure "$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$S/ctx/package.json" | head -n 1)")"; exit 0 ;;
   compose) shift ;;
   *) exit 1 ;;
 esac
@@ -58,14 +66,14 @@ case "$1" in
   ps) [ "$(read_state running)" = up ] && printf 'api\nworker\n' ;;
   build|pull)
     [ -e "$S/fail-build" ] && exit 1; [ -e "$S/fail-build-once" ] && { rm "$S/fail-build-once"; exit 1; }
-    if [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE; retag "$ref" "$(ensure "${ref##*:}")"; fi
+    if [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE base=${DOCKNEST_IMAGE%%@*}; id=$(ensure "${base##*:}"); retag "$ref" "$id"; case "$ref" in *@*) echo "${base%:*}@${ref#*@} $id" >> "$S/digests" ;; esac; fi
     exit 0 ;;
   stop) [ -e "$S/migrate-on-stop" ] && echo 2 > "$S/schema"; [ -e "$S/fail-stop" ] && exit 1; echo down > "$S/running" ;;
   logs) echo 'fake logs' ;;
   up)
     if [ -e "$S/image-mode" ]; then
       ref=$(image_ref)
-      case "$ref" in sha256:*) version=$(version_of "$ref") ;; *) version=${ref##*:} ;; esac
+      case "$ref" in sha256:*) version=$(version_of "$ref") ;; *) ref=${ref%%@*}; version=${ref##*:} ;; esac
     else
       tagged=$(resolve docknest:local)
       if [ -n "$tagged" ]; then version=$(version_of "$tagged"); else version=$(pkg_version); fi

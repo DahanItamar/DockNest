@@ -429,3 +429,155 @@ test('exit 4 never removes an image that existed before the run', { skip: !shell
   assert.equal(result.status, 4, result.stderr);
   assert.equal(await f.read('removed'), ''); assert.doesNotMatch(await f.read('calls'), /^image rm /m);
 });
+
+// Test doubles for the manual-run signature check: curl serves state/release/<file>; cosign accepts a bundle that holds
+// the SHA-256 of the manifest (a fixture trust root) and logs its identity flags.
+async function signer(f) {
+  await mkdir(join(f.state, 'release'), { recursive: true });
+  await writeFile(join(f.bin, 'curl'), '#!/bin/sh\nout=; prev=; for a; do [ "$prev" = -o ] && out=$a; prev=$a; done; eval url=\\${$#}\necho "curl $url" >> "$FAKE_STATE/calls"\nsrc="$FAKE_STATE/release/${url##*/}"; [ -f "$src" ] || { printf "404 "; exit 0; }; cp "$src" "$out"; printf "200 "\n', { mode: 0o755 });
+  await writeFile(join(f.bin, 'cosign'), '#!/bin/sh\necho "cosign $*" >> "$FAKE_STATE/calls"\n[ "$1" = verify-blob ] || exit 1\nbundle=; prev=; for a; do [ "$prev" = --bundle ] && bundle=$a; prev=$a; done; eval file=\\${$#}\n[ "$(sha256sum < "$file" | cut -c1-64)" = "$(cat "$bundle")" ]\n', { mode: 0o755 });
+  return async (fields, { tamper } = {}) => {
+    const text = JSON.stringify({ version: '2.2.0', tag: 'v2.2.0', commit: '', repository: 'DahanItamar/DockNest', prerelease: false, ...fields }, null, 2) + '\n';
+    await writeFile(join(f.state, 'release/docknest-release.json.sigstore.json'), createHash('sha256').update(text).digest('hex'));
+    await writeFile(join(f.state, 'release/docknest-release.json'), tamper ? text.replace('"prerelease": false', '"prerelease": true') : text);
+  };
+}
+
+test('manual runs refuse a tag off main and a tampered signed manifest; --no-verify allows them; older released tags still downgrade', { skip: !shell }, async t => {
+  const f = await fixture(t), origin = join(f.root, 'origin');
+  git(origin, 'checkout', '-q', '-b', 'side', 'v2.1.0'); await writeFile(join(origin, 'package.json'), pkg('2.1.1'));
+  git(origin, 'commit', '-q', '-am', 'off main'); git(origin, 'tag', 'v2.1.1'); git(origin, 'checkout', '-q', 'main');
+  let result = f.run('--version', 'v2.1.1');
+  assert.equal(result.status, 2, result.stderr); assert.match(result.stderr, /not on origin\/main/);
+  assert.equal((await f.status()).reason, 'verify-not-on-main'); assert.equal(f.head(), 'v2.0.0'); assert.ok(!existsSync(join(f.work, 'data/upgrade-backups')));
+  result = f.run('--version', 'v2.1.1', '--no-verify');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.match(result.stderr, /--no-verify/); assert.equal(f.head(), 'v2.1.1');
+  // The tag name decides whether a signature is needed, so it must be v plus the version it contains.
+  git(origin, 'tag', 'v9.9.9', 'v2.1.0');
+  result = f.run('--version', 'v9.9.9');
+  assert.equal(result.status, 2, result.stderr); assert.equal((await f.status()).reason, 'verify-manifest-mismatch'); assert.equal(f.head(), 'v2.1.1');
+  git(f.work, 'tag', '-d', 'v9.9.9'); git(origin, 'tag', '-d', 'v9.9.9');
+  // A local branch named like the tag never wins over the tag.
+  git(f.work, 'branch', 'v2.0.0', 'HEAD');
+  result = f.run('--version', 'v2.0.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.0.0', 'a downgrade to an older released tag still passes');
+  assert.equal(git(f.work, 'rev-parse', 'HEAD'), git(f.work, 'rev-parse', 'refs/tags/v2.0.0^{commit}'));
+  // A 2.2.0 release on main: with cosign present its signed manifest must verify and name the tag's commit.
+  await writeFile(join(origin, 'package.json'), pkg('2.2.0')); git(origin, 'commit', '-q', '-am', 'v2.2.0'); git(origin, 'tag', 'v2.2.0');
+  const commit = git(origin, 'rev-parse', 'v2.2.0^{commit}'), publish = await signer(f);
+  await publish({ commit }, { tamper: true });
+  result = f.run('--version', 'v2.2.0');
+  assert.equal(result.status, 2, result.stderr); assert.equal((await f.status()).reason, 'verify-signature-invalid'); assert.equal(f.head(), 'v2.0.0');
+  const calls = await f.read('calls');
+  assert.ok(calls.includes('--certificate-identity https://github.com/DahanItamar/DockNest/.github/workflows/release.yml@refs/tags/v2.2.0 --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-github-workflow-repository DahanItamar/DockNest --certificate-github-workflow-trigger push --certificate-github-workflow-ref refs/tags/v2.2.0 --certificate-github-workflow-sha ' + commit), calls);
+  await publish({ commit: 'f'.repeat(40) });
+  result = f.run('--version', 'v2.2.0');
+  assert.equal(result.status, 2, result.stderr); assert.equal((await f.status()).reason, 'verify-manifest-mismatch');
+  await publish({ commit, prerelease: true });
+  result = f.run('--version', 'v2.2.0');
+  assert.equal(result.status, 2, result.stderr); assert.match(result.stderr, /not a final release/);
+  await publish({ commit });
+  result = f.run('--version', 'v2.2.0', '--dry-run');
+  assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /Verified the signed release manifest of v2\.2\.0/);
+  await publish({ commit }, { tamper: true });
+  result = f.run('--version', 'v2.2.0', '--no-verify');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.2.0');
+});
+
+test('updater flags: capabilities, a pinned commit built from git archive, upgrade-only, request id, status fields and the lock', { skip: !shell }, async t => {
+  const f = await fixture(t), sha = tag => git(f.work, 'rev-parse', `${tag}^{commit}`);
+  const caps = JSON.parse(f.run('--capabilities').stdout);
+  assert.equal(caps.protocol, 1); for (const flag of ['--no-fetch', '--expect-commit', '--expect-image-digest', '--upgrade-only', '--request-id', '--no-verify']) assert.ok(caps.flags.includes(flag), flag);
+  assert.equal(f.run('--expect-commit', 'v2.1.0').status, 1, 'only a full SHA');
+  let result = f.run('--version', 'v2.1.0', '--expect-commit', sha('v2.0.0'), '--no-fetch');
+  assert.equal(result.status, 2); assert.equal((await f.status()).reason, 'verify-manifest-mismatch');
+  git(f.work, 'replace', sha('v2.0.0'), sha('v2.1.0'));
+  result = f.run('--version', 'v2.1.0', '--expect-commit', sha('v2.1.0'), '--no-fetch');
+  assert.equal(result.status, 2); assert.match(result.stderr, /refs\/replace/);
+  git(f.work, 'replace', '-d', sha('v2.0.0'));
+  assert.equal(f.run('--version', 'v2.0.0', '--upgrade-only').status, 2, 'never the installed release or an older one');
+  // A local branch named like the tag cannot win, and git-ignored files never reach the build context (F10).
+  git(f.work, 'branch', 'v2.1.0', 'v2.0.0'); await writeFile(join(f.work, 'compose.override.yaml'), 'secret: true\n'); await writeFile(join(f.work, 'data/key.pem'), 'x');
+  result = f.run('--version', 'v2.1.0', '--expect-commit', sha('v2.1.0'), '--no-fetch', '--upgrade-only', '--request-id', 'req-1.a_b');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.match(result.stdout, /--no-fetch/);
+  assert.equal(git(f.work, 'rev-parse', 'HEAD'), sha('v2.1.0')); assert.equal(await f.read('version'), '2.1.0');
+  const context = (await f.read('context')).split('\n');
+  assert.ok(context.includes('package.json') && !context.includes('compose.override.yaml') && !context.includes('data') && !context.includes('.git'), context.join(' '));
+  const calls = await f.read('calls');
+  assert.match(calls, /^build -t docknest:local - /m); assert.doesNotMatch(calls, /^compose build /m);
+  assert.match(calls, /^compose up -d --no-build api worker /m); assert.doesNotMatch(calls, /^compose up -d api worker /m);
+  const status = await f.status();
+  assert.deepEqual([status.ok, status.reason, status.schemaFrom, status.schemaTo, status.requestId], [true, null, 0, 2, 'req-1.a_b']);
+  // The installed version must be the exact tag at HEAD.
+  git(f.work, 'tag', '-d', 'v2.1.0');
+  result = f.run('--version', 'v2.2.0-rc.1', '--upgrade-only', '--no-fetch');
+  assert.equal(result.status, 2); assert.equal((await f.status()).reason, 'state-mismatch'); assert.equal(await f.read('version'), '2.1.0');
+  git(f.work, 'tag', 'v2.1.0', sha('HEAD'));
+  // One run at a time; a lock left by a process that is gone is taken over.
+  const holder = spawn('sh', ['-c', 'mkdir data/.upgrade.lock && echo $$ > data/.upgrade.lock/pid && exec sleep 30'], { cwd: f.work });
+  for (const deadline = Date.now() + 10000; !existsSync(join(f.work, 'data/.upgrade.lock/pid')) && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 50));
+  await writeFile(join(f.root, 'status.json'), '{"phase":"health"}');
+  result = f.run('--version', 'v2.2.0-rc.1');
+  holder.kill();
+  assert.equal(result.status, 2); assert.match(result.stderr, /holds data\/\.upgrade\.lock/);
+  assert.equal(await readFile(join(f.root, 'status.json'), 'utf8'), '{"phase":"health"}', "the other run's status is left alone");
+  await writeFile(join(f.work, 'data/.upgrade.lock/pid'), '999999\n');
+  // Another run is taking the stale lock over right now (its mutex exists): refuse rather than race it.
+  await mkdir(join(f.work, 'data/.upgrade.lock.takeover'));
+  result = f.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 2); assert.match(result.stderr, /holds data\/\.upgrade\.lock/);
+  await rm(join(f.work, 'data/.upgrade.lock.takeover'), { recursive: true });
+  result = f.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.ok(!existsSync(join(f.work, 'data/.upgrade.lock')), 'released at exit');
+});
+
+test('reason codes: busy, build failure and an unhealthy start report fixed codes and the schema before and after', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.state, 'busy'), '');
+  assert.equal(f.run('--version', 'v2.1.0').status, 3); assert.equal((await f.status()).reason, 'jobs-did-not-finish');
+  await rm(join(f.state, 'busy')); await writeFile(join(f.state, 'fail-build'), '');
+  assert.equal(f.run('--version', 'v2.1.0').status, 4); assert.equal((await f.status()).reason, 'build-failed');
+  await rm(join(f.state, 'fail-build')); await writeFile(join(f.state, 'unhealthy'), '2.1.0');
+  assert.equal(f.run('--version', 'v2.1.0').status, 4);
+  const status = await f.status();
+  assert.deepEqual([status.reason, status.schemaFrom, status.schemaTo], ['health-timeout-api', 0, 2]);
+});
+
+test('image mode: --expect-image-digest pulls and persists name:X.Y.Z@sha256, records RepoDigests; upgrade-only checks the running image', { skip: !shell }, async t => {
+  const f = await fixture(t), env = join(f.work, '.env'), digest = n => 'sha256:' + String(n).repeat(64);
+  await writeFile(join(f.state, 'image-mode'), '');
+  await writeFile(env, 'APP_ORIGIN=https://docknest.example.invalid\nDOCKNEST_IMAGE=ghcr.io/example/docknest:2.0.0\n');
+  await writeFile(join(f.state, 'digests'), `ghcr.io/example/docknest@${digest(0)} ${fakeId('2.0.0')}\n`);
+  let result = f.run('--version', 'v2.1.0', '--expect-image-digest', digest(1), '--upgrade-only');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(await f.read('calls'), new RegExp(`pull api worker IMG=ghcr\\.io/example/docknest:2\\.1\\.0@${digest(1)}`));
+  assert.match(await readFile(env, 'utf8'), new RegExp(`^DOCKNEST_IMAGE=ghcr\\.io/example/docknest:2\\.1\\.0@${digest(1)}$`, 'm'));
+  const [saved] = await f.backups();
+  assert.match(await readFile(join(f.work, 'data/upgrade-backups', saved, 'previous-release'), 'utf8'), new RegExp(`repoDigests=ghcr\\.io/example/docknest@${digest(0)}\n`));
+  await writeFile(join(f.state, 'label'), '9.9.9');
+  result = f.run('--version', 'v2.2.0-rc.1', '--upgrade-only');
+  assert.equal(result.status, 2); assert.equal((await f.status()).reason, 'state-mismatch');
+  await writeFile(join(f.state, 'label'), ''); // no label: the digest recorded in .env must be the running image's
+  result = f.run('--version', 'v2.2.0-rc.1', '--upgrade-only');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(await readFile(env, 'utf8'), /^DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.2\.0-rc\.1$/m, 'a tag plus digest in .env is accepted and switched');
+  assert.equal(f.run('--version', 'v2.1.0', '--expect-image-digest', 'sha256:abc').status, 1);
+});
+
+test('manual image mode pulls the digest from the verified manifest, pins it in .env and refuses another image name', { skip: !shell }, async t => {
+  const f = await fixture(t), env = join(f.work, '.env'), origin = join(f.root, 'origin'), digest = 'sha256:' + '7'.repeat(64);
+  await writeFile(join(f.state, 'image-mode'), '');
+  await writeFile(env, 'APP_ORIGIN=https://docknest.example.invalid\nDOCKNEST_IMAGE=ghcr.io/example/docknest:2.0.0\n');
+  await writeFile(join(origin, 'package.json'), pkg('2.2.0')); git(origin, 'commit', '-q', '-am', 'v2.2.0'); git(origin, 'tag', 'v2.2.0');
+  const commit = git(origin, 'rev-parse', 'v2.2.0^{commit}'), publish = await signer(f);
+  await publish({ commit, image: { name: 'ghcr.io/other/docknest', digest } });
+  let result = f.run('--version', 'v2.2.0');
+  assert.equal(result.status, 2, result.stderr); assert.match(result.stderr, /signed release is ghcr\.io\/other\/docknest/);
+  await publish({ commit, image: { name: 'ghcr.io/example/docknest', digest } });
+  result = f.run('--version', 'v2.2.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.doesNotMatch(result.stderr, /unverified/);
+  assert.match(await f.read('calls'), new RegExp(`pull api worker IMG=ghcr\\.io/example/docknest:2\\.2\\.0@${digest}`));
+  assert.match(await readFile(env, 'utf8'), new RegExp(`^DOCKNEST_IMAGE=ghcr\\.io/example/docknest:2\\.2\\.0@${digest}$`, 'm'));
+  result = f.run('--version', 'v2.2.0-rc.1', '--no-verify');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.match(result.stderr, /pulled by its tag, unverified/);
+});
