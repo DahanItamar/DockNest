@@ -21,6 +21,7 @@ import {Sites,Backups} from './recovery-pages.jsx';
 import './rebrand.css';
 import {StatusLabel} from './system.jsx';
 import './system.css';
+import './frame.css';
 import {Paginated} from './pagination.jsx';
 import {DataTable} from './data-table.jsx';
 import {JobDetails,BackupDetails,ReadableRecord} from './job-details.jsx';

@@ -1,0 +1,48 @@
+/* 2.3.0 page frame: content width, page header, Empty state, generic Modal, sign-in/setup/enrollment.
+   Loaded after rebrand.css and system.css; sizes come from the type scale and layout tokens only. */
+.workspace>footer{max-width:var(--content-max);width:100%;margin-inline:auto;padding:24px var(--edge);font-size:var(--fs-caption);line-height:var(--lh-caption)}
+main#content{padding-block:var(--edge);min-height:calc(100dvh - var(--header-height) - 72px)}
+
+.page-head{align-items:center;gap:var(--edge);margin-bottom:var(--edge)}
+.page-head h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading)}
+.page-head p{font-size:var(--fs-body);line-height:var(--lh-body);margin-top:4px;color:var(--text-secondary);max-width:68ch}
+.page-head .actions{flex:none}
+.rebrand-page button,.rebrand-page .button,.rebrand-page .page-head .primary{font-size:var(--fs-button);line-height:var(--lh-button);min-height:var(--control-height)}
+.rebrand-page input:not([type=checkbox]):not([type=radio]),.rebrand-page select,.rebrand-page textarea,.rebrand-page .field{font-size:var(--fs-body)}
+.rebrand-page .field small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+@media(max-width:767px){.page-head{flex-wrap:wrap}.page-head .actions{width:100%;display:flex}.page-head .actions>.primary{flex:1}}
+
+/* Empty state */
+.empty,.rebrand-page .empty{gap:8px;padding:48px 24px;min-height:240px}
+.empty-icon{width:48px;height:48px;margin-bottom:8px}
+.rebrand-page .empty h3,.empty h3{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--heading)}
+.rebrand-page .empty p,.empty p{font-size:var(--fs-body);line-height:var(--lh-body);max-width:50ch;color:var(--text-secondary)}
+.empty>button,.empty>.button,.empty>a{margin-top:8px}
+
+/* Generic Modal: one header, one padding, one footer row */
+dialog{width:min(760px,calc(100vw - 2 * var(--edge)));max-height:calc(100dvh - 2 * var(--edge));overflow:hidden auto;overscroll-behavior:contain;box-shadow:0 12px 48px var(--shadow)}
+dialog[open]{animation:dn-enter var(--dur-slow) var(--ease) both}
+.modal-head,.rebrand-page .modal-head{min-height:72px;padding:16px 24px;gap:16px}
+.modal-head h2,.rebrand-page .modal-head h2{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;min-width:0;overflow-wrap:anywhere}
+.modal-body,.rebrand-page .modal-body{padding:24px;font-size:var(--fs-body);line-height:var(--lh-body);min-width:0}
+.modal-body pre,.modal-body code{max-width:100%;overflow-wrap:anywhere}
+.modal-foot,.rebrand-page .modal-foot{gap:12px;margin-top:24px;padding-top:24px}
+.modal-foot button,.rebrand-page .modal-foot button{min-height:var(--control-height);min-width:120px}
+@media(max-width:767px){
+ .modal-head,.rebrand-page .modal-head{padding:16px}
+ .modal-body,.rebrand-page .modal-body{padding:16px}
+ .modal-foot,.rebrand-page .modal-foot{gap:8px}
+ .modal-foot button,.rebrand-page .modal-foot button{flex:1 1 0;min-width:0}
+}
+
+/* Sign-in, setup and enrollment */
+.auth-header{padding:24px var(--edge)}
+.auth-header>span{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.auth-main{padding:var(--edge)}
+.auth-card{max-width:480px;padding:32px;border:1px solid var(--border-subtle)}
+.auth-card h2{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading);margin-bottom:8px}
+.auth-card>p{font-size:var(--fs-body);line-height:var(--lh-body);margin-bottom:24px;margin-inline:auto}
+.security-note,.expiry{font-size:var(--fs-caption)!important;line-height:var(--lh-caption)}
+@media(max-width:480px){.auth-card{padding:24px 16px}.auth-header{padding:16px}}
+
+@media(prefers-reduced-motion:reduce){dialog[open]{animation:none}}
