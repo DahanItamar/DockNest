@@ -47,6 +47,15 @@ CI runs all of these on every pull request, plus browser tests and a Gitleaks sc
 - Update the relevant docs when behavior changes.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and pull request titles, for example `fix(restore): reject archives with absolute paths`.
 
+## Release checklist
+
+A release pull request (version bump) is not complete until all of these are done:
+
+1. **Release notes.** Copy [docs/releases/TEMPLATE.md](docs/releases/TEMPLATE.md) to `docs/releases/YYYY-MM-DD-vX.Y.Z.md` (a `vX.Y.md` file also covers the `X.Y.0` release; the file-name suffix is how `scripts/release-manifest.js` finds the notes) and fill in every section. Say what was actually tested, no more.
+2. **Changelog.** Add the `CHANGELOG.md` entry in Keep a Changelog format, link the notes file, and update the compare links at the bottom.
+3. **README "At a glance".** Update the version, the release date, the "What's new" bullets and the notes link in [README.md](README.md#at-a-glance). The version badge follows the latest GitHub release by itself.
+4. **Version.** Bump `package.json` (and the lockfile) so `scripts/release-manifest.js` accepts the tag.
+
 ## Safety rules for recovery code
 
 - Fail closed. If DockNest can't prove a step is safe, it must stop and say why.

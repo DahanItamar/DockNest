@@ -126,7 +126,7 @@ cosign verify ghcr.io/dahanitamar/docknest:2.1.0 \
 Each GitHub Release also includes `docknest-release.json`:
 
 ```json
-{"version":"2.1.0","schemaVersion":2,"minUpgradeFrom":"2.0.0","image":{"name":"ghcr.io/dahanitamar/docknest","digest":"sha256:…"},"notes":"docs/releases/2026-11-02-v2.1.0.md"}
+{"version":"2.1.0","schemaVersion":2,"minUpgradeFrom":"2.0.0","image":{"name":"ghcr.io/dahanitamar/docknest","digest":"sha256:…"},"notes":"docs/releases/2026-10-22-v2.1.md"}
 ```
 
 Release notes are also bundled in the image under `docs/releases/`. Name new notes `YYYY-MM-DD-vX.Y.Z.md`. A `vX.Y.md` file also covers the `X.Y.0` release.
