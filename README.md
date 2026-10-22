@@ -21,21 +21,21 @@
 
 | | |
 | :-- | :-- |
-| **Latest version** | **v2.1.0**, released 2026-10-22. [Release notes](docs/releases/2026-10-22-v2.1.md) · [Changelog](CHANGELOG.md) |
+| **Latest version** | **v2.2.0**, released 2026-10-22. [Release notes](docs/releases/2026-10-22-v2.2.0.md) · [Changelog](CHANGELOG.md) |
 | **What it does** | Backs up Docker and static nginx sites from your Linux servers to your own encrypted SFTP or S3-compatible storage, and restores any backup to a separate copy to check it. |
 | **Status** | Beta. See the [support matrix](docs/support-matrix.md) for what has been tested. |
 | **Needs** | A Linux machine with Docker and Docker Compose for the dashboard. Each backed-up server needs Linux, Docker, Python 3 and SSH with a key. Storage is SFTP or S3-compatible (S3-compatible is beta). Details in [Requirements](#requirements). |
 | **Install** | **Build from source** with Docker Compose (the default), or use the **published image** `ghcr.io/dahanitamar/docknest` (signed, `linux/amd64`). See [Installation](#installation) and [Upgrading](docs/upgrading.md#use-the-published-image). |
 
-### What's new in v2.1.0
+### What's new in v2.2.0
 
-- **Safe upgrades.** Versioned migrations, a private snapshot before every schema change, and `scripts/upgrade.sh` for one-command upgrade and rollback.
-- **S3-compatible storage (beta).** AWS S3, Cloudflare R2, Backblaze B2, Wasabi and MinIO, next to SFTP.
-- **Honest verification levels.** Each backup shows what was actually checked: integrity, consistency, isolated restore and application checks.
-- **A worker that recovers by itself,** and stricter checks on health and maintenance probe URLs.
-- **Signed container images** on GitHub Container Registry.
+- **Update Center.** Admins see new releases, read what changed and update DockNest with one click. Update checks are opt-in.
+- **Secure host updater.** A small service installed once on the DockNest host verifies each signed release before installing it. The dashboard never gets Docker or root access.
+- **Safe by design.** DockNest locks for everyone during an update, returns to the previous version automatically when it safely can, and only ever moves forward from the dashboard.
+- **Bounded disk use.** Old update copies and images are cleaned up after each successful update.
+- **Signed releases.** Every release manifest is signed, and the image is pinned to its exact digest.
 
-Upgrading from 2.0.0? Read the [upgrade notes](docs/releases/2026-10-22-v2.1.md#upgrade-notes) first. Full details: [DockNest 2.1 release notes](docs/releases/2026-10-22-v2.1.md).
+Upgrading from 2.1.x? Read the [upgrade notes](docs/releases/2026-10-22-v2.2.0.md#upgrade-notes) first. Full details: [DockNest 2.2.0 release notes](docs/releases/2026-10-22-v2.2.0.md).
 
 ![DockNest dashboard with synthetic sites, activity and storage metrics](docs/media/dashboard.png)
 
