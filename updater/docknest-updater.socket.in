@@ -11,7 +11,7 @@ ConditionPathIsDirectory=@VOLUME@
 [Socket]
 ListenStream=@VOLUME@/updater.sock
 SocketUser=root
-SocketGroup=@API_GID@
+SocketGroup=@API_GROUP@
 SocketMode=0660
 Accept=no
 Backlog=8

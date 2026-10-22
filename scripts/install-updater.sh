@@ -17,6 +17,8 @@ COSIGN_SHA256_ARM64=d098f3168ae4b3aa70b4ca78947329b953272b487727d1722cb3cb098a1a
 LIB=/usr/local/lib/docknest-updater ETC=/etc/docknest-updater STATE=/var/lib/docknest-updater WORK=/run/docknest-updater-work
 UNITS=/etc/systemd/system TMPFILES=/etc/tmpfiles.d/docknest-updater.conf
 VOLUME=docknest_updater PROJECT=docknest VERIFY=docknest-verify API_UID=1000 API_GID=1000
+# The socket's SocketGroup must name a real group: systemd 259 refuses a bare GID without one (status=216/GROUP).
+API_GROUP_NAME=docknest-api API_GROUP_MARK=/var/lib/docknest-updater/api-group-created
 die() { echo "ERROR: $*" >&2; exit 2; }
 MODE=install
 case "${1:-}" in
@@ -79,6 +81,13 @@ case "$MODE" in
     rm -f "$VOLUME_DIR/status/status.json" "$VOLUME_DIR/status/current.json" "$VOLUME_DIR/status/service.json"
     rmdir "$VOLUME_DIR/status" 2>/dev/null || true
     rm -rf "$LIB" "$ETC" "$WORK"
+    # Remove the api group only when this installer created it and it still has the api GID.
+    if [ -f "$API_GROUP_MARK" ]; then
+      if [ "$(getent group "$API_GROUP_NAME" | cut -d: -f3)" = "$API_GID" ]; then
+        groupdel "$API_GROUP_NAME" || echo "WARNING: could not remove the $API_GROUP_NAME group; remove it by hand." >&2
+      fi
+      rm -f "$API_GROUP_MARK"
+    fi
     close_requests
     echo "Uninstalled. Kept $STATE (history, pins and any block); a reinstall continues from it. Remove it and the $VERIFY account by hand to forget them."
     exit 0 ;;
@@ -124,6 +133,16 @@ getent passwd "$VERIFY" >/dev/null || useradd --system --user-group --home-dir "
 id -nG "$VERIFY" | tr ' ' '\n' | grep -qx docker && die "$VERIFY must not be in the docker group."
 install -d -m 0755 -o root -g root "$ETC" "$STATE" "$LIB" "$LIB/bin"
 install -d -m 0700 -o root -g root "$STATE/history"
+# A group for the api container's GID, so the socket unit can name it (an existing group of that GID is used as is).
+API_GROUP=$(getent group "$API_GID" | cut -d: -f1)
+if [ -z "$API_GROUP" ]; then
+  getent group "$API_GROUP_NAME" >/dev/null && die "The group $API_GROUP_NAME exists with a GID other than $API_GID; remove or renumber it, then run this again."
+  command -v groupadd >/dev/null 2>&1 || die "No group has GID $API_GID and groupadd is missing; create a group with GID $API_GID, then run this again."
+  groupadd --system --gid "$API_GID" "$API_GROUP_NAME" || die "Could not create the system group $API_GROUP_NAME with GID $API_GID (the api container's group); create a group with that GID, then run this again."
+  echo "$API_GROUP_NAME" > "$API_GROUP_MARK"
+  API_GROUP=$API_GROUP_NAME
+fi
+case "$API_GROUP" in ''|*[!A-Za-z0-9._-]*) die "Unsupported group name for GID $API_GID: $API_GROUP" ;; esac
 install -d -m 0755 -o "$VERIFY" -g "$VERIFY" "$STATE/mirror.git"
 install -d -m 0700 -o "$VERIFY" -g "$VERIFY" "$STATE/sigstore" "$STATE/verify-home"
 [ -f "$STATE/mirror.git/HEAD" ] || setpriv --reuid="$VERIFY" --regid="$VERIFY" --init-groups --inh-caps=-all --reset-env -- \
@@ -149,7 +168,7 @@ RENDER=$(mktemp -d)
 trap 'rm -rf "$RENDER"' EXIT
 for unit in socket service tmpfiles; do
   sed -e "s|@VOLUME@|$VOLUME_DIR|g" -e "s|@DOCKER_ROOT@|$DOCKER_ROOT|g" -e "s|@CHECKOUT@|$ROOT|g" -e "s|@OWNER_HOME@|$OWNER_HOME|g" \
-      -e "s|@OWNER@|$OWNER|g" -e "s|@GROUP@|$GROUP|g" -e "s|@API_GID@|$API_GID|g" "$ROOT/updater/docknest-updater.$unit.in" > "$RENDER/docknest-updater.$unit"
+      -e "s|@OWNER@|$OWNER|g" -e "s|@GROUP@|$GROUP|g" -e "s|@API_GROUP@|$API_GROUP|g" "$ROOT/updater/docknest-updater.$unit.in" > "$RENDER/docknest-updater.$unit"
 done
 systemd-analyze verify "$RENDER/docknest-updater.socket" "$RENDER/docknest-updater.service" || die 'The rendered units did not pass systemd-analyze verify.'
 install -m 0644 "$RENDER/docknest-updater.tmpfiles" "$TMPFILES"
