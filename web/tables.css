@@ -1,0 +1,66 @@
+/* 2.3.0 tables, pagination and backup library. Loaded after system.css; tokens only. */
+
+/* Jobs and Audit: fixed columns, 40px header, 56px rows, one line per row */
+.stable-table{--table-row-height:var(--row-height)}
+.stable-table .paged-content{min-height:var(--page-height,0px)}
+.stable-table tbody tr{height:var(--row-height)}
+.rebrand-page .data-table-wrap{overflow-x:auto;border:1px solid var(--border-subtle)}
+.rebrand-page .data-table-wrap table{min-width:0}
+.data-table .job-name{display:flex;align-items:center;gap:12px;min-width:0}
+.data-table .job-name b{flex:none;font-weight:500;color:var(--heading)}
+.data-table .job-site{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)}
+.data-table .brand-icon,.data-table .job-name>svg{flex:none}
+.data-table td b{font-weight:500}
+.data-table td .row-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:nowrap}
+.data-table td .row-actions>button:not(.icon-button){flex:none}
+.data-table td>button:not(.icon-button){padding-inline:0;border:0;background:var(--transparent);color:var(--link)}
+.data-table td>button:not(.icon-button):hover{text-decoration:underline}
+.data-table .icon-button{display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius)}
+@media(max-width:767px){
+ .rebrand-page .data-table-wrap{border:1px solid var(--border-subtle)}
+ .rebrand-page .data-table.mobile-table tbody tr{height:auto}
+ .rebrand-page .data-table.mobile-table td{height:auto;overflow:visible;text-overflow:clip;text-align:left}
+ .rebrand-page .data-table.mobile-table td.num{text-align:left}
+ .rebrand-page .data-table .job-name{flex-wrap:wrap}
+ .rebrand-page .data-table td .row-actions{flex-wrap:wrap}
+}
+
+/* Pagination: one control height, aligned columns */
+.rebrand-page .pagination{padding:12px 16px;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
+.pagination-count,.pagination-page{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.pagination-controls{grid-template-columns:112px minmax(96px,auto) 112px}
+.rebrand-page .pagination button{width:112px;height:var(--control-height);min-height:var(--control-height);padding:0 12px;font-size:var(--fs-button);line-height:var(--lh-button);background:var(--transparent);color:var(--text-secondary);border:1px solid var(--border-control)}
+.rebrand-page .pagination button:hover:not(:disabled){background:var(--surface-hover);color:var(--heading)}
+.rebrand-page .pagination button:disabled{background:var(--transparent);color:var(--text-muted);opacity:.5}
+.rebrand-page .pagination button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+@media(max-width:680px){
+ .pagination-controls{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+ .rebrand-page .pagination button{width:100%}
+ .pagination-count,.pagination-page{font-size:var(--fs-caption)}
+}
+
+/* Backup library rows: aligned columns, frameless actions */
+.backup-group>summary{font-size:var(--fs-body);line-height:var(--lh-body)}
+.backup-site-name b{font-size:var(--fs-section);line-height:var(--lh-section)}
+.backup-group small{font-size:var(--fs-caption);line-height:var(--lh-caption);margin-top:0}
+.backup-latest b{font-family:inherit;font-size:var(--fs-body);font-weight:500;font-variant-numeric:tabular-nums}
+.recovery-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 140px 220px;gap:24px;min-height:var(--row-height);padding:8px 0;font-size:var(--fs-body);line-height:var(--lh-body)}
+.recovery-point b{font-family:inherit;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;font-variant-numeric:tabular-nums}
+.recovery-point code{font-size:var(--fs-caption);line-height:var(--lh-caption);margin-top:0}
+.recovery-size{text-align:right;font-variant-numeric:tabular-nums}
+.recovery-size b{font-weight:500}
+.recovery-actions{justify-content:flex-end;gap:0}
+a.icon-button{display:inline-flex;align-items:center;justify-content:center;height:var(--control-height);border-radius:var(--radius);text-decoration:none}
+.rebrand-page .recovery-action.icon-button{width:var(--control-height);min-width:var(--control-height);height:var(--control-height);min-height:var(--control-height);border:0;background:var(--transparent);color:var(--text-secondary)}
+.rebrand-page .recovery-action.icon-button:hover{background:var(--surface-hover);color:var(--heading)}
+.rebrand-page .recovery-action.icon-button[aria-pressed=true]{background:var(--accent-soft);color:var(--link)}
+.recovery-action.icon-button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+@media(max-width:899px){
+ .recovery-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 16px;padding:12px 0}
+ .recovery-size{text-align:left}
+ .recovery-actions{justify-content:flex-end}
+}
+@media(max-width:680px){
+ .recovery-actions{display:flex;width:100%;justify-content:space-between}
+ .recovery-actions .recovery-action{width:var(--control-height)}
+}

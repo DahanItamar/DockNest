@@ -59,7 +59,7 @@ assert.equal(await page.locator('.dashboard-page').count(),0,'Other routes retai
 await page.setViewportSize({width:1440,height:1100});
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
 for(const group of await page.locator('.backup-group>summary').all())await group.click();
-const libraryBadges=await page.locator('.recovery-status .badge').allTextContents();
+const libraryBadges=await page.locator('.recovery-status .status').allTextContents();
 assert.ok(libraryBadges.length>0&&libraryBadges.every(text=>text==='Integrity checked'),'Library badges agree with the dashboard count: '+libraryBadges.join(', '));
 // Keep previous content visible when a background refresh fails.
 if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('button',{name:'Overview',exact:true}).click();
@@ -69,7 +69,7 @@ await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).w
 assert.equal(await page.locator('.dash-site').count(),4,'A failed refresh retains previous state');
 await page.route('**/api/state',r=>r.fulfill({json:state}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
-await page.getByRole('alert').waitFor({state:'hidden'});
+await page.getByRole('alert').filter({hasText:'Fixture refresh unavailable.'}).waitFor({state:'hidden'});
 // Restore facts: tested (green), helper-reported failure (amber + error badge), incomplete attempt (amber, never "failed").
 const passed={status:'passed',checkedAt:time(1)},untested={status:'not-tested'},levels=(isolatedRestore,application=untested)=>({integrity:passed,consistency:untested,isolatedRestore,application});
 const evidenceState={...state,jobs:[],backups:[{id:'tested',siteId:'DemoShop',createdAt:time(2),verified:true,size:1024**3,verification:levels(passed)},{id:'helper-failed',siteId:'store',createdAt:time(3),verified:true,size:1024**3,verification:levels({status:'failed',method:'helper health check',checkedAt:time(1)})},{id:'attempt',siteId:'journal',createdAt:time(4),verified:true,size:1024**3,verification:levels({status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)},{status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)})}]};
@@ -81,7 +81,7 @@ assert.deepEqual(states,[['stored','Recovery point stored · restore tested'],['
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
 for(const group of await page.locator('.backup-group>summary').all())await group.click();
 const failedRow=page.locator('.recovery-row').filter({hasText:'helper-failed'});
-assert.equal(await failedRow.locator('.badge').textContent(),'Isolated restore failed');assert.match(await failedRow.locator('.badge').getAttribute('class'),/\bbad\b/);
+assert.equal(await failedRow.locator('.status').textContent(),'Isolated restore failed');assert.match(await failedRow.locator('.status').getAttribute('class'),/\bstatus-failed\b/);
 const attemptRow=page.locator('.recovery-row').filter({hasText:'attempt'});
 assert.doesNotMatch(await attemptRow.textContent(),/failed/,'An incomplete attempt is not shown as failed');
 const rowHeights=await page.locator('.recovery-row').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().height));

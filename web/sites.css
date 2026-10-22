@@ -1,0 +1,19 @@
+/* Sites & schedules page: layout comes from .card-grid, .card and .def-list in system.css. */
+.site-grid{grid-auto-rows:1fr}
+.site-card-head{display:flex;align-items:center;gap:12px;color:var(--primary-deep)}
+.site-card-head .card-title{margin:0;min-width:0;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.site-card-body>.status{margin:8px 0 16px}
+.site-metadata .def-row{min-height:calc(var(--lh-body) + 24px)}
+.site-metadata .def-row:nth-child(2),.site-metadata .def-row:nth-child(3){min-height:calc(var(--lh-body) + var(--lh-caption) + 24px)}
+.site-metadata dd{display:flex;flex-direction:column;align-items:flex-end}
+.site-metadata code{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-primary)}
+.site-metadata .container-labels{gap:0}
+.site-card-actions{justify-content:space-between;padding:0 16px 0 12px}
+.site-card-tools{display:flex;align-items:center;gap:4px}
+.site-card-actions .primary{flex:none;padding-inline:16px}
+.site-card-actions button:disabled{opacity:.5;cursor:wait}
+@media(max-width:767px){
+ .card-footer.site-card-actions{flex-direction:column-reverse;align-items:stretch;height:auto;padding:16px;gap:12px}
+ .site-card-actions .primary{width:100%}
+ .site-card-tools{justify-content:space-between}
+}

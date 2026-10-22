@@ -1,4 +1,6 @@
+import './wizards.css';
 import {Paginated} from './pagination.jsx';
+import {AlertPanel} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups} from './container-groups.js';
@@ -138,7 +140,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
    <label className="check"><input type="checkbox" name="exclusiveSourcesConfirmed" checked={settings.exclusiveSourcesConfirmed} onChange={update} required/> {isStatic?'No deployment or process will change these website files during capture.':'No containers or processes outside this site write to its mounted data.'}</label>
    <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, deploy the maintenance page and integrate the source proxy, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
   </>}
-  {error&&<div className="alert" role="alert">{error}</div>}
+  {error&&<AlertPanel variant="error" title="The site could not be saved">{error}</AlertPanel>}
   <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step>1&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>value-1);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step===1&&!!error)}>{busy?'Saving site…':step===3?(initialSite?'Save configuration':'Add site'):'Continue'}</button></div>
  </form>;
 }

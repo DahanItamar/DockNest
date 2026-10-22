@@ -1,0 +1,10 @@
+/* Storage page on the 2.3.0 system: card footers pinned, actions identical, alerts as panels. */
+.storage-grid{gap:var(--edge)}
+.storage-card.card{border:1px solid var(--border-subtle);overflow:visible}
+.storage-card-content{display:flex;flex-direction:column;gap:12px}
+.storage-card-content>*{margin:0}
+.storage-card-content h3{min-height:0;font-size:var(--fs-card);line-height:var(--lh-card)}
+.card-footer.storage-card-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;height:auto;min-height:var(--card-footer-height);padding:12px 24px;margin-top:0}
+.storage-card-actions button{flex:0 0 auto;min-height:var(--control-height);white-space:nowrap}
+@media(max-width:480px){.card-footer.storage-card-actions{flex-direction:column;flex-wrap:nowrap;align-items:stretch;padding:16px}.storage-card-actions button{width:100%}}
+@media(max-width:767px){.storage-grid{grid-template-columns:minmax(0,1fr)}.storage-card-content{min-width:0}}

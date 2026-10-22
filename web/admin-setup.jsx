@@ -1,5 +1,6 @@
 import React,{useState} from 'react';
 import {Brand,ThemeToggle} from './brand.jsx';
+import {AlertPanel} from './system.jsx';
 
 export function AdminSetup({api,Field,status,onAuth,onExit}) {
  const [enrollment,setEnrollment]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -29,7 +30,7 @@ export function AdminSetup({api,Field,status,onAuth,onExit}) {
    <label className="check"><input type="checkbox" required/> I saved my recovery codes securely.</label>
    <Field label="Authenticator code" name="code" inputMode="numeric" autoComplete="one-time-code" minLength={6} maxLength={6} required/>
   </>}
-  {error&&<div className="alert" role="alert">{error}</div>}
+  {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   <button className="primary wide" disabled={busy}>{busy?'Working…':enrollment?'Confirm administrator':'Continue setup'}</button>
  </form><button className="text enrollment-back" disabled={busy} onClick={onExit}>Back to sign in</button></div></main></div>;
 }

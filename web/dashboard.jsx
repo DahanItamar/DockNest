@@ -2,6 +2,7 @@ import React,{useState} from 'react';
 import {ActivityChart,Sparkline,bucketActivity} from './charts.jsx';
 import {ArrowRight,Check,ChevronDown,TriangleAlert} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
+import {StatusLabel,AlertPanel} from './system.jsx';
 import {describeSchedule} from './schedule.js';
 import './dashboard.css';
 import {Paginated} from './pagination.jsx';
@@ -28,6 +29,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
   const week=backups.filter(b=>new Date(b.capturedAt||b.createdAt)>new Date(Date.now()-7*86400000));
   const latestJob=id=>jobs.find(j=>j.siteId===id);
   const attention=s.sites.filter(site=>['failed','recovery_required'].includes(latestJob(site.id)?.status));
+  const attentionJobs=attention.map(x=>latestJob(x.id)),attentionFailed=attentionJobs.some(j=>j.status==='failed'),attentionJob=attentionJobs.find(j=>j.status==='failed')||attentionJobs[0];
   const covered=s.sites.filter(site=>backups.some(b=>b.siteId===site.id&&isIntegrityChecked(b)));
   const storagePercent=s.storage?.total?Math.min(100,Math.round((s.storage.used||0)/s.storage.total*100)):null;
   const downtime=week.filter(b=>Number.isFinite(b.downtimeMs));
@@ -43,19 +45,18 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
         <section className="dash-panel dash-activity" aria-labelledby="dash-activity-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">OPERATIONS</span><h2 id="dash-activity-title">Recent activity</h2></div><IconButton label="View all jobs" onClick={()=>navigate('Jobs')}><ArrowRight size={17}/></IconButton></header>
           <div className="activity-feature"><div><span>Integrity-checked captures<small>Last 7 days</small></span><b>{week.filter(isIntegrityChecked).length}</b></div><Sparkline values={bucketActivity(s,'week').series[0].values} color="#4527A0" area label="Integrity-checked captures in the last seven days"/></div>
           {jobs.length?<div className="dash-job-list">{jobs.slice(0,5).map(job=>{
-            const failed=['failed','recovery_required'].includes(job.status),running=['running','queued'].includes(job.status);
-            return <div className="dash-job" key={job.id}><span className={`dash-job-icon ${failed?'warning':running?'neutral':'stored'}`}>{failed?<TriangleAlert size={16}/>:running?<BrandIcon name="jobs" size={16}/>:<Check size={16}/>}</span><div><b>{name(job.siteId)}</b><span>{job.type==='restore'?'Restore':'Backup'} · {job.status.replaceAll('_',' ')}</span><small title={date(job.createdAt||job.startedAt)}>{shortDate(job.createdAt||job.startedAt)}</small>{job.status==='recovery_required'&&<button className="dash-link" onClick={()=>open({type:'recovery',item:job})}>Review recovery <ArrowRight size={12}/></button>}</div><IconButton label={`View job ${job.id}`} onClick={()=>open({type:'job',item:job})}><ArrowRight size={16}/></IconButton></div>;
+            return <div className="dash-job" key={job.id}><div><b>{name(job.siteId)}</b><span>{job.type==='restore'?'Restore':'Backup'}</span><span><StatusLabel value={job.status}/></span><small title={date(job.createdAt||job.startedAt)}>{shortDate(job.createdAt||job.startedAt)}</small>{job.status==='recovery_required'&&<button className="dash-link" onClick={()=>open({type:'recovery',item:job})}>Review recovery <ArrowRight size={12}/></button>}</div><IconButton label={`View job ${job.id}`} onClick={()=>open({type:'job',item:job})}><ArrowRight size={16}/></IconButton></div>;
           })}</div>:<Empty icon={Activity} title="No jobs yet">Your backup and restore activity will appear here.</Empty>}
         </section>
 
 
         <section className="dash-panel dash-sites" aria-labelledby="dash-sites-title">
           <header className="dash-panel-head"><div><span className="dash-eyebrow">YOUR INFRASTRUCTURE</span><h2 id="dash-sites-title">Sites at a glance <span className="dash-count">{s.sites.length}</span></h2></div><button className="dash-link" onClick={()=>navigate('Sites & schedules')}>Manage sites <ArrowRight size={16}/></button></header>
-          <div className={`dash-summary ${attention.length?'has-attention':''}`}>
-            <span className="dash-summary-icon">{attention.length?<TriangleAlert size={20}/>:<BrandIcon name="sites" size={20}/>}</span>
-            <div><strong>{attention.length?`${attention.length} ${attention.length===1?'site needs':'sites need'} attention`:s.sites.length?'Your sites, in one place':s.servers.length?'Choose your first site':'Start with your first Docker host'}</strong><p>{attention.length?'Review the latest failed or recovery job before your next capture.':s.sites.length?'Expand a site to browse its recovery points.':s.servers.length?'Select the containers that make up the site you want to protect.':'Connect a server, then choose the sites you want to back up.'}</p></div>
-            {attention.length>0&&<IconButton label="Review job activity" onClick={()=>navigate('Jobs')}><ArrowRight size={18}/></IconButton>}
-          </div>
+          {attention.length>0?<AlertPanel variant={attentionFailed?'error':'warning'} title={`${attention.length} ${attention.length===1?'site needs':'sites need'} attention`} action={<button type="button" className="text link-btn dash-alert-action" onClick={()=>attentionJob.status==='recovery_required'?open({type:'recovery',item:attentionJob}):open({type:'job',item:attentionJob})}>{attentionJob.status==='recovery_required'?'Review recovery':'Open job'}</button>}>{attentionJob.error?String(attentionJob.error).slice(0,160):attentionFailed?'The latest backup job failed.':'A job needs recovery review before your next capture.'}</AlertPanel>:
+          <div className="dash-summary">
+            <span className="dash-summary-icon"><BrandIcon name="sites" size={20}/></span>
+            <div><strong>{s.sites.length?'Your sites, in one place':s.servers.length?'Choose your first site':'Start with your first Docker host'}</strong><p>{s.sites.length?'Expand a site to browse its recovery points.':s.servers.length?'Select the containers that make up the site you want to protect.':'Connect a server, then choose the sites you want to back up.'}</p></div>
+          </div>}
           {s.sites.length?<>
             <div className="dash-site-columns" aria-hidden="true"><span>Site / server</span><span>Latest recovery point</span><span>Schedule</span><span/></div>
             <Paginated rows={s.sites} label="Dashboard sites" pageSize={5}>{visible=>visible.map(site=>{

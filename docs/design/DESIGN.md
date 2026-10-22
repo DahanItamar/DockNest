@@ -17,3 +17,22 @@ A System health heartbeat sits above storage, using a full-width waveform when e
 The compact storage readout uses actual stored and total amounts, rather than an unexplained percentage.
 
 Verify with `npm run check` and the existing browser suites. Interface checks alone do not establish Linux recovery.
+
+## 2.3.0 system
+
+Shared foundation in `web/tokens.css` (tokens), `web/system.css` (primitives) and `web/system.jsx` (components). Pages use these; they do not define their own sizes.
+
+Type scale (size / line height / weight), on an 8px rhythm: page title 24/32/600 (`.t-title`), card title 20/28/600 (`.t-card`), section 16/24/500 (`.t-section`), body 14/20/400 (`.t-body`), caption 12/16/400 (`.t-caption`), button 14/20/500. Tokens are `--fs-*` and `--lh-*`. From 1920px every step goes up one size (body 15); from 2560px body is 16.
+
+Breakpoints: edge padding `--edge` is 16px below 768, 24px at 768-1439, 32px from 1440. Content max width is 1680px (centred) from 1920 and 1920px from 2560. `.card-grid` has 1 column below 768, 2 at 768-1439, 3 at 1440-1919, 4 from 1920.
+
+Primitives:
+- `StatusLabel` (`.status .status-{success|running|queued|failed|needs-review}`): 16px icon plus text in the semantic colour, weight 500, no background, border or dot. The running icon rotates unless reduced motion is set.
+- Switch: every `button[role=switch]` is a 36x20 pill with a 16px knob and a 160ms knob transition; the button keeps a 44px hit area.
+- Buttons: 40px high (44px at 480px and below), 14/20 500, no wrapping. `.primary`, default secondary, `.danger`. `IconButton` (`.icon-button`): 40x40, no border or background, soft `--surface-hover` on hover and focus, always has an `aria-label`.
+- `AlertPanel` (`.alert-panel .alert-{error|warning|info}`): tinted surface, 1px border, icon, bold title, text, optional action link. Error and warning use `role="alert"`, info uses `role="status"`.
+- Card (`.card`, `.card-body`, `.card-footer`): 8px radius, 1px `--border-subtle`. The footer is 64px with a top border and right-aligned actions; cards in `.card-grid` stretch to equal height.
+- Data table (`.data-table` in `.data-table-wrap`): fixed layout, 40px header in caption style on `--surface-muted`, 56px rows with one bottom line, tabular numbers, `.num` for right-aligned numeric columns, ellipsis on overflow. Below 768px it scrolls inside its own box.
+- Definition rows (`.def-list > .def-row > dt + dd`): caption label left, value right, full-width separators.
+
+Motion: durations `--dur-fast` 120ms, `--dur-base` 160ms, `--dur-slow` 240ms and one easing `--ease`. Cards, panels and alert panels enter with opacity and a 4px rise. All animation and transitions in the primitives are off under `prefers-reduced-motion`.
