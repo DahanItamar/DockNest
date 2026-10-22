@@ -19,6 +19,8 @@ import {SelfBackup} from './self-backup.jsx';
 import {AdminSetup} from './admin-setup.jsx';
 import {Sites,Backups} from './recovery-pages.jsx';
 import './rebrand.css';
+import {StatusLabel} from './system.jsx';
+import './system.css';
 import {Paginated} from './pagination.jsx';
 import {DataTable} from './data-table.jsx';
 import {JobDetails,BackupDetails,ReadableRecord} from './job-details.jsx';
@@ -34,7 +36,7 @@ async function api(path,body,method){const r=await fetch('/api'+path,{credential
 import {formatDate} from './date-format.js';
 const date=v=>formatDate(v);
 const bytes=v=>{if(!v)return '0 B';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i];};
-function Badge({value}){return <span className={'badge '+(/failed|error|recovery/i.test(value||'')?'bad':/complete|success|ready|healthy/i.test(value||'')?'good':'')}>{value||'Unknown'}</span>;}
+function Badge({value}){return <StatusLabel value={value}/>;}
 function Field({label,help,options,multiline,...props}){return <label className="field"><span>{label}</span>{options?<select {...props}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea {...props}/>:<input {...props}/>} {help&&<small>{help}</small>}</label>;}
 function Empty({icon:Icon=Archive,title,children,action}){return <div className="empty"><span className="empty-icon"><Icon size={28}/></span><h3>{title}</h3><p>{children}</p>{action}</div>;}
 function Modal({title,onClose,children,className}){const ref=useRef();useEffect(()=>{ref.current.showModal();return()=>ref.current?.close();},[]);return <dialog ref={ref} className={className} aria-labelledby="dialog-title" onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}}><div className="modal-head"><h2 id="dialog-title">{title}</h2><button className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>{children}</dialog>;}
