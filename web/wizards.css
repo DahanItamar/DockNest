@@ -1,0 +1,21 @@
+/* Server and site wizards and their dialogs: one step indicator, one footer, type scale only. */
+.server-wizard,.site-wizard,.server-details,.configuration-browser{font-size:var(--fs-body);line-height:var(--lh-body)}
+.server-wizard .wizard-steps,.site-wizard .wizard-steps{gap:0;margin:0 0 24px;border-bottom:1px solid var(--border-subtle);font-size:var(--fs-body);line-height:var(--lh-body)}
+.server-wizard .wizard-steps li,.site-wizard .wizard-steps li{padding:8px 16px;margin-bottom:-1px;background:none;border-radius:0;border-bottom:2px solid transparent;color:var(--text-muted)}
+.server-wizard .wizard-steps [aria-current=step],.site-wizard .wizard-steps [aria-current=step]{background:none;color:var(--heading);border-bottom-color:var(--accent);font-weight:500}
+.server-wizard h3,.site-wizard h3{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--heading)}
+.server-wizard h4,.site-wizard h4{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:600;color:var(--heading)}
+.server-wizard .hint,.site-wizard .hint,.server-wizard .field small,.site-wizard .field small,.server-details .field small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.server-wizard .modal-foot,.site-wizard .modal-foot,.server-details .modal-foot{gap:8px}
+.server-wizard .modal-foot button,.site-wizard .modal-foot button,.server-details .modal-foot button{min-height:var(--control-height);height:var(--control-height);min-width:120px;white-space:nowrap}
+.server-wizard .alert-panel,.site-wizard .alert-panel,.server-details .alert-panel,.configuration-browser .alert-panel{margin:16px 0}
+.alert-panel button{margin-top:8px;align-self:flex-start}
+.configuration-browser button{white-space:nowrap}
+.configuration-tree button{white-space:normal}
+.configuration-browser .configuration-tree button{height:auto;min-height:var(--control-height)}
+.configuration-tree button>span{font-size:var(--fs-caption)}
+@media(max-width:767px){
+ .server-wizard .modal-foot,.site-wizard .modal-foot,.server-details .modal-foot{flex-direction:column-reverse;align-items:stretch}
+ .server-wizard .modal-foot button,.site-wizard .modal-foot button,.server-details .modal-foot button{width:100%;flex:none}
+ .server-wizard .wizard-steps li,.site-wizard .wizard-steps li{padding:8px}
+}

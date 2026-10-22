@@ -1,4 +1,6 @@
+import './wizards.css';
 import {Paginated} from './pagination.jsx';
+import {AlertPanel} from "./system.jsx";
 import React,{useEffect,useState} from 'react';
 import {Folder,File,ArrowUp} from './icons.jsx';
 
@@ -15,7 +17,7 @@ export function ConfigurationFiles({api,serverId,containers,directory,onChoose,o
   <code className="configuration-path">{listing?.directory||path||'Detected project folder'}</code>
   <p>Open a folder to navigate. Select a file to include it in the backup.</p>
   {loading&&<p role="status">Loading folder…</p>}
-  {error&&<><div className="alert" role="alert">{error}</div><button type="button" onClick={()=>setRetry(value=>value+1)}>Retry folder</button></>}
+  {error&&<AlertPanel variant="error" title="This folder could not be opened" action={<button type="button" onClick={()=>setRetry(value=>value+1)}>Retry folder</button>}>{error}</AlertPanel>}
   {!loading&&listing&&<>
    {listing.parent&&<button type="button" onClick={()=>setPath(listing.parent)}><ArrowUp size={14}/> Parent folder</button>}
    <Paginated rows={listing.entries} label="Project files" resetKey={listing.directory}>{visible=><ul className="configuration-tree">{visible.map(entry=><li key={entry.path}>{entry.kind==='directory'?<button type="button" onClick={()=>setPath(entry.path)} aria-label={'Open folder '+entry.name}><Folder size={16}/>{entry.name}<span>Open folder</span></button>:<button type="button" disabled={!entry.selectable} onClick={()=>onChoose(entry.path)} aria-label={'Select file '+entry.name}><File size={16}/>{entry.name}<span>{entry.selectable?'Select file':'Unavailable'}</span></button>}</li>)}</ul>}</Paginated>
