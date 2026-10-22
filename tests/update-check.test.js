@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrate } from '../src/migrations.js';
-import { RELEASES_URL, ASSET_HOSTS, limits, ensureCheckRow, compareSemver, summarizeReleases, assetRedirect, manifestFields, manifestUrl, releaseName, releaseNotes, highlights, claimCheck, runCheck, checkNow, startCheck, tickUpdateCheck, pendingCheck, nextAfterSuccess, nextAfterFailure } from '../src/updates/check.js';
+import { RELEASES_URL, ASSET_HOSTS, limits, ensureCheckRow, compareSemver, summarizeReleases, assetRedirect, manifestFields, manifestUrl, fetchManifest, releaseName, releaseNotes, highlights, claimCheck, runCheck, checkNow, startCheck, tickUpdateCheck, pendingCheck, nextAfterSuccess, nextAfterFailure } from '../src/updates/check.js';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR, T0 = Date.parse('2026-10-22T08:00:00.000Z'), quiet = () => {};
 const RELEASE = 'v2.2.0', MANIFEST = 'https://github.com/DahanItamar/DockNest/releases/download/v2.2.0/docknest-release.json';
@@ -291,4 +291,42 @@ test('the User-Agent carries only a valid DockNest version', async t => {
   const db = await consented(t), { fetch, calls } = network(json([]));
   await check(db, fetch, { version: '2.1.0\r\nX-Install-Id: 1' });
   assert.equal(calls[0].init.headers['User-Agent'], 'DockNest/unknown');
+});
+
+test('line and paragraph separators, Arabic letter mark, soft hyphen and Mongolian vowel separator are stripped from names and notes', () => {
+  const noise = 'a\u2028b\u2029c\u061cd\u00ade\u180ef';
+  assert.equal(releaseName(noise), 'abcdef'); assert.equal(releaseNotes(noise), 'abcdef');
+});
+
+test('Check now and the check after turn-on do not bypass a stored rate-limit retry time', async t => {
+  const db = await consented(t), retry = T0 + 10 * 60_000;
+  due(db); await check(db, network(new Response('', { status: 429, headers: { 'retry-after': '600' } })).fetch);
+  assert.equal(row(db).status, 'failed'); assert.equal(row(db).next_check_at, retry);
+  const { fetch, calls } = network();
+  assert.deepEqual(await checkNow({ db, fetch, version: '2.1.0', now: () => T0 + 5 * 60_000 }), { claimed: false });
+  assert.equal(startCheck({ db, fetch, version: '2.1.0', now: () => T0 + 5 * 60_000 }), null);
+  assert.equal(calls.length, 0); assert.equal(row(db).next_check_at, retry);
+  assert.equal(claimCheck(db, { manual: true, now: retry }), true, 'once the retry time has passed the check may run');
+});
+
+test('the manifest must be served as JSON or as a GitHub release asset', async t => {
+  const db = await consented(t), body = JSON.stringify(manifest());
+  for (const type of ['application/octet-stream', 'application/octet-stream; charset=binary']) assert.equal((await fetchManifest({ fetch: network(new Response(body, { headers: { 'content-type': type } })).fetch, tag: RELEASE, signal: AbortSignal.timeout(200) })).tag, RELEASE);
+  for (const type of ['text/plain', 'text/html', '']) {
+    const response = new Response(body, { headers: type ? { 'content-type': type } : {} });
+    await assert.rejects(fetchManifest({ fetch: network(response).fetch, tag: RELEASE, signal: AbortSignal.timeout(200) }), { code: 'invalid' });
+  }
+  assert.equal((await fetchManifest({ fetch: network(json(manifest())).fetch, tag: RELEASE, signal: AbortSignal.timeout(200) })).tag, RELEASE);
+  due(db); assert.equal((await check(db, network(json([release(RELEASE)]), new Response(body, { headers: { 'content-type': 'text/plain' } })).fetch)).manifest, null);
+});
+
+test('Check now waits for a running check no longer than its own budget', async t => {
+  const db = await consented(t);
+  const hang = (_url, init) => new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+  const first = tickUpdateCheck({ db, fetch: hang, version: '2.1.0', now: () => T0, timeoutMs: 400 }, quiet);
+  assert.ok(first);
+  const started = Date.now();
+  assert.deepEqual(await checkNow({ db, fetch: hang, version: '2.1.0', now: () => T0, timeoutMs: 30 }), { claimed: false });
+  assert.ok(Date.now() - started < 300, 'returned at the caller budget, not when the running check ended');
+  await first;
 });

@@ -42,10 +42,10 @@ export function updateRoutes({ release, fetch } = {}) {
     const decided = transaction(() => {
       if (db.prepare('INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,?,?,?) ON CONFLICT(id) DO NOTHING').run(checkEnabled ? 1 : 0, req.user.id, new Date(now).toISOString()).changes !== 1) return false;
       if (checkEnabled) ensureCheckRow(db, now);
+      audit(req.user.id, 'update.consent', null, { checkEnabled });
       return true;
     });
     if (!decided) return res.status(409).json({ error: 'Another administrator already answered the update check question. You can change it in the Update Center.', code: 'ALREADY_DECIDED', consent: updateState(db, release).consent });
-    audit(req.user.id, 'update.consent', null, { checkEnabled });
     // After "Yes" the API checks once straight away; the response does not wait for it.
     if (checkEnabled) startCheck(options());
     res.json(updateState(db, release));
@@ -57,10 +57,10 @@ export function updateRoutes({ release, fetch } = {}) {
       if (!current) return null;
       db.prepare('UPDATE update_preferences SET check_enabled=?,changed_by=?,changed_at=? WHERE id=1').run(checkEnabled ? 1 : 0, req.user.id, new Date(now).toISOString());
       if (checkEnabled) ensureCheckRow(db, now);
+      audit(req.user.id, 'update.settings', null, { checkEnabled });
       return checkEnabled && current.check_enabled !== 1;
     });
     if (turnedOn === null) return res.status(409).json({ error: 'Answer the update check question first.', code: 'CONSENT_PENDING' });
-    audit(req.user.id, 'update.settings', null, { checkEnabled });
     if (turnedOn) startCheck(options());
     res.json(updateState(db, release));
   });
