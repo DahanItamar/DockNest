@@ -362,7 +362,13 @@ Repeated upgrades must never fill the server. Retention runs in `scripts/upgrade
 
 ## 11. Implementation plan
 
-One branch, one pull request and one commit per section. Every PR passes the five required checks and gets independent QA plus the reviews listed; every UI PR also gets UX/UI and accessibility review. Every UI PR that changes what users see notes its README impact (owner rule: the README is always current). Reviews check the threat model's implementation checklist I1 to I24 and the requirements REQ-01 to REQ-14 in section 11.1 for the PR they name.
+One branch, one pull request and one commit per section. Every PR passes the five required checks and gets independent QA plus the reviews listed; every UI PR also gets UX/UI and accessibility review. Every UI PR that changes what users see notes its README impact (owner rule: the README is always current). Reviews check the threat model's implementation checklist I1 to I46 and the requirements REQ-01 to REQ-14 in section 11.1 for the PR they name.
+
+**Scope split (owner decision, 2026-10-22).** To ship one-click updates sooner, 2.2.0 carries the essentials and 2.3.0 the rest. Process: feature PRs merge into `integration/2.2.0` after one combined independent review; the single `integration/2.2.0` to `main` PR runs every required check and the private release validation before `v2.2.0` is tagged.
+
+- **2.2.0:** PRs 1 to 6 (done or in progress); the host updater (PR 7) without the read-only `check` action and without self-update (the installer's `--repair` updates the broker); release validation from 2.1.0 (PR 12); the API (PR 8) without pre-check, changelog and history-details endpoints; the Update Center with Overview, What's new and a simple History list, the confirm dialog, the lock view with stages and result screens, automatic rollback, and **Report a bug** in Settings > About (PRs 9 to 11, reduced); docs and README (PR 13); the release-pipeline fixes from the PR 4 review before tagging.
+- **2.3.0:** the broker `check` action and the Pre-update checks page (D19); broker self-update (D6, I38 to I44); Full changelog tab and History details; the Activity timeline; **Open GitHub** reports for failed updates with reason, environment and excerpt (section 7.1); problem reports across DockNest (section 13, PR 16).
+- **Rollout:** the owner upgrades from 2.1.x to 2.2.0 with `scripts/upgrade.sh` (after taking a recovery kit), runs `sudo scripts/install-updater.sh` once, then installs 2.3.0 from the Update Center — the first real in-app update.
 
 | # | Branch | Scope | Author role | Required reviews |
 | --- | --- | --- | --- | --- |
