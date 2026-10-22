@@ -4,6 +4,27 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-23
+
+See [docs/releases/2026-10-23-v2.4.0.md](docs/releases/2026-10-23-v2.4.0.md).
+
+### Added
+
+- Problem reports across DockNest: an **Open GitHub** button in the red failure panels of job details, storage and server connection tests and DockNest backup, on the update result screen and on failed Recent updates rows opens a "Review what will be shared" dialog, then a pre-filled public GitHub issue in a new tab. Typed, allow-listed values only; the server sends nothing (docs/security.md, Problem reports).
+- App error boundary: "This page stopped working" with Reload page and a report that carries only the page, area and error name.
+- Update-failure reports with the section 7.1 fields, an environment section (on by default, untickable) and an optional redacted error excerpt (off by default).
+- Issue forms job-failure.yml, storage-failure.yml, server-connection.yml, self-backup-failure.yml, app-error.yml and update-failure.yml.
+- API (additive): storage tests return `errorClass` and server connection tests `check` and `errorClass` next to the unchanged message; the admin update status adds typed report fields; `GET /api/updates/requests/:id` returns one past request's admin status.
+- `npm run test:reports` browser suite, run in CI.
+
+### Changed
+
+- Settings > About: the button is now labelled **Report a bug** and uses the shared review dialog.
+
+### Removed
+
+- The duplicate `bug_report.yml` issue form (it asked for logs); `bug-report.yml` remains.
+
 ## [2.3.1] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.3.1.md](docs/releases/2026-10-23-v2.3.1.md).
