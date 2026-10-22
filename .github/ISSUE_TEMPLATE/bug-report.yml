@@ -1,0 +1,35 @@
+name: Bug report from DockNest
+description: Opened from Settings > About > Report a bug. The version and install mode are filled in for you.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues on this repository are public. Describe the problem in your own words and remove anything private first:
+        never paste host names, addresses, paths, user names, credentials, logs or backup contents.
+        For security problems, use private reporting instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: DockNest version
+      description: Filled in by DockNest. Correct it if it is wrong.
+      placeholder: "v2.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_mode
+    attributes:
+      label: Install mode
+      description: Filled in by DockNest when it knows it. image means a pulled release image, source means a git checkout built on the host.
+      options:
+        - image
+        - source
+    validations:
+      required: false
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true

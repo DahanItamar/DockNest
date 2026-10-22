@@ -1,2 +1,4 @@
 # Shell scripts run on Linux servers; keep LF even in Windows checkouts.
 *.sh text eol=lf
+# The host updater (broker, unit templates) runs on Linux hosts; keep LF.
+updater/** text eol=lf

@@ -1,15 +1,23 @@
-.git
-.ssh
-.aws
-.codex
-.agents
-node_modules
-dist
-data
-backups
-.env
-.env.*
-!.env.example
-test-results
-playwright-report
-*.log
+# Allow-list: the build context holds only what the Dockerfile copies and builds, plus the integration host image
+# (tests/integration/Dockerfile copies start.sh). Anything new must be added here on purpose; secrets, data, backups,
+# git history and local tooling never enter the context.
+*
+!package.json
+!package-lock.json
+!index.html
+!vite.config.js
+!web/
+!public/
+!src/
+!shared/
+!scripts/
+!remote/
+!docs/releases/
+!CHANGELOG.md
+!tests/integration/start.sh
+# Re-excluded even inside allowed directories.
+**/node_modules
+**/.env
+**/.env.*
+**/*.log
+**/.DS_Store

@@ -16,6 +16,8 @@ scripts/upgrade.sh --version v2.1.0   # a specific release
 scripts/upgrade.sh --dry-run          # show the plan only
 ```
 
+Since 2.2.0 the script also checks that the target is official before it changes anything, removes old upgrade files after a successful run, and can be driven by the [host updater](#host-updater-and-update-center). These parts are described below.
+
 **First upgrade from v2.0.0.** v2.0.0 does not include this script. Fetch it from the target release and run it from the checkout:
 
 ```sh
@@ -24,20 +26,25 @@ git show v2.1.0:scripts/upgrade.sh > /tmp/docknest-upgrade.sh
 sh /tmp/docknest-upgrade.sh --version v2.1.0
 ```
 
+**Upgrading from 2.1.x to 2.2.0 runs 2.1's script.** The script that performs an upgrade is the one in the checkout you start from, so the hop to 2.2.0 uses the 2.1 script, not the 2.2.0 one. That hop has none of the 2.2.0 behavior below: no on-`main` or signature check, no cleanup of old upgrade files, and no exit 4 after a compatible migration (a failure after the schema changed ends with exit 5 and manual commands). It also does not pause DockNest self-backups: 2.1's hold covers site jobs only, so a self-backup that starts during the hop is not waited for. Run the hop outside your self-backup window. After it, the checkout holds the 2.2.0 script and every later upgrade behaves as described here. To get the 2.2.0 behavior on the hop itself, run the script from the target release, as for the first upgrade from v2.0.0 above (`git show v2.2.0:scripts/upgrade.sh`).
+
 The script:
 
-1. Refuses to continue if tracked files were edited (see [Customising without conflicts](#customising-without-conflicts)), if `data/master.key` or `data/setup.token` is missing, if the target release cannot upgrade from your version (`minUpgradeFrom`), or if Compose configuration is invalid.
-2. Fetches release tags and shows the current and target versions.
+1. Refuses to continue if another `upgrade.sh` run holds the [script lock](#the-script-lock), if the target is not an official release (see [Verifying the target](#verifying-the-target)), if tracked files were edited (see [Customising without conflicts](#customising-without-conflicts)), if `data/master.key` or `data/setup.token` is missing, if the target release cannot upgrade from your version (`minUpgradeFrom`), or if Compose configuration is invalid.
+2. Fetches release tags and shows the current and target versions. If the fetch fails it continues with the tags already in the checkout, so a rollback works offline.
 3. Sets the deployment hold (`scripts/deployment-preflight.js hold`) so no new backups or restores start. It waits up to `--wait` seconds (default 600) for queued or running jobs, then stops. `--force` continues anyway; interrupted jobs then need recovery review.
-4. Copies `.env`, `compose.override.yaml`, `data/master.key` and `data/setup.token` to `data/upgrade-backups/<time>-<from>-to-<to>/` with mode 0700. These copies are never deleted automatically.
+4. Copies `.env`, `compose.override.yaml`, `data/master.key` and `data/setup.token` to `data/upgrade-backups/<time>-<from>-to-<to>/` with mode 0700. Each run gets a folder of its own with a `result` marker that records how the run ended. Only a later successful upgrade removes old folders, under the [retention rules](#what-is-removed-after-an-upgrade).
 5. Checks out the release tag, then builds the new image (or pulls it in [image mode](#use-the-published-image)) while the old release keeps serving.
 6. Stops the worker, which finishes in-flight work first, then starts the new API and worker. On first start the new code migrates the metadata after taking a snapshot.
-7. Waits up to `--timeout` seconds (default 300) for `GET /api/version` to report the target version and for the worker to run. Then it lifts the hold.
+7. Waits up to `--timeout` seconds (default 300) for `GET /api/version` to report the target version and for the worker to run. Then it lifts the hold, records the success in the backup's `result` marker and only then removes old upgrade files.
 
 If the new release does not become healthy:
 
-- **Schema unchanged:** the script checks out the previous commit, starts it again (image mode: the exact image recorded before the switch), lifts the hold and exits with code 4. No data changed.
-- **Schema already migrated:** the script does not guess. It exits with code 5, keeps the hold, and prints the exact [rollback](#rolling-back) commands.
+- **Schema unchanged:** the script checks out the previous commit, starts it again from the exact image recorded before the switch (so it works offline and never pulls), lifts the hold and exits with code 4. No data changed.
+- **Schema migrated, but only by compatible migrations:** if the previous release's own schema is at or above the compatibility floor of the migrated database (the rule in [Rolling back](#rolling-back)), the previous release runs on the migrated metadata as is. The script restores it, lifts the hold and exits with code 4. No data is discarded.
+- **Schema migrated by an incompatible migration:** the script does not guess. It exits with code 5, keeps the hold, and prints the exact [rollback](#rolling-back) commands.
+
+After exit 4 the script also removes the image it built or pulled for the failed target, best effort and without `--force`. It never removes an image a service runs or one recorded by a run that needs manual action. The backup folder of the failed run stays.
 
 Any other failure after the hold is set (a step that errors, Ctrl-C, a signal) is handled the same way: the hold is released, the checkout and containers return to the previous release when the metadata is provably unchanged, and the status file ends with `ok: false`. It never stays at `ok: null`. A refusal after the hold (for example, no space for the configuration backup) also lifts the hold.
 
@@ -53,7 +60,11 @@ Reinstall boot recovery afterwards, if you use it. See [Boot recovery after upgr
 | `--status-file PATH` | Write progress as JSON, replaced atomically at each phase. |
 | `--force` | Continue when jobs are still queued or running after `--wait`. |
 | `--wait SECONDS` / `--timeout SECONDS` | Idle wait (default 600) and health wait (default 300). |
-| `--dry-run` | Read-only plan: no fetch (it uses the tags already in the checkout), no hold, no status file, no containers started apart from reading the schema version. |
+| `--dry-run` | Read-only plan: no fetch (it uses the tags already in the checkout), no hold, no lock, no status file, no containers started apart from reading the schema version. It also lists what the cleanup would remove after a successful upgrade. |
+| `--no-prune` | Skip the cleanup of old upgrade files after a successful upgrade; keep everything. |
+| `--no-verify` | Skip the on-`main` and signature checks of [Verifying the target](#verifying-the-target), for forks, mirrors and hosts without access to GitHub. Prints a warning. |
+| `--capabilities` | Print the supported flags and status fields as JSON and exit. The host updater uses this to refuse a script it does not understand. |
+| `--no-fetch`, `--expect-commit SHA`, `--expect-image-digest sha256:...`, `--upgrade-only`, `--request-id ID` | For the host updater, which has already verified the release: use the tags already in the checkout, build or pull exactly the verified commit and signed image digest, refuse anything that is not newer, and tag the status file. Not needed for manual runs. |
 
 | Code | Result |
 | --- | --- |
@@ -61,17 +72,50 @@ Reinstall boot recovery afterwards, if you use it. See [Boot recovery after upgr
 | 1 | Usage error. |
 | 2 | Refused before changing anything (edited files, missing secrets, unknown tag, unsupported path, downgrade without a matching snapshot, cancelled). |
 | 3 | Jobs were still queued, running or awaiting recovery review. Nothing changed. |
-| 4 | Failed before the schema changed. The previous release was restored automatically. |
-| 5 | Failed after the schema migrated, or failed unexpectedly where the metadata could not be proven unchanged. The hold stays on. Roll back manually with the printed commands. |
+| 4 | Failed, and the previous release was restored automatically: either before the schema changed, or after only compatible migrations ran (the previous release runs on the migrated metadata and no data is discarded). |
+| 5 | Failed after an incompatible migration, or failed unexpectedly where the metadata could not be proven unchanged or compatible. The hold stays on. Roll back manually with the printed commands. |
 | 6 | The automatic return to the previous release also failed. |
 
 The status file is a single JSON object:
 
 ```json
-{"phase":"health","from":"2.0.0","to":"2.1.0","startedAt":"2026-10-21T08:00:00Z","updatedAt":"2026-10-21T08:02:10Z","ok":null,"error":null,"rollbackHint":"git checkout <commit> && docker compose up -d --build && ..."}
+{"phase":"health","from":"2.1.0","to":"2.2.0","startedAt":"2026-10-21T08:00:00Z","updatedAt":"2026-10-21T08:02:10Z","ok":null,"error":null,"rollbackHint":"git checkout <commit> && docker compose up -d --build && ...","warning":null,"reason":null,"schemaFrom":4,"schemaTo":null,"requestId":null}
 ```
 
-`phase` moves through `preflight`, `fetch`, `idle`, `backup`, `checkout`, `build`, `stop`, `restore-snapshot` (downgrades only), `start`, `health`, `rollback` (only after a failure) and `release`, and ends at `done` or `failed`. `ok` stays `null` while the script runs and is `true` or `false` at the end. The file has mode 0644 and contains no secrets.
+`warning` is set only when the cleanup ran into a problem (the upgrade itself still succeeded). `reason` is set only when `ok` is `false`, from a fixed list (for example `verify-signature-invalid`, `verify-not-on-main`, `fetch-failed`, `jobs-did-not-finish`, `build-failed`, `pull-failed`, `migration-failed`, `health-timeout-api`, `health-timeout-worker`, `rollback-failed`, `interrupted`), otherwise `unknown`. `schemaFrom` and `schemaTo` are integers or `null`; `requestId` is the host updater's request id or `null`.
+
+`phase` moves through `preflight`, `fetch`, `idle`, `backup`, `checkout`, `build`, `stop`, `restore-snapshot` (downgrades only), `start`, `health`, `rollback` (only after a failure), `release` and `cleanup`, and ends at `done` or `failed`. `ok` stays `null` while the script runs and is `true` or `false` at the end. The file has mode 0644 and contains no secrets.
+
+### Verifying the target
+
+Unless you pass `--no-verify`, a manual run checks that the target is an official release before it holds the deployment or changes anything:
+
+1. The target tag's commit must be an ancestor of `origin/main`. Otherwise the run stops with exit 2. A checkout without `origin/main` is refused too; run `git fetch origin`.
+2. For a target of 2.2.0 or later, the signed `docknest-release.json` and its `.sigstore.json` bundle are downloaded from the GitHub release and checked with `cosign verify-blob` against the release workflow's identity for that exact tag and commit. The manifest's `commit`, `tag`, `version` and `repository` must match, and `prerelease` must be `false`. In [image mode](#use-the-published-image) the signed image digest is used for the pull. Targets before 2.2.0 have no signed manifest and get only the first check.
+
+This needs `curl` and `cosign` on the host. If `cosign` is not installed (and the host updater's pinned copy is absent), the signature check is skipped with a warning and the on-`main` check still applies. If `curl` is missing or the download fails, the run stops with exit 2 and changes nothing. A host that cannot reach GitHub (offline or air-gapped) must pass `--no-verify`, which skips both checks; a rollback to a tag that is already in the checkout then works offline. Only the host updater compares the numeric GitHub repository and owner ids, so a manual run trusts the repository name.
+
+### The script lock
+
+Only one `upgrade.sh` run can change the installation at a time. A run takes the folder `data/.upgrade.lock` (created atomically, holding its PID) when it starts and removes it when it ends. A second run, including one started by the host updater, stops with exit 2 and names the PID. `--dry-run` takes no lock.
+
+A lock whose process is gone is taken over automatically, using a second folder, `data/.upgrade.lock.takeover`, as a short mutex so two runs can never both own it. If the machine lost power in the middle of that takeover and later runs keep refusing, confirm that no `upgrade.sh` is running, then remove both folders:
+
+```sh
+rm -rf data/.upgrade.lock data/.upgrade.lock.takeover
+```
+
+### What is removed after an upgrade
+
+After a successful upgrade, once the success is recorded, the script cleans up old upgrade files. The cleanup never changes the outcome: if it fails or is interrupted, the upgrade is still a success (exit 0) and the status file carries a `warning`. It has its own two-minute limit. It removes:
+
+| What | Rule |
+| --- | --- |
+| `data/upgrade-backups/<time>-<from>-to-<to>/` | Keeps the newest 5, counting the run that just finished. A backup is also kept, whatever its age, when its run ended with exit 5 or 6 or never recorded an exit code (an interrupted run), because it holds the files for a manual rollback. Folders written before 2.2.0 have no marker and count as ordinary. |
+| Rollback copies in the state volume (`upgrade-snapshots/pre-downgrade-*` and `pre-rollback-*`) | Keeps the newest 2 of each kind. The `state-v*-to-v*` snapshots are rotated separately (see [Rolling back](#rolling-back)). A rollback copy that was removed cannot be restored: to go back that far, pull or rebuild the old release. |
+| Docker images of earlier releases | Only images whose ID this installation recorded in its own upgrade backups and that are tagged only in this installation's repository (the local build name, or the image name in `DOCKNEST_IMAGE`). The images the `api` and `worker` run, the previous release's image and images recorded by a run that needs manual action are kept. The step is skipped when one of those IDs is unknown. It uses `docker image rm` without `--force`; it never runs `docker image prune` and never touches other images. |
+
+A failed (exit 4, 5, 6) or interrupted run does not clean up. Use `--no-prune` to keep everything, or `--dry-run` to see the list first. Upgrade backups hold `.env` and secrets; keep your own copy of `data/master.key` regardless.
 
 ## Manual upgrade
 
@@ -129,9 +173,17 @@ Each GitHub Release also includes `docknest-release.json`:
 {"version":"2.1.0","schemaVersion":2,"minUpgradeFrom":"2.0.0","image":{"name":"ghcr.io/dahanitamar/docknest","digest":"sha256:…"},"notes":"docs/releases/2026-10-22-v2.1.md"}
 ```
 
+From 2.2.0 the manifest also names the release's `tag`, full `commit` SHA, `repository` and `prerelease` (always `false`), the optional `highlights` taken from the notes front matter ([template](releases/TEMPLATE.md)), and an `updater` block with the SHA-256 of each host updater file (empty until the updater's self-update ships). It is signed keylessly as well: the release carries `docknest-release.json.sigstore.json`, and the workflow verifies both signatures before it publishes the release. Verify the manifest yourself with:
+
+```sh
+cosign verify-blob docknest-release.json --bundle docknest-release.json.sigstore.json \
+  --certificate-identity https://github.com/DahanItamar/DockNest/.github/workflows/release.yml@refs/tags/vX.Y.Z \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
 Release notes are also bundled in the image under `docs/releases/`. Name new notes `YYYY-MM-DD-vX.Y.Z.md`. A `vX.Y.md` file also covers the `X.Y.0` release.
 
-DockNest never checks for updates on its own. The **About** section in preferences shows the running version and links to the releases page.
+DockNest checks for updates only after an administrator agrees (see [the Update Center flow](#the-update-center-flow)). The **About** section in preferences shows the running version and links to the releases page.
 
 ## Boot recovery after upgrades
 
@@ -153,13 +205,13 @@ DockNest follows [Semantic Versioning](https://semver.org/). Within a major vers
 
 | Area | Stable items |
 | --- | --- |
-| Environment variables | `APP_ORIGIN`, `SECURE_COOKIES`, `HOST_PORT`, `APP_DOMAIN`, `PORT`, `HOST`, `NODE_ENV`, `DATA_DIR`, `BACKUP_DIR`, `BACKUP_STORAGE`, `MASTER_KEY_FILE`, `SETUP_TOKEN_FILE`, `ALLOW_LOCAL_BACKUP_STORAGE`, `STORAGE_HOST`, `STORAGE_PORT`, `STORAGE_USERNAME`, `STORAGE_HOST_KEY_SHA256`, `STORAGE_PRIVATE_KEY_FILE`, `STORAGE_PASSWORD_FILE`, `STORAGE_ROOT`, `STORAGE_CAPACITY_BYTES`, and the optional `DOCKNEST_IMAGE`. |
+| Environment variables | `APP_ORIGIN`, `SECURE_COOKIES`, `HOST_PORT`, `APP_DOMAIN`, `PORT`, `HOST`, `NODE_ENV`, `DATA_DIR`, `BACKUP_DIR`, `BACKUP_STORAGE`, `MASTER_KEY_FILE`, `SETUP_TOKEN_FILE`, `ALLOW_LOCAL_BACKUP_STORAGE`, `TRUST_PROXY` (new in 2.2.0, optional, unset by default), `STORAGE_HOST`, `STORAGE_PORT`, `STORAGE_USERNAME`, `STORAGE_HOST_KEY_SHA256`, `STORAGE_PRIVATE_KEY_FILE`, `STORAGE_PASSWORD_FILE`, `STORAGE_ROOT`, `STORAGE_CAPACITY_BYTES`, and the optional `DOCKNEST_IMAGE`. |
 | Secret files | `./data/master.key` (base64 32-byte key) and `./data/setup.token`, mounted as the Compose secrets `master_key` and `setup_token` at `/run/secrets/master_key` and `/run/secrets/setup_token`. |
-| Compose | Project `docknest`; services `api`, `worker` and `proxy` (profile `https`); volumes `docker-backup-manager_state`, `docker-backup-manager_caddy_data` and `docker-backup-manager_caddy_config` (legacy names kept on purpose, so certificates and state carry over); loopback API port `127.0.0.1:${HOST_PORT:-3000}`. |
+| Compose | Project `docknest`; services `api`, `worker` and `proxy` (profile `https`); volumes `docker-backup-manager_state`, `docker-backup-manager_caddy_data` and `docker-backup-manager_caddy_config` (legacy names kept on purpose, so certificates and state carry over), and, from 2.2.0, `docknest_updater` (mounted read-only into `api` only; empty unless the host updater is installed); loopback API port `127.0.0.1:${HOST_PORT:-3000}`. |
 | `DATA_DIR` layout | `state.sqlite` with its `-wal` and `-shm` files, `worker.lock`, `upgrade-snapshots/`, `manager-backups/`, `private-exports/`, and `backups/` in local mode. Snapshot names follow `state-v<from>-to-v<to>-<UTC>.sqlite`. |
 | Sessions | The `dbm_session` cookie and the `x-csrf-token` header. An upgrade keeps valid sessions, except the one-time v2.0.0 cleanup of legacy sessions without timestamps. |
 | Site configuration | The JSON fields accepted by `POST /api/sites`: `kind`, `documentRoot`, `containers`, `stagingRoot`, `deliveryMode`, `sqliteIntegrityCheck`, `exclusiveSourcesConfirmed`, `stopTimeout`, `shutdownProfile`, `cleanShutdownConfirmed`, `unresolvedDependencies`, `services`, `configFiles`, `mountExclusions`, `mountExclusionsConfirmed`, `restoreReferences`, `temporaryMemoryFolders`, `composeFiles`, `externalReferencesConfirmed`, `maintenanceRequired`, `maintenanceProbeOrigin`, `maintenancePublicUrl`, `domains`, `healthUrl` and `maintenance`. Saved configurations keep loading. New fields always get defaults. |
-| Public endpoints | `GET /healthz` returns `{status}` and `GET /api/version` returns `{version, schemaVersion}`. Neither needs a session. |
+| Public endpoints | `GET /healthz` returns `{status}` and `GET /api/version` returns `{version, schemaVersion}`. Neither needs a session. From 2.2.0, `GET /api/updates/progress` is also public and returns `{active, phase, to, state, stale, updatedAt, events: [{phase, at}]}`, nothing else, rate limited per client address (120 a minute); its fields may gain values but are not renamed. The update lock view relies on these endpoints to see the new release come up. |
 | Backup formats | DBM1 encrypted payloads (`scripts/decrypt-backup.js`), manifests and recovery kits written by any 2.x release stay readable by later 2.x releases. |
 
 Not covered: internal module APIs, database table layout (use the API), the CSS and markup of the dashboard, and authenticated JSON fields not listed above.
@@ -179,29 +231,52 @@ On startup, `src/db.js` takes `BEGIN IMMEDIATE` with a long busy timeout, so whe
 
 Migration 1 (`baseline`) is the exact v2.0.0 startup schema. It is repeatable: it runs on every start, as v2.0.0 did. Only additive `CREATE ... IF NOT EXISTS` statements may be appended to it. Every other change needs a new numbered entry. Add `compatible: true` only to an entry that creates new tables or indexes and changes nothing existing; anything that alters, drops, rewrites or reinterprets existing data must not carry it, because older releases would then misread the data. Keep each entry on one line starting with `{ version: N,`, because `scripts/upgrade.sh` reads the highest number and the compatible flags from that pattern (`tests/upgrade-script.test.js` checks it against the real file). A failed snapshot leaves no `.partial` file, and stale ones are removed at the next start. `scripts/release-manifest.js` imports `schemaVersion` directly. Tests: `tests/migrations.test.js` (unit) and `npm run test:upgrade -- vX.Y.Z` (the real released code against the current API, run by the CI `upgrade` job for every final tag).
 
-## In-app updater request contract (planned)
+## Host updater and Update Center
 
-The containers never get the Docker socket. A future in-app updater will use a host-side root service, installed once with `sudo scripts/install-updater.sh` (not part of this release). The service watches a request file in the state volume and runs `scripts/upgrade.sh`. Planned contract:
+The containers never get the Docker socket. In-app updates therefore go through a small root service on the host, the host updater, which you install once. It receives a request over a Unix socket, verifies the release itself, and then runs `scripts/upgrade.sh`. The design is in [update-center.md](update-center.md) and the threat model in [updater-threat-model.md](updater-threat-model.md). The host updater is optional: without it, DockNest upgrades exactly as before with `scripts/upgrade.sh`.
 
-| Item | Contract |
-| --- | --- |
-| Directory | `DATA_DIR/updater/` (`/data/updater` in the containers; on the host, the `docker-backup-manager_state` volume's `_data/updater`). Owned by uid 1000, mode 0700. |
-| Request | `updater/request.json`, mode 0600, written by the API as uid 1000. The API writes `request.json.<id>.tmp`, syncs it, then renames it so the file appears complete. The API accepts only one pending request, and only when `status.json` is absent or has ended (`ok` is not `null`). |
-| Fields | `{"schema":1,"id":"<uuid>","action":"upgrade"|"downgrade","version":"vX.Y.Z","allowDataRollback":false,"requestedBy":"<user id>","requestedAt":"<ISO time>"}`. No other fields. Values are never passed through a shell. |
-| Reader | A root systemd path unit and service. It opens the file with `O_NOFOLLOW` and requires a regular file owned by uid 1000. It rejects unknown fields, a `version` not matching `^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`, tags missing from `origin`, and versions below `minUpgradeFrom`. It moves the request to `updater/processing/<id>.json`, then runs `scripts/upgrade.sh --non-interactive --version <version> [--allow-data-rollback] --status-file DATA/updater/status.json` from the checkout, one request at a time. Afterwards it moves the request to `updater/done/<id>.json` with the exit code added. |
-| Status | The script writes the status file with an exclusive, unpredictable temporary name created together with its contents in a directory owned by the script's user, mode 0644, then renames it; it refuses to write if the file or its directory is a symlink or not owned by that user. So the directory must be owned by the account running the script (root for the host service), not by uid 1000; see the requirements below. The API only reads it. The API restarts during an upgrade, so the dashboard must poll `/api/version` and the status file through the new API. |
-| Trust | The request only asks for an upgrade; the host service decides. Treat the volume as writable by a possibly compromised API: never follow links, never run values from the request, and require `allowDataRollback` before any downgrade that restores a snapshot. |
+**Status of this work.** The broker, installer and the `upgrade.sh` flags are implemented and covered by unit and script tests (`updater/test_broker.py`, `tests/host-updater.test.js`, `tests/upgrade-script.test.js`). The Update Center page, the update request path and the update lock have unit, API and mocked-browser tests (`tests/update-requests.test.js`, `tests/update-transport.test.js`, `npm run test:updates`). None of it has been validated on a real Linux Docker host: the browser test uses a mocked API and proves the page, not a real update, rollback or restart.
 
-### Known requirements for the 2.2.0 updater
+### Install the host updater (once)
 
-An independent review found these gaps in the contract above. Treat everything in a directory owned by uid 1000 as attacker-controlled, including the directory, its parents under `_data/` and every name inside. The 2.2.0 implementation must close all of them.
+From the DockNest checkout on the host:
 
-1. **Path components can be swapped for symlinks.** `O_NOFOLLOW` protects only the final component. `updater`, `processing/` and `done/` are owned by uid 1000, so the API could replace them with symlinks (for example to `/etc/cron.d`) between a check and a `rename`. Open the volume path through a descriptor chain (`O_PATH|O_DIRECTORY|O_NOFOLLOW`, or `openat2` with `RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH`) and do every operation with `*at()` calls relative to it.
-2. **Validate-then-use race.** The API owns the file and can rewrite it after the root reader validated it. Read once from the open descriptor into memory (size cap such as 4 KiB), validate that copy, write a root-owned record under a root-owned directory such as `/var/lib/docknest-updater/` (not the 1000-owned `processing/`), use only the in-memory values afterwards, then `unlinkat` the original.
-3. **Other file-type attacks.** After opening, check with `fstat`: a regular file, `st_uid == 1000`, `st_nlink == 1` (no hardlinks), size cap. Open with `O_NONBLOCK` so a FIFO cannot stall the service. Reject sparse or huge files.
-4. **`id` is not constrained.** Only `version` has a regex, yet `id` becomes a file name (`processing/<id>.json`, `done/<id>.json`), so `../` or an absolute path escapes. Require a canonical UUID and build names from the parsed value. Write results into a root-owned directory and let the API read them through a read-only view; writing `done/<id>.json` as root into a 1000-owned directory has the symlink problem of item 1.
-5. **`allowDataRollback` is attacker-supplied.** A compromised API sets it itself, so requiring it protects nothing. The root service should refuse any downgrade that restores a snapshot, or require a confirmation that never touches the volume (a local CLI step or a one-time token). Decide explicitly whether `action: "upgrade"` with an older version is allowed; `scripts/upgrade.sh` permits compatible downgrades silently.
-6. **Version trust.** The regex allows pre-release suffixes, so a request can select a pre-release tag if one exists on `origin`. The script trusts the `origin` in `.git/config` and does not check tag signatures, so a force-moved or rogue tag leads to building attacker-chosen code as root. Pin the expected remote URL in the service configuration, accept final releases only unless an administrator enabled pre-releases, require `git verify-tag` or a match with the signed `docknest-release.json` / cosign identity before building, and check that the tag commit is an ancestor of `origin/main`.
-7. **Least privilege.** The script needs only the Docker socket and the checkout. A dedicated user in the `docker` group that owns the checkout is better than root and removes the `safe.directory` relaxation and the root-follows-symlinks class of bugs. The docker group is root-equivalent anyway, so this is about not adding exposure, not a security boundary.
-8. **Denial of service and replay.** A path unit on a directory the API can modify can be triggered at will. Add `StartLimitBurst`, a single-instance lock and a cool-down. Add a monotonic `requestedAt` or nonce check against the last `done` record so a replayed old request cannot run again. The rule "only when `status.json` has ended" is enforced by the component the contract does not trust, so the root service must enforce its own queueing.
-9. **Status.** `status.json` must be written by the root service into a root-owned location, and the API must treat its contents as untrusted when rendering them.
+```sh
+sudo scripts/install-updater.sh              # install
+sudo scripts/install-updater.sh --status     # broker state and the last result with its rollback hint
+sudo scripts/install-updater.sh --ack        # lift the "needs host acknowledgement" block
+sudo scripts/install-updater.sh --repair     # reinstall broker, cosign, units and status directory; keeps state
+sudo scripts/install-updater.sh --uninstall  # remove units and code; keeps /var/lib/docknest-updater
+```
+
+It needs Linux with systemd, Python 3.9 or later, `git`, `docker`, `curl`, `flock` and `setpriv` (util-linux 2.35 or later) and `systemd-analyze`. It installs a socket-activated systemd unit, downloads a `cosign` pinned by version and SHA-256 into `/usr/local/lib/docknest-updater`, and creates an unprivileged `docknest-verify` account that is used only to verify releases. It never adds anyone to the `docker` group, never changes ownership of the checkout and stores no secret. The upgrade itself runs as the checkout's owner, who must be root or already in the `docker` group. The first install verifies the release you are running (signed manifest, tag on `main`, image digest in image mode) and records it; if that fails, nothing is enabled.
+
+The installer refuses:
+
+- **Rootless Docker or user-namespace remapping**, and **Docker Desktop**. Update those from the command line with `scripts/upgrade.sh`.
+- **A second install.** One updater per host. Use `--repair` or `--uninstall` from the checkout it was installed for.
+- A host where exactly one running `api` container of the `docknest` project is not found, where the `docknest_updater` volume is missing (start DockNest 2.2.0 or later with `docker compose up -d` first) or is not a plain local volume, or where a required tool is missing.
+- `--repair`, `--ack` and `--uninstall` while an in-app upgrade is running.
+
+The `docknest_updater` volume is mounted read-only into the `api` container only. It carries the socket and an allow-listed copy of the status.
+
+After an upgrade that needs a person to look at the host (exit 5 or 6, an interrupted run, an unexpected exit or repeated automatic rollbacks) the updater blocks itself. `--status` names the reason and shows the rollback commands. Once you have checked the host and released the deployment hold (`docker compose exec api node scripts/deployment-preflight.js release`), run `sudo scripts/install-updater.sh --ack`; it refuses while the hold is still on. The updater also allows one run at a time, a 60-second cool-down and six runs a day, and stops a run after two hours.
+
+### The Update Center flow
+
+Administrators get **Update Center** in the sidebar (Administration), with the tabs Overview, What's new and History. The design is in [update-center.md](update-center.md).
+
+1. **Consent, asked once.** At the first administrator sign-in DockNest asks whether it may check GitHub daily. The first answer wins; a second administrator is told the recorded answer. Until someone says yes nothing is sent. The Overview tab has a switch to change it later.
+2. **Check.** With checks on, the worker asks GitHub once a day, and an administrator can use **Check now** (at most one real call a minute). The result is advisory display data. The destinations and what GitHub sees are in [security.md](security.md#update-checks-outbound-requests). The sidebar shows a badge when a newer final release is cached.
+3. **Set up the host updater.** If the updater is not installed, the page shows the `sudo scripts/install-updater.sh` step and notices when it connects. If the updater is too old, blocked or not responding, the page says so and how to fix it (`systemctl status docknest-updater`, `--repair`, `--ack`). Without the updater the page offers the command-line route instead.
+4. **Update.** An administrator selects **Update to vX.Y.Z**, reads what will happen, and confirms with the shared password and a fresh authenticator code. Only then does `POST /api/updates/requests` send one request over the updater's Unix socket. The API decides eligibility itself (a newer final release, the updater present and unblocked, no deployment hold, no recovery review pending); the host updater then decides again: it accepts upgrades only, rechecks the signed manifest and that the tag is on `main`, and runs `scripts/upgrade.sh --non-interactive --upgrade-only --no-fetch --expect-commit <sha>` as the checkout's owner. Nothing is installed unattended, and downgrades stay a command-line task.
+5. **Progress and the update lock.** While a request is active, the API answers every request with `423 {"error":"UPDATE_IN_PROGRESS"}` except a short list: `GET /api/version`, `GET /api/updates/progress`, `GET /api/updates` and `/api/updates/status`, `GET /api/auth/status`, signing out, and an administrator closing a stale request. The browser then shows only the lock view, which replaces every page, sign-in included, and reads the public progress. The API restarts during the upgrade, so the lock view keeps polling and shows its own result when DockNest answers again. The update status the API reads from the `docknest_updater` volume (`status.json`, `current.json`, `service.json`) is untrusted display data.
+6. **Result.** A successful update returns to the page with a notice. A failed one ends with the same exit codes and rollback behavior as a manual run: an automatic return (exit 4) allows a retry once, and a second automatic return for the same version blocks that version until `sudo scripts/install-updater.sh --ack`. A run that needs manual action (exit 5 or 6) blocks updates and keeps the lock view's message until the operator runs the rollback commands from `--status`, releases the hold and runs `--ack`.
+
+If the updater stops reporting progress (no heartbeat for 2 minutes, or no phase change for 15 minutes, 45 while building), the lock view marks the update as stale and an administrator can close the record after checking the host. The API closes a request that never ran or has outlived the updater's two-hour limit by itself. Closing a record does not stop anything on the host.
+
+**Update history.** The History tab lists in-app runs together with versions that were installed from the command line, with the outcome (installed, rolled back, needs manual action, not changed).
+
+### Recovery kits and the hold
+
+Restoring a recovery kit (`node scripts/recovery-kit.js restore`) writes into a new directory and clears the deployment hold in the restored state, because a kit taken during a hold would otherwise restore a manager that refuses all work. Exporting a kit is refused while the hold is on. Since the restore clears the hold, it refuses with "A DockNest update is running on this host" while the host updater reports a run. The guard reads the updater status at `/run/docknest-updater/status`, which exists only inside the `api` container, so run the restore there (`docker compose exec api node scripts/recovery-kit.js restore ...`) when you want the guard to apply. On a recovery machine without the updater the status is absent and the restore proceeds. If the refusal is stale and you are in disaster recovery, retry with `--ignore-updater`; it prints a warning, and you must not put the restored state in service while an update really is running.

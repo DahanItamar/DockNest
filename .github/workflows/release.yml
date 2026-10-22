@@ -1,6 +1,9 @@
 name: Release
-# Publishes ghcr.io/<owner>/docknest for a final vX.Y.Z tag, signs it keylessly and attaches docknest-release.json.
-# Image tags: X.Y.Z, X.Y, X and latest. There are no public release candidates: a tag with a pre-release suffix
+# Publishes ghcr.io/<owner>/docknest for a final vX.Y.Z tag, signs it keylessly and attaches docknest-release.json with
+# its keyless cosign bundle (docknest-release.json.sigstore.json). The release is created as a draft and published only
+# after the image signature and the uploaded manifest bundle verify with the same pinned cosign (threat model F6).
+# The image is pushed only as sha-<commit> and signed by digest; the X.Y.Z, X.Y, X and latest tags are added to that same
+# digest only after the draft's downloaded assets verify, so a failed run never moves a public version tag. There are no public release candidates: a tag with a pre-release suffix
 # (vX.Y.Z-rc.N) fails before anything is built, so it never creates a GitHub Release or an image tag. A candidate is
 # validated privately by release-validation.yml (candidate input) on its main commit before the final tag is pushed.
 on:
@@ -75,7 +78,8 @@ jobs:
         id: release
         run: |
           version="${GITHUB_REF_NAME#v}"
-          node scripts/release-manifest.js --version "$version" > /dev/null
+          # Fails before anything is built when the notes front matter or the updater file list is invalid.
+          node scripts/release-manifest.js --version "$version" --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY" > /dev/null
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/docknest" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
@@ -88,7 +92,8 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
           images: ${{ steps.release.outputs.image }}
-          # Only final versions get this far, so every pattern applies and latest=auto adds latest.
+          # Only final versions get this far, so every pattern applies and latest=auto adds latest. The retag step
+          # applies these after verification; the build never pushes them.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -103,23 +108,102 @@ jobs:
           context: .
           platforms: linux/amd64   # arm64 is not published yet; build from source on ARM hosts
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          # A non-version tag only: X.Y.Z, X.Y, X and latest are added by digest after the draft release verifies.
+          tags: ${{ steps.release.outputs.image }}:sha-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
+      # cosign-release is pinned explicitly (the installer's own default today) so signing and verification use one known
+      # cosign. The host updater's installer must pin this same version, and a change here changes both (F6, D14).
       - uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+        with:
+          cosign-release: 'v3.0.5'
       - name: Sign image by digest
         env:
           IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE"
-      - name: Create GitHub Release with manifest
+      - name: Write and sign the release manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
           IMAGE: ${{ steps.release.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          node scripts/release-manifest.js --version "$VERSION" --image "$IMAGE" --digest "$DIGEST" > docknest-release.json
-          notes=$(node -p "require('./docknest-release.json').notes || ''")
-          set -- "$GITHUB_REF_NAME" docknest-release.json --title "DockNest $VERSION" --verify-tag
-          if [ -n "$notes" ]; then set -- "$@" --notes-file "$notes"; else set -- "$@" --generate-notes; fi
-          set -- "$@" --latest
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then gh release upload "$GITHUB_REF_NAME" docknest-release.json --clobber; else gh release create "$@"; fi
+          node scripts/release-manifest.js --version "$VERSION" --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"             --image "$IMAGE" --digest "$DIGEST" > docknest-release.json
+          cosign sign-blob --yes --bundle docknest-release.json.sigstore.json docknest-release.json
+      # The identity a host verifier pins (threat model section 5): this workflow, at this tag, pushed, at this commit.
+      - name: Verify the image signature and the manifest bundle
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cat > "$RUNNER_TEMP/verify.sh" <<'EOF'
+          set -euo pipefail
+          identity=(--certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@$GITHUB_REF"
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" --certificate-github-workflow-trigger push
+            --certificate-github-workflow-ref "$GITHUB_REF" --certificate-github-workflow-sha "$GITHUB_SHA")
+          cosign verify "${identity[@]}" "$IMAGE" > /dev/null
+          cosign verify-blob "${identity[@]}" --bundle "$1/docknest-release.json.sigstore.json" "$1/docknest-release.json"
+          node scripts/release-manifest.js --check "$1/docknest-release.json" --version "$VERSION" --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY" --digest "$DIGEST"
+          EOF
+          bash "$RUNNER_TEMP/verify.sh" .
+      - name: Create the GitHub Release as a draft and verify its assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -o pipefail
+          assets=(docknest-release.json docknest-release.json.sigstore.json)
+          # A published release is never rewritten; a draft left by an earlier failed run gets the new assets. Any gh or
+          # API error fails the step (bash -e), and so does more than one release for the tag.
+          draft=$(gh release list --limit 1000 --json tagName,isDraft --jq '[.[] | select(.tagName == $ENV.GITHUB_REF_NAME)] | if length == 0 then "none" elif length == 1 then (.[0].isDraft | tostring) else error("more than one release for the tag") end')
+          case "$draft" in
+            false) echo "::error::$GITHUB_REF_NAME is already published; its signed assets are not replaced"; exit 1 ;;
+            true)
+              # Only the two signed files may stay on a reused draft.
+              gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | while IFS= read -r name; do
+                case "$name" in docknest-release.json|docknest-release.json.sigstore.json) ;; *) gh release delete-asset "$GITHUB_REF_NAME" "$name" --yes ;; esac
+              done
+              gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber ;;
+            none)
+              notes=$(node -p "require('./docknest-release.json').notes || ''")
+              set -- "$GITHUB_REF_NAME" "${assets[@]}" --draft --title "DockNest $VERSION" --verify-tag
+              # The notes front matter is data for the manifest, not text for the release page.
+              if [ -n "$notes" ]; then node scripts/release-manifest.js --notes-body "$notes" > "$RUNNER_TEMP/notes.md"; set -- "$@" --notes-file "$RUNNER_TEMP/notes.md"; else set -- "$@" --generate-notes; fi
+              gh release create "$@" ;;
+            *) echo "::error::unexpected release state $draft"; exit 1 ;;
+          esac
+          names=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '[.assets[].name] | sort | join(" ")')
+          [ "$names" = "docknest-release.json docknest-release.json.sigstore.json" ] || { echo "::error::the draft carries $names"; exit 1; }
+          # Verify what was uploaded, not only the local files, before anyone can see the release.
+          rm -rf "$RUNNER_TEMP/published" && mkdir "$RUNNER_TEMP/published"
+          gh release download "$GITHUB_REF_NAME" --dir "$RUNNER_TEMP/published" --pattern docknest-release.json --pattern docknest-release.json.sigstore.json
+          bash "$RUNNER_TEMP/verify.sh" "$RUNNER_TEMP/published"
+      # Only now do the version tags move, by digest, to the image that was signed and verified (buildx is SHA-pinned
+      # through setup-buildx-action). Each tag is then read back and must resolve to the signed digest.
+      - name: Tag the verified image X.Y.Z, X.Y, X and latest
+        env:
+          SOURCE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -o pipefail
+          mapfile -t tags < <(printf '%s\n' "$TAGS" | sed '/^$/d')
+          [ "${#tags[@]}" -eq 4 ] || { echo "::error::expected the X.Y.Z, X.Y, X and latest tags, got ${tags[*]}"; exit 1; }
+          set --; for tag in "${tags[@]}"; do set -- "$@" --tag "$tag"; done
+          docker buildx imagetools create "$@" "$SOURCE"
+          for tag in "${tags[@]}"; do
+            got=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+            [ "$got" = "$DIGEST" ] || { echo "::error::$tag resolves to $got, not the signed $DIGEST"; exit 1; }
+          done
+      - name: Publish the release and compare its assets with the signed files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          rm -rf "$RUNNER_TEMP/final" && mkdir "$RUNNER_TEMP/final"
+          gh release download "$GITHUB_REF_NAME" --dir "$RUNNER_TEMP/final" --pattern docknest-release.json --pattern docknest-release.json.sigstore.json
+          for asset in docknest-release.json docknest-release.json.sigstore.json; do
+            [ "$(sha256sum < "$asset")" = "$(sha256sum < "$RUNNER_TEMP/final/$asset")" ] || { echo "::error::the published $asset differs from the signed file"; exit 1; }
+          done

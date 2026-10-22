@@ -16,7 +16,7 @@ for(const path of paths){
  if(data.subarray(0,8192).includes(0))continue;
  const text=data.toString('utf8');
  if(/(?:[A-Z]:[\\/]Users[\\/][^\s/\\]+|[A-Z]:[\\/]Dev[\\/]repos[\\/])/i.test(text))findings.push({path,category:'personal workstation path'});
- if([...text.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)].some(match=>!allowedAddress(match[0])))findings.push({path,category:'non-example IP address'});
+ if([...text.matchAll(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.]*\d)/g)].some(match=>!allowedAddress(match[0])))findings.push({path,category:'non-example IP address'});
  if(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\r\n]+[A-Za-z0-9+/=]{32}/.test(text))findings.push({path,category:'private key material'});
 }
 if(findings.length){console.error(JSON.stringify(findings,null,2));process.exitCode=1;}
