@@ -1,0 +1,193 @@
+name: Update failure from DockNest
+description: "Opened from the update result screen or the Update Center after an in-app update failed."
+labels: [bug, update-failure]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opened from DockNest (update result). DockNest filled in only fixed, typed values; your browser opened this form and nothing was posted.
+        Issues on this repository are public and linked to your GitHub account. Anyone can read what you share.
+        Remove anything private before you submit: never paste host names, addresses, paths, user names, emails,
+        site or server names, credentials, keys, logs or backup contents into any field.
+        For security problems, use private reporting instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: DockNest version
+      description: "Filled in by DockNest."
+      placeholder: "v2.4.0"
+    validations:
+      required: false
+  - type: input
+    id: install_mode
+    attributes:
+      label: Install mode
+      description: "image (published release image) or source (git checkout). Filled in by DockNest."
+      placeholder: "image"
+    validations:
+      required: false
+  - type: input
+    id: from_version
+    attributes:
+      label: From version
+      description: "The version that was running."
+      placeholder: "v2.3.0"
+    validations:
+      required: false
+  - type: input
+    id: to_version
+    attributes:
+      label: To version
+      description: "The version being installed."
+      placeholder: "v2.4.0"
+    validations:
+      required: false
+  - type: input
+    id: outcome
+    attributes:
+      label: Outcome
+      description: "rolled_back, needs_action, not_changed or lost."
+      placeholder: "rolled_back"
+    validations:
+      required: false
+  - type: input
+    id: result
+    attributes:
+      label: Result
+      description: "exit-4, exit-5, exit-6, stale, lost or refused-<code>."
+      placeholder: "exit-4"
+    validations:
+      required: false
+  - type: input
+    id: stage
+    attributes:
+      label: Failed stage
+      description: "verify, prepare, protect, install or confirm."
+      placeholder: "confirm"
+    validations:
+      required: false
+  - type: input
+    id: phase
+    attributes:
+      label: Failed phase
+      description: "One of the 14 update phase ids."
+      placeholder: "health"
+    validations:
+      required: false
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Timeline
+      description: "One line per step: phase id, seconds since the run was accepted, seconds taken. No clock times."
+    validations:
+      required: false
+  - type: input
+    id: updater_version
+    attributes:
+      label: Host updater version
+      description: "Filled in by DockNest."
+      placeholder: "v2.2.0"
+    validations:
+      required: false
+  - type: input
+    id: reason
+    attributes:
+      label: Failure reason code
+      description: "From the fixed list in docs/update-center.md section 7.1, else unknown."
+      placeholder: "health-timeout-api"
+    validations:
+      required: false
+  - type: input
+    id: migration_ran
+    attributes:
+      label: Database schema changed
+      description: "yes or no."
+      placeholder: "no"
+    validations:
+      required: false
+  - type: input
+    id: schema
+    attributes:
+      label: Schema
+      description: "v<from> to v<to>."
+      placeholder: "v5 to v5"
+    validations:
+      required: false
+  - type: textarea
+    id: excerpt
+    attributes:
+      label: Last error lines (optional)
+      description: "Only when you chose to include them. DockNest redacted addresses, paths, names and keys, but read it again: it may still contain private text."
+    validations:
+      required: false
+  - type: input
+    id: docker
+    attributes:
+      label: Docker Engine
+      description: "major.minor, filled in by DockNest when the environment section was included."
+      placeholder: "27.3"
+    validations:
+      required: false
+  - type: input
+    id: compose
+    attributes:
+      label: Docker Compose
+      description: "major.minor."
+      placeholder: "2.29"
+    validations:
+      required: false
+  - type: input
+    id: git
+    attributes:
+      label: git
+      description: "major.minor."
+      placeholder: "2.51"
+    validations:
+      required: false
+  - type: input
+    id: cosign
+    attributes:
+      label: cosign
+      description: "The pinned version."
+      placeholder: "v2.4.1"
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: "OS id and major version, or other."
+      placeholder: "ubuntu-24"
+    validations:
+      required: false
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel
+      description: "major.minor."
+      placeholder: "6.8"
+    validations:
+      required: false
+  - type: input
+    id: arch
+    attributes:
+      label: Architecture
+      description: "amd64, arm64 or other."
+      placeholder: "amd64"
+    validations:
+      required: false
+  - type: input
+    id: free_disk
+    attributes:
+      label: Free disk
+      description: "Bucket: <2GiB, 2-10GiB, 10-50GiB or >50GiB."
+      placeholder: ">50GiB"
+    validations:
+      required: false
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: "In your own words: what you did and what you expected. Do not paste logs, host names or secrets."
+    validations:
+      required: true
