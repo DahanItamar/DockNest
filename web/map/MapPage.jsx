@@ -1,0 +1,148 @@
+import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {IconServer,IconBox,IconZoomIn,IconZoomOut,IconArrowsMaximize,IconMap2} from '@tabler/icons-react';
+import {StatusLabel,IconButton} from '../system.jsx';
+import {count} from '../plural.js';
+import {layoutMap,groupForList} from './layout.js';
+import './map.css';
+
+const SOON='Moving sites is coming soon';
+const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
+const MIN=0.2,MAX=2;
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+
+function serverStatus(server){
+ if(server.status==='connected')return <StatusLabel state="success">Connected</StatusLabel>;
+ if(!server.status||server.status==='unchecked')return <StatusLabel state="queued">Not checked yet</StatusLabel>;
+ return <StatusLabel state="failed">Needs attention</StatusLabel>;
+}
+function serverFacts(server,sites){
+ const free=bytes(server.capabilities?.freeBytes);
+ return count(sites,'site')+(free?' · '+free+' free':'');
+}
+const siteFacts=site=>Array.isArray(site.config?.containers)?count(site.config.containers.length,'container'):'Docker site';
+
+function useNarrow(){
+ const q='(max-width:767px)',[narrow,setNarrow]=useState(()=>matchMedia(q).matches);
+ useEffect(()=>{const m=matchMedia(q),h=()=>setNarrow(m.matches);m.addEventListener('change',h);return()=>m.removeEventListener('change',h)},[]);
+ return narrow;
+}
+
+function MapList({groups}){
+ return <div className="map-list">{groups.map(({server,sites},i)=>{
+  const id='map-list-'+(server?server.id:'unassigned');
+  return <section key={id} className="map-list-group" aria-labelledby={id}>
+   <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span></>}</div></div>
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><IconBox size={18} stroke={1.75} aria-hidden="true"/><span className="map-name">{s.name}</span><span className="map-caption">{siteFacts(s)}</span></li>)}</ul>:<p className="map-caption map-none">No sites on this server yet.</p>}
+  </section>;
+ })}</div>;
+}
+
+export function MapPage({servers=[],sites=[],user}){
+ const narrow=useNarrow(),canMove=user?.role==='admin';
+ const layout=useMemo(()=>layoutMap(servers,sites),[servers,sites]);
+ const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
+ const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s]))}),[servers,sites]);
+ const view=useRef(null),touched=useRef(false),pointers=useRef(new Map()),gesture=useRef(null);
+ const [t,setT]=useState({x:0,y:0,k:1}),[drag,setDrag]=useState(null),[note,setNote]=useState('');
+
+ const fit=useCallback(()=>{
+  const el=view.current;if(!el)return;
+  const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
+  const k=clamp(Math.min(w/layout.width,h/layout.height),MIN,1);
+  setT({k,x:(w-layout.width*k)/2,y:Math.max(0,(h-layout.height*k)/2)});
+ },[layout.width,layout.height]);
+ useLayoutEffect(()=>{if(narrow||!servers.length)return;touched.current=false;fit();},[narrow,fit,servers.length]);
+ useEffect(()=>{
+  const el=view.current;if(!el||typeof ResizeObserver==='undefined')return;
+  const ro=new ResizeObserver(()=>{if(!touched.current)fit()});ro.observe(el);return()=>ro.disconnect();
+ },[fit,narrow,servers.length]);
+
+ const zoomAt=useCallback((factor,cx,cy)=>{
+  touched.current=true;
+  setT(p=>{const k=clamp(p.k*factor,MIN,MAX),r=k/p.k;return {k,x:cx-(cx-p.x)*r,y:cy-(cy-p.y)*r}});
+ },[]);
+ const zoomCentre=factor=>{const el=view.current;zoomAt(factor,el.clientWidth/2,el.clientHeight/2)};
+ useEffect(()=>{
+  const el=view.current;if(!el)return;
+  const wheel=e=>{e.preventDefault();const r=el.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*0.0015),e.clientX-r.left,e.clientY-r.top)};
+  el.addEventListener('wheel',wheel,{passive:false});return()=>el.removeEventListener('wheel',wheel);
+ },[zoomAt,narrow,servers.length]);
+
+ const toCanvas=(e)=>{const r=view.current.getBoundingClientRect();return [(e.clientX-r.left-t.x)/t.k,(e.clientY-r.top-t.y)/t.k]};
+ function down(e){
+  if(e.button>0)return;
+  pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const card=canMove&&e.target.closest?.('[data-site]');
+  if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);}
+  else if(card){const rect=layout.sites.find(s=>s.id===card.dataset.site);const [px,py]=toCanvas(e);gesture.current={type:'drag',id:rect.id};setDrag({id:rect.id,px,py,over:null});}
+  else gesture.current={type:'pan',x:e.clientX,y:e.clientY};
+  e.currentTarget.setPointerCapture?.(e.pointerId);
+ }
+ function move(e){
+  if(!pointers.current.has(e.pointerId))return;
+  const prev=pointers.current.get(e.pointerId);pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  const g=gesture.current;if(!g)return;
+  if(g.type==='pinch'&&pointers.current.size===2){
+   const [a,b]=[...pointers.current.values()],d=Math.hypot(a.x-b.x,a.y-b.y),r=view.current.getBoundingClientRect();
+   if(g.d)zoomAt(d/g.d,(a.x+b.x)/2-r.left,(a.y+b.y)/2-r.top);g.d=d;
+  }else if(g.type==='pan'){touched.current=true;setT(p=>({...p,x:p.x+e.clientX-prev.x,y:p.y+e.clientY-prev.y}));}
+  else if(g.type==='drag'){
+   const [px,py]=toCanvas(e),home=layout.sites.find(s=>s.id===g.id).serverId;
+   const over=layout.servers.find(s=>s.id!==home&&px>=s.x&&px<=s.x+s.w&&py>=s.y&&py<=s.y+s.h);
+   setDrag({id:g.id,px,py,over:over?over.id:null});
+  }
+ }
+ function up(e){
+  pointers.current.delete(e.pointerId);
+  const g=gesture.current;
+  if(g?.type==='drag'&&drag?.over)setNote(`${byId.sites[g.id]?.name} was not moved. ${SOON}.`);
+  if(!pointers.current.size){gesture.current=null;setDrag(null);}
+ }
+ function key(e){
+  const step=48;let handled=true;
+  if(e.key==='ArrowLeft')setT(p=>({...p,x:p.x+step}));
+  else if(e.key==='ArrowRight')setT(p=>({...p,x:p.x-step}));
+  else if(e.key==='ArrowUp')setT(p=>({...p,y:p.y+step}));
+  else if(e.key==='ArrowDown')setT(p=>({...p,y:p.y-step}));
+  else if(e.key==='+'||e.key==='=')zoomCentre(1.25);
+  else if(e.key==='-')zoomCentre(0.8);
+  else if(e.key==='0'){touched.current=false;fit();}
+  else handled=false;
+  if(handled){e.preventDefault();if(/Arrow/.test(e.key))touched.current=true;}
+ }
+
+ if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add a site. They will appear here, arranged automatically.</p></section>;
+ if(narrow)return <div className="map-root"><MapList groups={groups}/></div>;
+
+ const home=drag&&layout.sites.find(s=>s.id===drag.id);
+ const item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
+ const renderSite=r=>{const s=byId.sites[r.id];return <article key={r.id} data-site={r.id} className={'map-site'+(canMove?' movable':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
+  <IconBox size={20} stroke={1.75} aria-hidden="true"/><div><b className="map-name">{s.name}</b><span className="map-caption">{siteFacts(s)}</span></div></article>};
+ const groupIds=[...layout.servers.map(s=>s.id)];
+ return <section className="map-root" aria-label="Infrastructure map">
+  <div className="map-toolbar">
+   <div className="map-zoom">
+    <IconButton label="Zoom out" icon={IconZoomOut} onClick={()=>zoomCentre(0.8)}/>
+    <IconButton label="Zoom in" icon={IconZoomIn} onClick={()=>zoomCentre(1.25)}/>
+   </div>
+   <button type="button" onClick={()=>{touched.current=false;fit()}}><IconArrowsMaximize size={18} stroke={1.75} aria-hidden="true"/>Fit to screen</button>
+   {canMove&&<button type="button" className="primary" disabled title={SOON} aria-label={'Save changes. '+SOON}>Save changes</button>}
+  </div>
+  <div ref={view} className="map-viewport" tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+   <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
+    <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
+     {layout.paths.map(p=><path key={p.id} d={p.d} className={drag?.id===p.id?'dim':undefined}/>)}
+     {home&&<path className="drag" d={`M${home.x} ${home.y+home.h/2} L${drag.px} ${drag.py}`}/>}
+    </svg>
+    {groupIds.map(id=>{const r=layout.servers.find(s=>s.id===id),s=byId.servers[id],mine=layout.sites.filter(x=>x.serverId===id);
+     return <div key={id} role="group" aria-labelledby={'map-server-'+id} className="map-group">
+      <div className={'map-server'+(drag?.over===id?' target':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{serverFacts(s,mine.length)}</span></div>
+      {mine.map(renderSite)}
+     </div>})}
+    {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}
+   </div>
+  </div>
+  <p className="map-hint map-caption">Drag the background to move around. Use the buttons, mouse wheel or pinch to zoom.</p>
+  <div className="map-live" role="status" aria-live="polite">{note}</div>
+ </section>;
+}
