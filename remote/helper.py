@@ -19,6 +19,7 @@ Delete plaintext staging securely according to your storage policy; filesystem d
 """
 
 EVENT_STREAM=sys.stdout
+NOFOLLOW=getattr(os,'O_NOFOLLOW',0)
 CAPTURE_DIAGNOSTICS=False
 def emit(**kw): print(json.dumps(kw),file=EVENT_STREAM,flush=True)
 def diagnostic(**kw):
@@ -954,8 +955,15 @@ def maintenance(cfg,enabled):
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
     if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
     def enable_flag():
-        flag=directory/'enabled';flag.touch(mode=0o600)
-        if m.get('readableFlag'):flag.chmod(0o644)
+        # The proxy may share this directory; never follow a planted link as root.
+        flag=directory/'enabled'
+        if flag.is_symlink():raise ValueError('Maintenance flag cannot be a symbolic link')
+        fd=os.open(flag,os.O_WRONLY|os.O_CREAT|NOFOLLOW,0o600)
+        try:
+            if m.get('readableFlag'):
+                if hasattr(os,'fchmod'):os.fchmod(fd,0o644)
+                else:os.chmod(flag,0o644)
+        finally:os.close(fd)
     if enabled:
         was_enabled=(directory/'enabled').exists()
         enable_flag()
@@ -1700,9 +1708,14 @@ def deploy_maintenance(req):
     p.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(req['html'])
     if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')
-    temp=p/'maintenance.html.tmp'
-    with open(temp,'wb') as f:f.write(content)
-    os.chmod(temp,0o644);os.replace(temp,p/'maintenance.html')
+    temp=p/('maintenance.html.tmp-'+str(uuid.uuid4()))
+    fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o644)
+    try:
+        with os.fdopen(fd,'wb') as f:
+            f.write(content)
+            if hasattr(os,'fchmod'):os.fchmod(f.fileno(),0o644)
+        os.replace(temp,p/'maintenance.html')
+    finally:temp.unlink(missing_ok=True)
     emit(result={'distributed':True,'helperVersion':VERSION,'ready':False,'proxyIntegrationRequired':True,'directory':str(p)})
 
 def install_boot_recovery(req):

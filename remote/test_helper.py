@@ -453,6 +453,24 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.health',return_value=True),patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag') as sync:
                 with self.assertRaises(ValueError):maintenance(cfg,False)
                 self.assertTrue((base/'enabled').exists());sync.assert_called_once_with(base)
+    def test_planted_flag_and_page_links_are_never_followed(self):
+        import os
+        from helper import deploy_maintenance
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);site=base/'site';site.mkdir();(site/'ready').touch()
+            outside=base/'outside.txt';outside.write_text('host file')
+            try:os.symlink(outside,site/'enabled')
+            except OSError:self.skipTest('Creating symbolic links is not permitted here')
+            before=outside.stat().st_mode
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':str(site),'publicUrl':'http://fixture/','readableFlag':True}}
+            with patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag'):
+                with self.assertRaisesRegex(ValueError,'symbolic link'):maintenance(cfg,True)
+            self.assertEqual(outside.stat().st_mode,before);self.assertEqual(outside.read_text(),'host file')
+            (site/'enabled').unlink();os.symlink(outside,site/'maintenance.html.tmp')
+            deploy_maintenance({'config':cfg,'html':__import__('base64').b64encode(b'<p>dbm-maintenance-v1</p>').decode()})
+            self.assertEqual(outside.read_text(),'host file')
+            self.assertEqual((site/'maintenance.html').read_bytes(),b'<p>dbm-maintenance-v1</p>')
+            self.assertEqual([p.name for p in site.iterdir() if p.name.startswith('maintenance.html.tmp-')],[])
     def test_origin_https_verifies_original_hostname_on_loopback(self):
         from unittest.mock import Mock
         context=Mock();sock=Mock()
