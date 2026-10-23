@@ -45,7 +45,8 @@ it. It never deletes your data by itself.
 - Once the DNS switch has started, DockNest never undoes the move by itself: visitors may already be writing to the
   new copy. If a later step fails (certificate, finish, a lost connection), the move shows the reason with **Try
   again** or **Switch back**, and keeps the new copy and its data. If finishing fails because the old server is gone,
-  **Finish without the old server** (type the site name) completes the move without stopping the old copy.
+  **Finish without the old server** (type the site name) completes the move without stopping the old copy; the move
+  then warns that the old copy may start again and offers **Disable old copy** for when that server is back.
 - While DockNest waits for DNS, **Cancel and go back** (the same Switch back action) stops the new copy and starts the
   old site again. After 48 hours of waiting the move asks you to check the record. When the domain is behind
   Cloudflare's proxy (orange cloud), public DNS never shows your server; DockNest says so and lets you confirm the
@@ -123,15 +124,17 @@ Collapsed by default and pre-filled; most moves need no changes here.
 - Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.
-  The maintenance folder on the new server is the site's own when it is under `/var/www`, `/srv` or
-  `/usr/share/nginx`, otherwise `/var/lib/docknest/maintenance/<site>` (the site record follows at the finish and goes
-  back on Switch back).
-- Compose: the merged configuration (`docker compose config`) must match the backup: no privileged mode, host
-  network/PID/IPC/user namespaces, devices or added capabilities, and only the mounts and volumes the backup holds. A
-  Compose project of the same name already on the new server is refused.
+  The maintenance folder on the new server is always DockNest's own `/var/lib/docknest/maintenance/<site>`, never an
+  existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
+  finish and goes back on Switch back.
+- Compose: the merged configuration (`docker compose config`) is checked against allow-lists of known top-level and
+  service settings; anything else (for example `security_opt`, `sysctls`, `volumes_from`, `uts`, `cgroup`,
+  `cgroup_parent`, privileged mode, host namespaces, devices, added capabilities, secrets or configs read from files,
+  volumes with driver options, external networks or volumes, networks or mounts the backup does not hold, fixed
+  addresses) is refused with the reason. A Compose project of the same name already on the new server is refused.
 - Remove old copy with data deletes only read-write data folders and volumes of the old containers; never folders used
-  by another container, served by nginx on that server or named in another DockNest site's settings, and never system
-  paths. What was kept is listed in the step result (`kept`).
+  by another container, served by nginx on that server or named in another DockNest site's settings (compared after
+  following symlinks), never a home folder itself (`/home/<user>` or any user's home), and never system paths. What was kept is listed in the step result (`kept`).
 - Move jobs use the statuses `move_queued` and `move_running`, so a release without moves never claims them.
 - Step time limits come from `src/moves/state.js` (for example 60 minutes for a deploy, 5 for the test). A backup step
   past its limit fails and the move undoes itself; a server step past its limit sets `needs_attention` because its
@@ -141,8 +144,9 @@ Collapsed by default and pre-filled; most moves need no changes here.
 - Cloudflare (`src/moves/cloudflare.js`): the token is checked with read calls only (token verify, zone list, a DNS
   record read per zone), sealed with the master key, stored in settings, decrypted only for a call, and never
   returned, logged, audited or journaled. All calls go to `https://api.cloudflare.com` without redirects. Edit
-  permission cannot be proven without writing, so a token without Zone.DNS:Edit fails at the switch and the move undoes
-  itself.
+  permission cannot be proven without writing, so a token without Zone.DNS:Edit fails at the switch; the move then
+  needs attention. `switched_at` is set together with the journal, before the first change, so Undo is refused once a
+  record may have changed.
 
 ## API for the UI (administrators only)
 
@@ -204,7 +208,7 @@ it answers 409 `PREFLIGHT_CHANGED` with the fresh preview in `preview`. Long dow
   "id": "uuid", "siteId": "uuid", "siteName": "Shop", "sourceServerId": "uuid", "sourceName": "old-srv", "targetServerId": "uuid", "targetName": "new-srv",
   "state": "draft | queued | running | waiting_switch | waiting_dns | cancelling | rolling_back | needs_attention | done | switching_back | switched_back | cleaned | rolled_back | cancelled | failed",
   "dnsMode": "manual | cloudflare", "mailBlocked": true,
-  "actions": { "cancel": true, "switchBack": false, "dnsProxied": false, "removeOldCopy": false, "askRemoveOldCopy": false, "resolve": ["retry", "undo", "finish-without-old-server"] },
+  "actions": { "cancel": true, "switchBack": false, "dnsProxied": false, "disableOldCopy": false, "removeOldCopy": false, "askRemoveOldCopy": false, "resolve": ["retry", "undo", "finish-without-old-server"] },
   "engineState": "the state.js state, for diagnostics",
   "waitingFor": "owner-switch | dns | null",
   "statusLine": "One plain sentence for the progress screen.",
@@ -244,6 +248,11 @@ confirms with `{ "gate": "dns", "confirmed": true }` (**I changed it**).
 No body; needs a recent re-verification. Allowed while `actions.switchBack` is true: a finished move whose old copy
 was not removed, a move waiting for DNS (**Cancel and go back**), or a move that needs attention after the switch. 202 with the move (`switching_back`, then `switched_back`). With manual DNS, `dns` then holds the
 record pointing back at the old server.
+
+### POST /api/moves/:id/disable-old-copy
+
+No body; needs a recent re-verification. Allowed while `actions.disableOldCopy` is true (a move finished without the
+old server): stops the old copy and turns its restart off. 202 with the move.
 
 ### POST /api/moves/:id/remove-old-copy
 

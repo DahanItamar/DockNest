@@ -67,6 +67,7 @@ def complete_recovery(root,boot_id=None):
         except OSError:pass
         raise
 def run(args,timeout=3600,input=None):
+    if STOPPING:raise ValueError('DockNest stopped this step.')
     started=time.monotonic();label=pathlib.Path(args[0]).name+(' '+str(args[1]) if len(args)>1 and args[0]=='docker' else '')
     diagnostic(command=label,phase='start')
     try:
@@ -2243,8 +2244,8 @@ def wait_probe(port,host,path,seconds=60):
         time.sleep(2)
 def deploy_maintenance_dir(d,state,n):
     mdir=move_path(n['maintenanceDirectory'],own=True)
-    problem=maintenance_directory_problem({'stagingRoot':n.get('stagingRoot') or '/var/lib/docknest'},mdir)
-    if problem:raise ValueError(problem)
+    # On the new server the page always lives in DockNest's own folder, never in an existing web root.
+    if not within(lexical(mdir),'/var/lib/docknest/maintenance') or lexical(mdir)=='/var/lib/docknest/maintenance':raise ValueError('The maintenance folder on the new server must be below /var/lib/docknest/maintenance')
     if not mdir.exists():journal_resource(d,state,'paths',{'path':str(mdir),'restoreEmpty':False})
     mdir.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(n.get('maintenanceHtml') or '')
@@ -2416,19 +2417,45 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
                 if new!=value:env.append((key,new.replace('$','$$')))
         if env:lines+=['    environment:']+['      %s: %s'%(yaml_str(k),yaml_str(v)) for k,v in env];rewritten+=len(env)
     return '\n'.join(lines)+'\n',ports,rewritten
+# Allow-lists for the merged Compose configuration (docker compose config). Anything not listed is refused, so a
+# setting DockNest does not understand can never reach the new server.
+COMPOSE_TOP_KEYS={'name','services','networks','volumes','secrets','configs'}
+COMPOSE_SERVICE_KEYS={'image','build','command','entrypoint','environment','env_file','ports','expose','volumes','networks','depends_on','restart','healthcheck','labels','container_name','hostname','domainname','working_dir','user','stop_signal','stop_grace_period','tmpfs','logging','pull_policy','init','extra_hosts','mem_limit','mem_reservation','memswap_limit','cpus','cpu_shares','cpuset','shm_size','ulimits','read_only','stdin_open','tty','platform','profiles','links','dns','dns_search','deploy','secrets','configs','scale','oom_score_adj','pids_limit'}
+COMPOSE_SERVICE_NETWORK_KEYS={'aliases','priority'}
+COMPOSE_NETWORK_KEYS={'name','driver','internal','enable_ipv6','labels','attachable'}
+COMPOSE_VOLUME_KEYS={'name','driver','labels'}
+COMPOSE_MOUNT_KEYS={'type','source','target','read_only','bind','volume','tmpfs','consistency'}
 def check_compose_config(config,services,manifest):
     # The site's Compose files come from the old server; the merged result may only describe what the backup holds.
+    def refuse(text):raise ValueError(text+' DockNest does not move this site automatically.')
     binds={m['Source'] for c in manifest['containers'] for m in c['Mounts'] if m['Type']=='bind'}
     volumes={m.get('Name') for c in manifest['containers'] for m in c['Mounts'] if m['Type']=='volume'}
+    networks={n for c in manifest['containers'] for n in (c.get('NetworkSettings',{}).get('Networks') or {})}
+    unknown=set(config)-COMPOSE_TOP_KEYS
+    if unknown:refuse('The Compose files use %s.'%', '.join(sorted(unknown)))
+    for kind in ['secrets','configs']:
+        for key,item in (config.get(kind) or {}).items():
+            if not isinstance(item,dict) or item.get('file') or item.get('external') or set(item)-{'name','environment','content'}:refuse('The Compose %s %s reads a file or an external source.'%(kind[:-1],key))
+    declared_networks=config.get('networks') or {}
+    for key,item in declared_networks.items():
+        item=item or {}
+        if item.get('external') or set(item)-COMPOSE_NETWORK_KEYS or item.get('driver','bridge')!='bridge':refuse('The Compose network %s is external or uses settings DockNest cannot move.'%key)
     declared=config.get('volumes') or {}
+    for key,item in declared.items():
+        item=item or {}
+        if item.get('external') or item.get('driver_opts') or set(item)-COMPOSE_VOLUME_KEYS or item.get('driver','local')!='local':refuse('The Compose volume %s is external or uses driver options.'%key)
     for name in services:
         service=(config.get('services') or {}).get(name)
         if not isinstance(service,dict):raise ValueError('The Compose service %s is missing from the Compose files'%name)
-        mode=str(service.get('network_mode') or '')
-        if service.get('privileged') or service.get('devices') or service.get('cap_add') or mode=='host' or mode.startswith(('container:','service:')) or service.get('pid')=='host' or service.get('ipc')=='host' or service.get('userns_mode')=='host':
-            raise ValueError('The Compose service %s asks for host privileges or devices, so DockNest does not start it on the new server.'%name)
+        extra=set(service)-COMPOSE_SERVICE_KEYS
+        if extra:refuse('The Compose service %s uses %s.'%(name,', '.join(sorted(extra))))
+        for network,options in (service.get('networks') or {}).items():
+            real=((declared_networks.get(network) or {}).get('name') or network)
+            if real not in networks:refuse('The Compose service %s joins the network %s, which the old copy did not use.'%(name,real))
+            if set(options or {})-COMPOSE_SERVICE_NETWORK_KEYS:refuse('The Compose service %s sets a fixed address or other network settings.'%name)
         for volume in service.get('volumes') or []:
             kind=volume.get('type');source=volume.get('source')
+            if set(volume)-COMPOSE_MOUNT_KEYS:refuse('The Compose service %s uses mount settings DockNest cannot move.'%name)
             if kind=='bind':
                 if source not in binds:raise ValueError('The Compose service %s mounts %s, which is not in the backup.'%(name,source))
                 move_path(source)
@@ -2626,6 +2653,10 @@ def move_remove_old(req):
     keep=[lexical(value) for value in req.get('keepPaths') or [] if isinstance(value,str) and value.startswith('/')]
     try:keep+=[lexical(site['documentRoot']) for site in nginx_sites() if site.get('documentRoot')]
     except Exception:pass
+    keep=list(dict.fromkeys(keep+[lexical(os.path.realpath(value)) for value in keep]))
+    homes={'/home','/root'}
+    try:homes|={lexical(entry.pw_dir) for entry in __import__('pwd').getpwall() if entry.pw_dir.startswith('/')}
+    except Exception:pass
     for c in cs:docker('rm',c['Id'])
     result={'containers':len(cs),'volumes':[],'paths':[],'dataKept':not req.get('deleteData')}
     if req.get('deleteData'):
@@ -2635,9 +2666,10 @@ def move_remove_old(req):
             if not any(m['Type']=='volume' and m.get('Name')==name for m in used):docker('volume','rm',name);result['volumes'].append(name)
         result['kept']=[]
         for source in binds:
-            path=lexical(source)
-            shared=any(os.path.commonpath([os.path.realpath(m['Source']),os.path.realpath(source)]) in [os.path.realpath(m['Source']),os.path.realpath(source)] for m in used)
-            if shared or any(within(path,k) or within(k,path) for k in keep):result['kept'].append(path);continue
+            path=lexical(source);real=lexical(os.path.realpath(source))
+            shared=any(within(real,lexical(os.path.realpath(m['Source']))) or within(lexical(os.path.realpath(m['Source'])),real) for m in used)
+            home=any(candidate==h or (candidate.startswith('/home/') and len(pathlib.PurePosixPath(candidate).parts)<=3) for candidate in [path,real] for h in homes)
+            if shared or home or any(within(candidate,k) or within(k,candidate) for candidate in [path,real] for k in keep):result['kept'].append(path);continue
             try:p=move_path(source)
             except ValueError:result['kept'].append(path);continue
             if p.is_symlink() or p.is_file():p.unlink()
@@ -2645,6 +2677,7 @@ def move_remove_old(req):
             else:continue
             result['paths'].append(str(p))
     atomic_json(done,result);record.unlink();emit(result=result)
+STOPPING=False;MOVE_ID=''
 LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
 MOVE_LOCK=None
 def move_lock(mid,wait=False):
@@ -2654,23 +2687,35 @@ def move_lock(mid,wait=False):
     try:fcntl.flock(handle,fcntl.LOCK_EX|(0 if wait else fcntl.LOCK_NB))
     except BlockingIOError:handle.close();return None
     return handle
-def watch_stdin():
-    # DockNest keeps stdin open while it waits. When it gives up (time limit) or its connection drops, stdin ends and
-    # this step stops with everything it started, so a stopped wait never leaves work running on the server.
-    def stop():
-        try:sys.stdin.read()
-        except Exception:pass
-        try:os.killpg(os.getpgrp(),signal.SIGTERM)
-        except Exception:os._exit(1)
-    threading.Thread(target=stop,daemon=True).start()
+def docker_snapshot():
+    try:return subprocess.run(['docker','ps','-a','--no-trunc','--filter','label=docknest.move='+MOVE_ID,'--format','{{.ID}} {{.State}}'],capture_output=True,timeout=20).stdout.decode().split('\n')
+    except Exception:return None
+def stop_after_stdin(read=None,limit=180):
+    """DockNest keeps stdin open while it waits. When it gives up (time limit) or its connection drops, stdin ends:
+    end every child process, then keep the move lock (this process) until Docker has settled, meaning two snapshots of
+    the move's containers 2 s apart are identical and none is restarting or being removed. A Try again never races
+    Docker's own work."""
+    global STOPPING
+    try:(read or sys.stdin.read)()
+    except Exception:pass
+    STOPPING=True
+    try:signal.signal(signal.SIGTERM,signal.SIG_IGN);os.killpg(os.getpgrp(),signal.SIGTERM)
+    except Exception:pass
+    deadline=time.time()+limit;previous=None
+    while time.time()<deadline:
+        current=docker_snapshot()
+        if current is not None and current==previous and not any(line.endswith((' restarting',' removing')) for line in current):break
+        previous=current;time.sleep(2)
+    os._exit(1)
+def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID
     if req.get('operation')=='move-lock-status':
         handle=move_lock(move_id(req))
         emit(result={'busy':handle is None})
         return
     if req.get('operation') in LOCKED_MOVE_OPS:
-        MOVE_LOCK=move_lock(move_id(req))
+        MOVE_LOCK=move_lock(move_id(req));MOVE_ID=move_id(req)
         if MOVE_LOCK is None:raise ValueError('Another DockNest step for this move is still running on this server.')
         if req.get('watchStdin'):watch_stdin()
     op=req['operation']

@@ -251,6 +251,19 @@ class SwitchBackAndRemovalTests(unittest.TestCase):
                 _,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{},'deleteData':True,'keepPaths':[str(other)]},outputs,str(base/'moves'))
             self.assertFalse(data.exists());self.assertTrue(ro.exists(),'read-only mounts are not this site\'s data');self.assertTrue(other.exists(),'declared by another site')
             self.assertTrue(sysdir.exists());self.assertIn('/etc/letsencrypt',result['kept']);self.assertEqual(result['paths'],[str(data)])
+    @unittest.skipUnless(os.name=='posix','Uses real symbolic links')
+    def test_remove_old_copy_compares_real_paths_and_never_removes_a_home_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);d=base/'moves'/MOVE;d.mkdir(parents=True)
+            shared=base/'srv'/'shared';shared.mkdir(parents=True);link=base/'srv'/'alias';link.symlink_to(shared)
+            (d/'retired.json').write_text(json.dumps({'containers':[{'id':'o1','name':'web','restartPolicy':'always'}]}))
+            mounts=[{'Type':'bind','Source':str(link),'RW':True},{'Type':'bind','Source':'/home/alice','RW':True}]
+            old=[{'Id':'o1','State':{'Running':False},'Mounts':mounts}]
+            outputs=[(['ps','-aq','--no-trunc'],b'o1'),(['ps','-aq'],b''),(['inspect','o1'],json.dumps(old).encode())]
+            with patch('helper.nginx_sites',return_value=[]):
+                _,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{},'deleteData':True,'keepPaths':[str(shared)]},outputs,str(base/'moves'))
+            self.assertTrue(shared.exists(),'a path another site uses is kept even when reached through a symlink')
+            self.assertIn('/home/alice',result['kept']);self.assertEqual(result['paths'],[])
 
 class CertificateTests(unittest.TestCase):
     def test_without_certbot_the_owner_gets_one_exact_command(self):
@@ -278,6 +291,22 @@ class MoveSafetyTests(unittest.TestCase):
         for bad in [{'privileged':True},{'network_mode':'host'},{'pid':'host'},{'cap_add':['SYS_ADMIN']},{'devices':['/dev/sda']},{'volumes':[{'type':'bind','source':'/etc'}]},{'volumes':[{'type':'volume','source':'other'}]},{'volumes':[{'type':'npipe','source':'x'}]}]:
             with self.assertRaises(ValueError,msg=json.dumps(bad)):helper.check_compose_config({'services':{'web':bad},'volumes':{}},['web'],manifest)
         with self.assertRaises(ValueError):helper.check_compose_config({'services':{}},['web'],manifest)
+    def test_compose_settings_outside_the_allow_list_are_refused(self):
+        manifest=fixture_manifest()
+        base=lambda **service:{'services':{'web':{'image':'x',**service}},'networks':{'default':{'name':'shop_default'}},'volumes':{}}
+        helper.check_compose_config(base(networks={'default':{'aliases':['web']}}),['web'],manifest)
+        cases=[base(security_opt=['seccomp:unconfined']),base(sysctls={'net.ipv4.ip_forward':'1'}),base(volumes_from=['db']),base(uts='host'),base(cgroup='host'),base(cgroup_parent='/x'),
+            base(networks={'outside':None}),base(networks={'default':{'ipv4_address':'172.30.0.9'}}),
+            {**base(),'secrets':{'key':{'file':'/root/key'}}},{**base(),'configs':{'c':{'file':'./c'}}},
+            {**base(),'volumes':{'data0':{'name':'shop_data0','driver_opts':{'type':'nfs'}}}},{**base(),'networks':{'default':{'name':'shop_default','external':True}}},
+            {**base(),'include':[{'path':'x.yaml'}]}]
+        for config in cases:
+            with self.assertRaises(ValueError,msg=json.dumps(config)):helper.check_compose_config(config,['web'],manifest)
+    def test_the_maintenance_folder_on_the_new_server_is_always_dockNest_own(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state={'created':{'paths':[]},'deployed':{}}
+            for bad in ['/var/www/shop','/srv/site','/var/lib/docknest/maintenance']:
+                with self.assertRaises(ValueError,msg=bad):helper.deploy_maintenance_dir(pathlib.Path(temporary),state,{'maintenanceDirectory':bad})
     def test_mail_is_blocked_by_subnet_for_ipv4_and_ipv6(self):
         calls=[]
         with tempfile.TemporaryDirectory() as temporary:
@@ -289,6 +318,21 @@ class MoveSafetyTests(unittest.TestCase):
         self.assertTrue(all(call[call.index('--dports')+1]=='25,465,587' and 'docknest-move-'+MOVE in call for call in inserts))
         self.assertEqual(state['created']['firewall'],['172.30.0.0/16','fd00:1::/64'])
         with patch('helper.firewall_ready',return_value=False):self.assertFalse(helper.block_mail(None,None,MOVE,['172.30.0.0/16']))
+
+class StoppedStepTests(unittest.TestCase):
+    def test_a_stopped_step_keeps_its_lock_until_docker_has_settled(self):
+        snapshots=iter([['a restarting'],['a restarting'],['a running','b created'],['a running','b created']]);taken=[]
+        def snapshot():value=next(snapshots);taken.append(value);return value
+        class Exit(Exception):pass
+        def exit_(code):raise Exit(code)
+        with patch('helper.docker_snapshot',side_effect=snapshot),patch('helper.os.killpg',create=True),patch('helper.os.getpgrp',create=True,return_value=1),patch('helper.signal.signal'),patch('helper.time.sleep'),patch('helper.os._exit',side_effect=exit_):
+            with self.assertRaises(Exit):helper.stop_after_stdin(read=lambda:'')
+        self.assertEqual(len(taken),4,'waits while a container restarts and until two snapshots agree')
+        self.assertTrue(helper.STOPPING);helper.STOPPING=False
+        with self.assertRaises(ValueError):
+            helper.STOPPING=True
+            try:helper.run(['true'])
+            finally:helper.STOPPING=False
 
 class KeepStoppedTests(unittest.TestCase):
     def test_capture_documents_keep_stopped_only_after_a_complete_capture(self):

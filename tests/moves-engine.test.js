@@ -351,8 +351,8 @@ test('Cloudflare: the token is checked with read calls, sealed, never returned, 
     if (url.includes('/zones?')) return ok([{ id: zone, name: 'example.com' }]);
     if (url.includes('/dns_records?')) return ok([{ id: 'r'.repeat(32), type: 'A', name: 'cf.example.com', content, proxied: true, ttl: 1 }]);
     if (init.method === 'PATCH') {
-      const running = db.prepare("SELECT resources FROM site_move_steps WHERE step='switch_dns' AND state='running'").get();
-      if (running) journaledFirst.push(JSON.parse(running.resources).records?.[0]?.previous === '203.0.113.7');
+      const running = db.prepare("SELECT s.resources,m.switched_at FROM site_move_steps s JOIN site_moves m ON m.id=s.move_id WHERE s.step='switch_dns' AND s.state='running'").get();
+      if (running) journaledFirst.push(JSON.parse(running.resources).records?.[0]?.previous === '203.0.113.7' && !!running.switched_at);
       content = JSON.parse(init.body).content; return ok({});
     }
     return { ok: false, status: 404, json: async () => ({ success: false }) };
@@ -370,7 +370,7 @@ test('Cloudflare: the token is checked with read calls, sealed, never returned, 
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM audit_events').all()).includes(token));
   const { siteId, moveId } = await finishedMove('cf', { dnsMode: 'cloudflare' });
   assert.equal(content, '198.51.100.9', 'the A record points at the new server');
-  assert.deepEqual(journaledFirst, [true], 'the previous record is journaled before Cloudflare is changed');
+  assert.deepEqual(journaledFirst, [true], 'the previous record is journaled, and Undo refused, before Cloudflare is changed');
   const { switchRecord } = await import('../src/moves/cloudflare.js');
   const journalRow = db.prepare("SELECT resources FROM site_move_steps WHERE move_id=? AND step='switch_dns'").get(moveId);
   const kept = JSON.parse(journalRow.resources).records, rejournal = [];
@@ -441,6 +441,33 @@ test('DNS wait: a Cloudflare proxy is explained and confirmed by the owner, Canc
     assert.ok(operations.includes('move-stop-target') && operations.includes('move-resume-source') && !operations.includes('move-unretire-source') && !operations.includes('deploy-teardown'), operations.join());
     assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(other).server_id, oldServer);
   } finally { dnsResolver.resolve = async () => [{ A: ['198.51.100.9'], AAAA: [] }]; }
+});
+
+test('finishing without an unreachable old server warns, and Disable old copy stops it later; the page uses DockNest\'s own folder', async () => {
+  const siteId = siteRow('deadsource'); backupRow(siteId);
+  const draft = await preview(siteId); assert.equal((await start(draft)).status, 202);
+  faults['move-retire-source'] = 'connection refused';
+  calls.length = 0; await drive(40);
+  assert.equal(engineState(draft.id), 'recovery_required');
+  const live = calls.find(call => call.operation === 'deploy-restore' && call.mode === 'live');
+  assert.equal(live.request.nginx.maintenanceDirectory, `/var/lib/docknest/maintenance/${siteId}`, 'never an existing web root');
+  let view = await (await admin('/moves/' + draft.id)).json();
+  assert.ok(view.actions.resolve.includes('finish-without-old-server'));
+  assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'finish-without-old-server', confirmation: 'wrong' })).status, 409);
+  assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'finish-without-old-server', confirmation: 'deadsource' })).status, 200);
+  await drive(10);
+  view = await (await admin('/moves/' + draft.id)).json();
+  assert.equal(view.engineState, 'completed'); assert.equal(view.actions.disableOldCopy, true);
+  assert.match(view.statusLine, /Warning: old-srv could not be reached, so the old copy there was not stopped and may start again\. When old-srv is back, press Disable old copy\.$/);
+  assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId).config).maintenance.directory, `/var/lib/docknest/maintenance/${siteId}`);
+  delete faults['move-retire-source'];
+  assert.equal((await post(staleAdmin, `/moves/${draft.id}/disable-old-copy`)).status, 403);
+  assert.equal((await post(admin, `/moves/${draft.id}/disable-old-copy`)).status, 202);
+  calls.length = 0; await drive(5);
+  assert.ok(calls.some(call => call.operation === 'move-retire-source' && call.server === 'old-srv'));
+  view = await (await admin('/moves/' + draft.id)).json();
+  assert.equal(view.actions.disableOldCopy, false); assert.match(view.statusLine, /The old copy on old-srv is kept, stopped/);
+  assert.equal((await post(admin, `/moves/${draft.id}/disable-old-copy`)).status, 409);
 });
 
 test('a release without moves never claims or recovers move jobs (rollback safety)', () => {

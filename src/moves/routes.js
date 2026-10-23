@@ -3,7 +3,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { requireAdmin, requireRecentAuth, rateLimit } from '../auth.js';
-import { previewMove, startMove, cancelMove, continueMove, moveView, listMoves, switchBack, removeOldCopy, resolveMove } from './engine.js';
+import { previewMove, startMove, cancelMove, continueMove, moveView, listMoves, switchBack, removeOldCopy, resolveMove, disableOldCopy } from './engine.js';
 import * as cloudflare from './cloudflare.js';
 
 const uuid = z.uuid();
@@ -35,6 +35,7 @@ moveRoutes.post('/:id/continue', requireRecentAuth, handle(async (req, res) => {
   res.json(await continueMove(uuid.parse(req.params.id), body.gate, req.user.id, { confirmed: body.confirmed }));
 }));
 moveRoutes.post('/:id/switch-back', requireRecentAuth, handle(async (req, res) => { z.object({}).strict().parse(req.body ?? {}); res.status(202).json(switchBack(uuid.parse(req.params.id), req.user.id)); }));
+moveRoutes.post('/:id/disable-old-copy', requireRecentAuth, handle(async (req, res) => { z.object({}).strict().parse(req.body ?? {}); res.status(202).json(disableOldCopy(uuid.parse(req.params.id), req.user.id)); }));
 moveRoutes.post('/:id/remove-old-copy', requireRecentAuth, handle(async (req, res) => {
   const body = z.object({ confirmation: z.string().max(200), deleteData: z.boolean().default(false) }).strict().parse(req.body);
   res.status(202).json(removeOldCopy(uuid.parse(req.params.id), body, req.user.id));
