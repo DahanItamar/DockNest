@@ -27,6 +27,9 @@ export const EVENTS_FOR={site:SITE,server:[...SITE,'server.unreachable','server.
 // What a new line starts with: the things that need you, not the good news
 export const DEFAULT_EVENTS={site:['backup.failed','move.needs_you'],server:['server.unreachable','server.disk_low','backup.failed'],docknest:['update.available','server.unreachable']};
 export const KIND_LABEL={telegram:'Telegram',email:'Email'};
+// Nodes are 'telegram' or 'email'; the credential an email node uses has kind 'smtp'
+export const CRED_LABEL={telegram:'Telegram',smtp:'Email'};
+export const credKind=kind=>kind==='email'?'smtp':kind;
 export const words=events=>(events||[]).filter(e=>EVENT_LABEL[e]).map(e=>EVENT_LABEL[e]).join(', ');
 // The tiny label on a line: two events in words, then how many more
 export function lineLabel(events){const list=(events||[]).filter(e=>EVENT_LABEL[e]);return list.length<=2?words(list):list.slice(0,2).map(e=>EVENT_LABEL[e]).join(', ')+` and ${list.length-2} more`}

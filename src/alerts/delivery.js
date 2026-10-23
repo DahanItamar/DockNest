@@ -4,7 +4,7 @@
 // opened only at the moment of a send and never appear in a log line, an audit event or an error.
 import { db, id, audit } from '../db.js';
 import { messageFor, ruleMatches, DEDUPE_MS, STATE_DEDUPE_MS } from './events.js';
-import { enabledRules, getChannel, channelConfig, recordResult, httpError } from './store.js';
+import { enabledRules, getChannel, getCredential, nodeCredential, credentialSecret, recordResult, recordCredentialTest, httpError } from './store.js';
 import { sendMail, SmtpError } from './smtp.js';
 
 export const deliveryPolicy = Object.freeze({ attempts: 3, backoffMs: [60_000, 5 * 60_000], batch: 20, keepDays: 7, timeoutMs: 10_000, responseBytes: 64 * 1024 });
@@ -19,9 +19,9 @@ async function boundedText(response) {
   return Buffer.concat(parts).toString('utf8');
 }
 class DeliveryError extends Error {}
-async function sendTelegram(config, text) {
+async function sendTelegram(secret, node, text) {
   let response, body = {};
-  try { response = await alertHttp.fetch(`${TELEGRAM}/bot${config.token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: config.chatId, text, disable_web_page_preview: true }) }); }
+  try { response = await alertHttp.fetch(`${TELEGRAM}/bot${secret.token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: node.chatId, text, disable_web_page_preview: true }) }); }
   catch { throw new DeliveryError('Telegram could not be reached.'); } // never the error: its text can carry the URL with the token
   try { body = JSON.parse(await boundedText(response)); } catch { /* not JSON */ }
   if (response.ok && body.ok !== false) return;
@@ -30,16 +30,34 @@ async function sendTelegram(config, text) {
   if (response.status === 429) throw new DeliveryError('Telegram asked DockNest to slow down.');
   throw new DeliveryError('Telegram refused the message.');
 }
-async function sendEmail(config, text, subject) {
-  try { await sendMail({ ...config, to: config.to }, { subject, text }); }
+async function sendEmail(secret, node, text, subject) {
+  try { await sendMail({ ...secret, to: node.to }, { subject: `${node.subjectPrefix ? node.subjectPrefix + ' ' : ''}${subject}`, text }); }
   catch (error) { throw new DeliveryError(error instanceof SmtpError ? error.message : 'The mail server could not be reached.'); }
 }
-// One message to one channel. Throws a DeliveryError with a plain, secret-free sentence.
+// One message through one node. Throws a DeliveryError with a plain, secret-free sentence. A node without a matching
+// credential sends nothing.
 export async function sendThrough(row, text, subject = 'DockNest alert') {
-  let config; try { config = channelConfig(row); } catch { throw new DeliveryError('The saved settings of this channel cannot be read. Enter them again.'); }
-  if (row.kind === 'telegram') return sendTelegram(config, text);
-  if (row.kind === 'email') return sendEmail(config, text, subject);
+  const credential = nodeCredential(row); if (!credential) throw new DeliveryError('Needs a credential. Choose one for this node.');
+  let secret, node; try { secret = credentialSecret(credential); node = JSON.parse(row.config); } catch { throw new DeliveryError('The saved settings cannot be read. Enter them again.'); }
+  if (row.kind === 'telegram') return sendTelegram(secret, node, text);
+  if (row.kind === 'email') return sendEmail(secret, node, text, subject);
   throw new DeliveryError('This channel type is not supported.');
+}
+// Checks a credential's login without sending a message: Telegram getMe, or SMTP connect + encrypt + sign in.
+export async function verifyCredential(credentialId, actor) {
+  const row = getCredential(credentialId); if (!row) throw httpError(404, 'This credential does not exist.');
+  try {
+    const secret = (() => { try { return credentialSecret(row); } catch { throw new DeliveryError('The saved settings cannot be read. Enter them again.'); } })();
+    if (row.kind === 'telegram') {
+      let response; try { response = await alertHttp.fetch(`${TELEGRAM}/bot${secret.token}/getMe`, { method: 'GET' }); } catch { throw new DeliveryError('Telegram could not be reached.'); }
+      let body = {}; try { body = JSON.parse(await boundedText(response)); } catch { /* not JSON */ }
+      if (!response.ok || body.ok === false) throw new DeliveryError(response.status === 401 || response.status === 404 ? 'Telegram does not accept this bot token.' : 'Telegram refused the check.');
+    } else {
+      try { await sendMail(secret, null); } catch (error) { throw new DeliveryError(error instanceof SmtpError ? error.message : 'The mail server could not be reached.'); }
+    }
+  } catch (error) { recordCredentialTest(credentialId, false, error.message); audit(actor, 'alert.credential.test', credentialId, { kind: row.kind, ok: false }); throw httpError(502, error instanceof DeliveryError ? error.message : 'The check failed.'); }
+  recordCredentialTest(credentialId, true); audit(actor, 'alert.credential.test', credentialId, { kind: row.kind, ok: true });
+  return { verified: true };
 }
 export async function sendTest(channelId, actor) {
   const row = getChannel(channelId); if (!row) throw httpError(404, 'This channel does not exist.');

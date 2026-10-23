@@ -3,7 +3,7 @@ import {IconBrandTelegram,IconMail,IconDownload,IconCircleX,IconCircleCheck,Icon
 import {Sheet,Note,useGuard} from './MoveFlow.jsx';
 import {SidePanel} from './Panels.jsx';
 import {friendly} from './moves-client.js';
-import {EVENT_LABEL,EVENTS_FOR,DEFAULT_EVENTS,KIND_LABEL,words,sameSource} from './alerts-client.js';
+import {EVENT_LABEL,EVENTS_FOR,DEFAULT_EVENTS,KIND_LABEL,CRED_LABEL,credKind,words,sameSource} from './alerts-client.js';
 
 export const KindIcon=({kind,size=32,stroke=1.5})=>{const I=kind==='email'?IconMail:IconBrandTelegram;return <I size={size} stroke={stroke} aria-hidden="true"/>};
 export const DockNestIcon=({size=32,stroke=1.5})=><IconDownload size={size} stroke={stroke} aria-hidden="true"/>;
@@ -43,7 +43,7 @@ const draftOf=(source,rule)=>({key:srcKey(source),source,ruleId:rule?.id||null,e
 // The one place to set an alert node up: the channel's own settings, then "Sends when" with one block per connected source.
 // Save applies every change at once (channel, then lines); Cancel discards them all.
 export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sourceName,preselect,scrollTo,client,when,onClose,onSaved,onDelete,onReload}){
- const edit=!!channel,c=channel?.config||{},guard=useGuard(client),list=credentials.filter(x=>x.kind===kind);
+ const edit=!!channel,c=channel?.config||{},guard=useGuard(client),list=credentials.filter(x=>x.kind===credKind(kind));
  const [name,setName]=useState(channel?.name||KIND_LABEL[kind]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[made,setMade]=useState(null),[tab,setTab]=useState(scrollTo?'sends':'settings');
  const [credentialId,setCredentialId]=useState(channel?.credentialId||''),[chatId,setChatId]=useState(c.chatId||''),[to,setTo]=useState((c.to||[]).join(', ')),[newCred,setNewCred]=useState(false);
  const [drafts,setDrafts]=useState(()=>{
@@ -59,7 +59,7 @@ export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sou
  const disconnect=key=>setDrafts(l=>l.flatMap(d=>d.key!==key?[d]:d.ruleId?[{...d,gone:true}]:[]));
  const addSource=()=>{const s=sourceList.find(x=>srcKey(x)===pick);if(!s)return;setDrafts(l=>[...l.filter(d=>d.key!==pick),draftOf(s,null)]);setPick('');setTimeout(()=>document.querySelector(`[data-src="${srcKey(s)}"]`)?.scrollIntoView({block:'nearest'}),0)};
  const recipients=to.split(/[,\s;]+/).filter(Boolean);
- const body=()=>({name,credentialId:credentialId||null,config:kind==='telegram'?{chatId}:{to:recipients}});
+ const body=()=>({name,...(credentialId?{credentialId}:{}),config:kind==='telegram'?{chatId}:{to:recipients}});
  const dirty=!live||name!==live.name||credentialId!==(live.credentialId||'')||(kind==='telegram'?chatId!==(live.config?.chatId||''):recipients.join()!==(live.config?.to||[]).join());
  const ready=name.trim()&&(kind==='telegram'?chatId.trim():recipients.length>0&&recipients.length<=5)&&visible.every(d=>d.events.size>0);
  async function save(){
@@ -90,8 +90,8 @@ export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sou
   {tab==='settings'&&<section id="map-tabpanel-settings" role="tabpanel" aria-labelledby="map-tab-settings" className="map-cfg">
    <Field label="Name" value={name} onChange={setName}/>
    {edit&&channel.configReadable===false&&<Note kind="warn" icon={IconInfoCircle}>DockNest cannot read the saved settings of this channel. Enter them again to fix it.</Note>}
-   {!credentialId&&<Note kind="warn" icon={IconAlertTriangle}>Needs a credential. Choose one below, or create a new one.</Note>}
-   <label className="map-field">Credential<select value={credentialId} onChange={e=>{if(e.target.value==='__new')setNewCred(true);else setCredentialId(e.target.value)}}><option value="">Choose…</option>{list.map(x=><option key={x.id} value={x.id}>{x.name} ({KIND_LABEL[x.kind]})</option>)}<option value="__new">Create new credential</option></select>{cred&&<span className="map-caption">{kind==='telegram'?'Bot token: Saved':`${cred.config?.host||'Mail server'}${cred.config?.passwordSet?', password: Saved':''}`}</span>}</label>
+   {(!credentialId||live?.needsCredential)&&<Note kind="warn" icon={IconAlertTriangle}>Needs a credential. Choose one below, or create a new one.</Note>}
+   <label className="map-field">Credential<select value={credentialId} onChange={e=>{if(e.target.value==='__new')setNewCred(true);else setCredentialId(e.target.value)}}><option value="">Choose…</option>{list.map(x=><option key={x.id} value={x.id}>{x.name} ({CRED_LABEL[x.kind]})</option>)}<option value="__new">Create new credential</option></select>{cred&&<span className="map-caption">{kind==='telegram'?'Bot token: Saved':`${cred.config?.host||'Mail server'}${cred.config?.passwordSet?', password: Saved':''}`}</span>}</label>
    {kind==='telegram'?<Field label="Chat ID" value={chatId} onChange={setChatId} hint="A number, or the @name of a public channel."/>
     :<Field label="Recipients" value={to} onChange={setTo} hint="Up to 5 addresses, separated by commas."/>}
    {live&&<dl className="map-defs"><div><dt>Last result</dt><dd>{last}</dd></div></dl>}
@@ -108,13 +108,13 @@ export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sou
   </section>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {guard.prompt}
-  {newCred&&<CredentialSheet kind={kind} client={client} onClose={()=>setNewCred(false)} onSaved={async saved=>{await onReload();setCredentialId(saved.id);setNewCred(false)}}/>}
+  {newCred&&<CredentialSheet kind={credKind(kind)} client={client} onClose={()=>setNewCred(false)} onSaved={async saved=>{await onReload();setCredentialId(saved.id);setNewCred(false)}}/>}
  </SidePanel>;
 }
 
 // A credential (the secret part of a node): reusable by several nodes. Secrets are never shown again.
 export function CredentialSheet({kind,credential,client,onClose,onSaved}){
- const edit=!!credential,c=credential?.config||{},guard=useGuard(client),[name,setName]=useState(credential?.name||(kind==='email'?'Mail account':'Telegram bot')),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const edit=!!credential,c=credential?.config||{},guard=useGuard(client),[name,setName]=useState(credential?.name||(kind==='smtp'?'Mail account':'Telegram bot')),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [token,setToken]=useState(''),[repToken,setRepToken]=useState(false),[host,setHost]=useState(c.host||''),[port,setPort]=useState(String(c.port||587)),[security,setSecurity]=useState(c.security||'starttls'),[username,setUsername]=useState(c.username||''),[password,setPassword]=useState(''),[repPass,setRepPass]=useState(false),[from,setFrom]=useState(c.from||'');
  const tokenSaved=edit&&!!c.tokenSet,passSaved=edit&&!!c.passwordSet&&!!username;
  const config=()=>kind==='telegram'?(token?{token}:{}):{host,port:Number(port),security,username,from,...(password?{password}:{})};
@@ -125,7 +125,7 @@ export function CredentialSheet({kind,credential,client,onClose,onSaved}){
   setBusy(false);
  }
  function changeEncryption(v){setSecurity(v);if(v==='tls'&&['587','25'].includes(port))setPort('465');if(v==='starttls'&&port==='465')setPort('587')}
- return <Sheet title={edit?`Edit ${credential.name}`:kind==='email'?'New Email credential':'New Telegram credential'} labelId="map-credential-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
+ return <Sheet title={edit?`Edit ${credential.name}`:kind==='smtp'?'New Email credential':'New Telegram credential'} labelId="map-credential-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
   <Field label="Name" value={name} onChange={setName}/>
   {kind==='telegram'?<>
    <Secret label="Bot token" saved={tokenSaved} replacing={repToken} onReplace={()=>setRepToken(true)} value={token} onChange={setToken}/>
@@ -139,27 +139,28 @@ export function CredentialSheet({kind,credential,client,onClose,onSaved}){
    <Field label="From" value={from} onChange={setFrom} type="email"/>
   </>}
   {edit&&<CredentialTest client={client} credential={credential}/>}
+  {edit&&<section aria-labelledby="map-cred-used"><h3 id="map-cred-used" className="map-group-title">Used by</h3>{(credential.usedBy||[]).length?<ul className="map-plain">{credential.usedBy.map(u=><li key={u.id}>{u.name}</li>)}</ul>:<p className="map-caption">No alert node uses it yet.</p>}</section>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {guard.prompt}
  </Sheet>;
 }
-function CredentialTest({client,credential}){
+function CredentialTest({client,credential,onTested}){
  const [s,setS]=useState({busy:false,text:'',ok:false});
- async function run(){setS({busy:true,text:'',ok:false});try{await client.testCredential(credential.id);setS({busy:false,ok:true,text:'The login works.'})}catch(e){setS({busy:false,ok:false,text:e.message||'The login did not work.'})}}
- return <div className="map-test"><button type="button" disabled={s.busy} onClick={run}>{s.busy?'Testing…':'Test'}</button><p className="map-caption">Checks the saved login.</p><div role="status" aria-live="polite">{s.text&&<Note kind={s.ok?'ok':'error'} icon={s.ok?IconCircleCheck:IconCircleX}>{s.text}</Note>}</div></div>;
+ async function run(){setS({busy:true,text:'',ok:false});try{await client.testCredential(credential.id);setS({busy:false,ok:true,text:'The login works.'})}catch(e){setS({busy:false,ok:false,text:e.message||'The login did not work.'})}await onTested?.()}
+ return <div className="map-test"><button type="button" disabled={s.busy} onClick={run}>{s.busy?'Testing…':'Test'}</button><p className="map-caption">Checks the saved login without sending a message.{credential.lastTest==='failed'&&credential.lastError?' Last test: '+credential.lastError:''}</p><div role="status" aria-live="polite">{s.text&&<Note kind={s.ok?'ok':'error'} icon={s.ok?IconCircleCheck:IconCircleX}>{s.text}</Note>}</div></div>;
 }
 
 // "Credentials" from the "+" panel: list, edit, delete (refused by the API while a node uses it)
 export function CredentialsPanel({narrow,credentials,channels,client,onClose,onReload}){
  const [sheet,setSheet]=useState(null),[note,setNote]=useState(null),[confirm,setConfirm]=useState(null),[err,setErr]=useState('');
- const uses=id=>channels.filter(c=>c.credentialId===id).length;
+ const uses=x=>(x.usedBy||channels.filter(c=>c.credentialId===x.id)).length;
  async function del(cred){setErr('');try{await client.deleteCredential(cred.id);await onReload();setConfirm(null);setNote(cred.name+' is deleted.')}catch(e){setErr(e.message||'This credential could not be deleted.')}}
  return <SidePanel narrow={narrow} labelId="map-panel-title" title="Credentials" onClose={onClose} footer={<button type="button" className="primary" onClick={onClose}>Close</button>}>
   <p className="map-caption">A credential holds a login. Several alert nodes can use the same one.</p>
-  {credentials.length>0?<ul className="map-alert-rows">{credentials.map(x=><li key={x.id}><span><b className="map-name">{x.name}</b><span className="map-caption">{KIND_LABEL[x.kind]}, used by {uses(x.id)===1?'1 node':uses(x.id)+' nodes'}</span></span><button type="button" aria-label={`Edit ${x.name}`} onClick={()=>setSheet({kind:x.kind,credential:x})}>Edit</button><button type="button" aria-label={`Delete ${x.name}`} onClick={()=>{setErr('');setConfirm(x)}}>Delete</button></li>)}</ul>:<p className="map-caption">No credentials yet.</p>}
-  <div className="map-inline-actions"><button type="button" onClick={()=>setSheet({kind:'telegram'})}>New Telegram credential</button><button type="button" onClick={()=>setSheet({kind:'email'})}>New Email credential</button></div>
+  {credentials.length>0?<ul className="map-alert-rows">{credentials.map(x=><li key={x.id}><span><b className="map-name">{x.name}</b><span className="map-caption">{CRED_LABEL[x.kind]}, used by {uses(x)===1?'1 node':uses(x)+' nodes'}</span></span><button type="button" aria-label={`Edit ${x.name}`} onClick={()=>setSheet({kind:x.kind,credential:x})}>Edit</button><button type="button" aria-label={`Delete ${x.name}`} onClick={()=>{setErr('');setConfirm(x)}}>Delete</button></li>)}</ul>:<p className="map-caption">No credentials yet.</p>}
+  <div className="map-inline-actions"><button type="button" onClick={()=>setSheet({kind:'telegram'})}>New Telegram credential</button><button type="button" onClick={()=>setSheet({kind:'smtp'})}>New Email credential</button></div>
   <div role="status" aria-live="polite">{note&&<p className="map-caption">{note}</p>}</div>
-  {sheet&&<CredentialSheet kind={sheet.kind} credential={sheet.credential} client={client} onClose={()=>setSheet(null)} onSaved={async()=>{await onReload();setSheet(null);setNote('Credential saved.')}}/>}
+  {sheet&&<CredentialSheet key={sheet.credential?.id||sheet.kind} kind={sheet.kind} credential={sheet.credential} client={client} onClose={()=>setSheet(null)} onSaved={async()=>{await onReload();setSheet(null);setNote('Credential saved.')}}/>}
   {confirm&&<Sheet title={`Delete ${confirm.name}?`} labelId="map-cred-delete-title" onClose={()=>setConfirm(null)} actions={<><button type="button" onClick={()=>setConfirm(null)}>Cancel</button><button type="button" className="primary" onClick={()=>del(confirm)}>Delete</button></>}>
    <p>The login is removed from DockNest. A credential that a node still uses cannot be deleted.</p>
    {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}</Sheet>}

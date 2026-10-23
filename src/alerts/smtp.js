@@ -76,9 +76,11 @@ export function buildMessage({ from, to, subject, text, date = new Date(), id })
 }
 
 // config: { host, port, security: 'starttls' | 'tls', username, password, from, to: [address] }
-export async function sendMail(config, { subject, text }, { id = String(Date.now()), tlsOptions = {} } = {}) {
-  const from = mailbox(config.from), recipients = config.to.map(mailbox);
-  if (!from || !recipients.length || recipients.some(item => !item)) throw new SmtpError('The sender or recipient address is not valid.', 'config');
+// With `message` null it only connects, encrypts and signs in (to check a credential), then quits without sending.
+export async function sendMail(config, message, { id = String(Date.now()), tlsOptions = {} } = {}) {
+  const { subject, text } = message ?? {};
+  const from = mailbox(config.from), recipients = (config.to ?? []).map(mailbox);
+  if (!from || (message && (!recipients.length || recipients.some(item => !item)))) throw new SmtpError('The sender or recipient address is not valid.', 'config');
   let connection, timer;
   const run = async () => {
     const address = await smtpIo.resolve(config.host);
@@ -107,6 +109,7 @@ export async function sendMail(config, { subject, text }, { id = String(Date.now
         await connection.command(Buffer.from(config.password).toString('base64'), [235]);
       } else throw new SmtpError('The mail server does not offer a sign-in method DockNest supports (PLAIN or LOGIN).', 'auth');
     }
+    if (!message) { try { connection.socket.write('QUIT\r\n'); } catch { /* Checked; nothing was sent. */ } return; }
     await connection.command(`MAIL FROM:<${from}>`, [250]);
     for (const recipient of recipients) await connection.command(`RCPT TO:<${recipient}>`, [250, 251]);
     await connection.command('DATA', [354]);

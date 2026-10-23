@@ -47,7 +47,7 @@ const alertsDb={channels:[],rules:[],credentials:[],seq:1,needReauth:false,testF
 const resetAlerts=(seed=true)=>{
  Object.assign(alertsDb,{channels:[],rules:[],credentials:[],seq:1,needReauth:false,testFail:false,reauths:0,calls:[]});
  if(!seed)return;
- alertsDb.credentials.push({id:'k1',kind:'telegram',name:'Ops bot',config:{tokenSet:true}},{id:'k2',kind:'email',name:'Fastmail account',config:{host:'smtp.fastmail.com',port:587,security:'starttls',username:'alerts@harborpaws.com',passwordSet:true,from:'alerts@harborpaws.com'}});
+ alertsDb.credentials.push({id:'k1',kind:'telegram',name:'Ops bot',config:{tokenSet:true}},{id:'k2',kind:'smtp',name:'Fastmail account',config:{host:'smtp.fastmail.com',port:587,security:'starttls',username:'alerts@harborpaws.com',passwordSet:true,from:'alerts@harborpaws.com'}});
  alertsDb.channels.push({id:'c1',kind:'telegram',name:'Ops chat',credentialId:'k1',config:{chatId:'-1001234567890'},configReadable:true,lastResult:'ok',lastResultAt:new Date().toISOString(),lastError:null},
   {id:'c2',kind:'email',name:'Team inbox',credentialId:'k2',config:{to:['ops@harborpaws.com','dana@harborpaws.com']},configReadable:true,lastResult:'failed',lastResultAt:new Date(Date.now()-36e5).toISOString(),lastError:'The mail server refused the login.'});
  alertsDb.rules.push({id:'r1',channelId:'c1',sourceKind:'docknest',sourceId:null,events:['server.unreachable','update.available'],enabled:true},
@@ -55,25 +55,28 @@ const resetAlerts=(seed=true)=>{
   {id:'r3',channelId:'c2',sourceKind:'site',sourceId:'s1',events:['backup.failed'],enabled:true},
   {id:'r4',channelId:'c2',sourceKind:'server',sourceId:'nas',events:['server.disk_low'],enabled:true});
 };
+const credView=(A,k)=>({...k,usedBy:A.channels.filter(c=>c.credentialId===k.id).map(c=>({id:c.id,name:c.name})),lastTest:k.lastTest||null,lastTestAt:k.lastTestAt||null,lastError:k.lastError||null});
+const chView=(A,c)=>({...c,credentialName:A.credentials.find(k=>k.id===c.credentialId)?.name||null,needsCredential:!A.credentials.some(k=>k.id===c.credentialId)});
 function alertsApi(req,endpoint){
  const parts=endpoint.split('/').filter(Boolean).slice(2),m=req.method(),body=req.postDataJSON?.()||{},A=alertsDb;
  const ok=json=>({json}),err=(status,error,code)=>({status,json:{error,...(code?{code}:{})}});
- if(!parts.length)return ok({channels:A.channels,rules:A.rules,credentials:A.credentials,events:['backup.failed','backup.succeeded','move.finished','move.needs_you','server.unreachable','server.disk_low','update.available'],sourceKinds:['docknest','server','site'],limits:{channels:20,rules:200}});
+ if(!parts.length)return ok({channels:A.channels.map(c=>chView(A,c)),rules:A.rules,credentials:A.credentials.map(k=>credView(A,k)),diskLow:{usedPercent:90,freeBytes:5*1024**3},events:['backup.failed','backup.succeeded','move.finished','move.needs_you','server.unreachable','server.disk_low','update.available'],sourceKinds:['docknest','server','site'],limits:{channels:20,rules:200}});
  if(parts[0]==='credentials'){
   if(parts[2]==='test'){A.calls.push(['test-credential',parts[1]]);return A.testFail?err(502,'The mail server refused the login.'):ok({ok:true});}
   if(m!=='GET'&&A.needReauth)return err(403,'Please confirm it is you.','REAUTH_REQUIRED');
   if(m==='POST'){
+   if(!['telegram','smtp'].includes(body.kind))return err(400,'Choose Telegram or Email.');
    if(body.kind==='telegram'&&!/^\d{5,15}:[A-Za-z0-9_-]{30,64}$/.test(body.config?.token||''))return err(400,'Paste the bot token exactly as BotFather shows it.');
    const {token,password,...rest}=body.config,k={id:'k'+(++A.seq+10),kind:body.kind,name:body.name,config:{...rest,...(token?{tokenSet:true}:{}),...(password?{passwordSet:true}:{})}};
-   A.calls.push(['credential',JSON.stringify(body)]);A.credentials.push(k);return {status:201,json:k};
+   A.calls.push(['credential',JSON.stringify(body)]);A.credentials.push(k);return {status:201,json:credView(A,k)};
   }
-  if(m==='PATCH'){const k=A.credentials.find(x=>x.id===parts[1]);A.calls.push(['credential-update',JSON.stringify(body)]);if(body.name)k.name=body.name;if(body.config){const {token,password,...rest}=body.config;Object.assign(k.config,rest);if(token)k.config.tokenSet=true;if(password)k.config.passwordSet=true}return ok(k);}
-  if(m==='DELETE'){const n=A.channels.filter(c=>c.credentialId===parts[1]).length;if(n)return err(409,'This credential is used by '+n+' alert node'+(n===1?'':'s')+'. Disconnect it there first.');A.calls.push(['credential-delete',parts[1]]);A.credentials=A.credentials.filter(x=>x.id!==parts[1]);return ok({deleted:true});}
+  if(m==='PATCH'){const k=A.credentials.find(x=>x.id===parts[1]);A.calls.push(['credential-update',JSON.stringify(body)]);if(body.name)k.name=body.name;if(body.config){const {token,password,...rest}=body.config;Object.assign(k.config,rest);if(token)k.config.tokenSet=true;if(password)k.config.passwordSet=true}return ok(credView(A,k));}
+  if(m==='DELETE'){const n=A.channels.filter(c=>c.credentialId===parts[1]).length;if(n)return {status:409,json:{error:'This credential is used by '+n+' alert node'+(n===1?'':'s')+'. Disconnect it there first.',code:'CREDENTIAL_IN_USE',nodes:A.channels.filter(c=>c.credentialId===parts[1]).map(c=>({id:c.id,name:c.name}))}};A.calls.push(['credential-delete',parts[1]]);A.credentials=A.credentials.filter(x=>x.id!==parts[1]);return ok({deleted:true});}
  }
  if(parts[0]==='channels'){
   if(parts[2]==='test'){A.calls.push(['test',parts[1]]);const c=A.channels.find(x=>x.id===parts[1]);if(A.testFail){c.lastResult='failed';return err(502,'Telegram did not accept the message. Check the chat ID and that the bot was added to the chat.');}c.lastResult='ok';c.lastResultAt=new Date().toISOString();return ok({sent:true});}
-  if(m==='POST'){const c={id:'c'+(++A.seq+10),kind:body.kind,name:body.name,credentialId:body.credentialId||null,config:body.config,configReadable:true,lastResult:null,lastResultAt:null,lastError:null};A.calls.push(['create',JSON.stringify(body)]);A.channels.push(c);return {status:201,json:c};}
-  if(m==='PATCH'){const c=A.channels.find(x=>x.id===parts[1]);A.calls.push(['update',JSON.stringify(body)]);if(body.name)c.name=body.name;if('credentialId' in body)c.credentialId=body.credentialId;if(body.config)Object.assign(c.config,body.config);return ok(c);}
+  if(m==='POST'){const c={id:'c'+(++A.seq+10),kind:body.kind,name:body.name,credentialId:body.credentialId||null,config:body.config,configReadable:true,lastResult:null,lastResultAt:null,lastError:null};A.calls.push(['create',JSON.stringify(body)]);A.channels.push(c);return {status:201,json:chView(A,c)};}
+  if(m==='PATCH'){const c=A.channels.find(x=>x.id===parts[1]);A.calls.push(['update',JSON.stringify(body)]);if(body.name)c.name=body.name;if('credentialId' in body)c.credentialId=body.credentialId;if(body.config)Object.assign(c.config,body.config);return ok(chView(A,c));}
   if(m==='DELETE'){A.calls.push(['delete',parts[1]]);A.channels=A.channels.filter(x=>x.id!==parts[1]);A.rules=A.rules.filter(r=>r.channelId!==parts[1]);return ok({deleted:true});}
  }
  if(parts[0]==='rules'){
@@ -697,6 +700,7 @@ async function alertsFlow(scheme){
  await d.getByRole('button',{name:'Cancel'}).click();
  await panel.getByRole('button',{name:'Edit Fastmail account'}).click();
  await d.getByRole('group',{name:'Password'}).getByText('Saved').waitFor();assert.equal(await d.locator('input[type=password]').count(),0);
+ await d.getByRole('heading',{name:'Used by'}).waitFor();await d.getByText('Team inbox').waitFor();
  await d.getByRole('button',{name:'Test'}).click();await d.getByText('The login works.').waitFor();await shot(page,scheme,'1440-alerts-credential');
  await d.getByRole('button',{name:'Cancel'}).click();await page.screenshot({path:'C:/Users/USER/AppData/Local/Temp/claude/d--Dev-repos-DockNest/dbe053bb-f5b1-4d0f-aa73-059ba3a59478/scratchpad/dbg.png'});await panel.getByRole('button',{name:'Close'}).first().click();
  // Delete a node asks first
@@ -733,7 +737,7 @@ async function layoutFlow(scheme){
  // Drag a node by its body while editing: snaps to the 16 px grid, never opens the panel, undo and redo, Tidy up re-sorts
  await page.keyboard.press('Escape');await page.getByRole('button',{name:'Fit to screen'}).click();
  const node=page.locator('.map-site[data-site="s2"]'),before=await node.boundingBox();
- assert.equal(await page.getByRole('button',{name:'Tidy up'}).isDisabled(),true,'nothing to tidy yet');
+ assert.equal(await page.getByRole('button',{name:'Tidy up'}).isDisabled(),false,'Tidy up is always clickable');assert.equal(await page.getByRole('button',{name:'Undo'}).isDisabled(),true,'nothing to undo yet');
  await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();await page.mouse.move(before.x+before.width/2+90,before.y+before.height/2+60,{steps:6});await page.mouse.up();
  const after=await node.boundingBox();assert.ok(after.x-before.x>60&&after.y-before.y>40,'the node moved');
  assert.equal(await page.locator('.map-panel').count(),0,'a drag does not open the panel');

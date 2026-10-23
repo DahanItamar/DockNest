@@ -426,7 +426,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  return <section className="map-root" aria-label="Infrastructure map">
   {canMove&&<div className="map-toolbar">
    {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every site to a server to save</span>}
-   <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" disabled={!Object.keys(positions).length} onClick={tidy}>Tidy up</button>
+   <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" onClick={tidy}>Tidy up</button>
    {edit&&<button type="button" onClick={cancelEdit}>Cancel</button>}
    <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button>
   </div>}
@@ -456,8 +456,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
     </div>}
     {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={canMove?'docknest:':undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
-    {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed'||!ch.credentialId;return <React.Fragment key={'n'+r.id}>
-     <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
+    {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed'||ch.needsCredential||!ch.credentialId;return <React.Fragment key={'n'+r.id}>
+     <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${ch.needsCredential||!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
       <KindIcon kind={ch.kind} size={32}/>
       {bad&&<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
       <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className="map-caption">{KIND_LABEL[ch.kind]}</span></span>
