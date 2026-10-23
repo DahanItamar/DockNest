@@ -95,3 +95,12 @@ a.icon-button{display:inline-flex;align-items:center;justify-content:center;heig
  .rebrand-page .mobile-table td.audit-details::before{margin:0}
  .rebrand-page .data-table.mobile-table td.audit-details .audit-actions{width:auto;flex:none}
 }
+
+/* Access accounts: proportional columns, frameless right-aligned actions */
+.access-table .data-table td small{display:block;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted);font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.access-table .data-table td.num:last-child .row-actions{justify-content:flex-end}
+.access-table .row-actions button{padding:0;min-height:0;height:auto;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-body);line-height:var(--lh-body);white-space:nowrap}
+.access-table .row-actions button:hover:not(:disabled){text-decoration:underline}
+.access-table .row-actions button:disabled{opacity:.5}
+.access-table .your-account{color:var(--text-muted);font-size:var(--fs-caption)}
+@media(max-width:767px){.access-table .data-table td.num:last-child .row-actions{justify-content:flex-start}.access-table .data-table td.num{text-align:left}}
