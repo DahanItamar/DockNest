@@ -3,6 +3,7 @@
 // has no field to go into. Every builder adds the DockNest version and the install mode.
 import { buildIssueUrl, TITLE, URL_LIMIT } from './core.js';
 import { excerptFrom, excerptOk, redact, limitExcerpt } from './redact.js';
+import { whatHappened, whatHappenedOk } from './catalogue.js';
 
 export const VERSION = /^v\d{1,4}\.\d{1,4}\.\d{1,6}$/;
 export const INSTALL_MODES = ['image', 'source'];
@@ -33,11 +34,13 @@ function assemble({ template, title, version, installMode, fields, allow, labels
   const v = normVersion(version), mode = INSTALL_MODES.includes(installMode) ? installMode : null;
   const envFields = environmentFields(env), withEnv = includeEnvironment && Object.keys(envFields).length > 0;
   const all = { title, version: v, install_mode: mode, ...fields, ...(withEnv ? envFields : {}), ...extra };
-  const allowList = { ...BASE_FIELDS, ...allow, ...ENV_FIELDS, ...(extra.excerpt !== undefined ? { excerpt: excerptOk } : {}) };
+  const allowList = { ...BASE_FIELDS, ...allow, ...ENV_FIELDS, ...(extra.excerpt !== undefined ? { excerpt: excerptOk } : {}), ...(fields.what_happened !== undefined ? { what_happened: v => whatHappenedOk(v) || excerptOk(v) } : {}) };
   const { href, sent } = buildIssueUrl(template, all, allowList);
   const sentMap = Object.fromEntries(sent);
   const shared = [['Title', sentMap.title], ['DockNest', [sentMap.version, sentMap.install_mode].filter(Boolean).join(' · ') || 'Not available']];
   for (const [id, label] of Object.entries(labels)) if (sentMap[id] !== undefined) shared.push([label, sentMap[id]]);
+  // Only a catalogue-built text is listed in the review; an opt-in excerpt is shown in its own editable box.
+  if (whatHappenedOk(sentMap.what_happened)) shared.push(['What happened', sentMap.what_happened]);
   const environment = Object.entries(envFields).map(([id, value]) => [ENV_LABEL[id], value]);
   return { template, title: sentMap.title, href, sent, shared, environment, environmentIncluded: withEnv, version: sentMap.version || null, installMode: sentMap.install_mode || null };
 }
@@ -48,6 +51,18 @@ export function buildBugReport({ version, installMode } = {}) {
   const v = normVersion(version), mode = INSTALL_MODES.includes(installMode) ? installMode : null;
   const r = assemble({ template: BUG_TEMPLATE, title: 'Bug report: DockNest' + (v ? ' ' + v : ''), version, installMode, fields: {}, allow: {}, labels: {}, env: null, includeEnvironment: false });
   return { ...r, version: v, installMode: mode, fields: [['DockNest version', v || 'Not available'], ['Install mode', mode ? (mode === 'source' ? 'source (git checkout)' : 'image') : 'Not available']] };
+}
+
+// "What happened?" (2.4.1): the catalogue text when the message is one of DockNest's own fixed messages, otherwise only the
+// redacted excerpt the person opted into. The URL falls back to no text (and Copy excerpt) when it would be too long.
+function withWhat({ message, explanation, excerpt }, make) {
+  const auto = whatHappened(message, explanation);
+  const cleaned = !auto && typeof excerpt === 'string' && excerpt.trim() ? limitExcerpt(redact(excerpt)) : null;
+  const text = auto || cleaned;
+  let report = null, tooLong = false;
+  if (text) { try { report = make(text); } catch (e) { if (e.code !== 'TOO_LONG') throw e; tooLong = true; } }
+  if (!report) report = make(null);
+  return { ...report, whatHappened: auto, excerpt: cleaned, excerptIncluded: !!cleaned && !tooLong, excerptTooLong: !!cleaned && tooLong };
 }
 
 // Failed and recovery-required jobs (job-failure.yml). Existing structured fields only.
@@ -61,40 +76,40 @@ export const CONTAINER_BUCKETS = ['1', '2-5', '6-10', '>10'];
 export const HELPER_OUTCOMES = ['timeout', 'failure', 'exit'];
 export const containerBucket = n => (Number.isInteger(n) && n >= 1 ? (n === 1 ? '1' : n <= 5 ? '2-5' : n <= 10 ? '6-10' : '>10') : null);
 const JOB_NAME = { backup: 'Backup', restore: 'Restore', scrub: 'Integrity check' };
-export function buildJobReport({ version, installMode, env, includeEnvironment = true, jobType, outcome, phase, ended, siteKind, storage, containers, helperOutcome } = {}) {
+export function buildJobReport({ version, installMode, env, includeEnvironment = true, jobType, outcome, phase, ended, siteKind, storage, containers, helperOutcome, message, explanation, excerpt } = {}) {
   const type = pick(JOB_TYPES, jobType), out = pick(JOB_OUTCOMES, outcome) || 'failed', ph = pick(JOB_PHASES, phase);
   const title = (type ? JOB_NAME[type] : 'Job') + (out === 'recovery-required' ? ' needs recovery review' : ' failed') + (ph ? ': ' + ph + ' step' : '');
   const fields = { job_type: type, outcome: out, phase: ph, ended: out === 'recovery-required' ? pick(JOB_ENDINGS, ended) : null, site_kind: pick(SITE_KINDS, siteKind), storage: pick(STORAGE_TYPES, storage), containers: Number.isInteger(containers) ? containerBucket(containers) : pick(CONTAINER_BUCKETS, containers), helper_outcome: pick(HELPER_OUTCOMES, helperOutcome) };
-  return assemble({ template: 'job-failure.yml', title, version, installMode, env, includeEnvironment, fields,
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'job-failure.yml', title, version, installMode, env, includeEnvironment, fields: { ...fields, what_happened: what },
     allow: { job_type: JOB_TYPES, outcome: JOB_OUTCOMES, phase: JOB_PHASES, ended: JOB_ENDINGS, site_kind: SITE_KINDS, storage: STORAGE_TYPES, containers: CONTAINER_BUCKETS, helper_outcome: HELPER_OUTCOMES },
-    labels: { job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'Site kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } });
+    labels: { job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'Site kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } }));
 }
 
 // Storage target test failures (storage-failure.yml). Never the endpoint, bucket, host or port.
 export const SFTP_CLASSES = ['host-key-mismatch', 'auth-failed', 'dns', 'refused', 'timeout', 'sftp-start', 'other'];
 export const S3_CLASSES = ['AccessDenied', 'NoSuchBucket', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', 'AuthorizationHeaderMalformed', 'PermanentRedirect', 'InvalidBucketName', 'ObjectLockConfigurationNotFoundError', 'NotImplemented', 'MethodNotAllowed', 'NotFound', 'SlowDown', 'InternalError', 'ServiceUnavailable', 'RequestTimeTooSkewed', 'Unreachable', 'other'];
-export function buildStorageReport({ version, installMode, env, includeEnvironment = true, protocol, errorClass } = {}) {
+export function buildStorageReport({ version, installMode, env, includeEnvironment = true, protocol, errorClass, message, explanation, excerpt } = {}) {
   const p = pick(['sftp', 's3'], protocol), cls = p ? pick(p === 'sftp' ? SFTP_CLASSES : S3_CLASSES, errorClass) || 'other' : null;
-  return assemble({ template: 'storage-failure.yml', title: 'Storage test failed' + (p ? ': ' + p : '') + (cls ? ' (' + cls + ')' : ''), version, installMode, env, includeEnvironment,
-    fields: { protocol: p, error_class: cls }, allow: { protocol: ['sftp', 's3'], error_class: [...SFTP_CLASSES, ...S3_CLASSES] }, labels: { protocol: 'Protocol', error_class: 'Error class' } });
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'storage-failure.yml', title: 'Storage test failed' + (p ? ': ' + p : '') + (cls ? ' (' + cls + ')' : ''), version, installMode, env, includeEnvironment,
+    fields: { protocol: p, error_class: cls, what_happened: what }, allow: { protocol: ['sftp', 's3'], error_class: [...SFTP_CLASSES, ...S3_CLASSES] }, labels: { protocol: 'Protocol', error_class: 'Error class' } }));
 }
 
 // Server connection tests (server-connection.yml). Never the address.
 export const SERVER_CHECKS = ['ssh', 'host-key', 'python', 'docker'];
 export const SERVER_CLASSES = ['host-key-mismatch', 'auth-failed', 'dns', 'refused', 'timeout', 'not-found', 'helper-error', 'other'];
-export function buildServerReport({ version, installMode, env, includeEnvironment = true, check, errorClass } = {}) {
+export function buildServerReport({ version, installMode, env, includeEnvironment = true, check, errorClass, message, explanation, excerpt } = {}) {
   const c = pick(SERVER_CHECKS, check), cls = pick(SERVER_CLASSES, errorClass) || (c ? 'other' : null);
-  return assemble({ template: 'server-connection.yml', title: 'Server connection test failed' + (c ? ': ' + c : '') + (cls ? ' (' + cls + ')' : ''), version, installMode, env, includeEnvironment,
-    fields: { check: c, error_class: cls }, allow: { check: SERVER_CHECKS, error_class: SERVER_CLASSES }, labels: { check: 'Failed check', error_class: 'Error class' } });
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'server-connection.yml', title: 'Server connection test failed' + (c ? ': ' + c : '') + (cls ? ' (' + cls + ')' : ''), version, installMode, env, includeEnvironment,
+    fields: { check: c, error_class: cls, what_happened: what }, allow: { check: SERVER_CHECKS, error_class: SERVER_CLASSES }, labels: { check: 'Failed check', error_class: 'Error class' } }));
 }
 
 // DockNest self-backup failures (self-backup-failure.yml). The phase is not recorded yet (engine work); how it ended is.
 export const SELF_BACKUP_DESTINATIONS = ['sftp', 's3', 'local'];
 export const SELF_BACKUP_ENDINGS = ['failed', 'worker-interrupted', 'deployment-hold'];
-export function buildSelfBackupReport({ version, installMode, env, includeEnvironment = true, destination, ended } = {}) {
+export function buildSelfBackupReport({ version, installMode, env, includeEnvironment = true, destination, ended, message, explanation, excerpt } = {}) {
   const d = pick(SELF_BACKUP_DESTINATIONS, destination), e = pick(SELF_BACKUP_ENDINGS, ended) || 'failed';
-  return assemble({ template: 'self-backup-failure.yml', title: 'DockNest backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
-    fields: { destination: d, ended: e }, allow: { destination: SELF_BACKUP_DESTINATIONS, ended: SELF_BACKUP_ENDINGS }, labels: { destination: 'Destination', ended: 'How it ended' } });
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'self-backup-failure.yml', title: 'DockNest backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
+    fields: { destination: d, ended: e, what_happened: what }, allow: { destination: SELF_BACKUP_DESTINATIONS, ended: SELF_BACKUP_ENDINGS }, labels: { destination: 'Destination', ended: 'How it ended' } }));
 }
 
 // Unexpected app errors (app-error.yml): route name, area and error name. Never the message or stack.
@@ -172,10 +187,10 @@ export { excerptFrom };
 const ENV_IDS = Object.keys(ENV_FIELDS);
 export const TEMPLATE_FIELDS = Object.freeze({
   'bug-report.yml': ['version', 'install_mode'],
-  'job-failure.yml': ['version', 'install_mode', 'job_type', 'outcome', 'phase', 'ended', 'site_kind', 'storage', 'containers', 'helper_outcome', ...ENV_IDS],
-  'storage-failure.yml': ['version', 'install_mode', 'protocol', 'error_class', ...ENV_IDS],
-  'server-connection.yml': ['version', 'install_mode', 'check', 'error_class', ...ENV_IDS],
-  'self-backup-failure.yml': ['version', 'install_mode', 'destination', 'ended', ...ENV_IDS],
+  'job-failure.yml': ['version', 'install_mode', 'job_type', 'outcome', 'phase', 'ended', 'site_kind', 'storage', 'containers', 'helper_outcome', 'what_happened', ...ENV_IDS],
+  'storage-failure.yml': ['version', 'install_mode', 'protocol', 'error_class', 'what_happened', ...ENV_IDS],
+  'server-connection.yml': ['version', 'install_mode', 'check', 'error_class', 'what_happened', ...ENV_IDS],
+  'self-backup-failure.yml': ['version', 'install_mode', 'destination', 'ended', 'what_happened', ...ENV_IDS],
   'app-error.yml': ['version', 'install_mode', 'route', 'area', 'error_name', ...ENV_IDS],
   'update-failure.yml': ['version', 'install_mode', 'from_version', 'to_version', 'outcome', 'result', 'stage', 'phase', 'timeline', 'updater_version', 'reason', 'migration_ran', 'schema', 'excerpt', ...ENV_IDS],
 });

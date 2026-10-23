@@ -5,6 +5,7 @@ import {BrandIcon} from './brand.jsx';
 import {StatusLabel,IconButton,AlertPanel} from './system.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildServerReport} from './report/builders.js';
+import {catalogued,EXPLAIN} from './report/catalogue.js';
 import './servers.css';
 
 const ServerIcon=props=><BrandIcon name="server" {...props}/>;
@@ -26,7 +27,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
      <div className="def-row"><dt>Server ID</dt><dd><code>{server.id}</code></dd></div>
      <div className="def-row"><dt>Sites</dt><dd><span aria-label={`${count} configured ${count===1?'site':'sites'}`}>{count}</span></dd></div>
     </dl>
-    {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" build={(facts,opts)=>buildServerReport({...facts,...opts,check:failure.check,errorClass:failure.errorClass})}/></div>}>{failure.message}</AlertPanel>}
+    {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" excerptSource={catalogued(failure.message)||!failure.message?null:{error:failure.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildServerReport({...facts,...opts,check:failure.check,errorClass:failure.errorClass,message:failure.message,explanation:EXPLAIN.server})}/></div>}>{failure.message}</AlertPanel>}
    </div>
    <footer className="card-footer server-card-actions">
     <button disabled={busy} onClick={()=>onTest(server)}>Test connection</button>

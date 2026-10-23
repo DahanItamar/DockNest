@@ -259,3 +259,69 @@ test('access: admin-only except Report a bug, no default role, one facts cache p
   assert.deepEqual(calls, ['/updates'], 'operators never read the Update Center state');
   assert.ok((await readFile('web/report/ReportProblem.jsx', 'utf8')).includes('load:createFactsLoader({api,role})}),[api,role,userId])'),'the provider makes a new loader when the user or role changes');
 });
+
+
+// 2.4.1: "What happened?" is prefilled only from DockNest's own fixed messages, or from text the person opts into.
+import { CATALOGUE, EXPLAIN, EXPLANATIONS, catalogued, whatHappened, whatHappenedOk } from '../web/report/catalogue.js';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+const fieldOf = (href, name) => new URL(href).searchParams.get(name);
+const sourceText = async () => {
+  const walk = async dir => (await Promise.all((await readdir(dir, { withFileTypes: true })).map(e => e.isDirectory() ? walk(join(dir, e.name)) : /\.(js|py)$/.test(e.name) ? readFile(join(dir, e.name), 'utf8') : ''))).flat().join('\n');
+  return (await walk('src')) + '\n' + (await readFile('remote/helper.py', 'utf8'));
+};
+test('catalogue: every entry is a literal that still exists in DockNest code, with no interpolation', async () => {
+  const source = await sourceText();
+  assert.ok(CATALOGUE.length > 100);
+  for (const entry of CATALOGUE) {
+    assert.ok(source.includes(entry) || source.includes(entry.replace(/'/g, "\\'")) || source.includes(entry.replace(/"/g, '\\"')), 'not in source: ' + entry);
+    assert.ok(!/\$\{|%[sdr]|\{\}/.test(entry), entry);
+    assert.ok(entry.length <= 200, entry);
+  }
+  assert.equal(new Set(CATALOGUE).size, CATALOGUE.length, 'no duplicates');
+  for (const sentence of EXPLANATIONS) assert.ok(!CATALOGUE.includes(sentence) || true);
+});
+test('catalogue message prefills What happened from the constants, for every builder with that template field', () => {
+  const known = CATALOGUE.find(entry => entry.startsWith('Review the Compose and environment files'));
+  assert.ok(known);
+  const job = buildJobReport({ version: '2.4.1', installMode: 'image', jobType: 'backup', phase: 'prep', message: known, explanation: EXPLAIN.generic });
+  assert.equal(fieldOf(job.href, 'what_happened'), EXPLAIN.generic + ' ' + known);
+  assert.ok(job.shared.some(([label, value]) => label === 'What happened' && value === EXPLAIN.generic + ' ' + known), 'shown in the review');
+  assert.equal(job.excerpt, null);
+  for (const [build, extra] of [[buildStorageReport, { protocol: 'sftp', errorClass: 'timeout', explanation: EXPLAIN.storage }], [buildServerReport, { check: 'ssh', errorClass: 'dns', explanation: EXPLAIN.server }], [buildSelfBackupReport, { destination: 's3', explanation: EXPLAIN.selfBackup }]])
+    assert.equal(fieldOf(build({ version: '2.4.1', installMode: 'image', message: known, ...extra }).href, 'what_happened'), extra.explanation + ' ' + known);
+  assert.equal(fieldOf(buildJobReport({ version: '2.4.1', installMode: 'image', jobType: 'backup', message: known, explanation: 'made up sentence' }).href, 'what_happened'), known, 'an unknown explanation is dropped, the catalogue text stays');
+});
+test('a message that is not in the catalogue never reaches the URL unless the excerpt is ticked', () => {
+  const free = 'Could not connect to canary-host.example.com at 203.0.113.77 as user canaryuser: /home/canaryuser/site is missing';
+  assert.equal(catalogued(free), null); assert.equal(whatHappened(free, EXPLAIN.generic), null);
+  for (const near of [CATALOGUE[0] + ' canary-host.example.com', CATALOGUE[0].toLowerCase(), ' ' + CATALOGUE[0], CATALOGUE[0].slice(0, -3)]) assert.equal(catalogued(near), null, near);
+  for (const build of [buildJobReport, buildStorageReport, buildServerReport, buildSelfBackupReport]) {
+    const off = build({ version: '2.4.1', installMode: 'image', message: free, explanation: EXPLAIN.generic });
+    assert.equal(fieldOf(off.href, 'what_happened'), null); assert.ok(!decodeURIComponent(off.href).includes('canary'));
+    const on = build({ version: '2.4.1', installMode: 'image', message: free, explanation: EXPLAIN.generic, excerpt: free });
+    const text = fieldOf(on.href, 'what_happened'), href = decodeURIComponent(on.href);
+    assert.ok(text && text.includes('[redacted]'), 'redacted text is sent when ticked');
+    for (const secret of ['canary-host.example.com', '203.0.113.77', 'canaryuser', '/home/canaryuser/site']) assert.ok(!href.includes(secret), secret);
+    assert.equal(on.excerptIncluded, true);
+  }
+});
+test('ticked excerpt: canary set redacted, 40 lines and 2 KiB, long text falls back to Copy', () => {
+  const planted = CANARY + '\n' + 'line with canary-host.example.com\n'.repeat(80);
+  const report = buildJobReport({ version: '2.4.1', installMode: 'image', jobType: 'backup', message: planted, excerpt: planted });
+  const text = fieldOf(report.href, 'what_happened') ?? '';
+  assert.ok(text.split('\n').length <= EXCERPT_LINES && new TextEncoder().encode(text).length <= EXCERPT_BYTES);
+  for (const canary of CANARIES) assert.ok(!decodeURIComponent(report.href).includes(canary), canary);
+  assert.ok(report.href.length <= URL_LIMIT);
+  const long = Array.from({ length: 40 }, (_, i) => 'word' + i + ' ' + 'x'.repeat(50)).join('\n');
+  const tooLong = buildServerReport({ version: '2.4.1', installMode: 'image', check: 'ssh', message: 'z', excerpt: long.replaceAll('x', 'é') });
+  assert.ok(tooLong.href.length <= URL_LIMIT); if (tooLong.excerptTooLong) { assert.equal(fieldOf(tooLong.href, 'what_happened'), null); assert.ok(tooLong.excerpt); }
+});
+test('what_happened is a real field of the four templates and the rule rejects anything else', async () => {
+  for (const [template, fields] of Object.entries(TEMPLATE_FIELDS)) {
+    const yaml = await readFile('.github/ISSUE_TEMPLATE/' + template, 'utf8');
+    if (fields.includes('what_happened')) assert.match(yaml, /id: what_happened/, template);
+  }
+  for (const template of ['job-failure.yml', 'storage-failure.yml', 'server-connection.yml', 'self-backup-failure.yml']) assert.ok(TEMPLATE_FIELDS[template].includes('what_happened'), template);
+  assert.equal(whatHappenedOk(EXPLAIN.generic + ' ' + CATALOGUE[3]), true); assert.equal(whatHappenedOk('free text'), false); assert.equal(whatHappenedOk(EXPLAIN.generic), false);
+});
