@@ -11,6 +11,9 @@ import { enabledRules } from './store.js';
 
 const CURSOR = 'alerts_cursor', UPDATE_NOTIFIED = 'alerts_update_notified';
 const read = key => { try { return JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? 'null'); } catch { return null; } };
+// Time zone for message times: the site's schedule policy, else the self-backup schedule, else UTC (messageFor).
+const selfBackupZone = () => { try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get()?.value ?? 'null')?.timezone ?? null; } catch { return null; } };
+const zoneFor = siteId => { try { return db.prepare('SELECT timezone FROM policies WHERE site_id=?').get(siteId)?.timezone || selfBackupZone() || 'UTC'; } catch { return 'UTC'; } };
 const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
@@ -23,7 +26,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     jobs = job.finished_at;
     let details = {}; try { details = JSON.parse(job.details); } catch { /* keep {} */ }
     if (details.moveId) continue; // the backups a move takes are part of the move, reported by its own events
-    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: `site:${job.site_id}`, at: job.finished_at, siteId: job.site_id, serverId: job.server_id, siteName: job.site, serverName: job.server });
+    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: `site:${job.site_id}`, at: job.finished_at, siteId: job.site_id, timeZone: zoneFor(job.site_id), serverId: job.server_id, siteName: job.site, serverName: job.server });
   }
   const changed = db.prepare(`SELECT m.id,m.state,m.waiting_for,m.updated_at,m.site_id,m.source_server_id,m.target_server_id,s.name AS site,a.name AS source,b.name AS target FROM site_moves m JOIN sites s ON s.id=m.site_id JOIN servers a ON a.id=m.source_server_id JOIN servers b ON b.id=m.target_server_id
     WHERE m.updated_at>? AND m.state IN ('completed','rolled_back','failed','waiting','recovery_required') ORDER BY m.updated_at LIMIT 100`).all(cursor.moves);
@@ -71,7 +74,7 @@ export async function detectUnreachable() {
   for (const server of db.prepare('SELECT id,name,host,port FROM servers').all()) {
     if (await probe.connect(server.host, server.port)) { misses.delete(server.id); continue; }
     const seen = (misses.get(server.id) ?? 0) + 1; misses.set(server.id, seen);
-    if (seen >= 2) count += emit({ type: 'server.unreachable', key: `server:${server.id}`, serverId: server.id, serverName: server.name });
+    if (seen >= 2) count += emit({ type: 'server.unreachable', key: `server:${server.id}`, timeZone: selfBackupZone() || 'UTC', serverId: server.id, serverName: server.name });
   }
   return count;
 }

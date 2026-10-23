@@ -35,16 +35,16 @@ server, with no login. Backups that a move takes as part of the move are reporte
 
 A rule connects a source to a channel and lists the events it wants:
 
-- `docknest` (no source id): every event of this installation that is in the list.
-- `server`: events of that server, including moves to or from it.
-- `site`: events of that site.
+- `docknest` (no source id): everything that happens in this installation, plus new DockNest releases.
+- `server`: that server's own events (unreachable, low disk) and the events of every site on it (backups, and moves to or from it).
+- `site`: only that site's events.
 
 There is one rule per source and channel. A message goes to a channel at most once per event even when several rules
 match.
 
 ## Messages
 
-Short plain text with only the names you typed (site, server) and a time in UTC, for example:
+Short plain text with only the names you typed (site, server) and a time with its zone (the site schedule time zone, else the self-backup schedule zone, else UTC), for example:
 `Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. Open DockNest to see why.`
 No addresses, paths, logs or error details are ever included.
 
@@ -65,7 +65,7 @@ deleting a **channel** also needs a recent re-verification (the same as the Clou
 | `GET /` | `{ channels, rules, events, sourceKinds, diskLow, limits }` |
 | `GET /channels` | List channels |
 | `POST /channels` | `{ kind: "telegram", name, config: { token, chatId } }` or `{ kind: "email", name, config: { host, port, security, username?, password?, from, to: [..] } }` |
-| `PATCH /channels/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server needs the password again |
+| `PATCH /channels/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server, port or encryption needs the password again |
 | `DELETE /channels/:id` | Removes the channel and its rules |
 | `POST /channels/:id/test` | Sends "This is a test message from DockNest. Your alerts are connected." (10 per 10 minutes) |
 | `GET /rules`, `POST /rules` | `{ channelId, sourceKind, sourceId \| null, events: [..], enabled? }` |

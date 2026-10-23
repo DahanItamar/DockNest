@@ -11,12 +11,18 @@ export const DEDUPE_MS = 10 * 60_000;
 export const STATE_DEDUPE_MS = Object.freeze({ 'server.unreachable': 6 * 3600_000, 'server.disk_low': 24 * 3600_000 });
 
 const clean = (value, fallback = 'a site') => String(value ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
-const clock = (iso) => { const date = new Date(iso); return Number.isNaN(date.getTime()) ? '' : ` at ${date.toISOString().slice(11, 16)} UTC`; };
+// Time of day in the event's IANA time zone (the site's schedule zone, else the self-backup schedule zone, else UTC),
+// with the zone abbreviation, for example " at 03:00 UTC" or " at 06:00 GMT+3". An unknown zone falls back to UTC.
+const clock = (iso, timeZone = 'UTC') => {
+  const date = new Date(iso); if (Number.isNaN(date.getTime())) return '';
+  const format = zone => new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).format(date);
+  try { return ` at ${format(timeZone)}`.replace(',', ''); } catch { return ` at ${format('UTC')}`; }
+};
 const gb = bytes => `${(Number(bytes) / 1024 ** 3).toFixed(1)} GB`;
 
 // event: { type, at, siteName?, serverName?, targetName?, detail?, version?, freeBytes?, usedPercent?, key, siteId?, serverId? }
 export function messageFor(event) {
-  const site = clean(event.siteName), server = clean(event.serverName, 'your server'), target = clean(event.targetName, 'the new server'), when = clock(event.at);
+  const site = clean(event.siteName), server = clean(event.serverName, 'your server'), target = clean(event.targetName, 'the new server'), when = clock(event.at, event.timeZone);
   switch (event.type) {
     case 'backup.failed': return `Backup failed: ${site} on ${server}${when}. Open DockNest to see why.`;
     case 'backup.succeeded': return `Backup finished: ${site} on ${server}${when}.`;

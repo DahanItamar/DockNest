@@ -22,6 +22,7 @@ const detect = await import('../src/alerts/detect.js');
 const store = await import('../src/alerts/store.js');
 const events = await import('../src/alerts/events.js');
 const smtp = await import('../src/alerts/smtp.js');
+smtp.smtpPolicy.allowLoopback = true; // the fake servers listen on 127.0.0.1; production code never sets this
 const listener = app.listen(0, '127.0.0.1'); await new Promise(resolve => listener.once('listening', resolve));
 const base = `http://127.0.0.1:${listener.address().port}/api`;
 const at = () => new Date().toISOString();
@@ -328,6 +329,79 @@ test('SMTP refuses bad addresses, link-local targets and header injection before
   assert.equal(smtp.addressAllowed('192.168.1.10'), true, 'a mail relay on the home network is allowed');
   const message = smtp.buildMessage({ from: 'a@example.com', to: ['b@example.com'], subject: 'x\r\nBcc: evil@example.com', text: 't', id: '1' });
   assert.ok(!/\r\nBcc:/i.test(message), 'subject cannot add a header');
+});
+
+test('SMTP closes a server that streams endless reply lines or too many bytes, with one fixed sentence', async () => {
+  const flood = net.createServer(socket => { socket.on('error', () => {}); socket.write('220 hi\r\n'); socket.once('data', () => { const timer = setInterval(() => socket.write('250-' + 'x'.repeat(200) + '\r\n', () => {}), 1); socket.on('close', () => clearInterval(timer)); }); });
+  await new Promise(resolve => flood.listen(0, '127.0.0.1', resolve));
+  const started = Date.now();
+  try { await assert.rejects(smtp.sendMail(mail(flood.address().port, 'starttls'), { subject: 's', text: 't' }), error => error.message === 'The mail server could not be reached.' && error.code === 'protocol'); }
+  finally { flood.close(); }
+  assert.ok(Date.now() - started < 10_000, 'stopped long before the overall timeout');
+  const lines = net.createServer(socket => { socket.on('error', () => {}); socket.write('220 hi\r\n'); socket.once('data', () => socket.write('250-a\r\n'.repeat(150))); });
+  await new Promise(resolve => lines.listen(0, '127.0.0.1', resolve));
+  try { await assert.rejects(smtp.sendMail(mail(lines.address().port, 'starttls'), { subject: 's', text: 't' }), error => error.code === 'protocol'); }
+  finally { lines.close(); }
+});
+
+test('SMTP refuses loopback, metadata and link-local targets with the same sentence as any failure', async () => {
+  smtp.smtpPolicy.allowLoopback = false;
+  try {
+    for (const host of ['127.0.0.1', '127.8.8.8', '::1', 'fd00:ec2::254', '169.254.169.254', 'fe80::1']) {
+      assert.equal(smtp.addressAllowed(host), false, host);
+      await assert.rejects(smtp.sendMail(mail(587, 'starttls', { host }), { subject: 's', text: 't' }), error => error.message === 'The mail server could not be reached.');
+    }
+    assert.equal(smtp.addressAllowed('::ffff:127.0.0.1'), false);
+  } finally { smtp.smtpPolicy.allowLoopback = true; }
+});
+
+test('changing the mail server, port or encryption requires the password again', async () => {
+  reset();
+  const email = await (await send(admin, 'POST', '/alerts/channels', { kind: 'email', name: 'Mail', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'a@example.com', to: ['b@example.com'] } })).json();
+  for (const change of [{ port: 25 }, { security: 'tls' }, { host: 'smtp.other.example' }]) assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: change })).status, 400, JSON.stringify(change));
+  assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { port: 587, to: ['c@example.com'] } })).status, 200, 'unchanged values and other fields need no password');
+  assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { port: 465, security: 'tls', password: PASSWORD } })).status, 200);
+});
+
+test('message times use the site schedule zone, then the self-backup zone, then UTC, with the zone abbreviation', () => {
+  const base = { type: 'backup.failed', at: '2026-10-23T03:00:00Z', siteName: 'shop', serverName: 'srv' };
+  assert.match(events.messageFor({ ...base, timeZone: 'Asia/Jerusalem' }), /^Backup failed: shop on srv at 06:00 GMT\+3\. Open/);
+  assert.match(events.messageFor(base), /at 03:00 UTC\./);
+  assert.match(events.messageFor({ ...base, timeZone: 'Not/AZone' }), /at 03:00 UTC\./);
+  reset(); db.exec("DELETE FROM settings WHERE key IN ('alerts_cursor','manager_backup_config')");
+  const srv = server('tz-srv'), siteId = site(srv, 'tz-site'), channel = store.createChannel(telegramBody, 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  const fail = finished => db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup','failed','failed',?,?,'{}')").run(randomUUID(), siteId, finished, finished);
+  detect.detectJobsAndMoves('2026-06-01T00:00:00.000Z');
+  db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone) VALUES(?,1,'0 3 * * *','Asia/Jerusalem')").run(siteId);
+  fail('2026-06-01T06:00:00.000Z'); detect.detectJobsAndMoves();
+  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /at 09:00 GMT\+3\./, 'site policy zone wins');
+  db.prepare('DELETE FROM policies WHERE site_id=?').run(siteId); db.exec('DELETE FROM alert_queue');
+  db.prepare("INSERT INTO settings VALUES('manager_backup_config',?)").run(JSON.stringify({ timezone: 'America/New_York' }));
+  fail('2026-06-01T07:00:00.000Z'); detect.detectJobsAndMoves();
+  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /at 03:00 (EDT|GMT-4)\./, 'self-backup zone next');
+  db.exec("DELETE FROM settings WHERE key='manager_backup_config'");
+});
+
+test('migration versions are contiguous from 1 once version 7 exists', async () => {
+  const { migrations } = await import('../src/migrations.js'), versions = migrations.map(item => item.version);
+  // TODO(merge of #67 + #69): this branch has no migration 7 yet, so the gap at 7 is expected here. Delete the skip then.
+  if (!versions.includes(7)) return void console.log('skipped: migration 7 (server_installs, PR #67) is not on this branch yet');
+  assert.deepEqual(versions, versions.map((_, index) => index + 1));
+});
+
+test('a server line also carries the backups of the sites on that server, never those of other servers, and sends once', async () => {
+  reset(); db.exec("DELETE FROM settings WHERE key='alerts_cursor'");
+  const home = server('itamar-Srv'), away = server('other-Srv'), mine = site(home, 'mine'), theirs = site(away, 'theirs');
+  const channel = store.createChannel(telegramBody, 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'server', sourceId: home, events: ['server.unreachable', 'backup.failed'] }, 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: mine, events: ['backup.failed'] }, 'test');
+  detect.detectJobsAndMoves('2026-07-01T00:00:00.000Z');
+  const fail = (siteId, finished) => db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup','failed','failed',?,?,'{}')").run(randomUUID(), siteId, finished, finished);
+  fail(theirs, '2026-07-01T01:00:00.000Z'); fail(mine, '2026-07-01T02:00:00.000Z');
+  assert.equal(detect.detectJobsAndMoves(), 1, 'one message even though the server line and the site line both match');
+  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Backup failed: mine on itamar-Srv/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_queue').get().n, 1);
 });
 
 test.after(() => { listener.close(); listener.closeAllConnections?.(); });

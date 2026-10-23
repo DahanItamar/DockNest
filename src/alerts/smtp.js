@@ -9,13 +9,19 @@ import net, { BlockList, isIP } from 'node:net';
 import tls from 'node:tls';
 import dns from 'node:dns/promises';
 
-export const smtpLimits = Object.freeze({ totalMs: 20_000, replyBytes: 16 * 1024, bodyBytes: 4096, lineBytes: 998 });
+export const smtpLimits = Object.freeze({ totalMs: 20_000, replyBytes: 16 * 1024, connectionBytes: 64 * 1024, replyLines: 100, bodyBytes: 4096, lineBytes: 998 });
 export class SmtpError extends Error { constructor(message, code = 'smtp') { super(message); this.code = code; } }
 
 const blocked = new BlockList();
 for (const [address, prefix] of [['0.0.0.0', 8], ['169.254.0.0', 16], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(address, prefix, 'ipv4');
-for (const [address, prefix] of [['::', 128], ['fe80::', 10], ['ff00::', 8]]) blocked.addSubnet(address, prefix, 'ipv6');
-export const addressAllowed = address => { const family = isIP(address); if (!family) return false; const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); if (mapped) return addressAllowed(mapped[1]); return !blocked.check(address, family === 4 ? 'ipv4' : 'ipv6'); };
+// fd00:ec2::254 is the AWS IPv6 metadata address. Loopback is refused too: the mail relay is never DockNest's own host.
+for (const [address, prefix] of [['::', 128], ['::1', 128], ['fe80::', 10], ['ff00::', 8], ['fd00:ec2::254', 128]]) blocked.addSubnet(address, prefix, 'ipv6');
+blocked.addSubnet('127.0.0.0', 8, 'ipv4');
+// Only the test suite sets this, to reach a fake server on 127.0.0.1. There is no setting or API for it.
+export const smtpPolicy = { allowLoopback: false };
+const isLoopback = (address, family) => family === 4 ? address.startsWith('127.') : address === '::1';
+export const addressAllowed = address => { const family = isIP(address); if (!family) return false; const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); if (mapped) return addressAllowed(mapped[1]); if (smtpPolicy.allowLoopback && isLoopback(address, family)) return true; return !blocked.check(address, family === 4 ? 'ipv4' : 'ipv6'); };
+const unreachable = 'The mail server could not be reached.';
 
 // Tests replace these to talk to a local server.
 export const smtpIo = {
@@ -31,18 +37,18 @@ export const smtpIo = {
 };
 
 class Connection {
-  constructor(socket) { this.buffer = ''; this.replies = []; this.waiting = null; this.error = null; this.attach(socket); }
+  constructor(socket) { this.total = 0; this.buffer = ''; this.replies = []; this.waiting = null; this.error = null; this.attach(socket); }
   attach(socket) {
     this.socket = socket; this.buffer = ''; socket.setEncoding('utf8');
-    socket.on('data', chunk => { this.buffer += chunk; if (this.buffer.length > smtpLimits.replyBytes) return this.fail(new SmtpError('The mail server sent too much data.', 'protocol')); this.parse(); this.wake(); });
-    socket.on('error', error => this.fail(error)); socket.on('close', () => this.fail(new SmtpError('The mail server closed the connection.', 'closed')));
+    socket.on('data', chunk => { this.total += chunk.length; this.buffer += chunk; if (this.error) return; if (this.total > smtpLimits.connectionBytes || this.buffer.length > smtpLimits.replyBytes) return this.fail(new SmtpError(unreachable, 'protocol')); this.parse(); this.wake(); });
+    socket.on('error', error => this.fail(error)); socket.on('close', () => this.fail(new SmtpError(unreachable, 'closed')));
   }
   parse() {
     for (;;) {
       const end = this.buffer.indexOf('\r\n'); if (end < 0) return;
       const line = this.buffer.slice(0, end); this.buffer = this.buffer.slice(end + 2);
-      const match = /^(\d{3})([ -])(.*)$/.exec(line); if (!match) return this.fail(new SmtpError('The mail server sent an unexpected answer.', 'protocol'));
-      (this.partial ??= []).push(match[3]);
+      const match = /^(\d{3})([ -])(.*)$/.exec(line); if (!match) return this.fail(new SmtpError(unreachable, 'protocol'));
+      if ((this.partial ??= []).push(match[3]) > smtpLimits.replyLines) return this.fail(new SmtpError(unreachable, 'protocol'));
       if (match[2] === ' ') { this.replies.push({ code: Number(match[1]), lines: this.partial }); this.partial = null; }
     }
   }
@@ -76,7 +82,7 @@ export async function sendMail(config, { subject, text }, { id = String(Date.now
   let connection, timer;
   const run = async () => {
     const address = await smtpIo.resolve(config.host);
-    if (!addressAllowed(address)) throw new SmtpError('The mail server address is not allowed.', 'blocked');
+    if (!addressAllowed(address)) throw new SmtpError(unreachable, 'blocked');
     const implicitTls = config.security === 'tls';
     const socket = await smtpIo.connect({ address, port: config.port, host: config.host, implicitTls, tlsOptions });
     connection = new Connection(socket);
@@ -86,7 +92,7 @@ export async function sendMail(config, { subject, text }, { id = String(Date.now
       if (!features.some(line => line === 'STARTTLS')) throw new SmtpError('The mail server does not offer encryption (STARTTLS). DockNest never sends mail unencrypted.', 'no-tls');
       await connection.command('STARTTLS', [220]);
       // Bytes queued behind the 220 would be read as if they came from the encrypted server: refuse.
-      if (connection.buffer.length || connection.replies.length) throw new SmtpError('The mail server sent unexpected data before encryption.', 'protocol');
+      if (connection.buffer.length || connection.replies.length) throw new SmtpError(unreachable, 'protocol');
       const plain = connection.socket; plain.removeAllListeners('data'); plain.removeAllListeners('close'); plain.removeAllListeners('error'); plain.on('error', () => {});
       const secure = await smtpIo.upgrade(plain, { host: config.host, tlsOptions });
       connection.attach(secure);
@@ -108,10 +114,10 @@ export async function sendMail(config, { subject, text }, { id = String(Date.now
     try { connection.socket.write('QUIT\r\n'); } catch { /* The message is already accepted. */ }
   };
   try {
-    await Promise.race([run(), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new SmtpError('The mail server did not answer in time.', 'timeout')), smtpLimits.totalMs); })]);
+    await Promise.race([run(), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new SmtpError(unreachable, 'timeout')), smtpLimits.totalMs); })]);
   } catch (error) {
     if (error instanceof SmtpError) throw error;
     const tlsProblem = /certificate|self.signed|hostname|altnames|ssl|tls/i.test(`${error?.code} ${error?.message}`);
-    throw new SmtpError(tlsProblem ? 'The mail server certificate could not be verified.' : 'The mail server could not be reached.', tlsProblem ? 'tls' : 'network');
+    throw new SmtpError(tlsProblem ? 'The mail server certificate could not be verified.' : unreachable, tlsProblem ? 'tls' : 'network');
   } finally { clearTimeout(timer); try { connection?.socket.destroy(); } catch { /* Already closed. */ } }
 }

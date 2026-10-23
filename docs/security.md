@@ -181,11 +181,11 @@ These checks are covered by unit tests. GNU `tar` extraction of real archives, l
   channel's last error or error responses. Telegram's URL carries the token, so transport errors are replaced by fixed
   sentences and never passed on. Audit events name the channel and the changed field names only.
 - Creating, changing or deleting a channel needs an administrator and a recent re-verification, like the Cloudflare
-  token. Changing the mail server requires typing the password again, so a saved password cannot be redirected by
+  token. Changing the mail server, port or encryption requires typing the password again, so a saved password cannot be redirected by
   editing the host alone. Rules need an administrator only. Test messages are rate limited.
 - SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
   If a server offers no STARTTLS, DockNest stops before sending any credential. The host name is resolved once and the
-  connection goes to that address; link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10), the unspecified
+  connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10, fd00:ec2::254), the unspecified
   and multicast ranges are refused. Private and loopback addresses are allowed so a mail relay at home works. Server
   replies are never returned to the browser or logged. Addresses and subjects are validated against line breaks.
 - Messages hold only the site and server names the owner typed and a time. They never include addresses, paths, logs

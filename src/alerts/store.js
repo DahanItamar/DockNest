@@ -52,8 +52,8 @@ export function createChannel(input, actor) {
   audit(actor, 'alert.channel.create', channelId, { kind: data.data.kind });
   return channelView(getChannel(channelId));
 }
-// Secrets left out of `config` keep their saved value. Changing the mail server requires typing the password again, so
-// a saved password can never be redirected to another server by editing the host alone.
+// Secrets left out of `config` keep their saved value. Changing the mail server, port or encryption requires typing the
+// password again, so a saved password can never be redirected by editing those alone.
 export function updateChannel(channelId, input, actor) {
   const row = mustChannel(channelId);
   const patch = z.object({ name: name.optional(), config: z.record(z.string(), z.unknown()).optional() }).strict().safeParse(input); if (!patch.success) fail(patch.error);
@@ -61,7 +61,7 @@ export function updateChannel(channelId, input, actor) {
   const incoming = patch.data.config ?? {};
   const merged = { ...current, ...Object.fromEntries(Object.entries(incoming).filter(([key, value]) => !(['token', 'password'].includes(key) && (value === undefined || value === '')))) };
   if (row.kind === 'email' && 'username' in incoming && !incoming.username) merged.password = '';
-  if (row.kind === 'email' && incoming.host && incoming.host !== current.host && !incoming.password && merged.password) throw httpError(400, 'Enter the password again when you change the mail server.');
+  if (row.kind === 'email' && merged.password && !incoming.password && ['host', 'port', 'security'].some(key => key in incoming && incoming[key] !== current[key])) throw httpError(400, 'Enter the password again when you change the mail server, port or encryption.');
   const config = parseConfig(row.kind, merged);
   db.prepare('UPDATE alert_channels SET name=?,config=?,updated_at=?,last_result=NULL,last_result_at=NULL,last_error=NULL WHERE id=?').run(patch.data.name ?? row.name, seal(JSON.stringify(config)), now(), channelId);
   audit(actor, 'alert.channel.update', channelId, { kind: row.kind, fields: Object.keys(incoming).slice(0, 12) }); // field names only, never values
