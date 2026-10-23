@@ -23,7 +23,7 @@ const transitions = {
   draft: ['queued', 'cancelled'],
   queued: ['running', 'cancelled', 'failed'],
   running: ['waiting', 'rolling_back', 'recovery_required', 'completed', 'cancelled', 'failed'],
-  waiting: ['running', 'rolling_back', 'recovery_required'],
+  waiting: ['running', 'rolling_back', 'recovery_required', 'switching_back'],
   rolling_back: ['rolled_back', 'cancelled', 'recovery_required'],
   recovery_required: ['running', 'rolling_back', 'switching_back'],
   completed: ['retention_expired', 'switching_back', 'cleaned'],
@@ -182,6 +182,8 @@ export function nextAction(move, steps, { now = new Date().toISOString() } = {})
   if (move.state === 'retention_expired' || move.state === 'switching_back') return { type: 'none' }; // owner-driven
   const running = steps.find(step => step.state === 'running');
   if (move.state === 'rolling_back') {
+    // Defensive: a finished switch is never rolled back by deleting the new copy.
+    if (steps.some(step => step.step === SWITCH_STEP && step.state === 'done')) return { type: 'transition', to: 'recovery_required' };
     if (running) return { type: 'recover', step: running.step };
     // An undo that failed stops the rollback: the owner is told plainly what state the site is in.
     if (steps.some(step => step.state === 'undo_failed')) return { type: 'transition', to: 'recovery_required' };
@@ -191,7 +193,9 @@ export function nextAction(move, steps, { now = new Date().toISOString() } = {})
   }
   if (running) return { type: 'recover', step: running.step };
   const failed = steps.find(step => step.state === 'failed' || step.state === 'undo_failed');
-  if (failed) return { type: 'transition', to: rollbackPlan(move, steps).length ? 'rolling_back' : 'failed' };
+  // After the switch has started, visitors may already write to the new copy: nothing is undone automatically. The owner
+  // chooses Try again or Switch back (recovery_required), and the new copy and its data are never deleted.
+  if (failed) return { type: 'transition', to: switchStarted(steps) ? 'recovery_required' : rollbackPlan(move, steps).length ? 'rolling_back' : 'failed' };
   if (move.cancel_requested) {
     const decision = cancelDecision(move, steps);
     if (decision.allowed) return { type: 'transition', to: decision.next };

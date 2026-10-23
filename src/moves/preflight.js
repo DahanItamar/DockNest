@@ -124,7 +124,7 @@ export function evaluateMove(facts, options = {}) {
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${folder} already exists on ${target.name}. DockNest never overwrites existing folders.`);
-    const labels = { containers: 'container', volumes: 'volume', networks: 'network' };
+    const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `A ${label} named ${name} already exists on ${target.name}. DockNest never replaces it.`);
     for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
 

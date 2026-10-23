@@ -60,6 +60,8 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   await drive(preview.id, state => ['completed', 'rolled_back', 'failed', 'recovery_required', 'cancelled'].includes(state), {
     // Written after the test copy: only the final copy can carry it to the new server.
     test: async () => {
+      assert.equal(preview.mailBlocked, true, 'the fixture host has the Docker DOCKER-USER chain');
+      assert.match(await run('exec', target, 'iptables', '-S', 'DOCKER-USER'), new RegExp('--dports 25,465,587 .*docknest-move-' + preview.id), 'SMTP from the test copy is rejected while it runs');
       assert.equal(await run('exec', target, 'curl', '-s', 'http://127.0.0.1:8091/record'), 'test-record');
       assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.HostConfig.RestartPolicy.Name}}', 'move-app'), 'no', 'the test copy never restarts by itself');
       assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', 'move-app'), 'true', 'the old site stays online during the test');
@@ -75,6 +77,7 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   assert.match(await run('exec', target, 'sh', '-c', 'head -1 /etc/nginx/conf.d/docknest-' + sites['move-app'] + '.conf'), /^# Managed by DockNest move /);
   assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}', 'move-app'), 'false no', 'the old copy is kept, stopped, and cannot restart by itself');
   assert.equal(await run('exec', source, 'docker', 'volume', 'inspect', '--format', '{{.Name}}', 'move-app-data'), 'move-app-data', 'the old data is kept');
+  assert.doesNotMatch(await run('exec', target, 'iptables', '-S', 'DOCKER-USER'), new RegExp('docknest-move-' + preview.id), 'the mail rule is removed with the test copy');
   record('Site move: fresh backup, loopback test copy on a remapped port, final copy behind a stopped source, nginx route on the new server, DNS wait, finalize; old copy kept stopped with restart=no');
   // The moved site is an ordinary DockNest site on its new server.
   const after = enqueueBackup(sites['move-app'], 'qa'), afterJob = claimJob(); assert.equal(afterJob.id, after.id); await executeJob(afterJob);

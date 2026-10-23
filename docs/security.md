@@ -142,8 +142,13 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
 - The token is sealed with the master key (AES-256-GCM, like server SSH keys), decrypted only at the moment of a
   call, and never returned by the API, written to logs, audit events, job details or the move journal. Error
   messages carry Cloudflare's own sentence, never the request. Use a token scoped to Zone.DNS:Edit on the site's zone.
-- The test copy of a moved site runs on real data; DockNest rejects its outgoing SMTP through Docker's `DOCKER-USER`
-  chain where it exists and removes the rule with the copy. HTTP-based mail and webhooks are not blocked.
+- The test copy of a moved site runs on real data, on networks of its own; before it starts, DockNest rejects its
+  outgoing SMTP by subnet through Docker's `DOCKER-USER` chain (IPv4 and IPv6) where it exists and removes the rules
+  with the copy. HTTP-based mail and webhooks are not blocked.
+- A move writes only outside system folders, Docker storage, `.ssh` and protected files (symlinks followed); the
+  merged Compose configuration must match the backup; removing an old copy deletes only its own read-write data.
+  Every server step of a move holds a per-move lock on the server and stops when DockNest stops waiting for it.
+- Cloudflare: the previous record is journaled before it is changed; a resumed switch reuses that journal.
 
 ## Client address and TRUST_PROXY
 

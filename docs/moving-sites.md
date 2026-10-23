@@ -40,8 +40,18 @@ it. It never deletes your data by itself.
 - After 7 days DockNest asks **Remove old copy?**. It never removes anything by itself. Removing deletes the stopped
   old containers; their data folders and volumes stay unless you tick **Also delete the old data** (data still used by
   another container is always kept). You type the site name to confirm.
-- If a step takes much longer than it should, the move stops waiting and shows **Try again** (and **Undo** before the
-  switch). DockNest does not guess: the server may still be working.
+- If a step takes much longer than it should, DockNest stops it on the server, confirms it stopped, and shows **Try
+  again** (and **Undo** before the switch). Until the server confirms, nothing else runs for that move.
+- Once the DNS switch has started, DockNest never undoes the move by itself: visitors may already be writing to the
+  new copy. If a later step fails (certificate, finish, a lost connection), the move shows the reason with **Try
+  again** or **Switch back**, and keeps the new copy and its data. If finishing fails because the old server is gone,
+  **Finish without the old server** (type the site name) completes the move without stopping the old copy.
+- While DockNest waits for DNS, **Cancel and go back** (the same Switch back action) stops the new copy and starts the
+  old site again. After 48 hours of waiting the move asks you to check the record. When the domain is behind
+  Cloudflare's proxy (orange cloud), public DNS never shows your server; DockNest says so and lets you confirm the
+  change yourself (**I changed it**).
+- Before rolling DockNest back to a release without moves (2.5.0 or older), finish or cancel every move. Older
+  releases ignore move jobs (they use their own job statuses), but they cannot continue or undo a move.
 
 ## When a move is refused
 
@@ -68,8 +78,9 @@ Collapsed by default and pre-filled; most moves need no changes here.
   **Move anyway**.
 - **Ask before switching** (off by default): the move pauses after the test so you choose when the downtime starts.
 - **Test copy**: the copy runs your real app on a copy of your data, reachable only from the new server. Outgoing
-  mail (ports 25, 465, 587) from the copy is rejected by a rule DockNest adds to Docker's `DOCKER-USER` firewall
-  chain for the copy's addresses only, and removes again with the copy. Where that chain does not exist (Docker with
+  mail (ports 25, 465, 587) from the copy is rejected by rules DockNest adds to Docker's `DOCKER-USER` firewall
+  chain (`iptables`, and `ip6tables` for IPv6 networks) for the networks of the copy only, before any copy container
+  starts; the copy never joins Docker's shared default bridge. The rules are removed with the copy. Where that chain does not exist (Docker with
   `iptables: false`, rootless Docker, nftables-only hosts) the preview says so plainly and the copy could send email.
   Mail through an HTTP API (for example a mail service's REST API) is not blocked, and scheduled jobs and webhooks
   may run once. DockNest does not put the copy on a network without internet, because many apps fail to start
@@ -109,6 +120,19 @@ Collapsed by default and pre-filled; most moves need no changes here.
   from their snapshot images with `docker create`, which copies ports, mounts, networks, extra hosts and `--init` but
   not resource limits or log drivers. After a move, running `docker compose up` by hand without the override brings
   the original host port back.
+- Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
+  `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
+  files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.
+  The maintenance folder on the new server is the site's own when it is under `/var/www`, `/srv` or
+  `/usr/share/nginx`, otherwise `/var/lib/docknest/maintenance/<site>` (the site record follows at the finish and goes
+  back on Switch back).
+- Compose: the merged configuration (`docker compose config`) must match the backup: no privileged mode, host
+  network/PID/IPC/user namespaces, devices or added capabilities, and only the mounts and volumes the backup holds. A
+  Compose project of the same name already on the new server is refused.
+- Remove old copy with data deletes only read-write data folders and volumes of the old containers; never folders used
+  by another container, served by nginx on that server or named in another DockNest site's settings, and never system
+  paths. What was kept is listed in the step result (`kept`).
+- Move jobs use the statuses `move_queued` and `move_running`, so a release without moves never claims them.
 - Step time limits come from `src/moves/state.js` (for example 60 minutes for a deploy, 5 for the test). A backup step
   past its limit fails and the move undoes itself; a server step past its limit sets `needs_attention` because its
   outcome is unknown, and the owner chooses Try again or Undo (`POST /api/moves/:id/resolve`).
@@ -180,7 +204,7 @@ it answers 409 `PREFLIGHT_CHANGED` with the fresh preview in `preview`. Long dow
   "id": "uuid", "siteId": "uuid", "siteName": "Shop", "sourceServerId": "uuid", "sourceName": "old-srv", "targetServerId": "uuid", "targetName": "new-srv",
   "state": "draft | queued | running | waiting_switch | waiting_dns | cancelling | rolling_back | needs_attention | done | switching_back | switched_back | cleaned | rolled_back | cancelled | failed",
   "dnsMode": "manual | cloudflare", "mailBlocked": true,
-  "actions": { "cancel": true, "switchBack": false, "removeOldCopy": false, "askRemoveOldCopy": false, "resolve": ["retry", "undo"] },
+  "actions": { "cancel": true, "switchBack": false, "dnsProxied": false, "removeOldCopy": false, "askRemoveOldCopy": false, "resolve": ["retry", "undo", "finish-without-old-server"] },
   "engineState": "the state.js state, for diagnostics",
   "waitingFor": "owner-switch | dns | null",
   "statusLine": "One plain sentence for the progress screen.",
@@ -205,18 +229,20 @@ still keeping their old copy. Drafts are not listed.
 
 ### POST /api/moves/:id/cancel
 
-No body. Allowed until the switch starts (`cancelable`). A draft or a queued move ends at once (`cancelled`);
+No body; needs a recent re-verification. Allowed until the switch starts (`cancelable`). A draft or a queued move ends at once (`cancelled`);
 otherwise the move undoes what it created (`cancelling`) and ends `cancelled`. After the switch: 409 with the reason.
 
 ### POST /api/moves/:id/continue
 
-`{ "gate": "owner-switch" }` is **Switch now** when Ask before switching is on; `{ "gate": "dns" }` is **Check DNS
-now** and answers 409 with the reason while DNS still points elsewhere.
+Needs a recent re-verification. `{ "gate": "owner-switch" }` is **Switch now** when Ask before switching is on;
+`{ "gate": "dns" }` is **Check DNS now** and answers 409 with the reason while DNS still points elsewhere. When the
+domain is behind Cloudflare's proxy the 409 has `code: "DNS_PROXIED"` and `actions.dnsProxied` is true; the owner then
+confirms with `{ "gate": "dns", "confirmed": true }` (**I changed it**).
 
 ### POST /api/moves/:id/switch-back
 
-No body; needs a recent re-verification. Allowed while `actions.switchBack` is true (a finished move whose old copy
-was not removed). 202 with the move (`switching_back`, then `switched_back`). With manual DNS, `dns` then holds the
+No body; needs a recent re-verification. Allowed while `actions.switchBack` is true: a finished move whose old copy
+was not removed, a move waiting for DNS (**Cancel and go back**), or a move that needs attention after the switch. 202 with the move (`switching_back`, then `switched_back`). With manual DNS, `dns` then holds the
 record pointing back at the old server.
 
 ### POST /api/moves/:id/remove-old-copy
@@ -227,8 +253,10 @@ record pointing back at the old server.
 
 ### POST /api/moves/:id/resolve
 
-`{ "action": "retry" | "undo" }` for a move in `needs_attention`; `actions.resolve` lists what is allowed (no Undo after
-the switch). Answers 409 while DockNest is still working on the move.
+`{ "action": "retry" | "undo" | "finish-without-old-server", "confirmation"?: "<site name>" }` for a move in
+`needs_attention`; needs a recent re-verification. `actions.resolve` lists what is allowed (no Undo after the switch;
+`finish-without-old-server` only when finishing failed, with the site name). Answers 409 while a step of the move is
+still running on a server.
 
 ### Step results the UI shows
 

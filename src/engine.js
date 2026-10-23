@@ -373,8 +373,10 @@ export function claimJob(){
  db.exec('BEGIN IMMEDIATE');
  try{
   // A job occupies its target (or its site's) server and, for a site move, also its source server.
-  const job=db.prepare("SELECT j.* FROM jobs j WHERE j.status='queued' AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) ORDER BY j.created_at LIMIT 1").get();
-  if(job)db.prepare("UPDATE jobs SET status='running',stage='preflight',started_at=? WHERE id=?").run(now(),job.id);
+  const job=db.prepare("SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) ORDER BY j.created_at LIMIT 1").get();
+  // Site-move jobs use their own statuses so a release without moves (for example after a rollback) never claims
+  // them as backups, and its startup never turns them into recovery work.
+  if(job)db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' ELSE 'running' END,stage='preflight',started_at=? WHERE id=?").run(now(),job.id);
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
 }

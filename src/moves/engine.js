@@ -14,7 +14,7 @@ import { storageCapacity } from '../storage.js';
 import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners } from '../engine.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
-import { checkDns, currentRecords, cloudflare, ipv4 } from './dns.js';
+import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
 
 export const RETENTION_DAYS = 7;
 export const DRAFT_TTL_MS = 60 * 60 * 1000;
@@ -56,12 +56,24 @@ function transition(move, to, changes = {}) {
 }
 
 // ---------- SSH (tests replace members) ----------
-export const moveTransport = { remote: (...args) => transport.remote(...args), upload: uploadBackupTo, wait: ms => new Promise(resolve => setTimeout(resolve, ms)) };
+export const moveTransport = { remote: (server, request, options) => transport.remote(server, request, () => {}, () => {}, options), upload: uploadBackupTo, wait: ms => new Promise(resolve => setTimeout(resolve, ms)) };
+// Operations that change a server hold the move's lock there and stop when DockNest stops waiting (stdin closes).
+const LOCKED = new Set(['deploy-restore', 'deploy-teardown', 'move-test', 'move-resume-source', 'move-retire-source', 'move-finalize-target', 'move-certificate', 'move-stop-target', 'move-unretire-source', 'move-remove-old']);
+let activeStep = null; // the worker runs one job at a time
 async function remote(server, request) {
+  const locked = LOCKED.has(request.operation);
+  const options = locked ? { keepStdinOpen: true, signal: activeStep?.signal } : {};
   for (let attempt = 1; ; attempt++) {
-    try { return await moveTransport.remote(server, request); }
-    catch (error) { if (error.remoteReported || attempt >= 3) throw error; await moveTransport.wait(2000 * attempt); }
+    try { return await moveTransport.remote(server, locked ? { ...request, watchStdin: true } : request, options); }
+    catch (error) { if (error.remoteReported || error.aborted || attempt >= 3) throw error; await moveTransport.wait(2000 * attempt); }
   }
+}
+async function serversIdle(move) {
+  for (const serverId of [move.source_server_id, move.target_server_id]) {
+    try { if ((await moveTransport.remote(server(serverId), { operation: 'move-lock-status', moveId: move.id }, {})).busy) return false; }
+    catch { return false; }
+  }
+  return true;
 }
 const plain = error => String(error?.remoteReported || error?.status ? error.message : `The server connection failed (${error?.code || error?.name || 'error'}). DockNest tried 3 times.`).replace(/[a-z][a-z0-9+.-]*:\/\/[^\s/@]+@/gi, '').slice(0, 500);
 const server = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);
@@ -90,7 +102,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const sf = sourceFacts.site;
   let targetFacts = null, hostKeyOk = true;
   if (target.id !== source.id) {
-    try { targetFacts = await remote(target, { operation: 'move-facts', role: 'target', config: { stagingRoot: cfg.stagingRoot || '/var/lib/docknest' }, probe: { paths: sf.bindPaths, names: sf.names } }); }
+    try { targetFacts = await remote(target, { operation: 'move-facts', role: 'target', config: { stagingRoot: cfg.stagingRoot || '/var/lib/docknest' }, probe: { paths: sf.bindPaths, names: { ...sf.names, composeProject: sf.compose?.project ?? null } } }); }
     catch (error) { hostKeyOk = !error.hostKeyRejected; }
   }
   const backup = lastBackup(site.id);
@@ -120,6 +132,10 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     dns: { mode: options.dnsMode, records },
   };
   const result = evaluateMove(facts, { envRewrite: options.envRewrite });
+  if (options.dnsMode === 'manual' && records.some(record => cloudflareProxied(record.value))) {
+    result.details.checks.push({ id: 'dns', status: 'warn', title: 'DNS', text: `${domain} is behind Cloudflare's proxy (orange cloud). Public DNS will not show the new server, so after changing the record in Cloudflare you confirm it yourself.`, advanced: true });
+    result.details.warnings++; if (result.verdict === 'ready') result.verdict = 'ready-with-notes';
+  }
   if (sf.kind !== 'static' && targetFacts && !mailBlocking) {
     const text = `${target.name} has no Docker firewall chain DockNest can use, so the test copy could send email. Pause scheduled mail in your app before the move if that matters.`;
     result.details.checks.push({ id: 'test', status: 'warn', title: 'Email during the test', text, advanced: true });
@@ -130,7 +146,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     Object.assign(result, { verdict: 'blocked', canStart: false, sentence: result.details.checks.at(-1).text });
   }
   const plan = { kind: sf.kind, domains: sf.domains, nginxDirectives: sf.nginxDirectives ?? [], web: sf.web ?? null, running: sf.running, networks: sf.networks, portMap: result.details.portMap, healthPath: healthPath(cfg),
-    targetAddresses, recordValue, recordValue6, sourceValue, compose: composeOverride ? sf.compose : null, volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
+    targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
   return { site, source, target, result, plan, hash: preflightHash(result, options) };
 }
 function composeAtLeast(text, need) {
@@ -232,13 +248,14 @@ export function cancelMove(moveId, actor) {
 }
 
 // POST /api/moves/:id/continue: "Switch now" (owner-switch) or "Check DNS now" (dns).
-export async function continueMove(moveId, gate, actor) {
+export async function continueMove(moveId, gate, actor, { confirmed = false } = {}) {
   const move = loadMove(moveId);
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'waiting' || move.waiting_for !== gate) throw httpError(409, 'This move is not waiting for that.');
   if (gate === 'dns') {
     const check = await dnsCheck(move);
-    if (!check.ok) { recordDnsCheck(move, check); throw httpError(409, `${move.preflight.plan.domains[0]} does not point to the new server yet. ${check.reason}`); }
+    // Behind Cloudflare's proxy public DNS never shows the server, so the owner confirms the change themselves.
+    if (!check.ok && !(confirmed && check.proxied)) { recordDnsCheck(move, check); throw httpError(409, check.proxied ? check.reason : `${move.preflight.plan.domains[0]} does not point to the new server yet. ${check.reason}`, check.proxied ? { code: 'DNS_PROXIED' } : {}); }
   }
   passGate(move, gate);
   audit(actor, 'move.continue', move.site_id, { move: moveId, gate });
@@ -254,7 +271,12 @@ function passGate(move, gate) {
 const dnsCheck = move => move.options.dnsMode === 'cloudflare' ? cloudflare.pointsAt(move.preflight.plan.domains[0], move.preflight.plan.recordValue) : checkDns(move.preflight.plan.domains[0], move.preflight.plan.targetAddresses);
 function recordDnsCheck(move, check) {
   const step = loadSteps(move).find(item => item.step === 'verify_dns');
-  if (step?.state === 'pending') saveStep({ ...step, result: { ...step.result, lastCheckAt: now(), lastCheck: check.reason ?? 'ok' } });
+  if (step?.state === 'pending') saveStep({ ...step, result: { ...step.result, lastCheckAt: now(), lastCheck: check.reason ?? 'ok', proxied: !!check.proxied } });
+}
+export const DNS_WAIT_HOURS = 48;
+function markDnsWait(moveId) {
+  const move = loadMove(moveId), step = loadSteps(move).find(item => item.step === 'verify_dns');
+  if (step?.state === 'pending') saveStep({ ...step, result: { ...step.result, waitingSince: now() } });
 }
 
 // ---------- views ----------
@@ -310,13 +332,13 @@ export function moveView(moveId) {
     state: publicState(move), engineState: move.state, waitingFor: move.waiting_for, statusLine: statusLine(move, steps, names),
     progress: steps.length ? Math.round(finished / steps.length * 100) : 0, cancelable: !!decision.allowed && !move.cancel_requested, cancelLabel: decision.label ?? null,
     dnsMode: move.options.dnsMode, mailBlocked: !!move.preflight.plan.mailBlocking,
-    actions: { cancel: !!decision.allowed && !move.cancel_requested, switchBack: ['completed', 'retention_expired'].includes(move.state), removeOldCopy: ['completed', 'retention_expired'].includes(move.state), askRemoveOldCopy: move.state === 'retention_expired', resolve: move.state === 'recovery_required' ? ['retry', ...(move.switched_at ? [] : ['undo'])] : [] },
+    actions: { cancel: !!decision.allowed && !move.cancel_requested, switchBack: ['completed', 'retention_expired'].includes(move.state) || (move.state === 'waiting' && move.waiting_for === 'dns') || (move.state === 'recovery_required' && !!move.switched_at && !steps.some(step => SWITCH_BACK_STEPS.includes(step.step))), dnsProxied: !!steps.find(step => step.step === 'verify_dns')?.result.proxied, removeOldCopy: ['completed', 'retention_expired'].includes(move.state), askRemoveOldCopy: move.state === 'retention_expired', resolve: move.state === 'recovery_required' ? ['retry', ...(move.switched_at ? [] : ['undo']), ...(['failed', 'running'].includes(steps.find(step => step.step === 'finalize')?.state) ? ['finish-without-old-server'] : [])] : [] },
     dns: dnsRecord(move), downtimeText: move.preflight.result.details.downtime?.text ?? null, error: move.error ?? null,
     steps: steps.map(step => ({ step: step.step, label: LABELS[step.step] ?? step.step, state: step.state, startedAt: step.started_at, finishedAt: step.finished_at, result: publicResult(step.result) })),
     createdAt: move.created_at, updatedAt: move.updated_at, switchedAt: move.switched_at, retainUntil: move.retain_until, finishedAt: move.finished_at,
   };
 }
-const publicResult = result => Object.fromEntries(Object.entries(result ?? {}).filter(([key]) => ['error', 'status', 'skipped', 'mailBlocked', 'ports', 'http', 'lastCheck', 'lastCheckAt', 'record', 'backupId', 'undoError', 'command', 'reason', 'dataKept', 'volumes', 'paths'].includes(key)));
+const publicResult = result => Object.fromEntries(Object.entries(result ?? {}).filter(([key]) => ['error', 'status', 'skipped', 'mailBlocked', 'ports', 'http', 'lastCheck', 'lastCheckAt', 'record', 'backupId', 'undoError', 'command', 'reason', 'dataKept', 'volumes', 'paths', 'kept', 'proxied', 'waitingSince'].includes(key)));
 export function listMoves() {
   if (!tableReady()) return [];
   return db.prepare("SELECT id FROM site_moves WHERE state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned') ORDER BY created_at DESC LIMIT 100").all().map(row => moveView(row.id));
@@ -344,12 +366,26 @@ function advance(moveId, at) {
     if (action.type === 'none' || action.type === 'owner') return;
     if (action.type === 'transition') {
       if (action.to === 'completed') return; // only finalize completes a move, inside its transaction
-      transition(move, action.to, action.waiting_for ? { waiting_for: action.waiting_for } : {});
+      const extra = action.waiting_for ? { waiting_for: action.waiting_for } : {};
+      if (action.to === 'recovery_required' && move.switched_at) {
+        const target = server(move.target_server_id)?.name ?? 'the new server';
+        extra.error = `${move.error ?? 'A step failed after the switch.'} The site already runs on ${target}, so DockNest did not undo anything. Press Try again, or Switch back.`;
+      }
+      transition(move, action.to, extra);
+      if (action.waiting_for === 'dns') markDnsWait(moveId);
       continue;
     }
     if (action.type === 'wait') {
       if (action.for === 'owner-switch' && !move.options.askBeforeSwitch) { passGate(move, 'owner-switch'); continue; }
-      if (action.for === 'dns') scheduleDnsCheck(move);
+      if (action.for === 'dns') {
+        const since = steps.find(step => step.step === 'verify_dns')?.result.waitingSince ?? move.updated_at;
+        if (Date.now() - Date.parse(since) > DNS_WAIT_HOURS * 3600000 * moveLimits.scale) {
+          const domain = move.preflight.plan.domains[0], target = server(move.target_server_id)?.name ?? 'the new server';
+          transition(move, 'recovery_required', { error: `${domain} still does not point to ${target} after ${DNS_WAIT_HOURS} hours. Check the DNS record, then press Try again, or Switch back to run the site on the old server again.` });
+          return;
+        }
+        scheduleDnsCheck(move);
+      }
       return;
     }
     if (action.type === 'run' && INLINE_RUN.has(action.step) && !(action.step === 'switch_dns' && move.options.dnsMode === 'cloudflare')) { if (runInline(move, steps, action.step)) continue; return; }
@@ -360,8 +396,8 @@ function advance(moveId, at) {
   }
 }
 function ensureJob(move) {
-  if (db.prepare("SELECT 1 FROM jobs WHERE type='site-move' AND json_extract(details,'$.moveId')=? AND status IN ('queued','running')").get(move.id)) return;
-  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-move','queued','queued',?,?)")
+  if (db.prepare("SELECT 1 FROM jobs WHERE type='site-move' AND json_extract(details,'$.moveId')=? AND status IN ('move_queued','move_running')").get(move.id)) return;
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-move','move_queued','queued',?,?)")
     .run(id(), move.site_id, now(), JSON.stringify({ moveId: move.id, sourceServerId: move.source_server_id, targetServerId: move.target_server_id }));
 }
 
@@ -438,19 +474,27 @@ export async function executeMoveJob(job) {
       else if (action.type === 'recover') await withLimit(context, action.step, limit, () => recover(context, steps.find(step => step.step === action.step)));
     }
   } catch (caught) { error = plain(caught); }
-  db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', now(), error, job.id);
+  db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='move_running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', now(), error, job.id);
 }
 // A server step that runs past its limit: DockNest stops waiting and asks the owner. The outcome is unknown (the
 // server may still be working), so nothing is undone automatically; late results of the abandoned call are ignored.
 async function withLimit(context, name, seconds, work) {
   let timer;
-  const limit = Math.max(seconds, 120) * 1000 * moveLimits.scale;
+  const limit = Math.max(seconds, 120) * 1000 * moveLimits.scale, controller = new AbortController();
+  activeStep = controller;
   const expired = new Promise(resolve => { timer = setTimeout(() => resolve('expired'), limit); });
-  const outcome = await Promise.race([work().then(() => 'done'), expired]).finally(() => clearTimeout(timer));
+  const outcome = await Promise.race([work().then(() => 'done'), expired]).finally(() => { clearTimeout(timer); activeStep = null; });
   if (outcome !== 'expired') return;
+  // Stop the work on the server (its SSH channel closes and the helper ends itself), then keep this job, and so both
+  // servers, busy until the server confirms the step is no longer running.
   context.abandoned = true;
+  controller.abort();
+  let stopped = false;
+  for (let check = 0; check < 12 && !stopped; check++) { await moveTransport.wait(5000); stopped = await serversIdle(context.move); }
   const where = ['sb_start_old', 'final_sync', 'remove_old'].includes(name) ? context.source.name : context.target.name;
-  const error = `${LABELS[name] ?? name} took longer than ${Math.round(limit / 60000) || 1} minutes, so DockNest stopped waiting. Check ${where}, then choose Try again${context.move.switched_at ? '' : ' or Undo'}.`;
+  const choices = context.move.switched_at ? 'Try again or Switch back' : 'Try again or Undo';
+  const error = stopped ? `${LABELS[name] ?? name} took longer than ${Math.round(limit / 60000) || 1} minutes, so DockNest stopped it. Check ${where}, then choose ${choices}.`
+    : `${LABELS[name] ?? name} took longer than ${Math.round(limit / 60000) || 1} minutes. DockNest asked ${where} to stop it but cannot confirm it stopped yet; ${choices} becomes possible once it has.`;
   const current = loadMove(context.move.id);
   if (!isTerminal(current.state) && current.state !== 'recovery_required') transition(current, 'recovery_required', { error });
 }
@@ -540,12 +584,17 @@ async function recover(context, step) {
 }
 
 const mappedPort = (plan, port) => plan.portMap.find(entry => entry.from === port)?.to ?? port;
+const WEB_ROOTS = ['/var/www/', '/srv/', '/usr/share/nginx/', '/var/lib/docknest/maintenance/'];
+export function targetMaintenanceDirectory(site) {
+  const current = String(site.config.maintenance?.directory ?? '');
+  return WEB_ROOTS.some(root => current.startsWith(root)) && !current.includes('..') ? current : `/var/lib/docknest/maintenance/${site.id}`;
+}
 async function fallbackHtml() { try { return await maintenanceHtml(); } catch { return (await readFile(new URL('../../remote/maintenance.html', import.meta.url))).toString('base64'); } }
 async function deploy(context, mode, backupId) {
   const { move, job, site, target, plan } = context;
   const request = { operation: 'deploy-restore', moveId: move.id, job: job.id, mode, portMap: plan.portMap, networks: plan.networks, volumes: plan.volumes ?? [], ...(plan.compose ? { compose: plan.compose } : {}),
     ...(move.options.envRewrite.length && plan.recordValue ? { envRewrite: { keys: move.options.envRewrite, from: plan.oldAddresses, to: plan.recordValue } } : {}),
-    ...(mode === 'live' && plan.domains.length ? { nginx: { siteId: site.id, domains: plan.domains, upstreamPort: plan.web ? mappedPort(plan, plan.web) : null, maintenanceDirectory: site.config.maintenance.directory, maintenanceHtml: await fallbackHtml(), path: plan.healthPath } } : {}) };
+    ...(mode === 'live' && plan.domains.length ? { nginx: { siteId: site.id, domains: plan.domains, upstreamPort: plan.web ? mappedPort(plan, plan.web) : null, maintenanceDirectory: plan.maintenanceDirectory ?? targetMaintenanceDirectory(site), stagingRoot: site.config.stagingRoot || '/var/lib/docknest', maintenanceHtml: await fallbackHtml(), path: plan.healthPath } } : {}) };
   if (mode === 'live' && plan.kind !== 'static' && plan.domains.length && !plan.web) throw new Error('DockNest could not find which port serves the website, so it cannot route the domain on the new server.');
   const status = await remote(target, { operation: 'deploy-status', moveId: move.id });
   if (status.deployed.includes(mode)) return remote(target, request);
@@ -577,20 +626,25 @@ const STEPS = {
     return { result: { status: result.status, ...(result.reason ? { reason: result.reason } : {}), ...(result.command ? { command: result.command } : {}) } };
   },
   async switch_dns({ move, plan, current }) {
-    const journal = await cloudflare.switchRecord(plan.domains[0], { ipv4: plan.recordValue, ipv6: plan.recordValue6 }, records => saveStep({ ...current, resources: { records } }));
+    const existing = loadSteps(move).find(step => step.step === 'switch_dns')?.resources.records ?? null;
+    const journal = await cloudflare.switchRecord(plan.domains[0], { ipv4: plan.recordValue, ipv6: plan.recordValue6 }, { existing, onJournal: records => saveStep({ ...current, resources: { ...current.resources, records } }) });
     db.prepare('UPDATE site_moves SET switched_at=?,updated_at=? WHERE id=?').run(now(), now(), move.id);
     return { resources: { records: journal }, result: { status: 'switched' } };
   },
-  async finalize({ move, site, source, target }) {
+  async finalize({ move, site, source, target, plan }) {
     await remote(target, { operation: 'move-finalize-target', moveId: move.id });
-    const retired = await remote(source, { operation: 'move-retire-source', moveId: move.id, config: site.config });
+    const latest = loadMove(move.id);
+    const retired = latest.preflight.skipRetire ? { containers: [], skipped: true } : await remote(source, { operation: 'move-retire-source', moveId: move.id, config: site.config });
     // The single irreversible database change: the site record moves to the new server.
     transaction(() => {
       const current = loadMove(move.id);
       if (current.state === 'completed') return;
       db.prepare('UPDATE sites SET server_id=? WHERE id=?').run(target.id, site.id);
+      // The maintenance folder moves to a DockNest folder on the new server when the old one is not allowed there.
+      const row = db.prepare('SELECT config FROM sites WHERE id=?').get(site.id), config = JSON.parse(row.config), previousDirectory = config.maintenance?.directory ?? null;
+      if (plan.maintenanceDirectory && plan.maintenanceDirectory !== site.config.maintenance.directory) db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...config, maintenance: { ...config.maintenance, directory: plan.maintenanceDirectory } }), site.id);
       const step = loadSteps(current).find(item => item.step === 'finalize');
-      saveStep(completeStep(step.state === 'running' ? step : beginStep(step, now()), { resources: { retired: retired.containers.map(({ name, restartPolicy }) => ({ name, restartPolicy })) }, result: { status: 'done' } }, now()));
+      saveStep(completeStep(step.state === 'running' ? step : beginStep(step, now()), { resources: { retired: retired.containers.map(({ name, restartPolicy }) => ({ name, restartPolicy })), previousMaintenanceDirectory: previousDirectory, oldServerSkipped: !!retired.skipped }, result: { status: 'done' } }, now()));
       const retainUntil = new Date(Date.now() + RETENTION_DAYS * 86400000).toISOString();
       saveMove(applyTransition(current, 'completed', now(), { retain_until: retainUntil, error: null }));
       audit('worker', 'move.complete', site.id, { move: move.id, from: source.id, to: target.id });
@@ -601,7 +655,13 @@ const STEPS = {
 // ---------- owner actions after a move ----------
 const OWNER_STEPS = {
   async sb_stop_new({ move, target }) { const result = await remote(target, { operation: 'move-stop-target', moveId: move.id }); return { resources: { stopped: result.containers.map(({ name, restartPolicy }) => ({ name, restartPolicy })) }, result: { status: 'stopped' } }; },
-  async sb_start_old({ move, site, source, plan }) { await remote(source, { operation: 'move-unretire-source', moveId: move.id, config: site.config, running: plan.running ?? [] }); return { result: { status: 'started' } }; },
+  async sb_start_old({ move, site, source, plan }) {
+    // Before finalize the old copy was only stopped by the final copy; after it, it was also retired (restart off).
+    const finalized = loadSteps(move).find(step => step.step === 'finalize')?.state === 'done';
+    const config = { ...site.config, maintenance: { ...site.config.maintenance, directory: loadSteps(move).find(step => step.step === 'finalize')?.resources.previousMaintenanceDirectory ?? site.config.maintenance.directory } };
+    await remote(source, { operation: finalized ? 'move-unretire-source' : 'move-resume-source', moveId: move.id, config, running: plan.running ?? [] });
+    return { result: { status: 'started' } };
+  },
   async sb_dns({ move, plan }) {
     if (!plan.domains.length) return { result: { skipped: 'The site has no domain.' } };
     if (move.options.dnsMode === 'cloudflare') { await cloudflare.revertRecord(loadSteps(move).find(step => step.step === 'switch_dns')?.resources.records ?? []); return { result: { status: 'reverted' } }; }
@@ -612,6 +672,12 @@ const OWNER_STEPS = {
       const current = loadMove(move.id);
       if (current.state !== 'switching_back') return;
       db.prepare('UPDATE sites SET server_id=? WHERE id=?').run(source.id, site.id);
+      const finalizeStep = loadSteps(current).find(item => item.step === 'finalize');
+      if (finalizeStep?.state === 'done' && 'previousMaintenanceDirectory' in finalizeStep.resources) {
+        const config = JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(site.id).config), previous = finalizeStep.resources.previousMaintenanceDirectory;
+        const maintenance = { ...config.maintenance }; if (previous) maintenance.directory = previous; else delete maintenance.directory;
+        db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...config, maintenance }), site.id);
+      }
       saveStep(completeStep(step, { result: { status: 'done' } }, now()));
       saveMove(applyTransition(current, 'switched_back', now(), { error: null }));
       audit('worker', 'move.switch_back', site.id, { move: move.id, from: target.id, to: source.id });
@@ -619,10 +685,13 @@ const OWNER_STEPS = {
     return { final: true };
   },
   async remove_old({ move, site, source }, step) {
-    const result = await remote(source, { operation: 'move-remove-old', moveId: move.id, config: site.config, deleteData: !!step.resources.deleteData });
+    const keepPaths = [];
+    const collect = value => { if (typeof value === 'string' && value.startsWith('/')) keepPaths.push(value); else if (value && typeof value === 'object') Object.values(value).forEach(collect); };
+    for (const row of db.prepare('SELECT config FROM sites WHERE id<>?').all(site.id)) { try { collect(JSON.parse(row.config)); } catch { /* unreadable config: nothing to add */ } }
+    const result = await remote(source, { operation: 'move-remove-old', moveId: move.id, config: site.config, deleteData: !!step.resources.deleteData, keepPaths: [...new Set(keepPaths)].slice(0, 2000) });
     transaction(() => {
       const current = loadMove(move.id);
-      saveStep(completeStep(step, { result: { status: 'removed', dataKept: result.dataKept, volumes: result.volumes, paths: result.paths } }, now()));
+      saveStep(completeStep(step, { result: { status: 'removed', dataKept: result.dataKept, volumes: result.volumes, paths: result.paths, kept: result.kept ?? [] } }, now()));
       saveMove(applyTransition({ ...current, preflight: { ...current.preflight, removed: { dataKept: result.dataKept } } }, 'cleaned', now(), { error: null }));
       audit('worker', 'move.cleanup', site.id, { move: move.id, dataDeleted: !result.dataKept });
     });
@@ -638,7 +707,8 @@ export function switchBack(moveId, actor) {
   return transaction(() => {
     const move = loadMove(moveId);
     if (!move) throw httpError(404, 'Move not found.');
-    if (!['completed', 'retention_expired'].includes(move.state)) throw httpError(409, 'Switch back is possible only after a finished move, while the old copy is kept.');
+    const allowed = ['completed', 'retention_expired'].includes(move.state) || (move.state === 'waiting' && move.waiting_for === 'dns') || (move.state === 'recovery_required' && !!move.switched_at && !loadSteps(move).some(step => SWITCH_BACK_STEPS.includes(step.step)));
+    if (!allowed) throw httpError(409, 'Switch back is possible after the switch, while the old copy is kept.');
     if (loadSteps(move).some(step => step.step === REMOVE_STEP && ['pending', 'running', 'done'].includes(step.state))) throw httpError(409, 'The old copy is being removed or was removed, so DockNest cannot switch back.');
     addOwnerSteps(moveId, SWITCH_BACK_STEPS);
     transition(move, 'switching_back');
@@ -663,14 +733,26 @@ export function removeOldCopy(moveId, { confirmation, deleteData = false }, acto
 }
 // POST /api/moves/:id/resolve: the owner's answer when a move needs attention. Try again re-runs the stopped step;
 // Undo (only before the switch) rolls the move back.
-export function resolveMove(moveId, action, actor) {
+export async function resolveMove(moveId, action, actor, { confirmation } = {}) {
+  const pending = loadMove(moveId);
+  if (pending?.state === 'recovery_required' && !(await serversIdle(pending))) throw httpError(409, 'A step of this move is still running on a server. Try again in a minute.');
   return transaction(() => {
     const move = loadMove(moveId);
     if (!move) throw httpError(404, 'Move not found.');
     if (move.state !== 'recovery_required') throw httpError(409, 'This move does not need a decision.');
-    if (db.prepare("SELECT 1 FROM jobs WHERE type='site-move' AND json_extract(details,'$.moveId')=? AND status IN ('queued','running')").get(moveId)) throw httpError(409, 'DockNest is still working on this move. Try again in a minute.');
+    if (db.prepare("SELECT 1 FROM jobs WHERE type='site-move' AND json_extract(details,'$.moveId')=? AND status IN ('move_queued','move_running')").get(moveId)) throw httpError(409, 'DockNest is still working on this move. Try again in a minute.');
     const steps = loadSteps(move), switchingBack = steps.some(step => SWITCH_BACK_STEPS.includes(step.step) && step.state !== 'pending' || SWITCH_BACK_STEPS.includes(step.step) && step.state === 'pending');
     const stuck = steps.filter(step => ['running', 'failed', 'undo_failed'].includes(step.state));
+    if (action === 'finish-without-old-server') {
+      const site = db.prepare('SELECT name FROM sites WHERE id=?').get(move.site_id);
+      const finalize = steps.find(step => step.step === 'finalize');
+      if (!['failed', 'running'].includes(finalize?.state)) throw httpError(409, 'This is possible only when finishing the move failed.');
+      if (confirmation !== site?.name) throw httpError(409, 'Type the site name to confirm finishing without the old server.');
+      saveStep({ ...finalize, state: 'pending', finished_at: null });
+      saveMove(applyTransition({ ...move, preflight: { ...move.preflight, skipRetire: true } }, 'running', now(), { error: null }));
+      audit(actor, 'move.resolve', move.site_id, { move: moveId, action });
+      return moveView(moveId);
+    }
     if (action === 'undo') {
       if (move.switched_at || switchingBack) throw httpError(409, 'The switch has happened, so this move cannot be undone. Use Switch back.');
       for (const step of stuck) if (step.state === 'running') saveStep({ ...step, state: 'failed', finished_at: now() });

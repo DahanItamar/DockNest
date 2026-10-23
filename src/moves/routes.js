@@ -29,19 +29,19 @@ moveRoutes.post('/:id/start', requireRecentAuth, rateLimit('move-start', 30, 10 
   const body = z.object({ preflightHash: z.string().regex(/^[0-9a-f]{64}$/), moveAnyway: z.boolean().default(false) }).strict().parse(req.body);
   res.status(202).json(await startMove(uuid.parse(req.params.id), body, req.user.id));
 }));
-moveRoutes.post('/:id/cancel', handle(async (req, res) => res.json(cancelMove(uuid.parse(req.params.id), req.user.id))));
-moveRoutes.post('/:id/continue', handle(async (req, res) => {
-  const body = z.object({ gate: z.enum(['owner-switch', 'dns']) }).strict().parse(req.body);
-  res.json(await continueMove(uuid.parse(req.params.id), body.gate, req.user.id));
+moveRoutes.post('/:id/cancel', requireRecentAuth, handle(async (req, res) => res.json(cancelMove(uuid.parse(req.params.id), req.user.id))));
+moveRoutes.post('/:id/continue', requireRecentAuth, handle(async (req, res) => {
+  const body = z.object({ gate: z.enum(['owner-switch', 'dns']), confirmed: z.boolean().default(false) }).strict().parse(req.body);
+  res.json(await continueMove(uuid.parse(req.params.id), body.gate, req.user.id, { confirmed: body.confirmed }));
 }));
 moveRoutes.post('/:id/switch-back', requireRecentAuth, handle(async (req, res) => { z.object({}).strict().parse(req.body ?? {}); res.status(202).json(switchBack(uuid.parse(req.params.id), req.user.id)); }));
 moveRoutes.post('/:id/remove-old-copy', requireRecentAuth, handle(async (req, res) => {
   const body = z.object({ confirmation: z.string().max(200), deleteData: z.boolean().default(false) }).strict().parse(req.body);
   res.status(202).json(removeOldCopy(uuid.parse(req.params.id), body, req.user.id));
 }));
-moveRoutes.post('/:id/resolve', handle(async (req, res) => {
-  const body = z.object({ action: z.enum(['retry', 'undo']) }).strict().parse(req.body);
-  res.json(resolveMove(uuid.parse(req.params.id), body.action, req.user.id));
+moveRoutes.post('/:id/resolve', requireRecentAuth, handle(async (req, res) => {
+  const body = z.object({ action: z.enum(['retry', 'undo', 'finish-without-old-server']), confirmation: z.string().max(200).optional() }).strict().parse(req.body);
+  res.json(await resolveMove(uuid.parse(req.params.id), body.action, req.user.id, { confirmation: body.confirmation }));
 }));
 
 // /api/settings/cloudflare-dns: the optional token for automatic DNS switching. The token is never returned.

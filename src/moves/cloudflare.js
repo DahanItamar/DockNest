@@ -37,7 +37,13 @@ export async function connect(raw, actor) {
   if (!/^[A-Za-z0-9_-]{30,200}$/.test(value)) throw httpError(400, 'Paste the Cloudflare API token exactly as Cloudflare shows it.');
   const status = await call(value, '/user/tokens/verify');
   if (status?.status !== 'active') throw httpError(400, 'This Cloudflare token is not active.');
-  const zones = (await call(value, '/zones?per_page=50') ?? []).map(zone => ({ id: String(zone.id), name: String(zone.name).toLowerCase() })).filter(zone => /^[a-f0-9]{32}$/.test(zone.id));
+  const listed = [];
+  for (let page = 1; page <= 20; page++) {
+    const batch = await call(value, `/zones?per_page=50&page=${page}`) ?? [];
+    listed.push(...batch);
+    if (batch.length < 50) break;
+  }
+  const zones = listed.map(zone => ({ id: String(zone.id), name: String(zone.name).toLowerCase() })).filter(zone => /^[a-f0-9]{32}$/.test(zone.id));
   if (!zones.length) throw httpError(400, 'This token cannot see any zone. Give it Zone.DNS:Edit on the zone of your site.');
   for (const zone of zones) await call(value, `/zones/${zone.id}/dns_records?per_page=1`);
   db.prepare("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(KEY, JSON.stringify({ token: seal(value), zones, savedAt: new Date().toISOString() }));
@@ -64,18 +70,29 @@ export async function records(domain) {
 export const available = () => !!stored();
 // Points the A record (and an AAAA record when the new server has IPv6) at the new server. Returns the journal entry
 // needed to switch back: record ids and their previous content, never the token.
-export async function switchRecord(domain, { ipv4: v4, ipv6: v6 }) {
+// The journal (record ids and previous content) is handed to `onJournal` and must be stored BEFORE any change. A
+// resumed switch passes the stored journal back in `existing`: it is never re-recorded, so the previous values stay
+// the ones from before the move even when the record already points at the new server.
+export async function switchRecord(domain, { ipv4: v4, ipv6: v6 }, { existing = null, onJournal } = {}) {
   const found = await records(domain);
   if (!found) throw httpError(400, `The Cloudflare token does not cover ${domain}.`);
   const a = found.filter(record => record.type === 'A'), aaaa = found.filter(record => record.type === 'AAAA');
   if (a.length !== 1) throw httpError(409, `${domain} needs exactly one A record for DockNest to switch it.`);
   const changes = [{ record: a[0], content: v4 }, ...(v6 && aaaa.length === 1 ? [{ record: aaaa[0], content: v6 }] : [])];
-  const journal = changes.map(({ record }) => ({ zoneId: record.zoneId, recordId: record.id, type: record.type, previous: record.value }));
-  for (const { record, content } of changes) if (record.value !== content) await call(token(), `/zones/${record.zoneId}/dns_records/${record.id}`, { method: 'PATCH', body: { content } });
+  let journal = existing?.length ? existing : null;
+  if (!journal) {
+    if (changes.some(({ record, content }) => record.value === content)) throw httpError(409, `${domain} already points at the new server, but DockNest has no record of its previous value, so it does not change it. Check the record in Cloudflare.`);
+    journal = changes.map(({ record }) => ({ zoneId: record.zoneId, recordId: record.id, type: record.type, previous: record.value }));
+    await onJournal?.(journal);
+  }
+  for (const { record, content } of changes) {
+    if (!journal.some(entry => entry.recordId === record.id)) continue; // only records journaled before the change
+    if (record.value !== content) await call(token(), `/zones/${record.zoneId}/dns_records/${record.id}`, { method: 'PATCH', body: { content } });
+  }
   return journal;
 }
 export async function revertRecord(journal = []) {
-  for (const entry of journal) await call(token(), `/zones/${entry.zoneId}/dns_records/${entry.recordId}`, { method: 'PATCH', body: { content: entry.previous } });
+  for (const entry of journal) if (entry.previous) await call(token(), `/zones/${entry.zoneId}/dns_records/${entry.recordId}`, { method: 'PATCH', body: { content: entry.previous } });
 }
 // Proxied records answer with Cloudflare addresses in public DNS, so the check reads the record itself.
 export async function pointsAt(domain, address) {

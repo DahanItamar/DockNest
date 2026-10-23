@@ -52,8 +52,8 @@ function backupRow(siteId, seconds = 20) {
 const calls = [], deployed = new Map(), faults = {};
 moves.moveTransport.wait = async () => {};
 moves.moveTransport.upload = async () => ({ plaintextChecksum: 'f'.repeat(64) });
-moves.moveTransport.remote = async (server, request) => {
-  calls.push({ server: server.name, operation: request.operation, mode: request.mode, request });
+moves.moveTransport.remote = async (server, request, options = {}) => {
+  calls.push({ server: server.name, operation: request.operation, mode: request.mode, request, options });
   if (faults[request.operation]) throw Object.assign(new Error(faults[request.operation]), { remoteReported: true });
   const state = deployed.get(request.moveId) ?? new Set();
   switch (request.operation) {
@@ -71,6 +71,7 @@ moves.moveTransport.remote = async (server, request) => {
     case 'move-stop-target': return { containers: [{ id: 'n1', name: 'web', restartPolicy: 'unless-stopped' }], maintenance: true };
     case 'move-unretire-source': return { started: 1, containers: [] };
     case 'move-remove-old': return { containers: 1, volumes: request.deleteData ? ['web-data'] : [], paths: [], dataKept: !request.deleteData };
+    case 'move-lock-status': return { busy: faults.lockBusy === true };
     default: throw new Error('unexpected operation ' + request.operation);
   }
 };
@@ -313,14 +314,24 @@ test('a server step past its time limit stops waiting and asks the owner; Try ag
   const siteId = siteRow('slow'); backupRow(siteId);
   const draft = await preview(siteId); assert.equal((await start(draft)).status, 202);
   const original = moves.moveTransport.remote;
-  let hang = true;
-  moves.moveTransport.remote = (server, request) => request.operation === 'move-test' && hang ? new Promise(() => {}) : original(server, request);
+  let hang = true, aborted = false, stdinOpen = false;
+  moves.moveTransport.remote = (server, request, options) => {
+    if (request.operation !== 'move-test' || !hang) return original(server, request, options);
+    stdinOpen = options.keepStdinOpen === true && request.watchStdin === true;
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('stopped'), { aborted: true })); }));
+  };
   moves.moveLimits.scale = 0.0005; // 300 s test limit (at least 120 s) -> well under a second
   try { await drive(30); } finally { moves.moveLimits.scale = 1; }
   assert.equal(engineState(draft.id), 'recovery_required');
+  assert.ok(aborted, 'the server-side step is stopped, not just abandoned'); assert.ok(stdinOpen, 'the helper watches stdin to stop itself');
   const view = await (await admin('/moves/' + draft.id)).json();
-  assert.equal(view.state, 'needs_attention'); assert.match(view.statusLine, /^Test the copy took longer than 1 minutes, so DockNest stopped waiting\. Check new-srv, then choose Try again or Undo\.$/);
+  assert.equal(view.state, 'needs_attention'); assert.match(view.statusLine, /^Test the copy took longer than 1 minutes, so DockNest stopped it\. Check new-srv, then choose Try again or Undo\.$/);
   assert.deepEqual(view.actions.resolve, ['retry', 'undo']);
+  assert.equal((await post(staleAdmin, `/moves/${draft.id}/resolve`, { action: 'retry' })).status, 403, 'resolving needs a recent re-verification');
+  faults.lockBusy = true;
+  const busy = await post(admin, `/moves/${draft.id}/resolve`, { action: 'retry' });
+  faults.lockBusy = false;
+  assert.equal(busy.status, 409, 'no Try again while the server still runs the step');
   hang = false;
   assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'retry' })).status, 200);
   await drive(); moves.moveTransport.remote = original;
@@ -331,13 +342,18 @@ test('Cloudflare: the token is checked with read calls, sealed, never returned, 
   const { cloudflareHttp } = await import('../src/moves/cloudflare.js');
   const token = 'cf_' + 'a'.repeat(40), zone = 'f'.repeat(32), requests = [];
   let content = '203.0.113.7';
+  const journaledFirst = [];
   cloudflareHttp.fetch = async (url, init) => {
     requests.push({ url, method: init.method, auth: init.headers.Authorization === 'Bearer ' + token, body: init.body });
     const ok = result => ({ ok: true, status: 200, json: async () => ({ success: true, result }) });
     if (url.endsWith('/user/tokens/verify')) return ok({ status: 'active' });
     if (url.includes('/zones?')) return ok([{ id: zone, name: 'example.com' }]);
     if (url.includes('/dns_records?')) return ok([{ id: 'r'.repeat(32), type: 'A', name: 'cf.example.com', content, proxied: true, ttl: 1 }]);
-    if (init.method === 'PATCH') { content = JSON.parse(init.body).content; return ok({}); }
+    if (init.method === 'PATCH') {
+      const running = db.prepare("SELECT resources FROM site_move_steps WHERE step='switch_dns' AND state='running'").get();
+      if (running) journaledFirst.push(JSON.parse(running.resources).records?.[0]?.previous === '203.0.113.7');
+      content = JSON.parse(init.body).content; return ok({});
+    }
     return { ok: false, status: 404, json: async () => ({ success: false }) };
   };
   assert.equal((await admin('/settings/cloudflare-dns')).status, 200);
@@ -353,6 +369,13 @@ test('Cloudflare: the token is checked with read calls, sealed, never returned, 
   assert.ok(!JSON.stringify(db.prepare('SELECT * FROM audit_events').all()).includes(token));
   const { siteId, moveId } = await finishedMove('cf', { dnsMode: 'cloudflare' });
   assert.equal(content, '198.51.100.9', 'the A record points at the new server');
+  assert.deepEqual(journaledFirst, [true], 'the previous record is journaled before Cloudflare is changed');
+  const { switchRecord } = await import('../src/moves/cloudflare.js');
+  const journalRow = db.prepare("SELECT resources FROM site_move_steps WHERE move_id=? AND step='switch_dns'").get(moveId);
+  const kept = JSON.parse(journalRow.resources).records, rejournal = [];
+  assert.deepEqual(await switchRecord('cf.example.com', { ipv4: '198.51.100.9' }, { existing: kept, onJournal: j => rejournal.push(j) }), kept, 'a resumed switch reuses the journal');
+  assert.deepEqual(rejournal, [], 'and never records the new value as the previous one');
+  await assert.rejects(switchRecord('cf.example.com', { ipv4: '198.51.100.9' }, {}), /no record of its previous value/);
   const steps = (await (await admin('/moves/' + moveId)).json()).steps.map(step => step.step);
   assert.ok(!steps.includes('await_switch'), 'no manual switch gate');
   assert.ok(!JSON.stringify(db.prepare('SELECT resources,result FROM site_move_steps WHERE move_id=?').all(moveId)).includes(token));
@@ -363,12 +386,76 @@ test('Cloudflare: the token is checked with read calls, sealed, never returned, 
   assert.equal((await (await admin('/settings/cloudflare-dns')).json()).configured, false);
 });
 
+test('a failure after the DNS switch never undoes the move: no teardown, no restart of the old site, the owner decides', async () => {
+  const siteId = siteRow('afterswitch'); backupRow(siteId);
+  const draft = await preview(siteId); assert.equal((await start(draft)).status, 202);
+  faults['move-certificate'] = 'certbot crashed';
+  calls.length = 0; await drive(40); delete faults['move-certificate'];
+  assert.equal(engineState(draft.id), 'recovery_required');
+  const live = calls.findIndex(call => call.operation === 'deploy-restore' && call.mode === 'live');
+  assert.ok(live > 0 && !calls.slice(live).some(call => ['deploy-teardown', 'move-resume-source'].includes(call.operation)), 'after the live deploy nothing is torn down and the old site is not restarted');
+  const view = await (await admin('/moves/' + draft.id)).json();
+  assert.match(view.statusLine, /certbot crashed The site already runs on new-srv, so DockNest did not undo anything\. Press Try again, or Switch back\.$/);
+  assert.deepEqual(view.actions.resolve, ['retry']); assert.equal(view.actions.switchBack, true);
+  assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'undo' })).status, 409);
+  // Switch back before finalize: the old copy was only stopped, so it is resumed (not un-retired).
+  calls.length = 0;
+  assert.equal((await post(admin, `/moves/${draft.id}/switch-back`)).status, 202); await drive(20);
+  assert.equal(engineState(draft.id), 'switched_back');
+  assert.ok(calls.some(call => call.operation === 'move-resume-source') && !calls.some(call => call.operation === 'move-unretire-source'));
+  assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(siteId).server_id, oldServer);
+});
+
+test('DNS wait: a Cloudflare proxy is explained and confirmed by the owner, Cancel and go back works, and the wait has a limit', async () => {
+  const siteId = siteRow('proxied'); backupRow(siteId);
+  const draft = await preview(siteId, { askBeforeSwitch: false });
+  assert.equal((await start(draft)).status, 202);
+  dnsResolver.resolve = async () => [{ A: ['104.16.1.1'], AAAA: [] }];
+  try {
+    await drive(40); await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(engineState(draft.id), 'waiting');
+    assert.equal((await post(staleAdmin, `/moves/${draft.id}/continue`, { gate: 'dns' })).status, 403);
+    const refused = await post(admin, `/moves/${draft.id}/continue`, { gate: 'dns' });
+    assert.equal(refused.status, 409); const body = await refused.json();
+    assert.equal(body.code, 'DNS_PROXIED'); assert.match(body.error, /behind Cloudflare's proxy \(orange cloud\)/);
+    assert.equal((await (await admin('/moves/' + draft.id)).json()).actions.dnsProxied, true);
+    assert.equal((await post(admin, `/moves/${draft.id}/continue`, { gate: 'dns', confirmed: true })).status, 200);
+    await drive(20); assert.equal(engineState(draft.id), 'completed');
+  } finally { dnsResolver.resolve = async () => [{ A: ['198.51.100.9'], AAAA: [] }]; }
+
+  const other = siteRow('goback'); backupRow(other);
+  const move = await preview(other); assert.equal((await start(move)).status, 202);
+  dnsResolver.resolve = async () => [{ A: ['203.0.113.7'], AAAA: [] }];
+  try {
+    await drive(40);
+    assert.equal((await (await admin('/moves/' + move.id)).json()).state, 'waiting_dns');
+    db.prepare("UPDATE site_move_steps SET result=json_set(result,'$.waitingSince',?) WHERE move_id=? AND step='verify_dns'").run(new Date(Date.now() - (moves.DNS_WAIT_HOURS + 1) * 3600000).toISOString(), move.id);
+    await drive(2);
+    const limited = await (await admin('/moves/' + move.id)).json();
+    assert.equal(limited.state, 'needs_attention'); assert.match(limited.statusLine, /still does not point to new-srv after 48 hours/); assert.equal(limited.actions.switchBack, true);
+    assert.equal((await post(admin, `/moves/${move.id}/switch-back`)).status, 202, 'Cancel and go back');
+    calls.length = 0; await drive(20);
+    assert.equal(engineState(move.id), 'switched_back');
+    const operations = calls.map(call => call.operation);
+    assert.ok(operations.includes('move-stop-target') && operations.includes('move-resume-source') && !operations.includes('move-unretire-source') && !operations.includes('deploy-teardown'), operations.join());
+    assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(other).server_id, oldServer);
+  } finally { dnsResolver.resolve = async () => [{ A: ['198.51.100.9'], AAAA: [] }]; }
+});
+
+test('a release without moves never claims or recovers move jobs (rollback safety)', () => {
+  const statuses = db.prepare("SELECT DISTINCT status FROM jobs WHERE type='site-move'").all().map(row => row.status);
+  assert.ok(statuses.length > 0);
+  assert.ok(statuses.every(status => !['queued', 'running', 'recovery_required'].includes(status)), statuses.join());
+  // 2.5.0 claimed with status='queued' and recovered status='running' on start.
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='site-move' AND status IN ('queued','running')").get().n, 0);
+});
+
 test('a site-move job keeps both of its servers busy', () => {
   const siteId = siteRow('exclusive'), other = randomUUID();
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(other, newServer, 'other', '{}', at());
   const running = randomUUID(), queued = randomUUID();
   db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','running','copying',?)").run(running, other, at());
-  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-move','queued','queued',?,?)").run(queued, siteId, at(), JSON.stringify({ moveId: randomUUID(), sourceServerId: oldServer, targetServerId: newServer }));
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-move','move_queued','queued',?,?)").run(queued, siteId, at(), JSON.stringify({ moveId: randomUUID(), sourceServerId: oldServer, targetServerId: newServer }));
   assert.equal(claimJob(), undefined, 'the target is busy with another site');
   db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(running);
   assert.equal(claimJob().id, queued);
