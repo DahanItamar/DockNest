@@ -55,7 +55,7 @@ export async function verifyCredential(credentialId, actor) {
     } else {
       try { await sendMail(secret, null); } catch (error) { throw new DeliveryError(error instanceof SmtpError ? error.message : 'The mail server could not be reached.'); }
     }
-  } catch (error) { recordCredentialTest(credentialId, false, error.message); audit(actor, 'alert.credential.test', credentialId, { kind: row.kind, ok: false }); throw httpError(502, error instanceof DeliveryError ? error.message : 'The check failed.'); }
+  } catch (error) { recordCredentialTest(credentialId, false, error instanceof DeliveryError ? error.message : 'The check failed.'); audit(actor, 'alert.credential.test', credentialId, { kind: row.kind, ok: false }); throw httpError(502, error instanceof DeliveryError ? error.message : 'The check failed.'); }
   recordCredentialTest(credentialId, true); audit(actor, 'alert.credential.test', credentialId, { kind: row.kind, ok: true });
   return { verified: true };
 }

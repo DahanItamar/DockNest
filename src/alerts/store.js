@@ -54,7 +54,7 @@ export function createCredential(input, actor) {
   audit(actor, 'alert.credential.create', credentialId, { kind: data.data.kind });
   return credentialView(getCredential(credentialId));
 }
-// Secrets left out of `config` keep their saved value. Changing the mail server, port or encryption requires typing the
+// Secrets left out of `config` keep their saved value. Changing the mail server, port, encryption or user name requires typing the
 // password again, so a saved password can never be redirected by editing those alone.
 export function updateCredential(credentialId, input, actor) {
   const row = mustCredential(credentialId);
@@ -63,7 +63,7 @@ export function updateCredential(credentialId, input, actor) {
   const incoming = patch.data.config ?? {};
   const merged = { ...current, ...Object.fromEntries(Object.entries(incoming).filter(([key, value]) => !(['token', 'password'].includes(key) && (value === undefined || value === '')))) };
   if (row.kind === 'smtp' && 'username' in incoming && !incoming.username) merged.password = '';
-  if (row.kind === 'smtp' && merged.password && !incoming.password && ['host', 'port', 'security'].some(key => key in incoming && incoming[key] !== current[key])) throw httpError(400, 'Enter the password again when you change the mail server, port or encryption.');
+  if (row.kind === 'smtp' && merged.password && !incoming.password && ['host', 'port', 'security', 'username'].some(key => key in incoming && incoming[key] !== current[key])) throw httpError(400, 'Enter the password again when you change the mail server, port or encryption.');
   const parsed = secretSchemas[row.kind].safeParse(merged); if (!parsed.success) fail(parsed.error);
   db.prepare('UPDATE alert_credentials SET name=?,config=?,updated_at=?,last_test=NULL,last_test_at=NULL,last_error=NULL WHERE id=?').run(patch.data.name ?? row.name, seal(JSON.stringify(parsed.data)), now(), credentialId);
   audit(actor, 'alert.credential.update', credentialId, { kind: row.kind, fields: Object.keys(incoming).slice(0, 12) }); // field names only, never values

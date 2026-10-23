@@ -71,7 +71,7 @@ secret and need an administrator only.
 | --- | --- |
 | `GET /` | `{ credentials, channels, rules, events, sourceKinds, diskLow, limits }` |
 | `GET /credentials`, `POST /credentials` | `{ kind: "telegram", name, config: { token } }` or `{ kind: "smtp", name, config: { host, port, security, username?, password?, from } }` |
-| `PATCH /credentials/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server, port or encryption needs the password again |
+| `PATCH /credentials/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server, port, encryption or user name needs the password again |
 | `DELETE /credentials/:id` | 409 `CREDENTIAL_IN_USE` (with `nodes`) while nodes use it |
 | `POST /credentials/:id/test` | Checks the login without sending a message: Telegram `getMe`, or SMTP connect, encrypt and sign in |
 | `GET /channels`, `POST /channels` | `{ kind: "telegram", name, credentialId, config: { chatId } }` or `{ kind: "email", name, credentialId, config: { to: [..], subjectPrefix? } }`; the credential must match the kind |
