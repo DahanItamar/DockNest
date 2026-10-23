@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutMap,METRICS} from '../web/map/layout.js';
+import {layoutMap,databasesOf,domainsOf,METRICS} from '../web/map/layout.js';
 
 const make=(ns,nm)=>{const servers=[],sites=[];for(let i=0;i<ns;i++){servers.push({id:'s'+i,name:'Server '+String(ns-i).padStart(2,'0')});for(let j=0;j<(nm+i)%(nm+1);j++)sites.push({id:`s${i}-w${j}`,serverId:'s'+i,name:'site-'+((j*7)%13)+'.example.com'});}return {servers,sites};};
+const storageFor=(sites,n=3)=>{const storage=Array.from({length:n},(_,i)=>({id:'t'+i,name:'Storage '+i})),backupOf={};sites.forEach((s,i)=>{if(i%4!==3)backupOf[s.id]=storage[i%n].id});return {storage,backupOf};};
 const overlap=(a,b)=>a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
 
 test('empty and server-only inputs',()=>{
@@ -11,60 +12,57 @@ test('empty and server-only inputs',()=>{
  assert.equal(l.servers.length,1);assert.equal(l.paths.length,0);assert.ok(l.height>0&&l.width>0);
 });
 test('deterministic and independent of input order',()=>{
- const {servers,sites}=make(6,5);
- const a=layoutMap(servers,sites),b=layoutMap([...servers].reverse(),[...sites].reverse());
+ const {servers,sites}=make(6,5),o=storageFor(sites),r={storage:[...o.storage].reverse(),backupOf:o.backupOf};
+ const a=layoutMap(servers,sites,o),b=layoutMap([...servers].reverse(),[...sites].reverse(),r);
  assert.deepEqual(a,b);
- assert.deepEqual(layoutMap(servers,sites),a);
+ assert.deepEqual(layoutMap(servers,sites,o),a);
 });
 test('servers ordered by name, sites by name inside their group',()=>{
  const l=layoutMap([{id:'2',name:'beta'},{id:'1',name:'Alpha'}],[{id:'x',serverId:'1',name:'b'},{id:'y',serverId:'1',name:'A'}]);
  assert.deepEqual(l.servers.map(s=>s.id),['1','2']);
  assert.deepEqual(l.sites.map(s=>s.id),['y','x']);
 });
-test('no overlaps and sites sit beside their own server group',()=>{
- const {servers,sites}=make(12,9),l=layoutMap(servers,sites),all=[...l.servers,...l.sites];
- for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.ok(!overlap(all[i],all[j]),`${all[i].id} overlaps ${all[j].id}`);
+test('no overlaps (labels included) and sites sit beside their own server group',()=>{
+ const {servers,sites}=make(12,9),l=layoutMap(servers,sites,storageFor(sites)),all=[...l.servers,...l.sites,...l.storage];
+ for(const n of all)assert.ok(n.block&&n.block.w>=n.w);
+ for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.ok(!overlap(all[i].block,all[j].block),`${all[i].id} overlaps ${all[j].id}`);
  assert.ok(l.sites.every(s=>{const n=l.servers.find(x=>x.id===s.serverId);return n&&s.x>n.x+n.w}));
+ assert.ok(l.storage.every(t=>l.sites.every(s=>t.x>s.x+s.w)));
 });
-test('connectors never cross',()=>{
+
+// Every line is a list of horizontal and vertical segments.
+const segments=p=>p.points.slice(1).map((q,i)=>[p.points[i],q]);
+const inside=(pt,r)=>pt[0]>r.x+0.5&&pt[0]<r.x+r.w-0.5&&pt[1]>r.y+0.5&&pt[1]<r.y+r.h-0.5;
+const hitsRect=(seg,r)=>{const [[x1,y1],[x2,y2]]=seg,minx=Math.min(x1,x2),maxx=Math.max(x1,x2),miny=Math.min(y1,y2),maxy=Math.max(y1,y2);return minx<r.x+r.w-0.5&&maxx>r.x+0.5&&miny<r.y+r.h-0.5&&maxy>r.y+0.5};
+test('lines never cross cards or labels',()=>{
+ const {servers,sites}=make(10,7),l=layoutMap(servers,sites,storageFor(sites)),blocks=[...l.servers,...l.sites,...l.storage].map(n=>({id:n.id,...n.block}));
+ const lines=[...l.paths.map(p=>({p,from:p.serverId,to:p.id})),...l.backupPaths.map(p=>({p,from:p.id,to:p.storageId}))];
+ assert.ok(lines.length>0);
+ for(const {p,from,to} of lines)for(const seg of segments(p))for(const b of blocks){
+  if(b.id===from||b.id===to)continue;
+  assert.ok(!hitsRect(seg,b),`line ${from}->${to} crosses ${b.id}`);
+ }
+});
+test('server lines of different servers never cross',()=>{
  const {servers,sites}=make(20,15),l=layoutMap(servers,sites);
  assert.equal(l.paths.length,sites.length);
- const sample=p=>{const mid=(p.x1+p.x2)/2,pts=[];for(let i=0;i<=24;i++){const t=i/24,u=1-t;pts.push([u*u*u*p.x1+3*u*u*t*mid+3*u*t*t*mid+t*t*t*p.x2,u*u*u*p.y1+3*u*u*t*p.y1+3*u*t*t*p.y2+t*t*t*p.y2]);}return pts};
  const o=(p,q,r)=>(q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]);
- const cross=(a,b,c,d)=>o(a,b,c)*o(a,b,d)<-1e-9&&o(c,d,a)*o(c,d,b)<-1e-9;
- const lines=l.paths.map(sample);
- for(let i=0;i<lines.length;i++)for(let j=i+1;j<lines.length;j++){
+ const cross=(a,b,c,d)=>o(a,b,c)*o(a,b,d)<0&&o(c,d,a)*o(c,d,b)<0;
+ for(let i=0;i<l.paths.length;i++)for(let j=i+1;j<l.paths.length;j++){
   if(l.paths[i].serverId===l.paths[j].serverId)continue;
-  for(let a=0;a<24;a++)for(let b=0;b<24;b++)assert.ok(!cross(lines[i][a],lines[i][a+1],lines[j][b],lines[j][b+1]),`${l.paths[i].id} crosses ${l.paths[j].id}`);
+  for(const [a,b] of segments(l.paths[i]))for(const [c,d] of segments(l.paths[j]))assert.ok(!cross(a,b,c,d),`${l.paths[i].id} crosses ${l.paths[j].id}`);
  }
 });
-test('connectors join the server edge to the card edge',()=>{
- const {servers,sites}=make(3,3),l=layoutMap(servers,sites);
- for(const p of l.paths){
-  const n=l.servers.find(s=>s.id===p.serverId),c=l.sites.find(s=>s.id===p.id);
-  assert.equal(p.x1,n.x+n.w);assert.equal(p.x2,c.x);assert.equal(p.y2,c.y+c.h/2);assert.ok(p.y1>=n.y&&p.y1<=n.y+n.h);
- }
+test('only sites with a backup get a backup line, ending at their storage',()=>{
+ const {servers,sites}=make(4,4),o=storageFor(sites),l=layoutMap(servers,sites,o);
+ assert.equal(l.backupPaths.length,Object.keys(o.backupOf).length);
+ for(const p of l.backupPaths){const t=l.storage.find(x=>x.id===p.storageId),end=p.points.at(-1);assert.ok(end[0]<t.x&&end[1]===t.in.y)}
+ assert.equal(layoutMap(servers,sites).storage.length,0);
 });
-test('unassigned sites go last without a connector; long names keep geometry',()=>{
- const l=layoutMap([{id:'a',name:'x'.repeat(300)}],[{id:'1',serverId:'a',name:'y'.repeat(500)},{id:'2',serverId:'gone',name:'o'}]);
- assert.equal(l.unassigned.length,1);assert.equal(l.paths.length,1);
- assert.equal(l.sites[0].w,METRICS.cardW);assert.ok(l.unassigned[0].y>l.sites[0].y);
+test('databases and domains come from existing site data and are never invented',()=>{
+ const site={id:'1',config:{services:[{container:'db',engine:'postgres',version:'16.2',database:'shop_db'},{container:'c',engine:'redis',version:'7.4.1'},{container:'app',engine:'generic'},{container:'x',engine:'auto'}],domains:['a.example.com','',5]}};
+ assert.deepEqual(databasesOf(site).map(d=>d.label),['PostgreSQL 16.2 · shop_db','Redis 7.4.1']);
+ assert.deepEqual(domainsOf(site),['a.example.com']);
+ assert.deepEqual(databasesOf({id:'2'}),[]);assert.deepEqual(domainsOf({id:'2'}),[]);
 });
-test('scales to 20 servers x 15 sites with a bounded canvas',()=>{
- const servers=[],sites=[];
- for(let i=0;i<20;i++){servers.push({id:'s'+i,name:'S'+i});for(let j=0;j<15;j++)sites.push({id:`s${i}-${j}`,serverId:'s'+i,name:'w'+j});}
- const t=Date.now(),l=layoutMap(servers,sites);
- assert.ok(Date.now()-t<200);assert.equal(l.sites.length,300);
- assert.equal(l.width,METRICS.pad*2+METRICS.serverW+METRICS.columnGap+METRICS.cardW);
-});
-test('connectors stay in the gap between the columns and never touch a card',()=>{
- const {servers,sites}=make(20,15),l=layoutMap(servers,sites),cards=[...l.servers,...l.sites,...l.unassigned];
- for(const p of l.paths){
-  const mid=(p.x1+p.x2)/2;
-  for(let i=0;i<=40;i++){
-   const t=i/40,u=1-t,x=u*u*u*p.x1+3*u*u*t*mid+3*u*t*t*mid+t*t*t*p.x2,y=u*u*u*p.y1+3*u*u*t*p.y1+3*u*t*t*p.y2+t*t*t*p.y2;
-   assert.ok(x>=p.x1-1e-9&&x<=p.x2+1e-9,'path leaves the gap: '+p.id);
-   for(const c of cards)assert.ok(!(x>c.x+0.01&&x<c.x+c.w-0.01&&y>c.y+0.01&&y<c.y+c.h-0.01),p.id+' crosses card '+c.id);
-  }
- }
-});
+test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});

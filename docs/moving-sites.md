@@ -4,9 +4,13 @@ Administrators move sites from the Map page (operators see the map read-only). R
 only when the two-host Linux Docker integration test (`scripts/integration-move.js`, CI job `linux-integration`)
 passes (see AGENTS.md).
 
+## If a server is missing a tool
+
+When a check says a server needs nginx, Docker, Compose or Certbot and DockNest can install it, the **Ready to move** sheet offers **Install nginx** (or the tool's name) and **Show command**. Install asks you to confirm it is you (the same check as a move), shows each step, and **Check again** re-runs the check. **Show command** shows the exact command so you can run it yourself. All these sheets are the same size with their buttons in the same place. The server's details panel on the Map lists the same tools.
+
 ## The short version
 
-1. On the Map page, drag a site onto another server (on a phone: **Move to…**).
+1. On the Map page, drag the end of a site's line off its server and drop it on another server (with the keyboard: focus the site, press Enter, **Move to…**; on a phone: **Details**, then **Move to…**, or **Move to…** in the list). While a site is not connected, **Save changes** stays off ("Connect every site to a server to save"); **Cancel** puts the line back.
 2. Press **Save changes**. DockNest checks both servers and shows **Ready to move** with how long the move takes,
    how long the site is offline and how long you can undo, or the one reason it cannot move yet.
    **Advanced settings** holds the details; most people never need them.

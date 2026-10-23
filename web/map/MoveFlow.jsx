@@ -1,9 +1,9 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
-import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly} from './moves-client.js';
+import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
-function Sheet({title,labelId,onClose,children,actions}){
+export function Sheet({title,labelId,onClose,children,actions}){
  const ref=useRef(null);
  // Focus the title on open, so no button shows a focus ring until the user moves focus
  useEffect(()=>{const d=ref.current;if(d&&!d.open){d.showModal();d.querySelector('h2')?.focus()}return()=>{if(d?.open)d.close()}},[]);
@@ -50,11 +50,11 @@ function useGuard(client){
 }
 
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
-const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
+export const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
-export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,client}){
+export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
  const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
@@ -76,6 +76,10 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
  return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
   {blocked&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
+  {installChecks(preview).map(c=>{const i=c.install,name=PACKAGE_NAME[i.package];return <div key={c.id||i.package} className="map-install">
+   <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
+   <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>
+  </div>})}
   {!blocked&&<div className="map-facts">
    <Fact label="Takes about" value={duration(preview.estimateSeconds)||unknown}/>
    <Fact label="Site offline about" value={duration(preview.downtimeSeconds)||unknown}/>
@@ -202,10 +206,63 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
 }
 
 // Phone: choose where to move a site. Same dialog look as the others.
-export function TargetDialog({site,servers,results,onPick,onCancel}){
- return <Sheet title={`Move ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" onClick={onCancel}>Cancel</button>}>
+export function TargetDialog({site,servers,results,onPick,onCancel,verb='Move'}){
+ return <Sheet title={`${verb} ${site.name} to`} labelId="map-target-title" onClose={onCancel} actions={<button type="button" onClick={onCancel}>Cancel</button>}>
   <ul className="map-targets">{servers.map(s=>{const r=results[s.id],bad=r&&(!r.ok||r.verdict==='blocked'),wait=!r;
    return <li key={s.id}><button type="button" disabled={bad||wait} onClick={()=>onPick(s.id)}><b>{s.name}</b><span className="map-caption">{bad?why(r):wait?'Checking…':'Ready'}</span></button></li>})}
    {!servers.length&&<li className="map-caption">There is no other server to move to.</li>}</ul>
+ </Sheet>;
+}
+
+// Install flow. Every sheet here is the same size with the same two footer buttons in the same place (secondary, then primary).
+function CommandBox({command}){
+ const [copied,setCopied]=useState(false);
+ async function copy(){try{await navigator.clipboard.writeText(command);setCopied(true)}catch{setCopied(false)}}
+ return <div className="map-code"><code>{command}</code><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>;
+}
+
+export function InstallConfirmDialog({server,check,client,onCancel,onStarted,onCheckAgain}){
+ const guard=useGuard(client),[busy,setBusy]=useState(false),[err,setErr]=useState(''),[already,setAlready]=useState(false),i=check.install,name=PACKAGE_NAME[i.package];
+ async function go(){
+  setBusy(true);setErr('');
+  await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
+  setBusy(false);
+ }
+ return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
+  <p>DockNest installs {name} on {server.name}.{i.command?' It runs this command there:':''}</p>
+  {i.command&&<CommandBox command={i.command}/>}
+  <p className="map-caption">Nothing else on the server is changed.</p>
+  {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}
+  {guard.prompt}
+ </Sheet>;
+}
+
+export function InstallProgressDialog({server,pkg,client,jobId,onClose,onCheckAgain}){
+ const [job,setJob]=useState(null),[err,setErr]=useState(''),name=PACKAGE_NAME[pkg];
+ useEffect(()=>{
+  let stop=false,t;
+  const poll=async()=>{
+   try{const r=await client.job(jobId);if(stop)return;const j=r?.job||r;setJob(j);if(!['completed','failed'].includes(jobState(j)))t=setTimeout(poll,2000)}
+   catch(e){if(stop)return;setErr(e.message);t=setTimeout(poll,4000)}
+  };
+  poll();return()=>{stop=true;clearTimeout(t)};
+ },[client,jobId]);
+ const state=jobState(job),finished=state==='completed'||state==='failed',steps=jobSteps(job);
+ const title=state==='completed'?`${name} is installed`:state==='failed'?`Installing ${name} stopped`:`Installing ${name}`;
+ return <Sheet title={title} labelId="map-install-run-title" onClose={finished?onClose:undefined} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" disabled={!finished} onClick={onCheckAgain}>Check again</button></>}>
+  {state==='failed'?<Note kind="error" icon={IconCircleX} role="alert">{job?.error||`${server.name} could not install ${name}. You can install it yourself and check again.`}</Note>
+   :state==='completed'?<Note kind="ok" icon={IconCircleCheck} role="status">{name} is ready on {server.name}. Press Check again to continue.</Note>
+   :<p className="map-status" role="status">{server.name} is installing {name}. You can close this and come back.</p>}
+  {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}
+  <ol className="map-steps">{steps.map((s,k)=>{const st=s.status==='completed'?'done':s.status==='succeeded'?'done':s.status||'pending';return <li key={k} className={'step-'+st}><StepIcon status={st}/><span>{s.name}<span className="sr-only">, {STATUS_WORD[st]||st}</span></span></li>})}</ol>
+ </Sheet>;
+}
+
+export function CommandDialog({server,check,onClose,onCheckAgain}){
+ const i=check.install,name=PACKAGE_NAME[i.package];
+ return <Sheet title={`Install ${name} yourself`} labelId="map-command-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={onCheckAgain}>Check again</button></>}>
+  <p>Run this command on {server.name}, then press Check again.</p>
+  <CommandBox command={i.command}/>
+  <p className="map-caption">DockNest does not run this command for you here.</p>
  </Sheet>;
 }

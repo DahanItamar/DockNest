@@ -7,6 +7,9 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Added
 
 - Moving a site: when the new server lacks nginx, Docker, Docker Compose 2 or certbot, an administrator can ask DockNest to install it (optional; confirmed with re-verification, with a "Show command" line to run it yourself). Supported on Debian and Ubuntu (apt) and Fedora, Rocky, AlmaLinux and RHEL (dnf) with the system's own packages only: no repositories added, no scripts downloaded, no configuration edited, nothing removed. Backend: `POST /api/servers/:id/install`, a fixed package list and argv in the remote helper, the `install` field on preflight checks, and a new additive `server_installs` table (schema v7). See docs/moving-sites.md and docs/security.md.
+- Map v2: an n8n-style canvas with square nodes, ports and elbow lines, and a Backup storage column (free space, which sites back up there). The map always opens at regular size; Fit to screen shrinks it only when you ask.
+- Map: click a server, site or storage node to open its details on the right (domains, containers, databases that move with the site, backup storage, last backup, tools on the server). "+" at the top right adds a server or backup storage; "+" beside a server lists the Docker projects and nginx sites found there that are not added yet, and opens the existing Add site wizard with that site chosen.
+- Moving a site on the Map: pull the end of its line off the server (the site shows "Not connected" and Save changes stays off) and drop it on another server. Keyboard and phone have the same steps.
 
 ### Fixed
 
