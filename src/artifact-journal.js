@@ -20,18 +20,22 @@ export function authenticatePublication(backupId,checksum,size){
  const row=db.prepare("UPDATE artifact_operations SET state='authenticated',checksum=?,size=?,updated_at=? WHERE backup_id=? AND state='prepared'").run(checksum,size,now(),backupId);
  if(!row.changes)throw new Error('Publication journal does not match capture');
 }
-export function finalizePublication(backupId){
- transaction(()=>{
+// ownedDetails: the live worker's final job details. The job then completes only while it is still 'running', and
+// the result says whether this worker still owns it. Without it (startup reconciliation) the job completes as before.
+export function finalizePublication(backupId,{ownedDetails}={}){
+ return transaction(()=>{
   const operation=db.prepare('SELECT * FROM artifact_operations WHERE backup_id=?').get(backupId);
   if(!operation||!['authenticated','completed'].includes(operation.state))throw new Error('Authenticated publication journal required');
-  if(operation.state==='completed')return;
+  if(operation.state==='completed')return false;
   const metadata=JSON.parse(operation.metadata);
   if(metadata.manifest?.deliveryMode==='direct'&&!metadata.manifest.complete)throw new Error('Incomplete direct capture cannot be published');
   db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,1,?)').run(backupId,operation.site_id,operation.job_id,metadata.capturedAt,operation.published,operation.size,operation.checksum,JSON.stringify(metadata.manifest),now());
   recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},operation.job_id);
   recordVerification(backupId,'consistency',metadata.manifest.consistency||{status:'not-tested'},operation.job_id);
   db.prepare("UPDATE artifact_operations SET state='completed',updated_at=? WHERE backup_id=?").run(now(),backupId);
+  if(ownedDetails)return db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,error=NULL,details=? WHERE id=? AND status='running'").run(now(),JSON.stringify(ownedDetails),operation.job_id).changes===1;
   db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,error=NULL,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:metadata.manifest.downtimeSeconds}),operation.job_id);
+  return true;
  });
 }
 export function deletionBlocked(backupId){

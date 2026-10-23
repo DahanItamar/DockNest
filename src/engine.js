@@ -20,7 +20,9 @@ const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
-export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return remote(server,{operation:'plan',config:site.config});}
+// Backup transport; tests replace these members to drive executeJob without SSH.
+export const transport={remote,remoteCaptureStream,download};
+export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
 // Boot recovery copies these files onto the host; other operations stream the current helper each time.
 const bootBundle=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
 export const bootRecoveryBundle=Object.freeze({sha256:createHash('sha256').update(bootBundle[0]).update('\0').update(bootBundle[1]).digest('hex'),helperVersion:Number(/^VERSION=(\d+)$/m.exec(bootBundle[0].toString())?.[1]||0)});
@@ -248,10 +250,10 @@ export async function executeJob(job){
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
    contacted=true;
-   try{result=await remoteCaptureStream(server,request,pass,onStage,onDiagnostic,onProgress);await writing;}
+   try{result=await transport.remoteCaptureStream(server,request,pass,onStage,onDiagnostic,onProgress);await writing;}
    catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }else{
-   contacted=true;result=await remote(server,request,onStage,onDiagnostic);
+   contacted=true;result=await transport.remote(server,request,onStage,onDiagnostic);
    captured=trustedCaptureTime(result.manifest.capturedAt,startedMs);
    published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
@@ -272,18 +274,20 @@ export async function executeJob(job){
    stage(job.id,'transferring');
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
-   try{await download(server,result.remotePath,pass,onProgress);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+   try{await transport.download(server,result.remotePath,pass,onProgress);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }
   stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
-  await renameFile(temporary,published);finalizePublication(backupId);
-  publishedBackup=true;
   const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
+  await renameFile(temporary,published);
+  // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
+  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})}});
+  publishedBackup=true;
   // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
-  if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})})))return;
+  if(!owned){console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
-  await remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
+  await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);
