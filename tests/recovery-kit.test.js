@@ -62,6 +62,21 @@ test('a kit taken during a hold restores with the hold cleared and its active up
   }finally{restored.close();}
  }
 });
+test('kit restore revokes enrollment invitations that were still open in the snapshot',async()=>{
+ const input=join(root,'invitations.dkit'),target=join(root,'invitations-restored'),at=new Date().toISOString();
+ await exportRecoveryKit({database:db,masterKey:holdKey,output:input,passphrase:holdPassphrase});
+ await reseal(input,state=>{
+  state.prepare("INSERT OR IGNORE INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at) VALUES('invitee','invitee@example.invalid','fixture','','[]',0,?)").run(at);
+  const insert=state.prepare('INSERT INTO invitations(id,user_id,token_hash,expires_at,created_at,created_by,consumed_at) VALUES(?,?,?,?,?,?,?)');
+  insert.run('open','invitee','a'.repeat(64),Date.now()+15*60*1000,at,'admin',null);insert.run('used','invitee','b'.repeat(64),Date.now()+15*60*1000,at,'admin',Date.now());
+ });
+ await restoreRecoveryKit({input,directory:target,passphrase:holdPassphrase});
+ const restored=new DatabaseSync(join(target,'state.sqlite'));
+ try{
+  assert.ok(restored.prepare("SELECT revoked_at FROM invitations WHERE id='open'").get().revoked_at);
+  assert.equal(restored.prepare("SELECT revoked_at FROM invitations WHERE id='used'").get().revoked_at,null);
+ }finally{restored.close();}
+});
 test('kit restore refuses while the updater status mount shows an active run, and ignores a missing mount',async t=>{
  const mount=join(root,'updater-status'),write=(name,value)=>writeFile(join(mount,name),typeof value==='string'?value:JSON.stringify(value));
  const run={requestId:'4b0c9c1e-7d0f-4c55-9a0e-2a3c7b0d9f11',target:'v2.2.0',acceptedAt:'2026-10-22T10:00:00Z',events:[{phase:'verify',at:'2026-10-22T10:00:00Z'},{phase:'build',at:'2026-10-22T10:01:00Z'}],truncated:false};
