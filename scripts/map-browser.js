@@ -703,7 +703,7 @@ async function alertsFlow(scheme){
  await d.getByRole('group',{name:'Password'}).getByText('Saved').waitFor();assert.equal(await d.locator('input[type=password]').count(),0);
  await d.getByRole('heading',{name:'Used by'}).waitFor();await d.getByText('Team inbox').waitFor();
  await d.getByRole('button',{name:'Test'}).click();await d.getByText('The login works.').waitFor();await shot(page,scheme,'1440-alerts-credential');
- await d.getByRole('button',{name:'Cancel'}).click();await page.screenshot({path:'C:/Users/USER/AppData/Local/Temp/claude/d--Dev-repos-DockNest/dbe053bb-f5b1-4d0f-aa73-059ba3a59478/scratchpad/dbg.png'});await panel.getByRole('button',{name:'Close'}).first().click();
+ await d.getByRole('button',{name:'Cancel'}).click();await panel.getByRole('button',{name:'Close'}).first().click();
  // Delete a node asks first
  await page.locator('.map-alert[data-alert="c1"]').focus();await page.keyboard.press('Enter');
  await panel.getByRole('button',{name:'Delete this node'}).click();await d.getByRole('heading',{name:'Delete Ops chat?'}).waitFor();await d.getByRole('button',{name:'Cancel'}).click();
