@@ -67,12 +67,6 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
   </tr>
 </table>
 
-<p align="center">
-  <img src="docs/media/dashboard-mobile.png" width="260" alt="Dashboard on a phone" />
-</p>
-
-All screenshots use synthetic data. See [docs/media/README.md](docs/media/README.md).
-
 ## Requirements
 
 | Where | What you need |
