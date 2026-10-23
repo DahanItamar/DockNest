@@ -3,7 +3,7 @@ import {IconServer,IconBox,IconZoomIn,IconZoomOut,IconArrowsMaximize,IconMap2} f
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {layoutMap,groupForList} from './layout.js';
-import {createMovesClient} from './moves-client.js';
+import {createMovesClient,blocked,why} from './moves-client.js';
 import {ReviewDialog,ProgressDialog,TargetDialog} from './MoveFlow.jsx';
 import './map.css';
 
@@ -57,13 +57,25 @@ export function MapPage({servers=[],sites=[],user,api}){
  }
  function openReview(siteId,targetId){
   setFlow({kind:'review',siteId,targetId,busy:true});
-  client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,verdict:e.message}}));
+  client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,blockers:[e.message]}}));
  }
  function closeFlow(finished){setFlow(null);if(finished)setPending(null);setTimeout(()=>opener.current?.focus?.(),0)}
  async function startMove(options){
+  const {envRewrite,askBeforeSwitch,moveAnyway}=options;
   setFlow(f=>({...f,busy:true,error:''}));
-  try{await client.start(flow.preview.id,options);setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:f.preview.id}))}
-  catch(e){setFlow(f=>({...f,busy:false,error:e.message}))}
+  try{
+   let p=flow.preview;
+   // Advanced choices change the plan, so ask for a fresh preview that includes them.
+   if(envRewrite.length||askBeforeSwitch)p=await client.preview(flow.siteId,flow.targetId,{dnsMode:'manual',envRewrite,askBeforeSwitch});
+   if(blocked(p)){setFlow(f=>({...f,preview:p,busy:false}));return;}
+   await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway});
+   setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
+  }catch(e){
+   if(e.code==='PREFLIGHT_CHANGED'){
+    try{const p=await client.preview(flow.siteId,flow.targetId);setFlow(f=>({...f,preview:p,busy:false,error:'Something changed on the servers. Please review and press Move again.'}));return;}catch{}
+   }
+   setFlow(f=>({...f,busy:false,error:e.message}));
+  }
  }
  function moveTo(siteId,button){opener.current=button;precheck(siteId);setFlow({kind:'target',siteId})}
 
@@ -119,7 +131,7 @@ export function MapPage({servers=[],sites=[],user,api}){
   const g=gesture.current;
   if(g?.type==='drag'&&drag?.over){
    const r=checks[g.id]?.[drag.over],name=byId.sites[g.id]?.name,target=byId.servers[drag.over]?.name;
-   if(r&&!r.ok)setNote(`${name} cannot move to ${target}. ${r.verdict}`);
+   if(r&&blocked(r))setNote(`${name} cannot move to ${target}. ${why(r)}`);
    else{setPending({siteId:g.id,targetId:drag.over});setNote(`${name} will move to ${target}. Choose Save changes to continue.`);}
   }
   if(!pointers.current.size){gesture.current=null;setDrag(null);}
@@ -174,7 +186,7 @@ export function MapPage({servers=[],sites=[],user,api}){
     {layout.sites.map(r=><span key={"h"+r.id} aria-hidden="true" className={"map-handle"+(drag?.id===r.id?" active":"")} style={{left:r.x-6,top:r.y+r.h/2-6}}/>)}
     {groupIds.map(id=>{const r=layout.servers.find(s=>s.id===id),s=byId.servers[id],mine=layout.sites.filter(x=>x.serverId===id);
      return <div key={id} role="group" aria-labelledby={'map-server-'+id} className="map-group">
-      <div className={'map-server'+(drag?.over===id?' target':'')+(drag&&id!==home?.serverId&&siteChecks[id]&&!siteChecks[id].ok?' blocked':'')+(pending?.targetId===id?' chosen':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{drag&&siteChecks[id]&&!siteChecks[id].ok?siteChecks[id].verdict:pending?.targetId===id?'New home for '+byId.sites[pending.siteId]?.name:serverFacts(s,mine.length)}</span></div>
+      <div className={'map-server'+(drag?.over===id?' target':'')+(drag&&id!==home?.serverId&&siteChecks[id]&&blocked(siteChecks[id])?' blocked':'')+(pending?.targetId===id?' chosen':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{drag&&siteChecks[id]&&blocked(siteChecks[id])?why(siteChecks[id]):pending?.targetId===id?'New home for '+byId.sites[pending.siteId]?.name:serverFacts(s,mine.length)}</span></div>
       {mine.map(renderSite)}
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}

@@ -27,21 +27,27 @@ const state={
 };
 let browser;const errors=[];
 // Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
-const mock={previews:[],starts:[],cancels:[],phase:'running'};
-function preview({siteId,targetServerId}){
- const id='m-'+siteId+'-'+targetServerId,base={id,estimateSeconds:180,downtimeSeconds:30,undoDays:7,warnings:[],advanced:{ports:['80 to 80','8080 to 8081 (8080 is taken)'],nginx:{file:'/etc/nginx/sites-enabled/shop.conf',uncopiedLines:['include /etc/nginx/custom.conf;']},envKeys:['DATABASE_URL','REDIS_HOST'],dns:'manual',tests:[]}};
- if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'This server is not connected. Reconnect it first.'};
- if(targetServerId==='d')return {...base,ok:true,verdict:'Ready',estimateSeconds:1500,downtimeSeconds:900,warnings:['The database is large.']};
- return {...base,ok:true,verdict:'Ready'};
+// Shapes follow docs/moving-sites.md, "API for the UI".
+const mock={previews:[],starts:[],cancels:[],continues:[],phase:'running',withDns:true};
+const HASH='a'.repeat(64);
+function preview({siteId,targetServerId,options}){
+ const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
+ const base={id,siteId,targetServerId,ok:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual'},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
+ if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
+ if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
+ return base;
 }
+const NAMES=['Check both servers','Copy to the new server','Test the new copy','Switch','Wait for the domain'];
 const stepsFor=phase=>{
- const names=['Check both servers','Copy files','Copy the database','Start the new copy','Test the new copy','Switch'];
- const done={running:3,switching:5,waiting_dns:6,done:6,cancelled:2}[phase]??0;
- return names.map((title,i)=>({id:'s'+i,title,status:i<done?'done':i===done&&phase!=='cancelled'?'running':'waiting'}));
+ const done={running:2,waiting_switch:3,switching:3,waiting_dns:4,done:5,cancelling:1,cancelled:1,rolling_back:1,rolled_back:0,needs_attention:2}[phase]??0;
+ return NAMES.map((label,i)=>({step:'s'+i,label,state:i<done?'done':i===done&&!['cancelled','rolled_back','waiting_switch'].includes(phase)?(phase==='needs_attention'?'failed':'running'):'pending'}));
 };
 function moveState(){
  const p=mock.phase;
- return {state:p,steps:stepsFor(p),progress:{running:0.5,switching:0.85,waiting_dns:1,done:1,cancelled:0.3}[p]??0,statusLine:p==='running'?'Copying the database':p==='switching'?'Switching':'',cancelable:p==='running',dns:{type:'A',name:'shop.example.com',value:'203.0.113.7'}};
+ return {id:'m',state:p,steps:stepsFor(p),progress:{running:40,waiting_switch:60,switching:70,waiting_dns:90,done:100,cancelling:20,cancelled:20,rolling_back:30,rolled_back:0,needs_attention:50}[p]??0,
+  statusLine:{running:'Copying to the new server.',waiting_switch:'The new copy works. Ready when you are.',cancelling:'Cancelling and cleaning up.',rolling_back:'Switching back to the old server.',rolled_back:'Your site is back on the old server.'}[p]||'',
+  cancelable:p==='running'||p==='waiting_switch',cancelLabel:p==='cancelling'?'Cancelling...':'Cancel',error:p==='needs_attention'?'The old server did not answer. Check it, then open the move again.':null,
+  dns:mock.withDns?{type:'A',name:'shop.example.com',value:'203.0.113.7'}:null};
 }
 
 async function open({role='admin',width=1440,height=900,scheme='light',appState=state}={}){
@@ -56,8 +62,9 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   const req=route.request();
   if(endpoint.startsWith('/api/moves')){
    const parts=endpoint.split('/').filter(Boolean),body=req.postDataJSON?.()||{};
-   if(parts.length===2&&req.method()==='POST'){mock.previews.push(body);return route.fulfill({json:preview(body)});}
-   if(parts[3]==='start'){mock.starts.push({id:parts[2],body});mock.phase='running';return route.fulfill({status:202,json:{ok:true}});}
+   if(parts.length===2&&req.method()==='POST'){mock.previews.push(body);return route.fulfill({status:201,json:preview(body)});}
+   if(parts[3]==='start'){if(mock.changeOnce){mock.changeOnce=false;return route.fulfill({status:409,json:{error:'Something changed.',code:'PREFLIGHT_CHANGED'}});}mock.starts.push({id:parts[2],body});mock.phase='running';return route.fulfill({status:202,json:{ok:true}});}
+   if(parts[3]==='continue'){mock.continues.push(body.gate);if(body.gate==='dns'&&mock.dnsWrong)return route.fulfill({status:409,json:{error:'The domain still points to the old server.'}});mock.phase=body.gate==='owner-switch'?'waiting_dns':mock.phase;return route.fulfill({json:{ok:true}});}
    if(parts[3]==='cancel'){mock.cancels.push(parts[2]);mock.phase='cancelled';return route.fulfill({json:{ok:true}});}
    if(parts.length===3)return route.fulfill({json:moveState()});
    return route.fulfill({json:[]});
@@ -89,7 +96,7 @@ async function trapped(page){ // focus stays inside the open dialog after severa
  for(let i=0;i<8;i++){await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('dialog')),true,'focus trapped');}
 }
 async function moveFlow(page,scheme){
- Object.assign(mock,{previews:[],starts:[],cancels:[],phase:'running',blockA:false});
+ Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
  const save=page.getByRole('button',{name:'Save changes'});
  assert.equal(await save.isDisabled(),true,'save starts disabled');
  // Blocked target: greyed with the reason; nothing pending
@@ -120,10 +127,9 @@ async function moveFlow(page,scheme){
  await shot(page,scheme,'1440-4-review');
  await adv.click();
  assert.equal(await d.getByLabel('DATABASE_URL').isChecked(),false,'env rewrite off by default');
- assert.equal(await d.getByLabel('Block outgoing mail while testing').isChecked(),true);
- await d.getByLabel('Let DockNest change it with Cloudflare').check();
- await d.getByLabel('Cloudflare token (optional)').waitFor();
- await d.getByLabel('I will change the DNS record myself').check();
+ assert.equal(await d.getByLabel('Ask me before switching').isChecked(),false,'ask before switching off by default');
+ await d.getByText('Port 8080 is taken, 8081 will be used.').waitFor();
+ assert.equal(await d.getByText('Cloudflare').count(),0,'no Cloudflare choice yet');
  await shot(page,scheme,'1440-5-advanced');
  await trapped(page);
  // Escape cancels and focus returns to the opener
@@ -132,16 +138,26 @@ async function moveFlow(page,scheme){
  // Move: start, progress, DNS wait, done
  await save.click();await d.getByRole('heading',{name:'Ready to move'}).waitFor();
  await d.getByRole('button',{name:'Advanced settings'}).click();await d.getByLabel('REDIS_HOST').check();
+ await d.getByLabel('Ask me before switching').check();
+ mock.changeOnce=true; // the servers changed since the preview: DockNest asks again, nothing starts
+ await d.getByRole('button',{name:'Move',exact:true}).click();
+ await d.getByText(/Something changed on the servers/).waitFor();
+ assert.equal(mock.starts.length,0);
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
- assert.deepEqual(mock.starts[0].body.options.envRewrite,['REDIS_HOST']);
- assert.equal(mock.starts[0].id,'m-1-a');assert.equal(mock.starts[0].body.options.dns.provider,'manual');
- await d.getByRole('progressbar').waitFor();assert.equal(await d.getByRole('progressbar').getAttribute('aria-valuenow'),'50');
- await d.getByText('Copying the database').waitFor();
- await d.getByRole('listitem').filter({hasText:'Copy files'}).getByText('done').waitFor({state:'attached'});
+ assert.deepEqual(mock.previews.at(-1).options,{dnsMode:'manual',envRewrite:['REDIS_HOST'],askBeforeSwitch:true});
+ assert.equal(mock.starts[0].id,'m-1-a-opt');assert.equal(mock.starts[0].body.preflightHash,'a'.repeat(64));assert.equal(mock.starts[0].body.moveAnyway,undefined);
+ await d.getByRole('progressbar').waitFor();assert.equal(await d.getByRole('progressbar').getAttribute('aria-valuenow'),'40');
+ await d.getByText('Copying to the new server.').waitFor();
+ await d.getByRole('listitem').filter({hasText:'Check both servers'}).getByText('done').waitFor({state:'attached'});
  assert.equal(await d.getByRole('button',{name:'Cancel'}).isEnabled(),true,'cancel before the switch');
  assert.equal(await d.locator('[role=status]').count()>=1,true,'live region');
  await shot(page,scheme,'1440-6-moving');
+ mock.phase='waiting_switch';
+ await d.getByRole('heading',{name:'shop.example.com is ready to switch'}).waitFor({timeout:6000});
+ await shot(page,scheme,'1440-6b-switch');
+ await d.getByRole('button',{name:'Switch now'}).click();
+ assert.deepEqual(mock.continues,['owner-switch']);
  mock.phase='switching';
  await d.getByText('The switch has started and cannot be cancelled.').waitFor({timeout:6000});
  assert.equal(await d.getByRole('button',{name:'Cancel'}).isDisabled(),true,'no cancel after the switch');
@@ -151,6 +167,9 @@ async function moveFlow(page,scheme){
  assert.equal(await d.getByRole('button',{name:'Copy'}).count(),1);
  await shot(page,scheme,'1440-7-done');
  await d.getByRole('button',{name:'Copy'}).click();
+ mock.dnsWrong=true;await d.getByRole('button',{name:'Check DNS now'}).click();
+ await d.getByRole('alert').getByText('The domain still points to the old server.').waitFor();
+ assert.ok(mock.continues.includes('dns'));mock.dnsWrong=false;
  mock.phase='done';
  await d.getByText('The domain points to the new server.').waitFor({timeout:6000});
  await d.getByRole('button',{name:'Close'}).click();await dialog(page).waitFor({state:'detached'});
@@ -170,9 +189,23 @@ async function moveFlow(page,scheme){
  assert.equal(await go.isDisabled(),true,'long downtime blocks until confirmed');
  await shot(page,scheme,'1440-8-warning');
  await d.getByLabel('Move anyway').check();assert.equal(await go.isEnabled(),true);
- await d.getByRole('button',{name:'Cancel'}).click();
+ await go.click();
+ await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
+ assert.equal(mock.starts.at(-1).body.moveAnyway,true,'Move anyway is sent');
+ // Failure, undo and attention states
+ mock.phase='cancelling';
+ await d.getByRole('heading',{name:'Cancelling the move'}).waitFor({timeout:6000});
+ assert.equal(await d.getByRole('button',{name:'Cancelling...'}).isDisabled(),true);
+ mock.phase='rolling_back';
+ await d.getByRole('heading',{name:'Undoing the move'}).waitFor({timeout:6000});
+ mock.phase='needs_attention';
+ await d.getByRole('alert').getByText('The old server did not answer.',{exact:false}).waitFor({timeout:6000});
+ await shot(page,scheme,'1440-8b-attention');
+ mock.phase='rolled_back';
+ await d.getByRole('heading',{name:'Move undone'}).waitFor({timeout:6000});
+ await d.getByText('Your site is back on the old server.').first().waitFor();
+ await d.getByRole('button',{name:'Close'}).click();
  // Blocked at review time: plain red sentence, no Move
- await page.getByRole('button',{name:'Undo change'}).click();
  await dragSite(page,'1','itamar-Srv');mock.blockA=true;await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  await d.getByRole('alert').getByText('This server is not connected. Reconnect it first.').waitFor();
@@ -267,7 +300,7 @@ try{
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
    await fits(page,'phone '+scheme);
    // Move to... opens the same dialogs as full-screen sheets
-   Object.assign(mock,{previews:[],starts:[],cancels:[],phase:'running',blockA:false});
+   Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
    await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
    const d=dialog(page);
    await d.getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
@@ -281,7 +314,7 @@ try{
    for(const b of await d.getByRole('button').all())assert.ok((await b.boundingBox()).height>=43.5,'phone buttons 44px');
    await fits(page,'phone sheet '+scheme);await shot(page,scheme,'402-2-review');
    await d.getByRole('button',{name:'Move',exact:true}).click();
-   await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();await d.getByText('Copying the database').waitFor();
+   await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();await d.getByText('Copying to the new server.').waitFor();
    await shot(page,scheme,'402-3-moving');
    mock.phase='waiting_dns';
    await d.getByText(/Waiting for the domain to point here/).waitFor({timeout:6000});
