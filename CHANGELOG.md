@@ -16,6 +16,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - CI runs once per change (main pushes and pull requests), cancels superseded pull-request runs, and runs the Linux integration suite on main and on pull requests that are ready for review (skipped on drafts).
 
+### Fixed
+
+- Access: the users table splits Status and Role into their own columns, aligned like the other tables, and the Active status shows its proper icon.
+- Storage card buttons now really share the full width of the card; an older layout rule still placed them in three fixed columns.
+
 ## [2.5.0] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.5.0.md](docs/releases/2026-10-23-v2.5.0.md).
