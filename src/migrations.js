@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS update_events (request_id TEXT NOT NULL REFERENCES up
 CREATE UNIQUE INDEX IF NOT EXISTS update_requests_active ON update_requests((1)) WHERE state IN ('submitted','running','needs_action');
 CREATE TABLE IF NOT EXISTS whats_new_seen (user_id TEXT PRIMARY KEY REFERENCES users(id), version TEXT NOT NULL, seen_at TEXT NOT NULL);
 `;
+// Site moves (docs/moving-sites.md): one row per move plus a per-step journal. Additive only: new tables and indexes,
+// no rows, nothing altered. Backup ids carry no foreign key because retention may delete old backups; a move never does.
+// The partial unique index keeps one unfinished move per site; its list must equal TERMINAL_STATES in src/moves/state.js.
+export const siteMovesSchema = `
+CREATE TABLE IF NOT EXISTS site_moves (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),source_server_id TEXT NOT NULL REFERENCES servers(id),target_server_id TEXT NOT NULL REFERENCES servers(id),state TEXT NOT NULL CHECK (length(state) <= 32),waiting_for TEXT CHECK (waiting_for IS NULL OR length(waiting_for) <= 32),options TEXT NOT NULL CHECK (length(options) <= 65536),preflight TEXT NOT NULL CHECK (length(preflight) <= 262144),preflight_hash TEXT NOT NULL CHECK (length(preflight_hash) <= 128),backup_id TEXT,final_backup_id TEXT,cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0,1)),actor TEXT NOT NULL,error TEXT CHECK (error IS NULL OR length(error) <= 2048),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,switched_at TEXT,retain_until TEXT,finished_at TEXT,CHECK (source_server_id <> target_server_id));
+CREATE UNIQUE INDEX IF NOT EXISTS site_moves_active ON site_moves(site_id) WHERE state NOT IN ('rolled_back','cancelled','failed','switched_back','cleaned');
+CREATE INDEX IF NOT EXISTS site_moves_created ON site_moves(created_at,id);
+CREATE TABLE IF NOT EXISTS site_move_steps (move_id TEXT NOT NULL REFERENCES site_moves(id) ON DELETE CASCADE,step TEXT NOT NULL CHECK (length(step) <= 32),attempt INTEGER NOT NULL DEFAULT 0 CHECK (typeof(attempt) = 'integer' AND attempt >= 0),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped','undone','undo_failed')),started_at TEXT,finished_at TEXT,resources TEXT NOT NULL DEFAULT '{}' CHECK (length(resources) <= 65536),result TEXT NOT NULL DEFAULT '{}' CHECK (length(result) <= 65536),PRIMARY KEY (move_id,step));
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -104,6 +113,8 @@ export const migrations = [
   `) },
   // Update Center (docs/update-center.md section 3): tables and one partial unique index, no rows, nothing altered.
   { version: 5, name: 'update-center', compatible: true, up: db => db.exec(updateCenterSchema) },
+  // Site moves (docs/moving-sites.md): two tables and their indexes, no rows, nothing altered.
+  { version: 6, name: 'site-moves', compatible: true, up: db => db.exec(siteMovesSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
