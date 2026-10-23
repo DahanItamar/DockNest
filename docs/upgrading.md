@@ -258,6 +258,8 @@ The installer refuses:
 - A host where exactly one running `api` container of the `docknest` project is not found, where the `docknest_updater` volume is missing (start DockNest 2.2.0 or later with `docker compose up -d` first) or is not a plain local volume, or where a required tool is missing.
 - `--repair`, `--ack` and `--uninstall` while an in-app upgrade is running.
 
+In image mode, in-app updates need `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:<version>`. An install whose `DOCKNEST_IMAGE` names a mirror or has no tag is refused in-app (`state-mismatch`, nothing changed), because its image could not be verified; upgrade it with `scripts/upgrade.sh`.
+
 The `docknest_updater` volume is mounted read-only into the `api` container only. It carries the socket and an allow-listed copy of the status.
 
 After an upgrade that needs a person to look at the host (exit 5 or 6, an interrupted run, an unexpected exit or repeated automatic rollbacks) the updater blocks itself. `--status` names the reason and shows the rollback commands. Once you have checked the host and released the deployment hold (`docker compose exec api node scripts/deployment-preflight.js release`), run `sudo scripts/install-updater.sh --ack`; it refuses while the hold is still on. The updater also allows one run at a time, a 60-second cool-down and six runs a day, and stops a run after two hours.
