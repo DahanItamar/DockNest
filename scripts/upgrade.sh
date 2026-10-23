@@ -503,6 +503,10 @@ FROM_REF=$(git_ rev-parse HEAD)
 FROM=$(package_field HEAD version)
 matches "$FROM" "$SEMVER" || fail 2 "package.json at HEAD has no valid version (${FROM:-none}). Check the checkout."
 [ -z "$EXPECT_DIGEST" ] || [ "$IMAGE_MODE" = 1 ] || fail 2 '--expect-image-digest is for installs that run the published image.'
+# A host updater run (--expect-commit) in image mode must name the verified digest: without it the image would be pulled
+# by its tag, unverified. The broker detects image mode from the running api image name, so an image from another
+# registry name (a mirror, or no tag) is seen as source mode and sends no digest.
+[ -z "$EXPECT_COMMIT" ] || [ "$IMAGE_MODE" != 1 ] || [ -n "$EXPECT_DIGEST" ] || fail 2 'This install runs an image (DOCKNEST_IMAGE), but the host updater sent no verified image digest, so the image would be pulled unverified. Use DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:<version>, or upgrade from the command line with scripts/upgrade.sh. Nothing was changed.' state-mismatch
 # --upgrade-only (F2): the installed version comes from package.json at HEAD and the exact release tag at HEAD.
 if [ "$UPGRADE_ONLY" = 1 ] && ! { matches "$FROM" "$SEMVER" && git_ tag --points-at HEAD | grep -Fqx "v$FROM"; }; then
   fail 2 "The installed version is unclear: package.json says ${FROM:-nothing} but HEAD is not tagged v$FROM. Check the host; nothing was changed." state-mismatch

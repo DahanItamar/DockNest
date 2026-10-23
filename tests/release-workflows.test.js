@@ -165,11 +165,21 @@ test('release-validation.yml validates a main commit privately and names the run
   assert.ok(pattern('target').test('v2.1.0')); assert.ok(!pattern('target').test('v2.1.0\nmode=candidate'));
 });
 
-test('every action in the release workflows is pinned to a full commit SHA', async () => {
-  for (const name of ['release.yml', 'release-validation.yml']) {
+test('every action in every workflow is pinned to a full commit SHA', async () => {
+  // ci.yml too: the release gate trusts its Verify result, so a moved action tag there could fake a green check.
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
     const uses = [...(await workflow(name)).matchAll(/uses: (\S+)/g)].map(match => match[1]);
     assert.ok(uses.length > 0, name);
     for (const action of uses) assert.match(action, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${name}: ${action}`);
+  }
+});
+
+test('no workflow checkout leaves the job token in .git/config', async () => {
+  for (const name of ['release.yml', 'release-validation.yml', 'ci.yml']) {
+    const text = (await workflow(name)).replace(/\r\n/g, '\n');
+    const checkouts = [...text.matchAll(/uses: actions\/checkout@\S+[^\n]*\n((?: {8,}[^\n]*\n)*)/g)];
+    assert.ok(checkouts.length > 0, name);
+    for (const [, body] of checkouts) assert.match(body, /persist-credentials: false/, `${name}: ${body}`);
   }
 });
 
