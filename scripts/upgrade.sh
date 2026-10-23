@@ -68,7 +68,7 @@ matches() { printf '%s\n' "$1" | grep -Eqx "$2"; }
 [ -z "$EXPECT_DIGEST" ] || matches "$EXPECT_DIGEST" 'sha256:[0-9a-f]{64}' || { echo '--expect-image-digest takes sha256: and 64 lowercase hex digits' >&2; exit 1; }
 [ -z "$REQUEST_ID" ] || matches "$REQUEST_ID" '[A-Za-z0-9._-]{1,128}' || { echo '--request-id takes 1 to 128 letters, digits, dots, dashes or underscores' >&2; exit 1; }
 if [ "$CAPABILITIES" = 1 ]; then
-  printf '{"protocol":%s,"flags":["--version","--non-interactive","--force","--allow-data-rollback","--status-file","--timeout","--wait","--dry-run","--no-prune","--no-fetch","--no-verify","--expect-commit","--expect-image-digest","--upgrade-only","--request-id","--capabilities"],"statusFields":["phase","from","to","startedAt","updatedAt","ok","error","rollbackHint","warning","reason","schemaFrom","schemaTo","requestId"]}\n' "$PROTOCOL"
+  printf '{"protocol":%s,"flags":["--version","--non-interactive","--force","--allow-data-rollback","--status-file","--timeout","--wait","--dry-run","--no-prune","--no-fetch","--no-verify","--expect-commit","--expect-image-digest","--upgrade-only","--request-id","--capabilities"],"statusFields":["phase","from","to","startedAt","updatedAt","ok","error","rollbackHint","warning","reason","schemaFrom","schemaTo","requestId","cleanup"]}\n' "$PROTOCOL"
   exit 0
 fi
 [ -t 0 ] || INTERACTIVE=0
@@ -80,6 +80,8 @@ PHASE=init LAST_PHASE=init FROM='' TO='' STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ) 
 FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA='' IMAGE_MODE=0 PREV_IMAGE='' PREV_ID='' NEW_IMAGE=''
 SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
 REASON='' SCHEMA_TO='' START_FAILED=0 HEALTH_FAIL='' FETCH_FAILED=0 PREV_DIGESTS='' VERIFY_DIR='' LOCKED=0 LOCK="$ROOT/data/.upgrade.lock"
+# REPO: this install's image repository; PREV_REF: the stable tag that pins the previous release's image (pin_previous).
+REPO='' PREV_REF='' OLD_PREV='' CLEAN_FILE='' CLEANED=''
 [ "$DRY_RUN" = 1 ] && STATUS_FILE=''
 json() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\010\013\014\016-\037\177' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # Failure reason codes (docs/update-center.md section 7.1); anything else is written as "unknown".
@@ -97,18 +99,20 @@ status() { # status OK ERROR
   STATUS_TMP="$dir/.status.$$.$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   # warning: set only by the cleanup phase, from fixed messages plus validated folder names and image IDs.
   # reason: only on a failure, from the fixed list; schemaFrom/schemaTo: integers or null; requestId: validated above.
-  if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s,"warning":%s,"reason":%s,"schemaFrom":%s,"schemaTo":%s,"requestId":%s}\n' \
+  # cleanup: the one-line retention summary of a success ("Cleaned up: N old DockNest images"), built from a count.
+  if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s,"warning":%s,"reason":%s,"schemaFrom":%s,"schemaTo":%s,"requestId":%s,"cleanup":%s}\n' \
     "$PHASE" "$(json "$FROM")" "$(json "$TO")" "$STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ok" \
     "$( [ -n "${2:-}" ] && printf '"%s"' "$(json "$2")" || printf null)" "$( [ -n "$HINT" ] && printf '"%s"' "$(json "$HINT")" || printf null)" \
     "$( [ -n "$WARNING" ] && printf '"%s"' "$(json "$WARNING" | tr -d '\\"' | cut -c1-1024)" || printf null)" \
     "$( [ "$ok" = false ] && printf '"%s"' "$(reason_of "$REASON")" || printf null)" "$(int_or_null "$DB_SCHEMA")" "$(int_or_null "$SCHEMA_TO")" \
-    "$( [ -n "$REQUEST_ID" ] && printf '"%s"' "$REQUEST_ID" || printf null)" > "$STATUS_TMP" ) 2>/dev/null \
+    "$( [ -n "$REQUEST_ID" ] && printf '"%s"' "$REQUEST_ID" || printf null)" \
+    "$( [ -n "$CLEANED" ] && printf '"%s"' "$(json "$CLEANED" | tr -d '\\"' | cut -c1-256)" || printf null)" > "$STATUS_TMP" ) 2>/dev/null \
     && mv -f "$STATUS_TMP" "$STATUS_FILE" 2>/dev/null; then STATUS_TMP=''; else echo "WARNING: could not write $STATUS_FILE" >&2; rm -f "$STATUS_TMP"; STATUS_TMP=''; fi
   return 0
 }
 phase() { PHASE=$1 LAST_PHASE=$1; echo "==> $2"; status; }
 cleanup_files() {
-  [ -z "$STATUS_TMP" ] || rm -f "$STATUS_TMP"; [ -z "$WARN_FILE" ] || rm -f "$WARN_FILE"; [ -z "$VERIFY_DIR" ] || rm -rf "$VERIFY_DIR"
+  [ -z "$STATUS_TMP" ] || rm -f "$STATUS_TMP"; [ -z "$WARN_FILE" ] || rm -f "$WARN_FILE"; [ -z "$CLEAN_FILE" ] || rm -f "$CLEAN_FILE"; [ -z "$VERIFY_DIR" ] || rm -rf "$VERIFY_DIR"
   [ "$LOCKED" != 1 ] || rm -rf "$LOCK"
   case "$COPY" in */docknest-upgrade.*) rm -f "$COPY" ;; esac
 }
@@ -318,9 +322,11 @@ start_previous() {
   elif [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ] && docker tag "$PREV_ID" "$LOCAL_IMAGE"; then docker compose up -d --no-build api worker
   else docker compose build api worker && docker compose up -d api worker; fi
 }
+# The hint names the previous image by the tag that pins it (PREV_REF), not by its ID alone: an image left without
+# any name is dangling and may be gone by the time someone runs the hint.
 restart_previous_cmd() {
-  if [ "$IMAGE_MODE" = 1 ]; then echo "git checkout $FROM_REF && DOCKNEST_IMAGE=${PREV_ID:-$PREV_IMAGE} docker compose up -d --pull never   # and keep DOCKNEST_IMAGE=$PREV_IMAGE in .env"
-  elif [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ]; then echo "git checkout $FROM_REF && docker tag $PREV_ID $LOCAL_IMAGE && docker compose up -d --no-build"
+  if [ "$IMAGE_MODE" = 1 ]; then echo "git checkout $FROM_REF && DOCKNEST_IMAGE=${PREV_REF:-${PREV_ID:-$PREV_IMAGE}} docker compose up -d --pull never   # and keep DOCKNEST_IMAGE=$PREV_IMAGE in .env"
+  elif [ -n "$PREV_ID" ] && [ -n "$LOCAL_IMAGE" ]; then echo "git checkout $FROM_REF && docker tag ${PREV_REF:-$PREV_ID} $LOCAL_IMAGE && docker compose up -d --no-build"
   else echo "git checkout $FROM_REF && docker compose up -d --build"; fi
 }
 # Full image IDs only (sha256 plus 64 hex digits): anything else could be read by Docker as a repository name.
@@ -338,6 +344,30 @@ drop_new_image() {
   if docker image rm "$NEW_ID" >/dev/null 2>&1; then echo "Removed the $TO image $NEW_ID."
   else echo "WARNING: could not remove the $TO image $NEW_ID; when it is unused, run: docker image rm $NEW_ID" >&2; fi
   return 0
+}
+# The repository part of name[:tag] (a registry port as in host:5000/name stays part of the name).
+repo_of() { case "${1##*/}" in *:*) echo "${1%:*}" ;; *) echo "$1" ;; esac; }
+# The previous release's image keeps a name of its own in this install's repository, in both modes and on both image
+# stores. `docker compose build` moves docknest:local (a pull can move a floating tag such as :latest) and would leave
+# the previous image without any name: dangling, and Docker, the containerd image store in particular, may drop it, so
+# a rollback by ID alone found "No such image". So it is pinned as REPO:pre-upgrade before the build or pull, and after
+# a success that pin becomes REPO:previous. A failed run leaves REPO:previous on the release before, so it keeps both.
+pin_previous() {
+  [ -n "$PREV_ID" ] && [ -n "$REPO" ] || return 0
+  if docker tag "$PREV_ID" "$REPO:pre-upgrade"; then PREV_REF="$REPO:pre-upgrade"
+  else echo "WARNING: could not tag the $FROM image $PREV_ID as $REPO:pre-upgrade; a rollback uses its ID." >&2; fi
+}
+# A failed run's hint names REPO:pre-upgrade, which a later run re-points: this line records the exact image ID too.
+prev_note() { [ -z "$PREV_REF" ] || printf '\n# the %s image is %s (tagged %s until the next upgrade run)' "$FROM" "$PREV_ID" "$PREV_REF"; }
+promote_previous() {
+  [ -n "$PREV_REF" ] || return 0
+  # A rebuild that produced the same image (for example a --force reinstall): it is the running image, not a previous
+  # release, so REPO:previous stays where it is and only the temporary pin goes.
+  if [ "$PREV_ID" = "$(running_id api)" ]; then docker image rm "$REPO:pre-upgrade" >/dev/null 2>&1 || true; PREV_REF=''; return 0; fi
+  OLD_PREV=$(image_id "$REPO:previous") # loses its name when the tag moves; retention removes it
+  if docker tag "$PREV_ID" "$REPO:previous"; then
+    PREV_REF="$REPO:previous"; docker image rm "$REPO:pre-upgrade" >/dev/null 2>&1 || true # removes the tag only
+  else echo "WARNING: could not tag the $FROM image as $REPO:previous; it stays tagged $PREV_REF." >&2; fi
 }
 # Image mode: DOCKNEST_IMAGE (environment or .env) names the image; the script switches only the tag, per command.
 image_setup() {
@@ -417,28 +447,48 @@ prune_backups() {
     if rm -rf -- "$path"; then echo "Removed data/upgrade-backups/$name"; else warn "Could not remove data/upgrade-backups/$name."; fi
   done; }
 }
-# own_image ID: every tag and digest of the image belongs to this install's repository (image mode: the name in
-# DOCKNEST_IMAGE; source mode: the local image name, or untagged). Exit 2 when the image no longer exists.
+# own_image ID [UNTAGGED_OK]: every tag and digest of the image is in this install's repository (REPO: image mode the
+# name in DOCKNEST_IMAGE, source mode the local image name's, docknest). Containerd-store IDs are manifest digests and a
+# local build lists REPO@<its ID> as a digest; that is the same repository. An image without any name counts only in
+# source mode or with UNTAGGED_OK (its DockNest label was checked). Exit 2 when the image no longer exists.
 own_image() {
   refs=$(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' -- "$1" 2>/dev/null) || return 2
-  [ -n "$refs" ] || [ "$IMAGE_MODE" != 1 ] || return 1
+  [ -n "$refs" ] || [ "$IMAGE_MODE" != 1 ] || [ -n "${2:-}" ] || return 1
   for ref in $refs; do
-    if [ "$IMAGE_MODE" = 1 ]; then
-      case "$ref" in *@*) repo=${ref%%@*} ;; *) case "${ref##*/}" in *:*) repo=${ref%:*} ;; *) repo=$ref ;; esac ;; esac
-      [ "$repo" = "$IMAGE_NAME" ] || return 1
-    else [ "$ref" = "$LOCAL_IMAGE" ] || return 1; fi
+    case "$ref" in *@*) repo=${ref%%@*} ;; *) repo=$(repo_of "$ref") ;; esac
+    [ "$repo" = "$REPO" ] || return 1
   done
 }
-# Removes only image IDs this install recorded itself (imageId in its previous-release files) that belong to its
-# repository, minus the images api and worker run, the previous one and those recorded by runs that are kept for manual
-# action. Skipped entirely when any of those IDs is unknown. docker image rm without --force; never any prune command.
+# Tags of an image (RepoTags), one per line; <none> entries are skipped.
+image_tags() { docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}' -- "$1" 2>/dev/null | grep -Ex '[A-Za-z0-9._/:-]+' || true; }
+# Image IDs any container (running or stopped, of any project) was created from; fails when they cannot be listed.
+container_images() {
+  ids=$(docker ps -aq --no-trunc) || return 1
+  [ -z "$ids" ] || docker inspect --format '{{.Image}}' $ids || return 1
+}
+# Removes an image by its tags (the last one deletes it) or, untagged, by ID. Never --force: Docker refuses an image a
+# container uses. Prints the ID and records one line per removed image for the summary.
+remove_image() {
+  tags=$(image_tags "$1")
+  if [ -n "$tags" ]; then for tag in $tags; do docker image rm "$tag" >/dev/null 2>&1 || { warn "Could not remove image $1 (still used by a container)."; return 0; }; done
+  elif ! docker image rm "$1" >/dev/null 2>&1; then warn "Could not remove image $1 (still used by a container or tagged more than once)."; return 0; fi
+  echo "Removed image $1"; [ -z "$CLEAN_FILE" ] || echo image >> "$CLEAN_FILE"
+}
+# Keeps exactly the image api and worker run and the previous release's image (REPO:previous after a success) and
+# removes every other image of this install's repository that no container uses: every tag in REPO (also legacy names
+# such as docknest:sqlite-online), the untagged images this install recorded (imageId in previous-release files) and
+# untagged images carrying the DockNest label (old releases and build stages, DOCKNEST_LABEL in the Dockerfile).
+# Images recorded by runs kept for manual action stay. An image also named in another repository is never touched.
+# Skipped entirely when the running, the previous ID or the containers' images are unknown. Never any prune command.
+DOCKNEST_LABEL=io.github.dahanitamar.docknest
 prune_images() {
   parent="$ROOT/data/upgrade-backups"
   if [ -L "$parent" ] || [ ! -d "$parent" ]; then return 0; fi
   api=$(running_id api) worker=$(running_id worker)
   if [ -z "$api" ] || [ -z "$worker" ] || [ -z "$PREV_ID" ]; then echo 'Image cleanup skipped: the running or the previous DockNest image ID is unknown.'; return 0; fi
-  if [ "$IMAGE_MODE" != 1 ] && [ -z "$LOCAL_IMAGE" ]; then echo 'Image cleanup skipped: the local image name is unknown.'; return 0; fi
-  keep=" $api $worker $PREV_ID " recorded='' untracked=0
+  if [ -z "$REPO" ]; then echo 'Image cleanup skipped: the image name is unknown.'; return 0; fi
+  if ! used=$(container_images); then echo 'Image cleanup skipped: the images that containers use could not be listed.'; return 0; fi
+  keep=" $api $worker $PREV_ID $(printf '%s\n' "$used" | tr '\n' ' ')" recorded='' untracked=0
   for entry in $(backup_list "$parent" | sed 's/^[0-9]* //; s/ /:/'); do
     name=${entry%:*}; file="$parent/$name/previous-release"
     if [ -L "$file" ] || [ ! -f "$file" ]; then continue; fi
@@ -450,13 +500,23 @@ prune_images() {
     fi
     if [ "${entry##*:}" = free ]; then recorded="$recorded $id"; else keep="$keep$id "; fi
   done
-  for id in $(printf '%s\n' $recorded | sort -u); do
+  # Every tag in the repository, and untagged images that carry the DockNest label (this install's builds and pulls).
+  tagged=$(docker image ls --no-trunc --format '{{.ID}}' -- "$REPO" 2>/dev/null) || tagged=''
+  labelled=$(docker image ls --no-trunc --quiet --filter dangling=true --filter "label=$DOCKNEST_LABEL" 2>/dev/null) || labelled=''
+  # OLD_PREV: the image this run's promotion took REPO:previous from (two releases back now, possibly left untagged).
+  for id in $(printf '%s\n' $recorded $tagged $labelled $OLD_PREV | sort -u); do
+    valid_id "$id" || continue
     case "$keep" in *" $id "*) continue ;; esac
-    own_image "$id"; owned=$?
+    # Never by ID matching alone: an image that carries a tag rollback or the services rely on always stays.
+    protected=''
+    for tag in $(image_tags "$id"); do case "$tag" in "$REPO:previous"|"$REPO:pre-upgrade"|"$LOCAL_IMAGE"|"$NEW_IMAGE"|"${NEW_IMAGE%%@*}") protected=$tag ;; esac; done
+    if [ -n "$protected" ]; then echo "Keeping image $id: it is tagged $protected."; continue; fi
+    untagged=''; case " $(printf '%s\n' "$labelled" | tr '\n' ' ') $OLD_PREV " in *" $id "*) untagged=1 ;; esac
+    own_image "$id" "$untagged"; owned=$?
     [ "$owned" != 2 ] || continue
     if [ "$owned" != 0 ]; then echo "Keeping image $id: it is also tagged outside this installation's repository."; continue; fi
     if [ "$DRY_RUN" = 1 ]; then echo "Would remove image $id"; continue; fi
-    if docker image rm "$id" >/dev/null 2>&1; then echo "Removed image $id"; else warn "Could not remove image $id (still used by a container or tagged more than once)."; fi
+    remove_image "$id"
   done
   [ "$untracked" = 0 ] || echo "$untracked older upgrade backup(s) recorded no image ID; remove unused DockNest images by hand with docker image ls and docker image rm <id>."
 }
@@ -471,9 +531,13 @@ retention() {
   if [ "$NO_PRUNE" = 1 ]; then echo 'Retention skipped (--no-prune): old upgrade files were kept.'; return 0; fi
   prune_images; prune_snapshots; prune_backups "$1"
 }
+# The Docker build cache cannot be scoped to one project (docker builder prune has no project or label filter that
+# covers the cache a Compose build leaves), so the script never trims it: it only names the optional command.
+BUILD_CACHE_HINT='docker builder prune --filter until=168h'
 # Runs retention in a guarded background subshell with its own time limit; nothing in it can change the outcome.
 run_cleanup() {
   WARN_FILE=$(mktemp "${TMPDIR:-/tmp}/docknest-warnings.XXXXXX" 2>/dev/null) || WARN_FILE=''
+  CLEAN_FILE=$(mktemp "${TMPDIR:-/tmp}/docknest-cleanup.XXXXXX" 2>/dev/null) || CLEAN_FILE=''
   ( trap - EXIT INT TERM; set +e -f; retention 5 ) &
   CLEANUP_PID=$!
   ( trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM; sleep "$CLEANUP_TIMEOUT" & sleeper=$!; wait "$sleeper" && kill "$CLEANUP_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
@@ -484,6 +548,13 @@ run_cleanup() {
   if [ "$rc" -gt 128 ]; then warn "Removing old upgrade files was stopped after ${CLEANUP_TIMEOUT}s; some may remain until the next successful upgrade."
   elif [ "$rc" != 0 ]; then warn 'Removing old upgrade files ended early; some may remain until the next successful upgrade.'; fi
   if [ -n "$WARN_FILE" ]; then WARNING=$(tr '\n' ' ' < "$WARN_FILE" | sed 's/ *$//'); fi
+  # One summary line built from counts only, for the console and the status file (cleanup).
+  if [ "$NO_PRUNE" != 1 ] && [ -n "$CLEAN_FILE" ]; then
+    count=$(grep -cx image "$CLEAN_FILE" 2>/dev/null) || count=0
+    CLEANED="Cleaned up: $count old DockNest image$([ "$count" = 1 ] || echo s)"
+    echo "$CLEANED"
+    [ "$IMAGE_MODE" = 1 ] || echo "Optional: '$BUILD_CACHE_HINT' frees Docker build cache older than 7 days. It is host-wide (every project's cache, never images, containers or volumes), so DockNest does not run it."
+  fi
   return 0
 }
 
@@ -546,6 +617,7 @@ elif [ -z "$EXPECT_COMMIT" ]; then verify_target; fi
 [ "$IMAGE_MODE" != 1 ] || [ -n "$EXPECT_DIGEST" ] || echo "WARNING: image mode without a verified digest: $NEW_IMAGE is pulled by its tag, unverified." >&2
 [ "$IMAGE_MODE" = 1 ] || LOCAL_IMAGE=$(local_image)
 [ -z "$EXPECT_COMMIT" ] || [ "$IMAGE_MODE" = 1 ] || [ -n "$LOCAL_IMAGE" ] || fail 2 'api and worker must use one image name (check compose.override.yaml) to build the verified commit.'
+if [ "$IMAGE_MODE" = 1 ]; then REPO=$IMAGE_NAME; elif [ -n "$LOCAL_IMAGE" ]; then REPO=$(repo_of "$LOCAL_IMAGE"); fi
 # The exact image the previous release runs, in both modes: rollback starts it again without pulling or building.
 PREV_ID=$(running_id api)
 PREV_DIGESTS=$(repo_digests "$PREV_ID")
@@ -633,6 +705,8 @@ HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment
 phase build "Preparing the $TO image"
 # Every image present before the build or pull: exit 4 removes only an image that was not among them.
 if IMAGES_BEFORE=$(docker image ls -aq --no-trunc 2>/dev/null); then IMAGES_LISTED=1; fi
+pin_previous
+HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release$(prev_note)"
 if ! build_and_start; then
   git_ checkout --quiet "$FROM_REF" && CHECKED_OUT=0; release_hold; HOLD=0
   # A partial source build may have moved the local tag: point it back at the image the services still run.
@@ -683,13 +757,14 @@ if ! healthy "$(expect HEAD)" "$TIMEOUT"; then
   HINT="docker compose stop api worker
 # restore metadata (schema v$DB_SCHEMA) from the newest /data/upgrade-snapshots/state-v$DB_SCHEMA-to-v${AFTER:-?}-*.sqlite, see docs/upgrading.md#rolling-back
 $(restart_previous_cmd)
-docker compose exec api node scripts/deployment-preflight.js release"
+docker compose exec api node scripts/deployment-preflight.js release$(prev_note)"
   fail 5 "$TO did not become healthy after migrating metadata to schema v${AFTER:-unknown}. Nothing was rolled back automatically."
 fi
 
 phase release 'Releasing the deployment hold'
 release_hold || echo 'WARNING: could not release the deployment hold; run: docker compose exec api node scripts/deployment-preflight.js release' >&2
 [ "$IMAGE_MODE" != 1 ] || image_persist || echo "WARNING: could not update DOCKNEST_IMAGE in .env; set it to $NEW_IMAGE so later restarts keep this release." >&2
+promote_previous
 HINT="$(restart_previous_cmd)   # previous release; see docs/upgrading.md#rolling-back"
 # Success is recorded before anything is removed. From here on every end, even an abort or a signal, is exit 0 with
 # status done and ok:true (on_exit), so retention can never revert a good upgrade.

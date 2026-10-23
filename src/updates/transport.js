@@ -69,6 +69,8 @@ export function parseStatus(value) {
   for (const key of ['startedAt', 'updatedAt']) { if (value[key] === undefined) continue; if (!isTime(value[key])) return null; out[key] = value[key]; }
   if (value.ok !== undefined) { if (![true, false, null].includes(value.ok)) return null; out.ok = value.ok; }
   for (const key of ['error', 'rollbackHint', 'warning']) { if (value[key] === undefined) continue; const clean = text(value[key], key === 'warning' ? limits.warning : limits.text); if (clean === false) return null; out[key] = clean; }
+  // cleanup: the retention summary of a success ("Cleaned up: N old DockNest images"), additive after 2.4.1.
+  if (value.cleanup !== undefined) { const clean = text(value.cleanup, 256); if (clean === false) return null; out.cleanup = clean; }
   if (value.reason !== undefined && value.reason !== null) out.reason = REASONS.includes(value.reason) ? value.reason : 'unknown';
   for (const key of ['schemaFrom', 'schemaTo']) { if (value[key] === undefined || value[key] === null) continue; if (!isInt(value[key], 100000)) return null; out[key] = value[key]; }
   return out;

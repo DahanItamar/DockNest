@@ -10,11 +10,17 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
 - `npm run test:status-pages` browser suite.
 
+### Fixed
+
+- Upgrades keep the previous release's image. `scripts/upgrade.sh` tags it `<repository>:pre-upgrade` before it builds or pulls and `<repository>:previous` (`docknest:previous` from source) after a success, so `docker compose build` re-tagging `docknest:local` no longer leaves it without a name, where Docker's containerd image store could drop it and the printed rollback (`docker tag sha256:… docknest:local`) failed with "No such image". The rollback hint now uses the tag. The installed release's script runs an upgrade, so this takes effect from the upgrade after the one that installs it; before upgrading from 2.4.1 or earlier, run `docker tag docknest:local docknest:previous` to keep that release's image ([docs/upgrading.md](docs/upgrading.md#what-is-removed-after-an-upgrade)).
+
 ### Changed
 
 - Unknown non-API paths now answer with status 404 and the app, which shows its 404 page. API 404s remain JSON.
 
 - Storage card buttons share the full width of the card, so a card with two buttons has no empty space beside them.
+- Retention after a successful upgrade keeps exactly the running and the previous DockNest image and removes every other image of the installation's repository that no container uses (including legacy tags such as `docknest:sqlite-online`), its recorded untagged images, and untagged images with the new Dockerfile label `io.github.dahanitamar.docknest` (old releases and build stages). Never `--force`, never a prune command, never another repository.
+- The upgrade ends with a `Cleaned up: N old DockNest images` line, also written to the status file as the additive `cleanup` field (accepted by the host updater and the API transport). From source it also prints the optional, host-wide `docker builder prune --filter until=168h`; the script does not trim the build cache itself because Docker cannot scope it to one project.
 
 ### Security
 
