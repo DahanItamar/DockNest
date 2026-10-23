@@ -4,9 +4,13 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-23
+
+See [docs/releases/2026-10-23-v2.5.0.md](docs/releases/2026-10-23-v2.5.0.md).
+
 ### Added
 
-- Branded error pages in one shared style (a large heading-weight status code that fades out, one sentence, two actions): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
+- Branded error pages in one shared style (a full-screen page with a large status code that fades out, one sentence and one button): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
 - `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
 - `npm run test:status-pages` browser suite.
 - Site move engine (not yet in the UI): administrators can preview, start, follow and cancel moving a site to another server through `/api/moves` ([docs/moving-sites.md](docs/moving-sites.md)). DockNest takes a fresh verified backup, deploys and tests a copy on the new server (loopback only, outgoing mail blocked where the firewall allows), takes a final copy behind the maintenance page, waits for your DNS change and keeps the old copy stopped for 7 days. Ports taken on the new server move to the next free one; DockNest writes one nginx file of its own and never installs software, overwrites existing folders or deletes data. An estimated downtime over 30 minutes is a warning that needs "Move anyway" rather than a refusal. Real moves are validated only by the two-host Linux integration test.
@@ -26,6 +30,9 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Security
 
+- Sign-in, code, invitation and other API rate limits now key an IPv6 client by its /64 prefix (and an IPv4-mapped address, dotted or hex, as plain IPv4). This includes the public update progress limiter. Before, rotating addresses inside one ordinary IPv6 allocation gave a fresh budget on every request. IPv4 limits are unchanged; existing counters for IPv4-mapped clients start again once after the upgrade.
+- Only administrators can add or change a site's configuration files, Compose files, website files folder, staging directory or maintenance directory. Operators get HTTP 403 (`ADMIN_REQUIRED`) unless discovery reports the path for that server; saved paths keep working for backups, restores and downloads. Before, an operator could add any file on a source server (for example `/etc/shadow`) to a backup and download it decrypted.
+- The remote helper never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, SSH host keys (`/etc/ssh/*_key`), SSH key folders, `/proc`, `/sys` or `/dev`, or a folder that contains them. Paths are checked as written (a leading `//` counts as `/`) and after following symlinks. The API refuses paths starting with `//`, and staging directories inside system folders such as `/etc`, `/root` or `/usr/bin`. It deploys a maintenance page only under the staging root, the site's project folders or a web root (`/var/www`, `/srv`, `/usr/share/nginx`); an existing deployment elsewhere keeps working, with a warning, unless the folder is a symlink into a system folder.
 - Restore extraction follows each archive symlink through the archive's other symlinks before extracting, so a chain of links that each stay inside (for example `d -> ../..` and `l -> d/../..`) can no longer point outside the restore directory. Absolute link targets are refused as before, and link loops are now refused too.
 - Restore extraction is refused before anything is written when the archive's declared file sizes do not fit in the free space of the target filesystem (64 MiB reserve).
 - A capture time reported by the source server outside the job's own run (10 minutes tolerance) is replaced by the DockNest server time. A reset or future source clock could otherwise make retention delete the newest recovery point right after it was published. The job shows a "Source server clock" warning and the manifest records `sourceClock`.

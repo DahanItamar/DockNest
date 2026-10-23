@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -84,6 +84,49 @@ def inspect(ids): return json.loads(docker('inspect',*ids))
 
 # A Docker bind path can conceal a remote filesystem. Unknown filesystems fail closed.
 LOCAL_FILESYSTEMS={'ext2','ext3','ext4','xfs','btrfs','zfs','overlay'}
+# Credentials, SSH keys and kernel interfaces are never captured, whoever configured the site.
+PROTECTED_FILES={'/etc/shadow','/etc/shadow-','/etc/gshadow','/etc/gshadow-'}
+PROTECTED_TREES=('/root/.ssh','/proc','/sys','/dev')
+# A directory source that contains any of these would capture them too.
+PROTECTED_CONTENT=tuple(PROTECTED_FILES)+PROTECTED_TREES+('/etc/ssh','/etc/sudoers','/etc/sudoers.d')
+def lexical(value):
+    # The helper runs on Linux; the separator swap only lets the unit tests run on a Windows workstation.
+    path=posixpath.normpath(str(value).replace(os.sep,'/'))
+    # POSIX keeps a leading '//' after normpath; on Linux it names the same file as '/'.
+    return '/'+path.lstrip('/') if path.startswith('/') else path
+def within(path,root):
+    root=root.rstrip('/') or '/'
+    return path==root or root=='/' or path.startswith(root+'/')
+def resolved(value):
+    # Both the written path and the path after following symlinks (parent links included) are checked.
+    path=lexical(value)
+    return [path,lexical(os.path.realpath(path))] if path.startswith('/') else [path]
+def protected_lexical(path):
+    return path in PROTECTED_FILES or path.startswith('/etc/sudoers') or bool(re.fullmatch(r'/etc/ssh/[^/]*_key',path)) or any(within(path,root) for root in PROTECTED_TREES) or '.ssh' in pathlib.PurePosixPath(path).parts
+def protected_path(value):
+    return any(protected_lexical(path) for path in resolved(value))
+def protected_content(value):
+    return any(any(within(item,path) for item in PROTECTED_CONTENT) for path in resolved(value) if os.path.isdir(path))
+def refuse_protected_sources(cfg):
+    for value in ([cfg['documentRoot']] if cfg.get('kind')=='static' and cfg.get('documentRoot') else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
+        if protected_path(value) or protected_content(value):raise ValueError('Protected system path refused: %s. Password databases, sudoers, SSH keys, /proc, /sys and /dev are never captured.'%value)
+# The maintenance page belongs in the site's staging root, its project folders or a web root, never in system folders.
+MAINTENANCE_ROOTS=('/var/lib/docknest','/var/www','/srv','/usr/share/nginx')
+SYSTEM_TREES=('/etc','/root','/boot','/proc','/sys','/dev','/bin','/sbin','/lib','/lib32','/lib64','/usr/bin','/usr/sbin','/usr/lib','/usr/local/bin','/usr/local/sbin','/var/spool','/var/log','/run')
+def maintenance_link_escape(directory):
+    # A symlink from an allowed folder into a system folder is refused outright, even for an existing deployment.
+    path=lexical(directory);real=lexical(os.path.realpath(path))
+    return real!=path and real.startswith('/') and (protected_lexical(real) or any(within(real,root) for root in SYSTEM_TREES))
+def system_path(value):
+    return any(protected_lexical(path) or any(within(path,root) for root in SYSTEM_TREES) for path in resolved(value))
+def maintenance_directory_problem(cfg,directory):
+    path=lexical(directory)
+    # Symlinks are followed for the system-folder check, so /var/www/x -> /etc/cron.d is refused.
+    if system_path(path):return 'Maintenance directory %s is inside a system folder'%path
+    roots=list(MAINTENANCE_ROOTS)+[cfg.get('stagingRoot') or '']+[posixpath.dirname(value) for value in cfg.get('composeFiles',[])]+([cfg['documentRoot']] if cfg.get('documentRoot') else [])
+    if any(root and lexical(root)!='/' and within(path,lexical(root)) for root in roots):return None
+    return "Maintenance directory %s is outside the site's staging root, project folders and web roots (/var/www, /srv, /usr/share/nginx)"%path
+def warn(message):emit(warning=message)
 def mount_table(text=None):
     if text is None:
         try:text=pathlib.Path('/proc/self/mountinfo').read_text()
@@ -236,6 +279,7 @@ def capture_size(containers,configuration,exclusions,images):
     return size+sum(c.get('SizeRw',0) or 0 for c in containers)+sum(image['Size'] for image in images)
 
 def backup_plan(cfg,containers=None):
+    refuse_protected_sources(cfg)
     containers=preflight(cfg) if containers is None else containers
     services=service_contracts(cfg,containers)
     if any(s['engine']=='generic' for s in services) and not cfg.get('cleanShutdownConfirmed'):
@@ -954,6 +998,10 @@ def maintenance(cfg,enabled):
     directory=pathlib.Path(m['directory'])
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
     if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
+    problem=maintenance_directory_problem(cfg,directory)
+    # Leaving maintenance is never blocked, so a site can always return to service.
+    if enabled and maintenance_link_escape(directory):raise ValueError(problem+'. The maintenance directory links into a system folder.')
+    if problem:warn(problem+'; kept because the maintenance proxy is already integrated there')
     def enable_flag():
         # The proxy may share this directory; never follow a planted link as root.
         flag=directory/'enabled'
@@ -1155,6 +1203,7 @@ def temporary_mounts(c,declared):
 
 def static_preflight(cfg):
     if cfg.get('unresolvedDependencies'):raise ValueError('Resolve required external dependencies before capture')
+    refuse_protected_sources(cfg)
     root=pathlib.Path(cfg.get('documentRoot',''))
     if not root.is_absolute() or '..' in root.parts or not root.is_dir() or root.resolve()!=root:raise ValueError('Choose a regular static website directory from discovery')
     if not any(site.get('documentRoot')==str(root) for site in nginx_sites() if site['kind']=='static'):raise ValueError('The directory must belong to a discovered static nginx website')
@@ -1278,6 +1327,7 @@ def preflight(cfg):
             for ours in mounts:
                 a,b=os.path.realpath(m['Source']),os.path.realpath(ours['Source'])
                 if os.path.commonpath([a,b]) in [a,b]:raise ValueError('A running container outside the site shares a mount')
+    refuse_protected_sources(cfg)
     for filename in cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
         p=pathlib.Path(filename)
         if not p.is_absolute() or '..' in p.parts or not p.is_file() or p.is_symlink() or not os.access(p,os.R_OK):raise ValueError('Explicit configuration file is unreadable or invalid')
@@ -1717,6 +1767,11 @@ def deploy_maintenance(req):
     p=pathlib.Path(m.get('directory',''))
     if not p.is_absolute() or '..' in p.parts:raise ValueError('Absolute maintenance directory required')
     if p.exists() and not p.is_dir():raise ValueError('Maintenance directory is not a directory')
+    problem=maintenance_directory_problem(cfg,p)
+    if problem:
+        # A page deployed there by an earlier release keeps working; a new location or a link into a system folder is refused.
+        if maintenance_link_escape(p) or not (p/'maintenance.html').is_file():raise ValueError(problem+'. Choose a directory under the staging root or a web root.')
+        warn(problem+'; kept because a maintenance page is already deployed there')
     p.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(req['html'])
     if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')

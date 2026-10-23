@@ -16,6 +16,25 @@ Administrators manage invitations, revoke access, and rotate the system password
 
 Sensitive administration requires password plus that administrator's personal factor verified within the previous five minutes. The server returns REAUTH_REQUIRED when another verification is needed. Rotating the shared password signs everyone out and invalidates pending login/enrollment challenges and invitations. Tell authorized people the replacement password privately.
 
+### Roles and site host paths
+
+Some site settings name folders and files on the source server that the helper reads or writes as root. Only administrators can add or change them. An operator who saves a site with a new or changed path gets HTTP 403 (`ADMIN_REQUIRED`) and the message "Only an administrator can change the ... of a site". Operators can still edit every other field, remove paths, and run backups, restores and downloads that use paths an administrator saved.
+
+| Site setting | Administrator | Operator |
+| --- | --- | --- |
+| Configuration (environment) files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Compose project files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Static website files folder | A folder discovery reports | Saved folder, or a folder discovery reports |
+| Staging directory | Outside system folders (`/etc`, `/root`, `/usr/bin` and the others the helper refuses) | Saved value or the default `/var/lib/docknest` only |
+| Maintenance directory | Under the staging root, a project folder or a web root | Saved value or the default under the staging root only |
+| Name, containers, services, schedule, probe URLs, domains | Yes | Yes |
+
+Moving a site to another server checks all of its paths again. When discovery cannot reach the server, a path counts as not discovered.
+
+The helper also checks paths, for every role. It never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, the SSH host keys (`/etc/ssh/*_key`), `/root/.ssh`, any `.ssh` folder, `/proc`, `/sys` or `/dev`, nor a folder that contains one of them (such as `/etc/ssh` or `/`). Each path is checked as written, with a leading `//` read as `/`, and again after following symlinks, so a link such as `/opt/x -> /etc` does not get around the list. The API also refuses paths that start with `//`. It deploys a maintenance page only under the site's staging root, its Compose project folders, its website folder, `/var/lib/docknest`, `/var/www`, `/srv` or `/usr/share/nginx`, and never inside system folders such as `/etc`, `/root` or `/usr/bin`. A maintenance directory outside these places that is already deployed (it already holds `maintenance.html`) or already integrated (it holds `ready`) keeps working. The helper reports a warning, and the API logs it as `Remote helper warning:`. The exception is a maintenance folder that is a symlink into a system folder (for example `/var/www/x -> /etc/cron.d`). The helper refuses to deploy into it or to enable maintenance there, but it still lets the site leave maintenance. To clear the warning, move the folder under `/var/www/<domain>` or the staging root and update the site.
+
+Upgrading: a site that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. A site whose staging directory is inside a system folder keeps backing up, but it can be saved again only after its staging directory is moved, for example to `/var/lib/docknest`. No other saved site changes behaviour.
+
 ## Session expiry
 
 The server rejects sessions after 30 minutes without reported user interaction and after eight hours from login, even with continued activity. Dashboard polling and ordinary reads do not renew the idle timer. The UI reports trusted keyboard/pointer interaction through the protected activity endpoint; that endpoint cannot revive an expired session.
@@ -128,7 +147,7 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
 
 ## Client address and TRUST_PROXY
 
-By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. See [Deployment](deployment.md).
+By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).
 
 ## Host updater
 

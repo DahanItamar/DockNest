@@ -529,7 +529,7 @@ class MaintenanceTests(unittest.TestCase):
             try:os.symlink(outside,site/'enabled')
             except OSError:self.skipTest('Creating symbolic links is not permitted here')
             before=outside.stat().st_mode
-            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':str(site),'publicUrl':'http://fixture/','readableFlag':True}}
+            cfg={'containers':['fixture'],'stagingRoot':str(base),'maintenance':{'required':True,'directory':str(site),'publicUrl':'http://fixture/','readableFlag':True}}
             with patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag'):
                 with self.assertRaisesRegex(ValueError,'symbolic link'):maintenance(cfg,True)
             self.assertEqual(outside.stat().st_mode,before);self.assertEqual(outside.read_text(),'host file')
@@ -860,4 +860,65 @@ class ProbeIpv6SpecialRangeTests(unittest.TestCase):
         for address in ['::a9fe:a9fe','::10.0.0.1','64:ff9b::a9fe:a9fe','64:ff9b::a00:1','64:ff9b::7f00:1','64:ff9b:1::1','2002:a9fe:a9fe::1','2002:a00:1::1','2002:7f00:1::1','2002:6464:64c8::1','2001::1','2001:0:4136:e378::1','2001:db8::1','100::1']:
             with self.assertRaises(ProbePolicyError,msg=address):probe_addresses(address,80,['site.example'])
         for address in ['64:ff9b::101:101','2002:101:101::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
+class ProtectedPathTests(unittest.TestCase):
+    def test_protected_system_paths_are_refused_for_every_source_kind(self):
+        from helper import protected_path, refuse_protected_sources
+        for path in ['/etc/shadow','/etc/gshadow','/etc/shadow-','/etc/sudoers','/etc/sudoers.d/admins','/root/.ssh','/root/.ssh/id_ed25519','/home/deploy/.ssh/authorized_keys','/proc/1/environ','/sys/kernel','/dev/sda','/etc/../etc/shadow']:
+            self.assertTrue(protected_path(path),path)
+        for path in ['/etc/nginx/sites-enabled/example.org','/opt/app/.env','/var/www/example.org','/etc/passwd-backup.conf','/srv/app/compose.yaml','/opt/app/ssh.conf']:
+            self.assertFalse(protected_path(path),path)
+        for cfg in [{'configFiles':['/etc/shadow']},{'composeFiles':['/root/.ssh/config']},{'kind':'static','documentRoot':'/proc'}]:
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources(cfg)
+        refuse_protected_sources({'configFiles':['/opt/app/.env'],'composeFiles':['/opt/app/compose.yaml']})
+
+    def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
+        from helper import protected_path, maintenance_directory_problem
+        for path in ['//etc/shadow','///etc/shadow','//root/.ssh/id_rsa','/etc//shadow','/etc/ssh/ssh_host_ed25519_key','/etc/ssh/ssh_host_rsa_key','//etc/ssh/ssh_host_ecdsa_key']:
+            self.assertTrue(protected_path(path),path)
+        for path in ['/etc/ssh/sshd_config','/etc/ssh/ssh_host_rsa_key.pub']:
+            self.assertFalse(protected_path(path),path)
+        self.assertIsNotNone(maintenance_directory_problem({},'//etc/cron.d'))
+
+    @unittest.skipUnless(__import__('os').name=='posix','Symlinks to system folders need a POSIX host')
+    def test_symlinks_into_system_folders_are_followed(self):
+        import os,base64,helper
+        from helper import protected_path, refuse_protected_sources, maintenance_directory_problem, maintenance_link_escape
+        with tempfile.TemporaryDirectory() as temp:
+            parent=pathlib.Path(temp)/'opt-x';os.symlink('/etc',parent)
+            self.assertTrue(protected_path(str(parent/'shadow')),'a parent symlink to /etc is resolved')
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources({'kind':'static','documentRoot':str(parent/'ssh')})
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources({'kind':'static','documentRoot':'/'})
+            link=pathlib.Path(temp)/'www';os.symlink('/etc',link)
+            cfg={'stagingRoot':temp,'maintenance':{'directory':str(link)}}
+            self.assertIsNotNone(maintenance_directory_problem(cfg,str(link)));self.assertTrue(maintenance_link_escape(str(link)))
+            with patch('helper.emit'),self.assertRaisesRegex(ValueError,'system folder'):helper.deploy_maintenance({'config':cfg,'html':base64.b64encode(b'x').decode()})
+
+    def test_maintenance_directory_must_be_a_web_root_or_site_path(self):
+        from helper import maintenance_directory_problem as problem
+        cfg={'stagingRoot':'/var/lib/docknest','composeFiles':['/opt/app/compose.yaml']}
+        for path in ['/var/lib/docknest/maintenance/site','/var/www/example.org/maintenance','/srv/maintenance','/usr/share/nginx/html/maintenance','/opt/app/maintenance']:
+            self.assertIsNone(problem(cfg,path),path)
+        self.assertIsNone(problem({'stagingRoot':'/data/docknest'},'/data/docknest/maintenance/site'))
+        for path in ['/etc/cron.d','/root/maintenance','/home/deploy/.ssh','/usr/bin','/opt/other/maintenance','/tmp/maintenance','/var/www/../../etc']:
+            self.assertIsNotNone(problem(cfg,path),path)
+        self.assertIsNotNone(problem({'stagingRoot':'/'},'/opt/x'),'the filesystem root is not a staging root')
+
+    def test_deploy_refuses_new_locations_and_keeps_existing_deployments_with_a_warning(self):
+        import base64,helper
+        with tempfile.TemporaryDirectory() as temp:
+            target=pathlib.Path(temp)/'proxy'/'maintenance'
+            request={'config':{'maintenance':{'directory':str(target)}},'html':base64.b64encode(b'<p>m</p>').decode()}
+            events=[]
+            with patch('helper.emit',side_effect=lambda **kw:events.append(kw)):
+                with self.assertRaisesRegex(ValueError,'outside the site'):helper.deploy_maintenance(request)
+                self.assertFalse(target.exists())
+                target.mkdir(parents=True);(target/'maintenance.html').write_text('old')
+                helper.deploy_maintenance(request)
+            self.assertEqual((target/'maintenance.html').read_bytes(),b'<p>m</p>')
+            self.assertTrue(any('kept because a maintenance page is already deployed' in event.get('warning','') for event in events))
+            if __import__('os').name!='posix':return  # The helper compares POSIX paths; it runs on Linux.
+            staged=pathlib.Path(temp)/'staging'/'maintenance'/'site'
+            with patch('helper.emit'):helper.deploy_maintenance({'config':{'stagingRoot':str(pathlib.Path(temp)/'staging'),'maintenance':{'directory':str(staged)}},'html':request['html']})
+            self.assertTrue((staged/'maintenance.html').is_file())
+
 if __name__=='__main__':unittest.main()
