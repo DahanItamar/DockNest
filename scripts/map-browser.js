@@ -26,6 +26,23 @@ const state={
  jobs:[],backups:[],policies:[],audit:[],storage:{used:0,total:1e12},worker:{online:true}
 };
 let browser;const errors=[];
+// Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
+const mock={previews:[],starts:[],cancels:[],phase:'running'};
+function preview({siteId,targetServerId}){
+ const id='m-'+siteId+'-'+targetServerId,base={id,estimateSeconds:180,downtimeSeconds:30,undoDays:7,warnings:[],advanced:{ports:['80 to 80','8080 to 8081 (8080 is taken)'],nginx:{file:'/etc/nginx/sites-enabled/shop.conf',uncopiedLines:['include /etc/nginx/custom.conf;']},envKeys:['DATABASE_URL','REDIS_HOST'],dns:'manual',tests:[]}};
+ if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'This server is not connected. Reconnect it first.'};
+ if(targetServerId==='d')return {...base,ok:true,verdict:'Ready',estimateSeconds:1500,downtimeSeconds:900,warnings:['The database is large.']};
+ return {...base,ok:true,verdict:'Ready'};
+}
+const stepsFor=phase=>{
+ const names=['Check both servers','Copy files','Copy the database','Start the new copy','Test the new copy','Switch'];
+ const done={running:3,switching:5,waiting_dns:6,done:6,cancelled:2}[phase]??0;
+ return names.map((title,i)=>({id:'s'+i,title,status:i<done?'done':i===done&&phase!=='cancelled'?'running':'waiting'}));
+};
+function moveState(){
+ const p=mock.phase;
+ return {state:p,steps:stepsFor(p),progress:{running:0.5,switching:0.85,waiting_dns:1,done:1,cancelled:0.3}[p]??0,statusLine:p==='running'?'Copying the database':p==='switching'?'Switching':'',cancelable:p==='running',dns:{type:'A',name:'shop.example.com',value:'203.0.113.7'}};
+}
 
 async function open({role='admin',width=1440,height=900,scheme='light',appState=state}={}){
  const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme});
@@ -36,6 +53,15 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
  await page.route('**/api/**',route=>{
   const endpoint=new URL(route.request().url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
+  const req=route.request();
+  if(endpoint.startsWith('/api/moves')){
+   const parts=endpoint.split('/').filter(Boolean),body=req.postDataJSON?.()||{};
+   if(parts.length===2&&req.method()==='POST'){mock.previews.push(body);return route.fulfill({json:preview(body)});}
+   if(parts[3]==='start'){mock.starts.push({id:parts[2],body});mock.phase='running';return route.fulfill({status:202,json:{ok:true}});}
+   if(parts[3]==='cancel'){mock.cancels.push(parts[2]);mock.phase='cancelled';return route.fulfill({json:{ok:true}});}
+   if(parts.length===3)return route.fulfill({json:moveState()});
+   return route.fulfill({json:[]});
+  }
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
   return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?appState:endpoint==='/api/version'?{version:'0.0.0'}:{}});
  });
@@ -50,6 +76,110 @@ const overlap=(a,b)=>a.x<b.x+b.w-0.5&&b.x<a.x+a.w-0.5&&a.y<b.y+b.h-0.5&&b.y<a.y+
 async function fits(page,label){const o=await page.evaluate(()=>({sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth}));assert.ok(o.sw<=o.cw,label+': horizontal overflow');}
 async function shot(page,scheme,size){if(shots)await page.screenshot({path:path.join(shots,`map-${size}-${scheme}.png`)});}
 const scaleOf=page=>page.locator('.map-canvas').evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).a);
+
+async function dragSite(page,siteId,serverName,release=true){
+ const src=(await boxes(page,`.map-site[data-site="${siteId}"]`))[0],t=(await page.locator('.map-server',{hasText:serverName}).first().boundingBox());
+ await page.mouse.move(src.x+src.w/2,src.y+src.h/2);await page.mouse.down();
+ await page.mouse.move(t.x+t.width/2,t.y+t.height/2,{steps:5});
+ await page.locator('.map-lines path.drag').waitFor();
+ if(release){await page.mouse.up();}
+}
+const dialog=page=>page.getByRole('dialog');
+async function trapped(page){ // focus stays inside the open dialog after several Tab presses
+ for(let i=0;i<8;i++){await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('dialog')),true,'focus trapped');}
+}
+async function moveFlow(page,scheme){
+ Object.assign(mock,{previews:[],starts:[],cancels:[],phase:'running',blockA:false});
+ const save=page.getByRole('button',{name:'Save changes'});
+ assert.equal(await save.isDisabled(),true,'save starts disabled');
+ // Blocked target: greyed with the reason; nothing pending
+ await dragSite(page,'1','Quiet server',false);
+ await page.locator('.map-server.blocked').getByText('This server is not connected. Reconnect it first.').waitFor();
+ await shot(page,scheme,'1440-1-drag-blocked');
+ await page.mouse.up();
+ await page.getByText(/cannot move to Quiet server.*not connected/).waitFor();
+ assert.equal(await save.isDisabled(),true,'blocked target keeps save off');
+ // Valid target
+ await dragSite(page,'1','itamar-Srv',false);
+ await page.locator('.map-server.target').waitFor();
+ await shot(page,scheme,'1440-2-drag');
+ await page.mouse.up();
+ await page.getByText(/will move to itamar-Srv/).waitFor();
+ await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
+ assert.equal(await page.getByRole('button',{name:'Undo change'}).count(),1);
+ await shot(page,scheme,'1440-3-pending');
+ // Review dialog: simple summary, advanced collapsed
+ await save.click();
+ await dialog(page).getByRole('heading',{name:'Ready to move'}).waitFor();
+ const d=dialog(page);
+ await d.getByText('shop.example.com',{exact:false}).first().waitFor();
+ await d.getByText('3 minutes').waitFor();await d.getByText('30 s').waitFor();await d.getByText('7 days').waitFor();
+ const adv=d.getByRole('button',{name:'Advanced settings'});
+ assert.equal(await adv.getAttribute('aria-expanded'),'false');
+ assert.equal(await d.getByText('DATABASE_URL').count(),0,'advanced hidden');
+ await shot(page,scheme,'1440-4-review');
+ await adv.click();
+ assert.equal(await d.getByLabel('DATABASE_URL').isChecked(),false,'env rewrite off by default');
+ assert.equal(await d.getByLabel('Block outgoing mail while testing').isChecked(),true);
+ await d.getByLabel('Let DockNest change it with Cloudflare').check();
+ await d.getByLabel('Cloudflare token (optional)').waitFor();
+ await d.getByLabel('I will change the DNS record myself').check();
+ await shot(page,scheme,'1440-5-advanced');
+ await trapped(page);
+ // Escape cancels and focus returns to the opener
+ await page.keyboard.press('Escape');await dialog(page).waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.activeElement?.textContent==='Save changes');
+ // Move: start, progress, DNS wait, done
+ await save.click();await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+ await d.getByRole('button',{name:'Advanced settings'}).click();await d.getByLabel('REDIS_HOST').check();
+ await d.getByRole('button',{name:'Move',exact:true}).click();
+ await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
+ assert.deepEqual(mock.starts[0].body.options.envRewrite,['REDIS_HOST']);
+ assert.equal(mock.starts[0].id,'m-1-a');assert.equal(mock.starts[0].body.options.dns.provider,'manual');
+ await d.getByRole('progressbar').waitFor();assert.equal(await d.getByRole('progressbar').getAttribute('aria-valuenow'),'50');
+ await d.getByText('Copying the database').waitFor();
+ await d.getByRole('listitem').filter({hasText:'Copy files'}).getByText('done').waitFor({state:'attached'});
+ assert.equal(await d.getByRole('button',{name:'Cancel'}).isEnabled(),true,'cancel before the switch');
+ assert.equal(await d.locator('[role=status]').count()>=1,true,'live region');
+ await shot(page,scheme,'1440-6-moving');
+ mock.phase='switching';
+ await d.getByText('The switch has started and cannot be cancelled.').waitFor({timeout:6000});
+ assert.equal(await d.getByRole('button',{name:'Cancel'}).isDisabled(),true,'no cancel after the switch');
+ mock.phase='waiting_dns';
+ await d.getByText(/Waiting for the domain to point here/).waitFor({timeout:6000});
+ await d.getByText('A shop.example.com').waitFor();await d.getByText('203.0.113.7',{exact:false}).waitFor();
+ assert.equal(await d.getByRole('button',{name:'Copy'}).count(),1);
+ await shot(page,scheme,'1440-7-done');
+ await d.getByRole('button',{name:'Copy'}).click();
+ mock.phase='done';
+ await d.getByText('The domain points to the new server.').waitFor({timeout:6000});
+ await d.getByRole('button',{name:'Close'}).click();await dialog(page).waitFor({state:'detached'});
+ assert.equal(await save.isDisabled(),true,'pending cleared after finish');
+ // Cancel path
+ mock.phase='running';
+ await dragSite(page,'1','itamar-Srv');await save.click();
+ await d.getByRole('button',{name:'Move',exact:true}).click();
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await d.getByRole('heading',{name:'Move cancelled'}).waitFor({timeout:6000});
+ assert.equal(mock.cancels.length,1);
+ await d.getByRole('button',{name:'Close'}).click();
+ // Long downtime: warning and "Move anyway"
+ await dragSite(page,'1','zeta-Srv');await save.click();
+ await d.getByText(/offline for a long time/).waitFor();
+ const go=d.getByRole('button',{name:'Move',exact:true});
+ assert.equal(await go.isDisabled(),true,'long downtime blocks until confirmed');
+ await shot(page,scheme,'1440-8-warning');
+ await d.getByLabel('Move anyway').check();assert.equal(await go.isEnabled(),true);
+ await d.getByRole('button',{name:'Cancel'}).click();
+ // Blocked at review time: plain red sentence, no Move
+ await page.getByRole('button',{name:'Undo change'}).click();
+ await dragSite(page,'1','itamar-Srv');mock.blockA=true;await save.click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ await d.getByRole('alert').getByText('This server is not connected. Reconnect it first.').waitFor();
+ assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
+ await shot(page,scheme,'1440-9-blocked');
+ await d.getByRole('button',{name:'Cancel'}).click();mock.blockA=false;
+}
 
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
@@ -106,18 +236,7 @@ try{
    await page.mouse.move(m.x+m.width/2,m.y+m.height/2);await page.mouse.wheel(0,-300);
    await page.waitForFunction(k=>new DOMMatrix(getComputedStyle(document.querySelector('.map-canvas')).transform).a>k,k0);
    await page.getByRole('button',{name:'Fit to screen'}).click();
-   // Moving is scaffolded only
-   const save=page.getByRole('button',{name:/Save changes/});
-   assert.equal(await save.isDisabled(),true);assert.equal(await save.getAttribute('title'),'Moving sites is coming soon');
-   const src=(await boxes(page,'.map-site'))[0];
-     await page.mouse.move(src.x+src.w/2,src.y+src.h/2);await page.mouse.down();
-   const target=await page.locator('.map-server').evaluateAll(els=>els.map(e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}}));
-   await page.mouse.move(target[3].x,target[3].y,{steps:4});
-   await page.locator('.map-lines path.drag').waitFor();await page.locator('.map-server.target').waitFor();
-   await shot(page,scheme,'1440-drag');
-   await page.mouse.up();
-   assert.equal(await page.locator('.map-lines path.drag').count(),0);
-   await page.getByText(/was not moved\. Moving sites is coming soon/).waitFor();
+   await moveFlow(page,scheme);
    await page.getByRole('button',{name:'Fit to screen'}).click();
    await fits(page,'desktop '+scheme);
    await shot(page,scheme,'1440');
@@ -130,6 +249,10 @@ try{
    await page.locator('.map-site').first().waitFor();
    assert.equal(await page.getByRole('button',{name:/Save changes/}).count(),0);
    assert.equal(await page.locator('.map-site.movable').count(),0);
+   await page.locator('.map-viewport').focus();
+   assert.equal(await page.getByRole('button',{name:'Undo change'}).count(),0);
+   const src=(await boxes(page,'.map-site'))[0];await page.mouse.move(src.x+10,src.y+10);await page.mouse.down();await page.mouse.move(src.x+10,src.y+300,{steps:4});await page.mouse.up();
+   assert.equal(await page.locator('.map-lines path.drag').count(),0,'operators cannot drag');
    await context.close();
   }
   // Phone list
@@ -143,6 +266,28 @@ try{
    await page.getByText('No sites on this server yet.').first().waitFor();
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
    await fits(page,'phone '+scheme);
+   // Move to... opens the same dialogs as full-screen sheets
+   Object.assign(mock,{previews:[],starts:[],cancels:[],phase:'running',blockA:false});
+   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
+   const d=dialog(page);
+   await d.getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
+   await d.getByText('This server is not connected. Reconnect it first.').waitFor();
+   assert.equal(await d.getByRole('button',{name:/Quiet server/}).isDisabled(),true,'blocked target greyed');
+   await page.waitForFunction(()=>[...document.querySelectorAll('dialog button')].every(b=>!/Checking/.test(b.textContent)));
+   const box=await d.boundingBox();assert.ok(box.width>=401&&box.height>=873,'full-screen sheet');
+   await shot(page,scheme,'402-1-target');
+   await d.getByRole('button',{name:/^itamar-Srv/}).click();
+   await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+   for(const b of await d.getByRole('button').all())assert.ok((await b.boundingBox()).height>=43.5,'phone buttons 44px');
+   await fits(page,'phone sheet '+scheme);await shot(page,scheme,'402-2-review');
+   await d.getByRole('button',{name:'Move',exact:true}).click();
+   await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();await d.getByText('Copying the database').waitFor();
+   await shot(page,scheme,'402-3-moving');
+   mock.phase='waiting_dns';
+   await d.getByText(/Waiting for the domain to point here/).waitFor({timeout:6000});
+   await fits(page,'phone done '+scheme);await shot(page,scheme,'402-4-done');
+   await d.getByRole('button',{name:'Close'}).click();
+   assert.equal(mock.starts.length,1);
    await page.evaluate(()=>window.scrollTo(0,0));
    await shot(page,scheme,'402');
    await context.close();

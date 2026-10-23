@@ -3,9 +3,10 @@ import {IconServer,IconBox,IconZoomIn,IconZoomOut,IconArrowsMaximize,IconMap2} f
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {layoutMap,groupForList} from './layout.js';
+import {createMovesClient} from './moves-client.js';
+import {ReviewDialog,ProgressDialog,TargetDialog} from './MoveFlow.jsx';
 import './map.css';
 
-const SOON='Moving sites is coming soon';
 const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
 const MIN=0.2,MAX=2,FIT_MIN=0.85; // fit never scales above 100% or below 85%; beyond that the user pans
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -27,23 +28,44 @@ function useNarrow(){
  return narrow;
 }
 
-function MapList({groups}){
+function MapList({groups,canMove,onMoveTo}){
  return <div className="map-list">{groups.map(({server,sites},i)=>{
   const id='map-list-'+(server?server.id:'unassigned');
   return <section key={id} className="map-list-group" aria-labelledby={id}>
    <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span></>}</div></div>
-   {sites.length?<ul>{sites.map(s=><li key={s.id}><IconBox size={18} stroke={1.75} aria-hidden="true"/><span className="map-name">{s.name}</span><span className="map-caption">{siteFacts(s)}</span></li>)}</ul>:<p className="map-caption map-none">No sites on this server yet.</p>}
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><IconBox size={18} stroke={1.75} aria-hidden="true"/><span className="map-name">{s.name}</span><span className="map-caption">{siteFacts(s)}</span>{canMove&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</li>)}</ul>:<p className="map-caption map-none">No sites on this server yet.</p>}
   </section>;
  })}</div>;
 }
 
-export function MapPage({servers=[],sites=[],user}){
+export function MapPage({servers=[],sites=[],user,api}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
  const layout=useMemo(()=>layoutMap(servers,sites),[servers,sites]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s]))}),[servers,sites]);
  const view=useRef(null),touched=useRef(false),pointers=useRef(new Map()),gesture=useRef(null);
  const [t,setT]=useState({x:0,y:0,k:1}),[drag,setDrag]=useState(null),[note,setNote]=useState('');
+ const client=useMemo(()=>createMovesClient(api||(()=>Promise.reject(new Error('Moving is not available.')))),[api]);
+ const [pending,setPending]=useState(null),[checks,setChecks]=useState({}),[flow,setFlow]=useState(null),opener=useRef(null);
+ const siteChecks=checks[drag?.id]||{};
+ function precheck(siteId){
+  const home=byId.sites[siteId]?.serverId;
+  servers.filter(s=>s.id!==home).forEach(s=>{
+   if(checks[siteId]?.[s.id])return;
+   client.preview(siteId,s.id).then(r=>setChecks(c=>({...c,[siteId]:{...c[siteId],[s.id]:r}}))).catch(()=>{});
+  });
+ }
+ function openReview(siteId,targetId){
+  setFlow({kind:'review',siteId,targetId,busy:true});
+  client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,verdict:e.message}}));
+ }
+ function closeFlow(finished){setFlow(null);if(finished)setPending(null);setTimeout(()=>opener.current?.focus?.(),0)}
+ async function startMove(options){
+  setFlow(f=>({...f,busy:true,error:''}));
+  try{await client.start(flow.preview.id,options);setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:f.preview.id}))}
+  catch(e){setFlow(f=>({...f,busy:false,error:e.message}))}
+ }
+ function moveTo(siteId,button){opener.current=button;precheck(siteId);setFlow({kind:'target',siteId})}
 
  const fit=useCallback(()=>{
   const el=view.current;if(!el)return;
@@ -74,7 +96,7 @@ export function MapPage({servers=[],sites=[],user}){
   pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
   const card=canMove&&e.target.closest?.('[data-site]');
   if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);}
-  else if(card){const rect=layout.sites.find(s=>s.id===card.dataset.site);const [px,py]=toCanvas(e);gesture.current={type:'drag',id:rect.id};setDrag({id:rect.id,px,py,over:null});}
+  else if(card){precheck(card.dataset.site);const rect=layout.sites.find(s=>s.id===card.dataset.site);const [px,py]=toCanvas(e);gesture.current={type:'drag',id:rect.id};setDrag({id:rect.id,px,py,over:null});}
   else gesture.current={type:'pan',x:e.clientX,y:e.clientY};
   e.currentTarget.setPointerCapture?.(e.pointerId);
  }
@@ -95,7 +117,11 @@ export function MapPage({servers=[],sites=[],user}){
  function up(e){
   pointers.current.delete(e.pointerId);
   const g=gesture.current;
-  if(g?.type==='drag'&&drag?.over)setNote(`${byId.sites[g.id]?.name} was not moved. ${SOON}.`);
+  if(g?.type==='drag'&&drag?.over){
+   const r=checks[g.id]?.[drag.over],name=byId.sites[g.id]?.name,target=byId.servers[drag.over]?.name;
+   if(r&&!r.ok)setNote(`${name} cannot move to ${target}. ${r.verdict}`);
+   else{setPending({siteId:g.id,targetId:drag.over});setNote(`${name} will move to ${target}. Choose Save changes to continue.`);}
+  }
   if(!pointers.current.size){gesture.current=null;setDrag(null);}
  }
  function key(e){
@@ -112,7 +138,13 @@ export function MapPage({servers=[],sites=[],user}){
  }
 
  if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add a site. They will appear here, arranged automatically.</p></section>;
- if(narrow)return <div className="map-root"><MapList groups={groups}/></div>;
+ const flowSite=flow&&byId.sites[flow.siteId],flowTo=flow&&byId.servers[flow.targetId],flowFrom=flowSite&&byId.servers[flowSite.serverId];
+ const dialogs=<>
+  {flow?.kind==='target'&&<TargetDialog site={flowSite} servers={servers.filter(s=>s.id!==flowSite.serverId)} results={checks[flow.siteId]||{}} onCancel={()=>closeFlow(false)} onPick={id=>openReview(flow.siteId,id)}/>}
+  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} onCancel={()=>closeFlow(false)} onMove={startMove}/>}
+  {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
+ </>;
+ if(narrow)return <div className="map-root"><MapList groups={groups} canMove={canMove} onMoveTo={moveTo}/>{dialogs}</div>;
 
  const home=drag&&layout.sites.find(s=>s.id===drag.id);
  const item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
@@ -126,19 +158,23 @@ export function MapPage({servers=[],sites=[],user}){
     <IconButton label="Zoom in" icon={IconZoomIn} onClick={()=>zoomCentre(1.25)}/>
    </div>
    <button type="button" onClick={()=>{touched.current=false;fit()}}><IconArrowsMaximize size={18} stroke={1.75} aria-hidden="true"/>Fit to screen</button>
-   {canMove&&<button type="button" className="primary" disabled title={SOON} aria-label={'Save changes. '+SOON}>Save changes</button>}
+   {canMove&&<>
+    <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button>
+    {pending&&<button type="button" onClick={()=>{setPending(null);setNote('')}}>Undo change</button>}
+   </>}
   </div>
   <div ref={view} className="map-viewport" tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
    <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
      {layout.paths.map(p=><path key={p.id} d={p.d} className={drag?.id===p.id?'dim':undefined}/>)}
+     {pending&&!drag&&(()=>{const a=layout.sites.find(x=>x.id===pending.siteId),b=layout.servers.find(x=>x.id===pending.targetId);return a&&b&&<path className="drag" d={`M${a.x} ${a.y+a.h/2} L${b.x+b.w} ${b.y+b.h/2}`}/>})()}
      {home&&<path className="drag" d={`M${home.x} ${home.y+home.h/2} L${drag.px} ${drag.py}`}/>}
     </svg>
     {layout.servers.map(r=><span key={"h"+r.id} aria-hidden="true" className={"map-handle"+(drag?.over===r.id?" active":"")} style={{left:r.x+r.w-6,top:r.y+r.h/2-6}}/>)}
     {layout.sites.map(r=><span key={"h"+r.id} aria-hidden="true" className={"map-handle"+(drag?.id===r.id?" active":"")} style={{left:r.x-6,top:r.y+r.h/2-6}}/>)}
     {groupIds.map(id=>{const r=layout.servers.find(s=>s.id===id),s=byId.servers[id],mine=layout.sites.filter(x=>x.serverId===id);
      return <div key={id} role="group" aria-labelledby={'map-server-'+id} className="map-group">
-      <div className={'map-server'+(drag?.over===id?' target':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{serverFacts(s,mine.length)}</span></div>
+      <div className={'map-server'+(drag?.over===id?' target':'')+(drag&&id!==home?.serverId&&siteChecks[id]&&!siteChecks[id].ok?' blocked':'')+(pending?.targetId===id?' chosen':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{drag&&siteChecks[id]&&!siteChecks[id].ok?siteChecks[id].verdict:pending?.targetId===id?'New home for '+byId.sites[pending.siteId]?.name:serverFacts(s,mine.length)}</span></div>
       {mine.map(renderSite)}
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}
@@ -146,5 +182,6 @@ export function MapPage({servers=[],sites=[],user}){
   </div>
   <p className="map-hint map-caption">Drag the background to move around. Use the buttons, mouse wheel or pinch to zoom.</p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
+  {dialogs}
  </section>;
 }
