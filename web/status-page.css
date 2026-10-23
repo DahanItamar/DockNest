@@ -1,0 +1,20 @@
+/* Status pages (404, 403, 401, 500). Tokens and the type scale only; the code is a display element, so it alone uses a large clamp().
+   The code is heavy, and fades from the heading colour to transparent, so it reads as cropped into the page in both themes. */
+/* .status-screen (z-index 2000) covers the whole app: use it only for route-level screens (404, 403, 401 and the 500 from the route boundary in report/ErrorBoundary.jsx). */
+.status-screen{position:fixed;inset:0;z-index:2000;display:flex;flex-direction:column;align-items:center;overflow:auto;background:var(--background);padding:var(--edge)}
+.status-brand{flex:none;padding-top:8px;opacity:.9}
+.status-page:focus{outline:none}
+.status-page{flex:1 0 auto;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:var(--edge);margin-inline:auto;max-width:560px;animation:dn-enter var(--dur-slow) var(--ease) both}
+.status-code{margin:0;max-width:none;font-size:clamp(104px,min(30vw,36vh),224px);line-height:1;font-weight:900;letter-spacing:-.045em;color:var(--heading);background:linear-gradient(to bottom,var(--heading) 20%,var(--transparent) 76%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;user-select:none;margin-bottom:-.22em;}
+.status-title{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+.status-page .status-text{margin:4px 0 0;max-width:44ch;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--text-secondary);text-wrap:balance}
+.status-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px}
+.status-actions>:is(button,a){min-width:152px}
+.status-aside{margin-top:12px;display:flex;justify-content:center}
+.status-page .status-link{min-height:var(--control-height);padding:0 8px;font-weight:400;text-decoration:underline;text-underline-offset:3px;color:var(--link)}
+.status-page .status-note{margin-top:24px;max-width:48ch}
+@media(min-width:1920px){.status-page{max-width:720px}.status-code{font-size:clamp(224px,12vw,320px)}}
+@media(min-width:2560px){.status-page{max-width:880px}.status-code{font-size:clamp(320px,12vw,440px)}}
+@media(max-width:480px){.status-actions{width:100%;flex-direction:column;align-items:stretch}.status-actions>:is(button,a){width:100%;min-height:44px}.status-page{padding-inline:0}}
+@media(forced-colors:active){.status-code{background:none;-webkit-text-fill-color:currentColor;color:CanvasText}}
+@media(prefers-reduced-motion:reduce){.status-page{animation:none!important}}
