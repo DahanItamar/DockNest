@@ -1863,12 +1863,21 @@ PROTECTED_PATHS={'/','/bin','/boot','/dev','/etc','/home','/lib','/lib64','/medi
 MAIL_PORTS='25,465,587'
 def move_id(req):
     value=str(req.get('moveId',''));uuid.UUID(value);return value
-def move_path(value):
-    """An absolute, normalised, non-system path a move may create (and later remove) on the target."""
-    p=pathlib.PurePosixPath(str(value))
-    if not p.is_absolute() or '..' in p.parts or str(p)!=str(value) or str(p) in PROTECTED_PATHS or len(p.parts)<2:raise ValueError('Unsupported path for a move: '+str(value))
-    if any(str(p).startswith(prefix) for prefix in ['/proc/','/sys/','/dev/','/run/','/boot/']):raise ValueError('System paths cannot be moved: '+str(value))
-    return pathlib.Path(str(p))
+# A move never writes into system folders, Docker's own storage or another program's configuration, even when a site
+# mounted such a path on its old server. Only the move's own DockNest folders below /var/lib/docknest are allowed there.
+MOVE_FORBIDDEN=SYSTEM_TREES+('/usr','/var/lib/docker','/var/lib/containerd','/var/lib/docker-backup-manager','/var/lib/docknest','/var/spool','/var/mail','/var/cache')
+MOVE_OWN_ROOTS=('/var/lib/docknest/moves','/var/lib/docknest/acme','/var/lib/docknest/maintenance')
+def move_path(value,own=False):
+    """An absolute, normalised, non-system path a move may create (and later remove). Symlinks in the existing part of
+    the path are followed for the check, so /srv/x -> /etc is refused too. `own` admits DockNest's own move folders."""
+    text=str(value)
+    p=pathlib.PurePosixPath(text)
+    if not p.is_absolute() or '..' in p.parts or str(p)!=text or text in PROTECTED_PATHS or len(p.parts)<2:raise ValueError('Unsupported path for a move: '+text)
+    for path in resolved(text):
+        if not path.startswith('/'):continue
+        allowed=own and any(within(path,root) and path!=root for root in MOVE_OWN_ROOTS)
+        if protected_lexical(path) or (not allowed and any(within(path,root) for root in MOVE_FORBIDDEN)):raise ValueError('%s is a system or protected location; DockNest never writes there during a move.'%text)
+    return pathlib.Path(text)
 def move_state(mid,create=False):
     d=MOVES_ROOT/mid
     if create:MOVES_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
@@ -2058,6 +2067,8 @@ def target_probe(probe):
     names=probe.get('names') or {}
     existing={'containers':docker('ps','-a','--format','{{.Names}}').decode().split(),'volumes':docker('volume','ls','-q').decode().split(),'networks':docker('network','ls','--format','{{.Name}}').decode().split()}
     conflicts={kind:sorted(set(names.get(kind) or [])&set(values)) for kind,values in existing.items()}
+    project=names.get('composeProject')
+    if isinstance(project,str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):conflicts['composeProjects']=[project] if docker('ps','-aq','--filter','label=com.docker.compose.project='+project).decode().split() else []
     return {'existingPaths':paths,'conflicts':conflicts}
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
@@ -2139,27 +2150,38 @@ def firewall_ready():
     if not shutil.which('iptables'):return False
     try:run(['iptables','-S','DOCKER-USER'],timeout=10);return True
     except Exception:return False
-def block_mail(d,state,mid,ips):
-    """Test copies must not send mail: reject outbound SMTP from their addresses where the host firewall allows it."""
-    if not ips or not firewall_ready():return False
-    for ip in ips:
-        if not is_ip(ip):continue
-        journal_resource(d,state,'firewall',ip)
-        run(['iptables','-I','DOCKER-USER','-s',ip,'-p','tcp','-m','multiport','--dports',MAIL_PORTS,'-m','comment','--comment','docknest-move-'+mid,'-j','REJECT'],timeout=10)
-    return True
+def block_mail(d,state,mid,subnets):
+    """Test copies must not send mail. Before they start, reject outbound SMTP from the networks this move created
+    (IPv4 with iptables, IPv6 with ip6tables, in Docker's DOCKER-USER chain). True only when every network is covered."""
+    if not subnets or not firewall_ready():return False
+    covered=True
+    for subnet in subnets:
+        tool='ip6tables' if ':' in subnet else 'iptables'
+        try:ipaddress.ip_network(subnet);run([tool,'-S','DOCKER-USER'],timeout=10)
+        except Exception:covered=False;continue
+        journal_resource(d,state,'firewall',subnet)
+        run([tool,'-I','DOCKER-USER','-s',subnet,'-p','tcp','-m','multiport','--dports',MAIL_PORTS,'-m','comment','--comment','docknest-move-'+mid,'-j','REJECT'],timeout=10)
+    return covered
 def unblock_mail(mid):
-    if not shutil.which('iptables'):return
-    try:rules=run(['iptables','-S','DOCKER-USER'],timeout=10).decode().splitlines()
-    except Exception:return
-    for rule in rules:
-        if rule.startswith('-A DOCKER-USER') and 'docknest-move-'+mid in rule:
-            try:run(['iptables','-D',*shlex.split(rule)[1:]],timeout=10)
-            except Exception:pass
+    for tool in ['iptables','ip6tables']:
+        if not shutil.which(tool):continue
+        try:rules=run([tool,'-S','DOCKER-USER'],timeout=10).decode().splitlines()
+        except Exception:continue
+        for rule in rules:
+            if rule.startswith('-A DOCKER-USER') and 'docknest-move-'+mid in rule:
+                try:run([tool,'-D',*shlex.split(rule)[1:]],timeout=10)
+                except Exception:pass
+def network_subnets(names):
+    subnets=[]
+    for name in names:
+        try:subnets+=[c['Subnet'] for c in (json.loads(docker('network','inspect',name))[0].get('IPAM') or {}).get('Config') or [] if c.get('Subnet')]
+        except Exception:pass
+    return subnets
 def nginx_site_conf(mid,n,tls=None):
     domains=[d for d in n.get('domains',[]) if DOMAIN.fullmatch(d)]
     if not domains:raise ValueError('A move with nginx needs at least one valid domain')
     site=str(n['siteId']);uuid.UUID(site);suffix=site.replace('-','')[:12]
-    mdir=str(move_path(n['maintenanceDirectory']));acme=str(ACME_ROOT/site)
+    mdir=str(move_path(n['maintenanceDirectory'],own=True));acme=str(ACME_ROOT/site)
     if re.search(r'[\s;{}"\'$]',mdir):raise ValueError('Unsupported maintenance directory')
     if n.get('documentRoot'):
         root=str(move_path(n['documentRoot']))
@@ -2184,6 +2206,7 @@ def nginx_reload():
     try:run(['nginx','-s','reload'],timeout=60)
     except Exception:run(['systemctl','reload','nginx'],timeout=60)
 def write_nginx(d,state,mid,n,tls=None):
+    uuid.UUID(str(n.get('siteId','')))
     conf_dir=nginx_conf_dir()
     if not conf_dir:raise ValueError('nginx on this server does not include a conf.d folder DockNest can add its file to.')
     path=pathlib.Path(conf_dir)/('docknest-%s.conf'%n['siteId'])
@@ -2219,7 +2242,9 @@ def wait_probe(port,host,path,seconds=60):
         if time.time()>=deadline:return last
         time.sleep(2)
 def deploy_maintenance_dir(d,state,n):
-    mdir=move_path(n['maintenanceDirectory'])
+    mdir=move_path(n['maintenanceDirectory'],own=True)
+    problem=maintenance_directory_problem({'stagingRoot':n.get('stagingRoot') or '/var/lib/docknest'},mdir)
+    if problem:raise ValueError(problem)
     if not mdir.exists():journal_resource(d,state,'paths',{'path':str(mdir),'restoreEmpty':False})
     mdir.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(n.get('maintenanceHtml') or '')
@@ -2293,6 +2318,12 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         journal_resource(d,state,'networks',name)
         labels=[part for k,v in (network.get('labels') or {}).items() if SAFE_NAME.fullmatch(k) and isinstance(v,str) and len(v)<256 for part in ['--label',k+'='+v]]
         docker('network','create','--driver','bridge',*(['--internal'] if network.get('internal') else []),*(['--ipv6'] if network.get('ipv6') else []),'--label','docknest.move='+mid,*labels,name)
+    # The test copy never joins Docker's shared default bridge: containers from it get a network of this move, so its
+    # outgoing mail can be blocked by subnet before anything starts.
+    test_network='dn-test-'+mid[:12]
+    if mode=='test':
+        journal_resource(d,state,'networks',test_network)
+        docker('network','create','--driver','bridge','--label','docknest.move='+mid,test_network)
     for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
     docker('load','-i',str(unpacked/'images.tar'))
     created=[];ports=[];names=[]
@@ -2308,6 +2339,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             networks=[n for n in (c.get('NetworkSettings',{}).get('Networks') or {}) if n!='none']
             primary=hc.get('NetworkMode') if hc.get('NetworkMode') in networks else (networks[0] if networks else 'none')
             if primary=='default':primary='bridge'
+            if primary=='bridge' and mode=='test':primary=test_network
             args=['create','--name',name,'--restart',policy,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,'--network',primary]
             def aliases(network):
                 values=[a for a in (c['NetworkSettings']['Networks'][network].get('Aliases') or []) if a and a!=c['Id'][:12] and SAFE_NAME.fullmatch(a)]
@@ -2338,18 +2370,21 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
         running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
+        mail_blocked=False
+        if mode=='test':
+            used={n for c in inspect(created) for n in (c.get('NetworkSettings',{}).get('Networks') or {})}
+            mail_blocked=block_mail(d,state,mid,network_subnets(sorted(used))) and used<=set(state['created']['networks'])
         restart_services(running,[{**s,'container':mapping[s['container']],'dependsOn':[mapping[x] for x in s.get('dependsOn',[])]} for s in contracts if s.get('container') in mapping])
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('The copied containers did not become healthy')
-        ips=[n.get('IPAddress') for c in inspect(running) for n in (c.get('NetworkSettings',{}).get('Networks') or {}).values() if n.get('IPAddress')] if running else []
-        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':block_mail(d,state,mid,ips) if mode=='test' else False}
+        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':mail_blocked}
         if mode=='live' and req.get('nginx'):
             n=req['nginx'];deploy_maintenance_dir(d,state,n)
             result['nginx']=write_nginx(d,state,mid,n)
             status,_=wait_probe(80,n['domains'][0],n.get('path') or '/',60)
             if status is None or status>=400:raise ValueError('nginx on this server did not serve the moved site')
-            (move_path(n['maintenanceDirectory'])/'ready').touch(mode=0o644)
+            (move_path(n['maintenanceDirectory'],own=True)/'ready').touch(mode=0o644)
         return result
     except Exception:
         try:
@@ -2380,6 +2415,26 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
                 if new!=value:env.append((key,new.replace('$','$$')))
         if env:lines+=['    environment:']+['      %s: %s'%(yaml_str(k),yaml_str(v)) for k,v in env];rewritten+=len(env)
     return '\n'.join(lines)+'\n',ports,rewritten
+def check_compose_config(config,services,manifest):
+    # The site's Compose files come from the old server; the merged result may only describe what the backup holds.
+    binds={m['Source'] for c in manifest['containers'] for m in c['Mounts'] if m['Type']=='bind'}
+    volumes={m.get('Name') for c in manifest['containers'] for m in c['Mounts'] if m['Type']=='volume'}
+    declared=config.get('volumes') or {}
+    for name in services:
+        service=(config.get('services') or {}).get(name)
+        if not isinstance(service,dict):raise ValueError('The Compose service %s is missing from the Compose files'%name)
+        mode=str(service.get('network_mode') or '')
+        if service.get('privileged') or service.get('devices') or service.get('cap_add') or mode=='host' or mode.startswith(('container:','service:')) or service.get('pid')=='host' or service.get('ipc')=='host' or service.get('userns_mode')=='host':
+            raise ValueError('The Compose service %s asks for host privileges or devices, so DockNest does not start it on the new server.'%name)
+        for volume in service.get('volumes') or []:
+            kind=volume.get('type');source=volume.get('source')
+            if kind=='bind':
+                if source not in binds:raise ValueError('The Compose service %s mounts %s, which is not in the backup.'%(name,source))
+                move_path(source)
+            elif kind=='volume':
+                real=(declared.get(source) or {}).get('name',source)
+                if real not in volumes:raise ValueError('The Compose service %s uses the volume %s, which is not in the backup.'%(name,real))
+            elif kind!='tmpfs':raise ValueError('The Compose service %s uses a %s mount, which DockNest cannot move.'%(name,kind))
 def compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rewritten):
     project=str(compose.get('project',''))
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):raise ValueError('Unsupported Compose project name')
@@ -2390,8 +2445,12 @@ def compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rew
     fd=os.open(override,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|NOFOLLOW,0o600)
     with os.fdopen(fd,'w') as f:f.write(text)
     names=[c['Name'].lstrip('/') for c in manifest['containers']]
-    for name in names:journal_resource(d,state,'containers',name)
     command=['docker','compose','-p',project,'--project-directory',str(workdir)]+[part for f in files for part in ['-f',f]]+['-f',str(override)]
+    others=[cid for cid in docker('ps','-aq','--filter','label=com.docker.compose.project='+project).decode().split()]
+    owned=docker('ps','-aq','--filter','label=com.docker.compose.project='+project,'--filter','label=docknest.move='+mid).decode().split()
+    if set(others)-set(owned):raise ValueError('A Compose project named %s already exists on this server. DockNest never joins or replaces it.'%project)
+    check_compose_config(json.loads(run(command+['config','--format','json'],timeout=120)),[compose['services'][n] for n in names],manifest)
+    for name in names:journal_resource(d,state,'containers',name)
     # Created only; DockNest starts them in the recorded order and checks health like every restore.
     run(command+['up','--no-start','--no-build','--pull','never','--no-deps',*[compose['services'][n] for n in names]],timeout=1800)
     created=[]
@@ -2401,7 +2460,7 @@ def compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rew
         created.append(ids[0])
     return created,names,ports,rewritten+count
 def remove_path(record):
-    p=move_path(record['path'])
+    p=move_path(record['path'],own=True)
     if p.is_symlink() or p.is_file():p.unlink()
     elif p.is_dir():
         if not getattr(shutil.rmtree,'avoids_symlink_attacks',False) and os.name=='posix':raise ValueError('Safe directory removal is unavailable on this host')
@@ -2515,7 +2574,7 @@ def move_stop_target(req):
     if record.is_file():emit(result=json.loads(record.read_text()));return
     n=json.loads((d/'nginx.json').read_text()) if (d/'nginx.json').is_file() else None
     if n:
-        flag=move_path(n['maintenanceDirectory'])/'enabled'
+        flag=move_path(n['maintenanceDirectory'],own=True)/'enabled'
         if flag.is_symlink():raise ValueError('Maintenance flag cannot be a symbolic link')
         flag.touch(mode=0o644)
     ids=docker('ps','-aq','--filter','label=docknest.move='+mid,'--filter','label=docknest.move.mode=live').decode().split()
@@ -2561,8 +2620,11 @@ def move_remove_old(req):
     cs=inspect(existing) if existing else []
     if any(c['State'].get('Running') for c in cs):raise ValueError('The old copy is running again, so DockNest does not remove it.')
     volumes=list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume'))
-    binds=list(dict.fromkeys(m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind'))
+    binds=list(dict.fromkeys(m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind' and m.get('RW',True)))
     if cfg.get('kind')=='static' and cfg.get('documentRoot'):binds.append(cfg['documentRoot'])
+    keep=[lexical(value) for value in req.get('keepPaths') or [] if isinstance(value,str) and value.startswith('/')]
+    try:keep+=[lexical(site['documentRoot']) for site in nginx_sites() if site.get('documentRoot')]
+    except Exception:pass
     for c in cs:docker('rm',c['Id'])
     result={'containers':len(cs),'volumes':[],'paths':[],'dataKept':not req.get('deleteData')}
     if req.get('deleteData'):
@@ -2570,16 +2632,46 @@ def move_remove_old(req):
         used=[m for c in (inspect(others) if others else []) for m in c['Mounts']]
         for name in volumes:
             if not any(m['Type']=='volume' and m.get('Name')==name for m in used):docker('volume','rm',name);result['volumes'].append(name)
+        result['kept']=[]
         for source in binds:
-            if any(os.path.commonpath([os.path.realpath(m['Source']),os.path.realpath(source)]) in [os.path.realpath(m['Source']),os.path.realpath(source)] for m in used):continue
-            p=move_path(source)
+            path=lexical(source)
+            shared=any(os.path.commonpath([os.path.realpath(m['Source']),os.path.realpath(source)]) in [os.path.realpath(m['Source']),os.path.realpath(source)] for m in used)
+            if shared or any(within(path,k) or within(k,path) for k in keep):result['kept'].append(path);continue
+            try:p=move_path(source)
+            except ValueError:result['kept'].append(path);continue
             if p.is_symlink() or p.is_file():p.unlink()
             elif p.is_dir():shutil.rmtree(p)
             else:continue
             result['paths'].append(str(p))
     atomic_json(done,result);record.unlink();emit(result=result)
+LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
+MOVE_LOCK=None
+def move_lock(mid,wait=False):
+    import fcntl
+    d=MOVES_ROOT/mid;MOVES_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
+    handle=open(d/'.lock','a')
+    try:fcntl.flock(handle,fcntl.LOCK_EX|(0 if wait else fcntl.LOCK_NB))
+    except BlockingIOError:handle.close();return None
+    return handle
+def watch_stdin():
+    # DockNest keeps stdin open while it waits. When it gives up (time limit) or its connection drops, stdin ends and
+    # this step stops with everything it started, so a stopped wait never leaves work running on the server.
+    def stop():
+        try:sys.stdin.read()
+        except Exception:pass
+        try:os.killpg(os.getpgrp(),signal.SIGTERM)
+        except Exception:os._exit(1)
+    threading.Thread(target=stop,daemon=True).start()
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK
+    if req.get('operation')=='move-lock-status':
+        handle=move_lock(move_id(req))
+        emit(result={'busy':handle is None})
+        return
+    if req.get('operation') in LOCKED_MOVE_OPS:
+        MOVE_LOCK=move_lock(move_id(req))
+        if MOVE_LOCK is None:raise ValueError('Another DockNest step for this move is still running on this server.')
+        if req.get('watchStdin'):watch_stdin()
     op=req['operation']
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr

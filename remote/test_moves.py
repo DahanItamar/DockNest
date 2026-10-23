@@ -148,7 +148,7 @@ class DeployRestoreTests(unittest.TestCase):
             self.assertIn('DATABASE_URL=postgres://user:secret@10.0.0.9:5432/app',web)
             self.assertTrue((base/'srv'/'shop'/'config.txt').exists());self.assertFalse(root.exists(),'plaintext staging is removed')
             state=json.loads((base/'moves'/MOVE/'resources.json').read_text())
-            self.assertEqual(state['created']['volumes'],['shop_data0','shop_data1']);self.assertEqual(state['created']['networks'],['shop_default'])
+            self.assertEqual(state['created']['volumes'],['shop_data0','shop_data1']);self.assertEqual(state['created']['networks'],['shop_default','dn-test-'+MOVE[:12]])
             self.assertEqual(state['created']['containers'],['web','db']);self.assertIn('test',state['deployed'])
             self.assertEqual(state['deployed']['test']['ports'][0]['to'],8081)
     def test_deploy_refuses_existing_folders_and_teardown_removes_only_created_paths(self):
@@ -227,6 +227,20 @@ class SwitchBackAndRemovalTests(unittest.TestCase):
             outputs=[(['ps','-aq','--no-trunc'],b'o1'),(['ps','-aq'],b'z'),(['inspect','o1'],json.dumps(old).encode()),(['inspect','z'],json.dumps(other).encode())]
             calls,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{},'deleteData':True},outputs,temporary)
             self.assertEqual(result['volumes'],['shop_data']);self.assertNotIn(['volume','rm','shared'],calls)
+    @unittest.skipUnless(os.name=='posix','Removes real folders')
+    def test_remove_old_copy_deletes_only_read_write_data_not_used_elsewhere(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);d=base/'moves'/MOVE;d.mkdir(parents=True)
+            data=base/'srv'/'data';ro=base/'srv'/'certs';other=base/'srv'/'other-site';sysdir=pathlib.Path('/etc')
+            for folder in [data,ro,other]:folder.mkdir(parents=True)
+            (d/'retired.json').write_text(json.dumps({'containers':[{'id':'o1','name':'web','restartPolicy':'always'}]}))
+            mounts=[{'Type':'bind','Source':str(data),'RW':True},{'Type':'bind','Source':str(ro),'RW':False},{'Type':'bind','Source':str(other),'RW':True},{'Type':'bind','Source':'/etc/letsencrypt','RW':True}]
+            old=[{'Id':'o1','State':{'Running':False},'Mounts':mounts}]
+            outputs=[(['ps','-aq','--no-trunc'],b'o1'),(['ps','-aq'],b''),(['inspect','o1'],json.dumps(old).encode())]
+            with patch('helper.nginx_sites',return_value=[]):
+                _,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{},'deleteData':True,'keepPaths':[str(other)]},outputs,str(base/'moves'))
+            self.assertFalse(data.exists());self.assertTrue(ro.exists(),'read-only mounts are not this site\'s data');self.assertTrue(other.exists(),'declared by another site')
+            self.assertTrue(sysdir.exists());self.assertIn('/etc/letsencrypt',result['kept']);self.assertEqual(result['paths'],[str(data)])
 
 class CertificateTests(unittest.TestCase):
     def test_without_certbot_the_owner_gets_one_exact_command(self):
@@ -238,6 +252,33 @@ class CertificateTests(unittest.TestCase):
             result=json.loads(events.getvalue())['result']
             self.assertEqual(result['status'],'needs-owner');command.assert_not_called()
             self.assertEqual(result['command'],'certbot --nginx --cert-name docknest-%s -d shop.example.com -d www.shop.example.com'%SITE)
+
+class MoveSafetyTests(unittest.TestCase):
+    def test_moves_never_write_into_system_docker_or_protected_locations(self):
+        for bad in ['/etc/cron.d/backdoor','/etc/sudoers.d/x','/root/.ssh/authorized_keys','/home/u/.ssh/authorized_keys','/etc/nginx/sites-enabled/x','/usr/local/bin/x','/var/lib/docker/volumes/x','/boot/x','/lib64/x','/var/lib/docknest/moves/x','/etc/shadow']:
+            with self.assertRaises(ValueError,msg=bad):helper.move_path(bad)
+        self.assertEqual(str(helper.move_path('/var/lib/docknest/moves/x',own=True)).replace('\\','/'),'/var/lib/docknest/moves/x')
+        with self.assertRaises(ValueError):helper.move_path('/var/lib/docknest/moves',own=True)
+        with self.assertRaises(ValueError):helper.move_path('/etc/x',own=True)
+        for good in ['/srv/shop/data','/data','/opt/app/config.yaml','/var/www/site']:helper.move_path(good)
+    def test_compose_files_may_only_describe_what_the_backup_holds(self):
+        manifest=fixture_manifest()
+        ok={'services':{'web':{'volumes':[{'type':'volume','source':'data0'},{'type':'bind','source':'/srv/shop/config.txt'},{'type':'tmpfs','target':'/tmp'}]}},'volumes':{'data0':{'name':'shop_data0'}}}
+        helper.check_compose_config(ok,['web'],manifest)
+        for bad in [{'privileged':True},{'network_mode':'host'},{'pid':'host'},{'cap_add':['SYS_ADMIN']},{'devices':['/dev/sda']},{'volumes':[{'type':'bind','source':'/etc'}]},{'volumes':[{'type':'volume','source':'other'}]},{'volumes':[{'type':'npipe','source':'x'}]}]:
+            with self.assertRaises(ValueError,msg=json.dumps(bad)):helper.check_compose_config({'services':{'web':bad},'volumes':{}},['web'],manifest)
+        with self.assertRaises(ValueError):helper.check_compose_config({'services':{}},['web'],manifest)
+    def test_mail_is_blocked_by_subnet_for_ipv4_and_ipv6(self):
+        calls=[]
+        with tempfile.TemporaryDirectory() as temporary:
+            d=pathlib.Path(temporary);state={'created':{'firewall':[]},'deployed':{}}
+            with patch('helper.firewall_ready',return_value=True),patch('helper.run',side_effect=lambda args,timeout=0:calls.append(args) or b''),patch('helper.atomic_json'):
+                self.assertTrue(helper.block_mail(d,state,MOVE,['172.30.0.0/16','fd00:1::/64']))
+        inserts=[call for call in calls if '-I' in call]
+        self.assertEqual([call[0] for call in inserts],['iptables','ip6tables'])
+        self.assertTrue(all(call[call.index('--dports')+1]=='25,465,587' and 'docknest-move-'+MOVE in call for call in inserts))
+        self.assertEqual(state['created']['firewall'],['172.30.0.0/16','fd00:1::/64'])
+        with patch('helper.firewall_ready',return_value=False):self.assertFalse(helper.block_mail(None,None,MOVE,['172.30.0.0/16']))
 
 class KeepStoppedTests(unittest.TestCase):
     def test_capture_documents_keep_stopped_only_after_a_complete_capture(self):
