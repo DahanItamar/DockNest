@@ -42,7 +42,7 @@ test('Node matching and EOL', () => {
 test('tag-only branch', () => {
   const base = { product: 'php', version: '8.3', source: 'image-tag' };
   assert.equal(m({ ...base, imageCreated: '2026-09-01T00:00:00Z' })[0].kind, 'likely');
-  assert.equal(m({ ...base, imageCreated: '2026-10-10T00:00:00Z' })[0].kind, 'unknown');
+  assert.equal(m({ ...base, imageCreated: '2026-10-22T00:00:00Z' })[0].kind, 'unknown');
   assert.equal(m(base)[0].kind, 'unknown');
 });
 
