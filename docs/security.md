@@ -16,6 +16,25 @@ Administrators manage invitations, revoke access, and rotate the system password
 
 Sensitive administration requires password plus that administrator's personal factor verified within the previous five minutes. The server returns REAUTH_REQUIRED when another verification is needed. Rotating the shared password signs everyone out and invalidates pending login/enrollment challenges and invitations. Tell authorized people the replacement password privately.
 
+### Roles and site host paths
+
+Some site settings name folders and files on the source server that the helper reads or writes as root. Only administrators can add or change them. An operator who saves a site with a new or changed path gets HTTP 403 (`ADMIN_REQUIRED`) and the message "Only an administrator can change the ... of a site". Operators can still edit every other field, remove paths, and run backups, restores and downloads that use paths an administrator saved.
+
+| Site setting | Administrator | Operator |
+| --- | --- | --- |
+| Configuration (environment) files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Compose project files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Static website files folder | A folder discovery reports | Saved folder, or a folder discovery reports |
+| Staging directory | Yes | Saved value or the default `/var/lib/docknest` only |
+| Maintenance directory | Under the staging root, a project folder or a web root | Saved value or the default under the staging root only |
+| Name, containers, services, schedule, probe URLs, domains | Yes | Yes |
+
+Moving a site to another server checks all of its paths again. When discovery cannot reach the server, a path counts as not discovered.
+
+The helper also checks paths, for every role. It never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, `/root/.ssh`, any `.ssh` folder, `/proc`, `/sys` or `/dev`. It deploys a maintenance page only under the site's staging root, its Compose project folders, its website folder, `/var/lib/docknest`, `/var/www`, `/srv` or `/usr/share/nginx`, and never inside system folders such as `/etc`, `/root` or `/usr/bin`. A maintenance directory outside these places that is already deployed (it already holds `maintenance.html`) or already integrated (it holds `ready`) keeps working. The helper reports a warning, and the API logs it as `Remote helper warning:`. To clear the warning, move the folder under `/var/www/<domain>` or the staging root and update the site.
+
+Upgrading: a site that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. No other saved site changes behaviour.
+
 ## Session expiry
 
 The server rejects sessions after 30 minutes without reported user interaction and after eight hours from login, even with continued activity. Dashboard polling and ordinary reads do not renew the idle timer. The UI reports trusted keyboard/pointer interaction through the protected activity endpoint; that endpoint cannot revive an expired session.

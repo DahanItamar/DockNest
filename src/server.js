@@ -205,14 +205,48 @@ function normalizedSite(data, siteId) {
   }
   return { ...data.config, ...(data.config.kind==='static'?{maintenanceRequired:false}:{}),maintenance, maintenancePage: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults };
 }
-app.post('/api/sites', (req, res) => {
+// Host paths the helper reads or writes as root. An operator may keep saved values, and may add configuration, Compose and
+// static website paths only when discovery reports them for that server; anything else needs an administrator.
+const defaultStagingRoot = '/var/lib/docknest';
+export function sitePathChanges(saved, next, siteId) {
+  const same = saved && saved.serverId === next.serverId ? saved.config || {} : {};
+  const added = (field) => (next.config[field] || []).filter(value => !(same[field] || []).includes(value));
+  return {
+    configFiles: added('configFiles'), composeFiles: added('composeFiles'),
+    documentRoot: next.config.kind === 'static' && next.config.documentRoot && next.config.documentRoot !== same.documentRoot ? [next.config.documentRoot] : [],
+    stagingRoot: next.config.stagingRoot !== (same.stagingRoot ?? defaultStagingRoot) ? [next.config.stagingRoot] : [],
+    maintenanceDirectory: next.config.maintenance?.directory && next.config.maintenance.directory !== (same.maintenance?.directory ?? `${next.config.stagingRoot}/maintenance/${siteId}`) ? [next.config.maintenance.directory] : [],
+  };
+}
+export function discoveredSitePaths(result) {
+  const containers = Array.isArray(result) ? result : result?.containers || [], statics = result?.staticSites || [];
+  const list = values => Array.isArray(values) ? values.filter(value => typeof value === 'string') : [];
+  return {
+    configFiles: new Set([...containers.flatMap(container => list(container?.backupConfiguration?.configFiles)), ...statics.flatMap(site => list(site?.configFiles))]),
+    composeFiles: new Set(containers.flatMap(container => list(container?.backupConfiguration?.composeFiles))),
+    documentRoot: new Set(statics.map(site => site?.documentRoot).filter(value => typeof value === 'string')),
+  };
+}
+const pathLabels = { configFiles: 'configuration files', composeFiles: 'Compose files', documentRoot: 'website files folder', stagingRoot: 'staging directory', maintenanceDirectory: 'maintenance directory' };
+async function sitePathRefusal(req, saved, next, siteId) {
+  if (req.user.role === 'admin') return null;
+  const changes = sitePathChanges(saved, next, siteId), fields = Object.keys(changes).filter(field => changes[field].length);
+  if (!fields.length) return null;
+  let found = { configFiles: new Set(), composeFiles: new Set(), documentRoot: new Set() };
+  if (fields.every(field => field in found)) { try { found = discoveredSitePaths(await discover(getServer(next.serverId))); } catch { /* Unconfirmed paths need an administrator. */ } }
+  const refused = fields.filter(field => !found[field] || changes[field].some(value => !found[field].has(value)));
+  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of a site, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
+}
+app.post('/api/sites', async (req, res) => {
   const data = siteSchema.parse(req.body); getServer(data.serverId); const siteId = id();
   const settings = normalizedSite(data, siteId);
+  const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
+  if (refusal) return res.status(403).json(refusal);
   db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, data.serverId, data.name, JSON.stringify(settings), now());
   db.prepare('INSERT INTO policies VALUES (?,0,?,?,7,NULL)').run(siteId, '0 2 * * *', 'Asia/Jerusalem');
   audit(req.user.id, 'site.create', siteId); res.status(201).json(getSite(siteId));
 });
-app.patch('/api/sites/:id', (req, res) => {
+app.patch('/api/sites/:id', async (req, res) => {
   const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
   // The site form does not edit the SQLite check mode; keep the saved choice.
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
@@ -220,6 +254,8 @@ app.patch('/api/sites/:id', (req, res) => {
   if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
+  const refusal = await sitePathRefusal(req, { serverId: site.server_id, config: saved }, { serverId: data.serverId, config: next }, site.id);
+  if (refusal) return res.status(403).json(refusal);
   // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
   const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
   const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));

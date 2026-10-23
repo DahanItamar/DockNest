@@ -7,6 +7,8 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Security
 
 - Sign-in, code, invitation and other API rate limits now key an IPv6 client by its /64 prefix (and an IPv4-mapped address as plain IPv4). Before, rotating addresses inside one ordinary IPv6 allocation gave a fresh budget on every request. IPv4 limits are unchanged; existing counters for IPv4-mapped clients start again once after the upgrade.
+- Only administrators can add or change a site's configuration files, Compose files, website files folder, staging directory or maintenance directory. Operators get HTTP 403 (`ADMIN_REQUIRED`) unless discovery reports the path for that server; saved paths keep working for backups, restores and downloads. Before, an operator could add any file on a source server (for example `/etc/shadow`) to a backup and download it decrypted.
+- The remote helper never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, SSH key folders, `/proc`, `/sys` or `/dev`. It deploys a maintenance page only under the staging root, the site's project folders or a web root (`/var/www`, `/srv`, `/usr/share/nginx`); an existing deployment elsewhere keeps working, with a warning.
 
 ## [2.4.1] - 2026-10-23
 
