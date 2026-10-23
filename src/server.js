@@ -368,7 +368,8 @@ app.post('/api/sites/:id/maintenance', async (req, res) => { const data = z.obje
 app.post('/api/sites/:id/maintenance/deploy', async (req, res) => res.json(await deployMaintenance(req.params.id)));
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not found.' }));
 const dist = path.resolve('dist');
-if (existsSync(dist)) { app.use(express.static(dist, { index: false })); app.get('/{*path}', (_req, res) => res.sendFile(path.join(dist, 'index.html'))); }
+// Unknown non-API paths get the app with a 404 status; the app renders its own 404 page.
+if (existsSync(dist)) { app.use(express.static(dist, { index: false })); app.get('/{*path}', (req, res) => { if (req.path !== '/' && req.path !== '/index.html') res.status(404); res.sendFile(path.join(dist, 'index.html')); }); }
 app.use((error, req, res, _next) => {
   if (res.headersSent) return res.end();
   if (error instanceof ZodError) return res.status(400).json({ error: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') });

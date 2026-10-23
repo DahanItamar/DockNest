@@ -288,7 +288,7 @@ class Limiter:
 
 # ---------------------------------------------------------------- status channel (section 4, R9, I18, I32)
 
-STATUS_FIELDS = ('phase', 'from', 'to', 'startedAt', 'updatedAt', 'ok', 'error', 'rollbackHint', 'requestId', 'warning', 'reason', 'schemaFrom', 'schemaTo')
+STATUS_FIELDS = ('phase', 'from', 'to', 'startedAt', 'updatedAt', 'ok', 'error', 'rollbackHint', 'requestId', 'warning', 'reason', 'schemaFrom', 'schemaTo', 'cleanup')
 
 
 def clean_text(value, cap):
@@ -317,6 +317,9 @@ def validate_status(raw, request_id):
             if item is not None and type(item) is not str: raise ValueError(key)
             if item is not None: item = clean_text(item, 1024 if key == 'warning' else 4096)
             if key == 'warning' and value[key] is not None and len(value[key]) > 1024: raise ValueError('warning longer than 1024')
+        elif key == 'cleanup':  # additive (upgrade.sh after 2.4.1): the one-line retention summary of a success
+            if item is not None and type(item) is not str: raise ValueError(key)
+            if item is not None: item = clean_text(item, 256)
         elif key == 'reason':
             if item is not None: item = item if item in REASONS else 'unknown'
         elif key in ('schemaFrom', 'schemaTo'):
@@ -328,7 +331,8 @@ def validate_status(raw, request_id):
 
 def failed_status(request_id, current, target, started, now, error, reason='unknown'):
     return {'phase': 'failed', 'from': current or '', 'to': target or '', 'startedAt': iso(started), 'updatedAt': iso(now), 'ok': False,
-            'error': error, 'rollbackHint': None, 'requestId': request_id, 'warning': None, 'reason': reason, 'schemaFrom': None, 'schemaTo': None}
+            'error': error, 'rollbackHint': None, 'requestId': request_id, 'warning': None, 'reason': reason, 'schemaFrom': None, 'schemaTo': None,
+            'cleanup': None}
 
 
 def new_current(request_id, target, accepted):
@@ -369,6 +373,23 @@ def read_work_status(dir_fd, owner_uid):
 
 
 PUBLISHED = ('status.json', 'current.json', 'service.json')
+
+
+def read_published(dir_fd, name, owner_uid=0):
+    """One of the broker's own published files, read back on start (reconcile): O_NOFOLLOW|O_NONBLOCK relative to the
+    status/ descriptor, a single-link regular file of root within 16 KiB. None when absent. A planted link or FIFO is
+    never followed or read, so a forged file cannot turn an interrupted run into a success."""
+    if name not in PUBLISHED: raise ValueError('not a published file')
+    try: fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, 'O_CLOEXEC', 0), dir_fd=dir_fd)
+    except FileNotFoundError: return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_nlink != 1 or info.st_size > STATUS_CAP:
+            raise ValueError('%s is not a single-link regular file of root within 16 KiB' % name)
+        data = os.read(fd, STATUS_CAP + 1)
+        if len(data) > STATUS_CAP: raise ValueError('%s larger than 16 KiB' % name)
+        return data
+    finally: os.close(fd)
 
 
 def publish(dir_fd, name, document):
@@ -966,9 +987,9 @@ class Broker:
         self.refresh()
         with StateFile() as state:
             last = None
-            try:
-                with open(os.path.join(self.host.status_dir, 'status.json'), 'rb') as handle: last = json.loads(handle.read(STATUS_CAP))
-            except (OSError, ValueError): pass
+            try: last = json.loads(read_published(self.open_status(), 'status.json') or b'null')
+            except (OSError, ValueError, RecursionError): last = None
+            if not isinstance(last, dict): last = None
             active = state['active']
             result = reconcile(state, last, time.time())
             if result:

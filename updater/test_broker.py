@@ -210,12 +210,14 @@ class StatusTests(unittest.TestCase):
         self.assertEqual((out['reason'], out['schemaFrom'], out['schemaTo'], out['error']), ('health-timeout', 4, 5, 'bad[31mtext'))
         self.assertEqual(b.validate_status(self.status(reason='rm -rf /'), RID)[0]['reason'], 'unknown')
         self.assertEqual(b.validate_status(self.status(**{'from': ''}), RID)[0]['from'], '')
+        self.assertEqual(b.validate_status(self.status(cleanup='Cleaned up: 2 old DockNest images' + 'x' * 300), RID)[0]['cleanup'][:34], 'Cleaned up: 2 old DockNest images' + 'x')
+        self.assertEqual(len(b.validate_status(self.status(cleanup='c' * 900), RID)[0]['cleanup']), 256)
 
     def test_other_requests_and_invalid_values(self):
         self.assertIsNone(b.validate_status(self.status(requestId='5b0c9c1e-7d0f-4c55-9a0e-2a3c7b0d9f11'), RID))
         self.assertIsNone(b.validate_status(self.status(requestId=...), RID))
         for fields in ({'phase': 'pwned'}, {'phase': ...}, {'ok': 1}, {'ok': 'true'}, {'to': '<script>'}, {'startedAt': 'yesterday'},
-                       {'warning': 'w' * 1025}, {'error': 5}, {'schemaFrom': True}, {'schemaTo': -1}, {'schemaTo': 1.5}):
+                       {'warning': 'w' * 1025}, {'error': 5}, {'schemaFrom': True}, {'schemaTo': -1}, {'schemaTo': 1.5}, {'cleanup': 3}):
             with self.assertRaises(ValueError, msg=fields): b.validate_status(self.status(**fields), RID)
         with self.assertRaises(ValueError): b.validate_status(b'{"phase":"build","x":"%s"}' % (b'a' * 16400), RID)
         with self.assertRaises(ValueError): b.validate_status(b'[1]', RID)
@@ -268,6 +270,17 @@ class PathTests(unittest.TestCase):
         with self.assertRaises(ValueError): b.read_work_status(self.fd, self.uid)  # a FIFO neither blocks nor is read
         os.unlink(os.path.join(self.dir, 'status.json')); self.write(b'x' * (b.STATUS_CAP + 1))
         with self.assertRaises(ValueError): b.read_work_status(self.fd, self.uid)
+
+    def test_published_status_is_read_back_without_following_links(self):
+        self.assertIsNone(b.read_published(self.fd, 'status.json', self.uid))
+        self.write(b'{"phase":"done"}'); self.assertEqual(b.read_published(self.fd, 'status.json', self.uid), b'{"phase":"done"}')
+        with self.assertRaises(ValueError): b.read_published(self.fd, 'status.json', self.uid + 1)  # not root's
+        with self.assertRaises(ValueError): b.read_published(self.fd, '../status.json', self.uid)
+        os.unlink(os.path.join(self.dir, 'status.json'))
+        self.write(b'{"phase":"done","ok":true}', 'forged'); os.symlink('forged', os.path.join(self.dir, 'status.json'))
+        with self.assertRaises(OSError): b.read_published(self.fd, 'status.json', self.uid)  # O_NOFOLLOW
+        os.unlink(os.path.join(self.dir, 'status.json')); os.mkfifo(os.path.join(self.dir, 'status.json'))
+        with self.assertRaises(ValueError): b.read_published(self.fd, 'status.json', self.uid)  # never blocks on a FIFO
 
     def test_publish_is_atomic_0644_and_allow_listed(self):
         old = os.umask(0o077)

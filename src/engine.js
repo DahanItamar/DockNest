@@ -20,7 +20,9 @@ const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
-export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return remote(server,{operation:'plan',config:site.config});}
+// Backup transport; tests replace these members to drive executeJob without SSH.
+export const transport={remote,remoteCaptureStream,download};
+export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
 // Boot recovery copies these files onto the host; other operations stream the current helper each time.
 const bootBundle=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
 export const bootRecoveryBundle=Object.freeze({sha256:createHash('sha256').update(bootBundle[0]).update('\0').update(bootBundle[1]).digest('hex'),helperVersion:Number(/^VERSION=(\d+)$/m.exec(bootBundle[0].toString())?.[1]||0)});
@@ -215,9 +217,45 @@ async function executeRestoreJob(job){
 // The restore outcome of a superseded job is unknown to the new lease holder; leave it for recovery review.
 function supersedeRestore(restoreId){db.prepare("UPDATE restores SET status='recovery_required' WHERE id=? AND status IN ('queued','running')").run(restoreId);}
 
+// The source server's clock orders recovery points for retention. A capture time outside this job's own window
+// (a skewed or reset source clock) is replaced by the DockNest host's time so retention never prunes the newest point.
+// Finished job folders left in a source staging root (releases 2.1.0-2.4.1 never removed them). The helper only lists;
+// DockNest decides here and removes each one with the marker-checking cleanup operation.
+export const STAGING_SAFE_AGE_SECONDS=6*3600;
+const jobFolder=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export function stagingRemovable(item,currentJob){
+ if(!item||!jobFolder.test(item.job)||item.job===currentJob||item.finished!==true)return false;
+ const row=db.prepare('SELECT status FROM jobs WHERE id=?').get(item.job);
+ // queued, running, recovery_required and failed (kept for review) folders stay; unknown jobs only once old.
+ return row?row.status==='completed':Number(item.ageSeconds)>=STAGING_SAFE_AGE_SECONDS;
+}
+export async function sweepStaging(server,site,currentJob){
+ const listing=await transport.remote(server,{operation:'list-staging',config:site.config});
+ if(typeof listing?.root!=='string'||!listing.root.startsWith('/'))return {removed:0,freedBytes:0};
+ let removed=0,freedBytes=0;
+ for(const item of (Array.isArray(listing.jobs)?listing.jobs:[]).filter(item=>stagingRemovable(item,currentJob)).slice(0,50)){
+  try{await transport.remote(server,{operation:'cleanup',root:listing.root.replace(/\/+$/,'')+'/'+item.job});removed++;freedBytes+=Number.isSafeInteger(item.bytes)?item.bytes:0;}catch{/* Kept; retried after the next backup. */}
+ }
+ // Counts only: folder names and paths stay out of the audit trail.
+ if(removed)audit('worker','staging.swept',server.id,{removed,freedBytes});
+ return {removed,freedBytes};
+}
+// Startup reconciliation published a crashed job's package and completed that job: finish its source cleanup and retention.
+export async function finishReconciledBackup(jobId){
+ const job=db.prepare("SELECT id,site_id FROM jobs WHERE id=? AND type='backup' AND status='completed'").get(jobId);if(!job)return;
+ const {site,server}=siteInfo(job.site_id);
+ await transport.remote(server,{operation:'cleanup',root:(site.config.stagingRoot||'/var/lib/docknest').replace(/\/+$/,'')+'/'+job.id}).catch(()=>{});
+ await sweepStaging(server,site,job.id).catch(()=>{});
+ await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
+}
+export function trustedCaptureTime(reported,startedMs,nowMs=Date.now(),skewMs=10*60*1000){
+ const ms=typeof reported==='number'?reported*1000:NaN;
+ return Number.isFinite(ms)&&ms>=startedMs-skewMs&&ms<=nowMs+skewMs?{ms,adjusted:false}:{ms:nowMs,adjusted:true};
+}
 export async function executeJob(job){
  if(job.type==='scrub')return executeScrub(job);
  if(job.type==='restore')return executeRestoreJob(job);
+ const startedMs=Date.now();
  let remoteStage='preflight',contacted=false,artifactTemporary=null,publishedBackup=false;
  const {site,server}=siteInfo(job.site_id);
  try{
@@ -230,7 +268,7 @@ export async function executeJob(job){
   const backupId=id(),directory=backupDirectory(server,site);
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';
-  let result,published,temporary;
+  let result,published,temporary,captured;
   const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1'};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
@@ -241,38 +279,45 @@ export async function executeJob(job){
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
    contacted=true;
-   try{result=await remoteCaptureStream(server,request,pass,onStage,onDiagnostic,onProgress);await writing;}
+   try{result=await transport.remoteCaptureStream(server,request,pass,onStage,onDiagnostic,onProgress);await writing;}
    catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }else{
-   contacted=true;result=await remote(server,request,onStage,onDiagnostic);
-   published=storageJoin(directory,backupFilename(backupId,new Date(result.manifest.capturedAt*1000)));temporary=published+'.partial';artifactTemporary=temporary;
+   contacted=true;result=await transport.remote(server,request,onStage,onDiagnostic);
+   captured=trustedCaptureTime(result.manifest.capturedAt,startedMs);
+   published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
+  captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
-  const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:result.manifest.capturedAt,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
+  const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   manifest.deliveryMode=direct?'direct':'staged';
   manifest.consistency=result.manifest.consistency;manifest.backupPlan=plan;
   if(result.manifest.backupScope)manifest.backupScope=result.manifest.backupScope;
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
-  const capturedAt=new Date(result.manifest.capturedAt*1000).toISOString();
+  if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
+  const capturedAt=new Date(captured.ms).toISOString();
   if(direct)completePreparedMetadata(backupId,manifest,capturedAt);
   else{
    preparePublication({backupId,jobId:job.id,siteId:site.id,temporary,published,manifest,capturedAt});
    stage(job.id,'transferring');
    const pass=new Transform({transform(c,e,cb){cb(null,c);}});pass.on('error',()=>{});
    const writing=encryptStream(pass,await openWrite(temporary));writing.catch(error=>pass.destroy(error));
-   try{await download(server,result.remotePath,pass,onProgress);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
+   try{await transport.download(server,result.remotePath,pass,onProgress);await writing;}catch(error){pass.destroy(error);await writing.catch(()=>{});throw error;}
   }
   stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
-  await renameFile(temporary,published);finalizePublication(backupId);
-  publishedBackup=true;
   const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
+  if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
+  await renameFile(temporary,published);
+  // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
+  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})}});
+  publishedBackup=true;
   // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
-  if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})})))return;
+  if(!owned){console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
-  await remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
+  await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
+  await sweepStaging(server,site,job.id).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);

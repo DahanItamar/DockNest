@@ -5,7 +5,10 @@
 # package.json before anything was built); image mode ("image-mode" file) runs $DOCKNEST_IMAGE (environment first, then
 # ./.env), either name:tag[@sha256:...] or an image id. `docker build -t NAME -` (the --expect-commit source build) reads
 # the tar context from stdin, lists it in "context" and tags the package.json version it contains. "label" overrides the
-# org.opencontainers.image.version label, which is otherwise the image's version.
+# org.opencontainers.image.version label, which is otherwise the image's version. "labelled" lists the IDs that carry the
+# DockNest label; "in-use" lists image IDs that other (stopped) containers use, as `docker ps -a` and `docker inspect`
+# report them (api and worker, while up, run the running version). `docker image rm REF` removes only that tag and
+# deletes the image with its last one.
 set -eu
 S=$FAKE_STATE
 echo "$* IMG=${DOCKNEST_IMAGE:-}" >> "$S/calls"
@@ -22,7 +25,14 @@ case "$1" in
   image)
     shift; op=$1; shift
     case "$op" in
-      ls) [ -e "$S/fail-ls" ] && exit 1; awk '{print $1}' "$S/store" 2>/dev/null || true ;;
+      ls)
+        [ -e "$S/fail-ls" ] && exit 1
+        case "$*" in
+          *dangling=true*) for id in $(awk '{print $1}' "$S/store" 2>/dev/null); do
+              awk -v i="$id" '$2==i{f=1}END{exit f}' "$S/tags" 2>/dev/null && grep -qx "$id" "$S/labelled" 2>/dev/null && echo "$id"; done; true ;;
+          *--format*) repo=$(eval "printf '%s' \"\${$#}\""); awk -v r="$repo" '{ref=$1; sub(/:[^:\/]*$/, "", ref); if (ref==r) print $2}' "$S/tags" 2>/dev/null || true ;;
+          *) awk '{print $1}' "$S/store" 2>/dev/null || true ;;
+        esac ;;
       inspect)
         format=$2; shift 2; [ "${1:-}" = -- ] && shift
         id=$(resolve "$1"); [ -n "$id" ] || exit 1
@@ -37,6 +47,12 @@ case "$1" in
         id=$1
         [ -e "$S/fail-rm" ] && exit 1
         [ -n "$(resolve "$id")" ] || exit 1
+        case "$id" in sha256:*) ;; *)
+          ref=$id id=$(resolve "$ref")
+          if [ "$(awk -v i="$id" '$2==i' "$S/tags" 2>/dev/null | wc -l)" -gt 1 ]; then
+            awk -v r="$ref" '$1!=r' "$S/tags" > "$S/tags.new"; mv "$S/tags.new" "$S/tags"; echo "$ref" >> "$S/untagged"; exit 0
+          fi ;;
+        esac
         [ "$(read_state running)" = up ] && [ "$id" = "$(fake_id "$(running_version)")" ] && exit 1
         [ -e "$S/in-use" ] && grep -qx "$id" "$S/in-use" && exit 1
         [ "$(awk -v i="$id" '$2==i' "$S/tags" "$S/digests" 2>/dev/null | wc -l)" -gt 1 ] && exit 1
@@ -47,6 +63,11 @@ case "$1" in
     esac
     exit 0 ;;
   tag) id=$(resolve "$2"); [ -n "$id" ] || exit 1; retag "$3" "$id"; exit 0 ;;
+  ps) [ -e "$S/fail-ps" ] && exit 1; [ "$(read_state running)" = up ] && printf 'c-api\nc-worker\n'; sed 's/^/u-/' "$S/in-use" 2>/dev/null || true; exit 0 ;;
+  inspect)
+    shift 3
+    for c in "$@"; do case "$c" in c-api|c-worker) fake_id "$(running_version)"; echo ;; u-*) echo "${c#u-}" ;; *) exit 1 ;; esac; done
+    exit 0 ;;
   build)
     [ -e "$S/fail-build" ] && exit 1
     rm -rf "$S/ctx"; mkdir "$S/ctx"; (cd "$S/ctx" && tar -xf -); ls -A "$S/ctx" > "$S/context"
@@ -62,11 +83,13 @@ case "$1" in
       *--images*) if [ -e "$S/image-mode" ]; then image_ref; image_ref; else printf 'docknest:local\ndocknest:local\n'; fi ;;
       *) [ -e "$S/image-mode" ] || echo '    context: /srv/docknest' ;;
     esac ;;
-  images) [ -e "$S/no-images" ] || ensure "$(running_version)" ;;
+  # "same-build": the build reproduces the running image (a --force reinstall), so the services keep that image ID.
+  images) [ -e "$S/no-images" ] || { if [ -e "$S/same-build" ]; then resolve docknest:local; else ensure "$(running_version)"; fi; } ;;
   ps) [ "$(read_state running)" = up ] && printf 'api\nworker\n' ;;
   build|pull)
     [ -e "$S/fail-build" ] && exit 1; [ -e "$S/fail-build-once" ] && { rm "$S/fail-build-once"; exit 1; }
-    if [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE base=${DOCKNEST_IMAGE%%@*}; id=$(ensure "${base##*:}"); retag "$ref" "$id"; case "$ref" in *@*) echo "${base%:*}@${ref#*@} $id" >> "$S/digests" ;; esac; fi
+    if [ "$1" = build ] && [ -e "$S/same-build" ]; then retag docknest:local "$(fake_id "$(read_state version)")"
+    elif [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE base=${DOCKNEST_IMAGE%%@*}; id=$(ensure "${base##*:}"); retag "$ref" "$id"; case "$ref" in *@*) echo "${base%:*}@${ref#*@} $id" >> "$S/digests" ;; esac; fi
     exit 0 ;;
   stop) [ -e "$S/migrate-on-stop" ] && echo 2 > "$S/schema"; [ -e "$S/fail-stop" ] && exit 1; echo down > "$S/running" ;;
   logs) echo 'fake logs' ;;
@@ -76,7 +99,7 @@ case "$1" in
       case "$ref" in sha256:*) version=$(version_of "$ref") ;; *) ref=${ref%%@*}; version=${ref##*:} ;; esac
     else
       tagged=$(resolve docknest:local)
-      if [ -n "$tagged" ]; then version=$(version_of "$tagged"); else version=$(pkg_version); fi
+      if [ -n "$tagged" ] && [ ! -e "$S/same-build" ]; then version=$(version_of "$tagged"); else version=$(pkg_version); fi
     fi
     echo "$version" > "$S/version"; echo up > "$S/running"
     schema=$(sed -n 's/^ *{ *version: *\([0-9][0-9]*\),.*/\1/p' src/migrations.js 2>/dev/null | tail -n 1)

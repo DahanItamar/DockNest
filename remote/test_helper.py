@@ -399,6 +399,104 @@ class ArchiveSecurityTests(unittest.TestCase):
                 entry=tarfile.TarInfo('alias/file');entry.size=1;t.addfile(entry,io.BytesIO(b'x'))
             with self.assertRaises(ValueError):safe_extract(archive,base/'output')
             self.assertFalse((base/'output/alias').exists())
+    def test_chained_symlinks_cannot_escape_destination(self):
+        # Each link alone stays inside lexically; followed together they leave the destination.
+        for chain in [[('x/y/d','../..'),('x/y/l','d/../..')],[('m','.'),('l','m/m/..')],[('loop1','loop2'),('loop2','loop1')]]:
+            with self.subTest(chain=chain), tempfile.TemporaryDirectory() as d:
+                base=pathlib.Path(d);archive=base/'chain.tar'
+                with tarfile.open(archive,'w') as t:
+                    good=tarfile.TarInfo('valid.txt');good.size=1;t.addfile(good,io.BytesIO(b'x'))
+                    for name,target in chain:
+                        link=tarfile.TarInfo(name);link.type=tarfile.SYMTYPE;link.linkname=target;t.addfile(link)
+                with self.assertRaises(ValueError):safe_extract(archive,base/'output')
+                self.assertFalse((base/'output/valid.txt').exists())
+    def test_extraction_is_refused_before_writing_when_declared_sizes_exceed_free_space(self):
+        import collections
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);archive=base/'large.tar'
+            with tarfile.open(archive,'w') as t:
+                entry=tarfile.TarInfo('data.bin');entry.size=4096;t.addfile(entry,io.BytesIO(b'\0'*4096))
+            usage=collections.namedtuple('Usage','total used free')
+            with patch('helper.shutil.disk_usage',return_value=usage(1<<40,0,4096)):
+                with self.assertRaisesRegex(ValueError,'capacity'):safe_extract(archive,base/'output')
+            self.assertFalse((base/'output/data.bin').exists())
+            with patch('helper.shutil.disk_usage',return_value=usage(1<<40,0,1<<30)):safe_extract(archive,base/'output')
+            self.assertEqual((base/'output/data.bin').stat().st_size,4096)
+    def test_contained_symlink_chains_are_accepted(self):
+        from helper import archive_link_escapes
+        links={('assets','current'):'v2',('assets','v2'):'releases/2',('assets','up'):'../assets'}
+        self.assertFalse(archive_link_escapes(('assets',),'v2',links))
+        self.assertFalse(archive_link_escapes(('assets',),'current/../photo.txt',links))
+        self.assertFalse(archive_link_escapes(('assets',),'up/current',links))
+        self.assertTrue(archive_link_escapes(('assets',),'up/../..',links))
+        self.assertTrue(archive_link_escapes((),'..',{}))
+
+class StagingSweepTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        # Linux rmtree is fd-based; let the Windows test run exercise the same rules.
+        safe=patch.object(shutil.rmtree,'avoids_symlink_attacks',True,create=True);safe.start();self.addCleanup(safe.stop)
+    def job(self,base,name,age,markers=('disarmed','watchdog.done')):
+        import os,time
+        folder=base/name;folder.mkdir();(folder/'payload.tar.gz').write_bytes(b'plaintext package')
+        for marker in markers:(folder/marker).write_text('{}')
+        old=time.time()-age
+        for path in [*folder.iterdir(),folder]:os.utime(path,(old,old))
+        return folder
+    def test_listing_reports_only_real_job_folders_without_deleting(self):
+        import os
+        from helper import list_staging
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d).resolve()
+            done=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab',8*86400)
+            armed=self.job(base,'44444444-2222-4333-8444-555555555555',8*86400,markers=('disarmed',))
+            recent=self.job(base,'33333333-2222-4333-8444-555555555555',60)
+            self.job(base,'88888888-AAAA-4BBB-8CCC-DDDDDDDDDDDD',8*86400);self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab.old',8*86400)
+            (base/'maintenance').mkdir();(base/'55555555-2222-4333-8444-555555555555').write_text('file')
+            outside=self.job(pathlib.Path(tempfile.mkdtemp()).resolve(),'66666666-2222-4333-8444-555555555555',8*86400)
+            try:os.symlink(outside,base/outside.name,target_is_directory=True);linked=True
+            except OSError:linked=False
+            listing=list_staging({'stagingRoot':str(base)})
+            self.assertEqual(listing['root'],str(base))
+            jobs={item['job']:item for item in listing['jobs']}
+            self.assertEqual(set(jobs),{done.name,armed.name,recent.name})
+            self.assertTrue(jobs[done.name]['finished']);self.assertFalse(jobs[armed.name]['finished'])
+            self.assertGreater(jobs[done.name]['ageSeconds'],7*86400);self.assertLess(jobs[recent.name]['ageSeconds'],3600)
+            self.assertGreater(jobs[done.name]['bytes'],0)
+            for kept in [done,armed,recent,base/'maintenance',outside]:self.assertTrue(kept.exists())
+            if linked:self.assertNotIn(outside.name,jobs)
+    def test_cleanup_requires_a_finished_real_job_folder(self):
+        import os,shutil
+        from helper import cleanup_staging
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d).resolve()
+            armed=self.job(base,'44444444-2222-4333-8444-555555555555',8*86400,markers=('disarmed',))
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(armed)})
+            self.assertTrue(armed.exists())
+            maintenance=base/'maintenance';maintenance.mkdir();(maintenance/'disarmed').touch();(maintenance/'watchdog.done').touch()
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(maintenance)})
+            self.assertTrue(maintenance.exists())
+            done=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab',8*86400)
+            with patch.object(shutil.rmtree,'avoids_symlink_attacks',False):
+                with self.assertRaises(ValueError):cleanup_staging({'root':str(done)})
+            cleanup_staging({'root':str(done)});self.assertFalse(done.exists())
+            outside=self.job(pathlib.Path(tempfile.mkdtemp()).resolve(),'66666666-2222-4333-8444-555555555555',8*86400)
+            try:os.symlink(outside,base/outside.name,target_is_directory=True)
+            except OSError:self.skipTest('Creating symbolic links is not permitted here')
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(base/outside.name)})
+            self.assertTrue((outside/'payload.tar.gz').exists())
+    def test_unsafe_or_missing_staging_roots(self):
+        import os
+        from helper import list_staging
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d).resolve()
+            self.assertEqual(list_staging({'stagingRoot':str(base/'absent')})['jobs'],[])
+            for unsafe in ['/','relative/path','/var/../etc']:
+                with self.assertRaises(ValueError):list_staging({'stagingRoot':unsafe})
+            (base/'real').mkdir()
+            try:os.symlink(base/'real',base/'alias',target_is_directory=True)
+            except OSError:self.skipTest('Creating symbolic links is not permitted here')
+            with self.assertRaises(ValueError):list_staging({'stagingRoot':str(base/'alias')})
 
 class MaintenanceTests(unittest.TestCase):
     def setUp(self):
@@ -422,6 +520,44 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.health',return_value=True),patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag') as sync:
                 with self.assertRaises(ValueError):maintenance(cfg,False)
                 self.assertTrue((base/'enabled').exists());sync.assert_called_once_with(base)
+    def test_planted_flag_and_page_links_are_never_followed(self):
+        import os
+        from helper import deploy_maintenance
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);site=base/'site';site.mkdir();(site/'ready').touch()
+            outside=base/'outside.txt';outside.write_text('host file')
+            try:os.symlink(outside,site/'enabled')
+            except OSError:self.skipTest('Creating symbolic links is not permitted here')
+            before=outside.stat().st_mode
+            cfg={'containers':['fixture'],'stagingRoot':str(base),'maintenance':{'required':True,'directory':str(site),'publicUrl':'http://fixture/','readableFlag':True}}
+            with patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag'):
+                with self.assertRaisesRegex(ValueError,'symbolic link'):maintenance(cfg,True)
+            self.assertEqual(outside.stat().st_mode,before);self.assertEqual(outside.read_text(),'host file')
+            (site/'enabled').unlink();os.symlink(outside,site/'maintenance.html.tmp')
+            deploy_maintenance({'config':cfg,'html':__import__('base64').b64encode(b'<p>dbm-maintenance-v1</p>').decode()})
+            self.assertEqual(outside.read_text(),'host file')
+            self.assertEqual((site/'maintenance.html').read_bytes(),b'<p>dbm-maintenance-v1</p>')
+            self.assertEqual([p.name for p in site.iterdir() if p.name.startswith('maintenance.html.tmp-')],[])
+    def test_planted_fifo_flag_fails_at_once_instead_of_blocking(self):
+        import os,threading
+        if not hasattr(os,'mkfifo'):self.skipTest('FIFOs require POSIX')
+        with tempfile.TemporaryDirectory() as d:
+            site=pathlib.Path(d);(site/'ready').touch();os.mkfifo(site/'enabled')
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            outcome=[]
+            def attempt():
+                with patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag'):
+                    try:maintenance(cfg,True)
+                    except ValueError as error:outcome.append(str(error))
+            worker=threading.Thread(target=attempt,daemon=True);worker.start();worker.join(5)
+            self.assertFalse(worker.is_alive(),'maintenance blocked on a FIFO flag')
+            self.assertEqual(len(outcome),1);self.assertIn('regular file',outcome[0])
+            # A FIFO with a reader attached opens, but is still not a regular file.
+            reader=os.open(site/'enabled',os.O_RDONLY|os.O_NONBLOCK)
+            try:
+                outcome.clear();worker=threading.Thread(target=attempt,daemon=True);worker.start();worker.join(5)
+                self.assertFalse(worker.is_alive());self.assertEqual(len(outcome),1);self.assertIn('regular file',outcome[0])
+            finally:os.close(reader)
     def test_origin_https_verifies_original_hostname_on_loopback(self):
         from unittest.mock import Mock
         context=Mock();sock=Mock()

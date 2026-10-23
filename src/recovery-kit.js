@@ -84,6 +84,8 @@ export async function restoreRecoveryKit({input,directory,passphrase,updaterStat
    if(saved){const settings=JSON.parse(saved.value);settings.enabled=false;settings.nextRun=null;state.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(JSON.stringify(settings));}
   }
   for(const table of ['sessions','challenges','login_challenges','enrollment_challenges','downloads','leases'])if(hasTable(state,table))state.exec('DELETE FROM '+table);
+  // Open enrollment links belong to the old manager; an administrator issues new ones after recovery.
+  if(hasTable(state,'invitations'))state.prepare('UPDATE invitations SET revoked_at=? WHERE consumed_at IS NULL AND revoked_at IS NULL').run(Date.now());
   // A kit taken during a deployment hold would otherwise restore a manager that refuses all new work (the hold is
   // cleared below), and in-app update requests belong to the old host's updater (update_requests from schema 5).
   if(hasTable(state,'update_requests'))state.prepare("UPDATE update_requests SET state='lost',finished_at=COALESCE(finished_at,?) WHERE state IN ('submitted','running','needs_action')").run(new Date().toISOString());

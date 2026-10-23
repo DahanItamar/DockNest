@@ -19,6 +19,7 @@ Delete plaintext staging securely according to your storage policy; filesystem d
 """
 
 EVENT_STREAM=sys.stdout
+NOFOLLOW=getattr(os,'O_NOFOLLOW',0)
 CAPTURE_DIAGNOSTICS=False
 def emit(**kw): print(json.dumps(kw),file=EVENT_STREAM,flush=True)
 def diagnostic(**kw):
@@ -89,7 +90,8 @@ PROTECTED_TREES=('/root/.ssh','/proc','/sys','/dev')
 # A directory source that contains any of these would capture them too.
 PROTECTED_CONTENT=tuple(PROTECTED_FILES)+PROTECTED_TREES+('/etc/ssh','/etc/sudoers','/etc/sudoers.d')
 def lexical(value):
-    path=posixpath.normpath(str(value))
+    # The helper runs on Linux; the separator swap only lets the unit tests run on a Windows workstation.
+    path=posixpath.normpath(str(value).replace(os.sep,'/'))
     # POSIX keeps a leading '//' after normpath; on Linux it names the same file as '/'.
     return '/'+path.lstrip('/') if path.startswith('/') else path
 def within(path,root):
@@ -1001,8 +1003,18 @@ def maintenance(cfg,enabled):
     if enabled and maintenance_link_escape(directory):raise ValueError(problem+'. The maintenance directory links into a system folder.')
     if problem:warn(problem+'; kept because the maintenance proxy is already integrated there')
     def enable_flag():
-        flag=directory/'enabled';flag.touch(mode=0o600)
-        if m.get('readableFlag'):flag.chmod(0o644)
+        # The proxy may share this directory; never follow a planted link as root.
+        flag=directory/'enabled'
+        if flag.is_symlink():raise ValueError('Maintenance flag cannot be a symbolic link')
+        # O_NONBLOCK: a planted FIFO must fail at once instead of blocking the helper.
+        try:fd=os.open(flag,os.O_WRONLY|os.O_CREAT|NOFOLLOW|getattr(os,'O_NONBLOCK',0),0o600)
+        except OSError:raise ValueError('Maintenance flag must be a regular file')
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('Maintenance flag must be a regular file')
+            if m.get('readableFlag'):
+                if hasattr(os,'fchmod'):os.fchmod(fd,0o644)
+                else:os.chmod(flag,0o644)
+        finally:os.close(fd)
     if enabled:
         was_enabled=(directory/'enabled').exists()
         enable_flag()
@@ -1532,6 +1544,24 @@ def verify_restore_recovery(req):
     ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
     if ids and any(c['State']['Running'] for c in inspect(ids)):raise ValueError('Stop the interrupted isolated restore containers on the target before acknowledging recovery')
     emit(result={'recoveryReviewed':True,'targetContainersStopped':True,'stagingRetained':True})
+EXTRACT_RESERVE_BYTES=64*1024**2
+def archive_link_escapes(start,linkname,symlinks):
+    """Follow a relative link through the archive's own symlinks, as the kernel will after extraction."""
+    stack=list(start);pending=list(pathlib.PurePosixPath(linkname).parts);expansions=0
+    while pending:
+        part=pending.pop(0)
+        if part=='.':continue
+        if part=='..':
+            if not stack:return True
+            stack.pop();continue
+        stack.append(part)
+        target=symlinks.get(tuple(stack))
+        if target is not None:
+            expansions+=1
+            # Absolute targets and link loops cannot be proven to stay inside the destination.
+            if expansions>40 or target.startswith('/'):return True
+            stack.pop();pending=list(pathlib.PurePosixPath(target).parts)+pending
+    return False
 def safe_extract(archive,destination):
     if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -1539,8 +1569,12 @@ def safe_extract(archive,destination):
     root=destination.resolve()
     with tarfile.open(archive,'r:*') as tar:
         members=tar.getmembers()
-        symlinks={pathlib.PurePosixPath(m.name) for m in members if m.issym()}
+        links={pathlib.PurePosixPath(m.name).parts:m.linkname for m in members if m.issym()}
+        symlinks={pathlib.PurePosixPath(*parts) for parts in links}
         regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
+        # Bound extraction by the archive's declared sizes before writing anything; a highly
+        # compressible package must not fill the target filesystem part-way through.
+        if shutil.disk_usage(destination).free<sum(m.size for m in members if m.isfile())+EXTRACT_RESERVE_BYTES:raise ValueError('Insufficient target capacity to extract the archive')
         seen=set()
         for member in members:
             p=pathlib.PurePosixPath(member.name)
@@ -1555,6 +1589,8 @@ def safe_extract(archive,destination):
                 if link.is_absolute():raise ValueError('Absolute archive link is not portable')
                 linked=(target.parent/member.linkname).resolve() if member.issym() else (root/member.linkname).resolve()
                 if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
+                # A chain of individually contained links (d -> ../.., l -> d/../..) can still leave the destination.
+                if member.issym() and archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
                 if member.islnk() and (link not in regular or any(parent in symlinks for parent in link.parents)):raise ValueError('Hard link must target an archived regular file')
         if os.name=='posix':
             run(['tar','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
@@ -1730,9 +1766,14 @@ def deploy_maintenance(req):
     p.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(req['html'])
     if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')
-    temp=p/'maintenance.html.tmp'
-    with open(temp,'wb') as f:f.write(content)
-    os.chmod(temp,0o644);os.replace(temp,p/'maintenance.html')
+    temp=p/('maintenance.html.tmp-'+str(uuid.uuid4()))
+    fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o644)
+    try:
+        with os.fdopen(fd,'wb') as f:
+            f.write(content)
+            if hasattr(os,'fchmod'):os.fchmod(f.fileno(),0o644)
+        os.replace(temp,p/'maintenance.html')
+    finally:temp.unlink(missing_ok=True)
     emit(result={'distributed':True,'helperVersion':VERSION,'ready':False,'proxyIntegrationRequired':True,'directory':str(p)})
 
 def install_boot_recovery(req):
@@ -1762,6 +1803,44 @@ def install_boot_recovery(req):
     os.chmod(unit,0o644);run(['systemctl','daemon-reload']);run(['systemctl','enable','docknest-source-recovery.service'])
     emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
 
+JOB_DIRECTORY=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+FORBIDDEN_STAGING=['/']
+def staging_base(cfg):
+    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
+    if not base.is_absolute() or '..' in base.parts or str(base) in FORBIDDEN_STAGING:raise ValueError('Use a dedicated absolute staging directory')
+    return base
+def is_regular(path):
+    try:return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:return False
+def job_folder_finished(path):
+    """A real job directory (never a link) whose recovery completed and whose watchdog acknowledged it."""
+    try:folder=os.lstat(path)
+    except OSError:return False
+    return stat.S_ISDIR(folder.st_mode) and is_regular(path/'disarmed') and is_regular(path/'watchdog.done')
+def list_staging(cfg,now=None,limit=200):
+    """Report job folders in the staging root for DockNest to decide on. Never deletes and never follows links."""
+    now=time.time() if now is None else now
+    base=staging_base(cfg);jobs=[]
+    try:info=os.lstat(base)
+    except FileNotFoundError:return {'root':str(base),'jobs':jobs}
+    if not stat.S_ISDIR(info.st_mode) or base.resolve()!=base:raise ValueError('Staging directory cannot be a symbolic link')
+    for entry in sorted(os.scandir(base),key=lambda item:item.name):
+        if not JOB_DIRECTORY.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):continue
+        path=base/entry.name;finished=job_folder_finished(path);size=0;latest=os.lstat(path).st_mtime
+        for current,dirs,files in os.walk(path,followlinks=False):
+            for name in dirs+files:
+                try:item=os.lstat(os.path.join(current,name));size+=item.st_size;latest=max(latest,item.st_mtime)
+                except OSError:pass
+        jobs.append({'job':entry.name,'finished':finished,'ageSeconds':max(0,int(now-latest)),'bytes':size})
+        if len(jobs)>=limit:break
+    return {'root':str(base),'jobs':jobs}
+def cleanup_staging(req):
+    root=pathlib.Path(req['root'])
+    if not JOB_DIRECTORY.fullmatch(root.name) or str(root.parent)!=str(staging_base({'stagingRoot':str(root.parent)})):raise ValueError('Cleanup requires a job folder in the staging directory')
+    if not job_folder_finished(root):raise ValueError('Recovery watchdog has not acknowledged disarm')
+    # fd-based removal never follows a link planted inside the folder.
+    if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
+    shutil.rmtree(root)
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -1792,10 +1871,8 @@ def main(req):
         refused=skip_refused_probes(req['config'])
         if req['enabled'] and 'public' in refused:raise ValueError("Probe URL policy: %s. Update the site's public maintenance URL before enabling maintenance."%refused['public'])
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
-    elif op=='cleanup':
-        root=pathlib.Path(req['root']);uuid.UUID(root.name)
-        if not (root/'disarmed').exists() or not (root/'watchdog.done').exists():raise ValueError('Recovery watchdog has not acknowledged disarm')
-        shutil.rmtree(root);emit(result={'removed':True})
+    elif op=='cleanup':cleanup_staging(req);emit(result={'removed':True})
+    elif op=='list-staging':emit(result=list_staging(req['config']))
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
