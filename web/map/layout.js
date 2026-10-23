@@ -1,7 +1,7 @@
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
 // line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Nothing is persisted.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
- labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:16};
+ labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
 const byName=(a,b)=>{const x=String(a.name||'').toLowerCase(),y=String(b.name||'').toLowerCase();return x<y?-1:x>y?1:String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0};
 
 // Same grouping and order for the canvas, the phone list and screen readers.
@@ -45,7 +45,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  // Alerts: a band above the map holds the DockNest source and one lane per line; nothing is drawn until a channel exists.
  const chs=opts.alerts?.channels||[],on=chs.length>0,serverIds=new Set(servers.map(s=>s.id)),siteIds=new Set(sites.map(s=>s.id));
  const rules=on?(opts.alerts.rules||[]).filter(r=>chs.some(c=>c.id===r.channelId)&&(r.sourceKind==='docknest'||(r.sourceKind==='server'?serverIds.has(r.sourceId):siteIds.has(r.sourceId)))):[];
- const bandH=on?Math.max(112,48+m.laneGap*rules.length):0,base=on?m.pad+bandH+8:m.pad;
+ const lanes=rules.length>6?new Set(rules.map(r=>r.channelId)).size:rules.length,bandH=on?Math.max(112,48+m.laneGap*lanes):0,base=on?m.pad+bandH+8:m.pad;
  const rightEdge=siteX+m.siteS,channelB=rightEdge+m.storageGap+16,storageX=channelB+m.storageGap;
  const rowH=m.siteS+m.label;
  let y=base;
@@ -55,14 +55,14 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   let node=null;
   if(g.server){
    node={id:g.server.id,x:serverX,y:y+(height-block)/2,w:m.serverS,h:m.serverS};
-   node.block={x:node.x+node.w/2-m.labelW.server/2,y:node.y,w:m.labelW.server,h:block};node.alertOut={x:node.x+node.w,y:node.y+16};
+   node.block={x:node.x+node.w/2-m.labelW.server/2,y:node.y,w:m.labelW.server,h:block};node.alertOut={x:node.x+node.w,y:node.y+m.serverS/2};
    out.servers.push(node);
   }
   let top=y+(height-stack)/2;
   for(const site of g.sites){
    const cy=top+m.siteS/2,rect={id:site.id,serverId:g.server?g.server.id:null,x:siteX,y:top,w:m.siteS,h:m.siteS,cy};
    rect.block={x:siteX+m.siteS/2-m.labelW.site/2,y:top,w:m.labelW.site,h:rowH};
-   rect.in={x:siteX,y:cy};rect.out={x:rightEdge,y:cy};rect.alertOut={x:rightEdge,y:top+14};rect.backupId=backupOf[site.id]||null;
+   rect.in={x:siteX,y:cy};rect.out={x:rightEdge,y:cy};rect.alertOut=rect.out;rect.backupId=backupOf[site.id]||null;
    (g.server?out.sites:out.unassigned).push(rect);
    if(node){
     const x1=node.x+node.w,y1=node.y+m.serverS/2,x2=siteX,pts=route(x1,y1,x2-14,cy,channelS);
@@ -95,14 +95,23 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    n.block={x:alertX+m.alertS/2-m.labelW.alert/2,y:yy,w:m.labelW.alert,h:m.alertS+m.label};n.in={x:alertX,y:yy+m.alertS/2};out.alerts.push(n);bottom=Math.max(bottom,yy+m.alertS+m.label+m.pad)});
   const dn={x:serverX,y:m.pad,w:m.alertS,h:m.alertS};dn.block={x:dn.x+dn.w/2-m.labelW.site/2,y:dn.y,w:m.labelW.site,h:m.alertS+m.label};dn.alertOut={x:dn.x+dn.w,y:dn.y+dn.h/2};out.docknest=dn;
   const lane=[46,52,58,64,70,84,90,96],srcOf=r=>r.sourceKind==='docknest'?dn:r.sourceKind==='server'?out.servers.find(n=>n.id===r.sourceId):[...out.sites,...out.unassigned].find(n=>n.id===r.sourceId);
-  const rank=x=>x.r.sourceKind==='docknest'?0:1;
-  const placed=rules.map(r=>({r,src:srcOf(r)})).filter(x=>x.src).sort((a,b)=>rank(a)-rank(b)||a.src.alertOut.y-b.src.alertOut.y||(String(a.r.id)<String(b.r.id)?-1:1));
-  placed.forEach(({r,src},k)=>{
-   const node=out.alerts.find(n=>n.id===r.channelId),L=sy+k*m.laneGap,s0=src.alertOut;
-   const gx=r.sourceKind==='docknest'?dn.x+dn.w+48+(k%6)*4:r.sourceKind==='server'?src.x+src.w+40+(k%6)*4:s0.x+lane[k%8],ax=storageX+m.storageS+40+(k%8)*6;
-   const pts=[[s0.x,s0.y],[gx,s0.y],[gx,L],[ax,L],[ax,node.in.y],[node.in.x-14,node.in.y]];
-   out.rulePaths.push({id:r.id,ruleId:r.id,channelId:r.channelId,sourceKind:r.sourceKind,sourceId:r.sourceId,points:pts,d:elbow(pts),labelX:Math.min(gx,ax)+12,labelY:L-5});
-  });
+  const ax0=storageX+m.storageS+40,gxOf=(r,src,i)=>r.sourceKind==='docknest'?dn.x+dn.w+48:r.sourceKind==='server'?src.x+src.w+40+(i%6)*4:src.alertOut.x+lane[i%8];
+  // Lanes: the line that rises furthest left takes the highest lane and leaves furthest right, so lines nest and do not cross in the band.
+  const placed=rules.map(r=>({r,src:srcOf(r)})).filter(x=>x.src).map((x,i)=>({...x,gx:gxOf(x.r,x.src,i)})).sort((a,b)=>a.gx-b.gx||a.src.alertOut.y-b.src.alertOut.y||(String(a.r.id)<String(b.r.id)?-1:1));
+  const bundled=rules.length>6,mine=n=>placed.filter(p=>p.r.channelId===n.id);
+  const rt=(s0,gx,L,ax,node)=>[[s0.x,s0.y],[gx,s0.y],[gx,L],[ax,L],[ax,node.in.y],[node.in.x-14,node.in.y]];
+  out.bundled=bundled;
+  if(bundled){
+   const used=out.alerts.filter(n=>mine(n).length),step=Math.min(6,Math.floor(56/Math.max(1,used.length)));
+   used.forEach((node,k)=>{const pts=rt(dn.alertOut,dn.x+dn.w+48+k*3,sy+k*m.laneGap,ax0+(used.length-1-k)*step,node);node.count=new Set(mine(node).map(p=>p.r.sourceKind+':'+p.r.sourceId)).size;
+    out.rulePaths.push({id:'bundle:'+node.id,bundle:true,channelId:node.id,count:node.count,points:pts,d:elbow(pts,12)})});
+  }else{
+   const step=Math.min(6,Math.floor(56/Math.max(1,placed.length)));
+   placed.forEach(({r,src,gx},k)=>{
+    const node=out.alerts.find(n=>n.id===r.channelId),pts=rt(src.alertOut,gx,sy+k*m.laneGap,ax0+(placed.length-1-k)*step,node);node.count=(node.count||0)+1;
+    out.rulePaths.push({id:r.id,ruleId:r.id,channelId:r.channelId,sourceKind:r.sourceKind,sourceId:r.sourceId,points:pts,d:elbow(pts,12)});
+   });
+  }
   out.width=alertX+m.alertS+m.pad;
  }
  out.height=bottom;

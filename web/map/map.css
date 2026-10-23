@@ -236,4 +236,22 @@
 .map-root .map-list .map-list-sentences li{border-bottom:0;padding-block:0;min-height:0;flex-wrap:nowrap;justify-content:space-between}
 .map-root .map-list .map-list-sentences .map-caption{overflow-wrap:anywhere}
 .map-root .map-list-add{margin-top:16px}
+.map-root .map-node-head{display:flex;align-items:flex-end;gap:12px;color:var(--accent)}
+.map-root .map-node-head svg{margin-bottom:8px}
+.map-root .map-node-name{flex:1;min-width:0;color:var(--text-primary)}
+.map-root .map-tabs{display:flex;border-bottom:1px solid var(--border-subtle);gap:4px}
+.map-root .map-tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--text-secondary);min-height:40px;padding:0 12px;white-space:nowrap}
+.map-root .map-tabs button.on{border-bottom-color:var(--accent);color:var(--heading);font-weight:500}
+.map-root .map-tabs button:hover{background:var(--surface-muted)}
+.map-root .map-cfg,.map-root .map-sends{display:flex;flex-direction:column;gap:16px}
+.map-root .map-src{display:flex;flex-direction:column;gap:4px;margin:0;padding:12px 16px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);min-width:0}
+.map-root .map-src legend{padding:0 4px;font-weight:500;color:var(--heading)}
+.map-root .map-src>button{align-self:flex-start;margin-top:8px}
+.map-root .map-connect{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.map-root .map-connect .map-field{width:100%}
+.map-root .map-delete{align-self:flex-start}
+.map-root .map-panel select{min-height:40px}
+.map-root .map-field input,.map-root .map-field select{font-weight:400}
+.map-root .map-lines .rule-hit:focus-visible{outline:none;stroke:var(--focus-ring);stroke-opacity:.45}
+.map-root .map-alert-rows li>button{flex:none}
 @media(max-width:767px){.map-root .map-dialog select,.map-root .map-saved{min-height:44px}.map-root .map-alert-rows button{min-height:44px}}

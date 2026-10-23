@@ -72,9 +72,9 @@ test('without channels the layout has no alert nodes and is unchanged',()=>{
 });
 test('alert lines never cross cards or labels and reach their alert node',()=>{
  const {servers,sites}=make(8,6),o=storageFor(sites),channels=[{id:'c1',name:'Ops chat',kind:'telegram'},{id:'c2',name:'Mail',kind:'email'},{id:'c3',name:'Pager',kind:'telegram'}];
- const rules=[{id:'d1',channelId:'c1',sourceKind:'docknest',sourceId:null},{id:'d2',channelId:'c2',sourceKind:'docknest',sourceId:null}];
- servers.forEach((s,i)=>rules.push({id:'sv'+i,channelId:channels[i%3].id,sourceKind:'server',sourceId:s.id}));
- sites.forEach((s,i)=>{if(i%2)rules.push({id:'st'+i,channelId:channels[(i+1)%3].id,sourceKind:'site',sourceId:s.id})});
+ const rules=[{id:'d1',channelId:'c1',sourceKind:'docknest',sourceId:null}];
+ servers.slice(0,3).forEach((s,i)=>rules.push({id:'sv'+i,channelId:channels[i%3].id,sourceKind:'server',sourceId:s.id}));
+ sites.slice(0,5).forEach((s,i)=>{if(i%3===1)rules.push({id:'st'+i,channelId:channels[(i+1)%3].id,sourceKind:'site',sourceId:s.id})});
  rules.push({id:'gone',channelId:'c1',sourceKind:'site',sourceId:'missing'},{id:'nochan',channelId:'zzz',sourceKind:'docknest',sourceId:null});
  const l=layoutMap(servers,sites,{...o,alerts:{channels,rules}});
  assert.equal(l.rulePaths.length,rules.length-2,'rules for something gone are skipped');
@@ -88,5 +88,12 @@ test('alert lines never cross cards or labels and reach their alert node',()=>{
  }
  const top=Math.min(...[...l.servers,...l.sites,...l.storage].map(n=>n.y));
  assert.ok(top>l.docknest.block.y+l.docknest.block.h,'the map starts below the alert band');
+});
+test('more than 6 lines collapse to one line per alert node with a count of its sources',()=>{
+ const {servers,sites}=make(8,6),channels=[{id:'c1',name:'A',kind:'telegram'},{id:'c2',name:'B',kind:'email'}];
+ const rules=servers.map((s,i)=>({id:'sv'+i,channelId:channels[i%2].id,sourceKind:'server',sourceId:s.id}));
+ const l=layoutMap(servers,sites,{alerts:{channels,rules}});
+ assert.equal(l.bundled,true);assert.equal(l.rulePaths.length,2);assert.deepEqual(l.rulePaths.map(p=>p.count),[4,4]);
+ assert.deepEqual(l.alerts.map(n=>n.count),[4,4]);
 });
 test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});

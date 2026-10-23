@@ -1,43 +1,15 @@
-import React,{useState} from 'react';
-import {IconBrandTelegram,IconMail,IconDownload,IconCircleX,IconCircleCheck,IconInfoCircle} from '@tabler/icons-react';
+import React,{useEffect,useMemo,useState} from 'react';
+import {IconBrandTelegram,IconMail,IconDownload,IconCircleX,IconCircleCheck,IconInfoCircle,IconAlertTriangle} from '@tabler/icons-react';
 import {Sheet,Note,useGuard} from './MoveFlow.jsx';
+import {SidePanel} from './Panels.jsx';
 import {friendly} from './moves-client.js';
 import {EVENT_LABEL,EVENTS_FOR,DEFAULT_EVENTS,KIND_LABEL,words,sameSource} from './alerts-client.js';
 
 export const KindIcon=({kind,size=32,stroke=1.5})=>{const I=kind==='email'?IconMail:IconBrandTelegram;return <I size={size} stroke={stroke} aria-hidden="true"/>};
 export const DockNestIcon=({size=32,stroke=1.5})=><IconDownload size={size} stroke={stroke} aria-hidden="true"/>;
+export const srcKey=s=>s.kind+':'+(s.id||'');
 
-// "Alerts from <source> to <channel>": which events a line carries. Checkboxes only offer events the source can have.
-export function RuleSheet({source,channel,rule,client,onClose,onSaved}){
- const allowed=EVENTS_FOR[source.kind]||[],start=rule?rule.events.filter(e=>allowed.includes(e)):DEFAULT_EVENTS[source.kind]||[];
- const [picked,setPicked]=useState(()=>new Set(start)),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const list=allowed.filter(e=>picked.has(e));
- const toggle=e=>setPicked(p=>{const n=new Set(p);n.has(e)?n.delete(e):n.add(e);return n});
- async function save(){
-  setBusy(true);setError('');
-  try{
-   if(rule)await client.updateRule(rule.id,{events:list});
-   else await client.createRule({channelId:channel.id,sourceKind:source.kind,sourceId:source.id||null,events:list});
-   await onSaved(rule?'Alerts changed.':'Alerts will go to '+channel.name+'.');
-  }catch(e){setError(e.message||'Something went wrong.');setBusy(false)}
- }
- async function remove(){
-  setBusy(true);setError('');
-  try{await client.deleteRule(rule.id);await onSaved('Alerts removed.')}catch(e){setError(e.message||'Something went wrong.');setBusy(false)}
- }
- return <Sheet title={`Alerts from ${source.name} to ${channel.name}`} labelId="map-rule-title" onClose={onClose} actions={<>
-  {rule&&<button type="button" className="map-foot-left" disabled={busy} onClick={remove}>Remove alerts</button>}
-  <button type="button" onClick={onClose}>Cancel</button>
-  <button type="button" className="primary" disabled={busy||!list.length} onClick={save}>Save</button></>}>
-  <fieldset className="map-events"><legend>Tell me when</legend>
-   {allowed.map(e=><label key={e} className="map-check"><input type="checkbox" checked={picked.has(e)} onChange={()=>toggle(e)}/>{EVENT_LABEL[e]}</label>)}
-  </fieldset>
-  {!list.length&&<p className="map-caption" role="status">Choose at least one.</p>}
-  {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
- </Sheet>;
-}
-
-// Phone, keyboard and "+" path: choose the channel for a source, then the same rule sheet opens.
+// Phone, keyboard and "Send alerts to…": choose the channel for a source; its panel opens with that source added.
 export function PickSheet({source,channels,rules,onPick,onAdd,onClose}){
  return <Sheet title={`Send alerts from ${source.name} to`} labelId="map-pick-title" onClose={onClose} actions={<button type="button" onClick={onClose}>Cancel</button>}>
   {channels.length>0?<ul className="map-targets">{channels.map(c=>{const has=rules.some(r=>r.channelId===c.id&&sameSource(r,source));
@@ -54,7 +26,7 @@ function Secret({label,saved,value,onChange,replacing,onReplace,autoComplete='of
 }
 const Field=({label,value,onChange,type='text',inputMode,autoComplete='off',hint})=><label className="map-field">{label}<input type={type} inputMode={inputMode} autoComplete={autoComplete} value={value} onChange={e=>onChange(e.target.value)}/>{hint&&<span className="map-caption">{hint}</span>}</label>;
 
-export function TestBox({client,channel,onDone}){
+export function TestBox({client,channel,onDone,dirty}){
  const [state,setState]=useState({busy:false,text:'',ok:false});
  async function run(){
   setState({busy:true,text:'',ok:false});
@@ -62,54 +34,138 @@ export function TestBox({client,channel,onDone}){
   catch(e){setState({busy:false,ok:false,text:e.message||'The test message could not be sent.'})}
   onDone?.();
  }
- return <div className="map-test"><button type="button" disabled={state.busy} onClick={run}>{state.busy?'Sending…':'Send test message'}</button>
+ return <div className="map-test"><button type="button" className="primary" disabled={state.busy||!channel} onClick={run}>{state.busy?'Sending…':'Send test message'}</button>{dirty&&<span className="map-caption">Sends with the settings that are saved.</span>}
   <div role="status" aria-live="polite">{state.text&&<Note kind={state.ok?'ok':'error'} icon={state.ok?IconCircleCheck:IconCircleX}>{state.text}</Note>}</div></div>;
 }
 
-// Add or change a channel. Saving needs the recent re-verification, shown inside the sheet like in the move flow.
-export function ChannelSheet({kind,channel,client,onClose,onSaved}){
- const edit=!!channel,c=channel?.config||{},guard=useGuard(client);
- const [name,setName]=useState(channel?.name||KIND_LABEL[kind]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- const [token,setToken]=useState(''),[chatId,setChatId]=useState(c.chatId||''),[repToken,setRepToken]=useState(false);
- const [host,setHost]=useState(c.host||''),[port,setPort]=useState(String(c.port||587)),[security,setSecurity]=useState(c.security||'starttls'),[username,setUsername]=useState(c.username||''),[password,setPassword]=useState(''),[repPass,setRepPass]=useState(false),[from,setFrom]=useState(c.from||''),[to,setTo]=useState((c.to||[]).join(', '));
- const tokenSaved=edit&&!!c.tokenSet,passSaved=edit&&!!c.passwordSet&&!!username;
- function body(){
-  if(kind==='telegram')return {name,config:{chatId,...(token?{token}:{})}};
-  const recipients=to.split(/[,\s;]+/).filter(Boolean);
-  return {name,config:{host,port:Number(port),security,username,from,to:recipients,...(password?{password}:{})}};
- }
- const ready=name.trim()&&(kind==='telegram'?chatId.trim()&&(token||tokenSaved):host.trim()&&Number(port)>0&&from.trim()&&to.trim()&&(!username||password||passSaved));
+const draftOf=(source,rule)=>({key:srcKey(source),source,ruleId:rule?.id||null,events:new Set(rule?rule.events:DEFAULT_EVENTS[source.kind]||[]),first:rule?[...rule.events].join():null,gone:false});
+
+// The one place to set an alert node up: the channel's own settings, then "Sends when" with one block per connected source.
+// Save applies every change at once (channel, then lines); Cancel discards them all.
+export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sourceName,preselect,scrollTo,client,when,onClose,onSaved,onDelete,onReload}){
+ const edit=!!channel,c=channel?.config||{},guard=useGuard(client),list=credentials.filter(x=>x.kind===kind);
+ const [name,setName]=useState(channel?.name||KIND_LABEL[kind]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[made,setMade]=useState(null),[tab,setTab]=useState(scrollTo?'sends':'settings');
+ const [credentialId,setCredentialId]=useState(channel?.credentialId||''),[chatId,setChatId]=useState(c.chatId||''),[to,setTo]=useState((c.to||[]).join(', ')),[newCred,setNewCred]=useState(false);
+ const [drafts,setDrafts]=useState(()=>{
+  const mine=channel?rules.filter(r=>r.channelId===channel.id).map(r=>draftOf({kind:r.sourceKind,id:r.sourceId||null,name:sourceName(r)},r)):[];
+  if(preselect&&!mine.some(d=>d.key===srcKey(preselect)))mine.push(draftOf(preselect,null));
+  return mine;
+ });
+ const [pick,setPick]=useState(''),live=made||channel;
+ useEffect(()=>{if(scrollTo)document.querySelector(`[data-src="${scrollTo}"]`)?.scrollIntoView({block:'nearest'})},[scrollTo,tab]);
+ const visible=drafts.filter(d=>!d.gone),free=useMemo(()=>sourceList.filter(s=>!visible.some(d=>d.key===srcKey(s))),[sourceList,drafts]);
+ const setEvents=(key,fn)=>setDrafts(l=>l.map(d=>d.key===key?{...d,events:fn(new Set(d.events))}:d));
+ const toggle=(key,e)=>setEvents(key,s=>{s.has(e)?s.delete(e):s.add(e);return s});
+ const disconnect=key=>setDrafts(l=>l.flatMap(d=>d.key!==key?[d]:d.ruleId?[{...d,gone:true}]:[]));
+ const addSource=()=>{const s=sourceList.find(x=>srcKey(x)===pick);if(!s)return;setDrafts(l=>[...l.filter(d=>d.key!==pick),draftOf(s,null)]);setPick('');setTimeout(()=>document.querySelector(`[data-src="${srcKey(s)}"]`)?.scrollIntoView({block:'nearest'}),0)};
+ const recipients=to.split(/[,\s;]+/).filter(Boolean);
+ const body=()=>({name,credentialId:credentialId||null,config:kind==='telegram'?{chatId}:{to:recipients}});
+ const dirty=!live||name!==live.name||credentialId!==(live.credentialId||'')||(kind==='telegram'?chatId!==(live.config?.chatId||''):recipients.join()!==(live.config?.to||[]).join());
+ const ready=name.trim()&&(kind==='telegram'?chatId.trim():recipients.length>0&&recipients.length<=5)&&visible.every(d=>d.events.size>0);
  async function save(){
   setBusy(true);setError('');
-  const b=body();
   await guard.run(async()=>{
-   const saved=edit?await client.updateChannel(channel.id,b):await client.createChannel({kind,...b});
-   await onSaved(saved,!edit);
+   let ch=live;
+   if(!ch){ch=await client.createChannel({kind,...body()});setMade(ch)}
+   else if(dirty)ch=await client.updateChannel(ch.id,body());
+   const next=[...drafts];
+   try{
+    for(let i=0;i<drafts.length;i++){
+     const d=drafts[i],evs=EVENTS_FOR[d.source.kind].filter(e=>d.events.has(e));
+     if(d.gone){await client.deleteRule(d.ruleId);next[i]=null}
+     else if(d.ruleId){if(evs.join()!==d.first){await client.updateRule(d.ruleId,{events:evs});next[i]={...d,first:evs.join()}}}
+     else{const r=await client.createRule({channelId:ch.id,sourceKind:d.source.kind,sourceId:d.source.id||null,events:evs});next[i]={...d,ruleId:r.id,first:evs.join()}}
+    }
+   }catch(e){setDrafts(next.filter(Boolean));throw e}
+   await onSaved(ch,!edit&&!made);
   },e=>setError(friendly(e)));
   setBusy(false);
  }
+ const cred=list.find(x=>x.id===credentialId);
+ const title=edit?channel.name:kind==='email'?'Add Email alerts':'Add Telegram alerts';
+ const last=live?.lastResult==='ok'?'Sent '+when(live.lastResultAt):live?.lastResult==='failed'?'Could not send '+when(live.lastResultAt)+(live.lastError?'. '+live.lastError:''):'Nothing sent yet';
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title={title} onClose={onClose} footer={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
+  <div className="map-node-head"><KindIcon kind={kind} size={28}/><label className="map-field map-node-name">Name<input value={name} onChange={e=>setName(e.target.value)} autoComplete="off"/></label></div>
+  <TestBox client={client} channel={live&&credentialId?live:null} onDone={onReload} dirty={live&&dirty}/>
+  <div className="map-tabs" role="tablist" aria-label="Alert settings">{[['settings','Settings'],['sends','Sends when']].map(([id,label])=><button key={id} type="button" role="tab" id={'map-tab-'+id} aria-selected={tab===id} aria-controls={'map-tabpanel-'+id} tabIndex={tab===id?0:-1} className={tab===id?'on':''} onClick={()=>setTab(id)} onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const n=tab==='settings'?'sends':'settings';setTab(n);setTimeout(()=>document.getElementById('map-tab-'+n)?.focus(),0)}}}>{label}</button>)}</div>
+  {tab==='settings'&&<section id="map-tabpanel-settings" role="tabpanel" aria-labelledby="map-tab-settings" className="map-cfg">
+   {edit&&channel.configReadable===false&&<Note kind="warn" icon={IconInfoCircle}>DockNest cannot read the saved settings of this channel. Enter them again to fix it.</Note>}
+   {!credentialId&&<Note kind="warn" icon={IconAlertTriangle}>Needs a credential. Choose one below, or create a new one.</Note>}
+   <label className="map-field">Credential<select value={credentialId} onChange={e=>{if(e.target.value==='__new')setNewCred(true);else setCredentialId(e.target.value)}}><option value="">Choose…</option>{list.map(x=><option key={x.id} value={x.id}>{x.name} ({KIND_LABEL[x.kind]})</option>)}<option value="__new">Create new credential</option></select>{cred&&<span className="map-caption">{kind==='telegram'?'Bot token: Saved':`${cred.config?.host||'Mail server'}${cred.config?.passwordSet?', password: Saved':''}`}</span>}</label>
+   {kind==='telegram'?<Field label="Chat ID" value={chatId} onChange={setChatId} hint="A number, or the @name of a public channel."/>
+    :<Field label="Recipients" value={to} onChange={setTo} hint="Up to 5 addresses, separated by commas."/>}
+   {live&&<dl className="map-defs"><div><dt>Last result</dt><dd>{last}</dd></div></dl>}
+   {edit&&<button type="button" className="map-delete" onClick={onDelete}>Delete this node</button>}
+  </section>}
+  {tab==='sends'&&<section id="map-tabpanel-sends" role="tabpanel" aria-labelledby="map-tab-sends" className="map-sends">
+   {visible.length===0&&<p className="map-caption">Nothing is connected yet. Drag from a server, site or DockNest to this node, or connect one below.</p>}
+   {visible.map(d=><fieldset key={d.key} className="map-src" data-src={d.key}><legend>{d.source.name}<span className="map-caption"> {d.source.kind==='docknest'?'DockNest':d.source.kind==='server'?'Server':'Site'}</span></legend>
+    {EVENTS_FOR[d.source.kind].map(e=><label key={e} className="map-check"><input type="checkbox" checked={d.events.has(e)} onChange={()=>toggle(d.key,e)}/>{EVENT_LABEL[e]}</label>)}
+    {d.events.size===0&&<p className="map-caption" role="status">Choose at least one.</p>}
+    <button type="button" aria-label={`Disconnect ${d.source.name}`} onClick={()=>disconnect(d.key)}>Disconnect</button>
+   </fieldset>)}
+   {free.length>0&&<div className="map-connect"><label className="map-field">Connect another source<select value={pick} onChange={e=>setPick(e.target.value)}><option value="">Choose…</option>{free.map(s=><option key={srcKey(s)} value={srcKey(s)}>{s.name}</option>)}</select></label><button type="button" disabled={!pick} onClick={addSource}>Connect</button></div>}
+  </section>}
+  {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+  {guard.prompt}
+  {newCred&&<CredentialSheet kind={kind} client={client} onClose={()=>setNewCred(false)} onSaved={async saved=>{await onReload();setCredentialId(saved.id);setNewCred(false)}}/>}
+ </SidePanel>;
+}
+
+// A credential (the secret part of a node): reusable by several nodes. Secrets are never shown again.
+export function CredentialSheet({kind,credential,client,onClose,onSaved}){
+ const edit=!!credential,c=credential?.config||{},guard=useGuard(client),[name,setName]=useState(credential?.name||(kind==='email'?'Mail account':'Telegram bot')),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [token,setToken]=useState(''),[repToken,setRepToken]=useState(false),[host,setHost]=useState(c.host||''),[port,setPort]=useState(String(c.port||587)),[security,setSecurity]=useState(c.security||'starttls'),[username,setUsername]=useState(c.username||''),[password,setPassword]=useState(''),[repPass,setRepPass]=useState(false),[from,setFrom]=useState(c.from||'');
+ const tokenSaved=edit&&!!c.tokenSet,passSaved=edit&&!!c.passwordSet&&!!username;
+ const config=()=>kind==='telegram'?(token?{token}:{}):{host,port:Number(port),security,username,from,...(password?{password}:{})};
+ const ready=name.trim()&&(kind==='telegram'?token||tokenSaved:host.trim()&&Number(port)>0&&from.trim()&&(!username||password||passSaved));
+ async function save(){
+  setBusy(true);setError('');
+  await guard.run(async()=>{const saved=edit?await client.updateCredential(credential.id,{name,config:config()}):await client.createCredential({kind,name,config:config()});await onSaved(saved)},e=>setError(friendly(e)));
+  setBusy(false);
+ }
  function changeEncryption(v){setSecurity(v);if(v==='tls'&&['587','25'].includes(port))setPort('465');if(v==='starttls'&&port==='465')setPort('587')}
- return <Sheet title={edit?`Edit ${channel.name}`:kind==='email'?'Add Email alerts':'Add Telegram alerts'} labelId="map-channel-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
-  {edit&&channel.configReadable===false&&<Note kind="warn" icon={IconInfoCircle}>DockNest cannot read the saved settings of this channel. Enter them again to fix it.</Note>}
+ return <Sheet title={edit?`Edit ${credential.name}`:kind==='email'?'New Email credential':'New Telegram credential'} labelId="map-credential-title" onClose={onClose} actions={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
   <Field label="Name" value={name} onChange={setName}/>
   {kind==='telegram'?<>
    <Secret label="Bot token" saved={tokenSaved} replacing={repToken} onReplace={()=>setRepToken(true)} value={token} onChange={setToken}/>
-   <Field label="Chat ID" value={chatId} onChange={setChatId} inputMode="text" hint="A number, or the @name of a public channel."/>
-   {!edit&&<p className="map-caption">Create a bot with BotFather in Telegram, copy its token, then send the bot a message. DockNest only talks to api.telegram.org.</p>}
+   {!edit&&<p className="map-caption">Create a bot with BotFather in Telegram and copy its token. DockNest only talks to api.telegram.org.</p>}
   </>:<>
    <Field label="SMTP server" value={host} onChange={setHost} hint="For example smtp.example.com."/>
    <label className="map-field">Port<input inputMode="numeric" autoComplete="off" value={port} onChange={e=>setPort(e.target.value.replace(/\D/g,''))}/></label>
    <label className="map-field">Encryption<select value={security} onChange={e=>changeEncryption(e.target.value)}><option value="starttls">STARTTLS (usually port 587)</option><option value="tls">TLS (usually port 465)</option></select><span className="map-caption">Email is always encrypted.</span></label>
-   <Field label="User name" value={username} onChange={setUsername} autoComplete="off"/>
+   <Field label="User name" value={username} onChange={setUsername}/>
    <Secret label="Password" saved={passSaved} replacing={repPass} onReplace={()=>setRepPass(true)} value={password} onChange={setPassword} autoComplete="new-password"/>
-   <Field label="From" value={from} onChange={setFrom} type="email" autoComplete="off"/>
-   <Field label="Send to" value={to} onChange={setTo} hint="Up to 5 addresses, separated by commas."/>
+   <Field label="From" value={from} onChange={setFrom} type="email"/>
   </>}
-  {edit&&<div className="map-test-box"><TestBox client={client} channel={channel}/><p className="map-caption">Sends with the settings that are saved.</p></div>}
+  {edit&&<CredentialTest client={client} credential={credential}/>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
   {guard.prompt}
  </Sheet>;
 }
+function CredentialTest({client,credential}){
+ const [s,setS]=useState({busy:false,text:'',ok:false});
+ async function run(){setS({busy:true,text:'',ok:false});try{await client.testCredential(credential.id);setS({busy:false,ok:true,text:'The login works.'})}catch(e){setS({busy:false,ok:false,text:e.message||'The login did not work.'})}}
+ return <div className="map-test"><button type="button" disabled={s.busy} onClick={run}>{s.busy?'Testing…':'Test'}</button><p className="map-caption">Checks the saved login.</p><div role="status" aria-live="polite">{s.text&&<Note kind={s.ok?'ok':'error'} icon={s.ok?IconCircleCheck:IconCircleX}>{s.text}</Note>}</div></div>;
+}
+
+// "Credentials" from the "+" panel: list, edit, delete (refused by the API while a node uses it)
+export function CredentialsPanel({narrow,credentials,channels,client,onClose,onReload}){
+ const [sheet,setSheet]=useState(null),[note,setNote]=useState(null),[confirm,setConfirm]=useState(null),[err,setErr]=useState('');
+ const uses=id=>channels.filter(c=>c.credentialId===id).length;
+ async function del(cred){setErr('');try{await client.deleteCredential(cred.id);await onReload();setConfirm(null);setNote(cred.name+' is deleted.')}catch(e){setErr(e.message||'This credential could not be deleted.')}}
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title="Credentials" onClose={onClose} footer={<button type="button" className="primary" onClick={onClose}>Close</button>}>
+  <p className="map-caption">A credential holds a login. Several alert nodes can use the same one.</p>
+  {credentials.length>0?<ul className="map-alert-rows">{credentials.map(x=><li key={x.id}><span><b className="map-name">{x.name}</b><span className="map-caption">{KIND_LABEL[x.kind]}, used by {uses(x.id)===1?'1 node':uses(x.id)+' nodes'}</span></span><button type="button" aria-label={`Edit ${x.name}`} onClick={()=>setSheet({kind:x.kind,credential:x})}>Edit</button><button type="button" aria-label={`Delete ${x.name}`} onClick={()=>{setErr('');setConfirm(x)}}>Delete</button></li>)}</ul>:<p className="map-caption">No credentials yet.</p>}
+  <div className="map-inline-actions"><button type="button" onClick={()=>setSheet({kind:'telegram'})}>New Telegram credential</button><button type="button" onClick={()=>setSheet({kind:'email'})}>New Email credential</button></div>
+  <div role="status" aria-live="polite">{note&&<p className="map-caption">{note}</p>}</div>
+  {sheet&&<CredentialSheet kind={sheet.kind} credential={sheet.credential} client={client} onClose={()=>setSheet(null)} onSaved={async()=>{await onReload();setSheet(null);setNote('Credential saved.')}}/>}
+  {confirm&&<Sheet title={`Delete ${confirm.name}?`} labelId="map-cred-delete-title" onClose={()=>setConfirm(null)} actions={<><button type="button" onClick={()=>setConfirm(null)}>Cancel</button><button type="button" className="primary" onClick={()=>del(confirm)}>Delete</button></>}>
+   <p>The login is removed from DockNest. A credential that a node still uses cannot be deleted.</p>
+   {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}</Sheet>}
+ </SidePanel>;
+}
+
 
 export function DeleteChannelSheet({channel,client,onClose,onDeleted}){
  const guard=useGuard(client),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -124,34 +180,14 @@ export function DeleteChannelSheet({channel,client,onClose,onDeleted}){
 // One sentence per line: "Frankfurt-1: Backup failed, Server unreachable"
 export const ruleSentence=(rule,sourceName)=>`${sourceName}: ${words(rule.events)||'No events'}`;
 
-// In a server, site or DockNest panel: the lines that start here and a way to add one.
+// In a server, site or DockNest panel: the alerts that start here and a way to add one.
 export function SourceAlerts({source,rules,channels,onEdit,onAdd}){
  const mine=rules.filter(r=>sameSource(r,source)),name=id=>channels.find(c=>c.id===id)?.name||'a channel';
  return <section aria-labelledby={'map-alerts-'+source.kind}>
   <h3 id={'map-alerts-'+source.kind} className="map-group-title">Alerts</h3>
-  {mine.length>0?<ul className="map-alert-rows">{mine.map(r=><li key={r.id}><span><b className="map-name">To {name(r.channelId)}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" aria-label={`Edit alerts to ${name(r.channelId)}`} onClick={e=>onEdit(r,e.currentTarget)}>Edit</button></li>)}</ul>:<p className="map-caption">No alerts from here yet.</p>}
+  {mine.length>0?<ul className="map-alert-rows">{mine.map(r=><li key={r.id}><span><b className="map-name">To {name(r.channelId)}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" aria-label={`Open alerts to ${name(r.channelId)}`} onClick={e=>onEdit(r,e.currentTarget)}>Open</button></li>)}</ul>:<p className="map-caption">No alerts from here yet.</p>}
   <button type="button" onClick={e=>onAdd(source,e.currentTarget)}>Send alerts to{'…'}</button>
  </section>;
-}
-
-// Details of an alert node
-export function ChannelDetails({channel,rules,sourceName,when,client,onEditRule,onReload}){
- const c=channel.config||{},mine=rules.filter(r=>r.channelId===channel.id);
- const last=channel.lastResult==='ok'?'Sent '+when(channel.lastResultAt):channel.lastResult==='failed'?'Could not send '+when(channel.lastResultAt)+(channel.lastError?'. '+channel.lastError:''):'Nothing sent yet';
- return <>
-  {channel.configReadable===false&&<Note kind="warn" icon={IconInfoCircle}>DockNest cannot read the saved settings of this channel. Choose Edit to enter them again.</Note>}
-  <dl className="map-defs">
-   <div><dt>Kind</dt><dd>{KIND_LABEL[channel.kind]}</dd></div>
-   <div><dt>Name</dt><dd>{channel.name}</dd></div>
-   {channel.kind==='telegram'?<div><dt>Chat ID</dt><dd>{c.chatId||'Not set'}</dd></div>:<><div><dt>Server</dt><dd>{c.host?`${c.host}:${c.port}`:'Not set'}</dd></div><div><dt>Send to</dt><dd>{(c.to||[]).join(', ')||'Not set'}</dd></div></>}
-   <div><dt>Secrets</dt><dd>Saved, never shown again</dd></div>
-   <div><dt>Last result</dt><dd>{last}</dd></div>
-  </dl>
-  <TestBox client={client} channel={channel} onDone={onReload}/>
-  <section aria-labelledby="map-channel-lines"><h3 id="map-channel-lines" className="map-group-title">Lines</h3>
-   {mine.length?<ul className="map-alert-rows">{mine.map(r=>{const s=sourceName(r);return <li key={r.id}><span><b className="map-name">{s}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" aria-label={`Edit alerts from ${s}`} onClick={e=>onEditRule(r,e.currentTarget)}>Edit</button></li>})}</ul>:<p className="map-caption">Nothing is connected to this channel yet. Drag from a site, a server or DockNest to it.</p>}
-  </section>
- </>;
 }
 
 // Phone: channels and their lines in plain sentences
