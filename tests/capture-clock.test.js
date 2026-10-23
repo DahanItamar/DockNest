@@ -36,6 +36,7 @@ test('a staged backup from a source with a reset clock is published under the Do
  transport.remote=async(_server,request)=>{
   if(request.operation==='plan')return {fingerprint:'plan'};
   if(request.operation==='cleanup')return {removed:true};
+  if(request.operation==='list-staging')return {root:'/var/lib/docknest',jobs:[]};
   return {remotePath:'/var/lib/docknest/job/payload.tar.gz',root:'/var/lib/docknest/job',manifest:{kind:'docker',complete:true,capturedAt:reported,downtimeSeconds:1,originalImages:[],architecture:'amd64',containers:[],consistency:{status:'passed'}}};
  };
  transport.download=async(_server,_path,output)=>{output.end(Buffer.from('authenticated fixture payload'));};

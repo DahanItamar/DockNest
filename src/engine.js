@@ -219,6 +219,35 @@ function supersedeRestore(restoreId){db.prepare("UPDATE restores SET status='rec
 
 // The source server's clock orders recovery points for retention. A capture time outside this job's own window
 // (a skewed or reset source clock) is replaced by the DockNest host's time so retention never prunes the newest point.
+// Finished job folders left in a source staging root (releases 2.1.0-2.4.1 never removed them). The helper only lists;
+// DockNest decides here and removes each one with the marker-checking cleanup operation.
+export const STAGING_SAFE_AGE_SECONDS=6*3600;
+const jobFolder=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export function stagingRemovable(item,currentJob){
+ if(!item||!jobFolder.test(item.job)||item.job===currentJob||item.finished!==true)return false;
+ const row=db.prepare('SELECT status FROM jobs WHERE id=?').get(item.job);
+ // queued, running, recovery_required and failed (kept for review) folders stay; unknown jobs only once old.
+ return row?row.status==='completed':Number(item.ageSeconds)>=STAGING_SAFE_AGE_SECONDS;
+}
+export async function sweepStaging(server,site,currentJob){
+ const listing=await transport.remote(server,{operation:'list-staging',config:site.config});
+ if(typeof listing?.root!=='string'||!listing.root.startsWith('/'))return {removed:0,freedBytes:0};
+ let removed=0,freedBytes=0;
+ for(const item of (Array.isArray(listing.jobs)?listing.jobs:[]).filter(item=>stagingRemovable(item,currentJob)).slice(0,50)){
+  try{await transport.remote(server,{operation:'cleanup',root:listing.root.replace(/\/+$/,'')+'/'+item.job});removed++;freedBytes+=Number.isSafeInteger(item.bytes)?item.bytes:0;}catch{/* Kept; retried after the next backup. */}
+ }
+ // Counts only: folder names and paths stay out of the audit trail.
+ if(removed)audit('worker','staging.swept',server.id,{removed,freedBytes});
+ return {removed,freedBytes};
+}
+// Startup reconciliation published a crashed job's package and completed that job: finish its source cleanup and retention.
+export async function finishReconciledBackup(jobId){
+ const job=db.prepare("SELECT id,site_id FROM jobs WHERE id=? AND type='backup' AND status='completed'").get(jobId);if(!job)return;
+ const {site,server}=siteInfo(job.site_id);
+ await transport.remote(server,{operation:'cleanup',root:(site.config.stagingRoot||'/var/lib/docknest').replace(/\/+$/,'')+'/'+job.id}).catch(()=>{});
+ await sweepStaging(server,site,job.id).catch(()=>{});
+ await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
+}
 export function trustedCaptureTime(reported,startedMs,nowMs=Date.now(),skewMs=10*60*1000){
  const ms=typeof reported==='number'?reported*1000:NaN;
  return Number.isFinite(ms)&&ms>=startedMs-skewMs&&ms<=nowMs+skewMs?{ms,adjusted:false}:{ms:nowMs,adjusted:true};
@@ -288,10 +317,7 @@ export async function executeJob(job){
   if(!owned){console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
   await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
-  // Removes finished job folders left by earlier releases; every job DockNest still tracks as active is kept.
-  const keep=[job.id,...db.prepare("SELECT id FROM jobs WHERE status IN ('queued','running','recovery_required')").all().map(row=>row.id)];
-  const swept=await transport.remote(server,{operation:'sweep-staging',config:site.config,keep:[...new Set(keep)]}).catch(()=>null);
-  if(swept?.removed)audit('worker','staging.swept',server.id,{removed:swept.removed,freedBytes:swept.freedBytes});
+  await sweepStaging(server,site,job.id).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);

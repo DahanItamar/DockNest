@@ -20,8 +20,8 @@ export function authenticatePublication(backupId,checksum,size){
  const row=db.prepare("UPDATE artifact_operations SET state='authenticated',checksum=?,size=?,updated_at=? WHERE backup_id=? AND state='prepared'").run(checksum,size,now(),backupId);
  if(!row.changes)throw new Error('Publication journal does not match capture');
 }
-// ownedDetails: the live worker's final job details. The job then completes only while it is still 'running', and
-// the result says whether this worker still owns it. Without it (startup reconciliation) the job completes as before.
+// Completes the job only while it is still 'running' and says whether it did. ownedDetails: the live worker's final
+// job details. Reconciliation never downgrades a recovery_required job: the package is published, review stays.
 export function finalizePublication(backupId,{ownedDetails}={}){
  return transaction(()=>{
   const operation=db.prepare('SELECT * FROM artifact_operations WHERE backup_id=?').get(backupId);
@@ -33,9 +33,7 @@ export function finalizePublication(backupId,{ownedDetails}={}){
   recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},operation.job_id);
   recordVerification(backupId,'consistency',metadata.manifest.consistency||{status:'not-tested'},operation.job_id);
   db.prepare("UPDATE artifact_operations SET state='completed',updated_at=? WHERE backup_id=?").run(now(),backupId);
-  if(ownedDetails)return db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,error=NULL,details=? WHERE id=? AND status='running'").run(now(),JSON.stringify(ownedDetails),operation.job_id).changes===1;
-  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,error=NULL,details=? WHERE id=?").run(now(),JSON.stringify({backupId,downtimeSeconds:metadata.manifest.downtimeSeconds}),operation.job_id);
-  return true;
+  return db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=?,error=NULL,details=? WHERE id=? AND status='running'").run(now(),JSON.stringify(ownedDetails||{backupId,downtimeSeconds:metadata.manifest.downtimeSeconds}),operation.job_id).changes===1;
  });
 }
 export function deletionBlocked(backupId){
@@ -70,7 +68,7 @@ export async function finishDeletion(backupId){
  catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};}
  transaction(()=>{db.prepare('DELETE FROM downloads WHERE backup_id=? AND expires_at<=?').run(backupId,Date.now());db.prepare('DELETE FROM backups WHERE id=?').run(backupId);});
 }
-export async function reconcileArtifacts(verify,{checkCompleted=false}={}){
+export async function reconcileArtifacts(verify,{checkCompleted=false,onJobCompleted=async()=>{}}={}){
  const result={published:0,deleted:0,pending:0};
  if(checkCompleted){
   for(const operation of db.prepare("SELECT a.* FROM artifact_operations a JOIN backups b ON b.id=a.backup_id WHERE a.state='completed'").all()){
@@ -93,7 +91,8 @@ export async function reconcileArtifacts(verify,{checkCompleted=false}={}){
    if(await verify(file)!==operation.checksum||(await statFile(file)).size!==operation.size)throw new Error('Journal authentication does not match package');
    if(!exists)await renameFile(operation.temporary,operation.published);
    await syncFile(operation.published);
-   finalizePublication(operation.backup_id);result.published++;audit('worker','publication.reconciled',operation.backup_id,{});
+   const completed=finalizePublication(operation.backup_id);result.published++;audit('worker','publication.reconciled',operation.backup_id,{});
+   if(completed)await onJobCompleted(operation.job_id).catch(()=>{});
   }catch{result.pending++;audit('worker','publication.reconciliation_pending',operation.backup_id,{});}
  }
  for(const operation of db.prepare('SELECT * FROM retention_operations').all()){

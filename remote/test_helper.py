@@ -434,59 +434,69 @@ class ArchiveSecurityTests(unittest.TestCase):
 class StagingSweepTests(unittest.TestCase):
     def setUp(self):
         import shutil
-        # Linux rmtree is fd-based; let the Windows test run exercise the same selection rules.
+        # Linux rmtree is fd-based; let the Windows test run exercise the same rules.
         safe=patch.object(shutil.rmtree,'avoids_symlink_attacks',True,create=True);safe.start();self.addCleanup(safe.stop)
-    def job(self,base,name,age,disarmed=True,content=b'plaintext package'):
-        import os
-        folder=base/name;folder.mkdir();(folder/'payload.tar.gz').write_bytes(content)
-        if disarmed:(folder/'disarmed').write_text('{}')
-        old=__import__('time').time()-age
-        for path in [folder/'payload.tar.gz',*( [folder/'disarmed'] if disarmed else []),folder]:os.utime(path,(old,old))
+    def job(self,base,name,age,markers=('disarmed','watchdog.done')):
+        import os,time
+        folder=base/name;folder.mkdir();(folder/'payload.tar.gz').write_bytes(b'plaintext package')
+        for marker in markers:(folder/marker).write_text('{}')
+        old=time.time()-age
+        for path in [*folder.iterdir(),folder]:os.utime(path,(old,old))
         return folder
-    def test_only_old_finished_job_folders_are_removed(self):
+    def test_listing_reports_only_real_job_folders_without_deleting(self):
         import os
-        from helper import sweep_staging
+        from helper import list_staging
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d).resolve()
-            old=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab',8*86400)
-            active=self.job(base,'11111111-2222-4333-8444-555555555555',8*86400)
-            current=self.job(base,'22222222-2222-4333-8444-555555555555',8*86400)
-            recent=self.job(base,'33333333-2222-4333-8444-555555555555',3600)
-            armed=self.job(base,'44444444-2222-4333-8444-555555555555',8*86400,disarmed=False)
-            upper=self.job(base,'88888888-AAAA-4BBB-8CCC-DDDDDDDDDDDD',8*86400)
-            other=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab.old',8*86400)
-            maintenance=base/'maintenance';maintenance.mkdir();(maintenance/'enabled').touch();os.utime(maintenance,(0,0))
-            loose=base/'55555555-2222-4333-8444-555555555555';loose.write_text('file');os.utime(loose,(0,0))
-            result=sweep_staging({'stagingRoot':str(base)},[active.name,current.name,None])
-            self.assertEqual(result['removed'],1);self.assertGreater(result['freedBytes'],0)
-            self.assertFalse(old.exists())
-            for kept in [active,current,recent,armed,upper,other,maintenance,loose]:self.assertTrue(kept.exists(),kept.name)
-            self.assertNotIn(str(base),json.dumps(result))
-    def test_planted_link_named_like_a_job_is_never_followed(self):
-        import os
-        from helper import sweep_staging
+            done=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab',8*86400)
+            armed=self.job(base,'44444444-2222-4333-8444-555555555555',8*86400,markers=('disarmed',))
+            recent=self.job(base,'33333333-2222-4333-8444-555555555555',60)
+            self.job(base,'88888888-AAAA-4BBB-8CCC-DDDDDDDDDDDD',8*86400);self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab.old',8*86400)
+            (base/'maintenance').mkdir();(base/'55555555-2222-4333-8444-555555555555').write_text('file')
+            outside=self.job(pathlib.Path(tempfile.mkdtemp()).resolve(),'66666666-2222-4333-8444-555555555555',8*86400)
+            try:os.symlink(outside,base/outside.name,target_is_directory=True);linked=True
+            except OSError:linked=False
+            listing=list_staging({'stagingRoot':str(base)})
+            self.assertEqual(listing['root'],str(base))
+            jobs={item['job']:item for item in listing['jobs']}
+            self.assertEqual(set(jobs),{done.name,armed.name,recent.name})
+            self.assertTrue(jobs[done.name]['finished']);self.assertFalse(jobs[armed.name]['finished'])
+            self.assertGreater(jobs[done.name]['ageSeconds'],7*86400);self.assertLess(jobs[recent.name]['ageSeconds'],3600)
+            self.assertGreater(jobs[done.name]['bytes'],0)
+            for kept in [done,armed,recent,base/'maintenance',outside]:self.assertTrue(kept.exists())
+            if linked:self.assertNotIn(outside.name,jobs)
+    def test_cleanup_requires_a_finished_real_job_folder(self):
+        import os,shutil
+        from helper import cleanup_staging
         with tempfile.TemporaryDirectory() as d:
-            root=pathlib.Path(d).resolve();base=root/'staging';base.mkdir()
-            outside=self.job(root,'66666666-2222-4333-8444-555555555555',8*86400)
+            base=pathlib.Path(d).resolve()
+            armed=self.job(base,'44444444-2222-4333-8444-555555555555',8*86400,markers=('disarmed',))
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(armed)})
+            self.assertTrue(armed.exists())
+            maintenance=base/'maintenance';maintenance.mkdir();(maintenance/'disarmed').touch();(maintenance/'watchdog.done').touch()
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(maintenance)})
+            self.assertTrue(maintenance.exists())
+            done=self.job(base,'017d9970-1ecd-4f5e-9a0b-0123456789ab',8*86400)
+            with patch.object(shutil.rmtree,'avoids_symlink_attacks',False):
+                with self.assertRaises(ValueError):cleanup_staging({'root':str(done)})
+            cleanup_staging({'root':str(done)});self.assertFalse(done.exists())
+            outside=self.job(pathlib.Path(tempfile.mkdtemp()).resolve(),'66666666-2222-4333-8444-555555555555',8*86400)
             try:os.symlink(outside,base/outside.name,target_is_directory=True)
             except OSError:self.skipTest('Creating symbolic links is not permitted here')
-            self.assertEqual(sweep_staging({'stagingRoot':str(base)},[])['removed'],0)
-            self.assertTrue((outside/'payload.tar.gz').exists());self.assertTrue((base/outside.name).is_symlink())
-            # A staging root that is itself a link is refused.
-            os.symlink(base,root/'alias',target_is_directory=True)
-            with self.assertRaises(ValueError):sweep_staging({'stagingRoot':str(root/'alias')},[])
-    def test_missing_root_and_unsafe_removal_leave_everything(self):
-        import shutil
-        from helper import sweep_staging
+            with self.assertRaises(ValueError):cleanup_staging({'root':str(base/outside.name)})
+            self.assertTrue((outside/'payload.tar.gz').exists())
+    def test_unsafe_or_missing_staging_roots(self):
+        import os
+        from helper import list_staging
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d).resolve()
-            self.assertEqual(sweep_staging({'stagingRoot':str(base/'absent')},[])['removed'],0)
-            old=self.job(base,'77777777-2222-4333-8444-555555555555',8*86400)
-            with patch.object(shutil.rmtree,'avoids_symlink_attacks',False):
-                with self.assertRaises(ValueError):sweep_staging({'stagingRoot':str(base)},[])
-            self.assertTrue(old.exists())
-            for unsafe in ['/','/var/lib','relative/path']:
-                with self.assertRaises(ValueError):sweep_staging({'stagingRoot':unsafe},[])
+            self.assertEqual(list_staging({'stagingRoot':str(base/'absent')})['jobs'],[])
+            for unsafe in ['/','relative/path','/var/../etc']:
+                with self.assertRaises(ValueError):list_staging({'stagingRoot':unsafe})
+            (base/'real').mkdir()
+            try:os.symlink(base/'real',base/'alias',target_is_directory=True)
+            except OSError:self.skipTest('Creating symbolic links is not permitted here')
+            with self.assertRaises(ValueError):list_staging({'stagingRoot':str(base/'alias')})
 
 class MaintenanceTests(unittest.TestCase):
     def setUp(self):

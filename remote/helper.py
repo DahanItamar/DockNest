@@ -1749,37 +1749,43 @@ def install_boot_recovery(req):
     emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
 
 JOB_DIRECTORY=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
-STAGING_SWEEP_MIN_AGE=6*3600
-def sweep_staging(cfg,keep,now=None):
-    """Remove finished job folders left in the staging root. Only exact job-id names that are real directories,
-    disarmed, older than the minimum age and not kept are removed; links are never followed. Returns counts only."""
-    now=time.time() if now is None else now
-    keep={value for value in keep if isinstance(value,str)}
+FORBIDDEN_STAGING=['/']
+def staging_base(cfg):
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
-    if not base.is_absolute() or '..' in base.parts or str(base) in ['/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp']:raise ValueError('Use a dedicated absolute staging directory')
-    result={'removed':0,'freedBytes':0,'kept':0}
+    if not base.is_absolute() or '..' in base.parts or str(base) in FORBIDDEN_STAGING:raise ValueError('Use a dedicated absolute staging directory')
+    return base
+def is_regular(path):
+    try:return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:return False
+def job_folder_finished(path):
+    """A real job directory (never a link) whose recovery completed and whose watchdog acknowledged it."""
+    try:folder=os.lstat(path)
+    except OSError:return False
+    return stat.S_ISDIR(folder.st_mode) and is_regular(path/'disarmed') and is_regular(path/'watchdog.done')
+def list_staging(cfg,now=None,limit=200):
+    """Report job folders in the staging root for DockNest to decide on. Never deletes and never follows links."""
+    now=time.time() if now is None else now
+    base=staging_base(cfg);jobs=[]
     try:info=os.lstat(base)
-    except FileNotFoundError:return result
+    except FileNotFoundError:return {'root':str(base),'jobs':jobs}
     if not stat.S_ISDIR(info.st_mode) or base.resolve()!=base:raise ValueError('Staging directory cannot be a symbolic link')
-    # Without fd-based removal, rmtree could be raced into following a link; leave everything in place.
-    if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
-    for entry in os.scandir(base):
-        if not JOB_DIRECTORY.fullmatch(entry.name):continue
-        if entry.name in keep:result['kept']+=1;continue
-        path=base/entry.name
-        try:
-            folder=os.lstat(path);marker=os.lstat(path/'disarmed')
-        except OSError:result['kept']+=1;continue
-        # Not a real directory, recovery not completed, or touched recently: keep it.
-        if not stat.S_ISDIR(folder.st_mode) or not stat.S_ISREG(marker.st_mode) or now-max(folder.st_mtime,marker.st_mtime)<STAGING_SWEEP_MIN_AGE:result['kept']+=1;continue
-        size=0
+    for entry in sorted(os.scandir(base),key=lambda item:item.name):
+        if not JOB_DIRECTORY.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):continue
+        path=base/entry.name;finished=job_folder_finished(path);size=0;latest=os.lstat(path).st_mtime
         for current,dirs,files in os.walk(path,followlinks=False):
             for name in dirs+files:
-                try:size+=os.lstat(os.path.join(current,name)).st_size
+                try:item=os.lstat(os.path.join(current,name));size+=item.st_size;latest=max(latest,item.st_mtime)
                 except OSError:pass
-        shutil.rmtree(path)
-        result['removed']+=1;result['freedBytes']+=size
-    return result
+        jobs.append({'job':entry.name,'finished':finished,'ageSeconds':max(0,int(now-latest)),'bytes':size})
+        if len(jobs)>=limit:break
+    return {'root':str(base),'jobs':jobs}
+def cleanup_staging(req):
+    root=pathlib.Path(req['root'])
+    if not JOB_DIRECTORY.fullmatch(root.name) or str(root.parent)!=str(staging_base({'stagingRoot':str(root.parent)})):raise ValueError('Cleanup requires a job folder in the staging directory')
+    if not job_folder_finished(root):raise ValueError('Recovery watchdog has not acknowledged disarm')
+    # fd-based removal never follows a link planted inside the folder.
+    if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
+    shutil.rmtree(root)
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -1810,11 +1816,8 @@ def main(req):
         refused=skip_refused_probes(req['config'])
         if req['enabled'] and 'public' in refused:raise ValueError("Probe URL policy: %s. Update the site's public maintenance URL before enabling maintenance."%refused['public'])
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
-    elif op=='cleanup':
-        root=pathlib.Path(req['root']);uuid.UUID(root.name)
-        if not (root/'disarmed').exists() or not (root/'watchdog.done').exists():raise ValueError('Recovery watchdog has not acknowledged disarm')
-        shutil.rmtree(root);emit(result={'removed':True})
-    elif op=='sweep-staging':emit(result=sweep_staging(req['config'],req.get('keep',[])))
+    elif op=='cleanup':cleanup_staging(req);emit(result={'removed':True})
+    elif op=='list-staging':emit(result=list_staging(req['config']))
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
