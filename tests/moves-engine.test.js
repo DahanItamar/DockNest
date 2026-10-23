@@ -124,6 +124,7 @@ test('a site moves end to end: fresh backup, loopback test, final copy, DNS wait
   assert.ok(calls.findIndex(call => call.mode === 'live') < firstSourceChange || firstSourceChange === -1 || calls[firstSourceChange].operation === 'move-retire-source');
   const finalJob = db.prepare("SELECT details FROM jobs WHERE type='backup' AND json_extract(details,'$.keepStopped')=1 AND site_id=?").get(siteId);
   assert.ok(finalJob, 'the final copy keeps the source stopped behind its maintenance page');
+  assert.ok(db.prepare("SELECT 1 FROM jobs WHERE type='backup' AND json_extract(details,'$.moveId')=? AND json_extract(details,'$.keepStopped')=0").get(draft.id), 'the move takes its own fresh backup instead of reusing an older one');
   assert.equal(calls.filter(call => call.operation === 'deploy-teardown').length, 1, 'the rehearsal is removed before the live deploy');
   // After the move: the site's own record and backups are on the new server; the move is listed until cleanup.
   assert.ok((await (await admin('/moves')).json()).moves.some(move => move.id === draft.id));

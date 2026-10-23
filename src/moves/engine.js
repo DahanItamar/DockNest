@@ -18,7 +18,8 @@ import { checkDns, currentRecords, cloudflare, ipv4 } from './dns.js';
 
 export const RETENTION_DAYS = 7;
 export const DRAFT_TTL_MS = 60 * 60 * 1000;
-export const FRESH_BACKUP_MS = 10 * 60 * 1000;
+// Every move takes its own fresh verified backup: an older one would miss changes made since, and the test copy
+// would not show the site as it is now.
 const now = () => new Date().toISOString();
 const httpError = (status, message, extra = {}) => Object.assign(new Error(message), { status, ...extra });
 const tableReady = () => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
@@ -374,13 +375,6 @@ function runInline(move, steps, name) {
       audit('worker', 'move.step.switch_dns', move.site_id, { move: move.id });
     });
     return true;
-  }
-  if (name === 'backup') {
-    const fresh = lastBackup(move.site_id);
-    if (fresh && Date.now() - Date.parse(fresh.captured_at) < FRESH_BACKUP_MS && Date.parse(fresh.captured_at) >= Date.parse(move.created_at) - FRESH_BACKUP_MS) {
-      transaction(() => { saveStep(completeStep(beginStep(step, now()), { result: { backupId: fresh.id, reused: true } }, now())); saveMove({ ...move, backup_id: fresh.id, updated_at: now() }); });
-      return true;
-    }
   }
   if (deploymentHeld(db)) return false;
   let job;
