@@ -3,7 +3,7 @@ import {IconServer,IconBox,IconZoomIn,IconZoomOut,IconArrowsMaximize,IconMap2} f
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {layoutMap,groupForList} from './layout.js';
-import {createMovesClient,blocked,why} from './moves-client.js';
+import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {ReviewDialog,ProgressDialog,TargetDialog} from './MoveFlow.jsx';
 import './map.css';
 
@@ -57,7 +57,7 @@ export function MapPage({servers=[],sites=[],user,api}){
  }
  function openReview(siteId,targetId){
   setFlow({kind:'review',siteId,targetId,busy:true});
-  client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,blockers:[e.message]}}));
+  client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,blockers:[friendly(e)]}}));
  }
  const [moves,setMoves]=useState([]);
  const loadMoves=useCallback(()=>{if(canMove)client.list().then(r=>setMoves(Array.isArray(r?.moves)?r.moves:[])).catch(()=>{})},[client,canMove]);
@@ -76,13 +76,15 @@ export function MapPage({servers=[],sites=[],user,api}){
    await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway});
    setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
   }catch(e){
+   if(e.code==='REAUTH_REQUIRED'){setFlow(f=>({...f,busy:false}));throw e;}
    if(e.code==='PREFLIGHT_CHANGED'){
     try{const p=await client.preview(flow.siteId,flow.targetId);setFlow(f=>({...f,preview:p,busy:false,error:'Something changed on the servers. Please review and press Move again.'}));return;}catch{}
    }
-   setFlow(f=>({...f,busy:false,error:e.message}));
+   setFlow(f=>({...f,busy:false,error:friendly(e)}));
   }
  }
  function moveTo(siteId,button){opener.current=button;precheck(siteId);setFlow({kind:'target',siteId})}
+ function choose(siteId,targetId){const r=checks[siteId]?.[targetId];if(r&&blocked(r)){setNote(`${byId.sites[siteId]?.name} cannot move to ${byId.servers[targetId]?.name}. ${why(r)}`);return;}setPending({siteId,targetId});setNote(`${byId.sites[siteId]?.name} will move to ${byId.servers[targetId]?.name}. Choose Save changes to continue.`);closeFlow(false);}
 
  const fit=useCallback(()=>{
   const el=view.current;if(!el)return;
@@ -155,17 +157,18 @@ export function MapPage({servers=[],sites=[],user,api}){
  }
 
  if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add a site. They will appear here, arranged automatically.</p></section>;
+const vh=view.current?.clientHeight||0,vw=view.current?.clientWidth||0,clipped=!narrow&&vh>0&&(t.y+layout.height*t.k>vh+2||t.x+layout.width*t.k>vw+2);
  const flowSite=flow&&byId.sites[flow.siteId],flowTo=flow&&byId.servers[flow.targetId],flowFrom=flowSite&&byId.servers[flowSite.serverId];
  const dialogs=<>
-  {flow?.kind==='target'&&<TargetDialog site={flowSite} servers={servers.filter(s=>s.id!==flowSite.serverId)} results={checks[flow.siteId]||{}} onCancel={()=>closeFlow(false)} onPick={id=>openReview(flow.siteId,id)}/>}
-  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} onSaveToken={t=>client.saveCloudflareToken(t)} onCancel={()=>closeFlow(false)} onMove={startMove}/>}
+  {flow?.kind==='target'&&<TargetDialog site={flowSite} servers={servers.filter(s=>s.id!==flowSite.serverId)} results={checks[flow.siteId]||{}} onCancel={()=>closeFlow(false)} onPick={id=>narrow?openReview(flow.siteId,id):choose(flow.siteId,id)}/>}
+  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} client={client} onCancel={()=>closeFlow(false)} onMove={startMove}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
  </>;
  if(narrow)return <div className="map-root">{strip}<MapList groups={groups} canMove={canMove} onMoveTo={moveTo}/>{dialogs}</div>;
 
  const home=drag&&layout.sites.find(s=>s.id===drag.id);
  const item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
- const renderSite=r=>{const s=byId.sites[r.id];return <article key={r.id} data-site={r.id} className={'map-site'+(canMove?' movable':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
+ const renderSite=r=>{const s=byId.sites[r.id];return <article key={r.id} data-site={r.id} tabIndex={canMove?0:undefined} aria-label={canMove?`${s.name}. ${siteFacts(s)}. Press Enter to choose a new server.`:undefined} onKeyDown={canMove?(e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();moveTo(r.id,e.currentTarget)}}):undefined} className={'map-site'+(canMove?' movable':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
   <IconBox size={20} stroke={1.75} aria-hidden="true"/><div><b className="map-name">{s.name}</b><span className="map-caption">{siteFacts(s)}</span></div></article>};
  const groupIds=[...layout.servers.map(s=>s.id)];
  return <section className="map-root" aria-label="Infrastructure map">
@@ -197,8 +200,9 @@ export function MapPage({servers=[],sites=[],user,api}){
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}
    </div>
+   {clipped&&<div className="map-fade" aria-hidden="true"/>}
   </div>
-  <p className="map-hint map-caption">Drag the background to move around. Use the buttons, mouse wheel or pinch to zoom.</p>
+  <p className="map-hint map-caption">{clipped?'Part of the map is out of view. Drag the background or use the arrow keys to see more. ':''}Drag the background to move around. Use the buttons, mouse wheel or pinch to zoom.{canMove&&' To move a site with the keyboard, focus it and press Enter.'}</p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
   {dialogs}
  </section>;

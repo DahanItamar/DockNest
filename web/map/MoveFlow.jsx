@@ -1,6 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
-import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText} from './moves-client.js';
+import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
 function Sheet({title,labelId,onClose,children,actions}){
@@ -20,12 +20,41 @@ function Sheet({title,labelId,onClose,children,actions}){
  </dialog>;
 }
 
+// Same check as the Update Center: the shared password and a fresh authenticator code (POST /api/auth/reauth).
+function ReauthBox({client,onVerified,onCancel}){
+ const [password,setPassword]=useState(''),[code,setCode]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ async function verify(){
+  setBusy(true);setError('');
+  try{await client.reauth(password,code.trim());await onVerified()}
+  catch(e){setError(e.status===401?'That password or code was not right. Try again.':friendly(e));setBusy(false)}
+ }
+ return <div className="map-reauth" role="group" aria-labelledby="map-reauth-title">
+  <b id="map-reauth-title">Please confirm it is you</b>
+  <p>Enter the shared password and a fresh code from your authenticator.</p>
+  <label className="map-field">Password<input type="password" name="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} aria-invalid={!!error||undefined}/></label>
+  <label className="map-field">Authenticator code<input name="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={!!error||undefined}/></label>
+  {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+  <div className="map-reauth-actions"><button type="button" onClick={onCancel}>Not now</button><button type="button" className="primary" disabled={busy||!password||code.trim().length<6} onClick={verify}>Verify and continue</button></div>
+ </div>;
+}
+// run(fn, onError): runs fn; if the server asks for a fresh sign-in check, shows the check inside the dialog and retries fn once verified.
+function useGuard(client){
+ const [need,setNeed]=useState(null);
+ const run=async(fn,onError)=>{
+  try{return await fn()}
+  catch(e){if(e.code==='REAUTH_REQUIRED'){setNeed({fn,onError});return}if(onError)onError(e);else throw e}
+ };
+ const prompt=need&&<ReauthBox client={client} onCancel={()=>setNeed(null)} onVerified={async()=>{const n=need;setNeed(null);await run(n.fn,n.onError)}}/>;
+ return {run,prompt,waiting:!!need};
+}
+
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
 const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
-export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,onSaveToken}){
+export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,client}){
+ const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
  const [anyway,setAnyway]=useState(false);
@@ -33,9 +62,14 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,on
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
  const canMove=!blocked&&(!long||anyway)&&!busy;
  const warns=(preview.warnings||[]).filter(w=>!w.advanced),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
- const cfReady=tokenSaved||!!adv.dns?.cloudflareAvailable;
- const submit=()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway});
- async function saveToken(){setTokenBusy(true);setTokenErr('');try{await onSaveToken(token);setToken('');setTokenSaved(true);setCf(true)}catch(e){setTokenErr(e.message)}setTokenBusy(false)}
+ const cfReady=tokenSaved||cfConfigured;
+ useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
+ const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
+ async function saveToken(){
+  setTokenBusy(true);setTokenErr('');
+  await guard.run(async()=>{await client.saveCloudflareToken(token);setToken('');setTokenSaved(true);setCf(true)},e=>setTokenErr(friendly(e)));
+  setTokenBusy(false);
+ }
  const portsText=p=>`${p.from} to ${p.to}${p.changed?' (changed, the old number is taken)':''}`;
  const unknown='Not known yet';
  return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
@@ -48,7 +82,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,on
   </div>}
   {long&&<Note kind="warn" icon={IconAlertTriangle} role="alert">Your site will be offline for a long time.{warns[0]?' '+warningText(warns[0]):''}</Note>}
   {!blocked&&!long&&warns.length>0&&<Note kind="warn" icon={IconAlertTriangle}>{warns.map(warningText).join(' ')}</Note>}
-  {long&&<label className="map-check"><input type="checkbox" checked={anyway} onChange={e=>setAnyway(e.target.checked)}/>Move anyway</label>}
+  {long&&<label className="map-check"><input type="checkbox" checked={anyway} onChange={e=>setAnyway(e.target.checked)}/>I accept about {duration(preview.downtimeSeconds)||"a long time"} offline</label>}
   {!blocked&&<div className="map-advanced">
    <button type="button" className="map-disclose" aria-expanded={open} aria-controls="map-adv" onClick={()=>setOpen(!open)}>Advanced settings<IconChevronDown size={18} stroke={1.75} aria-hidden="true" className={open?'open':''}/></button>
    {open&&<div id="map-adv" className="map-adv-body">
@@ -73,6 +107,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,on
    </div>}
   </div>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+  {guard.prompt}
  </Sheet>;
 }
 
@@ -85,7 +120,7 @@ function StepIcon({status}){
 }
 const STATUS_WORD={done:'done',running:'in progress',failed:'failed',pending:'waiting',skipped:'skipped',undone:'undone',undo_failed:'could not be undone'};
 
-function RemoveDialog({site,onCancel,onRemove,error,busy}){
+function RemoveDialog({site,onCancel,onRemove,error,busy,prompt}){
  const [name,setName]=useState(''),[data,setData]=useState(false);
  return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
   <p>The old copy of <b>{site.name}</b> is stopped and no longer needed. Removing it deletes the old containers. You will not be able to switch back.</p>
@@ -94,6 +129,16 @@ function RemoveDialog({site,onCancel,onRemove,error,busy}){
   <label className="map-field">Type the site name to confirm<input type="text" autoComplete="off" value={name} onChange={e=>setName(e.target.value)} aria-describedby="map-remove-name"/></label>
   <p id="map-remove-name" className="map-caption">{site.name}</p>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+  {prompt}
+ </Sheet>;
+}
+
+function SwitchBackDialog({site,to,move,onCancel,onConfirm,error,busy,prompt}){
+ const src=move?.sourceName||'the old server',when=move?.downtimeText||'a few minutes';
+ return <Sheet title={`Switch back to ${src}?`} labelId="map-back-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={onConfirm}>Switch back</button></>}>
+  <p>The site goes offline for {when}. Changes made since the switch stay on {move?.targetName||to.name} (not copied back).</p>
+  {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+  {prompt}
  </Sheet>;
 }
 
@@ -110,18 +155,20 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  },[client,moveId,tick]);
  const state=move?.state,finished=FINISHED.has(state),acts=move?.actions||{};
  const pct=Math.round(Math.min(100,Math.max(0,move?.progress||0)));
- async function act(fn){setBusy(true);setErr('');try{await fn();setTick(n=>n+1)}catch(e){setErr(e.message)}setBusy(false)}
+  const guard=useGuard(client),[confirmBack,setConfirmBack]=useState(false);
+ async function act(fn){setBusy(true);setErr('');await guard.run(async()=>{await fn();setTick(n=>n+1)},e=>setErr(friendly(e)));setBusy(false)}
  async function copy(){const d=move.dns;try{await navigator.clipboard.writeText(`${d.type} ${d.name} ${d.value}`);setCopied(true)}catch{setCopied(false)}}
  const errNote=err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>;
  const record=d=>d&&<div className="map-record"><div><span className="map-caption">Record</span><code>{d.type} {d.name} {'→'} {d.value}</code></div><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>;
 
- if(removing)return <RemoveDialog site={site} busy={busy} error={err} onCancel={()=>{setRemoving(false);setErr('')}} onRemove={async b=>{setBusy(true);setErr('');try{await client.removeOldCopy(moveId,b);setRemoving(false);setTick(n=>n+1)}catch(e){setErr(e.message)}setBusy(false)}}/>;
+ if(removing)return <RemoveDialog site={site} busy={busy} error={err} onCancel={()=>{setRemoving(false);setErr('')}} prompt={guard.prompt} onRemove={async b=>{setBusy(true);setErr('');await guard.run(async()=>{await client.removeOldCopy(moveId,b);setRemoving(false);setTick(n=>n+1)},e=>setErr(friendly(e)));setBusy(false)}}/>;
+ if(confirmBack)return <SwitchBackDialog site={site} to={to} move={move} busy={busy} error={err} prompt={guard.prompt} onCancel={()=>{setConfirmBack(false);setErr('')}} onConfirm={async()=>{setBusy(true);setErr('');await guard.run(async()=>{await client.switchBack(moveId);setConfirmBack(false);setTick(n=>n+1)},e=>setErr(friendly(e)));setBusy(false)}}/>;
 
  if(state==='waiting_dns'||state==='done'){
   const d=move.dns,done=state==='done';
   return <Sheet title={done?`${site.name} is live on ${to.name}`:`${site.name} is ready on ${to.name}`} labelId="map-done-title" onClose={onClose} actions={<>
    {!done&&<button type="button" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
-   {acts.switchBack&&<button type="button" disabled={busy} onClick={()=>act(()=>client.switchBack(moveId))}>Switch back</button>}
+   {acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}
    {acts.askRemoveOldCopy&&<button type="button" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
    <button type="button" className="primary" onClick={onClose}>Close</button></>}>
    {done?<><Note kind="ok" icon={IconCircleCheck} role="status">The domain points to the new server. All done.</Note>
@@ -130,7 +177,7 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
    {record(d)}
    <p className="map-waiting" role="status"><IconLoader2 size={18} stroke={2} aria-hidden="true" className="s-run"/>Waiting for the domain to point here{'…'}</p>
    <p className="map-caption">The old copy keeps your site online until then. When the domain points here, DockNest gets the certificate and you are done.</p></>}
-   {errNote}
+   {errNote}{guard.prompt}
   </Sheet>;
  }
  const titles={failed:`Moving ${site.name} stopped`,cancelled:'Move cancelled',rolled_back:'Move undone',needs_attention:`${site.name} needs your attention`,cancelling:'Cancelling the move',rolling_back:'Undoing the move',waiting_switch:`${site.name} is ready to switch`,switching_back:'Switching back',switched_back:`${site.name} is back on ${move?.sourceName||'the old server'}`,cleaned:'Old copy removed'};
@@ -141,13 +188,13 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
  const close=<button type="button" className={resolve.length?'':'primary'} onClick={onClose}>Close</button>;
  let actions;
  if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
- else if(finished)actions=<>{acts.switchBack&&<button type="button" disabled={busy} onClick={()=>act(()=>client.switchBack(moveId))}>Switch back</button>}{close}</>;
+ else if(finished)actions=<>{acts.switchBack&&<button type="button" disabled={busy} onClick={()=>setConfirmBack(true)}>Switch back</button>}{close}</>;
  else actions=<><button type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
  return <Sheet title={titles[state]||`Moving ${site.name}`} labelId="map-moving-title" onClose={finished?onClose:undefined} actions={actions}>
   {!finished&&<div className="map-bar" role="progressbar" aria-label="Move progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>}
   {bad?<Note kind="error" icon={IconCircleX} role="alert">{move.error||line}</Note>:<p className="map-status" role="status">{line}</p>}
   {state==='switched_back'&&record(move.dns)}
-  {errNote}
+  {errNote}{guard.prompt}
   <ol className="map-steps">{(move?.steps||[]).map(s=><li key={s.step} className={'step-'+s.state}><StepIcon status={s.state}/><span>{s.label}<span className="sr-only">, {STATUS_WORD[s.state]||s.state}</span></span></li>)}</ol>
   {!finished&&<p className="map-caption">{cancelable?'You can cancel any time before the switch. Nothing changes for visitors.':state==='waiting_switch'?'Nothing has changed for visitors yet.':'The switch has started and cannot be cancelled.'} You can leave this page.</p>}
  </Sheet>;

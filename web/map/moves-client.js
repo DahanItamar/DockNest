@@ -14,6 +14,7 @@ export function createMovesClient(api){
   removeOldCopy:(moveId,{confirmation,deleteData})=>api('/moves/'+id(moveId)+'/remove-old-copy',{confirmation,deleteData:!!deleteData}),
   resolve:(moveId,action)=>api('/moves/'+id(moveId)+'/resolve',{action}),
   // Never returns the token: {configured, zones, savedAt}
+  reauth:(password,code)=>api('/auth/reauth',{password,code}),
   cloudflareStatus:()=>api('/settings/cloudflare-dns'),
   saveCloudflareToken:token=>api('/settings/cloudflare-dns',{token},'PUT')
  };
@@ -26,3 +27,7 @@ export const why=p=>p?.blockers?.[0]||p?.sentence||'This move is not possible ri
 export const blocked=p=>!p.ok||p.verdict==='blocked';
 export const warningText=w=>typeof w==='string'?w:w?.text||'';
 export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(s<60)return s+' s';const m=Math.round(s/60);return m===1?'1 minute':m+' minutes'};
+// Plain sentences for the codes the screens react to. Anything else keeps the server's own sentence.
+export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your site will be offline for a long time. Tick the box to continue.'
+ :e?.code==='SITE_MOVING'?'This site is already being moved. Wait for that move to finish.'
+ :e?.message||'Something went wrong.';

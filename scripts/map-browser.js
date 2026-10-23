@@ -28,11 +28,11 @@ const state={
 let browser;const errors=[];
 // Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
 // Shapes follow docs/moving-sites.md, "API for the UI".
-const mock={previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],phase:'running',withDns:true};
+const mock={previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
 const HASH='a'.repeat(64);
 function preview({siteId,targetServerId,options}){
  const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
- const base={id,siteId,targetServerId,ok:true,mailBlocked:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual',cloudflareAvailable:mock.cfSaved},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
+ const base={id,siteId,targetServerId,ok:true,mailBlocked:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual',cloudflareAvailable:false},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
  return base;
@@ -60,9 +60,13 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   const endpoint=new URL(route.request().url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
   const req=route.request();
-  if(endpoint==='/api/settings/cloudflare-dns'){if(req.method()==='PUT'){const t=req.postDataJSON().token;if(t==='bad')return route.fulfill({status:400,json:{error:'Cloudflare did not accept this token.'}});mock.tokens.push(t);mock.cfSaved=true;return route.fulfill({json:{configured:true,zones:['example.com'],savedAt:'2026-10-23T00:00:00Z'}});}return route.fulfill({json:{configured:mock.cfSaved}});}
+  if(endpoint==='/api/auth/reauth'){const b=req.postDataJSON();if(b.password==='pw'&&b.code==='123456'){mock.needReauth=false;mock.reauths++;return route.fulfill({json:{ok:true}});}return route.fulfill({status:401,json:{error:'No'}});}
+  if(endpoint==='/api/settings/cloudflare-dns'){if(req.method()==='PUT'&&mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});if(req.method()==='PUT'){const t=req.postDataJSON().token;if(t==='bad')return route.fulfill({status:400,json:{error:'Cloudflare did not accept this token.'}});mock.tokens.push(t);mock.cfSaved=true;return route.fulfill({json:{configured:true,zones:['example.com'],savedAt:'2026-10-23T00:00:00Z'}});}return route.fulfill({json:{configured:mock.cfSaved}});}
   if(endpoint.startsWith('/api/moves')){
    const parts=endpoint.split('/').filter(Boolean),body=req.postDataJSON?.()||{};
+   if(req.method()==='POST'&&parts.length>=4&&mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});
+   if(parts.length===2&&req.method()==='POST'&&mock.siteMoving)return route.fulfill({status:409,json:{error:'raw',code:'SITE_MOVING'}});
+   if(parts[3]==='start'&&mock.forceAnyway){mock.forceAnyway=false;return route.fulfill({status:409,json:{error:'raw',code:'MOVE_ANYWAY_REQUIRED'}});}
    if(parts.length===2&&req.method()==='POST'){mock.previews.push(body);return route.fulfill({status:201,json:preview(body)});}
    if(parts[3]==='start'){if(mock.changeOnce){mock.changeOnce=false;return route.fulfill({status:409,json:{error:'Something changed.',code:'PREFLIGHT_CHANGED'}});}mock.starts.push({id:parts[2],body});mock.phase='running';return route.fulfill({status:202,json:{ok:true}});}
    if(parts[3]==='continue'){mock.continues.push(body.gate);if(body.gate==='dns'&&mock.dnsWrong)return route.fulfill({status:409,json:{error:'The domain still points to the old server.'}});mock.phase=body.gate==='owner-switch'?'waiting_dns':mock.phase;return route.fulfill({json:{ok:true}});}
@@ -97,13 +101,26 @@ async function dragSite(page,siteId,serverName,release=true){
  if(release){await page.mouse.up();}
 }
 const dialog=page=>page.getByRole('dialog');
+async function reverify(page){const d=page.getByRole('dialog');await d.getByLabel('Password').fill('pw');await d.getByLabel('Authenticator code').fill('123456');await d.getByRole('button',{name:'Verify and continue'}).click();await d.getByRole('group',{name:'Please confirm it is you'}).waitFor({state:'detached'});}
 async function trapped(page){ // focus stays inside the open dialog after several Tab presses
  for(let i=0;i<8;i++){await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('dialog')),true,'focus trapped');}
 }
 async function moveFlow(page,scheme){
- Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
+ Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
  const save=page.getByRole('button',{name:'Save changes'});
  assert.equal(await save.isDisabled(),true,'save starts disabled');
+ // Keyboard path: focus a site, press Enter, choose a server
+ await page.locator('.map-site[data-site="1"]').focus();await page.keyboard.press('Enter');
+ await dialog(page).getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
+ await dialog(page).getByText('This server is not connected. Reconnect it first.').waitFor();
+ assert.equal(await dialog(page).getByRole('button',{name:/Quiet server/}).isDisabled(),true);
+ await page.waitForFunction(()=>![...document.querySelectorAll('dialog button')].some(b=>/Checking/.test(b.textContent)));
+ await dialog(page).getByRole('button',{name:/^itamar-Srv/}).click();
+ await page.getByText(/will move to itamar-Srv/).waitFor();
+ await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
+ await page.getByRole('button',{name:'Undo change'}).click();
+ assert.equal(await save.isDisabled(),true);
+ await page.locator('.map-fade').waitFor();await page.getByText('Part of the map is out of view',{exact:false}).waitFor();
  // Blocked target: greyed with the reason; nothing pending
  await dragSite(page,'1','Quiet server',false);
  await page.locator('.map-server.blocked').getByText('This server is not connected. Reconnect it first.').waitFor();
@@ -139,7 +156,8 @@ async function moveFlow(page,scheme){
  assert.equal(await cfBox.isDisabled(),true,'needs a saved token first');
  await d.getByLabel('Cloudflare token').fill('bad');await d.getByRole('button',{name:'Save token'}).click();
  await d.getByRole('alert').getByText('Cloudflare did not accept this token.').waitFor();
- await d.getByLabel('Cloudflare token').fill('secret-token-123');await d.getByRole('button',{name:'Save token'}).click();
+ await d.getByLabel('Cloudflare token').fill('secret-token-123');mock.needReauth=true;await d.getByRole('button',{name:'Save token'}).click();
+ await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();await reverify(page);
  await d.getByText('Cloudflare token: Saved').waitFor();
  assert.deepEqual(mock.tokens,['secret-token-123']);
  assert.equal(await page.evaluate(()=>document.body.innerHTML.includes('secret-token-123')||[...document.querySelectorAll('input')].some(i=>i.value.includes('secret-token'))),false,'token never shown again');
@@ -151,11 +169,18 @@ async function moveFlow(page,scheme){
  await page.waitForFunction(()=>document.activeElement?.textContent==='Save changes');
  // Move: start, progress, DNS wait, done
  await save.click();await d.getByRole('heading',{name:'Ready to move'}).waitFor();
- await d.getByRole('button',{name:'Advanced settings'}).click();await d.getByLabel('REDIS_HOST').check();
+ await d.getByRole('button',{name:'Advanced settings'}).click();await d.getByText('Cloudflare token: Saved').waitFor();await d.getByLabel('REDIS_HOST').check();
  await d.getByLabel('Ask me before switching').check();
- mock.changeOnce=true; // the servers changed since the preview: DockNest asks again, nothing starts
+mock.changeOnce=true;mock.needReauth=true; // the servers changed since the preview; first the sign-in check is asked for
+ mock.forceAnyway=true;
+ await d.getByRole('button',{name:'Move',exact:true}).click();
+ await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await reverify(page);
+ await d.getByText('This move needs your OK first',{exact:false}).waitFor();
+ assert.equal(mock.starts.length,0);
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByText(/Something changed on the servers/).waitFor();
+ assert.equal(mock.starts.length,0);
  assert.equal(mock.starts.length,0);
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
@@ -170,7 +195,12 @@ async function moveFlow(page,scheme){
  mock.phase='waiting_switch';
  await d.getByRole('heading',{name:'shop.example.com is ready to switch'}).waitFor({timeout:6000});
  await shot(page,scheme,'1440-6b-switch');
- await d.getByRole('button',{name:'Switch now'}).click();
+mock.needReauth=true;await d.getByRole('button',{name:'Switch now'}).click();
+ await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await shot(page,scheme,'1440-6c-reauth');
+ await d.getByLabel('Password').fill('wrong');await d.getByLabel('Authenticator code').fill('000000');await d.getByRole('button',{name:'Verify and continue'}).click();
+ await d.getByRole('alert').getByText('That password or code was not right. Try again.').waitFor();
+ await reverify(page);
  assert.deepEqual(mock.continues,['owner-switch']);
  mock.phase='switching';
  await d.getByText('The switch has started and cannot be cancelled.').waitFor({timeout:6000});
@@ -187,6 +217,13 @@ async function moveFlow(page,scheme){
  mock.phase='done';
  await d.getByText('The domain points to the new server.').waitFor({timeout:6000});
  // Switch back is offered from `actions`; then the old copy can be removed after 7 days
+ await d.getByRole('button',{name:'Switch back'}).click();
+ await d.getByRole('heading',{name:'Switch back to mobiX-Srv?'}).waitFor();
+await d.getByText('stay on itamar-Srv (not copied back)',{exact:false}).waitFor();
+ await shot(page,scheme,'1440-7c-switchback');
+ await d.getByRole('button',{name:'Cancel'}).click();assert.equal(mock.switchBacks,0);
+ await d.getByRole('button',{name:'Switch back'}).click();
+ await d.getByRole('heading',{name:'Switch back to mobiX-Srv?'}).waitFor();
  await d.getByRole('button',{name:'Switch back'}).click();
  assert.equal(mock.switchBacks,1);
  await d.getByRole('heading',{name:'shop.example.com is back on mobiX-Srv'}).waitFor({timeout:6000});
@@ -205,7 +242,10 @@ async function moveFlow(page,scheme){
  await shot(page,scheme,'1440-7b-remove');
  await d.getByLabel('Type the site name to confirm').fill('shop.example.com');
  await d.getByLabel('Also delete the old data').check();
- await rm.click();
+mock.needReauth=true;await rm.click();
+ await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await reverify(page);
+ await d.getByRole('heading',{name:'Old copy removed'}).waitFor({timeout:6000});
  await d.getByRole('heading',{name:'Old copy removed'}).waitFor({timeout:6000});
  assert.deepEqual(mock.removals,[{confirmation:'shop.example.com',deleteData:true}]);
  mock.listMoves=[];mock.askRemove=false;
@@ -220,12 +260,15 @@ async function moveFlow(page,scheme){
  assert.equal(mock.cancels.length,1);
  await d.getByRole('button',{name:'Close'}).click();
  // Long downtime: warning and "Move anyway"
+mock.siteMoving=true;await dragSite(page,'1','zeta-Srv');await save.click();
+ await d.getByText('This site is already being moved. Wait for that move to finish.').waitFor();
+ await d.getByRole('button',{name:'Cancel'}).click();mock.siteMoving=false;
  await dragSite(page,'1','zeta-Srv');await save.click();
  await d.getByText(/offline for a long time/).waitFor();
  const go=d.getByRole('button',{name:'Move',exact:true});
  assert.equal(await go.isDisabled(),true,'long downtime blocks until confirmed');
  await shot(page,scheme,'1440-8-warning');
- await d.getByLabel('Move anyway').check();assert.equal(await go.isEnabled(),true);
+ await d.getByLabel('I accept about 40 minutes offline').check();assert.equal(await go.isEnabled(),true);
  await go.click();
  await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
  assert.equal(mock.starts.at(-1).body.moveAnyway,true,'Move anyway is sent');
@@ -340,7 +383,7 @@ try{
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
    await fits(page,'phone '+scheme);
    // Move to... opens the same dialogs as full-screen sheets
-   Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
+   Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
    await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
    const d=dialog(page);
    await d.getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
@@ -374,7 +417,7 @@ try{
  {
   const {context,page}=await open({appState:{...state,servers:state.servers.slice(0,2),sites:state.sites.slice(0,2)}});
   await page.locator('.map-site').first().waitFor();
-  assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'small maps stay at 100%');await context.close();
+  assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'small maps stay at 100%');assert.equal(await page.locator('.map-fade').count(),0,'no fade when everything fits');await context.close();
  }
  {
   const {context,page}=await open({width:760,height:900});

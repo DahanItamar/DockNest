@@ -107,3 +107,10 @@
 .map-root .map-token{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
 .map-root .map-token .map-field{width:100%}
 @media(max-width:767px){.map-root .map-moves button{min-height:44px}}
+.map-root .map-fade{position:absolute;left:0;right:0;bottom:0;height:48px;pointer-events:none;background:linear-gradient(to bottom,transparent,var(--surface-muted))}
+.map-root .map-site:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.map-root .map-reauth{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted)}
+.map-root .map-reauth-actions{display:flex;gap:12px;justify-content:flex-end}
+.map-root .map-reauth-actions button{white-space:nowrap}
+.map-root .map-field input{min-height:40px}
+@media(max-width:767px){.map-root .map-reauth-actions button{flex:1;min-height:44px}.map-root .map-field input{min-height:44px}}
