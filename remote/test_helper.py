@@ -401,7 +401,7 @@ class ArchiveSecurityTests(unittest.TestCase):
             self.assertFalse((base/'output/alias').exists())
     def test_chained_symlinks_cannot_escape_destination(self):
         # Each link alone stays inside lexically; followed together they leave the destination.
-        for chain in [[('x/y/d','../..'),('x/y/l','d/../..')],[('a','b/c'),('b','.'),('a2','a/../../..')],[('loop1','loop2'),('loop2','loop1')]]:
+        for chain in [[('x/y/d','../..'),('x/y/l','d/../..')],[('m','.'),('l','m/m/..')],[('loop1','loop2'),('loop2','loop1')]]:
             with self.subTest(chain=chain), tempfile.TemporaryDirectory() as d:
                 base=pathlib.Path(d);archive=base/'chain.tar'
                 with tarfile.open(archive,'w') as t:
@@ -471,6 +471,26 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(outside.read_text(),'host file')
             self.assertEqual((site/'maintenance.html').read_bytes(),b'<p>dbm-maintenance-v1</p>')
             self.assertEqual([p.name for p in site.iterdir() if p.name.startswith('maintenance.html.tmp-')],[])
+    def test_planted_fifo_flag_fails_at_once_instead_of_blocking(self):
+        import os,threading
+        if not hasattr(os,'mkfifo'):self.skipTest('FIFOs require POSIX')
+        with tempfile.TemporaryDirectory() as d:
+            site=pathlib.Path(d);(site/'ready').touch();os.mkfifo(site/'enabled')
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            outcome=[]
+            def attempt():
+                with patch('helper.public_probe',return_value=(503,b'dbm-maintenance-v1')),patch('helper.sync_maintenance_flag'):
+                    try:maintenance(cfg,True)
+                    except ValueError as error:outcome.append(str(error))
+            worker=threading.Thread(target=attempt,daemon=True);worker.start();worker.join(5)
+            self.assertFalse(worker.is_alive(),'maintenance blocked on a FIFO flag')
+            self.assertEqual(len(outcome),1);self.assertIn('regular file',outcome[0])
+            # A FIFO with a reader attached opens, but is still not a regular file.
+            reader=os.open(site/'enabled',os.O_RDONLY|os.O_NONBLOCK)
+            try:
+                outcome.clear();worker=threading.Thread(target=attempt,daemon=True);worker.start();worker.join(5)
+                self.assertFalse(worker.is_alive());self.assertEqual(len(outcome),1);self.assertIn('regular file',outcome[0])
+            finally:os.close(reader)
     def test_origin_https_verifies_original_hostname_on_loopback(self):
         from unittest.mock import Mock
         context=Mock();sock=Mock()
