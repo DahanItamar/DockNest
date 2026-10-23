@@ -1,10 +1,18 @@
 name: Verify
 # Branch pushes and pull requests only: a tag push would start a second Verify run on the tagged commit, and the
 # release gate must find the run that main's push already finished. Every required check still reports on PRs and main.
+# One run per change: pushes to main (the release gate reads that run) and pull requests. Feature-branch pushes
+# without a PR do not run. A newer push to a pull request cancels its older run. The slow Linux integration job runs
+# on main and on pull requests that are ready for review; on drafts it reports skipped, which saves about 15 minutes
+# per push while work is in progress. Marking a PR ready runs it in full before anything can merge.
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -72,6 +80,7 @@ jobs:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000
   linux-integration:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- CI runs once per change (main pushes and pull requests), cancels superseded pull-request runs, and runs the Linux integration suite on main and on pull requests that are ready for review (skipped on drafts).
+
 ## [2.5.0] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.5.0.md](docs/releases/2026-10-23-v2.5.0.md).
