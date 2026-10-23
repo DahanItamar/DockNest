@@ -75,6 +75,7 @@ jobs:
           npm run test:mobile
           npm run test:reports
           npm run test:status-pages
+          npm run test:map
           npm run test:layout
         env:
           TEST_BROWSER_CHANNEL: chromium
