@@ -8,6 +8,8 @@ import {RefreshCw} from '../icons.jsx';
 export const ROUTE_IDS={Overview:'overview',Servers:'servers','Sites & schedules':'sites',Backups:'backups',Jobs:'jobs',Audit:'audit',Maintenance:'maintenance',Storage:'storage','DockNest backup':'self-backup','Update Center':'update-center',Access:'access','System health':'system-health'};
 export const routeId=route=>ROUTE_IDS[route]||'other';
 
+// Full-screen 500 overlay (status-page.css, z-index 2000): only for the route-level boundary (area "page"), the only one today.
+// A boundary around a smaller area must render its own inline message instead of StatusPage.
 // "This page stopped working": catches a render error in one area. The report keeps only the route id, the area and
 // the error name (TypeError and similar). The message and the stack never leave this component.
 export class AppErrorBoundary extends React.Component{

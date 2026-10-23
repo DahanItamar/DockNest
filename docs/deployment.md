@@ -85,6 +85,8 @@ For an existing nginx host, publish the API only on a loopback port and proxy th
 - Your own Caddy: copy the file to `/srv/docknest/unavailable.html`, then inside the site block add `handle_errors { @down expression {http.error.status_code} in [502, 503, 504]` and `handle @down { root * /srv/docknest; rewrite * /unavailable.html; header Cache-Control no-store; file_server { status 503 } } }`.
 - nginx: copy the file to `/var/www/docknest/unavailable.html`, then in the server block add `error_page 502 503 504 =503 /unavailable.html;` and `location = /unavailable.html { root /var/www/docknest; internal; add_header Cache-Control no-store always; }`. Reload nginx after `nginx -t` passes.
 
+The Caddy setups need a Caddy 2 release whose `file_server` accepts `status` (the current documentation lists it; the `caddy:2` image is 2.11.x at the time of writing). Run `caddy validate --config <Caddyfile>` before reloading an older install.
+
 The page cannot show a countdown without a script; the browser refresh header does the retry. These proxy snippets are not exercised by the repository tests: check them once by stopping the API container and loading the site.
 
 New remote backups use this hierarchy inside the selected SFTP storage root:

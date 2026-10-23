@@ -1,5 +1,6 @@
 /* Status pages (404, 403, 401, 500). Tokens and the type scale only; the code is a display element, so it alone uses a large clamp().
    The code is heavy, and fades from the heading colour to transparent, so it reads as cropped into the page in both themes. */
+/* .status-screen (z-index 2000) covers the whole app: use it only for route-level screens (404, 403, 401 and the 500 from the route boundary in report/ErrorBoundary.jsx). */
 .status-screen{position:fixed;inset:0;z-index:2000;display:flex;flex-direction:column;align-items:center;overflow:auto;background:var(--background);padding:var(--edge)}
 .status-brand{flex:none;padding-top:8px;opacity:.9}
 .status-page:focus{outline:none}
