@@ -135,6 +135,25 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
 
 By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).
 
+## Vulnerability radar
+
+The vulnerability radar tells you when a site runs a PHP or Node.js version with a known security flaw, or one that no longer gets security fixes. It only reads. It never updates, restarts or changes a container, a site or a server, and it uses no AI and no paid service.
+
+**What it reads.** Once a day per server, at a time chosen at random for each install, and after you discover containers on a server, the worker runs the helper's read-only `inventory` operation over the same pinned SSH connection as backups. For every container (500 at most) it reads:
+
+- the container name, its state, and the image name and ID;
+- from the image: its tags, digests, architecture and build date;
+- only these labels: `com.docker.compose.project`, `com.docker.compose.service`, and `org.opencontainers.image.version`, `.revision`, `.source` and `.base.name`;
+- the server's own `/etc/os-release` and Docker version.
+
+For running containers that are not DockNest's own, it also runs three fixed commands with `docker exec`: `php -r 'echo PHP_VERSION;'`, `node -v` and `cat /etc/os-release`. They run without a shell and as the container's normal user. Each one may run for 5 seconds and return 512 bytes at most. The output must look like a version number, otherwise it is thrown away. From `os-release` only `ID`, `VERSION_ID` and `PRETTY_NAME` are kept. If a container has no PHP or Node.js, that is normal and nothing is recorded.
+
+**What it never reads.** Environment variables, the container command, mounts and volumes, other labels, files in the site, and logs. A server is not scanned while a backup, restore or site move is queued or running on it.
+
+**Nothing leaves the install.** The advisory list ships with each release (`radar/advisories.json`) and the matching runs inside DockNest. Inventory and findings are stored only in DockNest's own database. Logs only say that a scan failed, never what the server sent back.
+
+**Turning the probes off.** An administrator can set `containerProbes` to `false` (`PUT /api/radar/preferences`; a switch in the app will follow). DockNest then runs no `docker exec` at all and judges versions from image tags only. Those findings are less certain and are labelled that way. Signed-in operators can view findings and ask for a scan, at most once a minute. Only administrators can dismiss a finding or change preferences, and every such action is written to the audit log.
+
 ## Host updater
 
 The containers never get the Docker socket. The optional host updater ([upgrading](upgrading.md#host-updater-and-update-center), [threat model](updater-threat-model.md)) is a root systemd service reached over a Unix socket in the `docknest_updater` volume, which only the `api` container mounts, read-only. It treats the volume as writable by a possibly compromised API: it reads one small request, accepts upgrades to final releases only, checks the signed `docknest-release.json` with a cosign it pinned by SHA-256 (as an unprivileged account), requires the tag to be on `main`, and runs the upgrade as the checkout's owner, not as root. It never adds anyone to the `docker` group. The pre-existing exposure remains: whoever is in the `docker` group, or root, controls the host. An update request needs an administrator who has just re-entered the shared password and an authenticator code. The public progress endpoint returns only the phase, target version, state and timestamps. This design is covered by unit tests only; it has not been validated on a real Linux Docker host.
