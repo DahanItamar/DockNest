@@ -93,6 +93,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS site_moves_active ON site_moves(site_id) WHERE
 CREATE INDEX IF NOT EXISTS site_moves_created ON site_moves(created_at,id);
 CREATE TABLE IF NOT EXISTS site_move_steps (move_id TEXT NOT NULL REFERENCES site_moves(id) ON DELETE CASCADE,step TEXT NOT NULL CHECK (length(step) <= 32),attempt INTEGER NOT NULL DEFAULT 0 CHECK (typeof(attempt) = 'integer' AND attempt >= 0),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped','undone','undo_failed')),started_at TEXT,finished_at TEXT,resources TEXT NOT NULL DEFAULT '{}' CHECK (length(resources) <= 65536),result TEXT NOT NULL DEFAULT '{}' CHECK (length(result) <= 65536),PRIMARY KEY (move_id,step));
 `;
+// Alerts (docs/alerts.md): channels (credentials sealed with the master key), rules (the lines on the Map) and the
+// delivery queue the worker drains. Additive only: new tables and indexes, no rows, nothing altered. Rules carry no
+// foreign key to servers or sites, so deleting those never fails; a rule for something gone simply never matches.
+export const alertsSchema = `
+CREATE TABLE IF NOT EXISTS alert_channels (id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK (kind IN ('telegram','email')),name TEXT NOT NULL CHECK (length(name) <= 80),config TEXT NOT NULL CHECK (length(config) <= 8192),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,last_result TEXT CHECK (last_result IS NULL OR last_result IN ('ok','failed')),last_result_at TEXT,last_error TEXT CHECK (last_error IS NULL OR length(last_error) <= 200));
+CREATE TABLE IF NOT EXISTS alert_rules (id TEXT PRIMARY KEY,channel_id TEXT NOT NULL REFERENCES alert_channels(id) ON DELETE CASCADE,source_kind TEXT NOT NULL CHECK (source_kind IN ('docknest','server','site')),source_id TEXT,events TEXT NOT NULL CHECK (length(events) <= 2048),enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,CHECK ((source_kind = 'docknest') = (source_id IS NULL)));
+CREATE INDEX IF NOT EXISTS alert_rules_channel ON alert_rules(channel_id);
+CREATE TABLE IF NOT EXISTS alert_queue (id TEXT PRIMARY KEY,channel_id TEXT NOT NULL REFERENCES alert_channels(id) ON DELETE CASCADE,event TEXT NOT NULL,dedupe_key TEXT NOT NULL CHECK (length(dedupe_key) <= 200),message TEXT NOT NULL CHECK (length(message) <= 1000),status TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,created_at TEXT NOT NULL,finished_at TEXT);
+CREATE INDEX IF NOT EXISTS alert_queue_due ON alert_queue(status,next_attempt_at);
+CREATE INDEX IF NOT EXISTS alert_queue_dedupe ON alert_queue(channel_id,dedupe_key,created_at);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -115,6 +126,8 @@ export const migrations = [
   { version: 5, name: 'update-center', compatible: true, up: db => db.exec(updateCenterSchema) },
   // Site moves (docs/moving-sites.md): two tables and their indexes, no rows, nothing altered.
   { version: 6, name: 'site-moves', compatible: true, up: db => db.exec(siteMovesSchema) },
+  // Alert channels, rules and delivery queue (docs/alerts.md). Purely additive: renumber before release if another migration lands first.
+  { version: 7, name: 'alerts', compatible: true, up: db => db.exec(alertsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
