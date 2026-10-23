@@ -12,7 +12,7 @@ import { migrate, migrations, schemaVersion, listSnapshots, compatFloor, SchemaT
 const run = promisify(execFile), quiet = () => {}, shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
 // Sorted by name, matching schema().
-const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
+const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','radar_advisories','radar_findings','radar_findings_server','radar_findings_site','radar_inventory','radar_preferences','radar_scans','radar_scans_active','radar_scans_server','release_history','restores_created','retention_deferrals','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;
@@ -157,7 +157,7 @@ test('migration 5 is one compatible `{ version: 5,` line, so upgrade.sh and 2.1.
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^ {2}\{ version: 5, name: 'update-center', compatible: true, up: .*\) \},$/);
   assert.deepEqual(source.filter(line => /version:\s*5\b/.test(line)), lines, 'no other line names version 5');
-  assert.equal(schemaVersion, 5); assert.equal(migrations.at(-1).compatible, true); assert.equal(compatFloor(migrations), 1);
+  assert.equal(migrations.find(migration => migration.version === 5).compatible, true); assert.equal(compatFloor(migrations), 1);
 });
 
 test('a fresh database gets exactly the documented Update Center schema and no rows', () => temporary(async directory => {
@@ -227,7 +227,7 @@ test('Update Center constraints: single rows, length limits, states, references 
   db.close();
 }));
 
-test('a real 2.1.0 database migrates to schema 5 with its data intact, a v4-to-v5 snapshot and floor 1', { skip: noTag }, () => temporary(async directory => {
+test('a real 2.1.0 database migrates to the current schema with its data intact, one v4 snapshot and floor 1', { skip: noTag }, () => temporary(async directory => {
   const v2 = await v210Migrations(), file = join(directory, 'state.sqlite'), db = v210Database(file, v2), before = schema(db);
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   db.exec(`INSERT INTO audit_events VALUES('audit','user','site.created','site','{}','2026-10-20');
@@ -238,32 +238,32 @@ test('a real 2.1.0 database migrates to schema 5 with its data intact, a v4-to-v
   const rows = contents();
   assert.ok(Object.values(rows).filter(list => list.length).length >= 10, 'the fixture has rows in most tables');
   const result = migrate(db, { file, now: () => new Date('2026-10-22T08:00:00.000Z'), log: quiet });
-  assert.deepEqual(contents(), rows, 'migration 5 writes no rows to existing tables');
-  assert.equal(result.from, 4); assert.equal(result.to, 5);
-  assert.match(result.snapshot, /state-v4-to-v5-20261022T080000000Z\.sqlite$/);
+  assert.deepEqual(contents(), rows, 'later migrations write no rows to existing tables');
+  assert.equal(result.from, 4); assert.equal(result.to, schemaVersion);
+  assert.match(result.snapshot, new RegExp(`state-v4-to-v${schemaVersion}-20261022T080000000Z\\.sqlite$`));
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
-  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), updateCenter);
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...radarObjects].sort());
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1, 'signed-in sessions survive');
   assert.equal(db.prepare("SELECT role FROM users WHERE id='user'").get().role, 'admin');
   assert.equal(db.prepare('SELECT path FROM backups').get().path, 'fixture.enc');
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
-  assert.deepEqual(migrate(db, { file, log: quiet }), { from: 5, to: 5, snapshot: null }, 'a restart migrates nothing and takes no snapshot');
+  assert.deepEqual(migrate(db, { file, log: quiet }), { from: schemaVersion, to: schemaVersion, snapshot: null }, 'a restart migrates nothing and takes no snapshot');
   db.close();
   const copy = new DatabaseSync(result.snapshot, { readOnly: true });
   assert.equal(version(copy), 4); assert.equal(copy.prepare("SELECT 1 FROM sqlite_master WHERE name='update_requests'").get(), undefined);
   copy.close();
 }));
 
-test('the real 2.1.0 code starts on a schema 5 database without changing it, and so does the 2.0.0 baseline', { skip: noTag }, () => temporary(async directory => {
+test('the real 2.1.0 code starts on a current-schema database without changing it, and so does the 2.0.0 baseline', { skip: noTag }, () => temporary(async directory => {
   const v2 = await v210Migrations(), file = join(directory, 'state.sqlite'), db = v210Database(file, v2), snapshots = () => listSnapshots(join(directory, 'upgrade-snapshots')).map(item => item.name);
   try {
     migrate(db, { file, log: quiet });
     db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
     const after = schema(db), taken = snapshots(), messages = [];
-    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 5, to: 5, snapshot: null });
-    assert.match(messages.join('\n'), /schema v5 is newer than this release \(v4\) but only adds compatible objects/);
-    assert.equal(version(db), 5); assert.deepEqual(schema(db), after); assert.equal(db.prepare('SELECT COUNT(*) AS count FROM update_checks').get().count, 1);
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: schemaVersion, to: schemaVersion, snapshot: null });
+    assert.match(messages.join('\n'), new RegExp(`schema v${schemaVersion} is newer than this release \\(v4\\) but only adds compatible objects`));
+    assert.equal(version(db), schemaVersion); assert.deepEqual(schema(db), after); assert.equal(db.prepare('SELECT COUNT(*) AS count FROM update_checks').get().count, 1);
     assert.deepEqual(snapshots(), taken, 'the rollback takes no snapshot');
     // 2.1.0 keeps writing its own tables; 2.0.0 has no schema check and re-runs its baseline as CREATE ... IF NOT EXISTS.
     db.exec("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job-2','site','backup','queued','queued','2026-10-22')");
@@ -271,10 +271,70 @@ test('the real 2.1.0 code starts on a schema 5 database without changing it, and
   } finally { db.close(); }
 }));
 
-test('the real 2.1.0 upgrade.sh and this one read this migrations file as schema 5, floor 1', { skip: (!shell && 'needs sh') || noTag }, () => temporary(async directory => {
+test('the real 2.1.0 upgrade.sh and this one read this migrations file as the current schema, floor 1', { skip: (!shell && 'needs sh') || noTag }, () => temporary(async directory => {
   const script = join(directory, 'upgrade-v2.1.0.sh'); await writeFile(script, released('v2.1.0', 'scripts/upgrade.sh'));
   for (const candidate of [script, join(root, 'scripts/upgrade.sh')]) {
     const result = spawnSync('sh', [candidate, '--print-schema'], { cwd: root, encoding: 'utf8', env: { ...process.env, DOCKNEST_DIR: root } });
-    assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), '5 1', candidate);
+    assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), `${schemaVersion} 1`, candidate);
   }
+}));
+
+// Migration 7 (vulnerability radar). Additive, so 2.5.x keeps running on it. Version 6 belongs to the Map moves (PR #58).
+const radarObjects = ['radar_advisories','radar_findings','radar_findings_server','radar_findings_site','radar_inventory','radar_preferences','radar_scans','radar_scans_active','radar_scans_server'];
+const v250 = released('v2.5.0', 'src/migrations.js'), noTag250 = !v250 && 'v2.5.0 tag not fetched';
+const v250Migrations = () => temporary(async directory => { const file = join(directory, 'migrations-v2.5.0.mjs'); await writeFile(file, v250); return import(pathToFileURL(file).href); });
+
+test('migration 7 is one compatible `{ version: 7,` line and keeps the floor at 1', async () => {
+  const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/), lines = source.filter(line => /^\s*\{\s*version:\s*7\b/.test(line));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^ {2}\{ version: 7, name: 'vulnerability-radar', compatible: true, up: .*\) \},$/);
+  assert.equal(schemaVersion, 7); assert.equal(migrations.at(-1).compatible, true); assert.equal(compatFloor(migrations), 1);
+});
+
+test('radar tables start empty and enforce states, one active scan per server and one finding per container and advisory', () => temporary(async directory => {
+  const file = join(directory, 'state.sqlite'), db = legacy(file), constraint = /constraint failed/i;
+  migrate(db, { file, log: quiet });
+  for (const table of ['radar_scans', 'radar_inventory', 'radar_findings', 'radar_advisories', 'radar_preferences']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0);
+  const scan = db.prepare("INSERT INTO radar_scans(id,server_id,reason,status,requested_at) VALUES(?,?,?,?,'2026-10-23')");
+  scan.run('s1', 'server', 'manual', 'requested');
+  assert.throws(() => scan.run('s2', 'server', 'scheduled', 'running'), constraint, 'one active scan per server');
+  assert.throws(() => scan.run('s3', 'server', 'whenever', 'completed'), constraint);
+  assert.throws(() => scan.run('s4', 'missing', 'manual', 'completed'), constraint);
+  scan.run('s5', 'server', 'manual', 'completed');
+  const finding = db.prepare("INSERT INTO radar_findings(id,container_key,server_id,site_id,advisory_id,kind,severity,product,source,first_seen_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?,?,'2026-10-23','2026-10-23')");
+  finding.run('f1', 'server:shop/web', 'server', 'site', 'DN-2026-0001', 'vulnerable', 'critical', 'php', 'runtime');
+  assert.throws(() => finding.run('f2', 'server:shop/web', 'server', 'site', 'DN-2026-0001', 'likely', 'critical', 'php', 'runtime'), constraint);
+  assert.throws(() => finding.run('f3', 'k', 'server', null, 'A', 'broken', 'critical', 'php', 'runtime'), constraint);
+  assert.throws(() => finding.run('f4', 'k', 'server', null, 'A', 'eol', 'urgent', 'php', 'runtime'), constraint);
+  db.exec("INSERT INTO radar_preferences(id) VALUES(1)");
+  assert.deepEqual({ ...db.prepare('SELECT container_probes,feed_refresh,notify_critical FROM radar_preferences').get() }, { container_probes: 1, feed_refresh: null, notify_critical: 1 });
+  assert.throws(() => db.exec("INSERT INTO radar_preferences(id) VALUES(2)"), constraint);
+  db.close();
+}));
+
+test('a real 2.5.0 database (schema 5) migrates with its data intact, radar tables only and floor 1', { skip: noTag250 }, () => temporary(async directory => {
+  const v2 = await v250Migrations(), file = join(directory, 'state.sqlite'), db = legacy(file);
+  assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-22T08:00:00.000Z'), log: quiet }).to, 5);
+  db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
+  const before = schema(db), contents = () => Object.fromEntries(before.filter(row => row.type === 'table').map(({ name }) => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row })).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
+  const rows = contents(), result = migrate(db, { file, now: () => new Date('2026-10-23T08:00:00.000Z'), log: quiet });
+  assert.deepEqual({ from: result.from, to: result.to }, { from: 5, to: schemaVersion });
+  assert.match(result.snapshot, new RegExp(`state-v5-to-v${schemaVersion}-20261023T080000000Z\\.sqlite$`));
+  assert.deepEqual(contents(), rows, 'the radar migration writes no rows to existing tables');
+  for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.5.0 objects keep their definition');
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => name.startsWith('radar_')), radarObjects);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
+  assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  db.close();
+}));
+
+test('the real 2.5.0 code starts on a radar-schema database without changing it', { skip: noTag250 }, () => temporary(async directory => {
+  const v2 = await v250Migrations(), file = join(directory, 'state.sqlite'), db = legacy(file), messages = [];
+  try {
+    migrate(db, { file, log: quiet });
+    const after = schema(db);
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: schemaVersion, to: schemaVersion, snapshot: null });
+    assert.match(messages.join('\n'), new RegExp(`schema v${schemaVersion} is newer than this release \\(v5\\) but only adds compatible objects`));
+    assert.deepEqual(schema(db), after);
+  } finally { db.close(); }
 }));

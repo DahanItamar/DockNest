@@ -84,6 +84,20 @@ CREATE TABLE IF NOT EXISTS update_events (request_id TEXT NOT NULL REFERENCES up
 CREATE UNIQUE INDEX IF NOT EXISTS update_requests_active ON update_requests((1)) WHERE state IN ('submitted','running','needs_action');
 CREATE TABLE IF NOT EXISTS whats_new_seen (user_id TEXT PRIMARY KEY REFERENCES users(id), version TEXT NOT NULL, seen_at TEXT NOT NULL);
 `;
+// Migration 7: vulnerability radar (docs/security.md "Vulnerability radar"). Additive only: new tables and indexes, no rows.
+// A missing radar_preferences row means the defaults (probes on, feed refresh undecided, critical alerts on).
+// Findings are one row per container_key+advisory_id: resolved_at keeps the history, dismissed_* records an admin decision.
+const radarSchema = `
+CREATE TABLE IF NOT EXISTS radar_scans (id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, reason TEXT NOT NULL CHECK (reason IN ('scheduled','discovery','manual')), status TEXT NOT NULL CHECK (status IN ('requested','running','completed','failed')), requested_by TEXT REFERENCES users(id), requested_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, containers INTEGER, findings INTEGER, feed_serial INTEGER, probes INTEGER CHECK (probes IS NULL OR probes IN (0,1)), error TEXT CHECK (error IS NULL OR length(error) <= 1024));
+CREATE INDEX IF NOT EXISTS radar_scans_server ON radar_scans(server_id,requested_at);
+CREATE UNIQUE INDEX IF NOT EXISTS radar_scans_active ON radar_scans(server_id) WHERE status IN ('requested','running');
+CREATE TABLE IF NOT EXISTS radar_inventory (server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, container_key TEXT NOT NULL CHECK (length(container_key) <= 512), container_id TEXT, name TEXT, site_id TEXT REFERENCES sites(id) ON DELETE SET NULL, scan_id TEXT NOT NULL, data TEXT NOT NULL CHECK (length(data) <= 16384), seen_at TEXT NOT NULL, PRIMARY KEY (server_id, container_key));
+CREATE TABLE IF NOT EXISTS radar_findings (id TEXT PRIMARY KEY, container_key TEXT NOT NULL CHECK (length(container_key) <= 512), server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, site_id TEXT REFERENCES sites(id) ON DELETE SET NULL, container_name TEXT, advisory_id TEXT NOT NULL CHECK (length(advisory_id) <= 64), kind TEXT NOT NULL CHECK (kind IN ('vulnerable','likely','eol','unknown')), severity TEXT NOT NULL CHECK (severity IN ('critical','high','medium','low','info')), product TEXT NOT NULL, version TEXT, source TEXT NOT NULL, fixed_in TEXT, evidence TEXT CHECK (evidence IS NULL OR length(evidence) <= 512), first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, resolved_at TEXT, dismissed_at TEXT, dismissed_by TEXT REFERENCES users(id), dismiss_reason TEXT CHECK (dismiss_reason IS NULL OR length(dismiss_reason) <= 500), UNIQUE (container_key, advisory_id));
+CREATE INDEX IF NOT EXISTS radar_findings_server ON radar_findings(server_id,resolved_at);
+CREATE INDEX IF NOT EXISTS radar_findings_site ON radar_findings(site_id,resolved_at);
+CREATE TABLE IF NOT EXISTS radar_advisories (id TEXT PRIMARY KEY CHECK (length(id) <= 64), feed_serial INTEGER NOT NULL, data TEXT NOT NULL CHECK (length(data) <= 16384), updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS radar_preferences (id INTEGER PRIMARY KEY CHECK (id = 1), container_probes INTEGER NOT NULL DEFAULT 1 CHECK (container_probes IN (0,1)), feed_refresh INTEGER DEFAULT NULL CHECK (feed_refresh IS NULL OR feed_refresh IN (0,1)), notify_critical INTEGER NOT NULL DEFAULT 1 CHECK (notify_critical IN (0,1)), changed_by TEXT REFERENCES users(id), changed_at TEXT);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -104,6 +118,9 @@ export const migrations = [
   `) },
   // Update Center (docs/update-center.md section 3): tables and one partial unique index, no rows, nothing altered.
   { version: 5, name: 'update-center', compatible: true, up: db => db.exec(updateCenterSchema) },
+  // REBASE NOTE: version 6 is the Map site-moves migration (PR #58). This radar branch must merge after #58 and keep
+  // that entry above this one; never ship 7 without 6, or a v7 database would skip migration 6 forever.
+  { version: 7, name: 'vulnerability-radar', compatible: true, up: db => db.exec(radarSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
