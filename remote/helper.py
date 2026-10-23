@@ -2422,8 +2422,23 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
 COMPOSE_TOP_KEYS={'name','services','networks','volumes','secrets','configs'}
 COMPOSE_SERVICE_KEYS={'image','build','command','entrypoint','environment','env_file','ports','expose','volumes','networks','depends_on','restart','healthcheck','labels','container_name','hostname','domainname','working_dir','user','stop_signal','stop_grace_period','tmpfs','logging','pull_policy','init','extra_hosts','mem_limit','mem_reservation','memswap_limit','cpus','cpu_shares','cpuset','shm_size','ulimits','read_only','stdin_open','tty','platform','profiles','links','dns','dns_search','deploy','secrets','configs','scale','oom_score_adj','pids_limit'}
 COMPOSE_SERVICE_NETWORK_KEYS={'aliases','priority'}
-COMPOSE_NETWORK_KEYS={'name','driver','internal','enable_ipv6','labels','attachable'}
-COMPOSE_VOLUME_KEYS={'name','driver','labels'}
+COMPOSE_NETWORK_KEYS={'name','driver','internal','enable_ipv6','labels','attachable','ipam','external','driver_opts'}
+COMPOSE_VOLUME_KEYS={'name','driver','labels','external','driver_opts'}
+def compose_network_problem(item):
+    # A network the project defines itself (including Compose's implicit `default`) with the bridge driver and no host
+    # resources is fine. External networks, other drivers, driver options and fixed subnets are refused.
+    if item.get('external'):return 'is external'
+    if set(item)-COMPOSE_NETWORK_KEYS:return 'uses %s'%', '.join(sorted(set(item)-COMPOSE_NETWORK_KEYS))
+    if (item.get('driver') or 'bridge')!='bridge':return 'uses the %s driver'%item.get('driver')
+    if item.get('driver_opts'):return 'sets driver options'
+    ipam=item.get('ipam') or {}
+    if set(ipam)-{'driver','config','options'} or (ipam.get('driver') or 'default')!='default' or ipam.get('options') or ipam.get('config'):return 'sets fixed subnets or IP address management, which may clash on the new server'
+    return None
+def compose_volume_problem(item):
+    if item.get('external'):return 'is external'
+    if set(item)-COMPOSE_VOLUME_KEYS:return 'uses %s'%', '.join(sorted(set(item)-COMPOSE_VOLUME_KEYS))
+    if (item.get('driver') or 'local')!='local' or item.get('driver_opts'):return 'uses a volume driver or driver options'
+    return None
 COMPOSE_MOUNT_KEYS={'type','source','target','read_only','bind','volume','tmpfs','consistency'}
 def check_compose_config(config,services,manifest):
     # The site's Compose files come from the old server; the merged result may only describe what the backup holds.
@@ -2437,13 +2452,15 @@ def check_compose_config(config,services,manifest):
         for key,item in (config.get(kind) or {}).items():
             if not isinstance(item,dict) or item.get('file') or item.get('external') or set(item)-{'name','environment','content'}:refuse('The Compose %s %s reads a file or an external source.'%(kind[:-1],key))
     declared_networks=config.get('networks') or {}
+    # A service without its own networks joins the project's default network.
+    used_networks={network for name in services for network in (((config.get('services') or {}).get(name) or {}).get('networks') or {'default':None})}
     for key,item in declared_networks.items():
-        item=item or {}
-        if item.get('external') or set(item)-COMPOSE_NETWORK_KEYS or item.get('driver','bridge')!='bridge':refuse('The Compose network %s is external or uses settings DockNest cannot move.'%key)
+        problem=compose_network_problem(item or {})
+        if problem and key in used_networks:refuse('The Compose network %s %s.'%(key,problem))
     declared=config.get('volumes') or {}
     for key,item in declared.items():
-        item=item or {}
-        if item.get('external') or item.get('driver_opts') or set(item)-COMPOSE_VOLUME_KEYS or item.get('driver','local')!='local':refuse('The Compose volume %s is external or uses driver options.'%key)
+        problem=compose_volume_problem(item or {})
+        if problem:refuse('The Compose volume %s %s.'%(key,problem))
     for name in services:
         service=(config.get('services') or {}).get(name)
         if not isinstance(service,dict):raise ValueError('The Compose service %s is missing from the Compose files'%name)

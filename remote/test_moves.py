@@ -291,6 +291,19 @@ class MoveSafetyTests(unittest.TestCase):
         for bad in [{'privileged':True},{'network_mode':'host'},{'pid':'host'},{'cap_add':['SYS_ADMIN']},{'devices':['/dev/sda']},{'volumes':[{'type':'bind','source':'/etc'}]},{'volumes':[{'type':'volume','source':'other'}]},{'volumes':[{'type':'npipe','source':'x'}]}]:
             with self.assertRaises(ValueError,msg=json.dumps(bad)):helper.check_compose_config({'services':{'web':bad},'volumes':{}},['web'],manifest)
         with self.assertRaises(ValueError):helper.check_compose_config({'services':{}},['web'],manifest)
+    def test_a_typical_project_with_the_implicit_default_network_passes(self):
+        # Shape of `docker compose config --format json` for a plain project (Compose 2.29), after the DockNest override.
+        config={'name':'shop','services':{'web':{'image':'sha256:aaa','pull_policy':'never','restart':'no','command':None,'entrypoint':None,'labels':{'docknest.move':MOVE},
+            'networks':{'default':None},'ports':[{'mode':'ingress','host_ip':'127.0.0.1','target':8080,'published':'8081','protocol':'tcp'}],
+            'volumes':[{'type':'volume','source':'data0','target':'/data','volume':{}},{'type':'bind','source':'/srv/shop/config.txt','target':'/config.txt','read_only':True,'bind':{'create_host_path':True}}]}},
+            'networks':{'default':{'name':'shop_default','ipam':{},'external':False}},'volumes':{'data0':{'name':'shop_data0','external':False}}}
+        helper.check_compose_config(config,['web'],fixture_manifest())
+        named={**config,'networks':{'default':{'name':'shop_default','driver':'bridge','labels':{'tier':'web'},'internal':False,'attachable':False,'enable_ipv6':False,'ipam':{'driver':'default'}}}}
+        helper.check_compose_config(named,['web'],fixture_manifest())
+        for bad in [{'external':True},{'driver':'overlay'},{'driver_opts':{'com.docker.network.bridge.name':'br0'}},{'ipam':{'config':[{'subnet':'172.30.0.0/16'}]}}]:
+            with self.assertRaises(ValueError,msg=json.dumps(bad)):helper.check_compose_config({**config,'networks':{'default':{'name':'shop_default',**bad}}},['web'],fixture_manifest())
+        # A network the moved services do not join is not their concern.
+        helper.check_compose_config({**config,'networks':{**config['networks'],'other':{'name':'x','external':True}}},['web'],fixture_manifest())
     def test_compose_settings_outside_the_allow_list_are_refused(self):
         manifest=fixture_manifest()
         base=lambda **service:{'services':{'web':{'image':'x',**service}},'networks':{'default':{'name':'shop_default'}},'volumes':{}}
