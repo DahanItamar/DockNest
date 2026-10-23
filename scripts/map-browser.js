@@ -253,7 +253,9 @@ mock.needReauth=true;await rm.click();
  assert.equal(await save.isDisabled(),true,'pending cleared after finish');
  // Cancel path
  mock.phase='running';
- await dragSite(page,'1','itamar-Srv');await save.click();
+ // The map refreshes after Close; retry the drag until it registers as a pending change
+ for(let i=0;i<5&&await save.isDisabled();i++){await page.waitForLoadState('networkidle');await dragSite(page,'1','itamar-Srv');}
+ await save.click();
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('button',{name:'Cancel'}).click();
  await d.getByRole('heading',{name:'Move cancelled'}).waitFor({timeout:6000});
