@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Security
+
+- Host updater: an in-app upgrade of an install that runs an image the broker does not recognise as `ghcr.io/dahanitamar/docknest:<version>` (a mirror, or no tag) is now refused (`state-mismatch`, nothing changed) instead of pulling that image by its tag without verifying it. Such installs upgrade from the command line.
+
 ## [2.4.1] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
