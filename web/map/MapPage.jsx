@@ -7,7 +7,7 @@ import './map.css';
 
 const SOON='Moving sites is coming soon';
 const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
-const MIN=0.2,MAX=2;
+const MIN=0.2,MAX=2,FIT_MIN=0.85; // fit never scales above 100% or below 85%; beyond that the user pans
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 
 function serverStatus(server){
@@ -48,8 +48,8 @@ export function MapPage({servers=[],sites=[],user}){
  const fit=useCallback(()=>{
   const el=view.current;if(!el)return;
   const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
-  const k=clamp(Math.min(w/layout.width,h/layout.height),MIN,1);
-  setT({k,x:(w-layout.width*k)/2,y:Math.max(0,(h-layout.height*k)/2)});
+  const k=clamp(Math.min(w/layout.width,h/layout.height),FIT_MIN,1);
+  setT({k,x:Math.max(0,(w-layout.width*k)/2),y:Math.max(0,(h-layout.height*k)/2)});
  },[layout.width,layout.height]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;touched.current=false;fit();},[narrow,fit,servers.length]);
  useEffect(()=>{
@@ -134,6 +134,8 @@ export function MapPage({servers=[],sites=[],user}){
      {layout.paths.map(p=><path key={p.id} d={p.d} className={drag?.id===p.id?'dim':undefined}/>)}
      {home&&<path className="drag" d={`M${home.x} ${home.y+home.h/2} L${drag.px} ${drag.py}`}/>}
     </svg>
+    {layout.servers.map(r=><span key={"h"+r.id} aria-hidden="true" className={"map-handle"+(drag?.over===r.id?" active":"")} style={{left:r.x+r.w-6,top:r.y+r.h/2-6}}/>)}
+    {layout.sites.map(r=><span key={"h"+r.id} aria-hidden="true" className={"map-handle"+(drag?.id===r.id?" active":"")} style={{left:r.x-6,top:r.y+r.h/2-6}}/>)}
     {groupIds.map(id=>{const r=layout.servers.find(s=>s.id===id),s=byId.servers[id],mine=layout.sites.filter(x=>x.serverId===id);
      return <div key={id} role="group" aria-labelledby={'map-server-'+id} className="map-group">
       <div className={'map-server'+(drag?.over===id?' target':'')} style={item(r)}><div className="map-server-title"><IconServer size={20} stroke={1.75} aria-hidden="true"/><b id={'map-server-'+id} className="map-name" title={s.name}>{s.name}</b></div>{serverStatus(s)}<span className="map-caption">{serverFacts(s,mine.length)}</span></div>

@@ -62,6 +62,8 @@ try{
    assert.equal(await page.locator('.map-server').count(),4,'servers');
    assert.equal(await page.locator('.map-site').count(),5,'sites');
    assert.equal(await page.locator('.map-lines path:not(.drag)').count(),5,'connectors');
+   assert.equal(await page.locator('.map-handle').count(),4+5,'connection handles');
+   assert.equal(await page.locator('.map-handle').first().evaluate(e=>e.getBoundingClientRect().width>0),true);
    // Order: servers by name
    const names=await page.locator('.map-server .map-name').allTextContents();
    assert.deepEqual(names,[...names].sort((x,y)=>x.toLowerCase()<y.toLowerCase()?-1:1),'server order');
@@ -80,7 +82,9 @@ try{
    assert.equal(await card.getAttribute('title'),long);
    // Fit shows everything inside the viewport
    const vp=await page.locator('.map-viewport').boundingBox();
-   for(const b of all)assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,'inside after fit');
+   const kFit=await scaleOf(page);assert.ok(kFit>=0.85-0.001&&kFit<=1,"fit scale between 85% and 100%");
+   if(kFit>0.851)for(const b of all)assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
+   assert.ok(parseFloat(await page.locator(".map-site .map-name").first().evaluate(e=>getComputedStyle(e).fontSize))===14,"card text uses body size");
    // Auto layout is stable across a reload
    const before=JSON.stringify(await boxes(page,'.map-site'));
    await page.reload();
@@ -148,6 +152,11 @@ try{
  {
   const {context,page}=await open({appState:{...state,servers:[],sites:[]}});
   await page.getByText('Nothing to show yet').waitFor();await context.close();
+ }
+ {
+  const {context,page}=await open({appState:{...state,servers:state.servers.slice(0,2),sites:state.sites.slice(0,2)}});
+  await page.locator('.map-site').first().waitFor();
+  assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'small maps stay at 100%');await context.close();
  }
  {
   const {context,page}=await open({width:760,height:900});

@@ -57,3 +57,14 @@ test('scales to 20 servers x 15 sites with a bounded canvas',()=>{
  assert.ok(Date.now()-t<200);assert.equal(l.sites.length,300);
  assert.equal(l.width,METRICS.pad*2+METRICS.serverW+METRICS.columnGap+METRICS.cardW);
 });
+test('connectors stay in the gap between the columns and never touch a card',()=>{
+ const {servers,sites}=make(20,15),l=layoutMap(servers,sites),cards=[...l.servers,...l.sites,...l.unassigned];
+ for(const p of l.paths){
+  const mid=(p.x1+p.x2)/2;
+  for(let i=0;i<=40;i++){
+   const t=i/40,u=1-t,x=u*u*u*p.x1+3*u*u*t*mid+3*u*t*t*mid+t*t*t*p.x2,y=u*u*u*p.y1+3*u*u*t*p.y1+3*u*t*t*p.y2+t*t*t*p.y2;
+   assert.ok(x>=p.x1-1e-9&&x<=p.x2+1e-9,'path leaves the gap: '+p.id);
+   for(const c of cards)assert.ok(!(x>c.x+0.01&&x<c.x+c.w-0.01&&y>c.y+0.01&&y<c.y+c.h-0.01),p.id+' crosses card '+c.id);
+  }
+ }
+});

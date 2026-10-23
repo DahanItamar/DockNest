@@ -39,3 +39,6 @@
 .map-root .map-list li .map-name{flex:1;white-space:normal;overflow-wrap:anywhere}
 .map-root .map-none{margin:16px 0 0}
 @media(prefers-reduced-motion:reduce){.map-root *{transition:none!important;animation:none!important}}
+.map-root button:disabled,.map-root button:disabled:hover{background:var(--surface-hover);border-color:var(--surface-hover);color:var(--text-muted);opacity:1;cursor:not-allowed}
+.map-root .map-handle{position:absolute;box-sizing:border-box;width:12px;height:12px;border-radius:50%;background:var(--surface);border:2px solid var(--border-control);pointer-events:auto;z-index:1}
+.map-root .map-handle:hover,.map-root .map-handle.active{border-color:var(--accent);background:var(--accent-soft)}
