@@ -112,7 +112,7 @@ try{
   for(const name of ['Jobs','Audit','Access','Maintenance']){
    await navigate(name);await page.locator('.mobile-table').waitFor();await fits(name+' at '+width);
    assert.equal(await page.locator('.mobile-table tbody tr').first().evaluate(el=>getComputedStyle(el).display),'grid');
-   if(name==='Audit'){await page.getByText('View details',{exact:true}).first().click();await page.getByRole('dialog').waitFor();assert.equal(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'Audit details fit '+width);await page.getByRole('button',{name:'Close dialog',exact:true}).click();await fits('Audit after details at '+width);}
+   if(name==='Audit'){await page.getByRole('button',{name:'View details'}).first().click();await page.getByRole('dialog').waitFor();assert.equal(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true,'Audit details fit '+width);await page.getByRole('button',{name:'Close dialog',exact:true}).click();await fits('Audit after details at '+width);}
    if(name==='Jobs'){
     await page.getByRole('button',{name:'View job',exact:true}).first().click();await page.getByRole('dialog').waitFor();
     assert.equal(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);await page.getByRole('button',{name:'Close dialog',exact:true}).click();

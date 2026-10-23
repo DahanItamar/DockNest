@@ -1,5 +1,6 @@
 ﻿import React from 'react';
 import {Paginated} from './pagination.jsx';
+import {count} from './plural.js';
 import {ChevronDown} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
 import {StatusLabel,IconButton} from './system.jsx';
@@ -25,7 +26,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Server</dt><dd>{name(site.serverId,'servers')}</dd></div>
      <div className="def-row"><dt>{site.config?.kind==='static'?'Website files':'Containers'}</dt><dd className="container-labels">{site.config?.kind==='static'?<code>{site.config.documentRoot}</code>:site.config?.containers?.length?site.config.containers.map(container=><code key={container}>{container}</code>):<span>No containers configured</span>}</dd></div>
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
-     <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${policy.retention} successful backups`:'Not configured'}</dd></div>
+     <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
     </dl>
    </div>
    <footer className="card-footer site-card-actions">

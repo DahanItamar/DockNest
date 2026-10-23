@@ -218,3 +218,33 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 }
 /* One close control: the header menu button closes the drawer, so the rail collapse item is desktop only. */
 @media(max-width:899px){.berry-nav-group .berry-nav-toggle{display:none}}
+
+/* 2.4.1 collapsed rail: one 44px health pulse and one 44px capacity ring. No text, no boxes at rest; details come from the tooltip and popover. */
+@media(min-width:900px){
+ .berry-shell.collapsed .system-health{display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0 auto 8px;padding:0;border:0;background:none;border-radius:var(--radius);outline:0}
+ .berry-shell.collapsed .system-health:hover{background:var(--surface-hover)}
+ .berry-shell.collapsed .system-health:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+ .berry-shell.collapsed .system-health .health-compact{display:block;width:28px;height:24px}
+ .berry-shell.collapsed .health-short{display:none}
+ .berry-shell.collapsed .compact-storage{display:flex;justify-content:center;margin:0 auto}
+ .berry-shell.collapsed .compact-storage-button{width:44px;height:44px;min-height:44px;padding:0;gap:0;border-radius:var(--radius);outline:0}
+ .berry-shell.collapsed .compact-storage-button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+ .berry-shell.collapsed .compact-storage-button b,.berry-shell.collapsed .compact-storage-button small{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .berry-shell.collapsed .storage-orbit,.berry-shell.collapsed .storage-orbit>svg:first-child{width:44px;height:44px}
+}
+
+/* 2.4.1: the header holds the logo and the actions only; each page has its own filter. */
+.berry-header-tools{margin-left:auto}
+.rebrand-page .filter-bar{background:var(--surface);border:1px solid var(--border-control);color:var(--text-secondary)}
+.rebrand-page .filter-bar:focus-within{outline:2px solid var(--focus-ring);outline-offset:2px}
+.rebrand-page .filter-bar>svg{flex:none;color:var(--text-muted)}
+
+/* 2.4.1 several destinations: names never overlap or overflow; the full name is in the tooltip. */
+.storage-name{display:block;max-width:100
+/* 2.4.1 several destinations: names never overlap or overflow; the full name is in the tooltip. */
+.storage-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)}
+.berry-sidebar-storage .storage-name{font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.compact-storage-details .storage-name{margin:0 0 8px}
+.storage-card-title{display:flex;flex-direction:column;min-width:0}
+.storage-card-name{overflow-wrap:anywhere}
+.storage-selected{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--success)}

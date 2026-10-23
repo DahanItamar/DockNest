@@ -62,15 +62,19 @@
 .dash-site[open] .dash-site-history{animation:dn-enter var(--dur-base) var(--ease) both}
 .dash-chevron{transition:transform var(--dur-base) var(--ease)}
 @media(min-width:768px){.metric-stack{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:1fr}}
+/* 2.4.1: the README layout at every desktop width: a 3 x 2 grid, two large cards spanning both rows and two stacked cards in the third column. */
+@media(min-width:1024px){
+ .dash-metrics{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,auto)}
+ .dash-metrics>.dash-metric{grid-row:span 2}
+ .metric-stack{display:contents}
+ .metric-stack>.dash-metric{grid-row:auto;grid-column:3;min-height:0}
+}
 @media(min-width:1440px){
- .metric-stack{grid-column:auto;grid-template-columns:minmax(0,1fr);grid-template-rows:repeat(2,minmax(0,1fr))}
  .dash-layout{grid-template-columns:repeat(var(--grid-columns),minmax(0,1fr))}
  .dash-growth{grid-column:span 2}
  .dash-sites{grid-column:1/-1}
 }
 @media(min-width:1920px){
- .metric-stack{display:contents}
- .metric-stack>.dash-metric{min-height:192px;flex-direction:row}
  .dash-growth{grid-column:span 3}
  .activity-chart-canvas{height:440px}
 }
