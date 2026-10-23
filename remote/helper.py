@@ -1748,6 +1748,38 @@ def install_boot_recovery(req):
     os.chmod(unit,0o644);run(['systemctl','daemon-reload']);run(['systemctl','enable','docknest-source-recovery.service'])
     emit(result={'installed':True,'enabled':True,'startsOnNextBoot':True,'helperVersion':VERSION})
 
+JOB_DIRECTORY=re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+STAGING_SWEEP_MIN_AGE=6*3600
+def sweep_staging(cfg,keep,now=None):
+    """Remove finished job folders left in the staging root. Only exact job-id names that are real directories,
+    disarmed, older than the minimum age and not kept are removed; links are never followed. Returns counts only."""
+    now=time.time() if now is None else now
+    keep={value for value in keep if isinstance(value,str)}
+    base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
+    if not base.is_absolute() or '..' in base.parts or str(base) in ['/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp']:raise ValueError('Use a dedicated absolute staging directory')
+    result={'removed':0,'freedBytes':0,'kept':0}
+    try:info=os.lstat(base)
+    except FileNotFoundError:return result
+    if not stat.S_ISDIR(info.st_mode) or base.resolve()!=base:raise ValueError('Staging directory cannot be a symbolic link')
+    # Without fd-based removal, rmtree could be raced into following a link; leave everything in place.
+    if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
+    for entry in os.scandir(base):
+        if not JOB_DIRECTORY.fullmatch(entry.name):continue
+        if entry.name in keep:result['kept']+=1;continue
+        path=base/entry.name
+        try:
+            folder=os.lstat(path);marker=os.lstat(path/'disarmed')
+        except OSError:result['kept']+=1;continue
+        # Not a real directory, recovery not completed, or touched recently: keep it.
+        if not stat.S_ISDIR(folder.st_mode) or not stat.S_ISREG(marker.st_mode) or now-max(folder.st_mtime,marker.st_mtime)<STAGING_SWEEP_MIN_AGE:result['kept']+=1;continue
+        size=0
+        for current,dirs,files in os.walk(path,followlinks=False):
+            for name in dirs+files:
+                try:size+=os.lstat(os.path.join(current,name)).st_size
+                except OSError:pass
+        shutil.rmtree(path)
+        result['removed']+=1;result['freedBytes']+=size
+    return result
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -1782,6 +1814,7 @@ def main(req):
         root=pathlib.Path(req['root']);uuid.UUID(root.name)
         if not (root/'disarmed').exists() or not (root/'watchdog.done').exists():raise ValueError('Recovery watchdog has not acknowledged disarm')
         shutil.rmtree(root);emit(result={'removed':True})
+    elif op=='sweep-staging':emit(result=sweep_staging(req['config'],req.get('keep',[])))
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))

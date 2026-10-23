@@ -288,6 +288,10 @@ export async function executeJob(job){
   if(!owned){console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
   audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
   await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
+  // Removes finished job folders left by earlier releases; every job DockNest still tracks as active is kept.
+  const keep=[job.id,...db.prepare("SELECT id FROM jobs WHERE status IN ('queued','running','recovery_required')").all().map(row=>row.id)];
+  const swept=await transport.remote(server,{operation:'sweep-staging',config:site.config,keep:[...new Set(keep)]}).catch(()=>null);
+  if(swept?.removed)audit('worker','staging.swept',server.id,{removed:swept.removed,freedBytes:swept.freedBytes});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));
  }catch(error){
   const journal=db.prepare('SELECT state FROM artifact_operations WHERE job_id=?').get(job.id);
