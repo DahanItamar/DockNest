@@ -31,7 +31,7 @@ let browser;const errors=[];
 // (write-only secrets, REAUTH_REQUIRED on channel writes, one line per source and channel, plain error sentences).
 const alertState={...state,
  servers:[
-  {id:'fr',name:'Frankfurt-1',host:'fra.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:84*1024**3,dockerVersion:'27.3.1',composeVersion:'2.29.7',nginx:{installed:true},certbot:{installed:true}}},
+  {id:'fr',name:'Frankfurt-1',host:'fra.example.invalid',port:22,username:'root',status:'connected',hostKey:'SHA256:Xr3Qw9mYk2LpVt8aBc4DeFg7HjKnRs5UvWx1Zy0AbCd',capabilities:{architecture:'x86_64',totalBytes:160*1024**3,freeBytes:84*1024**3,dockerVersion:'27.3.1',composeVersion:'2.29.7',nginx:{installed:true},certbot:{installed:true}}},
   {id:'ash',name:'Ashburn-1',host:'iad.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:41*1024**3}},
   {id:'nas',name:'Home NAS',host:'nas.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:3*1024**3}}
  ],
@@ -42,7 +42,7 @@ const alertState={...state,
   {id:'s4',name:'cedarandsage.shop',serverId:'ash',config:{containers:[1,2]}},
   {id:'s5',name:'photos.home.lan',serverId:'nas',config:{documentRoot:'/srv/photos'}}
  ],
- backups:[{id:'bk1',siteId:'s1',capturedAt:new Date().toISOString()},{id:'bk2',siteId:'s2',capturedAt:new Date().toISOString()}],policies:[{siteId:'s3',enabled:true},{siteId:'s4',enabled:true}]};
+ backups:[{id:'bk1',siteId:'s1',size:412*1024**2,capturedAt:new Date().toISOString()},{id:'bk2',siteId:'s2',size:96*1024**2,capturedAt:new Date().toISOString()}],policies:[{siteId:'s1',enabled:true,nextRun:new Date(Date.now()+864e5).toISOString()},{siteId:'s3',enabled:true},{siteId:'s4',enabled:true}]};
 const alertsDb={channels:[],rules:[],credentials:[],seq:1,needReauth:false,testFail:false,reauths:0,calls:[]};
 const resetAlerts=(seed=true)=>{
  Object.assign(alertsDb,{channels:[],rules:[],credentials:[],seq:1,needReauth:false,testFail:false,reauths:0,calls:[]});
@@ -109,8 +109,8 @@ function moveState(){
   dns:mock.withDns?{type:'A',name:'shop.example.com',value:'203.0.113.7'}:null};
 }
 
-async function open({role='admin',width=1440,height=900,scheme='light',appState=state}={}){
- const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme});
+async function open({role='admin',width=1440,height=900,scheme='light',appState=state,motion=false}={}){
+ const context=await browser.newContext({viewport:{width,height},reducedMotion:motion?'no-preference':'reduce',colorScheme:scheme});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  const page=await context.newPage(),offOrigin=[];
  page.on('pageerror',e=>errors.push(e.message));
@@ -712,6 +712,71 @@ async function alertsFlow(scheme){
  assert.deepEqual(offOrigin,[],'no outside requests');
  await context.close();
 }
+async function layoutFlow(scheme){
+ resetAlerts(true);
+ const {context,page}=await open({scheme,appState:alertState});
+ await page.locator('.map-site[data-site="s2"]').waitFor();
+ // Every line is solid
+ const dashes=await page.evaluate(()=>[...document.querySelectorAll('.map-lines .wire,.map-lines .backup,.map-lines .rule')].map(p=>getComputedStyle(p).strokeDasharray));
+ assert.ok(dashes.length>8&&dashes.every(d=>d==='none'),'all lines are solid');
+ // Hover a server: its whole path lights and the rest dims; Escape clears
+ await page.locator('.map-server',{hasText:'Frankfurt-1'}).hover();
+ assert.ok(await page.locator('.map-lines .lit').count()>=3,'connected lines light up');assert.ok(await page.locator('.map-lines .dim').count()>0,'other lines dim');
+ assert.ok(await page.locator('.map-site.lit').count()>=2,'sites at the ends light up');
+ await page.mouse.move(5,5);assert.equal(await page.locator('.map-lines .lit').count(),0);
+ // Selecting persists until the empty canvas is clicked or Escape is pressed
+ await page.locator('.map-site[data-site="s2"]').click();await page.locator('.map-panel').waitFor();
+ await page.mouse.move(5,5);assert.ok(await page.locator('.map-lines .lit').count()>0,'selection stays');
+ await page.keyboard.press('Escape');await page.waitForTimeout(200);assert.equal(await page.locator('.map-lines .lit').count(),0);
+ await page.locator('.map-site[data-site="s2"]').click();const vp=await page.locator('.map-viewport').boundingBox();
+ await page.mouse.click(vp.x+8,vp.y+8);assert.equal(await page.locator('.map-lines .lit').count(),0,'a click on the empty canvas clears it');
+ // Drag a node by its body while editing: snaps to the 16 px grid, never opens the panel, undo and redo, Tidy up re-sorts
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'Fit to screen'}).click();
+ const node=page.locator('.map-site[data-site="s2"]'),before=await node.boundingBox();
+ assert.equal(await page.getByRole('button',{name:'Tidy up'}).isDisabled(),true,'nothing to tidy yet');
+ await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();await page.mouse.move(before.x+before.width/2+90,before.y+before.height/2+60,{steps:6});await page.mouse.up();
+ const after=await node.boundingBox();assert.ok(after.x-before.x>60&&after.y-before.y>40,'the node moved');
+ assert.equal(await page.locator('.map-panel').count(),0,'a drag does not open the panel');
+ await page.keyboard.press('Control+z');await page.waitForTimeout(150);const undone=await node.boundingBox();assert.ok(Math.abs(undone.x-before.x)<6&&Math.abs(undone.y-before.y)<6,'undo puts it back '+JSON.stringify([before,after,undone]));
+ await page.keyboard.press('Control+Shift+z');await page.waitForTimeout(150);assert.ok((await node.boundingBox()).x-before.x>60,'redo');
+ await page.getByRole('button',{name:'Tidy up'}).click();await page.waitForTimeout(150);const tidy=await node.boundingBox();assert.ok(Math.abs(tidy.x-before.x)<6&&Math.abs(tidy.y-before.y)<6,'Tidy up re-sorts at once');
+ await page.getByRole('button',{name:'Undo'}).click();await page.waitForTimeout(150);assert.ok((await node.boundingBox()).x-before.x>60,'undo after Tidy up brings the layout back');
+ // Drag an item from "+" onto the canvas: a ghost node and the matching flow; Cancel removes the ghost
+ await page.getByRole('button',{name:'Add to the map'}).click();
+ await page.locator('.map-panel').getByRole('button',{name:/Telegram alerts/}).dragTo(page.locator('.map-viewport'),{targetPosition:{x:300,y:400}});
+ await page.locator('.map-ghost').waitFor();await page.locator('.map-panel').getByRole('heading',{name:'Add Telegram alerts'}).waitFor();
+ await shot(page,scheme,'1440-alerts-ghost');
+ await page.locator('.map-panel').getByRole('button',{name:'Cancel'}).click();assert.equal(await page.locator('.map-ghost').count(),0,'Cancel removes the ghost');
+ // Details: only what DockNest already knows, with copy buttons
+ await page.locator('[data-node="server:fr"]').focus();await page.keyboard.press('Enter');
+ const panel=page.locator('.map-panel');
+ for(const t of ['fra.example.invalid','Port 22, user root','x86_64','84.0 GB free of 160.0 GB'])await panel.getByText(t).waitFor();
+ await panel.getByRole('button',{name:'Copy address'}).waitFor();await panel.getByRole('button',{name:'Copy host key'}).waitFor();await shot(page,scheme,'1440-details-server');
+ await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
+ await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('412.0 MB').waitFor();await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
+ await page.keyboard.press('Escape');await page.locator('[data-node="storage:t1"]').focus();await page.keyboard.press('Enter');await panel.getByText('Sites using it').waitFor();await panel.getByText('Last upload').waitFor();
+ await context.close();
+ // Operators cannot move nodes: a body drag only pans
+ {const {context:c2,page:p2}=await open({role:'operator',appState:alertState});await p2.locator('.map-site[data-site="s2"]').waitFor();assert.equal(await p2.getByRole('button',{name:'Tidy up'}).count(),0,'no layout buttons for operators');
+  const b0=await p2.locator('.map-site[data-site="s2"]').boundingBox(),s0=await p2.locator('.map-server').first().boundingBox();await p2.mouse.move(b0.x+30,b0.y+30);await p2.mouse.down();await p2.mouse.move(b0.x+130,b0.y+130,{steps:4});await p2.mouse.up();
+  const b1=await p2.locator('.map-site[data-site="s2"]').boundingBox(),s1=await p2.locator('.map-server').first().boundingBox();assert.ok(Math.abs((b1.x-b0.x)-(s1.x-s0.x))<1,'the whole map panned, the node did not move on its own');await c2.close();}
+}
+// Nodes glide when the arrangement changes: positions in between, ending at the automatic layout, lines following
+async function glideTest(scheme){
+ resetAlerts(true);
+ const {context,page}=await open({scheme,appState:alertState,motion:true});
+ await page.locator('.map-site[data-site="s2"]').waitFor();await page.getByRole('button',{name:'Fit to screen'}).click();
+ const node=page.locator('.map-site[data-site="s2"]'),before=await node.boundingBox();
+ await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();await page.mouse.move(before.x+before.width/2+120,before.y+before.height/2+80,{steps:6});await page.mouse.up();
+ const moved=await node.boundingBox();assert.ok(moved.x-before.x>80,'dragging by hand is immediate');
+ const sampler=page.evaluate(()=>new Promise(res=>{const el=document.querySelector('.map-site[data-site="s2"]'),line=document.querySelector('.map-lines [data-wire="s2"]'),xs=[],ds=new Set(),t0=performance.now();const f=()=>{xs.push(el.getBoundingClientRect().x);ds.add(line.getAttribute('d'));if(performance.now()-t0<1100)requestAnimationFrame(f);else res({xs,lines:ds.size})};requestAnimationFrame(f)}));
+ await page.getByRole('button',{name:'Tidy up'}).click();
+ const {xs,lines}=await sampler,end=await node.boundingBox();
+ assert.ok(Math.abs(xs[0]-moved.x)<=6,'it starts where it was');assert.ok(Math.abs(end.x-before.x)<40&&end.x<moved.x-40,'it ends at the automatic place');
+ const mid=xs.filter(x=>x<moved.x-3&&x>before.x+3);assert.ok(mid.length>=3,'it glides through places in between '+JSON.stringify(xs.filter((_,i)=>i%4===0).map(Math.round)));
+ assert.ok(lines>=6,'the lines follow while it moves ('+lines+')');
+ await context.close();
+}
 async function alertsOperatorAndEmpty(){
  // Operators never receive alert data, so the Map is the plain one for them
  resetAlerts(true);
@@ -746,7 +811,7 @@ async function alertsPhone(scheme){
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  for(const scheme of ['light','dark']){
-  await alertsFlow(scheme);await alertsPhone(scheme);
+  await alertsFlow(scheme);await alertsPhone(scheme);await layoutFlow(scheme);await glideTest(scheme);
   if(shots){resetAlerts(true);const {context,page}=await open({scheme,width:2551,height:1257,appState:alertState});await page.locator('.map-alert').first().waitFor();await page.waitForTimeout(150);await shot(page,scheme,'2551-alerts');await context.close();}
   resetAlerts(false);
   // Desktop canvas

@@ -1,10 +1,10 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle} from '@tabler/icons-react';
+import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
-import {ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
+import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,KIND_LABEL} from './alerts-client.js';
@@ -35,6 +35,12 @@ function storageFacts(t){
  return {text:used?`${bytes(used)} stored`:'Nothing stored yet',pct:null};
 }
 
+// Only data DockNest already holds is shown; a copy button sits next to values people paste elsewhere.
+function CopyText({text,label}){
+ const [done,setDone]=useState(false);
+ return <button type="button" className="map-copy" aria-label={'Copy '+label} onClick={async()=>{try{await navigator.clipboard.writeText(text);setDone(true);setTimeout(()=>setDone(false),1500)}catch{}}}><IconCopy size={16} stroke={1.75} aria-hidden="true"/>{done?'Copied':'Copy'}</button>;
+}
+const Val=({text,label,children})=><span className="map-val"><span>{children||text}</span><CopyText text={text} label={label}/></span>;
 function useNarrow(){
  const q='(max-width:767px)',[narrow,setNarrow]=useState(()=>matchMedia(q).matches);
  useEffect(()=>{const m=matchMedia(q),h=()=>setNarrow(m.matches);m.addEventListener('change',h);return()=>m.removeEventListener('change',h)},[]);
@@ -62,7 +68,8 @@ function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd,aler
 
 export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
- const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null);
+ const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
+ const H=useRef({past:[],future:[]}),dragItem=useRef(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
  // state does not name one per backup, so a site with backups or an active schedule uses the active destination.
  useEffect(()=>{if(!canMove||!api)return;let live=true;api('/storage-targets').then(r=>{if(live&&Array.isArray(r?.targets))setTargets(r)}).catch(()=>{});return()=>{live=false}},[canMove,api]);
@@ -78,7 +85,27 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const [alerts,setAlerts]=useState({channels:[],rules:[],credentials:[]}),[aflow,setAflow]=useState(null);
  const loadAlerts=useCallback(()=>{if(!canMove||!api)return Promise.resolve();return alertsClient.load().then(r=>setAlerts({channels:Array.isArray(r?.channels)?r.channels:[],rules:Array.isArray(r?.rules)?r.rules:[],credentials:Array.isArray(r?.credentials)?r.credentials:[]})).catch(()=>{})},[alertsClient,canMove,api]);
  useEffect(()=>{loadAlerts();const t=setInterval(loadAlerts,30000);return()=>clearInterval(t)},[loadAlerts]);
- const layout=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts}),[servers,sites,storage,backupOf,alerts]);
+ const livePos=useMemo(()=>dragPos?{...positions,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}:positions,[positions,dragPos]);
+ const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts,positions:livePos}),[servers,sites,storage,backupOf,alerts,livePos]);
+ // When the arrangement changes (Tidy up, Save changes, a reconnect, new data) nodes glide to their new places and the lines follow every frame.
+ // A fresh page, a node being dragged by hand and "reduce motion" all place nodes at once.
+ const anim=useRef(null),shown=useRef(null),[tick,setTick]=useState(0);
+ useLayoutEffect(()=>{
+  const next=Object.fromEntries(Object.entries(target.keys).map(([k,n])=>[k,{x:n.x,y:n.y}])),from=shown.current;
+  const moves=from&&Object.keys(next).some(k=>from[k]&&(Math.abs(from[k].x-next[k].x)>1||Math.abs(from[k].y-next[k].y)>1));
+  if(dragPos||!moves||(typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches)){anim.current=null;shown.current=next;setTick(n=>n+1);return}
+  const start=performance.now(),dur=420,begin={...from};let raf;
+  anim.current=true;
+  const step=now=>{
+   const u=Math.min(1,(now-start)/dur),e=u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
+   shown.current=Object.fromEntries(Object.keys(next).map(k=>{const a=begin[k]||next[k];return [k,{x:a.x+(next[k].x-a.x)*e,y:a.y+(next[k].y-a.y)*e}]}));
+   if(u>=1){anim.current=null;shown.current=next}else raf=requestAnimationFrame(step);
+   setTick(n=>n+1);
+  };
+  raf=requestAnimationFrame(step);
+  return()=>cancelAnimationFrame(raf);
+ },[target]);
+ const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,alerts,positions:shown.current}):target,[target,tick]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
  const view=useRef(null),mode=useRef('home'),pointers=useRef(new Map()),gesture=useRef(null);
@@ -86,8 +113,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const client=useMemo(()=>createMovesClient(api||(()=>Promise.reject(new Error('Moving is not available.')))),[api]);
  // One change at a time: edit = {siteId, targetId} (a pending move) or {siteId, targetId:null, loose:{x,y}} (line pulled off, not connected)
  const [panel,setPanel]=useState(null);
- function openPanel(p,el){opener.current=el;setFlow(null);setPanel(p)}
- function closePanel(back=true){setPanel(null);if(back)setTimeout(()=>opener.current?.focus?.(),0)}
+ function openPanel(p,el){opener.current=el;setFlow(null);setGhost(null);if(['server','site','storage','alert','docknest'].includes(p.kind))setSel({type:'node',key:p.kind==='docknest'?'docknest:root':p.kind+':'+p.id});setPanel(p)}
+ function closePanel(back=true){setPanel(null);setGhost(null);setSel(null);if(back)setTimeout(()=>opener.current?.focus?.(),0)}
  useEffect(()=>{if(!panel||narrow)return;const h=e=>{if(e.key==='Escape'&&!e.defaultPrevented&&!document.querySelector('dialog[open]'))closePanel(true)};document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h)},[panel,narrow]);
  const [edit,setEdit]=useState(null),[checks,setChecks]=useState({}),[flow,setFlow]=useState(null),opener=useRef(null);
  const pending=edit&&edit.targetId?edit:null,unconnected=edit&&!edit.targetId?edit:null;
@@ -106,7 +133,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const [moves,setMoves]=useState([]);
  const loadMoves=useCallback(()=>{if(canMove)client.list().then(r=>setMoves(Array.isArray(r?.moves)?r.moves:[])).catch(()=>{})},[client,canMove]);
  useEffect(()=>{loadMoves();const t=setInterval(loadMoves,15000);return()=>clearInterval(t)},[loadMoves]);
- function closeFlow(finished){setFlow(null);if(finished)setEdit(null);loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
+ function closeFlow(finished){setFlow(null);if(finished){setEdit(null);setPositions({});H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
@@ -134,6 +161,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  }
  // Connect a site to a server (drop on its port, or the keyboard / phone sheet). The same server again undoes the change.
  function connect(siteId,targetId,loose){
+  pushHist();
   const name=short(byId.sites[siteId]?.name),target=short(byId.servers[targetId]?.name),r=checks[siteId]?.[targetId];
   if(targetId===byId.sites[siteId]?.serverId){setEdit(null);setNote(`${name} stays on ${target}. Nothing changes.`);return;}
   if(r&&blocked(r)){setEdit({siteId,targetId:null,loose:loose||edit?.loose||null});setNote(`${name} cannot move to ${target}. ${why(r)} ${name} is not connected.`);return;}
@@ -141,23 +169,35 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  }
  function disconnect(siteId,loose){
   const s=layout.sites.find(x=>x.id===siteId);if(!s)return;
+  pushHist();
   setEdit({siteId,targetId:null,loose:loose||{x:s.x-70,y:s.y+s.h+30}});
   setNote(`${short(byId.sites[siteId]?.name)} is not connected. Connect it to a server to save.`);
  }
  function choose(siteId,targetId){connect(siteId,targetId);closeFlow(false);}
- function cancelEdit(){setEdit(null);setNote('Change cancelled. Nothing was changed.')}
+ function cancelEdit(){pushHist();setEdit(null);setNote('Change cancelled. Nothing was changed.')}
 
  // Alert lines. A line is a rule: source -> channel with the events it carries. One rule per source and channel.
  const sourceOf=r=>({kind:r.sourceKind,id:r.sourceId||null,name:r.sourceKind==='docknest'?'DockNest':(r.sourceKind==='server'?byId.servers[r.sourceId]:byId.sites[r.sourceId])?.name||'Something removed'});
  const sourceName=r=>sourceOf(r).name;
  const ruleFor=(source,channelId)=>alerts.rules.find(r=>r.channelId===channelId&&sameSource(r,source))||null;
  const focusBack=()=>setTimeout(()=>opener.current?.focus?.(),0);
- function openAlert(channelId,source,el){if(el)opener.current=el;setFlow(null);setAflow(null);setPanel({kind:'alert',id:channelId,preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
+ function openAlert(channelId,source,el){if(el)opener.current=el;setFlow(null);setAflow(null);setSel({type:'node',key:'alert:'+channelId});setPanel({kind:'alert',id:channelId,preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
  const editRule=(rule,el)=>openAlert(rule.channelId,sourceOf(rule),el);
  function pickChannel(source,el){if(el)opener.current=el;setPanel(null);setFlow(null);setAflow({kind:'pick',source})}
  function addChannel(kind,el,source){if(el)opener.current=el;setFlow(null);setAflow(null);setPanel({kind:'alert-new',channelKind:kind,preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
  function closeAflow(){setAflow(null);focusBack()}
  const alertSource=(k,id)=>k==='docknest'?{kind:'docknest',id:null,name:'DockNest',from:layout.docknest?.alertOut}:k==='server'?{kind:'server',id,name:byId.servers[id]?.name,from:layout.servers.find(n=>n.id===id)?.alertOut}:{kind:'site',id,name:byId.sites[id]?.name,from:[...layout.sites,...layout.unassigned].find(n=>n.id===id)?.alertOut};
+
+ // Free layout is for working during an edit only: moved nodes are never saved. Save changes, or opening the Map again, re-arranges everything automatically.
+ const snap=()=>({positions,edit});
+ function pushHist(){H.current.past.push(snap());if(H.current.past.length>50)H.current.past.shift();H.current.future=[];bump(n=>n+1)}
+ function restore(from,to,word){const h=H.current;if(!h[from].length)return;h[to].push(snap());const v=h[from].pop();setPositions(v.positions);setEdit(v.edit);bump(n=>n+1);setNote(word)}
+ const undo=()=>restore('past','future','Undone.'),redo=()=>restore('future','past','Redone.');
+ useEffect(()=>{
+  const h=e=>{if(e.key==='Escape'){setSel(null);return}if(!(e.ctrlKey||e.metaKey)||e.altKey||!canMove)return;const k=e.key.toLowerCase();if(k!=='z'&&k!=='y')return;if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName||'')||document.querySelector('dialog[open]'))return;e.preventDefault();if(k==='y'||e.shiftKey)redo();else undo()};
+  document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h);
+ });
+ function tidy(){pushHist();setPositions({});setNote('The map is tidy again. Undo brings your layout back.')}
 
  // The default view is always 100%: centred when the map fits, otherwise the top-left of the content. Only the Fit button and the 0 key shrink it.
  const home=useCallback(()=>{
@@ -212,7 +252,11 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   else if(aport){const [k,...r]=aport.dataset.alertSrc.split(':'),src=alertSource(k,r.join(':')),[px,py]=toCanvas(e);if(src.kind==='site')precheck(src.id);gesture.current={type:'alert',src,x:e.clientX,y:e.clientY,moved:false};setAdrag({src,px,py,over:null});}
   else if(port&&edit&&edit.siteId!==port.dataset.portSite){setNote('Save or cancel the current change first.');gesture.current=null;}
   else if(port){const id=port.dataset.portSite;precheck(id);const [px,py]=toCanvas(e);gesture.current={type:'drag',id,x:e.clientX,y:e.clientY,moved:false};setDrag({id,px,py,over:null});}
-  else gesture.current={type:'pan',x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,moved:false,node:e.target.closest?.('[data-node]')||null};
+  else{
+   const node=e.target.closest?.('[data-node]')||null,nk=node?.dataset.node,kind=nk?nk.split(':')[0]:'',n=nk&&layout.keys?.[nk];
+   if(canMove&&n&&['server','site','storage','alert','docknest'].includes(kind))gesture.current={type:'node',key:nk,node,sx:e.clientX,sy:e.clientY,ox:n.x,oy:n.y,moved:false};
+   else gesture.current={type:'pan',x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,moved:false,node};
+  }
   e.currentTarget.setPointerCapture?.(e.pointerId);
  }
  function move(e){
@@ -225,6 +269,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }else if(g.type==='pan'){
    if(!g.moved&&Math.hypot(e.clientX-g.sx,e.clientY-g.sy)<=4)return; // a click is not a drag
    g.moved=true;mode.current='user';setT(p=>({...p,x:p.x+e.clientX-prev.x,y:p.y+e.clientY-prev.y}));}
+  else if(g.type==='node'){
+   if(!g.moved&&Math.hypot(e.clientX-g.sx,e.clientY-g.sy)<=4)return;
+   g.moved=true;const sn=v=>Math.round(v/16)*16;setDragPos({key:g.key,x:Math.max(0,sn(g.ox+(e.clientX-g.sx)/t.k)),y:Math.max(0,sn(g.oy+(e.clientY-g.sy)/t.k))});
+  }
   else if(g.type==='alert'){
    if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
    const [px,py]=toCanvas(e),over=alertAt(px,py),sv=!over&&g.src.kind==='site'?serverAt(px,py):null;
@@ -239,13 +287,23 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function up(e){
   pointers.current.delete(e.pointerId);
   const g=gesture.current;
-  if(g?.type==='pan'&&!g.moved&&g.node&&e.type==='pointerup'){const [kind,...rest]=g.node.dataset.node.split(':'),rid=rest.join(':');if(kind==='rule'){if(rid.startsWith('bundle:'))openAlert(rid.slice(7),null,view.current);else{const r=alerts.rules.find(x=>x.id===rid);if(r)editRule(r,view.current)}}else openPanel({kind,id:rid},g.node);}
+  if(g?.type==='pan'&&!g.moved&&g.node&&e.type==='pointerup'){const [kind,...rest]=g.node.dataset.node.split(':'),rid=rest.join(':');if(kind==='rule'){setSel({type:'line',id:'r'+rid});if(rid.startsWith('bundle:'))openAlert(rid.slice(7),null,view.current);else{const r=alerts.rules.find(x=>x.id===rid);if(r)editRule(r,view.current)}}else openPanel({kind,id:rid},g.node);}
+  if(g?.type==='node'&&e.type==='pointerup'){if(g.moved&&dragPos){pushHist();setPositions(p=>({...p,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}));setNote('Moved. Undo with Ctrl+Z.')}else if(!g.moved){const [kind,...rest]=g.node.dataset.node.split(':');openPanel({kind,id:rest.join(':')},g.node)}}
+  if(g?.type==='pan'&&!g.moved&&!g.node&&e.type==='pointerup')setSel(null);
   if(g?.type==='alert'&&g.moved&&e.type==='pointerup'){if(adrag?.over)openAlert(adrag.over,g.src,view.current);else if(adrag?.overServer)connect(g.src.id,adrag.overServer,{x:adrag.px,y:adrag.py});}
   if(g?.type==='drag'&&g.moved&&drag){
    if(drag.over)connect(g.id,drag.over,{x:drag.px,y:drag.py});
    else disconnect(g.id,{x:drag.px,y:drag.py});
   }
-  if(!pointers.current.size){gesture.current=null;setDrag(null);setAdrag(null);}
+  if(!pointers.current.size){gesture.current=null;setDrag(null);setAdrag(null);setDragPos(null);}
+ }
+ function drop(e){
+  const item=dragItem.current;dragItem.current=null;if(!item||!canMove)return;e.preventDefault();
+  const [px,py]=toCanvas(e),sn=v=>Math.max(0,Math.round(v/16)*16),g={x:sn(px-32),y:sn(py-32),kind:item.kind,name:item.name};
+  if(item.kind==='server'){setGhost(g);onAddServer?.()}
+  else if(item.kind==='storage'){setGhost(g);onAddStorage?.()}
+  else if(item.kind==='site'){setGhost(g);setPanel(null);onAddSite?.(item.serverId,item.name,item.choice)}
+  else{addChannel(item.kind);setGhost(g)}
  }
  function key(e){
   const step=48;let handled=true;
@@ -294,14 +352,14 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function panelBody(){
   if(!panel)return null;
   const close=()=>closePanel(true);
-  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onAddServer={()=>{closePanel(false);onAddServer?.()}} onAddStorage={()=>{closePanel(false);onAddStorage?.()}} onAddAlert={canMove?kind=>addChannel(kind):undefined} onCredentials={canMove?()=>setPanel({kind:'credentials'}):undefined}/></SidePanel>;
-  if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
+  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onDragItem={canMove?i=>{dragItem.current=i}:undefined} onAddServer={()=>{closePanel(false);onAddServer?.()}} onAddStorage={()=>{closePanel(false);onAddStorage?.()}} onAddAlert={canMove?kind=>addChannel(kind):undefined} onCredentials={canMove?()=>setPanel({kind:'credentials'}):undefined}/></SidePanel>;
+  if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} onDragItem={canMove?i=>{dragItem.current={...i,serverId:panel.id}}:undefined} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
-   const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed';
+   const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
-    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',doms.join(', ')],names&&['Containers',names],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet']]}/>
+    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
     {canMove&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
@@ -310,7 +368,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const sv=byId.servers[panel.id],c=sv.capabilities||{},mine=sites.filter(x=>x.serverId===sv.id).length,free=bytes(c.freeBytes);
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
-    <Defs rows={[['Status',serverStatus(sv)],free&&['Disk free',free],(c.os||c.osName)&&['System',c.os||c.osName],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),['Sites',String(mine)]]}/>
+    <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Sites',String(mine)]]}/>
     {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add a site found here</button>}
     {canMove&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
@@ -325,19 +383,24 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }
   if((panel.kind==='alert'||panel.kind==='alert-new')&&canMove){
    const ch=panel.kind==='alert'?alerts.channels.find(c=>c.id===panel.id):null;if(panel.kind==='alert'&&!ch)return null;
-   return <AlertPanel key={(ch?.id||'new-'+panel.channelKind)+':'+panel.n} narrow={narrow} kind={ch?.kind||panel.channelKind} channel={ch} rules={alerts.rules} credentials={alerts.credentials} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} when={when} onClose={close} onReload={loadAlerts} onDelete={()=>setAflow({kind:'delete',channel:ch})} onSaved={async(saved,created)=>{await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
+   return <AlertPanel key={(ch?.id||'new-'+panel.channelKind)+':'+panel.n} narrow={narrow} kind={ch?.kind||panel.channelKind} channel={ch} rules={alerts.rules} credentials={alerts.credentials} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} when={when} onClose={close} onReload={loadAlerts} onDelete={()=>setAflow({kind:'delete',channel:ch})} onSaved={async(saved,created)=>{if(created&&ghost)setPositions(p=>({...p,['alert:'+saved.id]:{x:ghost.x,y:ghost.y}}));await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
   }
   if(panel.kind==='storage'&&byId.storage[panel.id]){
-   const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id);
+   const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={t.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenStorage?.(t)}}>Open storage</button>}>
-    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':'SFTP server'],['Space',f.text],['Status',t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet']]}/>
+    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':'SFTP server'],['Space',f.text],['Status',t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet'],['Sites using it',String(here.length)],lastUp&&['Last upload',when(lastUp.capturedAt)]]}/>
     <section><h3 className="map-group-title">Backed up here</h3>{here.length?<ul className="map-plain">{here.map(x=><li key={x.id}>{x.name}</li>)}</ul>:<p className="map-caption">No sites back up here yet.</p>}</section>
    </SidePanel>;
   }
   return null;
  }
- const panelHot=panel?.kind==='alert'?{channel:panel.id}:panel&&['server','site'].includes(panel.kind)?{source:panel.kind+':'+panel.id}:panel?.kind==='docknest'?{source:'docknest:'}:null;
- const hov=(h)=>({onPointerEnter:()=>setHot(h),onPointerLeave:()=>setHot(null),onFocus:()=>setHot(h),onBlur:()=>setHot(null)});
+ const panelKey=!panel?null:panel.kind==='alert'?'alert:'+panel.id:panel.kind==='docknest'?'docknest:root':['server','site','storage'].includes(panel.kind)?panel.kind+':'+panel.id:null;
+ const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
+ const actKey=hot||(sel?.type==='node'?sel.key:null),actLine=!hot&&sel?.type==='line'?sel.id:null,lit=new Set(),litNodes=new Set();
+ if(actLine){const e=ends.find(x=>x[0]===actLine);if(e){lit.add(e[0]);litNodes.add(e[1]);litNodes.add(e[2])}}
+ else if(actKey){litNodes.add(actKey);for(const [id,a,b] of ends)if(a===actKey||b===actKey){lit.add(id);litNodes.add(a);litNodes.add(b)}}
+ const lineCls=id=>lit.size?(lit.has(id)?' lit':' dim'):'',nodeCls=k=>litNodes.has(k)?' lit':'';
+ const hov=(h)=>({onPointerEnter:()=>setHot(h),onPointerLeave:()=>setHot(null)});
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
  const alertsList=canMove&&<AlertsList channels={alerts.channels} rules={alerts.rules} sourceName={sourceName} onDetails={(c,el)=>openPanel({kind:'alert',id:c.id},el)} onEditRule={editRule} onAdd={addChannel} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
  if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
@@ -354,7 +417,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   const s=byId.sites[r.id],lost=unconnected?.siteId===r.id,moving=pending?.siteId===r.id;
   const home=byId.servers[s.serverId],warn=siteWarn(s);
   const label=`${s.name}. ${siteFacts(s)}. ${lost?'Not connected.':moving?`Will move to ${byId.servers[pending.targetId]?.name}.`:home?`Connected to ${home.name}.`:'Not on a server.'} Press Enter for details${canMove&&home?', or Delete to disconnect it':''}.`;
-  return <article key={r.id} {...hov({source:'site:'+r.id})} data-node={'site:'+r.id} data-site={r.id} tabIndex={0} aria-label={label} onKeyDown={e=>{if(enter(e,{kind:'site',id:r.id}))return;if(canMove&&home&&(e.key==='Delete'||e.key==='Backspace')&&!edit){e.preventDefault();e.stopPropagation();disconnect(r.id)}}} className={'map-site'+(canMove&&home?' movable':'')+(lost?' lost':'')+(moving?' chosen':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
+  return <article key={r.id} {...hov('site:'+r.id)} data-node={'site:'+r.id} data-site={r.id} tabIndex={0} aria-label={label} onKeyDown={e=>{if(enter(e,{kind:'site',id:r.id}))return;if(canMove&&home&&(e.key==='Delete'||e.key==='Backspace')&&!edit){e.preventDefault();e.stopPropagation();disconnect(r.id)}}} className={'map-site'+nodeCls('site:'+r.id)+(canMove&&home?' movable':'')+(lost?' lost':'')+(moving?' chosen':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
    <SiteIcon site={s} size={32}/>
    {warn?<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>:<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>}
    <span className="map-label"><b className="map-name">{s.name}</b><span className={'map-caption'+(lost?' warn':'')}>{lost||!home?'Not connected':siteFacts(s)}</span></span>
@@ -363,36 +426,38 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  return <section className="map-root" aria-label="Infrastructure map">
   {canMove&&<div className="map-toolbar">
    {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every site to a server to save</span>}
+   <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" disabled={!Object.keys(positions).length} onClick={tidy}>Tidy up</button>
    {edit&&<button type="button" onClick={cancelEdit}>Cancel</button>}
    <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button>
   </div>}
   {strip}
   <div className="map-stage">
-  <div ref={view} className="map-viewport" style={viewH?{height:viewH}:undefined} tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+  <div ref={view} className="map-viewport" style={viewH?{height:viewH}:undefined} tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onDragOver={e=>{if(dragItem.current)e.preventDefault()}} onDrop={drop} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
    <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}>
      <defs>
       {['','-warn','-pending','-rule'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
      </defs>
      <g aria-hidden="true" className="decor">
-     {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} className="wire" markerEnd="url(#map-arrow)" d={p.d}/>)}
-     {layout.backupPaths.map(p=><path key={'b'+p.id} className="backup" markerEnd="url(#map-arrow)" d={p.d}/>)}
+     {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} data-wire={p.id} className={'wire'+lineCls('w'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
+     {layout.backupPaths.map(p=><path key={'b'+p.id} className={'backup'+lineCls('b'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
      </g>
-     {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId),h=hot||panelHot,on=!!h&&(h.channel===p.channelId||(!!h.source&&h.source===p.sourceKind+':'+(p.sourceId||'')));return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')+(on?' hot':'')}>
+     {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId);return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')+lineCls('r'+p.id)}>
       <path className="rule" d={p.d}/>
       <path className="rule-hit" data-node={'rule:'+p.id} tabIndex={0} role="button" aria-label={p.bundle?`Alerts to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`:`Alerts from ${r?sourceName(r):''} to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(p.bundle)openAlert(p.channelId,null,e.currentTarget);else if(r)editRule(r,e.currentTarget)}}} d={p.d}/>
      </g>})}
      {adrag?.src.from&&<path className="rule dragging hot" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
     </svg>
-    {layout.docknest&&<div {...hov({source:'docknest:'})} data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className="map-docknest" style={item(layout.docknest)}>
+    {ghost&&<div className="map-ghost" aria-hidden="true" style={{left:ghost.x,top:ghost.y,width:64,height:64}}>{ghost.kind==='telegram'?<KindIcon kind="telegram" size={28}/>:ghost.kind==='email'?<KindIcon kind="email" size={28}/>:ghost.kind==='server'?<IconServer size={28} stroke={1.5}/>:ghost.kind==='storage'?<IconDatabaseExport size={28} stroke={1.5}/>:<IconBox size={28} stroke={1.5}/>}<span className="map-label"><b className="map-name">New</b></span></div>}
+    {layout.docknest&&<div {...hov('docknest:root')} data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className={'map-docknest'+nodeCls('docknest:root')} style={item(layout.docknest)}>
      <DockNestIcon size={32}/>
      <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
     </div>}
     {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={canMove?'docknest:':undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
     {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed'||!ch.credentialId;return <React.Fragment key={'n'+r.id}>
-     <div {...hov({channel:r.id})} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+(adrag?.over===r.id?' target':'')} style={item(r)}>
+     <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
       <KindIcon kind={ch.kind} size={32}/>
       {bad&&<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
       <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className="map-caption">{KIND_LABEL[ch.kind]}</span></span>
@@ -410,7 +475,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     {layout.storage.map(r=><span key={'i'+r.id} aria-hidden="true" data-handle={'in:'+r.id} className="map-port" style={at(r.x,r.y+r.h/2)}/>)}
     {layout.servers.map(r=>{const s=byId.servers[r.id],mine=layout.sites.filter(x=>x.serverId===r.id),bad=drag&&r.id!==byId.sites[drag.id]?.serverId&&siteChecks[r.id]&&blocked(siteChecks[r.id]);
      return <div key={r.id} role="group" aria-labelledby={'map-server-'+r.id} className="map-group">
-      <div {...hov({source:'server:'+r.id})} data-node={'server:'+r.id} tabIndex={0} aria-label={`${s.name}. ${serverFacts(s,mine.length)}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'server',id:r.id})} className={'map-server'+(drag?.over===r.id?' target':'')+(bad?' blocked':'')+(pending?.targetId===r.id?' chosen':'')+(s.status&&s.status!=='connected'&&s.status!=='unchecked'?' attention':'')} style={item(r)}>
+      <div {...hov('server:'+r.id)} data-node={'server:'+r.id} tabIndex={0} aria-label={`${s.name}. ${serverFacts(s,mine.length)}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'server',id:r.id})} className={'map-server'+nodeCls('server:'+r.id)+(drag?.over===r.id?' target':'')+(bad?' blocked':'')+(pending?.targetId===r.id?' chosen':'')+(s.status&&s.status!=='connected'&&s.status!=='unchecked'?' attention':'')} style={item(r)}>
        <IconServer size={44} stroke={1.5} aria-hidden="true"/>
        {s.status==='connected'?<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>:!s.status||s.status==='unchecked'?<IconClock className="map-badge" size={16} stroke={2} aria-hidden="true"/>:<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
        <span className="map-label"><b id={'map-server-'+r.id} className="map-name" title={s.name}>{s.name}</b>
@@ -421,7 +486,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
       {mine.map(renderSite)}
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}
-    {layout.storage.map(r=>{const tg=byId.storage[r.id],f=storageFacts(tg);return <div key={r.id} data-node={'storage:'+r.id} tabIndex={0} role="group" aria-label={`Backup storage ${tg.name}. ${f.text}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'storage',id:r.id})} className="map-storage" style={item(r)}>
+    {layout.storage.map(r=>{const tg=byId.storage[r.id],f=storageFacts(tg);return <div key={r.id} {...hov('storage:'+r.id)} data-node={'storage:'+r.id} tabIndex={0} role="group" aria-label={`Backup storage ${tg.name}. ${f.text}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'storage',id:r.id})} className={'map-storage'+nodeCls('storage:'+r.id)} style={item(r)}>
      <IconDatabaseExport size={44} stroke={1.5} aria-hidden="true"/>
      {f.pct!==null&&<div className="map-meter" role="meter" aria-label={tg.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}
      <span className="map-label"><b className="map-name" title={tg.name}>{tg.name}</b><span className="map-caption">{f.text}</span></span></div>})}
@@ -442,7 +507,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  </section>;
 }
 
-function AddServerPanel({server,sites,api,narrow,onClose,onPick}){
+function AddServerPanel({server,sites,api,narrow,onClose,onPick,onDragItem}){
  const found=useDiscovery(api,server,sites);
- return <SidePanel narrow={narrow} labelId="map-panel-title" title={'Add to '+server.name} onClose={onClose} footer={<DiscoverFooter found={found}/>}><AddToServer found={found} onPick={onPick}/></SidePanel>;
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title={'Add to '+server.name} onClose={onClose} footer={<DiscoverFooter found={found}/>}><AddToServer found={found} onPick={onPick} onDragItem={onDragItem}/></SidePanel>;
 }

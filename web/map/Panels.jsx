@@ -21,17 +21,17 @@ export function SidePanel({title,labelId,narrow,onClose,footer,children,icon,sub
 }
 
 export const Search=({value,onChange,label='Search'})=><label className="map-search"><IconSearch size={18} stroke={1.75} aria-hidden="true"/><input type="search" aria-label={label} placeholder="Search" value={value} onChange={e=>onChange(e.target.value)}/></label>;
-const Row=({icon:Icon,title,caption,onClick})=><li><button type="button" className="map-row" onClick={onClick}><Icon size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{title}</b><span className="map-caption">{caption}</span></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>;
+const Row=({icon:Icon,title,caption,onClick,onDrag})=><li><button type="button" className="map-row" onClick={onClick} draggable={onDrag?true:undefined} onDragStart={onDrag?e=>{e.dataTransfer.setData('text/plain',title);e.dataTransfer.effectAllowed='copy';onDrag()}:undefined}><Icon size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{title}</b><span className="map-caption">{caption}</span></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>;
 
 // "+" at the top right: adds a server or backup storage with the existing screens.
-export function AddToMap({onAddServer,onAddStorage,onAddAlert,onCredentials}){
+export function AddToMap({onAddServer,onAddStorage,onAddAlert,onCredentials,onDragItem}){
  const [q,setQ]=useState('');
- const rows=[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage},
-  ...(onAddAlert?[{id:'telegram',icon:IconBrandTelegram,title:'Telegram alerts',caption:'Messages in a Telegram chat',go:()=>onAddAlert('telegram')},{id:'email',icon:IconMail,title:'Email alerts',caption:'Messages by email',go:()=>onAddAlert('email')}]:[]),...(onCredentials?[{id:'credentials',icon:IconKey,title:'Credentials',caption:'Logins your alerts use',go:onCredentials}]:[])].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
+ const rows=[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer,item:{kind:'server'}},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage,item:{kind:'storage'}},
+  ...(onAddAlert?[{id:'telegram',icon:IconBrandTelegram,title:'Telegram alerts',caption:'Messages in a Telegram chat',go:()=>onAddAlert('telegram'),item:{kind:'telegram'}},{id:'email',icon:IconMail,title:'Email alerts',caption:'Messages by email',go:()=>onAddAlert('email'),item:{kind:'email'}}]:[]),...(onCredentials?[{id:'credentials',icon:IconKey,title:'Credentials',caption:'Logins your alerts use',go:onCredentials}]:[])].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
  return <>
   <Search value={q} onChange={setQ}/>
   <h3 className="map-group-title">Add</h3>
-  {rows.length?<ul className="map-rows">{rows.map(r=><Row key={r.id} icon={r.icon} title={r.title} caption={r.caption} onClick={r.go}/>)}</ul>:<p className="map-caption" role="status">Nothing matches this search.</p>}
+  {rows.length?<ul className="map-rows">{rows.map(r=><Row key={r.id} icon={r.icon} title={r.title} caption={r.caption} onClick={r.go} onDrag={onDragItem&&r.item?()=>onDragItem(r.item):undefined}/>)}</ul>:<p className="map-caption" role="status">Nothing matches this search.</p>}
  </>;
 }
 
@@ -52,7 +52,7 @@ export function useDiscovery(api,server,sites){
  },[state,sites,server.id]);
  return {...state,choices,again:()=>setRun(n=>n+1)};
 }
-export function AddToServer({found,onPick}){
+export function AddToServer({found,onPick,onDragItem}){
  const [q,setQ]=useState('');
  const rows=found.choices.filter(c=>c.name.toLowerCase().includes(q.trim().toLowerCase()));
  return <>
@@ -61,7 +61,7 @@ export function AddToServer({found,onPick}){
   <div role="status" aria-live="polite">{found.loading&&<p className="map-caption">Looking for sites{'…'}</p>}{found.error&&<Note kind="error" icon={IconInfoCircle}>{found.error}</Note>}
    {!found.loading&&!found.error&&!found.choices.length&&<p className="map-caption">No sites left to add on this server.</p>}
    {!found.loading&&found.choices.length>0&&!rows.length&&<p className="map-caption">Nothing matches this search.</p>}</div>
-  {rows.length>0&&<ul className="map-rows">{rows.map(c=><Row key={c.id} icon={c.kind==='static'?IconAppWindow:IconBox} title={c.name} caption={c.kind==='static'?'nginx site · static files':'Docker · '+count(c.containers.length,'container')} onClick={()=>onPick(c)}/>)}</ul>}
+  {rows.length>0&&<ul className="map-rows">{rows.map(c=><Row key={c.id} icon={c.kind==='static'?IconAppWindow:IconBox} title={c.name} caption={c.kind==='static'?'nginx site · static files':'Docker · '+count(c.containers.length,'container')} onClick={()=>onPick(c)} onDrag={onDragItem?()=>onDragItem({kind:'site',name:c.name,choice:c}):undefined}/>)}</ul>}
  </>;
 }
 export const DiscoverFooter=({found})=><><span className="map-caption">Not listed?</span><button type="button" className="map-link" disabled={found.loading} onClick={found.again}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Discover again</button></>;

@@ -96,4 +96,15 @@ test('more than 6 lines collapse to one line per alert node with a count of its 
  assert.equal(l.bundled,true);assert.equal(l.rulePaths.length,2);assert.deepEqual(l.rulePaths.map(p=>p.count),[4,4]);
  assert.deepEqual(l.alerts.map(n=>n.count),[4,4]);
 });
+test('saved positions move only their node, lines follow and unknown nodes keep their automatic place',()=>{
+ const {servers,sites}=make(3,3),o=storageFor(sites),auto=layoutMap(servers,sites,o),s0=auto.sites[0],t0=auto.storage[0];
+ const l=layoutMap(servers,sites,{...o,positions:{['site:'+s0.id]:{x:s0.x+48,y:s0.y+96},['storage:'+t0.id]:{x:t0.x,y:t0.y+200},'site:gone':{x:1,y:1}}});
+ const moved=l.sites.find(s=>s.id===s0.id);
+ assert.deepEqual([moved.x,moved.y],[s0.x+48,s0.y+96]);assert.deepEqual([moved.in.x,moved.in.y],[s0.in.x+48,s0.in.y+96]);
+ assert.deepEqual(l.sites.slice(1).map(s=>[s.x,s.y]),auto.sites.slice(1).map(s=>[s.x,s.y]),'other sites stay');
+ assert.equal(l.paths.length,auto.paths.length);assert.equal(l.backupPaths.length,auto.backupPaths.length);
+ assert.deepEqual(l.paths.find(p=>p.id===s0.id).points.at(-1),[moved.x-14,moved.in.y],'a line ends at the moved input');
+ assert.equal(l.custom,true);assert.equal(auto.custom,undefined);
+ assert.deepEqual(layoutMap(servers,sites,{...o,positions:{}}),auto,'no positions is the automatic layout');
+});
 test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});

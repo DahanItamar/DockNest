@@ -115,5 +115,26 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   out.width=alertX+m.alertS+m.pad;
  }
  out.height=bottom;
+ // Free layout: the owner's saved positions replace the automatic ones node by node (unknown nodes keep their automatic place).
+ // Lines are then drawn between the final ports with plain elbows; they can cross a card, which is the owner's choice.
+ const pos=opts.positions||{};
+ const nodes=[...out.servers.map(n=>['server:'+n.id,n]),...[...out.sites,...out.unassigned].map(n=>['site:'+n.id,n]),...out.storage.map(n=>['storage:'+n.id,n]),...out.alerts.map(n=>['alert:'+n.id,n]),...(out.docknest?[['docknest:root',out.docknest]]:[])];
+ out.keys=Object.fromEntries(nodes);
+ if(nodes.some(([k])=>pos[k])){
+  out.custom=true;
+  for(const [k,n] of nodes){
+   const p=pos[k];if(!p)continue;
+   const dx=p.x-n.x,dy=p.y-n.y,ports=new Set([n.in,n.out,n.alertOut].filter(Boolean));
+   n.x+=dx;n.y+=dy;n.block={...n.block,x:n.block.x+dx,y:n.block.y+dy};for(const q of ports){q.x+=dx;q.y+=dy}
+   if(n.block2)n.block2={...n.block2,x:n.block2.x+dx,y:n.block2.y+dy};
+  }
+  const gen=(a,b)=>{const x1=a.x,y1=a.y,x2=b.x-14,y2=b.y;if(y1===y2&&x2>x1)return [[x1,y1],[x2,y2]];if(x2>x1+24){const mx=Math.round((x1+x2)/2);return [[x1,y1],[mx,y1],[mx,y2],[x2,y2]]}const lo=Math.max(x1,x2)+24,my=Math.round((y1+y2)/2);return [[x1,y1],[x1+20,y1],[x1+20,my],[x2-20,my],[x2-20,y2],[x2,y2]]};
+  const sv=Object.fromEntries(out.servers.map(n=>[n.id,n])),st=Object.fromEntries(out.storage.map(n=>[n.id,n])),al=Object.fromEntries(out.alerts.map(n=>[n.id,n]));
+  out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],pts=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:pts,d:elbow(pts)}});
+  out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],pts=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:pts,d:elbow(pts)}});
+  out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],pts=gen(src.alertOut,node.in);return {...p,points:pts,d:elbow(pts,12)}});
+  let w=0,h=0;for(const [,n] of nodes){w=Math.max(w,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);h=Math.max(h,n.block.y+n.block.h+m.pad)}
+  out.width=Math.max(w,m.pad*2);out.height=Math.max(h,m.pad*2);
+ }
  return out;
 }

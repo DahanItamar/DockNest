@@ -274,5 +274,19 @@
 .map-root .map-cfg,.map-root .map-sends{gap:16px}
 @media(max-width:767px){.map-root .map-panel-sub{padding:0}.map-root .map-panel-sub .map-tabs{margin:0;padding:0}}
 @media(max-width:767px){.map-root .map-dialog select,.map-root .map-saved{min-height:44px}.map-root .map-alert-rows button{min-height:44px}}
+/* All lines are solid. Selecting or hovering a node or line lights its whole path; the rest dims. */
+.map-root .map-lines .backup{stroke:var(--border-control);stroke-dasharray:none;stroke-linecap:butt}
+.map-root .map-lines .arr-backup{fill:var(--border-control)}
+.map-root .map-lines .rule-g.off .rule{stroke-dasharray:none;stroke-opacity:.18}
+.map-root .map-lines .wire.dim,.map-root .map-lines .backup.dim,.map-root .map-lines .rule-g.dim .rule{opacity:.35}
+.map-root .map-lines .wire.lit,.map-root .map-lines .backup.lit{stroke:var(--accent);stroke-width:2.5}
+.map-root .map-lines .rule-g.lit .rule{stroke:var(--accent);stroke-opacity:1;stroke-width:2.5}
+.map-root .map-server.lit,.map-root .map-site.lit,.map-root .map-storage.lit,.map-root .map-alert.lit,.map-root .map-docknest.lit{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.map-root .map-ghost{position:absolute;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px dashed var(--accent);border-radius:var(--radius);background:var(--accent-soft);color:var(--accent);pointer-events:none}
+.map-root .map-val{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.map-root .map-vals{display:flex;flex-direction:column;gap:4px}
+.map-root .map-copy{min-height:28px;padding:0 8px;gap:4px;font-size:var(--fs-caption);white-space:nowrap}
+.map-root .map-row[draggable=true]{cursor:grab}
+.map-root .map-found{align-self:flex-start}
 .map-root .map-hint{max-width:none}
 .map-root .map-hint span{max-width:none}
