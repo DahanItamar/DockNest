@@ -393,6 +393,9 @@ try{
    assert.equal(await d.getByRole('button',{name:/Quiet server/}).isDisabled(),true,'blocked target greyed');
    await page.waitForFunction(()=>[...document.querySelectorAll('dialog button')].every(b=>!/Checking/.test(b.textContent)));
    const box=await d.boundingBox();assert.ok(box.width>=401&&box.height>=873,'full-screen sheet');
+   // Long reasons wrap inside their card, and opening the sheet focuses the title, not Cancel
+   assert.equal(await d.locator('.map-targets button').evaluateAll(bs=>bs.every(b=>[b,...b.children].every(e=>e.scrollWidth<=e.clientWidth+1))),true,'target text stays inside the card');
+   assert.equal(await page.evaluate(()=>document.activeElement?.tagName),'H2','title focused on open');
    await shot(page,scheme,'402-1-target');
    await d.getByRole('button',{name:/^itamar-Srv/}).click();
    await d.getByRole('heading',{name:'Ready to move'}).waitFor();

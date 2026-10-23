@@ -45,6 +45,7 @@ CI runs all of these on every pull request, plus browser tests and a Gitleaks sc
 - Use mock data only, in code, tests, docs and screenshots. Use reserved domains (`example.invalid`) and documentation IP ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`).
 - Never commit `.env` files, keys, databases, backups or real server details. See [repository privacy](docs/repository-privacy.md).
 - Update the relevant docs when behavior changes.
+- Fill in the **Release note** line of the pull request template: one plain sentence for dashboard users, or "None".
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and pull request titles, for example `fix(restore): reject archives with absolute paths`.
 
 ## Release checklist
@@ -52,9 +53,10 @@ CI runs all of these on every pull request, plus browser tests and a Gitleaks sc
 A release pull request (version bump) is not complete until all of these are done:
 
 1. **Version.** Bump `package.json` (and the lockfile) so `scripts/release-manifest.js` accepts the tag.
-2. **Release notes.** Copy [docs/releases/TEMPLATE.md](docs/releases/TEMPLATE.md) to `docs/releases/YYYY-MM-DD-vX.Y.Z.md` (a `vX.Y.md` file also covers the `X.Y.0` release; the file-name suffix is how `scripts/release-manifest.js` finds the notes) and fill in every section. Say what was actually tested, no more. Set the four highlights in the front matter (the template explains the strict format); a malformed block fails the release before anything is built.
-3. **Changelog.** Add the `CHANGELOG.md` entry in Keep a Changelog format, link the notes file, and update the compare links at the bottom.
-4. **README "At a glance".** Update the version, the release date, the "What's new" bullets and the notes link in [README.md](README.md#at-a-glance). The version badge follows the latest GitHub release by itself.
+2. **Release notes.** Copy [docs/releases/TEMPLATE.md](docs/releases/TEMPLATE.md) to `docs/releases/YYYY-MM-DD-vX.Y.Z.md` (a `vX.Y.md` file also covers the `X.Y.0` release; the file-name suffix is how `scripts/release-manifest.js` finds the notes). Build it from the "Release note" lines of the merged pull requests: short, for dashboard users, no CI or internals. Set the four highlights in the front matter (the template explains the strict format); a malformed block fails the release before anything is built.
+3. **Changelog.** Move the [Unreleased] entries in `CHANGELOG.md` under the new version (Keep a Changelog format) and link the notes file. The changelog is the detailed, technical record.
+4. **README.** Update the features and screenshots for anything new (`npm run docs:screenshots`, synthetic data only). The version badge follows the latest GitHub release by itself.
+5. **What was tested.** The release pull request description states what was tested and what was not. Backup, restore and move claims need a Linux Docker integration run.
 
 ## Safety rules for recovery code
 

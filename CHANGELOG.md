@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
+
+### Changed
+
+- Release notes are short and written for dashboard users (New, Better, Fixed, Security, Before you update); testing details stay in the changelog and the release pull request. The pull request template asks for a one-line user-facing release note. The 2.6.0 notes use the new style.
+
 ## [2.6.0] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.6.0.md](docs/releases/2026-10-23-v2.6.0.md).
