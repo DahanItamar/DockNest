@@ -81,3 +81,6 @@ a.icon-button{display:inline-flex;align-items:center;justify-content:center;heig
 .paginated-list.gapped.stable-page>.paged-content{display:flex;flex-direction:column}
 .paginated-list.gapped.stable-page>.paged-content>.paged-measure{flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
 .paginated-list.gapped.stable-page>.paged-content>.paged-measure>.card-grid,.paginated-list.gapped.stable-page>.paged-content>.paged-measure>.storage-grid{flex:1 1 auto}
+
+/* 2.4.1 audit: the details icon never widens its cell. */
+.data-table td .audit-actions{min-width:0;width:auto;justify-content:flex-end}

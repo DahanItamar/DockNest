@@ -240,12 +240,7 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 .rebrand-page .filter-bar>svg{flex:none;color:var(--text-muted)}
 
 /* 2.4.1 several destinations: names never overlap or overflow; the full name is in the tooltip. */
-.storage-name{display:block;max-width:100
-/* 2.4.1 several destinations: names never overlap or overflow; the full name is in the tooltip. */
 .storage-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)}
 .berry-sidebar-storage .storage-name{font-size:var(--fs-caption);line-height:var(--lh-caption)}
 .compact-storage-details .storage-name{margin:0 0 8px}
-.storage-card-title{display:flex;flex-direction:column;min-width:0}
-.storage-card-name{overflow-wrap:anywhere}
-.storage-selected{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--success)}
-.rebrand-page .storage-card h3 .storage-card-title{display:flex;flex-direction:column;gap:4px;min-width:0}
+

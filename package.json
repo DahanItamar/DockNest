@@ -1,6 +1,6 @@
 {
   "name": "docknest",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "license": "AGPL-3.0-only",
   "private": true,
   "docknest": {
@@ -40,6 +40,7 @@
     "audit:repo": "node scripts/audit-repository.js",
     "test:theme": "node scripts/theme-browser.js",
     "test:updates": "node scripts/update-center-browser.js",
+    "test:layout": "node scripts/layout-241-browser.js",
     "test:reports": "node scripts/problem-reports-browser.js"
   },
   "dependencies": {

@@ -44,7 +44,7 @@
 .rp-note{display:flex;gap:12px;margin:0 24px;padding:12px 16px;border:1px solid var(--alert-warning-border);border-radius:var(--radius);background:var(--warning-surface);color:var(--alert-warning-text)}
 .rp-note svg{flex:none;color:var(--warning)}
 .rp-foot{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:24px;min-height:72px;box-sizing:border-box;padding:0 24px;border-top:1px solid var(--border-subtle)}
-.rp-dialog .rp-foot>:is(button,a){box-sizing:border-box;flex:0 0 auto;min-width:144px;height:var(--control-height);min-height:var(--control-height);margin:0;padding:0 16px;gap:8px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;border-radius:var(--radius)}
+.rp-dialog .rp-foot>:is(button,a){box-sizing:border-box;flex:0 0 auto;min-width:176px;height:var(--control-height);min-height:var(--control-height);margin:0;padding:0 16px;gap:8px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;border-radius:var(--radius)}
 .rp-dialog a.rp-open{border:1px solid var(--button-primary);background:var(--button-primary);color:var(--primary-foreground);text-decoration:none}
 .rp-dialog a.rp-open:hover{background:var(--button-primary-hover);border-color:var(--button-primary-hover)}
 .rp-dialog a.rp-open:focus-visible,.rp-check input:focus-visible,.rp-excerpt textarea:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
