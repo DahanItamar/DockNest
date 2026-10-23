@@ -34,7 +34,7 @@ const HASH='a'.repeat(64);
 function preview({siteId,targetServerId,options}){
  const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
  const base={id,siteId,targetServerId,ok:true,mailBlocked:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual',cloudflareAvailable:false},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
-const nginx={id:'nginx',status:'block',title:'itamar-Srv needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported}};
+const nginx={id:'nginx',status:'block',title:'itamar-Srv needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported,reason:mock.unsupported?'This server packages offer Docker 20.10; this site needs 28 or newer. Install Docker from the Docker repository instead.':undefined}};
  if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['itamar-Srv needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
@@ -69,6 +69,7 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
    const parts=endpoint.split('/').filter(Boolean),body=req.postDataJSON?.()||{};
    if(req.method()==='POST'&&parts.length>=4&&mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});
    if(parts.length===2&&req.method()==='POST'&&mock.siteMoving)return route.fulfill({status:409,json:{error:'raw',code:'SITE_MOVING'}});
+   if(parts[3]==='start'&&mock.installRunning)return route.fulfill({status:409,json:{error:'An install is running on this server. Wait for it to finish, then try again.',code:'INSTALL_RUNNING'}});
    if(parts[3]==='start'&&mock.forceAnyway){mock.forceAnyway=false;return route.fulfill({status:409,json:{error:'raw',code:'MOVE_ANYWAY_REQUIRED'}});}
    if(parts.length===2&&req.method()==='POST'){mock.previews.push(body);return route.fulfill({status:201,json:preview(body)});}
    if(parts[3]==='start'){if(mock.changeOnce){mock.changeOnce=false;return route.fulfill({status:409,json:{error:'Something changed.',code:'PREFLIGHT_CHANGED'}});}mock.starts.push({id:parts[2],body});mock.phase='running';return route.fulfill({status:202,json:{ok:true}});}
@@ -84,7 +85,7 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   if(endpoint==='/api/servers/a/discover'){mock.discovers++;return route.fulfill({json:{containers:[{name:'crm-web',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'web'}},{name:'crm-db',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'db'}},{name:'wiki',Labels:{}}],staticSites:[{documentRoot:'/var/www/landing',name:'landing.example.com',configFiles:[]}]}});}
   if(endpoint==='/api/servers/a/test'){mock.tests++;return route.fulfill({json:{ok:true}});}
   if(endpoint==='/api/storage-targets')return route.fulfill({json:targets});
-  if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
+  if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});if(mock.alreadyInstalled)return route.fulfill({status:409,json:{error:'Docker is installed but not running. Start it, then check again.',code:'ALREADY_INSTALLED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
   if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to itamar-Srv',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
   return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?appState:endpoint==='/api/version'?{version:'0.0.0'}:{}});
@@ -513,8 +514,24 @@ async function installFlow(page,scheme){
  await dragSite(page,'1','itamar-Srv');await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  assert.equal(await d.getByRole('button',{name:'Install nginx'}).count(),0);
- await d.getByText('DockNest cannot install nginx on this system yet.',{exact:false}).waitFor();
+ await d.getByText('packages offer Docker 20.10',{exact:false}).waitFor();
+ assert.equal(await d.getByText('DockNest cannot install',{exact:false}).count(),0,'the reason replaces the generic line');
  assert.equal(await d.getByRole('button',{name:'Show command'}).count(),1);
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ mock.needNginx=true;mock.unsupported=false;mock.alreadyInstalled=true;
+ await dragSite(page,'1','itamar-Srv');await save.click();
+ await d.getByRole('button',{name:'Install nginx'}).first().click();
+ await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
+ await d.getByRole('alert').getByText('Docker is installed but not running. Start it, then check again.').waitFor();
+ assert.equal(await d.locator('.map-dialog-foot').getByRole('button',{name:'Check again'}).count(),1);
+ mock.alreadyInstalled=false;mock.needNginx=false;
+ await d.locator('.map-dialog-foot').getByRole('button',{name:'Check again'}).click();
+ await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+ mock.installRunning=true;
+ await d.getByRole('button',{name:'Move',exact:true}).click();
+ await d.getByRole('alert').getByText('An install is running on this server.',{exact:false}).waitFor();
+ mock.installRunning=false;
  await d.getByRole('button',{name:'Cancel'}).click();
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  mock.needNginx=false;mock.unsupported=false;

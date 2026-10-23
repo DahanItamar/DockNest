@@ -77,7 +77,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
   {blocked&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
   {installChecks(preview).map(c=>{const i=c.install,name=PACKAGE_NAME[i.package];return <div key={c.id||i.package} className="map-install">
-   <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {c.text||(i.supported?`DockNest can install ${name} for you.`:`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
+   <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
    <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>
   </div>})}
   {!blocked&&<div className="map-facts">
@@ -221,14 +221,14 @@ function CommandBox({command}){
  return <div className="map-code"><code>{command}</code><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>;
 }
 
-export function InstallConfirmDialog({server,check,client,onCancel,onStarted}){
- const guard=useGuard(client),[busy,setBusy]=useState(false),[err,setErr]=useState(''),i=check.install,name=PACKAGE_NAME[i.package];
+export function InstallConfirmDialog({server,check,client,onCancel,onStarted,onCheckAgain}){
+ const guard=useGuard(client),[busy,setBusy]=useState(false),[err,setErr]=useState(''),[already,setAlready]=useState(false),i=check.install,name=PACKAGE_NAME[i.package];
  async function go(){
   setBusy(true);setErr('');
-  await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package);onStarted(r?.job?.id)},e=>setErr(friendly(e)));
+  await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
   setBusy(false);
  }
- return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button></>}>
+ return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>
   <p>DockNest installs {name} on {server.name}.{i.command?' It runs this command there:':''}</p>
   {i.command&&<CommandBox command={i.command}/>}
   <p className="map-caption">Nothing else on the server is changed.</p>
