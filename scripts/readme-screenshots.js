@@ -52,6 +52,11 @@ try{
  await page.locator('tr',{hasText:'Studio Journal'}).filter({hasText:/running/i}).first().getByRole('button',{name:'View job'}).click();
  await page.getByRole('dialog').waitFor();await settle(page);await shot(page,'job-details.png');
  await context.close();
+ ({context,page}=await open({height:1300}));
+ await go(page,'Map');await page.locator('.map-site').first().waitFor();
+ await page.getByRole('button',{name:'Fit to screen'}).click();await settle(page);
+ assert.equal(await page.locator('.map-site').count(),sites.length);await shot(page,'map.png');
+ await context.close();
  ({context,page}=await open({height:1100}));
  await page.getByRole('navigation').getByRole('button',{name:/Update Center/}).click();
  await page.getByRole('heading',{name:'Update Center',level:1}).waitFor();await settle(page);await shot(page,'update-center.png');

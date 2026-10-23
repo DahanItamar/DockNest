@@ -46,11 +46,18 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.
 
+**Map and moving sites**
+- A Map page shows your servers and the sites on each one, arranged automatically, with zoom, Fit to screen and a list on phones.
+- Administrators move a site to another server by dragging it to that server and pressing Save changes. DockNest shows how long the move takes and how long the site is offline, then backs up the site, tests a copy on the new server and waits for your DNS change before switching.
+- The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving sites](docs/moving-sites.md).
+
 **Security**
 - Backups are encrypted with AES-256-GCM.
 - SSH host keys are pinned and checked before connecting.
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.
+
+![Map page with three synthetic servers and the sites on each one](docs/media/map.png)
 
 <table>
   <tr>
@@ -163,7 +170,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Security](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
