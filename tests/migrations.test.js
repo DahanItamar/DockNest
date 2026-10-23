@@ -12,7 +12,7 @@ import { migrate, migrations, schemaVersion, listSnapshots, compatFloor, SchemaT
 const run = promisify(execFile), quiet = () => {}, shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
 // Sorted by name, matching schema().
-const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','site_move_steps','site_moves','site_moves_active','site_moves_created','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
+const addedSinceV2 = ['audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','server_installs','server_installs_status','site_move_steps','site_moves','site_moves_active','site_moves_created','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;
@@ -242,7 +242,7 @@ test('a real 2.1.0 database migrates to the current schema with its data intact,
   assert.equal(result.from, 4); assert.equal(result.to, schemaVersion);
   assert.match(result.snapshot, new RegExp(`state-v4-to-v${schemaVersion}-20261022T080000000Z\\.sqlite$`));
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
-  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves].sort());
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves, ...serverInstalls].sort());
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1, 'signed-in sessions survive');
   assert.equal(db.prepare("SELECT role FROM users WHERE id='user'").get().role, 'admin');
@@ -281,6 +281,7 @@ test('the real 2.1.0 upgrade.sh and this one read this migrations file as the cu
 
 // Migration 6 (docs/moving-sites.md): site moves and their per-step journal. Additive, so 2.4.x keeps running on it.
 const siteMoves = ['site_move_steps','site_moves','site_moves_active','site_moves_created'];
+const serverInstalls = ['server_installs','server_installs_status'];
 const v241 = released('v2.4.1', 'src/migrations.js'), noTag241 = !v241 && 'v2.4.1 tag not fetched';
 const v241Migrations = () => temporary(async directory => { const file = join(directory, 'migrations-v2.4.1.mjs'); await writeFile(file, v241); return import(pathToFileURL(file).href); });
 
@@ -288,7 +289,14 @@ test('migration 6 is one compatible `{ version: 6,` line and keeps the floor at 
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/), lines = source.filter(line => /^\s*\{\s*version:\s*6\b/.test(line));
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^ {2}\{ version: 6, name: 'site-moves', compatible: true, up: .*\) \},$/);
-  assert.equal(schemaVersion, 6); assert.equal(migrations.at(-1).compatible, true); assert.equal(compatFloor(migrations), 1);
+  assert.ok(schemaVersion >= 6); assert.equal(compatFloor(migrations), 1);
+});
+
+test('migration 7 is one compatible `{ version: 7,` line that only adds server_installs', async () => {
+  const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/), lines = source.filter(line => /^\s*\{\s*version:\s*7\b/.test(line));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^ {2}\{ version: 7, name: 'server-installs', compatible: true, up: .*\) \},$/);
+  assert.equal(schemaVersion, 7); assert.equal(migrations.at(-1).compatible, true); assert.equal(compatFloor(migrations), 1);
 });
 
 test('site move tables start empty and enforce one unfinished move per site, valid steps and cascading journals', () => temporary(async directory => {
@@ -322,29 +330,48 @@ test('site move tables start empty and enforce one unfinished move per site, val
   db.close();
 }));
 
-test('a real 2.4.1 database (schema 5) migrates to 6 with its data intact and one v5-to-v6 snapshot', { skip: noTag241 }, () => temporary(async directory => {
+test('a real 2.4.1 database (schema 5) migrates to the current schema with its data intact and one v5-to-v7 snapshot', { skip: noTag241 }, () => temporary(async directory => {
   const v2 = await v241Migrations(), file = join(directory, 'state.sqlite'), db = legacy(file);
   assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-22T08:00:00.000Z'), log: quiet }).to, 5);
   db.exec("INSERT INTO update_checks(id,status,checked_at,next_check_at) VALUES(1,'ok','2026-10-22',0)");
   const before = schema(db), contents = () => Object.fromEntries(before.filter(row => row.type === 'table').map(({ name }) => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row })).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
   const rows = contents(), result = migrate(db, { file, now: () => new Date('2026-10-23T08:00:00.000Z'), log: quiet });
-  assert.deepEqual({ from: result.from, to: result.to }, { from: 5, to: 6 });
-  assert.match(result.snapshot, /state-v5-to-v6-20261023T080000000Z\.sqlite$/);
-  assert.deepEqual(contents(), rows, 'migration 6 writes no rows to existing tables');
+  assert.deepEqual({ from: result.from, to: result.to }, { from: 5, to: 7 });
+  assert.match(result.snapshot, /state-v5-to-v7-20261023T080000000Z\.sqlite$/);
+  assert.deepEqual(contents(), rows, 'migrations 6 and 7 write no rows to existing tables');
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.4.1 objects keep their definition');
-  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), siteMoves);
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), [...siteMoves, ...serverInstalls].sort());
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   db.close();
 }));
 
-test('the real 2.4.1 code starts on a schema 6 database without changing it', { skip: noTag241 }, () => temporary(async directory => {
+test('the real 2.4.1 code starts on a schema 7 database without changing it', { skip: noTag241 }, () => temporary(async directory => {
   const v2 = await v241Migrations(), file = join(directory, 'state.sqlite'), db = legacy(file), messages = [];
   try {
     migrate(db, { file, log: quiet });
     const after = schema(db);
-    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 6, to: 6, snapshot: null });
-    assert.match(messages.join('\n'), /schema v6 is newer than this release \(v5\) but only adds compatible objects/);
-    assert.equal(version(db), 6); assert.deepEqual(schema(db), after);
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 7, to: 7, snapshot: null });
+    assert.match(messages.join('\n'), /schema v7 is newer than this release \(v5\) but only adds compatible objects/);
+    assert.equal(version(db), 7); assert.deepEqual(schema(db), after);
+  } finally { db.close(); }
+}));
+
+// Migration 7: the optional install runs. One table and one index, nothing else touched.
+const v260 = released('v2.6.0', 'src/migrations.js'), noTag260 = !v260 && 'v2.6.0 tag not fetched';
+test('a real 2.6.0 database (schema 6) migrates to 7 adding only server_installs, and 2.6.0 code keeps running on it', { skip: noTag260 }, () => temporary(async directory => {
+  const file260 = join(directory, 'migrations-v2.6.0.mjs'); await writeFile(file260, v260);
+  const v2 = await import(pathToFileURL(file260).href), file = join(directory, 'state.sqlite'), db = legacy(file), messages = [];
+  try {
+    assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-23T08:00:00.000Z'), log: quiet }).to, 6);
+    const before = schema(db), jobs = db.prepare('SELECT * FROM jobs').all().map(row => ({ ...row }));
+    const result = migrate(db, { file, now: () => new Date('2026-10-24T08:00:00.000Z'), log: quiet });
+    assert.deepEqual({ from: result.from, to: result.to }, { from: 6, to: 7 });
+    for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.6.0 objects keep their definition');
+    assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), serverInstalls);
+    assert.deepEqual(db.prepare('SELECT * FROM jobs').all().map(row => ({ ...row })), jobs);
+    assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 7, to: 7, snapshot: null });
+    assert.match(messages.join('\n'), /schema v7 is newer than this release \(v6\) but only adds compatible objects/);
   } finally { db.close(); }
 }));

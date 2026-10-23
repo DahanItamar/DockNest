@@ -3,6 +3,7 @@
 // later step; this file defines their shape. It never sees secret values: env findings arrive masked and are
 // masked again here in case a collector forgets.
 import { createHash } from 'node:crypto';
+import { installInfo } from '../install-plan.js';
 
 /**
  * @typedef {{ hostIp?: string, hostPort: number, containerPort: number, protocol?: 'tcp'|'udp' }} PortBinding
@@ -79,6 +80,8 @@ export function describeDuration(seconds) {
 }
 
 const check = (id, status, title, text, extra) => ({ id, status, title, text, ...extra });
+// Only when the tool is missing (never for an old version) and only on a reachable target whose system was read.
+const installable = (target, name, need) => (target.os ? { install: installInfo(target, name, need) } : {});
 
 /** @param {MoveFacts} facts @param {{ envRewrite?: string[] }} [options] */
 export function evaluateMove(facts, options = {}) {
@@ -105,14 +108,14 @@ export function evaluateMove(facts, options = {}) {
 
     if (docker) {
       const dockerVersion = version(target.dockerVersion);
-      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`);
+      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`, installable(target, 'docker', { needDockerMajor: (site.containerCount ?? 1) > 1 ? MIN_DOCKER_MAJOR : 0 }));
       else if ((site.containerCount ?? 1) > 1 && dockerVersion[0] < MIN_DOCKER_MAJOR) add('docker', 'block', 'Docker', `Docker on ${target.name} is too old. Update it to version ${MIN_DOCKER_MAJOR} or newer.`);
       if (site.architecture && target.architecture && site.architecture !== target.architecture) add('docker', 'block', 'Processor type', `${target.name} has a different processor type (${target.architecture}) than ${site.name} (${site.architecture}).`);
       if (dockerVersion && !checks.some(item => item.id === 'docker')) add('docker', 'ok', 'Docker', `Docker ${target.dockerVersion} is ready on ${target.name}.`);
     }
     if (site.kind === 'compose') {
       const compose = version(target.composeVersion);
-      if (!compose || below(compose, MIN_COMPOSE)) add('compose', 'block', 'Docker Compose', `${target.name} needs Docker Compose 2. Install it, then try again.`);
+      if (!compose || below(compose, MIN_COMPOSE)) add('compose', 'block', 'Docker Compose', `${target.name} needs Docker Compose 2. Install it, then try again.`, !compose ? installable(target, 'compose') : {});
       else if (below(compose, OVERRIDE_COMPOSE)) add('compose', 'warn', 'Docker Compose', `Docker Compose ${target.composeVersion} on ${target.name} is older than 2.24, so DockNest recreates the containers itself instead of using a Compose override.`);
     }
 
@@ -129,7 +132,7 @@ export function evaluateMove(facts, options = {}) {
     for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
 
     const nginx = target.nginx ?? { installed: false };
-    if (!nginx.installed) add('nginx', 'block', 'nginx', `${target.name} needs nginx. Install it, then try again.`);
+    if (!nginx.installed) add('nginx', 'block', 'nginx', `${target.name} needs nginx. Install it, then try again.`, installable(target, 'nginx'));
     else if (nginx.configOk === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} has a setup error. Fix it, then try again.`);
     else if (nginx.confDir === null) add('nginx', 'block', 'nginx', `nginx on ${target.name} does not include a conf.d folder, so DockNest has nowhere to add its own site file. Add "include /etc/nginx/conf.d/*.conf;" to nginx.conf, then check again.`);
     else if (nginx.running === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} is stopped. Start it, then try again.`);
@@ -142,7 +145,7 @@ export function evaluateMove(facts, options = {}) {
     if (nginx.installed && !checks.some(item => item.id === 'nginx')) add('nginx', 'ok', 'nginx', `nginx is ready on ${target.name}.`);
 
     const proxied = (dns.records ?? []).some(record => record.proxied);
-    if (!proxied && !(target.certbot?.installed && target.certbot?.account)) add('tls', 'warn', 'Certificate', `No certificate tool is set up on ${target.name}. The site will use HTTP until you issue a certificate for ${site.domains[0] ?? site.name}.`);
+    if (!proxied && !(target.certbot?.installed && target.certbot?.account)) add('tls', 'warn', 'Certificate', `No certificate tool is set up on ${target.name}. The site will use HTTP until you issue a certificate for ${site.domains[0] ?? site.name}.`, target.certbot?.installed ? {} : installable(target, 'certbot'));
     if (site.maintenanceReady === false) add('maintenance', 'warn', 'Maintenance page', `No maintenance page is set up for ${site.name}; visitors will see an error during the final sync.`);
   }
 

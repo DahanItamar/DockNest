@@ -21,3 +21,8 @@ test('large SQLite databases are checked online, reused only when byte-identical
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for SQLite capture verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('install on server runs only fixed argv for a fixed package list and refuses everything else',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_install.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for install helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
