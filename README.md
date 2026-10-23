@@ -52,10 +52,6 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.
 
-<p align="center">
-  <img src="docs/media/job-details.png" width="720" alt="Job details for a running backup of a synthetic site, with transfer progress and a step timeline" />
-</p>
-
 <table>
   <tr>
     <td width="50%"><img src="docs/media/servers.png" alt="Servers page with three synthetic servers" /></td>
@@ -63,7 +59,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/update-center.png" alt="Update Center showing an available update and the host updater status" /></td>
-    <td width="50%"><img src="docs/media/dashboard-dark.png" alt="Dashboard in the dark theme" /></td>
+    <td width="50%"><img src="docs/media/job-details.png" alt="Job details for a running backup of a synthetic site, with transfer progress and a step timeline" /></td>
   </tr>
 </table>
 
