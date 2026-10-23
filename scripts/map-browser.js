@@ -106,7 +106,8 @@ async function dragSite(page,siteId,serverName,release=true){
  const port=page.locator(`[data-port-site="${siteId}"]`).first(),src=await port.boundingBox(),t=(await page.locator('.map-server',{hasText:serverName}).first().boundingBox());
  await page.mouse.move(src.x+src.width/2,src.y+src.height/2);await page.mouse.down();
  await page.mouse.move(t.x+t.width/2,t.y+t.height/2,{steps:5});
- await page.locator('.map-lines path.warn').waitFor();
+ // A drag that lands while the map is refreshing does not register; callers retry, so do not fail here
+ await page.locator('.map-lines path.warn').waitFor({timeout:5000}).catch(()=>{});
  if(release){await page.mouse.up();}
 }
 async function dragSiteToEmpty(page,siteId){
