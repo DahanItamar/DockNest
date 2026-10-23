@@ -68,6 +68,9 @@ moves.moveTransport.remote = async (server, request) => {
     case 'move-finalize-target': return { finalized: true };
     case 'move-retire-source': return { containers: [{ id: 'cid-web', name: 'web', restartPolicy: 'unless-stopped' }] };
     case 'move-resume-source': return { resumed: true, running: 1 };
+    case 'move-stop-target': return { containers: [{ id: 'n1', name: 'web', restartPolicy: 'unless-stopped' }], maintenance: true };
+    case 'move-unretire-source': return { started: 1, containers: [] };
+    case 'move-remove-old': return { containers: 1, volumes: request.deleteData ? ['web-data'] : [], paths: [], dataKept: !request.deleteData };
     default: throw new Error('unexpected operation ' + request.operation);
   }
 };
@@ -244,6 +247,119 @@ test('Start accepts a preview whose volatile facts changed, and refuses one whos
       const body = await refused.json(); assert.equal(body.code, 'PREFLIGHT_CHANGED', name); assert.ok(body.preview, 'the fresh preview comes back');
     } finally { moves.moveTransport.remote = original; }
   }
+});
+
+async function finishedMove(name, options) {
+  const siteId = siteRow(name); backupRow(siteId);
+  const draft = await preview(siteId, options);
+  assert.equal((await start(draft)).status, 202);
+  await drive();
+  assert.equal(engineState(draft.id), 'completed');
+  return { siteId, moveId: draft.id };
+}
+
+test('the certificate step gives the owner the exact command when the new server has no certbot account', async () => {
+  const original = moves.moveTransport.remote;
+  moves.moveTransport.remote = async (server, request) => request.operation === 'move-certificate' ? { status: 'needs-owner', reason: 'no-certbot', command: 'certbot --nginx --cert-name docknest-x -d cert.example.com' } : original(server, request);
+  try {
+    const { moveId } = await finishedMove('cert');
+    const step = (await (await admin('/moves/' + moveId)).json()).steps.find(item => item.step === 'certificate');
+    assert.equal(step.state, 'done'); assert.equal(step.result.command, 'certbot --nginx --cert-name docknest-x -d cert.example.com');
+  } finally { moves.moveTransport.remote = original; }
+});
+
+test('switch back within the 7 days: the new copy stops, the old copy starts, the site record returns', async () => {
+  const { siteId, moveId } = await finishedMove('back');
+  const view = await (await admin('/moves/' + moveId)).json();
+  assert.deepEqual([view.actions.switchBack, view.actions.removeOldCopy, view.actions.askRemoveOldCopy], [true, true, false]);
+  assert.equal((await post(staleAdmin, `/moves/${moveId}/switch-back`)).status, 403);
+  assert.equal((await post(operator, `/moves/${moveId}/switch-back`)).status, 403);
+  const started = await post(admin, `/moves/${moveId}/switch-back`); assert.equal(started.status, 202);
+  assert.equal((await started.json()).state, 'switching_back');
+  calls.length = 0; await drive(20);
+  assert.equal(engineState(moveId), 'switched_back');
+  assert.deepEqual(calls.filter(call => call.operation.startsWith('move-')).map(call => [call.server, call.operation]), [['new-srv', 'move-stop-target'], ['old-srv', 'move-unretire-source']]);
+  assert.ok(!calls.some(call => ['deploy-teardown', 'move-remove-old'].includes(call.operation)), 'switching back deletes nothing');
+  assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(siteId).server_id, oldServer);
+  const back = await (await admin('/moves/' + moveId)).json();
+  assert.equal(back.state, 'switched_back'); assert.deepEqual(back.dns, { type: 'A', name: 'back.example.com', value: '203.0.113.7' });
+  assert.match(back.statusLine, /Change the DNS record back: A back\.example\.com -> 203\.0\.113\.7/);
+  assert.equal((await post(admin, `/moves/${moveId}/switch-back`)).status, 409);
+});
+
+test('the old copy is never removed by itself; removal needs the site name and keeps data unless asked', async () => {
+  const { moveId } = await finishedMove('cleanup');
+  db.prepare('UPDATE site_moves SET retain_until=? WHERE id=?').run(new Date(Date.now() - 1000).toISOString(), moveId);
+  calls.length = 0; await drive(5);
+  assert.equal(engineState(moveId), 'retention_expired'); assert.ok(!calls.some(call => call.operation === 'move-remove-old'), 'nothing is removed automatically');
+  assert.equal((await (await admin('/moves/' + moveId)).json()).actions.askRemoveOldCopy, true);
+  assert.equal((await post(admin, `/moves/${moveId}/remove-old-copy`, { confirmation: 'wrong' })).status, 409);
+  assert.equal((await post(staleAdmin, `/moves/${moveId}/remove-old-copy`, { confirmation: 'cleanup' })).status, 403);
+  assert.equal((await post(admin, `/moves/${moveId}/remove-old-copy`, { confirmation: 'cleanup' })).status, 202);
+  await drive(5);
+  const removal = calls.find(call => call.operation === 'move-remove-old');
+  assert.equal(removal.server, 'old-srv'); assert.equal(removal.request.deleteData, false);
+  const view = await (await admin('/moves/' + moveId)).json();
+  assert.equal(view.engineState, 'cleaned'); assert.match(view.statusLine, /its data folders were kept/);
+  const other = await finishedMove('cleanup-data');
+  assert.equal((await post(admin, `/moves/${other.moveId}/remove-old-copy`, { confirmation: 'cleanup-data', deleteData: true })).status, 202);
+  calls.length = 0; await drive(5);
+  assert.equal(calls.find(call => call.operation === 'move-remove-old').request.deleteData, true);
+  assert.equal(engineState(other.moveId), 'cleaned');
+});
+
+test('a server step past its time limit stops waiting and asks the owner; Try again resumes it', async () => {
+  const siteId = siteRow('slow'); backupRow(siteId);
+  const draft = await preview(siteId); assert.equal((await start(draft)).status, 202);
+  const original = moves.moveTransport.remote;
+  let hang = true;
+  moves.moveTransport.remote = (server, request) => request.operation === 'move-test' && hang ? new Promise(() => {}) : original(server, request);
+  moves.moveLimits.scale = 0.0005; // 300 s test limit (at least 120 s) -> well under a second
+  try { await drive(30); } finally { moves.moveLimits.scale = 1; }
+  assert.equal(engineState(draft.id), 'recovery_required');
+  const view = await (await admin('/moves/' + draft.id)).json();
+  assert.equal(view.state, 'needs_attention'); assert.match(view.statusLine, /^Test the copy took longer than 1 minutes, so DockNest stopped waiting\. Check new-srv, then choose Try again or Undo\.$/);
+  assert.deepEqual(view.actions.resolve, ['retry', 'undo']);
+  hang = false;
+  assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'retry' })).status, 200);
+  await drive(); moves.moveTransport.remote = original;
+  assert.equal(engineState(draft.id), 'completed');
+});
+
+test('Cloudflare: the token is checked with read calls, sealed, never returned, and switches and reverts the A record', async () => {
+  const { cloudflareHttp } = await import('../src/moves/cloudflare.js');
+  const token = 'cf_' + 'a'.repeat(40), zone = 'f'.repeat(32), requests = [];
+  let content = '203.0.113.7';
+  cloudflareHttp.fetch = async (url, init) => {
+    requests.push({ url, method: init.method, auth: init.headers.Authorization === 'Bearer ' + token, body: init.body });
+    const ok = result => ({ ok: true, status: 200, json: async () => ({ success: true, result }) });
+    if (url.endsWith('/user/tokens/verify')) return ok({ status: 'active' });
+    if (url.includes('/zones?')) return ok([{ id: zone, name: 'example.com' }]);
+    if (url.includes('/dns_records?')) return ok([{ id: 'r'.repeat(32), type: 'A', name: 'cf.example.com', content, proxied: true, ttl: 1 }]);
+    if (init.method === 'PATCH') { content = JSON.parse(init.body).content; return ok({}); }
+    return { ok: false, status: 404, json: async () => ({ success: false }) };
+  };
+  assert.equal((await admin('/settings/cloudflare-dns')).status, 200);
+  assert.equal((await staleAdmin('/settings/cloudflare-dns', { method: 'PUT', body: JSON.stringify({ token }) })).status, 403);
+  assert.equal((await operator('/settings/cloudflare-dns')).status, 403);
+  const saved = await admin('/settings/cloudflare-dns', { method: 'PUT', body: JSON.stringify({ token }) });
+  const savedText = await saved.text();
+  assert.equal(saved.status, 200, savedText); assert.ok(!savedText.includes(token), 'the token is never returned');
+  assert.deepEqual(JSON.parse(savedText).zones, ['example.com']);
+  assert.ok(requests.every(request => request.auth && request.method === 'GET'), 'connecting only reads');
+  const stored = db.prepare("SELECT value FROM settings WHERE key='cloudflare_dns'").get().value;
+  assert.ok(!stored.includes(token), 'sealed with the master key');
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM audit_events').all()).includes(token));
+  const { siteId, moveId } = await finishedMove('cf', { dnsMode: 'cloudflare' });
+  assert.equal(content, '198.51.100.9', 'the A record points at the new server');
+  const steps = (await (await admin('/moves/' + moveId)).json()).steps.map(step => step.step);
+  assert.ok(!steps.includes('await_switch'), 'no manual switch gate');
+  assert.ok(!JSON.stringify(db.prepare('SELECT resources,result FROM site_move_steps WHERE move_id=?').all(moveId)).includes(token));
+  assert.equal((await post(admin, `/moves/${moveId}/switch-back`)).status, 202); await drive(20);
+  assert.equal(content, '203.0.113.7', 'switch back restores the previous record');
+  assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(siteId).server_id, oldServer);
+  assert.equal((await admin('/settings/cloudflare-dns', { method: 'DELETE' })).status, 200);
+  assert.equal((await (await admin('/settings/cloudflare-dns')).json()).configured, false);
 });
 
 test('a site-move job keeps both of its servers busy', () => {

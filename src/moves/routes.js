@@ -3,7 +3,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { requireAdmin, requireRecentAuth, rateLimit } from '../auth.js';
-import { previewMove, startMove, cancelMove, continueMove, moveView, listMoves } from './engine.js';
+import { previewMove, startMove, cancelMove, continueMove, moveView, listMoves, switchBack, removeOldCopy, resolveMove } from './engine.js';
+import * as cloudflare from './cloudflare.js';
 
 const uuid = z.uuid();
 const options = z.object({
@@ -33,3 +34,22 @@ moveRoutes.post('/:id/continue', handle(async (req, res) => {
   const body = z.object({ gate: z.enum(['owner-switch', 'dns']) }).strict().parse(req.body);
   res.json(await continueMove(uuid.parse(req.params.id), body.gate, req.user.id));
 }));
+moveRoutes.post('/:id/switch-back', requireRecentAuth, handle(async (req, res) => { z.object({}).strict().parse(req.body ?? {}); res.status(202).json(switchBack(uuid.parse(req.params.id), req.user.id)); }));
+moveRoutes.post('/:id/remove-old-copy', requireRecentAuth, handle(async (req, res) => {
+  const body = z.object({ confirmation: z.string().max(200), deleteData: z.boolean().default(false) }).strict().parse(req.body);
+  res.status(202).json(removeOldCopy(uuid.parse(req.params.id), body, req.user.id));
+}));
+moveRoutes.post('/:id/resolve', handle(async (req, res) => {
+  const body = z.object({ action: z.enum(['retry', 'undo']) }).strict().parse(req.body);
+  res.json(resolveMove(uuid.parse(req.params.id), body.action, req.user.id));
+}));
+
+// /api/settings/cloudflare-dns: the optional token for automatic DNS switching. The token is never returned.
+export const cloudflareRoutes = express.Router();
+cloudflareRoutes.use(requireAdmin);
+cloudflareRoutes.get('/', (_req, res) => res.json(cloudflare.connectionInfo()));
+cloudflareRoutes.put('/', requireRecentAuth, rateLimit('cloudflare-connect', 10), handle(async (req, res) => {
+  const body = z.object({ token: z.string().min(1).max(400) }).strict().parse(req.body);
+  res.json(await cloudflare.connect(body.token, req.user.id));
+}));
+cloudflareRoutes.delete('/', requireRecentAuth, handle(async (req, res) => res.json(cloudflare.disconnect(req.user.id))));
