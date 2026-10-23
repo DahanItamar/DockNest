@@ -4,9 +4,9 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
-## [2.4.2] - 2026-10-23
+### Changed
 
-See [docs/releases/2026-10-23-v2.4.2.md](docs/releases/2026-10-23-v2.4.2.md).
+- Storage card buttons share the full width of the card, so a card with two buttons has no empty space beside them.
 
 ## [2.4.1] - 2026-10-23
 
