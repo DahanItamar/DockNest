@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { claimJob, executeJob, tickScheduler,verifyEncrypted } from './engine.js';
+import { claimJob, executeJob, tickScheduler,verifyEncrypted,finishReconciledBackup } from './engine.js';
 import { reconcileArtifacts } from './artifact-journal.js';
 import { tickSelfBackup,claimSelfBackup,executeSelfBackup,recoverInterruptedSelfBackups,pruneSelfBackups } from './self-backup.js';
 import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-lease.js';
@@ -34,7 +34,7 @@ let signals=0;
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){console.error(`${event} received again; exiting without draining. The lease expires in ${LEASE_TTL_MS/1000}s and interrupted jobs become recovery_required on next start.`);process.exit(1);}stopping=true;console.log(`${event} received; draining: no new jobs will be claimed, waiting for the current job to finish.`);});
 try{
  let reconcileAt=0;
- const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;};
+ const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;};
  await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});},claimSelfBackup,executeSelfBackup,claimJob,executeJob,idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
