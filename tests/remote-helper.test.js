@@ -6,6 +6,11 @@ test('remote helper rejects unsafe archives and preserves safe maintenance failu
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification; install it before running npm run check');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('radar inventory is read-only: whitelisted fields, fixed probes, timeouts and caps',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_inventory.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for radar inventory verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('Redis contracts reject unsafe persistence, authentication, shutdown and key-check states',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_redis.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Redis contract verification');

@@ -1841,6 +1841,87 @@ def cleanup_staging(req):
     # fd-based removal never follows a link planted inside the folder.
     if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
     shutil.rmtree(root)
+# Vulnerability radar inventory: read-only. It reads image metadata, a few whitelisted labels and, for running
+# containers, three fixed-argv version probes. It never reads Env, Cmd, mounts, other labels or files, and never
+# starts, stops, removes or changes a container.
+INVENTORY_MAX_CONTAINERS=500
+PROBE_TIMEOUT=5
+PROBE_CAP=512
+INVENTORY_LABELS={'com.docker.compose.project':'composeProject','com.docker.compose.service':'composeService','org.opencontainers.image.version':'ociVersion','org.opencontainers.image.revision':'ociRevision','org.opencontainers.image.source':'ociSource','org.opencontainers.image.base.name':'ociBaseName'}
+VERSION_PATTERN=r'\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+~.][A-Za-z0-9.+~-]{1,32})?'
+INVENTORY_PROBES=(('php',['php','-r','echo PHP_VERSION;'],re.compile(r'('+VERSION_PATTERN+r')')),('node',['node','-v'],re.compile(r'v('+VERSION_PATTERN+r')')))
+OS_RELEASE_KEYS={'ID':'id','VERSION_ID':'versionId','PRETTY_NAME':'prettyName'}
+CONTAINER_ID=re.compile(r'[0-9a-f]{12,64}')
+def inventory_text(value,limit=200):
+    if not isinstance(value,str):return None
+    value=re.sub(r'[\x00-\x1f\x7f]',' ',value).strip()[:limit]
+    return value or None
+def exec_capped(argv,timeout=PROBE_TIMEOUT,cap=PROBE_CAP):
+    # At most cap bytes, or None on timeout, overflow, failure or a missing binary (all normal). No shell.
+    try:process=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    except OSError:return None
+    timer=threading.Timer(timeout,process.kill);timer.start()
+    try:
+        data=process.stdout.read(cap+1)
+        if len(data)>cap:process.kill()
+        process.stdout.close();code=process.wait()
+    finally:timer.cancel()
+    if code!=0 or len(data)>cap:return None
+    return data
+def parse_os_release(text):
+    found={}
+    for line in text.splitlines():
+        key,sep,value=line.partition('=');key=key.strip()
+        if not sep or key not in OS_RELEASE_KEYS:continue
+        value=value.strip()
+        if len(value)>=2 and value[0]==value[-1] and value[0] in '"\'':value=value[1:-1]
+        if re.fullmatch(r'[A-Za-z0-9 ._()/+:,-]{1,80}',value):found[OS_RELEASE_KEYS[key]]=value
+    return found or None
+def probe_container(cid):
+    runtime={}
+    for product,command,pattern in INVENTORY_PROBES:
+        output=exec_capped(['docker','exec',cid,*command])
+        try:match=pattern.fullmatch(output.decode('ascii').strip()) if output is not None else None
+        except UnicodeError:match=None
+        runtime[product]=match.group(1) if match else None
+    output=exec_capped(['docker','exec',cid,'cat','/etc/os-release'])
+    try:runtime['os']=parse_os_release(output.decode('utf-8')) if output is not None else None
+    except UnicodeError:runtime['os']=None
+    return runtime
+def own_container(c,labels):
+    # DockNest's own api/worker and its restore copies are never probed.
+    project=labels.get('com.docker.compose.project') or ''
+    image=(c.get('Config') or {}).get('Image') or ''
+    return bool(re.match(r'docknest(?:-|$)',project)) or bool(re.match(r'(?:[^/]+/)*docknest(?:[-_][^/:@]*)?(?:[:@]|$)',image))
+def inventory_strings(values,limit=20):
+    return [text for text in (inventory_text(value,300) for value in (values if isinstance(values,list) else [])[:limit]) if text]
+def inventory(req):
+    ids=[item for item in docker('ps','-aq','--no-trunc').decode().split() if CONTAINER_ID.fullmatch(item)]
+    truncated=len(ids)>INVENTORY_MAX_CONTAINERS;ids=ids[:INVENTORY_MAX_CONTAINERS]
+    containers=inspect(ids) if ids else []
+    image_ids=sorted({c.get('Image') for c in containers if isinstance(c.get('Image'),str) and re.fullmatch(r'sha256:[0-9a-f]{64}',c.get('Image'))})
+    images={}
+    if image_ids:
+        try:images={item.get('Id'):item for item in json.loads(docker('image','inspect',*image_ids))}
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):images={}
+    probes=req.get('probes',True) is not False
+    out=[]
+    for c in containers:
+        config=c.get('Config') or {};state=c.get('State') or {};labels=config.get('Labels') or {};image_id=c.get('Image') if c.get('Image') in image_ids else None;image=images.get(image_id) or {}
+        own=own_container(c,labels);running=state.get('Running') is True
+        item={'id':c.get('Id'),'name':inventory_text((c.get('Name') or '').lstrip('/')),'image':inventory_text(config.get('Image'),300),'imageId':image_id,
+              'repoTags':inventory_strings(image.get('RepoTags')),'repoDigests':inventory_strings(image.get('RepoDigests')),
+              'architecture':inventory_text(image.get('Architecture'),32),'imageCreated':inventory_text(image.get('Created'),40),
+              'state':inventory_text(state.get('Status'),32),'running':running,'own':own,
+              'labels':{name:inventory_text(labels.get(key),300) for key,name in INVENTORY_LABELS.items() if isinstance(labels.get(key),str)},'runtime':None}
+        if probes and running and not own and CONTAINER_ID.fullmatch(c.get('Id') or ''):item['runtime']=probe_container(c['Id'])
+        out.append(item)
+    try:
+        with open('/etc/os-release','rb') as handle:host_os=parse_os_release(handle.read(4096).decode('utf-8','replace'))
+    except OSError:host_os=None
+    try:docker_version=inventory_text(docker('version','--format','{{.Server.Version}}').decode().strip(),40)
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired):docker_version=None
+    return {'helperVersion':VERSION,'host':{'os':host_os,'docker':docker_version},'probes':probes,'truncated':truncated,'containers':out}
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -1857,6 +1938,7 @@ def main(req):
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites()
         emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c in cs]})
+    elif op=='inventory':emit(result=inventory(req))
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

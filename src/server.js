@@ -27,6 +27,8 @@ import { backupVerification, backupVerifications } from './recovery-evidence.js'
 import { installBootRecovery, bootRecoveryStatus } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
+import { radarRoutes } from './radar/routes.js';
+import { requestScan } from './radar/scan.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 await clearInterruptedExports();
 
@@ -58,6 +60,7 @@ app.use('/api/access', access);
 app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
+app.use('/api/radar', radarRoutes({ db, audit }));
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
@@ -191,6 +194,8 @@ app.post('/api/servers/:id/test', async (req, res) => {
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id));
   const containers = Array.isArray(result) ? result : result.containers || [];
+  // Fresh discovery queues a read-only radar inventory for this server (skipped if it was scanned within the hour).
+  try { requestScan(db, { serverIds: [req.params.id], reason: 'discovery', actor: req.user.id }); } catch { /* The radar never blocks discovery. */ }
   res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
 });
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{

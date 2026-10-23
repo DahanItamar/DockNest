@@ -13,6 +13,7 @@ See [docs/releases/2026-10-23-v2.5.0.md](docs/releases/2026-10-23-v2.5.0.md).
 - Branded error pages in one shared style (a full-screen page with a large status code that fades out, one sentence and one button): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
 - `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
 - `npm run test:status-pages` browser suite.
+- Vulnerability radar, backend only (the screens follow in a later release). A read-only helper operation, `inventory`, lists each container's image, tag, digest and a few whitelisted labels. On running containers it also asks for the PHP and Node.js version and `/etc/os-release` with fixed `docker exec` commands, each limited to 5 seconds and 512 bytes. It never reads environment variables, commands, mounts or files. The worker scans one server a day at a time chosen per install, skips servers with a backup, restore or move in progress, and checks the bundled advisory list. Results stay on your DockNest install. New API under `/api/radar` (summary, findings, scan, dismiss, preferences). Administrators can turn the container probes off. Migration 7 only adds tables, so 2.5.x keeps running on the new schema ([docs/security.md](docs/security.md#vulnerability-radar)).
 
 ### Fixed
 
