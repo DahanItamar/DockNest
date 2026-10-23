@@ -49,10 +49,12 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   assert.match(text, /\.display_title == \\"Release validation candidate \$GITHUB_SHA\\"/);
   assert.match(text, /\.conclusion == \\"success\\" and \.event == \\"workflow_dispatch\\" and \.head_branch == \\"main\\" and \.head_repository\.full_name == \\"\$GITHUB_REPOSITORY\\"/);
   assert.match(text, /for run in \$runs; do git merge-base --is-ancestor "\$run" origin\/main/, 'the validating run itself ran from a main commit');
-  // Verify runs for branch pushes and pull requests only, never a tag push (a second run on the tagged SHA hid the first).
-  const ci = await workflow('ci.yml'), ciOn = ci.slice(ci.indexOf('\non:'), ci.indexOf('\npermissions:'));
-  assert.match(ciOn, /\n {2}push:\n {4}branches: \['\*\*'\]\n {2}pull_request:$/);
+  // Verify runs for main pushes (the run the release gate reads) and pull requests, never a tag push (a second run on
+  // the tagged SHA hid the first). The slow Linux job is skipped only on draft pull requests.
+  const ci = await workflow('ci.yml'), ciOn = ci.slice(ci.indexOf('\non:'), ci.indexOf('\nconcurrency:'));
+  assert.match(ciOn, /\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {4}types: \[opened, synchronize, reopened, ready_for_review\]$/);
   assert.doesNotMatch(ciOn, /tags/);
+  assert.match(ci, /\n {2}linux-integration:\n {4}if: github\.event_name == 'push' \|\| github\.event\.pull_request\.draft == false\n/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);
 });
 

@@ -1,0 +1,130 @@
+{
+ "docker": [
+  [
+   "info",
+   "--format",
+   "{{.Architecture}}"
+  ],
+  [
+   "version",
+   "--format",
+   "{{.Server.Version}}"
+  ],
+  [
+   "load",
+   "-i",
+   "<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc/unpacked/images.tar"
+  ],
+  [
+   "network",
+   "create",
+   "--internal",
+   "--driver",
+   "bridge",
+   "--opt",
+   "com.docker.network.bridge.gateway_mode_ipv4=isolated",
+   "--opt",
+   "com.docker.network.bridge.gateway_mode_ipv6=isolated",
+   "--label",
+   "docker-backup-manager.restore=0b5e8d3c-1f2a-4c3d-9e8f-123456789abc",
+   "dbm-restore-0b5e8d3c-1f2-net-0"
+  ],
+  [
+   "network",
+   "inspect",
+   "dbm-restore-0b5e8d3c-1f2-net-0"
+  ],
+  [
+   "create",
+   "--network-alias",
+   "web",
+   "--name",
+   "dbm-restore-0b5e8d3c-1f2-0",
+   "--network",
+   "dbm-restore-0b5e8d3c-1f2-net-0",
+   "--restart",
+   "no",
+   "--label",
+   "docker-backup-manager.restore=0b5e8d3c-1f2a-4c3d-9e8f-123456789abc",
+   "--label",
+   "com.docker.compose.project=docknest-restore-0b5e8d3c-1f2",
+   "--label",
+   "com.docker.compose.project.working_dir=",
+   "--label",
+   "com.docker.compose.project.config_files=",
+   "--dns",
+   "127.0.0.1",
+   "--mount",
+   "type=bind,src=<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc/data-0-0/entry,dst=/data",
+   "--mount",
+   "type=bind,src=<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc/data-0-1/config.txt,dst=/config.txt,readonly",
+   "sha256:aaa"
+  ],
+  [
+   "create",
+   "--network-alias",
+   "db",
+   "--name",
+   "dbm-restore-0b5e8d3c-1f2-1",
+   "--network",
+   "dbm-restore-0b5e8d3c-1f2-net-0",
+   "--restart",
+   "no",
+   "--label",
+   "docker-backup-manager.restore=0b5e8d3c-1f2a-4c3d-9e8f-123456789abc",
+   "--label",
+   "com.docker.compose.project=docknest-restore-0b5e8d3c-1f2",
+   "--label",
+   "com.docker.compose.project.working_dir=",
+   "--label",
+   "com.docker.compose.project.config_files=",
+   "--dns",
+   "127.0.0.1",
+   "--mount",
+   "type=bind,src=<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc/data-1-0/entry,dst=/data",
+   "--mount",
+   "type=bind,src=<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc/data-0-1/config.txt,dst=/config.txt,readonly",
+   "sha256:bbb"
+  ]
+ ],
+ "events": [
+  {
+   "result": {
+    "access": "docker exec dbm-restore-0b5e8d3c-1f2-0 sh",
+    "containerHealthVerified": true,
+    "containerId": "dbm-restore-0b5e8d3c-1f2-0-id",
+    "containerIds": [
+     "dbm-restore-0b5e8d3c-1f2-0-id",
+     "dbm-restore-0b5e8d3c-1f2-1-id"
+    ],
+    "externalReferences": {
+     "fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+     "references": []
+    },
+    "externallyAccessible": false,
+    "name": "dbm-restore-0b5e8d3c-1f2-0",
+    "networkMode": "isolated-internal",
+    "networks": [
+     "dbm-restore-0b5e8d3c-1f2-net-0"
+    ],
+    "originalStatesPreserved": true,
+    "restoreTested": false,
+    "root": "<ROOT>/0b5e8d3c-1f2a-4c3d-9e8f-123456789abc",
+    "verification": {
+     "application": {
+      "checks": [],
+      "method": "named read-only native database checks",
+      "scope": "configured database checks; application workflows require separate review",
+      "status": "not-tested"
+     },
+     "isolatedRestore": {
+      "artifactsVerified": true,
+      "externalDataReadOnly": false,
+      "method": "fresh mounts and isolated networks",
+      "status": "passed"
+     }
+    }
+   }
+  }
+ ]
+}

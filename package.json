@@ -42,7 +42,8 @@
     "test:updates": "node scripts/update-center-browser.js",
     "test:layout": "node scripts/layout-241-browser.js",
     "test:reports": "node scripts/problem-reports-browser.js",
-    "test:status-pages": "node scripts/status-pages-browser.js"
+    "test:status-pages": "node scripts/status-pages-browser.js",
+    "test:map": "node scripts/map-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
