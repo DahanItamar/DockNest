@@ -127,7 +127,7 @@ export const migrations = [
   // Site moves (docs/moving-sites.md): two tables and their indexes, no rows, nothing altered.
   { version: 6, name: 'site-moves', compatible: true, up: db => db.exec(siteMovesSchema) },
   // Alert channels, rules and delivery queue (docs/alerts.md). Purely additive: renumber before release if another migration lands first.
-  { version: 7, name: 'alerts', compatible: true, up: db => db.exec(alertsSchema) },
+  { version: 8, name: 'alerts', compatible: true, up: db => db.exec(alertsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
