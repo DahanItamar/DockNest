@@ -1483,6 +1483,7 @@ def verify_restore_recovery(req):
     ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
     if ids and any(c['State']['Running'] for c in inspect(ids)):raise ValueError('Stop the interrupted isolated restore containers on the target before acknowledging recovery')
     emit(result={'recoveryReviewed':True,'targetContainersStopped':True,'stagingRetained':True})
+EXTRACT_RESERVE_BYTES=64*1024**2
 def archive_link_escapes(start,linkname,symlinks):
     """Follow a relative link through the archive's own symlinks, as the kernel will after extraction."""
     stack=list(start);pending=list(pathlib.PurePosixPath(linkname).parts);expansions=0
@@ -1510,6 +1511,9 @@ def safe_extract(archive,destination):
         links={pathlib.PurePosixPath(m.name).parts:m.linkname for m in members if m.issym()}
         symlinks={pathlib.PurePosixPath(*parts) for parts in links}
         regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
+        # Bound extraction by the archive's declared sizes before writing anything; a highly
+        # compressible package must not fill the target filesystem part-way through.
+        if shutil.disk_usage(destination).free<sum(m.size for m in members if m.isfile())+EXTRACT_RESERVE_BYTES:raise ValueError('Insufficient target capacity to extract the archive')
         seen=set()
         for member in members:
             p=pathlib.PurePosixPath(member.name)

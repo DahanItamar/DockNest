@@ -410,6 +410,18 @@ class ArchiveSecurityTests(unittest.TestCase):
                         link=tarfile.TarInfo(name);link.type=tarfile.SYMTYPE;link.linkname=target;t.addfile(link)
                 with self.assertRaises(ValueError):safe_extract(archive,base/'output')
                 self.assertFalse((base/'output/valid.txt').exists())
+    def test_extraction_is_refused_before_writing_when_declared_sizes_exceed_free_space(self):
+        import collections
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);archive=base/'large.tar'
+            with tarfile.open(archive,'w') as t:
+                entry=tarfile.TarInfo('data.bin');entry.size=4096;t.addfile(entry,io.BytesIO(b'\0'*4096))
+            usage=collections.namedtuple('Usage','total used free')
+            with patch('helper.shutil.disk_usage',return_value=usage(1<<40,0,4096)):
+                with self.assertRaisesRegex(ValueError,'capacity'):safe_extract(archive,base/'output')
+            self.assertFalse((base/'output/data.bin').exists())
+            with patch('helper.shutil.disk_usage',return_value=usage(1<<40,0,1<<30)):safe_extract(archive,base/'output')
+            self.assertEqual((base/'output/data.bin').stat().st_size,4096)
     def test_contained_symlink_chains_are_accepted(self):
         from helper import archive_link_escapes
         links={('assets','current'):'v2',('assets','v2'):'releases/2',('assets','up'):'../assets'}
