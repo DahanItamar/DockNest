@@ -12,6 +12,7 @@ import { storageCapacity, statFile, openRead } from './storage.js';
 import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
 import { moveRoutes, cloudflareRoutes } from './moves/routes.js';
+import { requestInstall, findInstall } from './installs.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { schemaVersion } from './migrations.js';
@@ -20,7 +21,7 @@ import { updateRoutes, cachedOffer } from './updates/routes.js';
 import { createUpdateService } from './updates/requests.js';
 import { progressHandler, lockMiddleware } from './updates/lock.js';
 import { seal } from './crypto.js';
-import { auth, session, requireAuth, csrf, rateLimit, requireAdmin } from './auth.js';
+import { auth, session, requireAuth, csrf, rateLimit, requireAdmin, requireRecentAuth } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
@@ -183,6 +184,10 @@ app.patch('/api/servers/:id', requireAdmin, (req, res) => {
   db.prepare("UPDATE servers SET name=?,note=?,host=?,port=?,username=?,private_key=?,host_key=?,status='unchecked',capabilities=NULL WHERE id=?").run(data.name, data.note??previous.note, data.host, data.port, data.username, data.privateKey ? seal(data.privateKey) : previous.private_key, fingerprint(data.hostKey), previous.id);
   audit(req.user.id, 'server.update', previous.id); res.json(safeServer(getServer(previous.id)));
 });
+app.post('/api/servers/:id/install', requireAdmin, requireRecentAuth, rateLimit('server-install', 10, 10 * 60_000), async (req, res) => {
+  try { res.status(202).json(await requestInstall(z.uuid().parse(req.params.id), req.body, req.user.id)); }
+  catch (error) { if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) }); throw error; }
+});
 app.post('/api/servers/:id/test', async (req, res) => {
   const server = getServer(req.params.id);
   try {
@@ -295,7 +300,7 @@ app.post('/api/sites/:id/readiness', async (req,res)=>res.json(await checkReadin
 app.post('/api/sites/:id/plan', async (req,res)=>res.json(await planBackup(req.params.id)));
 app.get('/api/sites/:id/boot-recovery', (req,res)=>{ const bootRecovery = bootRecoveryStatus(getSite(req.params.id).id); res.json({ ...bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }); });
 app.post('/api/sites/:id/boot-recovery', requireAdmin, async (req,res)=>res.json(await installBootRecovery(req.params.id)));
-app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || notFound('Job not found.')));
+app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || findInstall(req.params.id) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {
   const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id) || notFound('Job not found.');
   const site = getSite(job.site_id);

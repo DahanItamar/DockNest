@@ -10,6 +10,7 @@ import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-leas
 import { runWorkerLoop } from './worker-loop.js';
 import { tickUpdateCheck } from './updates/check.js';
 import { tickMoves } from './moves/engine.js';
+import { claimInstall, executeInstall, failInterruptedInstalls } from './installs.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
 // so a SIGKILLed worker cannot crash-loop its replacement. A legacy worker.lock is only reported: exclusion lives in the
@@ -22,6 +23,8 @@ while(!(lease=acquireLease(db,holder)).acquired){if(!waiting){console.log(`Worke
 if(lease.takeover)console.warn(`Took over expired worker lease (last renewed ${lease.previous.renewed_at}); interrupted jobs become recovery_required.`);
 // A site-move job only drives one journaled step; its move resumes from the journal (src/moves/engine.js).
 db.prepare("UPDATE jobs SET status='failed',stage='failed',error='Worker interrupted; the move resumes from its journal.',finished_at=? WHERE status='move_running'").run(new Date().toISOString());
+// An install was a single helper call; it is not resumed. The person is told and can try again.
+failInterruptedInstalls();
 // Any job still 'running' belonged to a worker that no longer holds the lease.
 db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
 let stopping=false,lost=false;
@@ -38,7 +41,7 @@ for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){co
 try{
  let reconcileAt=0;
  const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,idle:()=>new Promise(r=>setTimeout(r,3000))});
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);

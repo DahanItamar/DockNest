@@ -12,6 +12,7 @@ import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { storageCapacity } from '../storage.js';
 import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners } from '../engine.js';
+import { installActive } from '../installs.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
@@ -210,10 +211,17 @@ export function previewView(moveId, { result, plan, hash, target, site }) {
 }
 
 // POST /api/moves/:id/start. The preview is re-run here (the client is never trusted) and must still match.
+// A package install on either server of a move must finish first; both touch the same host.
+function refuseWhileInstalling(move) {
+  for (const serverId of [move.source_server_id, move.target_server_id]) {
+    if (installActive(serverId)) throw httpError(409, `DockNest is installing software on ${server(serverId)?.name ?? 'a server'} for this move. Start the move when the install has finished.`, { code: 'INSTALL_RUNNING' });
+  }
+}
 export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false }, actor) {
   const move = loadMove(moveId);
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'draft') throw httpError(409, 'This move has already started.');
+  refuseWhileInstalling(move);
   if (Date.parse(move.created_at) + DRAFT_TTL_MS < Date.now()) throw httpError(409, 'This check is more than an hour old. Press Save changes to check again.');
   const preview = await previewFacts(move.site_id, move.target_server_id, move.options);
   preview.plan.dnsMode = move.options.dnsMode;
@@ -223,6 +231,7 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
   transaction(() => {
     const current = loadMove(moveId);
     if (current.state !== 'draft') throw httpError(409, 'This move has already started.');
+    refuseWhileInstalling(current);
     const started = applyTransition({ ...current, preflight: { result: preview.result, plan: preview.plan, moveAnyway: !!moveAnyway } }, 'queued', now());
     saveMove(started);
     const insert = db.prepare('INSERT INTO site_move_steps(move_id,step,attempt,state,started_at,finished_at,resources,result) VALUES(?,?,?,?,?,?,?,?)');
