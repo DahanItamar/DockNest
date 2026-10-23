@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import { isIP } from 'node:net';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import QRCode from 'qrcode';
 import { z } from 'zod';
@@ -31,9 +32,22 @@ export async function qrEnrollment(user){
  const qrDataUrl=await QRCode.toDataURL(uri,{errorCorrectionLevel:'M',margin:2,width:320});
  return {secret,uri,qrDataUrl};
 }
+// Rate-limit identity of a client address. One subscriber normally holds a whole IPv6 /64, so IPv6 is keyed by its /64
+// prefix (otherwise rotating addresses gives a fresh budget per request); IPv4-mapped IPv6 is keyed as the IPv4 address.
+export function clientKey(address){
+ let value=String(address??'').split('%')[0].toLowerCase();
+ const mapped=/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(value);
+ if(mapped)return mapped[1];
+ if(isIP(value)!==6)return value||'unknown';
+ const v4=/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+ if(v4)value=value.slice(0,-v4[0].length)+((v4[1]<<8)|v4[2]).toString(16)+':'+((v4[3]<<8)|v4[4]).toString(16);
+ const [head,tail]=value.split('::'),words=part=>part?part.split(':'):[];
+ const all=tail===undefined?words(head):[...words(head),...Array(8-words(head).length-words(tail).length).fill('0'),...words(tail)];
+ return all.slice(0,4).map(word=>parseInt(word,16).toString(16)).join(':')+'::/64';
+}
 export function rateLimit(scope,limit=10,windowMs=15*60_000){
  return (req,res,next)=>{
-  const key=scope+':'+req.ip,now=Date.now();
+  const key=scope+':'+clientKey(req.ip),now=Date.now();
   const previous=db.prepare('SELECT * FROM rate_limits WHERE key=?').get(key);
   if(previous&&previous.reset_at>now&&previous.attempts>=limit){
    res.set('Retry-After',String(Math.ceil((previous.reset_at-now)/1000)));

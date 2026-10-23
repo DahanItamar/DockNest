@@ -114,7 +114,7 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
 
 ## Client address and TRUST_PROXY
 
-By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. See [Deployment](deployment.md).
+By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. The rate limiters count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64; an IPv4-mapped IPv6 address counts as its IPv4 address. See [Deployment](deployment.md).
 
 ## Host updater
 

@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Security
+
+- Sign-in, code, invitation and other API rate limits now key an IPv6 client by its /64 prefix (and an IPv4-mapped address as plain IPv4). Before, rotating addresses inside one ordinary IPv6 allocation gave a fresh budget on every request. IPv4 limits are unchanged; existing counters for IPv4-mapped clients start again once after the upgrade.
+
 ## [2.4.1] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
