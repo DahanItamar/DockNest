@@ -1811,7 +1811,7 @@ def move_id(req):
 def move_path(value):
     """An absolute, normalised, non-system path a move may create (and later remove) on the target."""
     p=pathlib.PurePosixPath(str(value))
-    if not p.is_absolute() or '..' in p.parts or str(p)!=str(value) or str(p) in PROTECTED_PATHS or len(p.parts)<3:raise ValueError('Unsupported path for a move: '+str(value))
+    if not p.is_absolute() or '..' in p.parts or str(p)!=str(value) or str(p) in PROTECTED_PATHS or len(p.parts)<2:raise ValueError('Unsupported path for a move: '+str(value))
     if any(str(p).startswith(prefix) for prefix in ['/proc/','/sys/','/dev/','/run/','/boot/']):raise ValueError('System paths cannot be moved: '+str(value))
     return pathlib.Path(str(p))
 def move_state(mid,create=False):

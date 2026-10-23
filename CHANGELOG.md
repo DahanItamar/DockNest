@@ -9,6 +9,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Branded error pages in one shared style (a large heading-weight status code that fades out, one sentence, two actions): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
 - `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
 - `npm run test:status-pages` browser suite.
+- Site move engine (not yet in the UI): administrators can preview, start, follow and cancel moving a site to another server through `/api/moves` ([docs/moving-sites.md](docs/moving-sites.md)). DockNest takes a fresh verified backup, deploys and tests a copy on the new server (loopback only, outgoing mail blocked where the firewall allows), takes a final copy behind the maintenance page, waits for your DNS change and keeps the old copy stopped for 7 days. Ports taken on the new server move to the next free one; DockNest writes one nginx file of its own and never installs software, overwrites existing folders or deletes data. An estimated downtime over 30 minutes is a warning that needs "Move anyway" rather than a refusal. Real moves are validated only by the two-host Linux integration test.
 
 ### Fixed
 
