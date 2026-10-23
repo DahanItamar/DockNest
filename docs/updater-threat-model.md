@@ -423,7 +423,7 @@ Each item is a requirement that the review of the named pull request (numbers fr
 | --- | --- | --- | --- |
 | I1 | Hold enforced in the self-backup queue, `claimSelfBackup` and the kit route; preflight counts manager backups; kit restore clears the hold and refuses while `current.json` shows an active run | DBRE 6, AR2-N9 | 2 |
 | I2 | `cleanup` after success is recorded, guarded subshell, abort is exit 0; `warning` from fixed messages only; exit 4 removes this run's image | DBRE 1, AR2-N2, AR2-N6 | 3 |
-| I3 | Retention: recorded image IDs only, `$SAVE` by identity, 5/6 and result-less folders kept | F7, F8 | 3 |
+| I3 | Retention: images of this install's repository only (never one a container uses, never another repository; untagged ones only when recorded or DockNest-labelled), the running and previous (`:previous`) image kept, `$SAVE` by identity, 5/6 and result-less folders kept | F7, F8 | 3 |
 | I4 | Manifest fields; `cosign-release` pinned to the installer's version; draft release, verify with that cosign, then publish | F6 | 4 |
 | I5 | `--expect-commit` (detached checkout, replace/graft/shallow refusal, HEAD check), `--no-fetch`, `--upgrade-only`, `--request-id`, `--capabilities`, lock | F3, F18 | 5 |
 | I6 | `--expect-image-digest`; `image_setup` parses `name:X.Y.Z@sha256:...` correctly; RepoDigests recorded | F4 | 5 |

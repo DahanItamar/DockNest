@@ -4,6 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrades keep the previous release's image. `scripts/upgrade.sh` tags it `<repository>:pre-upgrade` before it builds or pulls and `<repository>:previous` (`docknest:previous` from source) after a success, so `docker compose build` re-tagging `docknest:local` no longer leaves it without a name, where Docker's containerd image store could drop it and the printed rollback (`docker tag sha256:… docknest:local`) failed with "No such image". The rollback hint now uses the tag. The installed release's script runs an upgrade, so this takes effect from the upgrade after the one that installs it; before upgrading from 2.4.1 or earlier, run `docker tag docknest:local docknest:previous` to keep that release's image ([docs/upgrading.md](docs/upgrading.md#what-is-removed-after-an-upgrade)).
+
+### Changed
+
+- Retention after a successful upgrade keeps exactly the running and the previous DockNest image and removes every other image of the installation's repository that no container uses (including legacy tags such as `docknest:sqlite-online`), its recorded untagged images, and untagged images with the new Dockerfile label `io.github.dahanitamar.docknest` (old releases and build stages). Never `--force`, never a prune command, never another repository.
+- The upgrade ends with a `Cleaned up: N old DockNest images` line, also written to the status file as the additive `cleanup` field (accepted by the host updater and the API transport). From source it also prints the optional, host-wide `docker builder prune --filter until=168h`; the script does not trim the build cache itself because Docker cannot scope it to one project.
+
 ## [2.4.1] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
