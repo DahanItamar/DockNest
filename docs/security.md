@@ -175,14 +175,14 @@ These checks are covered by unit tests. GNU `tar` extraction of real archives, l
 - No alert channel means no alert traffic. With channels, DockNest connects only to `https://api.telegram.org` (a host
   fixed in code, no redirects, 10 second limit, 64 KB response cap) and to the SMTP server an administrator entered
   for an email channel. There are no webhooks and no user-supplied URLs.
-- Channel settings (Telegram bot token and chat, SMTP host, user name, password, addresses) are one value sealed with
+- Credentials (Telegram bot token; SMTP host, user name, password, from address) are one value sealed with
   the master key (AES-256-GCM, like server SSH keys), opened only at the moment of a send. The API never returns a
   token or password (it shows "set" flags), and they are never written to logs, audit events, queue rows, the
   channel's last error or error responses. Telegram's URL carries the token, so transport errors are replaced by fixed
   sentences and never passed on. Audit events name the channel and the changed field names only.
-- Creating, changing or deleting a channel needs an administrator and a recent re-verification, like the Cloudflare
+- Creating, changing or deleting a credential needs an administrator and a recent re-verification, like the Cloudflare
   token. Changing the mail server, port or encryption requires typing the password again, so a saved password cannot be redirected by
-  editing the host alone. Rules need an administrator only. Test messages are rate limited.
+  editing the host alone. Nodes (chat ID, recipients) hold no secret, and with rules they need an administrator only; a credential in use cannot be deleted. Test messages are rate limited.
 - SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
   If a server offers no STARTTLS, DockNest stops before sending any credential. The host name is resolved once and the
   connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10, fd00:ec2::254), the unspecified

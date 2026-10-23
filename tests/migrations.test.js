@@ -12,7 +12,7 @@ import { migrate, migrations, schemaVersion, listSnapshots, compatFloor, SchemaT
 const run = promisify(execFile), quiet = () => {}, shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
 // Sorted by name, matching schema().
-const addedSinceV2 = ['alert_channels','alert_queue','alert_queue_dedupe','alert_queue_due','alert_rules','alert_rules_channel','audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','site_move_steps','site_moves','site_moves_active','site_moves_created','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
+const addedSinceV2 = ['alert_channels','alert_credentials','alert_queue','alert_queue_dedupe','alert_queue_due','alert_rules','alert_rules_channel','audit_created','backups_captured','boot_recovery_installs','jobs_created','release_history','restores_created','retention_deferrals','site_move_steps','site_moves','site_moves_active','site_moves_created','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;
@@ -242,7 +242,7 @@ test('a real 2.1.0 database migrates to the current schema with its data intact,
   assert.equal(result.from, 4); assert.equal(result.to, schemaVersion);
   assert.match(result.snapshot, new RegExp(`state-v4-to-v${schemaVersion}-20261022T080000000Z\\.sqlite$`));
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
-  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves, 'alert_channels', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel'].sort());
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves, 'alert_channels', 'alert_credentials', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel'].sort());
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1, 'signed-in sessions survive');
   assert.equal(db.prepare("SELECT role FROM users WHERE id='user'").get().role, 'admin');

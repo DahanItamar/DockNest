@@ -39,70 +39,129 @@ const send = (as, method, route, body) => as(route, { method, ...(body === undef
 const TOKEN = '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35), PASSWORD = 'hunter2-correct-horse';
 const server = (name, host = '203.0.113.7') => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(serverId, name, host, 22, 'root', 'fixture', '0'.repeat(64), at()); return serverId; };
 const site = (serverId, name) => { const siteId = randomUUID(); db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, serverId, name, '{}', at()); return siteId; };
-const telegramBody = { kind: 'telegram', name: 'Phone', config: { token: TOKEN, chatId: '-1001234567890' } };
+const tgCredential = () => (db.prepare("SELECT id FROM alert_credentials WHERE kind='telegram' ORDER BY created_at LIMIT 1").get() ?? store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: TOKEN } }, 'test'));
+const tgNode = (extra = {}) => ({ kind: 'telegram', name: 'Phone', credentialId: tgCredential().id, config: { chatId: '-1001234567890' }, ...extra });
 const mockFetch = handler => { const calls = []; delivery.alertHttp.fetch = async (url, init) => { calls.push({ url, init }); return handler(url, init, calls.length); }; return calls; };
 const ok = () => new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
-const reset = () => { db.exec('DELETE FROM alert_queue;DELETE FROM alert_rules;DELETE FROM alert_channels;'); };
+const reset = () => { db.exec('DELETE FROM alert_queue;DELETE FROM alert_rules;DELETE FROM alert_channels;DELETE FROM alert_credentials;'); };
 
-test('only administrators reach the alert API, writes need CSRF and channel writes need a recent re-verification', async () => {
+const credBody = { kind: 'telegram', name: 'Bot', config: { token: TOKEN } };
+const smtpBody = { kind: 'smtp', name: 'Mail account', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'docknest@example.com' } };
+
+test('only administrators reach the alert API, writes need CSRF and credential writes need a recent re-verification', async () => {
+  reset();
   assert.equal((await send(operator, 'GET', '/alerts')).status, 403);
-  assert.equal((await send(operator, 'POST', '/alerts/channels', telegramBody)).status, 403);
-  assert.equal((await send(noCsrf, 'POST', '/alerts/channels', telegramBody)).status, 403);
-  const stale = await send(staleAdmin, 'POST', '/alerts/channels', telegramBody);
+  assert.equal((await send(operator, 'POST', '/alerts/credentials', credBody)).status, 403);
+  assert.equal((await send(noCsrf, 'POST', '/alerts/credentials', credBody)).status, 403);
+  const stale = await send(staleAdmin, 'POST', '/alerts/credentials', credBody);
   assert.equal(stale.status, 403); assert.equal((await stale.json()).code, 'REAUTH_REQUIRED');
   assert.equal((await send(staleAdmin, 'GET', '/alerts')).status, 200, 'reading is allowed without re-verification');
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_channels').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_credentials').get().n, 0);
+  const credential = await (await send(admin, 'POST', '/alerts/credentials', credBody)).json();
+  assert.equal((await send(staleAdmin, 'PATCH', `/alerts/credentials/${credential.id}`, { name: 'x' })).status, 403);
+  assert.equal((await send(staleAdmin, 'DELETE', `/alerts/credentials/${credential.id}`)).status, 403);
+  assert.equal((await send(operator, 'POST', '/alerts/channels', tgNode())).status, 403);
+  assert.equal((await send(staleAdmin, 'POST', '/alerts/channels', tgNode())).status, 201, 'nodes hold no secret and need no re-verification');
 });
 
-test('channel secrets are sealed, never returned, never audited, and kept when an update omits them', async () => {
+test('credential secrets are sealed, never returned, never audited, and kept when an update omits them', async () => {
   reset();
-  const created = await send(admin, 'POST', '/alerts/channels', telegramBody), view = await created.json();
-  assert.equal(created.status, 201);
-  assert.deepEqual(view.config, { chatId: '-1001234567890', tokenSet: true });
-  const row = db.prepare('SELECT * FROM alert_channels WHERE id=?').get(view.id);
-  assert.ok(!row.config.includes(TOKEN) && !row.config.includes('1234567890'), 'stored sealed, not as text');
-  const email = await (await send(admin, 'POST', '/alerts/channels', { kind: 'email', name: 'Mail', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'docknest@example.com', to: ['me@example.com'] } })).json();
-  assert.deepEqual(email.config, { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', passwordSet: true, from: 'docknest@example.com', to: ['me@example.com'] });
-  for (const route of ['/alerts', '/alerts/channels']) { const text = await (await send(admin, 'GET', route)).text(); assert.ok(!text.includes(TOKEN) && !text.includes(PASSWORD), route); }
-  const renamed = await (await send(admin, 'PATCH', `/alerts/channels/${view.id}`, { name: 'Renamed' })).json();
+  const created = await send(admin, 'POST', '/alerts/credentials', credBody), view = await created.json();
+  assert.equal(created.status, 201); assert.deepEqual(view.config, { tokenSet: true });
+  const row = db.prepare('SELECT * FROM alert_credentials WHERE id=?').get(view.id);
+  assert.ok(!row.config.includes(TOKEN) && !row.config.includes('123456789'), 'stored sealed, not as text');
+  const mail = await (await send(admin, 'POST', '/alerts/credentials', smtpBody)).json();
+  assert.deepEqual(mail.config, { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', passwordSet: true, from: 'docknest@example.com' });
+  const node = await (await send(admin, 'POST', '/alerts/channels', tgNode({ credentialId: view.id }))).json();
+  for (const route of ['/alerts', '/alerts/credentials', '/alerts/channels']) { const text = await (await send(admin, 'GET', route)).text(); assert.ok(!text.includes(TOKEN) && !text.includes(PASSWORD), route); }
+  assert.ok(!db.prepare('SELECT config FROM alert_channels WHERE id=?').get(node.id).config.includes(TOKEN), 'the node holds no secret');
+  const renamed = await (await send(admin, 'PATCH', `/alerts/credentials/${view.id}`, { name: 'Renamed' })).json();
   assert.equal(renamed.name, 'Renamed'); assert.equal(renamed.config.tokenSet, true);
-  assert.equal(JSON.parse(await (async () => { const { open } = await import('../src/crypto.js'); return open(db.prepare('SELECT config FROM alert_channels WHERE id=?').get(view.id).config); })()).token, TOKEN, 'token survived the update');
-  const otherHost = await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { host: 'smtp.other.example' } });
-  assert.equal(otherHost.status, 400, 'a new mail server needs the password typed again');
-  assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { host: 'smtp.other.example', password: PASSWORD } })).status, 200);
+  const { open } = await import('../src/crypto.js');
+  assert.equal(JSON.parse(open(db.prepare('SELECT config FROM alert_credentials WHERE id=?').get(view.id).config)).token, TOKEN, 'token survived the update');
+  for (const change of [{ port: 25 }, { security: 'tls' }, { host: 'smtp.other.example' }]) assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: change })).status, 400, 'needs the password again: ' + JSON.stringify(change));
+  assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: { port: 587, from: 'other@example.com' } })).status, 200, 'unchanged server values and other fields need no password');
+  assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: { host: 'smtp.other.example', password: PASSWORD } })).status, 200);
   const audit = JSON.stringify(db.prepare('SELECT * FROM audit_events WHERE action LIKE ?').all('alert.%'));
-  assert.ok(audit.includes('alert.channel.create') && !audit.includes(TOKEN) && !audit.includes(PASSWORD) && !audit.includes('smtp.example.com'));
-  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...telegramBody, config: { ...telegramBody.config, token: 'short' } })).status, 400);
-  assert.equal((await send(admin, 'POST', '/alerts/channels', { kind: 'webhook', name: 'x', config: { url: 'https://example.com' } })).status, 400, 'no webhooks');
-  assert.equal((await send(admin, 'POST', '/alerts/channels', { kind: 'email', name: 'x', config: { host: 'smtp.example.com', port: 25, security: 'none', from: 'a@example.com', to: ['b@example.com'] } })).status, 400, 'no plaintext mode');
-  assert.equal((await send(admin, 'POST', '/alerts/channels', { kind: 'email', name: 'x', config: { host: 'smtp.example.com', port: 587, security: 'starttls', from: 'a@example.com\r\nBcc: x@example.com', to: ['b@example.com'] } })).status, 400, 'header injection');
-  assert.equal((await send(admin, 'DELETE', `/alerts/channels/${email.id}`)).status, 200);
-  assert.equal((await send(staleAdmin, 'DELETE', `/alerts/channels/${view.id}`)).status, 403);
+  assert.ok(audit.includes('alert.credential.create') && !audit.includes(TOKEN) && !audit.includes(PASSWORD) && !audit.includes('smtp.example.com'));
+  assert.equal((await send(admin, 'POST', '/alerts/credentials', { ...credBody, config: { token: 'short' } })).status, 400);
+  assert.equal((await send(admin, 'POST', '/alerts/credentials', { kind: 'webhook', name: 'x', config: { url: 'https://example.com' } })).status, 400, 'no webhooks');
+  assert.equal((await send(admin, 'POST', '/alerts/credentials', { ...smtpBody, config: { ...smtpBody.config, security: 'none' } })).status, 400, 'no plaintext mode');
+  assert.equal((await send(admin, 'POST', '/alerts/credentials', { ...smtpBody, config: { ...smtpBody.config, from: 'a@example.com\r\nBcc: x@example.com' } })).status, 400, 'header injection');
 });
 
-test('the test message uses the exact Telegram request shape, a fixed host, and failures never leak the token', async () => {
+test('nodes need a matching credential, share one credential, and a credential in use cannot be deleted', async () => {
   reset();
-  const channel = await (await send(admin, 'POST', '/alerts/channels', telegramBody)).json();
+  const bot = await (await send(admin, 'POST', '/alerts/credentials', credBody)).json(), mail = await (await send(admin, 'POST', '/alerts/credentials', smtpBody)).json();
+  const emailNode = { kind: 'email', name: 'Me', credentialId: mail.id, config: { to: ['me@example.com'], subjectPrefix: '[Home]' } };
+  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...tgNode({ credentialId: mail.id }) })).status, 400, 'Telegram node with an SMTP credential');
+  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...emailNode, credentialId: bot.id })).status, 400);
+  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...emailNode, credentialId: randomUUID() })).status, 400);
+  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...emailNode, config: { to: ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com'] } })).status, 400, 'at most 5 recipients');
+  assert.equal((await send(admin, 'POST', '/alerts/channels', { ...emailNode, config: { to: ['me@example.com'], subjectPrefix: 'a\r\nBcc: x' } })).status, 400);
+  const one = await (await send(admin, 'POST', '/alerts/channels', tgNode({ name: 'Family chat', credentialId: bot.id }))).json();
+  const two = await (await send(admin, 'POST', '/alerts/channels', tgNode({ name: 'Work chat', credentialId: bot.id, config: { chatId: '-1009876543210' } }))).json();
+  const email = await (await send(admin, 'POST', '/alerts/channels', emailNode)).json();
+  assert.equal(one.needsCredential, false); assert.equal(one.credentialName, 'Bot'); assert.deepEqual(two.config, { chatId: '-1009876543210' });
+  assert.deepEqual(email.config, { to: ['me@example.com'], subjectPrefix: '[Home]' });
+  assert.deepEqual((await (await send(admin, 'GET', '/alerts/credentials')).json()).credentials.find(item => item.id === bot.id).usedBy.map(item => item.name), ['Family chat', 'Work chat']);
+  const refused = await send(admin, 'DELETE', `/alerts/credentials/${bot.id}`), body = await refused.json();
+  assert.equal(refused.status, 409); assert.equal(body.code, 'CREDENTIAL_IN_USE'); assert.deepEqual(body.nodes, ['Family chat', 'Work chat']); assert.match(body.error, /Family chat/);
+  assert.equal((await send(admin, 'DELETE', `/alerts/channels/${one.id}`)).status, 200);
+  assert.equal((await send(admin, 'DELETE', `/alerts/channels/${two.id}`)).status, 200);
+  assert.equal((await send(admin, 'DELETE', `/alerts/credentials/${bot.id}`)).status, 200);
+  // A node whose credential is gone (for example changed directly in the database) is flagged and sends nothing.
+  db.prepare('UPDATE alert_channels SET credential_id=NULL WHERE id=?').run(email.id);
+  const orphan = (await (await send(admin, 'GET', '/alerts/channels')).json()).channels.find(item => item.id === email.id);
+  assert.equal(orphan.needsCredential, true);
+  assert.equal((await send(admin, 'POST', `/alerts/channels/${email.id}/test`)).status, 502);
+});
+
+test('a node test sends through the credential with the exact Telegram request shape; failures never leak the token', async () => {
+  reset();
+  const node = await (await send(admin, 'POST', '/alerts/channels', tgNode())).json();
   let calls = mockFetch(ok);
-  assert.equal((await send(admin, 'POST', `/alerts/channels/${channel.id}/test`)).status, 200);
+  assert.equal((await send(admin, 'POST', `/alerts/channels/${node.id}/test`)).status, 200);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/sendMessage`);
   assert.equal(calls[0].init.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1001234567890', text: 'This is a test message from DockNest. Your alerts are connected.', disable_web_page_preview: true });
   assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'ok');
   calls = mockFetch(() => { throw Object.assign(new Error(`connect failed https://api.telegram.org/bot${TOKEN}/sendMessage`), { cause: TOKEN }); });
-  const failed = await send(admin, 'POST', `/alerts/channels/${channel.id}/test`), text = await failed.text();
+  const failed = await send(admin, 'POST', `/alerts/channels/${node.id}/test`), text = await failed.text();
   assert.equal(failed.status, 502); assert.ok(!text.includes(TOKEN));
   const stored = JSON.stringify(db.prepare('SELECT * FROM alert_channels').all()) + JSON.stringify(db.prepare('SELECT * FROM audit_events').all());
   assert.ok(!stored.includes(TOKEN), 'last_error and audit never hold the token');
   assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'failed');
   mockFetch(() => new Response('{"ok":false,"description":"Unauthorized"}', { status: 401 }));
-  assert.match((await (await send(admin, 'POST', `/alerts/channels/${channel.id}/test`)).json()).error, /bot token/);
+  assert.match((await (await send(admin, 'POST', `/alerts/channels/${node.id}/test`)).json()).error, /bot token/);
+});
+
+test('a credential test verifies the login without sending: Telegram getMe, SMTP connect and sign in', async () => {
+  reset();
+  const bot = await (await send(admin, 'POST', '/alerts/credentials', credBody)).json();
+  const calls = mockFetch(() => new Response('{"ok":true,"result":{"id":1}}', { status: 200 }));
+  assert.equal((await send(admin, 'POST', `/alerts/credentials/${bot.id}/test`)).status, 200);
+  assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/getMe`); assert.equal(calls[0].init.method, 'GET');
+  assert.equal(db.prepare('SELECT last_test FROM alert_credentials').get().last_test, 'ok');
+  mockFetch(() => new Response('{}', { status: 401 }));
+  const bad = await send(admin, 'POST', `/alerts/credentials/${bot.id}/test`); assert.equal(bad.status, 502); assert.ok(!(await bad.text()).includes(TOKEN));
+  if (noTls) return;
+  const fake = await fakeSmtp({ mode: 'starttls' });
+  try {
+    const original = smtp.smtpIo.upgrade;
+    smtp.smtpIo.upgrade = (socket, options) => original(socket, { ...options, tlsOptions: { ca: material.cert } });
+    const account = await (await send(admin, 'POST', '/alerts/credentials', { ...smtpBody, name: 'Local', config: { ...smtpBody.config, host: '127.0.0.1', port: fake.port } })).json();
+    try { assert.equal((await send(admin, 'POST', `/alerts/credentials/${account.id}/test`)).status, 200); }
+    finally { smtp.smtpIo.upgrade = original; }
+    assert.ok(fake.log.secure && fake.log.lines.some(line => line.startsWith('AUTH')), 'signed in over TLS');
+    assert.ok(!fake.log.lines.some(line => /^(MAIL|RCPT|DATA)/.test(line)), 'no message was sent');
+  } finally { fake.close(); }
 });
 
 test('rules are validated and a line to a channel exists once per source', async () => {
   reset();
-  const channel = await (await send(admin, 'POST', '/alerts/channels', telegramBody)).json(), srv = server('rules-srv'), siteId = site(srv, 'rules-site');
+  const channel = await (await send(admin, 'POST', '/alerts/channels', tgNode())).json(), srv = server('rules-srv'), siteId = site(srv, 'rules-site');
   const rule = body => send(admin, 'POST', '/alerts/rules', { channelId: channel.id, events: ['backup.failed'], ...body });
   assert.equal((await rule({ sourceKind: 'docknest' })).status, 201);
   assert.equal((await rule({ sourceKind: 'docknest' })).status, 409);
@@ -146,7 +205,7 @@ test('messages are short, plain and carry only the names the owner typed', () =>
 
 test('dedupe: one message per channel and event+source inside 10 minutes, occurrences never twice, other sources unaffected', async () => {
   reset();
-  const channel = store.createChannel(telegramBody, 'test'), other = store.createChannel({ ...telegramBody, name: 'Second' }, 'test');
+  const channel = store.createChannel(tgNode(), 'test'), other = store.createChannel(tgNode({ name: 'Second' }), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed', 'move.needs_you'] }, 'test');
   store.createRule({ channelId: other.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
   store.createRule({ channelId: other.id, sourceKind: 'site', sourceId: site(server('d-srv'), 'd-site'), events: ['backup.failed'] }, 'test');
@@ -163,7 +222,7 @@ test('dedupe: one message per channel and event+source inside 10 minutes, occurr
 
 test('delivery retries with backoff three times, then gives up; success records ok and sends once', async () => {
   reset();
-  const channel = store.createChannel(telegramBody, 'test');
+  const channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
   const t0 = Date.parse('2026-10-23T03:00:00Z'); let healthy = false;
   const calls = mockFetch(() => healthy ? ok() : new Response('{}', { status: 500 }));
@@ -187,7 +246,7 @@ test('delivery retries with backoff three times, then gives up; success records 
 test('the detector reads backups, moves, updates and disk without replaying history or touching those tables', () => {
   reset(); db.exec("DELETE FROM settings WHERE key IN ('alerts_cursor','alerts_update_notified')");
   const srv = server('mobiX-Srv', '203.0.113.9'), target = server('new-srv', '198.51.100.9'), siteId = site(srv, 'shop.example.com');
-  const channel = store.createChannel(telegramBody, 'test');
+  const channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: [...events.EVENTS] }, 'test');
   const job = (status, finished, details = '{}') => { const jobId = randomUUID(); db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup',?,?,?,?,?)").run(jobId, siteId, status, status, finished, finished, details); return jobId; };
   job('failed', '2026-01-01T01:00:00.000Z');
@@ -220,7 +279,7 @@ test('the detector reads backups, moves, updates and disk without replaying hist
 
 test('update.available fires once per new release, only when update checks are on', () => {
   reset(); db.exec("DELETE FROM settings WHERE key='alerts_update_notified'");
-  const channel = store.createChannel(telegramBody, 'test'), owner = db.prepare('SELECT id FROM users LIMIT 1').get().id;
+  const channel = store.createChannel(tgNode(), 'test'), owner = db.prepare('SELECT id FROM users LIMIT 1').get().id;
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['update.available'] }, 'test');
   db.prepare("INSERT OR REPLACE INTO update_checks(id,status,checked_at,next_check_at,latest_version) VALUES(1,'ok',?,0,'v99.1.0')").run(at());
   db.exec('DELETE FROM update_preferences');
@@ -235,7 +294,7 @@ test('update.available fires once per new release, only when update checks are o
 
 test('reachability needs two misses in a row, then alerts once per window', async () => {
   reset(); detect.resetProbeState();
-  const srv = server('flaky-srv'), channel = store.createChannel(telegramBody, 'test');
+  const srv = server('flaky-srv'), channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'server', sourceId: srv, events: ['server.unreachable'] }, 'test');
   let up = false; const original = detect.probe.connect; detect.probe.connect = async () => up;
   try {
@@ -355,21 +414,13 @@ test('SMTP refuses loopback, metadata and link-local targets with the same sente
   } finally { smtp.smtpPolicy.allowLoopback = true; }
 });
 
-test('changing the mail server, port or encryption requires the password again', async () => {
-  reset();
-  const email = await (await send(admin, 'POST', '/alerts/channels', { kind: 'email', name: 'Mail', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'a@example.com', to: ['b@example.com'] } })).json();
-  for (const change of [{ port: 25 }, { security: 'tls' }, { host: 'smtp.other.example' }]) assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: change })).status, 400, JSON.stringify(change));
-  assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { port: 587, to: ['c@example.com'] } })).status, 200, 'unchanged values and other fields need no password');
-  assert.equal((await send(admin, 'PATCH', `/alerts/channels/${email.id}`, { config: { port: 465, security: 'tls', password: PASSWORD } })).status, 200);
-});
-
 test('message times use the site schedule zone, then the self-backup zone, then UTC, with the zone abbreviation', () => {
   const base = { type: 'backup.failed', at: '2026-10-23T03:00:00Z', siteName: 'shop', serverName: 'srv' };
   assert.match(events.messageFor({ ...base, timeZone: 'Asia/Jerusalem' }), /^Backup failed: shop on srv at 06:00 GMT\+3\. Open/);
   assert.match(events.messageFor(base), /at 03:00 UTC\./);
   assert.match(events.messageFor({ ...base, timeZone: 'Not/AZone' }), /at 03:00 UTC\./);
   reset(); db.exec("DELETE FROM settings WHERE key IN ('alerts_cursor','manager_backup_config')");
-  const srv = server('tz-srv'), siteId = site(srv, 'tz-site'), channel = store.createChannel(telegramBody, 'test');
+  const srv = server('tz-srv'), siteId = site(srv, 'tz-site'), channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
   const fail = finished => db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup','failed','failed',?,?,'{}')").run(randomUUID(), siteId, finished, finished);
   detect.detectJobsAndMoves('2026-06-01T00:00:00.000Z');
@@ -393,7 +444,7 @@ test('migration versions are contiguous from 1 once version 7 exists', async () 
 test('a server line also carries the backups of the sites on that server, never those of other servers, and sends once', async () => {
   reset(); db.exec("DELETE FROM settings WHERE key='alerts_cursor'");
   const home = server('itamar-Srv'), away = server('other-Srv'), mine = site(home, 'mine'), theirs = site(away, 'theirs');
-  const channel = store.createChannel(telegramBody, 'test');
+  const channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'server', sourceId: home, events: ['server.unreachable', 'backup.failed'] }, 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: mine, events: ['backup.failed'] }, 'test');
   detect.detectJobsAndMoves('2026-07-01T00:00:00.000Z');

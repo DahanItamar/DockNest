@@ -22,7 +22,7 @@ test('the alerts migration only adds its own tables and indexes to a schema 6 da
     assert.equal(result.from, 6); assert.equal(result.to, migrations.at(-1).version);
     assert.equal(migrations.find(item => item.name === 'alerts').compatible, true);
     for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'existing objects keep their definition');
-    assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), ['alert_channels', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel']);
+    assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), ['alert_channels', 'alert_credentials', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel']);
     assert.deepEqual(db.prepare('SELECT key,value FROM settings WHERE key<>? ORDER BY key').all('schema_compat_floor').map(row => ({ ...row })), settings);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM servers').get().n, 1);
     assert.equal(compatFloor(migrations), 1);

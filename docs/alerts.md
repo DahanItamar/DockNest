@@ -4,12 +4,18 @@ DockNest can tell you when something needs you, in Telegram or by email. Nothing
 connect it to something with a line on the Map. There are no webhooks and no third-party services other than the
 two channels below.
 
-## Channels
+## Credentials and nodes
 
-| Kind | What you enter | Where DockNest connects |
-| --- | --- | --- |
-| Telegram | Bot token (from BotFather) and chat ID | `https://api.telegram.org` only |
-| Email | SMTP server, port, `starttls` or `tls`, user name and password (optional), from address, up to 5 recipients | The SMTP server you entered, nothing else |
+Secrets and destinations are kept apart, as in n8n.
+
+- A **credential** holds the secret and is entered once: a Telegram bot token, or an SMTP account (server, port, `starttls` or `tls`, user name and password, from address). It is sealed, never shown again, and creating, replacing or deleting one needs a recent re-verification.
+- A **node** (a channel on the Map) holds only what is not secret and points at a credential: a Telegram chat ID, or up to 5 email recipients and an optional subject prefix. One credential can serve many nodes, for example one bot for several chats. A node without a matching credential shows "Needs a credential" and sends nothing.
+- A credential that nodes use cannot be deleted (the answer is 409 `CREDENTIAL_IN_USE` with the node names).
+
+| Kind | Credential | Node | Where DockNest connects |
+| --- | --- | --- | --- |
+| Telegram | Bot token (from BotFather) | Chat ID | `https://api.telegram.org` only |
+| Email | SMTP account | Recipients, subject prefix | The SMTP server in the credential, nothing else |
 
 Email is always encrypted. `tls` connects with TLS from the first byte (usually port 465). `starttls` (usually port 587)
 asks the server to switch to TLS before anything secret is sent and stops if the server does not offer it. The server
@@ -58,25 +64,31 @@ replayed: the first time the worker runs, it starts from "now".
 ## API (administrators only)
 
 All routes are under `/api/alerts`, need a signed-in administrator and the usual CSRF header. Creating, changing or
-deleting a **channel** also needs a recent re-verification (the same as the Cloudflare token).
+deleting a **credential** also needs a recent re-verification (the same as the Cloudflare token). Nodes and rules hold no
+secret and need an administrator only.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /` | `{ channels, rules, events, sourceKinds, diskLow, limits }` |
-| `GET /channels` | List channels |
-| `POST /channels` | `{ kind: "telegram", name, config: { token, chatId } }` or `{ kind: "email", name, config: { host, port, security, username?, password?, from, to: [..] } }` |
-| `PATCH /channels/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server, port or encryption needs the password again |
-| `DELETE /channels/:id` | Removes the channel and its rules |
-| `POST /channels/:id/test` | Sends "This is a test message from DockNest. Your alerts are connected." (10 per 10 minutes) |
+| `GET /` | `{ credentials, channels, rules, events, sourceKinds, diskLow, limits }` |
+| `GET /credentials`, `POST /credentials` | `{ kind: "telegram", name, config: { token } }` or `{ kind: "smtp", name, config: { host, port, security, username?, password?, from } }` |
+| `PATCH /credentials/:id` | `{ name?, config? }`; secrets left out keep their saved value. Changing the mail server, port or encryption needs the password again |
+| `DELETE /credentials/:id` | 409 `CREDENTIAL_IN_USE` (with `nodes`) while nodes use it |
+| `POST /credentials/:id/test` | Checks the login without sending a message: Telegram `getMe`, or SMTP connect, encrypt and sign in |
+| `GET /channels`, `POST /channels` | `{ kind: "telegram", name, credentialId, config: { chatId } }` or `{ kind: "email", name, credentialId, config: { to: [..], subjectPrefix? } }`; the credential must match the kind |
+| `PATCH /channels/:id` | `{ name?, credentialId?, config? }` |
+| `DELETE /channels/:id` | Removes the node and its lines |
+| `POST /channels/:id/test` | Sends "This is a test message from DockNest. Your alerts are connected." through the node (10 per 10 minutes) |
 | `GET /rules`, `POST /rules` | `{ channelId, sourceKind, sourceId \| null, events: [..], enabled? }` |
 | `PATCH /rules/:id`, `DELETE /rules/:id` | `{ events?, enabled? }` |
 
-A channel looks like `{ id, kind, name, config, lastResult, lastResultAt, lastError }`. `config` never holds a secret:
-Telegram shows `{ chatId, tokenSet }`, email shows `{ host, port, security, username, passwordSet, from, to }`.
+A credential looks like `{ id, kind, name, config, usedBy: [{id, name}], lastTest, lastTestAt, lastError }`. `config` never
+holds a secret: Telegram shows `{ tokenSet }`, SMTP shows `{ host, port, security, username, passwordSet, from }`. A node
+looks like `{ id, kind, name, credentialId, credentialName, needsCredential, config, lastResult, lastResultAt, lastError }`.
 
-Limits: 20 channels, 200 rules.
+Limits: 20 credentials, 40 nodes, 200 rules.
 
 ## Data
 
-Migration 8 adds `alert_channels`, `alert_rules` and `alert_queue` (additive; nothing existing changes). A channel's whole
-configuration is one value sealed with the master key. See `docs/security.md`, "Alerts".
+Migration 8 adds `alert_credentials`, `alert_channels`, `alert_rules` and `alert_queue` (additive; nothing existing
+changes). A credential's whole configuration is one value sealed with the master key; nodes store plain, non-secret
+settings. See `docs/security.md`, "Alerts".
