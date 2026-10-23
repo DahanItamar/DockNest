@@ -16,7 +16,9 @@ export function connect(server) {
       privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>{const ok=hash.toLowerCase()===server.host_key.toLowerCase();hostKeyRejected=!ok;return ok;},readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
   });
 }
-export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}) {
+// options.keepStdinOpen: stdin stays open while the helper works (site moves); options.signal closes the channel, which
+// ends stdin so the helper stops itself.
+export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}, options={}) {
  const client=await connect(server);
  try {
   const source=await readFile(helper,'utf8');
@@ -27,16 +29,18 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
   return await new Promise((resolve,reject)=>{
    client.exec(command,{pty:false},(err,stream)=>{
     if(err)return reject(err);
+    if(options.signal){const abort=()=>{reject(Object.assign(new Error('DockNest stopped waiting for this step.'),{aborted:true}));try{stream.close();}catch{}};if(options.signal.aborted){abort();return;}options.signal.addEventListener('abort',abort,{once:true});}
     let buffer='',result,remoteError;
     stream.on('data',chunk=>{
      buffer+=chunk.toString();
      if(buffer.length>4*1024*1024){stream.destroy();reject(new Error('Remote output exceeds limit'));return;}
-     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
+     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
     stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null})));
-    stream.end(encoded+'\n'+JSON.stringify(request)+'\n');
+    const payload=encoded+'\n'+JSON.stringify(request)+'\n';
+    if(options.keepStdinOpen)stream.write(payload);else stream.end(payload);
    });
   });
  } finally {client.end();}
@@ -72,7 +76,7 @@ export async function remoteCaptureStream(server,request,output,onStage=()=>{},o
     let n;
     while((n=buffer.indexOf('\n'))>=0){
      const line=buffer.slice(0,n);buffer=buffer.slice(n+1);
-     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.progress)onProgress(event.progress);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
+     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.progress)onProgress(event.progress);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
     }
    });
    const storageFailed=cause=>{stream.destroy();reject(Object.assign(new Error('Direct capture storage failed; inspect recovery status before retrying'),{cause}));};

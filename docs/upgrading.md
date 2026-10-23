@@ -1,5 +1,8 @@
 # Upgrading DockNest
 
+Before rolling back to 2.5.0 or older, finish or cancel every site move ([moving-sites.md](moving-sites.md)): older
+releases ignore move jobs but cannot continue or undo a move.
+
 This page covers upgrades and rollbacks for a server installed with `git clone`, `scripts/setup.js` and `docker compose up -d --build`. It also lists what stays stable between versions.
 
 Upgrades never move, rename or delete your volumes, secrets, certificates, site configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.

@@ -16,6 +16,25 @@ Administrators manage invitations, revoke access, and rotate the system password
 
 Sensitive administration requires password plus that administrator's personal factor verified within the previous five minutes. The server returns REAUTH_REQUIRED when another verification is needed. Rotating the shared password signs everyone out and invalidates pending login/enrollment challenges and invitations. Tell authorized people the replacement password privately.
 
+### Roles and site host paths
+
+Some site settings name folders and files on the source server that the helper reads or writes as root. Only administrators can add or change them. An operator who saves a site with a new or changed path gets HTTP 403 (`ADMIN_REQUIRED`) and the message "Only an administrator can change the ... of a site". Operators can still edit every other field, remove paths, and run backups, restores and downloads that use paths an administrator saved.
+
+| Site setting | Administrator | Operator |
+| --- | --- | --- |
+| Configuration (environment) files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Compose project files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
+| Static website files folder | A folder discovery reports | Saved folder, or a folder discovery reports |
+| Staging directory | Outside system folders (`/etc`, `/root`, `/usr/bin` and the others the helper refuses) | Saved value or the default `/var/lib/docknest` only |
+| Maintenance directory | Under the staging root, a project folder or a web root | Saved value or the default under the staging root only |
+| Name, containers, services, schedule, probe URLs, domains | Yes | Yes |
+
+Moving a site to another server checks all of its paths again. When discovery cannot reach the server, a path counts as not discovered.
+
+The helper also checks paths, for every role. It never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, the SSH host keys (`/etc/ssh/*_key`), `/root/.ssh`, any `.ssh` folder, `/proc`, `/sys` or `/dev`, nor a folder that contains one of them (such as `/etc/ssh` or `/`). Each path is checked as written, with a leading `//` read as `/`, and again after following symlinks, so a link such as `/opt/x -> /etc` does not get around the list. The API also refuses paths that start with `//`. It deploys a maintenance page only under the site's staging root, its Compose project folders, its website folder, `/var/lib/docknest`, `/var/www`, `/srv` or `/usr/share/nginx`, and never inside system folders such as `/etc`, `/root` or `/usr/bin`. A maintenance directory outside these places that is already deployed (it already holds `maintenance.html`) or already integrated (it holds `ready`) keeps working. The helper reports a warning, and the API logs it as `Remote helper warning:`. The exception is a maintenance folder that is a symlink into a system folder (for example `/var/www/x -> /etc/cron.d`). The helper refuses to deploy into it or to enable maintenance there, but it still lets the site leave maintenance. To clear the warning, move the folder under `/var/www/<domain>` or the staging root and update the site.
+
+Upgrading: a site that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. A site whose staging directory is inside a system folder keeps backing up, but it can be saved again only after its staging directory is moved, for example to `/var/lib/docknest`. No other saved site changes behaviour.
+
 ## Session expiry
 
 The server rejects sessions after 30 minutes without reported user interaction and after eight hours from login, even with continued activity. Dashboard polling and ordinary reads do not renew the idle timer. The UI reports trusted keyboard/pointer interaction through the protected activity endpoint; that endpoint cannot revive an expired session.
@@ -112,10 +131,41 @@ Every report except Report a bug adds the DockNest version and install mode, and
 
 The API adds `errorClass` (and, for server tests, `check`) next to the existing error message of storage and server connection tests; these values come from fixed lists, never from error text.
 
+## Site moves: Cloudflare DNS and DNS checks (outbound requests)
+
+- Without a saved Cloudflare token, site moves make no request to Cloudflare. Waiting for a manual DNS change sends
+  DNS queries only, to 1.1.1.1 and 8.8.8.8.
+- With a token (Settings, administrators, recent re-verification): requests go only to `https://api.cloudflare.com`,
+  a host fixed in code, without redirects, with a 10 second limit. Saving the token makes read calls only (token
+  verify, zone list, one DNS record read per zone). A move changes only the A record (and one AAAA record when the
+  new server has IPv6) of the moved domain, journals the previous content first, and restores it on Undo or Switch back.
+- The token is sealed with the master key (AES-256-GCM, like server SSH keys), decrypted only at the moment of a
+  call, and never returned by the API, written to logs, audit events, job details or the move journal. Error
+  messages carry Cloudflare's own sentence, never the request. Use a token scoped to Zone.DNS:Edit on the site's zone.
+- The test copy of a moved site runs on real data, on networks of its own; before it starts, DockNest rejects its
+  outgoing SMTP by subnet through Docker's `DOCKER-USER` chain (IPv4 and IPv6) where it exists and removes the rules
+  with the copy. HTTP-based mail and webhooks are not blocked.
+- A move writes only outside system folders, Docker storage, `.ssh` and protected files (symlinks followed); the
+  merged Compose configuration must match the backup; removing an old copy deletes only its own read-write data.
+  Every server step of a move holds a per-move lock on the server and stops when DockNest stops waiting for it.
+- Cloudflare: the previous record is journaled before it is changed; a resumed switch reuses that journal.
+
 ## Client address and TRUST_PROXY
 
-By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. See [Deployment](deployment.md).
+By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).
 
 ## Host updater
 
 The containers never get the Docker socket. The optional host updater ([upgrading](upgrading.md#host-updater-and-update-center), [threat model](updater-threat-model.md)) is a root systemd service reached over a Unix socket in the `docknest_updater` volume, which only the `api` container mounts, read-only. It treats the volume as writable by a possibly compromised API: it reads one small request, accepts upgrades to final releases only, checks the signed `docknest-release.json` with a cosign it pinned by SHA-256 (as an unprivileged account), requires the tag to be on `main`, and runs the upgrade as the checkout's owner, not as root. It never adds anyone to the `docker` group. The pre-existing exposure remains: whoever is in the `docker` group, or root, controls the host. An update request needs an administrator who has just re-entered the shared password and an authenticator code. The public progress endpoint returns only the phase, target version, state and timestamps. This design is covered by unit tests only; it has not been validated on a real Linux Docker host.
+
+## Managed servers, archives and restore
+
+DockNest treats what a managed server returns as untrusted data. Commands for the remote helper are never built from request values: the helper source and the request travel over SSH stdin, and the helper passes names and paths to `docker`, `tar` and other tools as separate arguments, never through a shell. SSH and SFTP connections require a pinned SHA-256 host-key fingerprint and refuse any other key.
+
+- **Restore extraction.** Before extracting, the helper refuses absolute paths, `..`, device files, duplicate paths, writes through an archived symlink, and hard links that do not point to an archived regular file. Each symlink is also followed through the archive's other symlinks, the way the kernel follows them after extraction, so a chain of links that each look contained cannot point outside the restore directory. Absolute link targets and link loops are refused. Extraction is refused before anything is written when the declared file sizes do not fit in the target's free space (64 MiB reserve).
+- **Capture time.** Retention keeps the newest recovery points by capture time. When the time the source server reports falls outside the job's own run (10 minutes tolerance), DockNest records its own time instead, keeps the reported value as `sourceClock` in the manifest, and shows a "Source server clock" warning on the job. A source server with a reset or future clock therefore cannot make retention delete the newest point.
+- **Maintenance directory.** The proxy may read, or share, the maintenance directory. The helper runs as root, so it never follows a symbolic link there: the `enabled` flag refuses a link, a FIFO or any other non-regular file and is opened with `O_NOFOLLOW` and `O_NONBLOCK`, and the maintenance page is written through a unique `O_EXCL` temporary file.
+- **Staging leftovers.** After each successful backup, the helper lists the job folders in that site's staging root: real directories only (links are never followed) whose name is exactly a job ID. It deletes nothing itself. DockNest removes a folder through the `cleanup` operation, which checks for the `disarmed` and `watchdog.done` markers and refuses a link, and does so only when the job is `completed` in its database, or is unknown to it and the folder is older than 6 hours. Folders of queued, running, `recovery_required` and failed jobs, and names such as `maintenance`, stay. Removal is refused when the helper's Python cannot remove directories without following links. Only counts and freed bytes are recorded (`staging.swept`). Startup reconciliation publishes an authenticated package but never changes a `recovery_required` job; when it completes a job that was still running, it also runs that job's cleanup and retention.
+- **Recovery kits.** Restoring a kit revokes sessions, challenges and enrollment invitations that were open in the snapshot. Administrators issue new invitations after recovery.
+
+These checks are covered by unit tests. GNU `tar` extraction of real archives, link handling under `O_NOFOLLOW` and the end-to-end restore run only in the Linux Docker integration job (`npm run test:integration`).
