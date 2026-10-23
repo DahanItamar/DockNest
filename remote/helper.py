@@ -2004,7 +2004,8 @@ def move_facts(req):
         'webPortOwner':None if 80 not in ports else ('nginx' if nginx.get('running') else 'other'),
         'certbot':{'installed':bool(shutil.which('certbot')),'account':pathlib.Path('/etc/letsencrypt/accounts').is_dir()},'addresses':host_addresses()}
     facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}'])
-    if req.get('role')=='source':facts['site']=source_site_facts(cfg,[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)])
+    tokens=[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)]+[a for a in facts['addresses'] if not a.startswith(('127.','::1'))]
+    if req.get('role')=='source':facts['site']=source_site_facts(cfg,list(dict.fromkeys(tokens)))
     if req.get('probe'):facts['probe']=target_probe(req['probe'])
     emit(result=facts)
 def place_tree(archive,target,d,state,mid):

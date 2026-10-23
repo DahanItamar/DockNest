@@ -11,6 +11,7 @@ import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
 import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
+import { moveRoutes } from './moves/routes.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { schemaVersion } from './migrations.js';
@@ -24,7 +25,7 @@ import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
-import { installBootRecovery, bootRecoveryStatus } from './engine.js';
+import { installBootRecovery, bootRecoveryStatus, requireNotMoving } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
@@ -57,6 +58,7 @@ app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
 app.use('/api/access', access);
 app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
+app.use('/api/moves', moveRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
@@ -214,6 +216,7 @@ app.post('/api/sites', (req, res) => {
 });
 app.patch('/api/sites/:id', (req, res) => {
   const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
+  requireNotMoving(site.id);
   // The site form does not edit the SQLite check mode; keep the saved choice.
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
@@ -237,6 +240,7 @@ app.post('/api/sites/:id/policy', (req, res) => {
 });
 app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
   const site=getSite(req.params.id);
+  requireNotMoving(site.id);
   transaction(()=>{
     if(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id))throw Object.assign(new Error('Finish the active job or resolve recovery before removing this site.'),{status:409});
     db.prepare('INSERT OR IGNORE INTO site_archives(site_id,archived_at) VALUES (?,?)').run(site.id,now());

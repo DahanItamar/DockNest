@@ -9,6 +9,16 @@ import {
 import { siteMovesSchema } from '../src/migrations.js';
 
 const now = '2026-10-23T10:00:00.000Z';
+
+test('a draft preview can only start or be cancelled, does nothing by itself and blocks no other site work', async () => {
+  const { isMoving } = await import('../src/moves/state.js');
+  assert.deepEqual(TRANSITIONS.draft, ['queued', 'cancelled']);
+  assert.equal(isActive('draft'), true, 'it holds the one-move-per-site slot');
+  assert.equal(isMoving('draft'), false); assert.equal(isMoving('queued'), true);
+  assert.deepEqual(nextAction({ id: 'm', state: 'draft', options: { dnsMode: 'manual' } }, []), { type: 'none' });
+  assert.deepEqual(cancelDecision({ id: 'm', state: 'draft', options: { dnsMode: 'manual' } }, []), { allowed: true, next: 'cancelled', label: 'Cancel' });
+  assert.throws(() => assertTransition('draft', 'running'), MoveStateError);
+});
 const move = (changes = {}) => ({ id: 'move', state: 'running', waiting_for: null, cancel_requested: 0, options: { dnsMode: 'manual' }, retain_until: null, ...changes });
 // Steps with the first `done` steps finished (resources recorded) and the rest pending.
 function steps(options, doneNames = [], extra = {}) {
