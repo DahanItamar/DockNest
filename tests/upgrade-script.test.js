@@ -138,6 +138,7 @@ test('an unhealthy start after an incompatible migration stops with exact rollba
   assert.equal(status.ok, false); assert.match(status.rollbackHint, /state-v2-to-v3-\*\.sqlite/);
   assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.1.0^{commit}')} && docker tag docknest:pre-upgrade docknest:local && docker compose up -d --no-build`), status.rollbackHint);
   assert.match(await f.read('tags'), new RegExp(`^docknest:pre-upgrade ${fakeId('2.1.0')}$`, 'm'), 'the image the hint names still exists');
+  assert.ok(status.rollbackHint.includes(`# the 2.1.0 image is ${fakeId('2.1.0')} (tagged docknest:pre-upgrade until the next upgrade run)`), 'the hint also records the exact image ID');
   assert.equal(await f.read('restores'), ''); assert.equal(await f.read('removed'), '', 'nothing is pruned after exit 5');
   const failed = (await f.backups()).find(name => name.endsWith('-2.1.0-to-2.2.0-rc.1'));
   assert.equal(await readFile(join(f.work, 'data/upgrade-backups', failed, 'result'), 'utf8'), 'format=1\nexit=5\n');
@@ -350,6 +351,19 @@ test('failed and refused runs, --dry-run and --no-prune remove nothing; the dry 
   assert.equal((await f.backups()).length, 9); assert.equal(await f.read('removed'), fakeId('2.1.0'));
   const calls = await f.read('calls');
   assert.doesNotMatch(calls, forbidden); assert.ok(!calls.includes('node scripts/prune-upgrade-artifacts.js IMG='), 'the state volume is pruned only after a success');
+});
+
+test('a rebuild that reproduces the running image leaves docknest:previous alone; a tagged rollback image is never removed', { skip: !shell }, async t => {
+  const f = await fixture(t);
+  await images(f, [['2.0.0', 'docknest:local'], ['1.9.0', 'docknest:previous']]);
+  await writeFile(join(f.state, 'same-build'), '');
+  const result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const tags = await f.read('tags');
+  assert.match(tags, new RegExp(`^docknest:previous ${fakeId('1.9.0')}$`, 'm'), 'the real previous release keeps its tag');
+  assert.doesNotMatch(tags, /docknest:pre-upgrade/);
+  assert.equal(await f.read('removed'), '', 'the image tagged docknest:previous is kept although its ID is not the running one');
+  assert.match(result.stdout, new RegExp(`Keeping image ${fakeId('1.9.0')}: it is tagged docknest:previous`));
 });
 
 test("this run's backup is kept by identity; names dated in the future are ordered by modification time", { skip: !shell }, async t => {

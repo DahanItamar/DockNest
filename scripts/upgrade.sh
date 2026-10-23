@@ -357,8 +357,13 @@ pin_previous() {
   if docker tag "$PREV_ID" "$REPO:pre-upgrade"; then PREV_REF="$REPO:pre-upgrade"
   else echo "WARNING: could not tag the $FROM image $PREV_ID as $REPO:pre-upgrade; a rollback uses its ID." >&2; fi
 }
+# A failed run's hint names REPO:pre-upgrade, which a later run re-points: this line records the exact image ID too.
+prev_note() { [ -z "$PREV_REF" ] || printf '\n# the %s image is %s (tagged %s until the next upgrade run)' "$FROM" "$PREV_ID" "$PREV_REF"; }
 promote_previous() {
   [ -n "$PREV_REF" ] || return 0
+  # A rebuild that produced the same image (for example a --force reinstall): it is the running image, not a previous
+  # release, so REPO:previous stays where it is and only the temporary pin goes.
+  if [ "$PREV_ID" = "$(running_id api)" ]; then docker image rm "$REPO:pre-upgrade" >/dev/null 2>&1 || true; PREV_REF=''; return 0; fi
   OLD_PREV=$(image_id "$REPO:previous") # loses its name when the tag moves; retention removes it
   if docker tag "$PREV_ID" "$REPO:previous"; then
     PREV_REF="$REPO:previous"; docker image rm "$REPO:pre-upgrade" >/dev/null 2>&1 || true # removes the tag only
@@ -502,6 +507,10 @@ prune_images() {
   for id in $(printf '%s\n' $recorded $tagged $labelled $OLD_PREV | sort -u); do
     valid_id "$id" || continue
     case "$keep" in *" $id "*) continue ;; esac
+    # Never by ID matching alone: an image that carries a tag rollback or the services rely on always stays.
+    protected=''
+    for tag in $(image_tags "$id"); do case "$tag" in "$REPO:previous"|"$REPO:pre-upgrade"|"$LOCAL_IMAGE"|"$NEW_IMAGE"|"${NEW_IMAGE%%@*}") protected=$tag ;; esac; done
+    if [ -n "$protected" ]; then echo "Keeping image $id: it is tagged $protected."; continue; fi
     untagged=''; case " $(printf '%s\n' "$labelled" | tr '\n' ' ') $OLD_PREV " in *" $id "*) untagged=1 ;; esac
     own_image "$id" "$untagged"; owned=$?
     [ "$owned" != 2 ] || continue
@@ -693,7 +702,7 @@ phase build "Preparing the $TO image"
 # Every image present before the build or pull: exit 4 removes only an image that was not among them.
 if IMAGES_BEFORE=$(docker image ls -aq --no-trunc 2>/dev/null); then IMAGES_LISTED=1; fi
 pin_previous
-HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release"
+HINT="$(restart_previous_cmd) && docker compose exec api node scripts/deployment-preflight.js release$(prev_note)"
 if ! build_and_start; then
   git_ checkout --quiet "$FROM_REF" && CHECKED_OUT=0; release_hold; HOLD=0
   # A partial source build may have moved the local tag: point it back at the image the services still run.
@@ -744,7 +753,7 @@ if ! healthy "$(expect HEAD)" "$TIMEOUT"; then
   HINT="docker compose stop api worker
 # restore metadata (schema v$DB_SCHEMA) from the newest /data/upgrade-snapshots/state-v$DB_SCHEMA-to-v${AFTER:-?}-*.sqlite, see docs/upgrading.md#rolling-back
 $(restart_previous_cmd)
-docker compose exec api node scripts/deployment-preflight.js release"
+docker compose exec api node scripts/deployment-preflight.js release$(prev_note)"
   fail 5 "$TO did not become healthy after migrating metadata to schema v${AFTER:-unknown}. Nothing was rolled back automatically."
 fi
 

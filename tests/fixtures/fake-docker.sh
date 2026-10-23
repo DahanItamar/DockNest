@@ -83,11 +83,13 @@ case "$1" in
       *--images*) if [ -e "$S/image-mode" ]; then image_ref; image_ref; else printf 'docknest:local\ndocknest:local\n'; fi ;;
       *) [ -e "$S/image-mode" ] || echo '    context: /srv/docknest' ;;
     esac ;;
-  images) [ -e "$S/no-images" ] || ensure "$(running_version)" ;;
+  # "same-build": the build reproduces the running image (a --force reinstall), so the services keep that image ID.
+  images) [ -e "$S/no-images" ] || { if [ -e "$S/same-build" ]; then resolve docknest:local; else ensure "$(running_version)"; fi; } ;;
   ps) [ "$(read_state running)" = up ] && printf 'api\nworker\n' ;;
   build|pull)
     [ -e "$S/fail-build" ] && exit 1; [ -e "$S/fail-build-once" ] && { rm "$S/fail-build-once"; exit 1; }
-    if [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE base=${DOCKNEST_IMAGE%%@*}; id=$(ensure "${base##*:}"); retag "$ref" "$id"; case "$ref" in *@*) echo "${base%:*}@${ref#*@} $id" >> "$S/digests" ;; esac; fi
+    if [ "$1" = build ] && [ -e "$S/same-build" ]; then retag docknest:local "$(fake_id "$(read_state version)")"
+    elif [ "$1" = build ]; then retag docknest:local "$(ensure "$(pkg_version)")"; else ref=$DOCKNEST_IMAGE base=${DOCKNEST_IMAGE%%@*}; id=$(ensure "${base##*:}"); retag "$ref" "$id"; case "$ref" in *@*) echo "${base%:*}@${ref#*@} $id" >> "$S/digests" ;; esac; fi
     exit 0 ;;
   stop) [ -e "$S/migrate-on-stop" ] && echo 2 > "$S/schema"; [ -e "$S/fail-stop" ] && exit 1; echo down > "$S/running" ;;
   logs) echo 'fake logs' ;;
@@ -97,7 +99,7 @@ case "$1" in
       case "$ref" in sha256:*) version=$(version_of "$ref") ;; *) ref=${ref%%@*}; version=${ref##*:} ;; esac
     else
       tagged=$(resolve docknest:local)
-      if [ -n "$tagged" ]; then version=$(version_of "$tagged"); else version=$(pkg_version); fi
+      if [ -n "$tagged" ] && [ ! -e "$S/same-build" ]; then version=$(version_of "$tagged"); else version=$(pkg_version); fi
     fi
     echo "$version" > "$S/version"; echo up > "$S/running"
     schema=$(sed -n 's/^ *{ *version: *\([0-9][0-9]*\),.*/\1/p' src/migrations.js 2>/dev/null | tail -n 1)
