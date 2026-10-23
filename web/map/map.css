@@ -204,3 +204,89 @@
 .map-root .map-list button{min-height:44px;white-space:nowrap}
 @media(max-width:767px){.map-root .map-panel-foot{padding:16px 16px max(16px,env(safe-area-inset-bottom))}.map-root .map-row{min-height:56px}}
 .map-root .map-dialog-foot .map-panel-foot{border:0;padding:0;min-height:0}
+
+/* Alerts (2.8.0): purple lines from a server, site or DockNest to an alert node, in the band above the map */
+.map-root .map-docknest,.map-root .map-alert{position:absolute;box-sizing:border-box;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow);display:flex;align-items:center;justify-content:center;color:var(--accent);cursor:pointer}
+.map-root .map-alert.target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.map-root .map-docknest:focus-visible,.map-root .map-alert:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.map-root .map-lines .rule{stroke:var(--accent);stroke-width:2}
+.map-root .map-lines .rule.dragging{stroke-dasharray:6 4}
+.map-root .map-lines .rule-g.off .rule{stroke-dasharray:2 6;stroke-linecap:round}
+.map-root .map-lines .rule-g:hover .rule{stroke-width:3}
+.map-root .map-lines .rule-hit{stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
+.map-root .map-lines .arr-rule{fill:var(--accent)}
+.map-root .map-lines text.rule-label{fill:var(--text-secondary);font-size:var(--fs-caption);stroke:var(--surface-muted);stroke-width:4px;stroke-linejoin:round;paint-order:stroke;pointer-events:none;user-select:none}
+.map-root .map-lines .rule-hit,.map-root .map-lines text{stroke-linecap:round}
+.map-root .map-port.out.grab{border-color:var(--accent)}
+.map-root .map-foot-left{margin-right:auto}
+.map-root .map-events{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;border:0;min-width:0}
+.map-root .map-events legend{padding:0;margin-bottom:8px;font-weight:500;color:var(--heading)}
+.map-root .map-dialog select{min-height:40px}
+.map-root .map-saved{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px;padding:0 0 0 12px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);font-weight:400;color:var(--text-secondary)}
+.map-root .map-saved button{margin:-1px;white-space:nowrap}
+.map-root .map-field .map-caption{font-weight:400}
+.map-root .map-test{display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.map-root .map-test-box{display:flex;flex-direction:column;gap:8px}
+.map-root .map-alert-rows{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column}
+.map-root .map-alert-rows li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border-subtle)}
+.map-root .map-alert-rows li>span{display:flex;flex-direction:column;min-width:0;flex:1}
+.map-root .map-alert-rows .map-caption{overflow-wrap:anywhere}
+.map-root .map-alert-rows button{white-space:nowrap}
+.map-root .map-list .map-list-sentences{margin:8px 0 0;border-top:0;display:flex;flex-direction:column}
+.map-root .map-list .map-list-sentences li{border-bottom:0;padding-block:0;min-height:0;flex-wrap:nowrap;justify-content:space-between}
+.map-root .map-list .map-list-sentences .map-caption{overflow-wrap:anywhere}
+.map-root .map-list-add{margin-top:16px}
+.map-root .map-node-head{display:flex;align-items:flex-end;gap:12px;color:var(--accent)}
+.map-root .map-node-head svg{margin-bottom:8px}
+.map-root .map-node-name{flex:1;min-width:0;color:var(--text-primary)}
+.map-root .map-tabs{display:flex;border-bottom:1px solid var(--border-subtle);gap:4px}
+.map-root .map-tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--text-secondary);min-height:40px;padding:0 12px;white-space:nowrap}
+.map-root .map-tabs button.on{border-bottom-color:var(--accent);color:var(--heading);font-weight:500}
+.map-root .map-tabs button:hover{background:var(--surface-muted)}
+.map-root .map-cfg,.map-root .map-sends{display:flex;flex-direction:column;gap:16px}
+.map-root .map-src{display:flex;flex-direction:column;gap:4px;margin:0;padding:12px 16px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);min-width:0}
+.map-root .map-src legend{padding:0 4px;font-weight:500;color:var(--heading)}
+.map-root .map-src>button{align-self:flex-start;margin-top:8px}
+.map-root .map-connect{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.map-root .map-connect .map-field{width:100%}
+.map-root .map-delete{align-self:flex-start}
+.map-root .map-panel select{min-height:40px}
+.map-root .map-field input,.map-root .map-field select{font-weight:400}
+.map-root .map-lines .rule-hit:focus-visible{outline:none;stroke:var(--focus-ring);stroke-opacity:.45}
+.map-root .map-alert-rows li>button{flex:none}
+/* Quiet lines: thin slate until their node is hovered, focused or open */
+.map-root .map-lines .rule{stroke:var(--text-muted);stroke-opacity:.35;stroke-width:1.25}
+.map-root .map-lines .rule-g.hot .rule,.map-root .map-lines .rule-g:hover .rule,.map-root .map-lines .rule-g:focus-within .rule,.map-root .map-lines .rule.hot{stroke:var(--accent);stroke-opacity:1;stroke-width:2}
+.map-root .map-lines .rule.dragging{stroke-dasharray:6 4}
+/* Panels: the full height of the canvas, header and tabs fixed, footer pinned, content scrolls */
+.map-root .map-panel{top:16px;bottom:16px;height:auto;width:400px}
+.map-root .map-panel-head{padding:16px 8px 8px 24px;gap:12px}
+.map-root .map-panel-head h2{flex:1;min-width:0}
+.map-root .map-panel-icon{display:flex;color:var(--accent)}
+.map-root .map-panel-sub{flex:none;display:flex;flex-direction:column;gap:12px;padding:0 24px}
+.map-root .map-panel-body{padding:16px 24px 24px;gap:24px}
+.map-root .map-panel-foot{padding:12px 24px}
+.map-root .map-panel-sub .map-test{flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px}
+.map-root .map-panel-sub .map-test>div{flex:1;min-width:0}
+.map-root .map-result{display:flex;align-items:center;gap:8px;margin:0;font-size:var(--fs-body)}
+.map-root .map-result.ok{color:var(--success)}.map-root .map-result.bad{color:var(--error)}
+.map-root .map-panel-sub .map-tabs{margin:0 -24px;padding:0 24px}
+.map-root .map-cfg,.map-root .map-sends{gap:16px}
+@media(max-width:767px){.map-root .map-panel-sub{padding:0}.map-root .map-panel-sub .map-tabs{margin:0;padding:0}}
+@media(max-width:767px){.map-root .map-dialog select,.map-root .map-saved{min-height:44px}.map-root .map-alert-rows button{min-height:44px}}
+/* All lines are solid. Selecting or hovering a node or line lights its whole path; the rest dims. */
+.map-root .map-lines .backup{stroke:var(--border-control);stroke-dasharray:none;stroke-linecap:butt}
+.map-root .map-lines .arr-backup{fill:var(--border-control)}
+.map-root .map-lines .rule-g.off .rule{stroke-dasharray:none;stroke-opacity:.18}
+.map-root .map-lines .wire.dim,.map-root .map-lines .backup.dim,.map-root .map-lines .rule-g.dim .rule{opacity:.35}
+.map-root .map-lines .wire.lit,.map-root .map-lines .backup.lit{stroke:var(--accent);stroke-width:2.5}
+.map-root .map-lines .rule-g.lit .rule{stroke:var(--accent);stroke-opacity:1;stroke-width:2.5}
+.map-root .map-server.lit,.map-root .map-site.lit,.map-root .map-storage.lit,.map-root .map-alert.lit,.map-root .map-docknest.lit{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.map-root .map-ghost{position:absolute;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px dashed var(--accent);border-radius:var(--radius);background:var(--accent-soft);color:var(--accent);pointer-events:none}
+.map-root .map-val{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.map-root .map-vals{display:flex;flex-direction:column;gap:4px}
+.map-root .map-copy{min-height:28px;padding:0 8px;gap:4px;font-size:var(--fs-caption);white-space:nowrap}
+.map-root .map-row[draggable=true]{cursor:grab}
+.map-root .map-found{align-self:flex-start}
+.map-root .map-hint{max-width:none}
+.map-root .map-hint span{max-width:none}

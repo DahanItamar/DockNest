@@ -200,3 +200,26 @@ DockNest treats what a managed server returns as untrusted data. Commands for th
 - **Recovery kits.** Restoring a kit revokes sessions, challenges and enrollment invitations that were open in the snapshot. Administrators issue new invitations after recovery.
 
 These checks are covered by unit tests. GNU `tar` extraction of real archives, link handling under `O_NOFOLLOW` and the end-to-end restore run only in the Linux Docker integration job (`npm run test:integration`).
+
+## Alerts: Telegram and email (outbound requests, credentials)
+
+- No alert channel means no alert traffic. With channels, DockNest connects only to `https://api.telegram.org` (a host
+  fixed in code, no redirects, 10 second limit, 64 KB response cap) and to the SMTP server an administrator entered
+  for an email channel. There are no webhooks and no user-supplied URLs.
+- Credentials (Telegram bot token; SMTP host, user name, password, from address) are one value sealed with
+  the master key (AES-256-GCM, like server SSH keys), opened only at the moment of a send. The API never returns a
+  token or password (it shows "set" flags), and they are never written to logs, audit events, queue rows, the
+  channel's last error or error responses. Telegram's URL carries the token, so transport errors are replaced by fixed
+  sentences and never passed on. Audit events name the channel and the changed field names only.
+- Creating, changing or deleting a credential needs an administrator and a recent re-verification, like the Cloudflare
+  token. Changing the mail server, port or encryption requires typing the password again, so a saved password cannot be redirected by
+  editing the host alone. Nodes (chat ID, recipients) hold no secret, and with rules they need an administrator only; a credential in use cannot be deleted. Test messages are rate limited.
+- SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
+  If a server offers no STARTTLS, DockNest stops before sending any credential. The host name is resolved once and the
+  connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10, fd00:ec2::254), the unspecified
+  and multicast ranges are refused. Private and loopback addresses are allowed so a mail relay at home works. Server
+  replies are never returned to the browser or logged. Addresses and subjects are validated against line breaks.
+- Messages hold only the site and server names the owner typed and a time. They never include addresses, paths, logs
+  or error text. The alert queue keeps no secrets and is pruned after 7 days.
+- Alert detection only reads existing tables. The reachability check opens a TCP connection to a server's configured
+  SSH port without a login.
