@@ -208,7 +208,8 @@ def admit(state, request, now, current, recorded=lambda request_id: False):
     except ValueError:
         return 'state-mismatch'
     if state['exit4'].get(request['version'], 0) >= 2: return 'needs-host-ack'
-    if now - state['lastRunEnd'] < COOLDOWN or len([t for t in state['runs'] if now - t < 86400]) >= RUNS_PER_DAY \n            or len([t for t in state['attempts'] if now - t < 86400]) >= ATTEMPTS_PER_DAY: return 'rate-limited'
+    if (now - state['lastRunEnd'] < COOLDOWN or len([t for t in state['runs'] if now - t < 86400]) >= RUNS_PER_DAY
+            or len([t for t in state['attempts'] if now - t < 86400]) >= ATTEMPTS_PER_DAY): return 'rate-limited'
     return None
 
 
