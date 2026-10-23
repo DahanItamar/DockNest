@@ -455,7 +455,7 @@ async function panelChecks(page,scheme){
  await panel.getByRole('searchbox',{name:'Search'}).fill('');
  // Footer: "Not listed?" on the left, "Discover again" on the right edge
  const pb=await panel.boundingBox(),nl=await panel.getByText('Not listed?').boundingBox(),da=await panel.getByRole('button',{name:'Discover again'}).boundingBox();
- assert.ok(nl.x-pb.x<24,'Not listed? on the left');assert.ok(pb.x+pb.width-(da.x+da.width)<=24,'Discover again on the right edge');
+ assert.ok(nl.x-pb.x<=32,'Not listed? on the left');assert.ok(pb.x+pb.width-(da.x+da.width)<=32,'Discover again on the right edge');
  const before=mock.discovers;await panel.getByRole('button',{name:'Discover again'}).click();
  await page.waitForFunction(n=>true,before);await panel.getByText('Found on this server (3)').waitFor();
  assert.ok(mock.discovers>before,'discovery runs again');

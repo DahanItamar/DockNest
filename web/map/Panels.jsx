@@ -7,13 +7,14 @@ import {Sheet,Note} from './MoveFlow.jsx';
 
 // One panel at a time, on the right. Same size every time, footer pinned, content scrolls. Escape or Close closes it and
 // focus goes back to what opened it (the page does that). On a phone the same panel is a full-screen sheet.
-export function SidePanel({title,labelId,narrow,onClose,footer,children}){
+export function SidePanel({title,labelId,narrow,onClose,footer,children,icon,sub}){
  const head=useRef(null);
  useEffect(()=>{if(!narrow)head.current?.focus()},[narrow,title]);
  if(narrow)return <Sheet title={title} labelId={labelId} onClose={onClose} actions={<div className="map-panel-foot">{footer||<span/>}</div>}>
-  <span className="map-sheet-close"><IconButton label="Close" icon={IconX} onClick={onClose}/></span>{children}</Sheet>;
+  <span className="map-sheet-close"><IconButton label="Close" icon={IconX} onClick={onClose}/></span>{sub}{children}</Sheet>;
  return <aside className="map-panel" aria-labelledby={labelId} onKeyDown={e=>{if(e.key==='Escape'){e.stopPropagation();onClose()}}}>
-  <div className="map-panel-head"><h2 id={labelId} ref={head} tabIndex={-1}>{title}</h2><IconButton label="Close" icon={IconX} onClick={onClose}/></div>
+  <div className="map-panel-head">{icon&&<span className="map-panel-icon">{icon}</span>}<h2 id={labelId} ref={head} tabIndex={-1}>{title}</h2><IconButton label="Close" icon={IconX} onClick={onClose}/></div>
+  {sub&&<div className="map-panel-sub">{sub}</div>}
   <div className="map-panel-body">{children}</div>
   <div className="map-panel-foot">{footer||<span/>}</div>
  </aside>;

@@ -62,7 +62,7 @@ function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd,aler
 
 export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
- const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null);
+ const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
  // state does not name one per backup, so a site with backups or an active schedule uses the active destination.
  useEffect(()=>{if(!canMove||!api)return;let live=true;api('/storage-targets').then(r=>{if(live&&Array.isArray(r?.targets))setTargets(r)}).catch(()=>{});return()=>{live=false}},[canMove,api]);
@@ -336,6 +336,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }
   return null;
  }
+ const panelHot=panel?.kind==='alert'?{channel:panel.id}:panel&&['server','site'].includes(panel.kind)?{source:panel.kind+':'+panel.id}:panel?.kind==='docknest'?{source:'docknest:'}:null;
+ const hov=(h)=>({onPointerEnter:()=>setHot(h),onPointerLeave:()=>setHot(null),onFocus:()=>setHot(h),onBlur:()=>setHot(null)});
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
  const alertsList=canMove&&<AlertsList channels={alerts.channels} rules={alerts.rules} sourceName={sourceName} onDetails={(c,el)=>openPanel({kind:'alert',id:c.id},el)} onEditRule={editRule} onAdd={addChannel} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
  if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
@@ -352,7 +354,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   const s=byId.sites[r.id],lost=unconnected?.siteId===r.id,moving=pending?.siteId===r.id;
   const home=byId.servers[s.serverId],warn=siteWarn(s);
   const label=`${s.name}. ${siteFacts(s)}. ${lost?'Not connected.':moving?`Will move to ${byId.servers[pending.targetId]?.name}.`:home?`Connected to ${home.name}.`:'Not on a server.'} Press Enter for details${canMove&&home?', or Delete to disconnect it':''}.`;
-  return <article key={r.id} data-node={'site:'+r.id} data-site={r.id} tabIndex={0} aria-label={label} onKeyDown={e=>{if(enter(e,{kind:'site',id:r.id}))return;if(canMove&&home&&(e.key==='Delete'||e.key==='Backspace')&&!edit){e.preventDefault();e.stopPropagation();disconnect(r.id)}}} className={'map-site'+(canMove&&home?' movable':'')+(lost?' lost':'')+(moving?' chosen':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
+  return <article key={r.id} {...hov({source:'site:'+r.id})} data-node={'site:'+r.id} data-site={r.id} tabIndex={0} aria-label={label} onKeyDown={e=>{if(enter(e,{kind:'site',id:r.id}))return;if(canMove&&home&&(e.key==='Delete'||e.key==='Backspace')&&!edit){e.preventDefault();e.stopPropagation();disconnect(r.id)}}} className={'map-site'+(canMove&&home?' movable':'')+(lost?' lost':'')+(moving?' chosen':'')+(drag?.id===r.id?' lifted':'')} style={item(r)} title={s.name}>
    <SiteIcon site={s} size={32}/>
    {warn?<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>:<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>}
    <span className="map-label"><b className="map-name">{s.name}</b><span className={'map-caption'+(lost?' warn':'')}>{lost||!home?'Not connected':siteFacts(s)}</span></span>
@@ -378,19 +380,19 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
      </g>
-     {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId);return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')}>
-      <path className="rule" markerEnd="url(#map-arrow-rule)" d={p.d}/>
+     {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId),h=hot||panelHot,on=!!h&&(h.channel===p.channelId||(!!h.source&&h.source===p.sourceKind+':'+(p.sourceId||'')));return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')+(on?' hot':'')}>
+      <path className="rule" d={p.d}/>
       <path className="rule-hit" data-node={'rule:'+p.id} tabIndex={0} role="button" aria-label={p.bundle?`Alerts to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`:`Alerts from ${r?sourceName(r):''} to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(p.bundle)openAlert(p.channelId,null,e.currentTarget);else if(r)editRule(r,e.currentTarget)}}} d={p.d}/>
      </g>})}
-     {adrag?.src.from&&<path className="rule dragging" markerEnd="url(#map-arrow-rule)" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
+     {adrag?.src.from&&<path className="rule dragging hot" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
     </svg>
-    {layout.docknest&&<div data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className="map-docknest" style={item(layout.docknest)}>
+    {layout.docknest&&<div {...hov({source:'docknest:'})} data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className="map-docknest" style={item(layout.docknest)}>
      <DockNestIcon size={32}/>
      <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
     </div>}
     {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={canMove?'docknest:':undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
     {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed'||!ch.credentialId;return <React.Fragment key={'n'+r.id}>
-     <div data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+(adrag?.over===r.id?' target':'')} style={item(r)}>
+     <div {...hov({channel:r.id})} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+(adrag?.over===r.id?' target':'')} style={item(r)}>
       <KindIcon kind={ch.kind} size={32}/>
       {bad&&<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
       <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className="map-caption">{KIND_LABEL[ch.kind]}</span></span>
@@ -408,7 +410,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     {layout.storage.map(r=><span key={'i'+r.id} aria-hidden="true" data-handle={'in:'+r.id} className="map-port" style={at(r.x,r.y+r.h/2)}/>)}
     {layout.servers.map(r=>{const s=byId.servers[r.id],mine=layout.sites.filter(x=>x.serverId===r.id),bad=drag&&r.id!==byId.sites[drag.id]?.serverId&&siteChecks[r.id]&&blocked(siteChecks[r.id]);
      return <div key={r.id} role="group" aria-labelledby={'map-server-'+r.id} className="map-group">
-      <div data-node={'server:'+r.id} tabIndex={0} aria-label={`${s.name}. ${serverFacts(s,mine.length)}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'server',id:r.id})} className={'map-server'+(drag?.over===r.id?' target':'')+(bad?' blocked':'')+(pending?.targetId===r.id?' chosen':'')+(s.status&&s.status!=='connected'&&s.status!=='unchecked'?' attention':'')} style={item(r)}>
+      <div {...hov({source:'server:'+r.id})} data-node={'server:'+r.id} tabIndex={0} aria-label={`${s.name}. ${serverFacts(s,mine.length)}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'server',id:r.id})} className={'map-server'+(drag?.over===r.id?' target':'')+(bad?' blocked':'')+(pending?.targetId===r.id?' chosen':'')+(s.status&&s.status!=='connected'&&s.status!=='unchecked'?' attention':'')} style={item(r)}>
        <IconServer size={44} stroke={1.5} aria-hidden="true"/>
        {s.status==='connected'?<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>:!s.status||s.status==='unchecked'?<IconClock className="map-badge" size={16} stroke={2} aria-hidden="true"/>:<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
        <span className="map-label"><b id={'map-server-'+r.id} className="map-name" title={s.name}>{s.name}</b>
@@ -434,7 +436,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {canMove&&<button type="button" className="map-add" aria-label="Add to the map" aria-expanded={panel?.kind==='add'} onClick={e=>panel?.kind==='add'?closePanel(true):openPanel({kind:'add'},e.currentTarget)}><IconPlus size={20} stroke={1.75} aria-hidden="true"/></button>}
   {panelBody()}
   </div>
-  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. Drag the background to see more. ':''}{canMove?'Click a node for details. Drag the end of a site’s line to another server to move it. Nothing changes until you press Save changes.'+(layout.alerts.length?' To send alerts, drag from the small circle on a server, a site or DockNest to an alert.':''):'Click a node for details. Drag the background to move around.'}</span></p>
+  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. ':''}{canMove?'Click a node to open it. Drag a site’s line to another server to move it.':'Click a node for details. Drag the background to move around.'}</span></p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
   {dialogs}
  </section>;

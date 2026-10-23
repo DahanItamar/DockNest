@@ -254,4 +254,25 @@
 .map-root .map-field input,.map-root .map-field select{font-weight:400}
 .map-root .map-lines .rule-hit:focus-visible{outline:none;stroke:var(--focus-ring);stroke-opacity:.45}
 .map-root .map-alert-rows li>button{flex:none}
+/* Quiet lines: thin slate until their node is hovered, focused or open */
+.map-root .map-lines .rule{stroke:var(--text-muted);stroke-opacity:.35;stroke-width:1.25}
+.map-root .map-lines .rule-g.hot .rule,.map-root .map-lines .rule-g:hover .rule,.map-root .map-lines .rule-g:focus-within .rule,.map-root .map-lines .rule.hot{stroke:var(--accent);stroke-opacity:1;stroke-width:2}
+.map-root .map-lines .rule.dragging{stroke-dasharray:6 4}
+/* Panels: the full height of the canvas, header and tabs fixed, footer pinned, content scrolls */
+.map-root .map-panel{top:16px;bottom:16px;height:auto;width:400px}
+.map-root .map-panel-head{padding:16px 8px 8px 24px;gap:12px}
+.map-root .map-panel-head h2{flex:1;min-width:0}
+.map-root .map-panel-icon{display:flex;color:var(--accent)}
+.map-root .map-panel-sub{flex:none;display:flex;flex-direction:column;gap:12px;padding:0 24px}
+.map-root .map-panel-body{padding:16px 24px 24px;gap:24px}
+.map-root .map-panel-foot{padding:12px 24px}
+.map-root .map-panel-sub .map-test{flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px}
+.map-root .map-panel-sub .map-test>div{flex:1;min-width:0}
+.map-root .map-result{display:flex;align-items:center;gap:8px;margin:0;font-size:var(--fs-body)}
+.map-root .map-result.ok{color:var(--success)}.map-root .map-result.bad{color:var(--error)}
+.map-root .map-panel-sub .map-tabs{margin:0 -24px;padding:0 24px}
+.map-root .map-cfg,.map-root .map-sends{gap:16px}
+@media(max-width:767px){.map-root .map-panel-sub{padding:0}.map-root .map-panel-sub .map-tabs{margin:0;padding:0}}
 @media(max-width:767px){.map-root .map-dialog select,.map-root .map-saved{min-height:44px}.map-root .map-alert-rows button{min-height:44px}}
+.map-root .map-hint{max-width:none}
+.map-root .map-hint span{max-width:none}

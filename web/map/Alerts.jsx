@@ -35,7 +35,7 @@ export function TestBox({client,channel,onDone,dirty}){
   onDone?.();
  }
  return <div className="map-test"><button type="button" className="primary" disabled={state.busy||!channel} onClick={run}>{state.busy?'Sending…':'Send test message'}</button>{dirty&&<span className="map-caption">Sends with the settings that are saved.</span>}
-  <div role="status" aria-live="polite">{state.text&&<Note kind={state.ok?'ok':'error'} icon={state.ok?IconCircleCheck:IconCircleX}>{state.text}</Note>}</div></div>;
+  <div role="status" aria-live="polite">{state.text&&<p className={'map-result '+(state.ok?'ok':'bad')}>{state.ok?<IconCircleCheck size={16} stroke={2} aria-hidden="true"/>:<IconCircleX size={16} stroke={2} aria-hidden="true"/>}<span>{state.text}</span></p>}</div></div>;
 }
 
 const draftOf=(source,rule)=>({key:srcKey(source),source,ruleId:rule?.id||null,events:new Set(rule?rule.events:DEFAULT_EVENTS[source.kind]||[]),first:rule?[...rule.events].join():null,gone:false});
@@ -84,11 +84,11 @@ export function AlertPanel({narrow,kind,channel,rules,credentials,sourceList,sou
  const cred=list.find(x=>x.id===credentialId);
  const title=edit?channel.name:kind==='email'?'Add Email alerts':'Add Telegram alerts';
  const last=live?.lastResult==='ok'?'Sent '+when(live.lastResultAt):live?.lastResult==='failed'?'Could not send '+when(live.lastResultAt)+(live.lastError?'. '+live.lastError:''):'Nothing sent yet';
- return <SidePanel narrow={narrow} labelId="map-panel-title" title={title} onClose={onClose} footer={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>}>
-  <div className="map-node-head"><KindIcon kind={kind} size={28}/><label className="map-field map-node-name">Name<input value={name} onChange={e=>setName(e.target.value)} autoComplete="off"/></label></div>
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title={title} onClose={onClose} icon={<KindIcon kind={kind} size={24}/>} footer={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting||!ready} onClick={save}>Save</button></>} sub={<>
   <TestBox client={client} channel={live&&credentialId?live:null} onDone={onReload} dirty={live&&dirty}/>
-  <div className="map-tabs" role="tablist" aria-label="Alert settings">{[['settings','Settings'],['sends','Sends when']].map(([id,label])=><button key={id} type="button" role="tab" id={'map-tab-'+id} aria-selected={tab===id} aria-controls={'map-tabpanel-'+id} tabIndex={tab===id?0:-1} className={tab===id?'on':''} onClick={()=>setTab(id)} onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const n=tab==='settings'?'sends':'settings';setTab(n);setTimeout(()=>document.getElementById('map-tab-'+n)?.focus(),0)}}}>{label}</button>)}</div>
+  <div className="map-tabs" role="tablist" aria-label="Alert settings">{[['settings','Settings'],['sends','Sends when']].map(([id,label])=><button key={id} type="button" role="tab" id={'map-tab-'+id} aria-selected={tab===id} aria-controls={'map-tabpanel-'+id} tabIndex={tab===id?0:-1} className={tab===id?'on':''} onClick={()=>setTab(id)} onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const n=tab==='settings'?'sends':'settings';setTab(n);setTimeout(()=>document.getElementById('map-tab-'+n)?.focus(),0)}}}>{label}</button>)}</div></>}>
   {tab==='settings'&&<section id="map-tabpanel-settings" role="tabpanel" aria-labelledby="map-tab-settings" className="map-cfg">
+   <Field label="Name" value={name} onChange={setName}/>
    {edit&&channel.configReadable===false&&<Note kind="warn" icon={IconInfoCircle}>DockNest cannot read the saved settings of this channel. Enter them again to fix it.</Note>}
    {!credentialId&&<Note kind="warn" icon={IconAlertTriangle}>Needs a credential. Choose one below, or create a new one.</Note>}
    <label className="map-field">Credential<select value={credentialId} onChange={e=>{if(e.target.value==='__new')setNewCred(true);else setCredentialId(e.target.value)}}><option value="">Choose…</option>{list.map(x=><option key={x.id} value={x.id}>{x.name} ({KIND_LABEL[x.kind]})</option>)}<option value="__new">Create new credential</option></select>{cred&&<span className="map-caption">{kind==='telegram'?'Bot token: Saved':`${cred.config?.host||'Mail server'}${cred.config?.passwordSet?', password: Saved':''}`}</span>}</label>
