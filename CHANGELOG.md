@@ -8,6 +8,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - Storage card buttons share the full width of the card, so a card with two buttons has no empty space beside them.
 
+### Security
+
+- Restore extraction follows each archive symlink through the archive's other symlinks before extracting, so a chain of links that each stay inside (for example `d -> ../..` and `l -> d/../..`) can no longer point outside the restore directory. Link loops and absolute targets are refused as before.
+- Restore extraction is refused before anything is written when the archive's declared file sizes do not fit in the free space of the target filesystem (64 MiB reserve).
+- A capture time reported by the source server outside the job's own run (10 minutes tolerance) is replaced by the DockNest server time. A reset or future source clock could otherwise make retention delete the newest recovery point right after it was published. The job shows a "Source server clock" warning and the manifest records `sourceClock`.
+- The helper no longer follows symbolic links in the maintenance directory: the `enabled` flag refuses a link and is opened with `O_NOFOLLOW`, and the maintenance page is written through a unique `O_EXCL` temporary file. Before, anything that could write that directory could make the root helper change the mode of, or overwrite, a host file.
+- Restoring a recovery kit revokes enrollment invitations that were still open in the snapshot.
+
 ## [2.4.1] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
