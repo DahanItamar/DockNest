@@ -59,14 +59,19 @@ export function MapPage({servers=[],sites=[],user,api}){
   setFlow({kind:'review',siteId,targetId,busy:true});
   client.preview(siteId,targetId).then(p=>setFlow(f=>f&&{...f,preview:p,busy:false})).catch(e=>setFlow(f=>f&&{...f,error:e.message,busy:false,preview:{ok:false,blockers:[e.message]}}));
  }
- function closeFlow(finished){setFlow(null);if(finished)setPending(null);setTimeout(()=>opener.current?.focus?.(),0)}
+ const [moves,setMoves]=useState([]);
+ const loadMoves=useCallback(()=>{if(canMove)client.list().then(r=>setMoves(Array.isArray(r?.moves)?r.moves:[])).catch(()=>{})},[client,canMove]);
+ useEffect(()=>{loadMoves();const t=setInterval(loadMoves,15000);return()=>clearInterval(t)},[loadMoves]);
+ function closeFlow(finished){setFlow(null);if(finished)setPending(null);loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
+ function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
+ const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
-  const {envRewrite,askBeforeSwitch,moveAnyway}=options;
+  const {envRewrite,askBeforeSwitch,moveAnyway,dnsMode}=options;
   setFlow(f=>({...f,busy:true,error:''}));
   try{
    let p=flow.preview;
    // Advanced choices change the plan, so ask for a fresh preview that includes them.
-   if(envRewrite.length||askBeforeSwitch)p=await client.preview(flow.siteId,flow.targetId,{dnsMode:'manual',envRewrite,askBeforeSwitch});
+   if(envRewrite.length||askBeforeSwitch||dnsMode==='cloudflare')p=await client.preview(flow.siteId,flow.targetId,{dnsMode,envRewrite,askBeforeSwitch});
    if(blocked(p)){setFlow(f=>({...f,preview:p,busy:false}));return;}
    await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway});
    setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
@@ -153,10 +158,10 @@ export function MapPage({servers=[],sites=[],user,api}){
  const flowSite=flow&&byId.sites[flow.siteId],flowTo=flow&&byId.servers[flow.targetId],flowFrom=flowSite&&byId.servers[flowSite.serverId];
  const dialogs=<>
   {flow?.kind==='target'&&<TargetDialog site={flowSite} servers={servers.filter(s=>s.id!==flowSite.serverId)} results={checks[flow.siteId]||{}} onCancel={()=>closeFlow(false)} onPick={id=>openReview(flow.siteId,id)}/>}
-  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} onCancel={()=>closeFlow(false)} onMove={startMove}/>}
+  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} onSaveToken={t=>client.saveCloudflareToken(t)} onCancel={()=>closeFlow(false)} onMove={startMove}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
  </>;
- if(narrow)return <div className="map-root"><MapList groups={groups} canMove={canMove} onMoveTo={moveTo}/>{dialogs}</div>;
+ if(narrow)return <div className="map-root">{strip}<MapList groups={groups} canMove={canMove} onMoveTo={moveTo}/>{dialogs}</div>;
 
  const home=drag&&layout.sites.find(s=>s.id===drag.id);
  const item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
@@ -175,6 +180,7 @@ export function MapPage({servers=[],sites=[],user,api}){
     {pending&&<button type="button" onClick={()=>{setPending(null);setNote('')}}>Undo change</button>}
    </>}
   </div>
+  {strip}
   <div ref={view} className="map-viewport" tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
    <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">

@@ -25,14 +25,17 @@ const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
-export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy}){
+export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,onSaveToken}){
+ const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
  const [anyway,setAnyway]=useState(false);
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
  const canMove=!blocked&&(!long||anyway)&&!busy;
  const warns=(preview.warnings||[]).filter(w=>!w.advanced),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
- const submit=()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,moveAnyway:long&&anyway});
+ const cfReady=tokenSaved||!!adv.dns?.cloudflareAvailable;
+ const submit=()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway});
+ async function saveToken(){setTokenBusy(true);setTokenErr('');try{await onSaveToken(token);setToken('');setTokenSaved(true);setCf(true)}catch(e){setTokenErr(e.message)}setTokenBusy(false)}
  const portsText=p=>`${p.from} to ${p.to}${p.changed?' (changed, the old number is taken)':''}`;
  const unknown='Not known yet';
  return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
@@ -53,10 +56,19 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy}){
     {adv.ports?.length>0&&<section><h3>Ports</h3>{adv.ports.map((p,i)=><p key={i}>{portsText(p)}</p>)}</section>}
     {adv.nginx&&<section><h3>Nginx file</h3><p>{adv.nginx.file||'Not found'}</p>{adv.nginx.notCopied?.length>0&&<><p>These custom lines will not be copied:</p><pre>{adv.nginx.notCopied.join('\n')}</pre></>}</section>}
     {adv.envKeys?.length>0&&<section><h3>.env values to rewrite</h3><p className="map-caption">Off by default. Turn on only the values that point to the old server.</p>{adv.envKeys.map(k=><label key={k.key} className="map-check"><input type="checkbox" checked={!!env[k.key]} onChange={e=>setEnv({...env,[k.key]:e.target.checked})}/><span><code>{k.key}</code> <span className="map-caption">{k.masked}</span></span></label>)}</section>}
-    <section><h3>Testing</h3><p>{adv.tests?.mailBlocking?`Outgoing mail is blocked ${adv.tests.mailBlocking}.`:'DockNest tests the new copy before the switch.'}</p></section>
+    <section><h3>Block outgoing email during the test</h3><p>{preview.mailBlocked?'Yes. The test copy cannot send email.':'Not possible on this server. The test copy could send real email, so check that your site does not send mail while it is being tested.'}</p></section>
     <section><h3>Switching</h3><label className="map-check"><input type="checkbox" checked={ask} onChange={e=>setAsk(e.target.checked)}/>Ask me before switching</label></section>
     <section><h3>Old copy</h3><p>DockNest asks you what to do with it after 7 days.</p></section>
-    <section><h3>Domain</h3><p>You change the DNS record yourself. DockNest shows you the record at the end.</p></section>
+    <section><h3>Domain</h3>
+     <p>{cf&&cfReady?'DockNest will change the DNS record for you.':'You change the DNS record yourself. DockNest shows you the record at the end.'}</p>
+     <label className="map-check"><input type="checkbox" checked={cf&&cfReady} disabled={!cfReady} onChange={e=>setCf(e.target.checked)}/>Switch DNS for me (Cloudflare)</label>
+     {cfReady?<p className="map-caption">Cloudflare token: Saved</p>:<div className="map-token">
+      <label className="map-field">Cloudflare token<input type="password" autoComplete="off" value={token} onChange={e=>setToken(e.target.value)}/></label>
+      <p className="map-caption">Needs permission to edit DNS for your domain only.</p>
+      <button type="button" disabled={!token||tokenBusy} onClick={saveToken}>Save token</button>
+      {tokenErr&&<Note kind="error" icon={IconCircleX} role="alert">{tokenErr}</Note>}
+     </div>}
+    </section>
     {adv.checks?.length>0&&<section><h3>Checks</h3><ul className="map-checks">{adv.checks.map(c=>{const I=CHECK_ICON[c.status]||IconInfoCircle;return <li key={c.id} className={'chk-'+c.status}><I size={18} stroke={2} aria-hidden="true"/><span><b>{c.title}</b> <span className="sr-only">{CHECK_WORD[c.status]}. </span>{c.text}</span></li>})}</ul></section>}
    </div>}
   </div>}
@@ -73,8 +85,20 @@ function StepIcon({status}){
 }
 const STATUS_WORD={done:'done',running:'in progress',failed:'failed',pending:'waiting',skipped:'skipped',undone:'undone',undo_failed:'could not be undone'};
 
+function RemoveDialog({site,onCancel,onRemove,error,busy}){
+ const [name,setName]=useState(''),[data,setData]=useState(false);
+ return <Sheet title="Remove old copy?" labelId="map-remove-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={busy||name!==site.name} onClick={()=>onRemove({confirmation:name,deleteData:data})}>Remove old copy</button></>}>
+  <p>The old copy of <b>{site.name}</b> is stopped and no longer needed. Removing it deletes the old containers. You will not be able to switch back.</p>
+  <label className="map-check"><input type="checkbox" checked={data} onChange={e=>setData(e.target.checked)}/>Also delete the old data</label>
+  {data&&<Note kind="error" icon={IconAlertTriangle}>The old data will be deleted and cannot be brought back.</Note>}
+  <label className="map-field">Type the site name to confirm<input type="text" autoComplete="off" value={name} onChange={e=>setName(e.target.value)} aria-describedby="map-remove-name"/></label>
+  <p id="map-remove-name" className="map-caption">{site.name}</p>
+  {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
+ </Sheet>;
+}
+
 export function ProgressDialog({site,to,client,moveId,onClose}){
- const [move,setMove]=useState(null),[err,setErr]=useState(''),[copied,setCopied]=useState(false),[busy,setBusy]=useState(false);
+ const [move,setMove]=useState(null),[err,setErr]=useState(''),[copied,setCopied]=useState(false),[busy,setBusy]=useState(false),[removing,setRemoving]=useState(false);
  const [tick,setTick]=useState(0);
  useEffect(()=>{
   let stop=false,t;
@@ -84,33 +108,45 @@ export function ProgressDialog({site,to,client,moveId,onClose}){
   };
   poll();return()=>{stop=true;clearTimeout(t)};
  },[client,moveId,tick]);
- const state=move?.state,finished=FINISHED.has(state);
+ const state=move?.state,finished=FINISHED.has(state),acts=move?.actions||{};
  const pct=Math.round(Math.min(100,Math.max(0,move?.progress||0)));
  async function act(fn){setBusy(true);setErr('');try{await fn();setTick(n=>n+1)}catch(e){setErr(e.message)}setBusy(false)}
  async function copy(){const d=move.dns;try{await navigator.clipboard.writeText(`${d.type} ${d.name} ${d.value}`);setCopied(true)}catch{setCopied(false)}}
  const errNote=err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>;
+ const record=d=>d&&<div className="map-record"><div><span className="map-caption">Record</span><code>{d.type} {d.name} {'→'} {d.value}</code></div><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>;
+
+ if(removing)return <RemoveDialog site={site} busy={busy} error={err} onCancel={()=>{setRemoving(false);setErr('')}} onRemove={async b=>{setBusy(true);setErr('');try{await client.removeOldCopy(moveId,b);setRemoving(false);setTick(n=>n+1)}catch(e){setErr(e.message)}setBusy(false)}}/>;
 
  if(state==='waiting_dns'||state==='done'){
   const d=move.dns,done=state==='done';
-  return <Sheet title={done?`${site.name} is live on ${to.name}`:`${site.name} is ready on ${to.name}`} labelId="map-done-title" onClose={onClose} actions={<>{!done&&<button type="button" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}<button type="button" className="primary" onClick={onClose}>Close</button></>}>
-   {done?<Note kind="ok" icon={IconCircleCheck} role="status">The domain points to the new server. All done.</Note>
+  return <Sheet title={done?`${site.name} is live on ${to.name}`:`${site.name} is ready on ${to.name}`} labelId="map-done-title" onClose={onClose} actions={<>
+   {!done&&<button type="button" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'dns'))}>Check DNS now</button>}
+   {acts.switchBack&&<button type="button" disabled={busy} onClick={()=>act(()=>client.switchBack(moveId))}>Switch back</button>}
+   {acts.askRemoveOldCopy&&<button type="button" disabled={busy} onClick={()=>setRemoving(true)}>Remove old copy</button>}
+   <button type="button" className="primary" onClick={onClose}>Close</button></>}>
+   {done?<><Note kind="ok" icon={IconCircleCheck} role="status">The domain points to the new server. All done.</Note>
+    {acts.askRemoveOldCopy?<p>It has been 7 days. <b>Remove old copy?</b> The old copy is stopped and still on {move.sourceName||'the old server'}.</p>:acts.switchBack&&<p className="map-caption">The old copy is kept and stopped. You can switch back within 7 days.</p>}</>
    :<><p>{d?'One last step: point your domain to the new server.':'The new copy is running.'}</p>
-   {d&&<div className="map-record"><div><span className="map-caption">Record</span><code>{d.type} {d.name} {'→'} {d.value}</code></div><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>}
+   {record(d)}
    <p className="map-waiting" role="status"><IconLoader2 size={18} stroke={2} aria-hidden="true" className="s-run"/>Waiting for the domain to point here{'…'}</p>
    <p className="map-caption">The old copy keeps your site online until then. When the domain points here, DockNest gets the certificate and you are done.</p></>}
    {errNote}
   </Sheet>;
  }
- const titles={failed:`Moving ${site.name} stopped`,cancelled:'Move cancelled',rolled_back:'Move undone',needs_attention:`${site.name} needs your attention`,cancelling:'Cancelling the move',rolling_back:'Undoing the move',waiting_switch:`${site.name} is ready to switch`};
+ const titles={failed:`Moving ${site.name} stopped`,cancelled:'Move cancelled',rolled_back:'Move undone',needs_attention:`${site.name} needs your attention`,cancelling:'Cancelling the move',rolling_back:'Undoing the move',waiting_switch:`${site.name} is ready to switch`,switching_back:'Switching back',switched_back:`${site.name} is back on ${move?.sourceName||'the old server'}`,cleaned:'Old copy removed'};
  const bad=state==='failed'||state==='needs_attention';
  const line=state==='cancelled'?(move.statusLine||'Nothing changed for your visitors.'):state==='rolled_back'?(move.statusLine||'Your site is back on the old server.'):(move?.statusLine||'Starting…');
- const cancelable=move&&move.cancelable&&!BUSY_WORD.has(state);
+ const cancelable=move&&acts.cancel&&!BUSY_WORD.has(state);
+ const resolve=acts.resolve||[];
+ const close=<button type="button" className={resolve.length?'':'primary'} onClick={onClose}>Close</button>;
  let actions;
- if(finished)actions=<button type="button" className="primary" onClick={onClose}>Close</button>;
+ if(state==='needs_attention')actions=<>{close}{resolve.includes('undo')&&<button type="button" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'undo'))}>Undo</button>}{resolve.includes('retry')&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.resolve(moveId,'retry'))}>Try again</button>}</>;
+ else if(finished)actions=<>{acts.switchBack&&<button type="button" disabled={busy} onClick={()=>act(()=>client.switchBack(moveId))}>Switch back</button>}{close}</>;
  else actions=<><button type="button" disabled={!cancelable||busy} onClick={()=>act(()=>client.cancel(moveId))}>{move?.cancelLabel||'Cancel'}</button>{state==='waiting_switch'&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.proceed(moveId,'owner-switch'))}>Switch now</button>}</>;
  return <Sheet title={titles[state]||`Moving ${site.name}`} labelId="map-moving-title" onClose={finished?onClose:undefined} actions={actions}>
   {!finished&&<div className="map-bar" role="progressbar" aria-label="Move progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>}
   {bad?<Note kind="error" icon={IconCircleX} role="alert">{move.error||line}</Note>:<p className="map-status" role="status">{line}</p>}
+  {state==='switched_back'&&record(move.dns)}
   {errNote}
   <ol className="map-steps">{(move?.steps||[]).map(s=><li key={s.step} className={'step-'+s.state}><StepIcon status={s.state}/><span>{s.label}<span className="sr-only">, {STATUS_WORD[s.state]||s.state}</span></span></li>)}</ol>
   {!finished&&<p className="map-caption">{cancelable?'You can cancel any time before the switch. Nothing changes for visitors.':state==='waiting_switch'?'Nothing has changed for visitors yet.':'The switch has started and cannot be cancelled.'} You can leave this page.</p>}
