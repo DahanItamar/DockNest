@@ -16,7 +16,10 @@ export function createMovesClient(api){
   // Never returns the token: {configured, zones, savedAt}
   reauth:(password,code)=>api('/auth/reauth',{password,code}),
   cloudflareStatus:()=>api('/settings/cloudflare-dns'),
-  saveCloudflareToken:token=>api('/settings/cloudflare-dns',{token},'PUT')
+  saveCloudflareToken:token=>api('/settings/cloudflare-dns',{token},'PUT'),
+  // Installs a missing package on a server (admin, needs a recent re-check). Returns {job:{id}}; progress is GET /jobs/:id.
+  install:(serverId,pkg)=>api('/servers/'+id(serverId)+'/install',{package:pkg}),
+  job:jobId=>api('/jobs/'+id(jobId))
  };
 }
 export const FINISHED=new Set(['switched_back','cleaned','done','failed','cancelled','rolled_back','needs_attention']);
@@ -31,3 +34,9 @@ export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(
 export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your site will be offline for a long time. Tick the box to continue.'
  :e?.code==='SITE_MOVING'?'This site is already being moved. Wait for that move to finish.'
  :e?.message||'Something went wrong.';
+export const PACKAGE_NAME={nginx:'nginx',docker:'Docker',compose:'Compose',certbot:'Certbot'};
+// Preflight checks that offer an install: {id,title,text,install:{package,command,supported}}
+export const installChecks=p=>[...(p?.advanced?.checks||[]),...(p?.checks||[])].filter(c=>c?.install&&PACKAGE_NAME[c.install.package]);
+// Steps of an install job. Accepts details as an object or a JSON string.
+export function jobSteps(job){let d=job?.details;if(typeof d==='string'){try{d=JSON.parse(d)}catch{d=null}}return Array.isArray(d?.steps)?d.steps:[]}
+export const jobState=job=>{const v=String(job?.status||job?.state||'');return v==='completed'||v==='succeeded'?'completed':v==='failed'?'failed':v==='running'?'running':'queued'};

@@ -1,29 +1,14 @@
 /* Map page. Every rule is scoped under .map-root. Only existing tokens are used. */
 .map-root{display:flex;flex-direction:column;gap:var(--spacing);min-width:0}
 .map-root .map-toolbar{display:flex;align-items:center;gap:var(--spacing);flex-wrap:wrap}
-.map-root .map-zoom{display:flex;gap:4px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface);padding:0 4px}
 .map-root .map-viewport{position:relative;overflow:hidden;height:max(420px,calc(100dvh - 300px));border:1px solid var(--border-subtle);border-radius:var(--radius);background-color:var(--surface-muted);background-image:radial-gradient(var(--border-subtle) 1px,transparent 1px);background-size:20px 20px;cursor:grab;touch-action:none;user-select:none}
 .map-root .map-viewport:active{cursor:grabbing}
 .map-root .map-viewport:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .map-root .map-canvas{position:absolute;left:0;top:0;transform-origin:0 0}
 .map-root .map-lines{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
-.map-root .map-lines path{fill:none;stroke:var(--border-control);stroke-width:2}
-.map-root .map-lines path.dim{opacity:.3}
-.map-root .map-lines path.drag{stroke:var(--accent);stroke-dasharray:6 4}
 .map-root .map-group{display:contents}
-.map-root .map-server,.map-root .map-site{position:absolute;box-sizing:border-box;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow);overflow:hidden}
-.map-root .map-server{padding:16px;display:flex;flex-direction:column;justify-content:center;gap:4px}
-.map-root .map-server.target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
-.map-root .map-server-title{display:flex;align-items:center;gap:8px;color:var(--accent);min-width:0}
-.map-root .map-server-title b{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--heading)}
-.map-root .map-site{padding:12px 16px;display:flex;align-items:center;gap:12px;color:var(--text-secondary)}
-.map-root .map-site>div{display:flex;flex-direction:column;min-width:0}
-.map-root .map-site.movable{cursor:grab}
-.map-root .map-site.lifted{border-color:var(--accent);opacity:.7}
-.map-root .map-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-weight:500;color:var(--heading)}
 .map-root .map-caption{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
 .map-root svg{flex:none}
-.map-root .map-hint{margin:0}
 .map-root .map-live{min-height:var(--lh-caption);font-size:var(--fs-body);color:var(--text-secondary)}
 .map-root.map-empty{align-items:center;text-align:center;padding:48px 16px;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);color:var(--text-muted)}
 .map-root.map-empty h2{margin:0;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--heading)}
@@ -40,17 +25,10 @@
 .map-root .map-none{margin:16px 0 0}
 @media(prefers-reduced-motion:reduce){.map-root *{transition:none!important;animation:none!important}}
 .map-root button:disabled,.map-root button:disabled:hover{background:var(--surface-hover);border-color:var(--surface-hover);color:var(--text-muted);opacity:1;cursor:not-allowed}
-.map-root .map-handle{position:absolute;box-sizing:border-box;width:12px;height:12px;border-radius:50%;background:var(--surface);border:2px solid var(--border-control);pointer-events:auto;z-index:1}
-.map-root .map-handle:hover,.map-root .map-handle.active{border-color:var(--accent);background:var(--accent-soft)}
 /* Move flow. Dialogs are rendered inside .map-root, so the scope still applies. */
-.map-root .map-server.blocked{opacity:.55;background:var(--surface-muted);border-style:dashed}
-.map-root .map-server.blocked .map-caption{color:var(--error)}
-.map-root .map-server.chosen{border-color:var(--accent)}
 .map-root .map-toolbar button{white-space:nowrap}
 .map-root .map-moveto{margin-left:auto;white-space:nowrap;min-height:44px}
-.map-root dialog.map-dialog{width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:0;overflow:auto;display:none;flex-direction:column}
 .map-root dialog.map-dialog[open]{display:flex}
-.map-root .map-dialog-body{padding:24px;display:flex;flex-direction:column;gap:16px;overflow:auto;font-size:var(--fs-body);line-height:var(--lh-body)}
 .map-root .map-dialog h2:focus{outline:none}
 .map-root .map-dialog h2{margin:0;font-size:var(--fs-card);line-height:var(--lh-card);color:var(--heading);overflow-wrap:break-word}
 .map-root .map-dialog h3{margin:0 0 4px;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--heading)}
@@ -72,7 +50,6 @@
 .map-root .map-adv-body{display:flex;flex-direction:column;gap:16px;padding-top:16px}
 .map-root .map-adv-body pre{margin:0;padding:12px;overflow:auto;background:var(--surface-muted);border-radius:var(--radius);font-size:var(--fs-caption)}
 .map-root .map-dialog-foot{display:flex;justify-content:flex-end;gap:12px;padding:16px 24px;border-top:1px solid var(--border-subtle);background:var(--surface)}
-.map-root .map-dialog-foot button{min-width:120px;white-space:nowrap}
 .map-root .map-bar{height:8px;border-radius:4px;background:var(--surface-hover);overflow:hidden}
 .map-root .map-bar span{display:block;height:100%;background:var(--accent);transition:width .3s}
 .map-root .map-status{font-weight:500;color:var(--heading)}
@@ -116,3 +93,71 @@
 .map-root .map-reauth-actions button{white-space:nowrap}
 .map-root .map-field input{min-height:40px}
 @media(max-width:767px){.map-root .map-reauth-actions button{flex:1;min-height:44px}.map-root .map-field input{min-height:44px}}
+
+/* Map v2: n8n-style nodes. Square nodes with a large icon and the label under them. */
+.map-root .map-toolbar{justify-content:flex-end}
+.map-root .map-warn{display:flex;align-items:center;gap:8px;margin-right:auto;color:var(--warning);font-size:var(--fs-body);line-height:var(--lh-body)}
+.map-root .map-server,.map-root .map-site,.map-root .map-db,.map-root .map-storage{position:absolute;box-sizing:border-box;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow);display:flex;align-items:center;justify-content:center}
+.map-root .map-server{color:var(--accent)}
+.map-root .map-site,.map-root .map-db,.map-root .map-storage{color:var(--primary-main)}
+.map-root .map-db{box-shadow:none;background:var(--surface-muted)}
+.map-root .map-storage{flex-direction:column;gap:8px;padding-bottom:6px}
+.map-root .map-site.lifted{opacity:.7}
+.map-root .map-site.chosen{border-color:var(--accent)}
+.map-root .map-site.lost{border-style:dashed;border-color:var(--warning)}
+.map-root .map-server.attention{border-color:var(--warning)}
+.map-root .map-server.target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.map-root .map-server.blocked{opacity:.6;background:var(--surface-muted);border-style:dashed}
+.map-root .map-server.chosen{border-color:var(--accent)}
+.map-root .map-label{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:6px;display:flex;flex-direction:column;align-items:center;text-align:center;width:144px;pointer-events:none}
+.map-root .map-server .map-label,.map-root .map-storage .map-label{width:160px}
+.map-root .map-db .map-label{width:120px}
+.map-root .map-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-weight:500;color:var(--heading)}
+.map-root .map-label .map-caption{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-root .map-caption.warn{color:var(--warning)}
+.map-root .map-caption.bad{color:var(--error)}
+.map-root .map-badge{position:absolute;top:-8px;right:-8px;box-sizing:content-box;padding:1px;border-radius:50%;background:var(--surface);color:var(--text-muted)}
+.map-root .map-badge.ok{color:var(--success)}.map-root .map-badge.warn{color:var(--warning)}
+.map-root .map-domain{position:absolute;box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--surface-muted);border:1px solid var(--border-subtle);border-radius:var(--radius);color:var(--text-secondary);min-width:0}
+.map-root .map-domain .map-name{font-weight:400;color:var(--text-secondary);flex:1}
+.map-root .map-domain .map-caption{flex:none}
+.map-root .map-lines path{fill:none;stroke-width:2}
+.map-root .map-lines .wire,.map-root .map-lines .lock{stroke:var(--border-control)}
+.map-root .map-lines .backup{stroke:var(--text-muted);stroke-width:2;stroke-dasharray:2 6;stroke-linecap:round}
+.map-root .map-lines .pending{stroke:var(--accent);stroke-dasharray:6 4}
+.map-root .map-lines .warn{stroke:var(--warning);stroke-dasharray:6 4}
+.map-root .map-lines .arr{fill:var(--border-control)}.map-root .map-lines .arr-warn{fill:var(--warning)}.map-root .map-lines .arr-pending{fill:var(--accent)}
+.map-root .map-lines marker path{stroke:none}
+.map-root .map-port{position:absolute;box-sizing:border-box;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--surface);border:2px solid var(--border-control);z-index:2;pointer-events:none}
+.map-root .map-port.grab{pointer-events:auto;cursor:grab}
+.map-root .map-port.grab::after{content:'';position:absolute;inset:-10px;border-radius:50%}
+.map-root .map-port.grab:hover,.map-root .map-port.active{border-color:var(--accent);background:var(--accent-soft)}
+.map-root .map-port.lost,.map-root .map-port.loose{border-color:var(--warning);background:var(--warning-surface)}
+.map-root .map-port.loose{width:16px;height:16px;margin:-8px 0 0 -8px}
+.map-root .map-stub{position:absolute;box-sizing:border-box;width:24px;height:24px;margin-top:-12px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border-control);border-radius:4px;background:var(--surface);color:var(--text-muted);pointer-events:none}
+.map-root .map-stub::before{content:'';position:absolute;left:-9px;top:11px;width:8px;border-top:2px solid var(--border-control)}
+.map-root .map-controls{position:absolute;right:16px;bottom:16px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow);cursor:default}
+.map-root .map-hint{display:flex;align-items:flex-start;gap:8px;margin:0;color:var(--text-secondary);font-size:var(--fs-body);line-height:var(--lh-body)}
+.map-root .map-hint svg{margin-top:2px}
+.map-root .map-meter{height:6px;width:64px;border-radius:3px;background:var(--surface-hover);overflow:hidden}
+.map-root .map-meter span{display:block;height:100%;background:var(--primary-main)}
+.map-root .map-list-text{display:flex;flex-direction:column;flex:1;min-width:0}
+.map-root .map-list-store{display:flex;flex-direction:column;gap:12px;margin-top:16px;border-top:1px solid var(--border-subtle);padding-top:12px}
+.map-root .map-list-store>div{display:flex;flex-direction:column;gap:4px}
+.map-root .map-list-store .map-meter{width:100%}
+/* Move and install sheets are one size, with the same two footer buttons in the same place on every step. */
+.map-root dialog.map-dialog{width:min(560px,calc(100vw - 32px));height:min(600px,calc(100dvh - 32px));padding:0;overflow:hidden;display:none;flex-direction:column}
+.map-root .map-dialog-body{flex:1;min-height:0;padding:24px;display:flex;flex-direction:column;gap:16px;overflow:auto;font-size:var(--fs-body);line-height:var(--lh-body)}
+.map-root .map-dialog-foot{flex:none}
+.map-root .map-dialog-foot button{width:148px;white-space:nowrap}
+.map-root .map-inline-actions{display:flex;gap:12px;flex-wrap:wrap}
+.map-root .map-inline-actions button{white-space:nowrap}
+.map-root .map-install{display:flex;flex-direction:column;gap:12px}
+.map-root .map-code{display:flex;flex-direction:column;align-items:flex-end;gap:8px;padding:12px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted)}
+.map-root .map-code code{align-self:stretch;overflow-wrap:anywhere;font-size:var(--fs-body);color:var(--heading)}
+.map-root .map-code button{white-space:nowrap}
+@media(max-width:767px){
+  .map-root dialog.map-dialog{width:100vw;height:100dvh;max-width:none;max-height:none;border-radius:0}
+ .map-root .map-dialog-foot button{width:auto}
+ .map-root .map-controls button,.map-root .map-inline-actions button{min-height:44px}
+}

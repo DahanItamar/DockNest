@@ -17,22 +17,25 @@ const state={
   {id:'d',name:'zeta-Srv',host:'d.example.invalid',port:22,username:'root',status:'connected'}
  ],
  sites:[
-  {id:'1',name:'shop.example.com',serverId:'b',config:{containers:[1,2,3]}},
-  {id:'2',name:'blog.example.com',serverId:'a',config:{containers:[1]}},
+  {id:'1',name:'shop.example.com',serverId:'b',config:{containers:[1,2,3],services:[{container:'db',engine:'postgres',version:'16.2',database:'shop_db'},{container:'cache',engine:'redis',version:'7.4.1'},{container:'app',engine:'generic'}],domains:['shop.example.com']}},
+  {id:'2',name:'blog.example.com',serverId:'a',config:{containers:[1],domains:['blog.example.com','www.blog.example.com']}},
   {id:'3',name:long,serverId:'b',config:{containers:[1,2]}},
   {id:'4',name:'api.example.com',serverId:'a'},
   {id:'5',name:'wiki.example.com',serverId:'b'}
  ],
- jobs:[],backups:[],policies:[],audit:[],storage:{used:0,total:1e12},worker:{online:true}
+ jobs:[],backups:[{id:'bk1',siteId:'1'},{id:'bk2',siteId:'2'}],policies:[{siteId:'3',enabled:true},{siteId:'4',enabled:false}],audit:[],storage:{used:0,total:1e12},worker:{online:true}
 };
+const targets={targets:[{id:'t1',name:'nas-backup',kind:'sftp',status:'connected',capacity_bytes:2e12,trackedBytes:8e11},{id:'t2',name:'offsite-s3',kind:'s3',status:'connected',trackedBytes:5e9}],activeTargetId:'t1'};
 let browser;const errors=[];
 // Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
 // Shapes follow docs/moving-sites.md, "API for the UI".
-const mock={previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
+const mock={needNginx:false,jobStatus:'running',installs:[],previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
 const HASH='a'.repeat(64);
 function preview({siteId,targetServerId,options}){
  const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
  const base={id,siteId,targetServerId,ok:true,mailBlocked:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual',cloudflareAvailable:false},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
+const nginx={id:'nginx',status:'block',title:'itamar-Srv needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported}};
+ if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['itamar-Srv needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
  return base;
@@ -78,6 +81,9 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
    if(parts.length===3)return route.fulfill({json:moveState()});
    return route.fulfill({json:[]});
   }
+  if(endpoint==='/api/storage-targets')return route.fulfill({json:targets});
+  if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
+  if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to itamar-Srv',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
   return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?appState:endpoint==='/api/version'?{version:'0.0.0'}:{}});
  });
@@ -94,11 +100,16 @@ async function shot(page,scheme,size){if(shots)await page.screenshot({path:path.
 const scaleOf=page=>page.locator('.map-canvas').evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).a);
 
 async function dragSite(page,siteId,serverName,release=true){
- const src=(await boxes(page,`.map-site[data-site="${siteId}"]`))[0],t=(await page.locator('.map-server',{hasText:serverName}).first().boundingBox());
- await page.mouse.move(src.x+src.w/2,src.y+src.h/2);await page.mouse.down();
+ const port=page.locator(`[data-port-site="${siteId}"]`).first(),src=await port.boundingBox(),t=(await page.locator('.map-server',{hasText:serverName}).first().boundingBox());
+ await page.mouse.move(src.x+src.width/2,src.y+src.height/2);await page.mouse.down();
  await page.mouse.move(t.x+t.width/2,t.y+t.height/2,{steps:5});
- await page.locator('.map-lines path.drag').waitFor();
+ await page.locator('.map-lines path.warn').waitFor();
  if(release){await page.mouse.up();}
+}
+async function dragSiteToEmpty(page,siteId){
+ const port=page.locator(`[data-port-site="${siteId}"]`).first(),src=await port.boundingBox(),vp=await page.locator('.map-viewport').boundingBox();
+ await page.mouse.move(src.x+src.width/2,src.y+src.height/2);await page.mouse.down();
+ await page.mouse.move(src.x-40,Math.min(vp.y+vp.height-60,src.y+90),{steps:5});await page.mouse.up();
 }
 const dialog=page=>page.getByRole('dialog');
 async function reverify(page){const d=page.getByRole('dialog');await d.getByLabel('Password').fill('pw');await d.getByLabel('Authenticator code').fill('123456');await d.getByRole('button',{name:'Verify and continue'}).click();await d.getByRole('group',{name:'Please confirm it is you'}).waitFor({state:'detached'});}
@@ -106,7 +117,7 @@ async function trapped(page){ // focus stays inside the open dialog after severa
  for(let i=0;i<8;i++){await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('dialog')),true,'focus trapped');}
 }
 async function moveFlow(page,scheme){
- Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
+ Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false,needNginx:false,jobStatus:'running',installs:[]});
  const save=page.getByRole('button',{name:'Save changes'});
  assert.equal(await save.isDisabled(),true,'save starts disabled');
  // Keyboard path: focus a site, press Enter, choose a server
@@ -118,9 +129,8 @@ async function moveFlow(page,scheme){
  await dialog(page).getByRole('button',{name:/^itamar-Srv/}).click();
  await page.getByText(/will move to itamar-Srv/).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
- await page.getByRole('button',{name:'Undo change'}).click();
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
  assert.equal(await save.isDisabled(),true);
- await page.locator('.map-fade').waitFor();await page.getByText('Part of the map is out of view',{exact:false}).waitFor();
  // Blocked target: greyed with the reason; nothing pending
  await dragSite(page,'1','Quiet server',false);
  await page.locator('.map-server.blocked').getByText('This server is not connected. Reconnect it first.').waitFor();
@@ -135,7 +145,7 @@ async function moveFlow(page,scheme){
  await page.mouse.up();
  await page.getByText(/will move to itamar-Srv/).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
- assert.equal(await page.getByRole('button',{name:'Undo change'}).count(),1);
+ assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).count(),1);
  await shot(page,scheme,'1440-3-pending');
  // Review dialog: simple summary, advanced collapsed
  await save.click();
@@ -299,6 +309,149 @@ mock.siteMoving=true;await dragSite(page,'1','zeta-Srv');await save.click();
  await d.getByRole('button',{name:'Cancel'}).click();mock.blockA=false;
 }
 
+async function stateIsClean(page,label){
+ const save=page.getByRole('button',{name:'Save changes'});
+ assert.equal(await save.isDisabled(),true,label+': save stays off');
+ assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).count(),0,label+': nothing to cancel');
+ assert.equal(await page.locator('.map-lines path.warn, .map-lines path.pending').count(),0,label+': no changed line');
+ assert.equal(await page.locator('.map-site.lost').count(),0,label+': no site is unconnected');
+}
+// Databases and domains are locked to their site: nothing about them can be dragged, selected, focused or dropped on.
+async function lockedNodes(page,scheme){
+ for(const sel of ['.map-db','.map-domain']){
+  const node=page.locator(sel).first();
+  assert.equal(await node.getAttribute('tabindex'),null,sel+' is not focusable');
+  assert.equal(await node.locator('[data-port-site]').count(),0,sel+' has no port');
+  const siteBefore=(await boxes(page,'.map-site'))[0],before=await node.boundingBox();
+  await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();
+  await page.mouse.move(before.x+before.width/2+120,before.y+before.height/2+80,{steps:5});
+  await stateIsClean(page,sel+' while dragging');
+  await page.mouse.up();
+  await stateIsClean(page,sel+' after drop');
+  // Moving the background moves everything together, so the node never leaves its site
+  const after=await node.boundingBox(),siteAfter=(await boxes(page,'.map-site'))[0];
+  assert.ok(Math.abs((after.x-siteAfter.x)-(before.x-siteBefore.x))<1&&Math.abs((after.y-siteAfter.y)-(before.y-siteBefore.y))<1,sel+' stays attached to its site');
+  await page.getByRole('button',{name:'Fit to screen'}).click();
+ }
+ // The short line to a database has no handle and cannot be pulled off either
+ const line=await page.locator('.map-lines path.lock').first().boundingBox();
+ await page.mouse.move(line.x+line.width/2,line.y+line.height/2);await page.mouse.down();await page.mouse.move(line.x+line.width/2+60,line.y+line.height/2+120,{steps:4});
+ await stateIsClean(page,'line while dragging');await page.mouse.up();await stateIsClean(page,'line after drop');
+ assert.equal(await page.locator('.map-lines path.lock').count(),2,'database lines unchanged');
+ // Dropping a site line on a database or domain does not connect it anywhere
+ const db=await page.locator('.map-db').first().boundingBox(),port=await page.locator('[data-port-site="3"]').first().boundingBox();
+ await page.getByRole('button',{name:'Fit to screen'}).click();
+ const p2=await page.locator('[data-port-site="3"]').first().boundingBox(),d2=await page.locator('.map-db').first().boundingBox();
+ await page.mouse.move(p2.x+p2.width/2,p2.y+p2.height/2);await page.mouse.down();await page.mouse.move(d2.x+d2.width/2,d2.y+d2.height/2,{steps:5});
+ assert.equal(await page.locator('.map-server.target').count(),0,'a database is not a drop target');
+ await page.mouse.up();
+ await page.getByText('Connect every site to a server to save').waitFor();
+ assert.equal(await page.getByRole('button',{name:'Save changes'}).isDisabled(),true);
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ await stateIsClean(page,'after cancel');void db;void port;
+}
+async function reconnectChecks(page,scheme){
+ const save=page.getByRole('button',{name:'Save changes'});
+ // Pull the line off the server and let go in empty space: not connected, save is off with the reason
+ await dragSiteToEmpty(page,'3');
+ await page.locator('.map-site.lost').waitFor();
+ await page.getByText('Connect every site to a server to save').waitFor();
+ assert.equal(await save.isDisabled(),true,'save is off while a site is not connected');
+ await page.locator('.map-site.lost .map-caption',{hasText:'Not connected'}).waitFor();
+ assert.equal(await page.locator('.map-lines path.warn').count(),1,'dashed amber line');
+ assert.equal(await page.locator('.map-lines path.wire').count(),4,'other lines stay');
+ assert.equal((await save.evaluate(e=>getComputedStyle(e).backgroundColor))===(await page.getByRole('button',{name:'Cancel',exact:true}).evaluate(e=>getComputedStyle(e).backgroundColor)),false,'save looks disabled');
+ await shot(page,scheme,'1440-3b-not-connected');
+ // Only one change at a time
+ const p5=await page.locator('[data-port-site="5"]').first().boundingBox();await page.mouse.move(p5.x+p5.width/2,p5.y+p5.height/2);await page.mouse.down();
+ await page.getByText('Save or cancel the current change first.').waitFor();
+ await page.mouse.up();
+ // Cancel restores the line
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ await stateIsClean(page,'after cancel');
+ assert.equal(await page.locator('.map-lines path.wire').count(),5,'line restored');
+ // Dropping it back on its own server undoes the change
+ await dragSiteToEmpty(page,'3');await page.locator('.map-site.lost').waitFor();
+ await dragSite(page,'3','mobiX-Srv');
+ await page.locator('.map-live',{hasText:'stays on mobiX-Srv'}).waitFor();
+ await stateIsClean(page,'back on its own server');
+ // Reconnect to a different server: the existing move, save is on and the warning is gone
+ await dragSiteToEmpty(page,'3');await page.locator('.map-site.lost').waitFor();
+ await dragSite(page,'3','itamar-Srv');
+ await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
+ assert.equal(await page.getByText('Connect every site to a server to save').count(),0);
+ assert.equal(await page.locator('.map-lines path.pending').count(),1,'new line');
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ // Keyboard: Delete disconnects, Enter opens "Connect to", the sheet connects
+ const card=page.locator('.map-site[data-site="3"]');
+ await card.focus();await page.keyboard.press('Delete');
+ await page.locator('.map-site.lost').waitFor();
+ await card.focus();await page.keyboard.press('Enter');
+ const d=dialog(page);
+ await d.getByRole('heading',{name:/^Connect .* to$/}).waitFor();
+ await page.waitForFunction(()=>![...document.querySelectorAll('dialog button')].some(b=>/Checking/.test(b.textContent)));
+ await d.getByRole('button',{name:/^mobiX-Srv/}).click();
+ await page.locator('.map-live',{hasText:'stays on mobiX-Srv'}).waitFor();
+ await stateIsClean(page,'keyboard reconnect');
+}
+async function installFlow(page,scheme){
+ const d=dialog(page),save=page.getByRole('button',{name:'Save changes'});
+ if(await page.getByRole('button',{name:'Cancel',exact:true}).count())await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ Object.assign(mock,{needNginx:true,needReauth:false,installs:[],jobStatus:'running',blockA:false});
+ await dragSite(page,'1','itamar-Srv');
+ await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
+ await save.click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ await d.getByText('itamar-Srv needs nginx.',{exact:false}).first().waitFor();
+ const sizes=[],feet=[];
+ const measure=async()=>{sizes.push(await d.boundingBox());feet.push(await d.locator('.map-dialog-foot button').evaluateAll(bs=>bs.map(b=>{const r=b.getBoundingClientRect();return [r.x,r.y,r.width,r.height].map(Math.round)})))};
+ await measure();
+ await shot(page,scheme,'1440-9b-install-needed');
+ assert.equal(await d.getByRole('button',{name:'Install nginx'}).count(),1);
+ // Show command: code box, Copy, Check again
+ await d.getByRole('button',{name:'Show command'}).click();
+ await d.getByRole('heading',{name:'Install nginx yourself'}).waitFor();
+ await d.getByText('sudo apt-get update && sudo apt-get install -y nginx').waitFor();
+ await d.getByRole('button',{name:'Copy'}).waitFor();
+ await measure();await shot(page,scheme,'1440-9c-command');
+ await d.getByRole('button',{name:'Close'}).click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ // Install: needs a fresh sign-in check, then the progress
+ await d.getByRole('button',{name:'Install nginx'}).click();
+ await d.getByRole('heading',{name:'Install nginx on itamar-Srv'}).waitFor();
+ await measure();
+ mock.needReauth=true;
+ await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
+ await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await shot(page,scheme,'1440-9d-install-confirm');
+ await reverify(page);
+ await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
+ assert.deepEqual(mock.installs,[{package:'nginx'}]);
+ await d.getByText('Connected to itamar-Srv').waitFor();
+ assert.equal(await d.getByRole('button',{name:'Check again'}).isDisabled(),true,'check again waits for the install');
+ await measure();await shot(page,scheme,'1440-9e-installing');
+ mock.jobStatus='completed';mock.needNginx=false;
+ await d.getByRole('heading',{name:'nginx is installed'}).waitFor({timeout:6000});
+ await d.getByRole('button',{name:'Check again'}).click();
+ await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+ await measure();
+ for(const s of sizes){assert.equal(s.width,sizes[0].width,'same sheet width');assert.equal(s.height,sizes[0].height,'same sheet height');assert.equal(s.x,sizes[0].x);assert.equal(s.y,sizes[0].y)}
+ for(const f of feet)assert.deepEqual(f.at(-1),feet[0].at(-1),'primary button in the same place on every step');
+ for(const f of feet)assert.deepEqual(f.at(-2),feet[0].at(-2),'secondary button in the same place on every step');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ // Unsupported systems: a plain note, no Install button; the command only when it is known
+ mock.needNginx=true;mock.unsupported=true;
+ await dragSite(page,'1','itamar-Srv');await save.click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ assert.equal(await d.getByRole('button',{name:'Install nginx'}).count(),0);
+ await d.getByText('DockNest cannot install nginx on this system yet.',{exact:false}).waitFor();
+ assert.equal(await d.getByRole('button',{name:'Show command'}).count(),1);
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ mock.needNginx=false;mock.unsupported=false;
+}
+
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  for(const scheme of ['light','dark']){
@@ -309,9 +462,17 @@ try{
    assert.equal(await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).getAttribute('aria-current'),'page');
    assert.equal(await page.locator('.map-server').count(),4,'servers');
    assert.equal(await page.locator('.map-site').count(),5,'sites');
-   assert.equal(await page.locator('.map-lines path:not(.drag)').count(),5,'connectors');
-   assert.equal(await page.locator('.map-handle').count(),4+5,'connection handles');
-   assert.equal(await page.locator('.map-handle').first().evaluate(e=>e.getBoundingClientRect().width>0),true);
+   assert.equal(await page.locator('.map-lines path.wire').count(),5,'connectors');
+   assert.equal(await page.locator('.map-port.in.grab').count(),5,'incoming ports of sites');
+   assert.equal(await page.locator('.map-db').count(),2,'databases (generic services are not shown)');
+   assert.equal(await page.locator('.map-domain').count(),2,'domains');
+   assert.equal(await page.locator('.map-storage').count(),2,'backup storage');
+   assert.equal(await page.locator('.map-lines path.backup').count(),3,'backup lines');
+   assert.equal(await page.locator('.map-stub').count(),2,'open outputs');
+   await page.getByRole('img',{name:'PostgreSQL 16.2 · shop_db, part of shop.example.com'}).waitFor();
+   await page.getByRole('img',{name:'Redis 7.4.1, part of shop.example.com'}).waitFor();
+   await page.getByRole('img',{name:'blog.example.com and 1 more domain, domain of blog.example.com'}).waitFor();
+   await page.getByText('1.1 TB free of 1.8 TB').waitFor();
    // Order: servers by name
    const names=await page.locator('.map-server .map-name').allTextContents();
    assert.deepEqual(names,[...names].sort((x,y)=>x.toLowerCase()<y.toLowerCase()?-1:1),'server order');
@@ -322,7 +483,7 @@ try{
    await page.getByText('Needs attention').waitFor();
    assert.ok(await page.locator('.map-lines').getAttribute('aria-hidden')==='true');
    // No overlaps (screen space)
-   const all=[...await boxes(page,'.map-server'),...await boxes(page,'.map-site')];
+   const all=[...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-db'),...await boxes(page,'.map-domain'),...await boxes(page,'.map-storage')];
    for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.ok(!overlap(all[i],all[j]),'overlap '+i+' '+j);
    // Long names truncate inside the card
    const card=page.locator('.map-site',{hasText:'very-long-site-name'});
@@ -332,8 +493,8 @@ try{
    assert.ok(await page.locator('.map-hint').evaluate(e=>e.getBoundingClientRect().bottom<=window.innerHeight),'hint in view');
    // Fit shows everything inside the viewport
    const vp=await page.locator('.map-viewport').boundingBox();
-   const kFit=await scaleOf(page);assert.ok(kFit>=0.85-0.001&&kFit<=1,"fit scale between 85% and 100%");
-   if(kFit>0.851)for(const b of all)assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
+   const kFit=await scaleOf(page);assert.ok(kFit>=0.45-0.001&&kFit<=1,"fit scale between 45% and 100%");
+   if(kFit>0.451)for(const b of all)assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
    assert.ok(parseFloat(await page.locator(".map-site .map-name").first().evaluate(e=>getComputedStyle(e).fontSize))===14,"card text uses body size");
    // Auto layout is stable across a reload
    const before=JSON.stringify(await boxes(page,'.map-site'));
@@ -356,7 +517,10 @@ try{
    await page.mouse.move(m.x+m.width/2,m.y+m.height/2);await page.mouse.wheel(0,-300);
    await page.waitForFunction(k=>new DOMMatrix(getComputedStyle(document.querySelector('.map-canvas')).transform).a>k,k0);
    await page.getByRole('button',{name:'Fit to screen'}).click();
+   await lockedNodes(page,scheme);
+   await reconnectChecks(page,scheme);
    await moveFlow(page,scheme);
+   await installFlow(page,scheme);
    await page.getByRole('button',{name:'Fit to screen'}).click();
    await fits(page,'desktop '+scheme);
    await shot(page,scheme,'1440');
@@ -370,9 +534,11 @@ try{
    assert.equal(await page.getByRole('button',{name:/Save changes/}).count(),0);
    assert.equal(await page.locator('.map-site.movable').count(),0);
    await page.locator('.map-viewport').focus();
-   assert.equal(await page.getByRole('button',{name:'Undo change'}).count(),0);
+   assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).count(),0);
    const src=(await boxes(page,'.map-site'))[0];await page.mouse.move(src.x+10,src.y+10);await page.mouse.down();await page.mouse.move(src.x+10,src.y+300,{steps:4});await page.mouse.up();
-   assert.equal(await page.locator('.map-lines path.drag').count(),0,'operators cannot drag');
+   assert.equal(await page.locator('.map-lines path.warn').count(),0,'operators cannot drag');
+   assert.equal(await page.locator('[data-port-site]').count(),0,'operators have no grab handles');
+   assert.equal(await page.locator('.map-storage').count(),0,'operators do not load storage');
    await context.close();
   }
   // Phone list
@@ -381,7 +547,7 @@ try{
    await page.locator('.map-list').waitFor();
    assert.equal(await page.locator('.map-canvas').count(),0,'no canvas on phone');
      const heads=await page.locator('.map-list h2').allTextContents();
-   assert.deepEqual(heads,['itamar-Srv','mobiX-Srv','Quiet server with a rather long name that must not break','zeta-Srv']);
+   assert.deepEqual(heads,['itamar-Srv','mobiX-Srv','Quiet server with a rather long name that must not break','zeta-Srv','Backup storage']);
    assert.equal(await page.locator('.map-list li').count(),5);
    await page.getByText('No sites on this server yet.').first().waitFor();
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
