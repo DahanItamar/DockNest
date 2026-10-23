@@ -10,8 +10,16 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Changed
 
+- Storage card buttons share the full width of the card, so a card with two buttons has no empty space beside them.
 - Retention after a successful upgrade keeps exactly the running and the previous DockNest image and removes every other image of the installation's repository that no container uses (including legacy tags such as `docknest:sqlite-online`), its recorded untagged images, and untagged images with the new Dockerfile label `io.github.dahanitamar.docknest` (old releases and build stages). Never `--force`, never a prune command, never another repository.
 - The upgrade ends with a `Cleaned up: N old DockNest images` line, also written to the status file as the additive `cleanup` field (accepted by the host updater and the API transport). From source it also prints the optional, host-wide `docker builder prune --filter until=168h`; the script does not trim the build cache itself because Docker cannot scope it to one project.
+
+### Security
+
+- Host updater: an in-app upgrade of an install that runs an image the broker does not recognise as `ghcr.io/dahanitamar/docknest:<version>` (a mirror, or no tag) is now refused (`state-mismatch`, nothing changed) instead of pulling that image by its tag without verifying it. Such installs upgrade from the command line.
+- Host updater: on start, the broker reads its last published `status.json` back through the `status/` directory descriptor without following links (a root-owned regular file only), so a planted link or forged file in the volume cannot turn an interrupted run into a success and lift the block.
+- CI: every action in the Verify workflow (`ci.yml`), whose result the release gate trusts, is pinned to a full commit SHA like the release workflows, and no checkout keeps the job token in `.git/config` (`persist-credentials: false`).
+- Dependencies: Vite 7.3.7 (development server only; fixes GHSA-9jrq-w75r-8gcw, GHSA-rq7h-c2jc-7f22 and the bundled `launch-editor` advisories). `npm audit` reports no known vulnerabilities.
 
 ## [2.4.1] - 2026-10-23
 

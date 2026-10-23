@@ -600,6 +600,19 @@ test('image mode: --expect-image-digest pulls and persists name:X.Y.Z@sha256, re
   assert.equal(f.run('--version', 'v2.1.0', '--expect-image-digest', 'sha256:abc').status, 1);
 });
 
+test('an updater run (--expect-commit) in image mode without a verified digest is refused before anything is pulled', { skip: !shell }, async t => {
+  const f = await fixture(t), env = join(f.work, '.env'), sha = git(f.work, 'rev-parse', 'v2.1.0^{commit}');
+  await writeFile(join(f.state, 'image-mode'), '');
+  // An image name the broker does not recognise as the published one (a mirror) makes it send source-mode flags only.
+  await writeFile(env, 'APP_ORIGIN=https://docknest.example.invalid\nDOCKNEST_IMAGE=registry.example.invalid/docknest:2.0.0\n');
+  const result = f.run('--version', 'v2.1.0', '--expect-commit', sha, '--no-fetch', '--upgrade-only', '--request-id', 'req-2');
+  assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /pulled unverified/);
+  const status = await f.status();
+  assert.deepEqual([status.ok, status.reason], [false, 'state-mismatch']);
+  assert.doesNotMatch(await f.read('calls'), /pull api worker/); assert.equal(await f.read('version'), '2.0.0');
+  assert.equal(f.head(), 'v2.0.0'); assert.match(await readFile(env, 'utf8'), /DOCKNEST_IMAGE=registry\.example\.invalid\/docknest:2\.0\.0/);
+});
+
 test('manual image mode pulls the digest from the verified manifest, pins it in .env and refuses another image name', { skip: !shell }, async t => {
   const f = await fixture(t), env = join(f.work, '.env'), origin = join(f.root, 'origin'), digest = 'sha256:' + '7'.repeat(64);
   await writeFile(join(f.state, 'image-mode'), '');

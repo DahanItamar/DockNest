@@ -375,6 +375,23 @@ def read_work_status(dir_fd, owner_uid):
 PUBLISHED = ('status.json', 'current.json', 'service.json')
 
 
+def read_published(dir_fd, name, owner_uid=0):
+    """One of the broker's own published files, read back on start (reconcile): O_NOFOLLOW|O_NONBLOCK relative to the
+    status/ descriptor, a single-link regular file of root within 16 KiB. None when absent. A planted link or FIFO is
+    never followed or read, so a forged file cannot turn an interrupted run into a success."""
+    if name not in PUBLISHED: raise ValueError('not a published file')
+    try: fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, 'O_CLOEXEC', 0), dir_fd=dir_fd)
+    except FileNotFoundError: return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid or info.st_nlink != 1 or info.st_size > STATUS_CAP:
+            raise ValueError('%s is not a single-link regular file of root within 16 KiB' % name)
+        data = os.read(fd, STATUS_CAP + 1)
+        if len(data) > STATUS_CAP: raise ValueError('%s larger than 16 KiB' % name)
+        return data
+    finally: os.close(fd)
+
+
 def publish(dir_fd, name, document):
     """Exclusive temporary name, explicit 0644, fsync, rename. Only the three allow-listed names."""
     if name not in PUBLISHED: raise ValueError('not a published file')
@@ -970,9 +987,9 @@ class Broker:
         self.refresh()
         with StateFile() as state:
             last = None
-            try:
-                with open(os.path.join(self.host.status_dir, 'status.json'), 'rb') as handle: last = json.loads(handle.read(STATUS_CAP))
-            except (OSError, ValueError): pass
+            try: last = json.loads(read_published(self.open_status(), 'status.json') or b'null')
+            except (OSError, ValueError, RecursionError): last = None
+            if not isinstance(last, dict): last = None
             active = state['active']
             result = reconcile(state, last, time.time())
             if result:

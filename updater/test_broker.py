@@ -271,6 +271,17 @@ class PathTests(unittest.TestCase):
         os.unlink(os.path.join(self.dir, 'status.json')); self.write(b'x' * (b.STATUS_CAP + 1))
         with self.assertRaises(ValueError): b.read_work_status(self.fd, self.uid)
 
+    def test_published_status_is_read_back_without_following_links(self):
+        self.assertIsNone(b.read_published(self.fd, 'status.json', self.uid))
+        self.write(b'{"phase":"done"}'); self.assertEqual(b.read_published(self.fd, 'status.json', self.uid), b'{"phase":"done"}')
+        with self.assertRaises(ValueError): b.read_published(self.fd, 'status.json', self.uid + 1)  # not root's
+        with self.assertRaises(ValueError): b.read_published(self.fd, '../status.json', self.uid)
+        os.unlink(os.path.join(self.dir, 'status.json'))
+        self.write(b'{"phase":"done","ok":true}', 'forged'); os.symlink('forged', os.path.join(self.dir, 'status.json'))
+        with self.assertRaises(OSError): b.read_published(self.fd, 'status.json', self.uid)  # O_NOFOLLOW
+        os.unlink(os.path.join(self.dir, 'status.json')); os.mkfifo(os.path.join(self.dir, 'status.json'))
+        with self.assertRaises(ValueError): b.read_published(self.fd, 'status.json', self.uid)  # never blocks on a FIFO
+
     def test_publish_is_atomic_0644_and_allow_listed(self):
         old = os.umask(0o077)
         try: b.publish(self.fd, 'service.json', {'a': 1})
