@@ -59,7 +59,6 @@ test('blocked moves lead with one plain sentence naming the first reason', () =>
     [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'Port 8082 and the next 100 ports are all used on new-srv.'],
     [f => { f.dns.records = [{ type: 'CNAME', name: 'shop.example.com', value: 'shop.host.example.net' }]; }, 'shop.example.com is a CNAME record, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
     [f => { f.dns.records.push({ type: 'A', name: 'shop.example.com', value: '203.0.113.8' }); }, 'shop.example.com has 2 A records, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
-    [f => { f.site.timings = { backupSeconds: 1500, restoreSeconds: 1000 }; }, 'Shop is too large to move safely: the final copy would keep it offline for about 42 minutes, longer than the 30 minute limit.'],
   ];
   for (const [change, sentence] of cases) {
     const result = evaluateMove(facts(change));
@@ -148,6 +147,13 @@ test('planPorts remaps only conflicts, keeps host IPs, honours reservations and 
   assert.deepEqual(planPorts([], [1, 2]), { map: [], exhausted: [] });
 });
 
+test('nginx without a conf.d include, a stopped nginx and non-bridge networks are refused with a reason', () => {
+  assert.match(evaluateMove(facts(f => { f.target.nginx.confDir = null; })).sentence, /does not include a conf\.d folder/);
+  assert.match(evaluateMove(facts(f => { f.target.nginx.running = false; })).sentence, /not running/);
+  assert.match(evaluateMove(facts(f => { f.site.networks = [{ name: 'mesh', driver: 'overlay' }]; })).sentence, /overlay driver/);
+  assert.equal(evaluateMove(facts(f => { f.site.networks = [{ name: 'shop_default', driver: 'bridge' }]; })).canStart, true);
+});
+
 test('static sites skip Docker and Compose checks', () => {
   const result = evaluateMove(facts(f => { f.site.kind = 'static'; f.site.ports = []; f.target.dockerVersion = null; f.target.composeVersion = null; f.target.architecture = 'aarch64'; }));
   assert.equal(result.canStart, true);
@@ -161,6 +167,11 @@ test('downtime estimate is honest and explained', () => {
   const unknown = evaluateMove(facts(f => { f.site.timings = undefined; }));
   assert.equal(unknown.canStart, true); assert.match(only(unknown, 'downtime')[0].text, /cannot estimate the downtime yet/);
   assert.equal(unknown.sentence, 'Shop is ready to move to new-srv. It stays online while the copy is tested.');
+  // Owner decision: more than 30 minutes is an amber warning that needs "Move anyway", never a refusal.
+  const long = evaluateMove(facts(f => { f.site.timings = { backupSeconds: 1500, restoreSeconds: 900 }; }));
+  assert.equal(long.canStart, true); assert.equal(long.needsMoveAnyway, true);
+  assert.equal(only(long, 'downtime')[0].status, 'warn'); assert.match(only(long, 'downtime')[0].text, /Move anyway/);
+  assert.equal(evaluateMove(facts()).needsMoveAnyway, false);
   assert.equal(describeDuration(12), 'about 10 seconds'); assert.equal(describeDuration(240), 'about 4 minutes'); assert.equal(describeDuration(7200), 'about 2 hours');
 });
 

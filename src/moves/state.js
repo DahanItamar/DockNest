@@ -10,7 +10,9 @@
 // - Undo runs in reverse order over steps that changed something. Undo never deletes a backup or user data
 //   that existed before the move; it only removes what the step journaled as created by this move.
 
-export const MOVE_STATES = Object.freeze(['queued', 'running', 'waiting', 'rolling_back', 'recovery_required', 'completed', 'retention_expired', 'switching_back', 'rolled_back', 'cancelled', 'failed', 'switched_back', 'cleaned']);
+// draft: a reviewed preview (POST /api/moves) that has not been started; it holds the site's slot until started,
+// replaced by a newer preview, cancelled or expired. It blocks no other work on the site.
+export const MOVE_STATES = Object.freeze(['draft', 'queued', 'running', 'waiting', 'rolling_back', 'recovery_required', 'completed', 'retention_expired', 'switching_back', 'rolled_back', 'cancelled', 'failed', 'switched_back', 'cleaned']);
 // Must equal the list in the site_moves_active index (src/migrations.js, migration 6).
 export const TERMINAL_STATES = Object.freeze(['rolled_back', 'cancelled', 'failed', 'switched_back', 'cleaned']);
 export const STEP_STATES = Object.freeze(['pending', 'running', 'done', 'failed', 'skipped', 'undone', 'undo_failed']);
@@ -18,6 +20,7 @@ export const WAITING_FOR = Object.freeze(['owner-switch', 'dns']);
 export const DNS_MODES = Object.freeze(['manual', 'cloudflare']);
 
 const transitions = {
+  draft: ['queued', 'cancelled'],
   queued: ['running', 'cancelled', 'failed'],
   running: ['waiting', 'rolling_back', 'recovery_required', 'completed', 'cancelled', 'failed'],
   waiting: ['running', 'rolling_back', 'recovery_required'],
@@ -59,6 +62,8 @@ export class MoveStateError extends Error {
 export const isTerminal = state => TERMINAL_STATES.includes(state);
 // Holds the per-site slot (unique index) and blocks other mutating work on the site.
 export const isActive = state => MOVE_STATES.includes(state) && !isTerminal(state);
+// Active and past the preview: the site is being moved, so other mutating work on it is refused.
+export const isMoving = state => isActive(state) && state !== 'draft';
 export const canTransition = (from, to) => Boolean(TRANSITIONS[from]?.includes(to));
 export function assertTransition(from, to) {
   if (!MOVE_STATES.includes(from) || !MOVE_STATES.includes(to)) throw new MoveStateError('unknown-state', `Unknown move state ${JSON.stringify(MOVE_STATES.includes(from) ? to : from)}.`);
@@ -132,6 +137,7 @@ const switchStarted = steps => { const step = steps[indexOf(steps, SWITCH_STEP)]
 // Whether "Cancel" is offered, and what it does. Before any change: the move just ends. With changes on the target or a
 // stopped source: everything is undone first ("Cancelling..."). From the switch on, cancel is refused; use switch back.
 export function cancelDecision(move, steps) {
+  if (move.state === 'draft') return { allowed: true, next: 'cancelled', label: 'Cancel' };
   if (!isActive(move.state) || ['completed', 'retention_expired', 'switching_back'].includes(move.state)) return { allowed: false, reason: 'This move has already finished.' };
   if (move.state === 'rolling_back') return { allowed: false, reason: 'This move is already being undone.' };
   if (switchStarted(steps)) return { allowed: false, reason: 'The switch has started, so the move can no longer be cancelled. Use Switch back after it finishes.' };
@@ -170,7 +176,7 @@ export function recoverStep(move, step, observed) {
 // What the worker should do next for one move. Never side-effecting; the worker carries the action out, journals
 // it with the functions above, and calls this again.
 export function nextAction(move, steps, { now = new Date().toISOString() } = {}) {
-  if (isTerminal(move.state)) return { type: 'none' };
+  if (isTerminal(move.state) || move.state === 'draft') return { type: 'none' };
   if (move.state === 'recovery_required') return { type: 'owner', reason: move.error ?? 'This move needs your decision.' };
   if (move.state === 'completed') return move.retain_until && now >= move.retain_until ? { type: 'transition', to: 'retention_expired' } : { type: 'none' };
   if (move.state === 'retention_expired' || move.state === 'switching_back') return { type: 'none' }; // owner-driven

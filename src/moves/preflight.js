@@ -126,10 +126,13 @@ export function evaluateMove(facts, options = {}) {
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${folder} already exists on ${target.name}. DockNest never overwrites existing folders.`);
     const labels = { containers: 'container', volumes: 'volume', networks: 'network' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `A ${label} named ${name} already exists on ${target.name}. DockNest never replaces it.`);
+    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
 
     const nginx = target.nginx ?? { installed: false };
     if (!nginx.installed) add('nginx', 'block', 'nginx', `nginx is not installed on ${target.name}. DockNest does not install software; install it, then check again.`);
     else if (nginx.configOk === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} has a configuration error that DockNest did not cause. Fix it first.`);
+    else if (nginx.confDir === null) add('nginx', 'block', 'nginx', `nginx on ${target.name} does not include a conf.d folder, so DockNest has nowhere to add its own site file. Add "include /etc/nginx/conf.d/*.conf;" to nginx.conf, then check again.`);
+    else if (nginx.running === false) add('nginx', 'block', 'nginx', `nginx is installed on ${target.name} but not running. Start it, then check again.`);
     else {
       const served = new Set((nginx.serverNames ?? []).map(name => name.toLowerCase()));
       for (const domain of site.domains) if (served.has(domain.toLowerCase())) add('nginx', 'block', 'nginx', `${domain} is already served by nginx on ${target.name}.`);
@@ -159,16 +162,18 @@ export function evaluateMove(facts, options = {}) {
 
   // Honest downtime: the site is offline during the final sync.
   const seconds = estimateDowntime(facts);
-  if (seconds !== null && seconds > FINAL_SYNC_LIMIT_SECONDS) add('downtime', 'block', 'Downtime', `${site.name} is too large to move safely: the final copy would keep it offline for ${describeDuration(seconds)}, longer than the ${FINAL_SYNC_LIMIT_SECONDS / 60} minute limit.`);
+  // Owner decision: long downtime is not refused. It is an amber warning the owner must accept with "Move anyway".
+  if (seconds !== null && seconds > FINAL_SYNC_LIMIT_SECONDS) add('downtime', 'warn', 'Downtime', `${site.name} is large: the final copy will keep it offline for ${describeDuration(seconds)}, longer than ${FINAL_SYNC_LIMIT_SECONDS / 60} minutes. Choose a quiet time, then press Move anyway.`, { requiresConfirmation: true });
   else if (seconds === null) add('downtime', 'warn', 'Downtime', `DockNest cannot estimate the downtime yet because ${site.name} has no timed backup. The move takes a fresh backup first.`);
   const downtime = seconds === null ? null : { seconds, text: dns.mode === 'manual' ? `${describeDuration(seconds)}, then until your DNS change is live` : describeDuration(seconds) };
   if (downtime && !checks.some(item => item.id === 'downtime')) add('downtime', 'info', 'Downtime', `Expected downtime: ${downtime.text}.`);
 
   const blocks = checks.filter(item => item.status === 'block'), warnings = checks.filter(item => item.status === 'warn');
+  const needsMoveAnyway = checks.some(item => item.requiresConfirmation);
   const verdict = blocks.length ? 'blocked' : warnings.length ? 'ready-with-notes' : 'ready';
   const sentence = blocks.length ? blocks[0].text
     : `${site.name} is ready to move to ${target.name}. It stays online while the copy is tested${downtime ? `; expected downtime is ${downtime.text}` : ''}.`;
-  return { verdict, canStart: !blocks.length, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
+  return { verdict, canStart: !blocks.length, needsMoveAnyway, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
