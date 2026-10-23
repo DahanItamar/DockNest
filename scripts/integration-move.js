@@ -82,6 +82,41 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.State.Running}}', 'move-app'), 'true');
   record('A moved site backs up on its new server and keeps running');
 
+  // Switch back: the new copy stops (kept), the old copy starts with its original restart policy, the record returns.
+  moves.switchBack(preview.id, 'qa');
+  await drive(preview.id, state => ['switched_back', 'recovery_required'].includes(state));
+  assert.equal(moves.moveView(preview.id).engineState, 'switched_back', moves.moveView(preview.id).statusLine);
+  assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}', 'move-app'), 'true unless-stopped');
+  assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.State.Running}} {{.HostConfig.RestartPolicy.Name}}', 'move-app'), 'false no', 'the new copy is stopped and kept');
+  assert.equal(await run('exec', source, 'curl', '-s', 'http://127.0.0.1:8090/record'), 'final-record');
+  assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(sites['move-app']).server_id, servers[0].id);
+  record('Switch back stops and keeps the new copy, restarts the old copy with its restart policy and returns the site record');
+
+  // A Compose site moves through a generated override; afterwards the old copy is removed with its data on request.
+  await run('exec', source, 'sh', '-c', "mkdir -p /srv/move-compose && printf 'services:\\n  web:\\n    image: docknest-fixture:local\\n    restart: unless-stopped\\n    ports: [\"127.0.0.1:8097:8080\"]\\n    volumes: [\"data:/site\"]\\nvolumes:\\n  data: {}\\n' > /srv/move-compose/compose.yaml && docker compose -p movecompose -f /srv/move-compose/compose.yaml up -d");
+  await until(async () => (await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Health.Status}}', 'movecompose-web-1')) === 'healthy', 'Compose fixture is not healthy');
+  await run('exec', target, 'sh', '-c', 'docker compose version --short');
+  sites.compose = randomUUID();
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(sites.compose, servers[0].id, 'move-compose', JSON.stringify({ ...config('move-cancel'), containers: ['movecompose-web-1'], domains: ['compose.example.invalid'], healthUrl: 'http://127.0.0.1:8097/', composeFiles: ['/srv/move-compose/compose.yaml'], externalReferencesConfirmed: true }), new Date().toISOString());
+  { const queued = enqueueBackup(sites.compose, 'qa'), job = claimJob(); assert.equal(job.id, queued.id); await executeJob(job); assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id).status, 'completed', db.prepare('SELECT error FROM jobs WHERE id=?').get(job.id).error); }
+  const composeMove = await moves.previewMove({ siteId: sites.compose, targetServerId: servers[1].id, options: {} }, 'qa');
+  assert.equal(composeMove.ok, true, composeMove.sentence);
+  assert.equal(composeMove.advanced.deployMethod, 'compose-override');
+  dnsResolver.resolve = async () => [{ A: [composeMove.advanced.dns.record.value], AAAA: [] }];
+  await moves.startMove(composeMove.id, { preflightHash: composeMove.preflightHash }, 'qa');
+  await drive(composeMove.id, state => ['completed', 'rolled_back', 'failed', 'recovery_required', 'cancelled'].includes(state));
+  assert.equal(moves.moveView(composeMove.id).engineState, 'completed', moves.moveView(composeMove.id).statusLine);
+  assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}} {{.HostConfig.RestartPolicy.Name}}', 'movecompose-web-1'), 'movecompose unless-stopped');
+  assert.equal(await run('exec', target, 'curl', '-s', '-H', 'Host: compose.example.invalid', 'http://127.0.0.1/record'), 'snapshot-record');
+  assert.equal(await run('exec', target, 'cat', '/srv/move-compose/compose.yaml').then(text => text.includes('docknest')), false, 'the Compose file is not edited');
+  record('A Compose site moves with its own Compose files plus a generated override and stays part of its Compose project');
+  moves.removeOldCopy(composeMove.id, { confirmation: 'move-compose', deleteData: true }, 'qa');
+  await drive(composeMove.id, state => state === 'cleaned' || !!moves.moveView(composeMove.id).error);
+  assert.equal(moves.moveView(composeMove.id).engineState, 'cleaned', moves.moveView(composeMove.id).error ?? '');
+  assert.equal(await run('exec', source, 'sh', '-c', 'docker ps -aq --filter name=movecompose-web-1; docker volume ls -q --filter name=movecompose_data'), '');
+  assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.State.Running}}', 'movecompose-web-1'), 'true');
+  record('Remove old copy (asked, with data) deletes the stopped old containers and their volume only; the moved site keeps running');
+
   // Cancel before the switch removes everything the move created on the target; the source never stopped.
   const cancel = await moves.previewMove({ siteId: sites['move-cancel'], targetServerId: servers[1].id, options: { askBeforeSwitch: true } }, 'qa');
   assert.equal(cancel.ok, true, cancel.sentence);
