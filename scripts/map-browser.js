@@ -12,7 +12,7 @@ const long='very-long-site-name-'.repeat(8)+'.example.com';
 const state={
  servers:[
   {id:'b',name:'mobiX-Srv',host:'b.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:13*1024**3}},
-  {id:'a',name:'itamar-Srv',host:'a.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:57*1024**3}},
+  {id:'a',name:'itamar-Srv',host:'a.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:57*1024**3,dockerVersion:'27.0.1',composeVersion:'2.29.0',nginx:{installed:false},certbot:{installed:true}}},
   {id:'c',name:'Quiet server with a rather long name that must not break',host:'c.example.invalid',port:22,username:'root',status:'failed'},
   {id:'d',name:'zeta-Srv',host:'d.example.invalid',port:22,username:'root',status:'connected'}
  ],
@@ -29,7 +29,7 @@ const targets={targets:[{id:'t1',name:'nas-backup',kind:'sftp',status:'connected
 let browser;const errors=[];
 // Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
 // Shapes follow docs/moving-sites.md, "API for the UI".
-const mock={needNginx:false,jobStatus:'running',installs:[],previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
+const mock={discovers:0,tests:0,needNginx:false,jobStatus:'running',installs:[],previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
 const HASH='a'.repeat(64);
 function preview({siteId,targetServerId,options}){
  const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
@@ -81,6 +81,8 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
    if(parts.length===3)return route.fulfill({json:moveState()});
    return route.fulfill({json:[]});
   }
+  if(endpoint==='/api/servers/a/discover'){mock.discovers++;return route.fulfill({json:{containers:[{name:'crm-web',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'web'}},{name:'crm-db',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'db'}},{name:'wiki',Labels:{}}],staticSites:[{documentRoot:'/var/www/landing',name:'landing.example.com',configFiles:[]}]}});}
+  if(endpoint==='/api/servers/a/test'){mock.tests++;return route.fulfill({json:{ok:true}});}
   if(endpoint==='/api/storage-targets')return route.fulfill({json:targets});
   if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
   if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to itamar-Srv',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
@@ -122,6 +124,7 @@ async function moveFlow(page,scheme){
  assert.equal(await save.isDisabled(),true,'save starts disabled');
  // Keyboard path: focus a site, press Enter, choose a server
  await page.locator('.map-site[data-site="1"]').focus();await page.keyboard.press('Enter');
+ await page.locator('.map-panel').getByRole('button',{name:'Move to…'}).click();
  await dialog(page).getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
  await dialog(page).getByText('This server is not connected. Reconnect it first.').waitFor();
  assert.equal(await dialog(page).getByRole('button',{name:/Quiet server/}).isDisabled(),true);
@@ -316,40 +319,101 @@ async function stateIsClean(page,label){
  assert.equal(await page.locator('.map-lines path.warn, .map-lines path.pending').count(),0,label+': no changed line');
  assert.equal(await page.locator('.map-site.lost').count(),0,label+': no site is unconnected');
 }
-// Databases and domains are locked to their site: nothing about them can be dragged, selected, focused or dropped on.
-async function lockedNodes(page,scheme){
- for(const sel of ['.map-db','.map-domain']){
-  const node=page.locator(sel).first();
-  assert.equal(await node.getAttribute('tabindex'),null,sel+' is not focusable');
-  assert.equal(await node.locator('[data-port-site]').count(),0,sel+' has no port');
-  const siteBefore=(await boxes(page,'.map-site'))[0],before=await node.boundingBox();
-  await page.mouse.move(before.x+before.width/2,before.y+before.height/2);await page.mouse.down();
-  await page.mouse.move(before.x+before.width/2+120,before.y+before.height/2+80,{steps:5});
-  await stateIsClean(page,sel+' while dragging');
-  await page.mouse.up();
-  await stateIsClean(page,sel+' after drop');
-  // Moving the background moves everything together, so the node never leaves its site
-  const after=await node.boundingBox(),siteAfter=(await boxes(page,'.map-site'))[0];
-  assert.ok(Math.abs((after.x-siteAfter.x)-(before.x-siteBefore.x))<1&&Math.abs((after.y-siteAfter.y)-(before.y-siteBefore.y))<1,sel+' stays attached to its site');
-  await page.getByRole('button',{name:'Fit to screen'}).click();
- }
- // The short line to a database has no handle and cannot be pulled off either
- const line=await page.locator('.map-lines path.lock').first().boundingBox();
- await page.mouse.move(line.x+line.width/2,line.y+line.height/2);await page.mouse.down();await page.mouse.move(line.x+line.width/2+60,line.y+line.height/2+120,{steps:4});
- await stateIsClean(page,'line while dragging');await page.mouse.up();await stateIsClean(page,'line after drop');
- assert.equal(await page.locator('.map-lines path.lock').count(),2,'database lines unchanged');
- // Dropping a site line on a database or domain does not connect it anywhere
- const db=await page.locator('.map-db').first().boundingBox(),port=await page.locator('[data-port-site="3"]').first().boundingBox();
+// Details and add panels: one at a time, same size, Escape and Close, focus returns to what opened them.
+async function panelChecks(page,scheme){
+ const panel=page.locator('.map-panel'),save=page.getByRole('button',{name:'Save changes'});
+ const sizes=[];
+ const size=async()=>{const b=await panel.boundingBox();sizes.push([Math.round(b.width),Math.round(b.height)])};
+ // Clicking a node opens its details and never starts a change
+ await page.locator('.map-site[data-site="1"]').click();
+ await panel.getByRole('heading',{name:'shop.example.com'}).waitFor();
+ assert.equal(await panel.getByRole('heading',{name:'shop.example.com'}).evaluate(e=>document.activeElement===e),true,'panel title is focused on open');
+ await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
+ assert.equal(await panel.getByText('Generic').count()+await panel.getByText('app',{exact:true}).count(),0,'only detected databases are listed');
+ await panel.getByText('Moves together with the site.').waitFor();
+ await panel.getByText('nas-backup').waitFor();await panel.getByText('mobiX-Srv').waitFor();
+ assert.equal(await panel.getByRole('button',{name:'Open site'}).count(),1);assert.equal(await panel.getByRole('button',{name:'Move to…'}).count(),1);
+ assert.equal(await save.isDisabled(),true,'a click is not a change');
+ assert.equal(await page.locator('.map-lines path.warn, .map-lines path.pending').count(),0);
+ assert.equal(await page.locator('.map-db, .map-domain').count(),0,'no database or domain nodes');
+ await size();await shot(page,scheme,'1440-2a-details-site');
+ // Only one panel at a time: a server replaces it. Escape closes it and focus returns to the node
+ await page.locator('.map-server[data-node="server:b"]').click();
+ await panel.getByRole('heading',{name:'mobiX-Srv'}).waitFor();assert.equal(await panel.count(),1);
+ await panel.getByText('Docker').first().waitFor();await size();
+ await page.keyboard.press('Escape');await panel.waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.activeElement?.dataset?.node==='server:b');
+ // Keyboard: Enter on a node
+ await page.locator('.map-storage').first().focus();await page.keyboard.press('Enter');
+ await panel.getByRole('heading',{name:'nas-backup'}).waitFor();await panel.getByText('Backed up here').waitFor();
+ await panel.getByText('shop.example.com').waitFor();await size();
+ assert.equal(await panel.getByRole('button',{name:'Open storage'}).count(),1);
+ await panel.getByRole('button',{name:'Close'}).click();await panel.waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.activeElement?.dataset?.node==='storage:t1');
+ // Server tools: a missing one offers Install, using the install flow
+ await page.locator('.map-server[data-node="server:a"]').click();
+ await panel.getByText('27.0.1').waitFor();await panel.getByText('Missing').waitFor();await panel.getByText('Installed').waitFor();
+ await size();await shot(page,scheme,'1440-2b-details-server');
+ await panel.getByRole('button',{name:'Install nginx'}).click();
+ const d=dialog(page);
+ await d.getByRole('heading',{name:'Install nginx on itamar-Srv'}).waitFor();
+ Object.assign(mock,{needReauth:false,installs:[],jobStatus:'running',tests:0});
+ await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
+ await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
+ mock.jobStatus='completed';
+ await d.getByRole('heading',{name:'nginx is installed'}).waitFor({timeout:6000});
+ await d.getByRole('button',{name:'Check again'}).click();
+ await dialog(page).waitFor({state:'detached'});
+ assert.equal(mock.tests,1,'server is checked again');
+ await panel.getByRole('heading',{name:'itamar-Srv'}).waitFor();
+ await panel.getByRole('button',{name:'Close'}).click();
+ // "+" at the top right: add a server or backup storage with the existing screens
+ const plus=page.getByRole('button',{name:'Add to the map'});
+ await plus.click();
+ await panel.getByRole('heading',{name:'Add to the map'}).waitFor();
+ await panel.getByText('Connect another server by SSH').waitFor();await panel.getByText('A place to keep backups').waitFor();
+ await size();await shot(page,scheme,'1440-2c-add');
+ await panel.getByRole('searchbox',{name:'Search'}).fill('stor');
+ assert.equal(await panel.getByRole('button',{name:/^Server/}).count(),0,'search filters');
+ await panel.getByRole('searchbox',{name:'Search'}).fill('');
+ await page.keyboard.press('Escape');await panel.waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Add to the map');
+ await plus.click();await panel.getByRole('button',{name:/^Server/}).click();
+ await page.getByRole('dialog',{name:'Connect a server'}).waitFor();
+ await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('dialog').waitFor({state:'detached'});
+ // "+" on a server: discovered sites that are not added yet
+ await page.getByRole('button',{name:'Add a site to itamar-Srv'}).click();
+ await panel.getByRole('heading',{name:'Add to itamar-Srv'}).waitFor();
+ await panel.getByText('Found on this server (3)').waitFor();
+ await panel.getByText('Docker · 2 containers').waitFor();await panel.getByText('nginx site · static files').waitFor();
+ assert.equal(await panel.getByText('Discover again').count(),1);
+ await size();await shot(page,scheme,'1440-2d-add-server');
+ await panel.getByRole('searchbox',{name:'Search'}).fill('crm');
+ assert.equal(await panel.locator('.map-row').count(),1,'search filters sites');
+ await panel.getByRole('searchbox',{name:'Search'}).fill('');
+ // Footer: "Not listed?" on the left, "Discover again" on the right edge
+ const pb=await panel.boundingBox(),nl=await panel.getByText('Not listed?').boundingBox(),da=await panel.getByRole('button',{name:'Discover again'}).boundingBox();
+ assert.ok(nl.x-pb.x<24,'Not listed? on the left');assert.ok(pb.x+pb.width-(da.x+da.width)<=24,'Discover again on the right edge');
+ const before=mock.discovers;await panel.getByRole('button',{name:'Discover again'}).click();
+ await page.waitForFunction(n=>true,before);await panel.getByText('Found on this server (3)').waitFor();
+ assert.ok(mock.discovers>before,'discovery runs again');
+ for(const z of sizes)assert.deepEqual(z,sizes[0],'every panel is the same size');
+ // A row opens the existing Add site wizard with that site already chosen
+ await panel.getByRole('button',{name:/crm.example.com/}).click();
+ await panel.waitFor({state:'detached'});
+ const w=page.getByRole('dialog',{name:'Discover & add a site'});await w.waitFor();
+ await w.getByRole('button',{name:'Select site crm.example.com'}).waitFor();
+ await page.waitForFunction(()=>document.querySelector('[aria-label="Select site crm.example.com"]')?.getAttribute('aria-pressed')==='true');
+ await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('dialog').waitFor({state:'detached'});
+ // Open server goes to the existing Servers page, then back to the map
+ await page.locator('.map-server[data-node="server:b"]').click();
+ await panel.getByRole('button',{name:'Open server'}).click();
+ await page.getByRole('heading',{level:1,name:'Servers'}).waitFor();
+ await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).click();
+ await page.locator('.map-site').first().waitFor();
  await page.getByRole('button',{name:'Fit to screen'}).click();
- const p2=await page.locator('[data-port-site="3"]').first().boundingBox(),d2=await page.locator('.map-db').first().boundingBox();
- await page.mouse.move(p2.x+p2.width/2,p2.y+p2.height/2);await page.mouse.down();await page.mouse.move(d2.x+d2.width/2,d2.y+d2.height/2,{steps:5});
- assert.equal(await page.locator('.map-server.target').count(),0,'a database is not a drop target');
- await page.mouse.up();
- await page.getByText('Connect every site to a server to save').waitFor();
- assert.equal(await page.getByRole('button',{name:'Save changes'}).isDisabled(),true);
- await page.getByRole('button',{name:'Cancel',exact:true}).click();
- await stateIsClean(page,'after cancel');void db;void port;
 }
+
 async function reconnectChecks(page,scheme){
  const save=page.getByRole('button',{name:'Save changes'});
  // Pull the line off the server and let go in empty space: not connected, save is off with the reason
@@ -387,6 +451,7 @@ async function reconnectChecks(page,scheme){
  await card.focus();await page.keyboard.press('Delete');
  await page.locator('.map-site.lost').waitFor();
  await card.focus();await page.keyboard.press('Enter');
+ await page.locator('.map-panel').getByRole('button',{name:'Move to…'}).click();
  const d=dialog(page);
  await d.getByRole('heading',{name:/^Connect .* to$/}).waitFor();
  await page.waitForFunction(()=>![...document.querySelectorAll('dialog button')].some(b=>/Checking/.test(b.textContent)));
@@ -464,14 +529,10 @@ try{
    assert.equal(await page.locator('.map-site').count(),5,'sites');
    assert.equal(await page.locator('.map-lines path.wire').count(),5,'connectors');
    assert.equal(await page.locator('.map-port.in.grab').count(),5,'incoming ports of sites');
-   assert.equal(await page.locator('.map-db').count(),2,'databases (generic services are not shown)');
-   assert.equal(await page.locator('.map-domain').count(),2,'domains');
+   assert.equal(await page.locator('.map-db, .map-domain').count(),0,'no database or domain nodes on the canvas');
    assert.equal(await page.locator('.map-storage').count(),2,'backup storage');
    assert.equal(await page.locator('.map-lines path.backup').count(),3,'backup lines');
    assert.equal(await page.locator('.map-stub').count(),2,'open outputs');
-   await page.getByRole('img',{name:'PostgreSQL 16.2 · shop_db, part of shop.example.com'}).waitFor();
-   await page.getByRole('img',{name:'Redis 7.4.1, part of shop.example.com'}).waitFor();
-   await page.getByRole('img',{name:'blog.example.com and 1 more domain, domain of blog.example.com'}).waitFor();
    await page.getByText('1.1 TB free of 1.8 TB').waitFor();
    // Order: servers by name
    const names=await page.locator('.map-server .map-name').allTextContents();
@@ -483,7 +544,7 @@ try{
    await page.getByText('Needs attention').waitFor();
    assert.ok(await page.locator('.map-lines').getAttribute('aria-hidden')==='true');
    // No overlaps (screen space)
-   const all=[...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-db'),...await boxes(page,'.map-domain'),...await boxes(page,'.map-storage')];
+   const all=[...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-storage')];
    for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.ok(!overlap(all[i],all[j]),'overlap '+i+' '+j);
    // Long names truncate inside the card
    const card=page.locator('.map-site',{hasText:'very-long-site-name'});
@@ -491,10 +552,10 @@ try{
    assert.equal(await card.getAttribute('title'),long);
    // The map takes the height left on screen: the map and the hint below it are fully visible without scrolling
    assert.ok(await page.locator('.map-hint').evaluate(e=>e.getBoundingClientRect().bottom<=window.innerHeight),'hint in view');
-   // Fit shows everything inside the viewport
-   const vp=await page.locator('.map-viewport').boundingBox();
-   const kFit=await scaleOf(page);assert.ok(kFit>=0.45-0.001&&kFit<=1,"fit scale between 45% and 100%");
-   if(kFit>0.451)for(const b of all)assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
+   // The map always opens at 100%; nodes are never shrunk to make a big map fit
+   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'opens at 100%');
+   const vp=await page.locator('.map-viewport').boundingBox(),first=(await boxes(page,'.map-server'))[0];
+   assert.ok(first.x>=vp.x-1&&first.y>=vp.y-1,'the first server is in view');
    assert.ok(parseFloat(await page.locator(".map-site .map-name").first().evaluate(e=>getComputedStyle(e).fontSize))===14,"card text uses body size");
    // Auto layout is stable across a reload
    const before=JSON.stringify(await boxes(page,'.map-site'));
@@ -503,6 +564,10 @@ try{
    await page.locator('.map-site').first().waitFor();
    assert.equal(JSON.stringify(await boxes(page,'.map-site')),before,'stable layout');
    assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>/map|layout|position/i.test(k)).length),0,'nothing persisted');
+   // Fit shrinks the map when asked, down to the minimum, and everything is then inside the viewport
+   await page.getByRole('button',{name:'Fit to screen'}).click();
+   const kFit=await scaleOf(page);assert.ok(kFit>=0.45-0.001&&kFit<1,"fit scale between 45% and 100%");
+   if(kFit>0.451)for(const b of [...await boxes(page,'.map-server'),...await boxes(page,'.map-site'),...await boxes(page,'.map-storage')])assert.ok(b.x>=vp.x-1&&b.y>=vp.y-1&&b.x+b.w<=vp.x+vp.width+1&&b.y+b.h<=vp.y+vp.height+1,"inside after fit");
    // Zoom buttons, keyboard, fit
    const k0=await scaleOf(page);
    await page.getByRole('button',{name:'Zoom in'}).click();assert.ok(await scaleOf(page)>k0,'zoom in');
@@ -517,7 +582,7 @@ try{
    await page.mouse.move(m.x+m.width/2,m.y+m.height/2);await page.mouse.wheel(0,-300);
    await page.waitForFunction(k=>new DOMMatrix(getComputedStyle(document.querySelector('.map-canvas')).transform).a>k,k0);
    await page.getByRole('button',{name:'Fit to screen'}).click();
-   await lockedNodes(page,scheme);
+   await panelChecks(page,scheme);
    await reconnectChecks(page,scheme);
    await moveFlow(page,scheme);
    await installFlow(page,scheme);
@@ -525,6 +590,15 @@ try{
    await fits(page,'desktop '+scheme);
    await shot(page,scheme,'1440');
    assert.deepEqual(offOrigin,[],'off-origin requests');
+   await context.close();
+  }
+  // Large screen: still 100%, centred, and fully in view
+  {
+   const {context,page}=await open({width:2551,height:1257,scheme});
+   await page.locator('.map-site').first().waitFor();
+   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'100% on a large screen');
+   await page.locator('.map-site[data-site="1"]').click();await page.locator('.map-panel').waitFor();
+   await shot(page,scheme,'2551');
    await context.close();
   }
   // Operator: read only, no save button
@@ -539,6 +613,10 @@ try{
    assert.equal(await page.locator('.map-lines path.warn').count(),0,'operators cannot drag');
    assert.equal(await page.locator('[data-port-site]').count(),0,'operators have no grab handles');
    assert.equal(await page.locator('.map-storage').count(),0,'operators do not load storage');
+   assert.equal(await page.getByRole('button',{name:'Add to the map'}).count()+await page.locator('.map-plus').count(),0,'operators cannot add');
+   await page.locator('.map-site').first().click();
+   await page.locator('.map-panel').getByRole('button',{name:'Open site'}).waitFor();
+   assert.equal(await page.locator('.map-panel').getByRole('button',{name:'Move to…'}).count(),0,'operators cannot move');
    await context.close();
   }
   // Phone list
@@ -552,6 +630,21 @@ try{
    await page.getByText('No sites on this server yet.').first().waitFor();
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
    await fits(page,'phone '+scheme);
+   // Details and Add site are full-screen sheets with the same footer in the same place
+   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click();
+   const sheet=dialog(page);
+   await sheet.getByRole('heading',{name:'shop.example.com'}).waitFor();await sheet.getByText('PostgreSQL 16.2 · shop_db').waitFor();
+   const foot1=await sheet.locator('.map-dialog-foot').boundingBox();
+   await shot(page,scheme,'402-0-details');
+   await page.keyboard.press('Escape');await sheet.waitFor({state:'detached'});
+   await page.locator('.map-list-group',{hasText:'itamar-Srv'}).getByRole('button',{name:'Add site'}).click();
+   await sheet.getByRole('heading',{name:'Add to itamar-Srv'}).waitFor();await sheet.getByText('Found on this server (3)').waitFor();
+   assert.deepEqual(await sheet.locator('.map-dialog-foot').boundingBox(),foot1,'footer stays put');
+   await sheet.getByText('Not listed?').waitFor();
+   for(const b of await sheet.getByRole('button').all())assert.ok((await b.boundingBox()).height>=43.5,'phone buttons 44px');
+   await shot(page,scheme,'402-0-add-site');
+   await sheet.getByRole('button',{name:'Close'}).first().click();await sheet.waitFor({state:'detached'});
+   await fits(page,'phone panels '+scheme);
    // Move to... opens the same dialogs as full-screen sheets
    Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
    await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
@@ -591,6 +684,21 @@ try{
   const {context,page}=await open({appState:{...state,servers:state.servers.slice(0,2),sites:state.sites.slice(0,2)}});
   await page.locator('.map-site').first().waitFor();
   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'small maps stay at 100%');assert.equal(await page.locator('.map-fade').count(),0,'no fade when everything fits');await context.close();
+ }
+ {
+  // A big map still opens at 100% at the top left, with the out-of-view hint; Fit shrinks it
+  const servers=Array.from({length:6},(_,i)=>({id:'big'+i,name:'Server '+(i+1),host:'h'+i+'.example.invalid',port:22,username:'root',status:'connected'}));
+  const sites=Array.from({length:20},(_,i)=>({id:'bs'+i,name:'site-'+String(i).padStart(2,'0')+'.example.com',serverId:'big'+(i%6),config:{containers:[1]}}));
+  const {context,page}=await open({appState:{...state,servers,sites,backups:[],policies:[]}});
+  await page.locator('.map-site').first().waitFor();
+  assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'big map opens at 100%');
+  await page.locator('.map-fade').waitFor();await page.getByText('Part of the map is out of view',{exact:false}).waitFor();
+  const vp=await page.locator('.map-viewport').boundingBox(),s1=(await boxes(page,'.map-server'))[0];
+  assert.ok(s1.x>=vp.x&&s1.y>=vp.y&&s1.y<vp.y+vp.height/2,'the first server is at the top left');
+  await page.getByRole('button',{name:'Fit to screen'}).click();
+  assert.ok(await scaleOf(page)<0.99,'Fit shrinks a big map');
+  await page.keyboard.press('Escape');
+  await context.close();
  }
  {
   const {context,page}=await open({width:760,height:900});

@@ -9,7 +9,7 @@ import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
 const containerStatus=container=>typeof container.state==='object'?container.state.status:container.state||container.State?.Status||'unknown';
 
-export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
+export function SiteWizard({api,Field,servers,initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
  const [step,setStep]=useState(initialSite?2:1),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
  const [containers,setContainers]=useState([]),[primary,setPrimary]=useState(initialSite?.config.containers?.[0]||''),[additional,setAdditional]=useState(initialSite?.config.containers?.slice(1)||[]);
  const [staticSites,setStaticSites]=useState([]),[staticRoot,setStaticRoot]=useState(initialSite?.config.kind==='static'?initialSite.config.documentRoot:'');
@@ -36,6 +36,9 @@ export function SiteWizard({api,Field,servers,initialServer='',initialSite=null,
  },[serverId,scan]);
  const groups=containerGroups(containers);
  const siteChoices=[...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...groups.flatMap(group=>group.kind==='standalone'?group.containers.map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])];
+ const pickedOnce=useRef(false);
+ // Opened from the Map's + on a server: select the site that was clicked, once, after discovery has loaded.
+ useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const c=siteChoices.find(x=>x.name===initialPick);if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
  const selected=[primary,...additional].filter(Boolean);
  const isStatic=!!staticRoot,hasSelection=isStatic||!!selected.length;
  const detected=isStatic?{compose:false,composeFiles:[],configFiles:staticSites.find(site=>site.documentRoot===staticRoot)?.configFiles||initialSite?.config.configFiles||[],directory:staticRoot}:detectedConfiguration(containers,selected);

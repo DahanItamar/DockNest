@@ -3,7 +3,7 @@ import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,Ico
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
-function Sheet({title,labelId,onClose,children,actions}){
+export function Sheet({title,labelId,onClose,children,actions}){
  const ref=useRef(null);
  // Focus the title on open, so no button shows a focus ring until the user moves focus
  useEffect(()=>{const d=ref.current;if(d&&!d.open){d.showModal();d.querySelector('h2')?.focus()}return()=>{if(d?.open)d.close()}},[]);
@@ -50,7 +50,7 @@ function useGuard(client){
 }
 
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
-const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
+export const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 

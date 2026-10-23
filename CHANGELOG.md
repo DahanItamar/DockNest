@@ -4,6 +4,13 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Map v2: an n8n-style canvas with square nodes, ports and elbow lines, and a Backup storage column (free space, which sites back up there). The map always opens at regular size; Fit to screen shrinks it only when you ask.
+- Map: click a server, site or storage node to open its details on the right (domains, containers, databases that move with the site, backup storage, last backup, tools on the server). "+" at the top right adds a server or backup storage; "+" beside a server lists the Docker projects and nginx sites found there that are not added yet, and opens the existing Add site wizard with that site chosen.
+- Moving a site on the Map: pull the end of its line off the server (the site shows "Not connected" and Save changes stays off) and drop it on another server. Keyboard and phone have the same steps.
+- Moving a site: when a server lacks nginx, Docker, Compose or Certbot and DockNest can install it, the check offers Install and Show command. Needs the matching server API (`POST /api/servers/:id/install`).
+
 ### Fixed
 
 - Map: the map takes exactly the height left on the screen, so the whole map and the hint below it are visible without scrolling on any screen size.
