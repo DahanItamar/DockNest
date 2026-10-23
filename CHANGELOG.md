@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-24
+
+See [docs/releases/2026-10-24-v2.7.0.md](docs/releases/2026-10-24-v2.7.0.md).
+
 ### Added
 
 - Moving a site: when the new server lacks nginx, Docker, Docker Compose 2 or certbot, an administrator can ask DockNest to install it (optional; confirmed with re-verification, with a "Show command" line to run it yourself). Supported on Debian and Ubuntu (apt) and Fedora, Rocky, AlmaLinux and RHEL (dnf) with the system's own packages only: no repositories added, no scripts downloaded, no configuration edited, nothing removed. Backend: `POST /api/servers/:id/install`, a fixed package list and argv in the remote helper, the `install` field on preflight checks, and a new additive `server_installs` table (schema v7). See docs/moving-sites.md and docs/security.md.
