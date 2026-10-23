@@ -176,6 +176,69 @@ class DeployRestoreTests(unittest.TestCase):
                 helper.deploy_restore({'moveId':MOVE,'job':JOB,'mode':'test'})
             self.assertEqual(host.calls,[]);self.assertEqual(host.result()[0]['result']['mode'],'test')
 
+class ComposeOverrideTests(unittest.TestCase):
+    def test_override_remaps_host_ports_only_and_never_restarts_the_test_copy(self):
+        manifest=fixture_manifest();compose={'project':'shop','workingDir':'/srv/shop','files':['/srv/shop/compose.yaml'],'services':{'web':'web','db':'db'}}
+        text,ports,rewritten=helper.compose_override(compose,MOVE,'test',manifest,[{'from':8080,'to':8081,'containerPort':8080,'protocol':'tcp'}],{'DATABASE_URL'},['10.0.0.5'],'10.0.0.9')
+        self.assertIn('  "web":\n    image: "sha256:aaa"\n    pull_policy: never\n    ports: !override\n      - "127.0.0.1:8081:8080/tcp"\n    restart: "no"',text)
+        self.assertIn('  "db":\n    image: "sha256:bbb"\n    pull_policy: never\n    ports: !override []',text)
+        self.assertIn('docknest.move: "%s"'%MOVE,text);self.assertIn('"DATABASE_URL": "postgres://user:secret@10.0.0.9:5432/app"',text)
+        self.assertEqual(rewritten,2);self.assertEqual(ports[0]['to'],8081)
+        live,_,_=helper.compose_override(compose,MOVE,'live',manifest,[],set(),[],'')
+        self.assertNotIn('restart',live);self.assertNotIn('environment',live);self.assertIn('"127.0.0.1:8080:8080/tcp"',live)
+    def test_unknown_service_is_refused(self):
+        with self.assertRaises(ValueError):helper.compose_override({'services':{}},MOVE,'test',fixture_manifest(),[],set(),[],'')
+
+class SwitchBackAndRemovalTests(unittest.TestCase):
+    def run_op(self,op,req,docker_outputs,temporary):
+        calls=[];events=io.StringIO()
+        def docker(*args):
+            calls.append(list(args))
+            for prefix,value in docker_outputs:
+                if list(args[:len(prefix)])==prefix:return value(args) if callable(value) else value
+            return b''
+        with patch('helper.MOVES_ROOT',pathlib.Path(temporary)),patch('helper.docker',side_effect=docker),patch('helper.EVENT_STREAM',events),patch('helper.atomic_json',side_effect=lambda p,v:pathlib.Path(p).write_text(json.dumps(v))):
+            op(req)
+        return calls,json.loads(events.getvalue().splitlines()[-1])['result']
+    def test_stop_target_keeps_the_copy_and_records_policies_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            (pathlib.Path(temporary)/MOVE).mkdir()
+            inspected=[{'Id':'n1','Name':'/web','State':{'Running':True},'HostConfig':{'RestartPolicy':{'Name':'always'}}}]
+            calls,result=self.run_op(helper.move_stop_target,{'moveId':MOVE},[(['ps'],b'n1'),(['inspect'],json.dumps(inspected).encode())],temporary)
+            self.assertEqual(result['containers'][0]['restartPolicy'],'always');self.assertIn(['update','--restart=no','n1'],calls)
+            self.assertFalse(any(call[0]=='rm' for call in calls),'switch back never deletes the new copy')
+            again,_=self.run_op(helper.move_stop_target,{'moveId':MOVE},[],temporary);self.assertEqual(again,[])
+    def test_remove_old_copy_keeps_data_unless_asked_and_refuses_a_running_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d=pathlib.Path(temporary)/MOVE;d.mkdir()
+            (d/'retired.json').write_text(json.dumps({'containers':[{'id':'o1','name':'web','restartPolicy':'always'}]}))
+            old=[{'Id':'o1','State':{'Running':True},'Mounts':[{'Type':'volume','Name':'shop_data','Source':'/var/lib/docker/volumes/shop_data/_data'}]}]
+            with self.assertRaises(ValueError):self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{}},[(['ps','-aq','--no-trunc'],b'o1'),(['inspect'],json.dumps(old).encode())],temporary)
+            old[0]['State']['Running']=False
+            calls,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{}},[(['ps','-aq','--no-trunc'],b'o1'),(['inspect'],json.dumps(old).encode())],temporary)
+            self.assertIn(['rm','o1'],calls);self.assertFalse(any(call[:2]==['volume','rm'] for call in calls));self.assertTrue(result['dataKept'])
+            self.assertTrue((d/'removed.json').is_file());self.assertFalse((d/'retired.json').exists())
+    def test_remove_old_copy_deletes_unshared_volumes_only_when_asked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d=pathlib.Path(temporary)/MOVE;d.mkdir()
+            (d/'retired.json').write_text(json.dumps({'containers':[{'id':'o1','name':'web','restartPolicy':'always'}]}))
+            old=[{'Id':'o1','State':{'Running':False},'Mounts':[{'Type':'volume','Name':'shop_data','Source':'/x'},{'Type':'volume','Name':'shared','Source':'/y'}]}]
+            other=[{'Id':'z','Mounts':[{'Type':'volume','Name':'shared','Source':'/y'}]}]
+            outputs=[(['ps','-aq','--no-trunc'],b'o1'),(['ps','-aq'],b'z'),(['inspect','o1'],json.dumps(old).encode()),(['inspect','z'],json.dumps(other).encode())]
+            calls,result=self.run_op(helper.move_remove_old,{'moveId':MOVE,'config':{},'deleteData':True},outputs,temporary)
+            self.assertEqual(result['volumes'],['shop_data']);self.assertNotIn(['volume','rm','shared'],calls)
+
+class CertificateTests(unittest.TestCase):
+    def test_without_certbot_the_owner_gets_one_exact_command(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            d=pathlib.Path(temporary)/MOVE;d.mkdir();(d/'nginx.json').write_text(json.dumps({'siteId':SITE,'domains':['shop.example.com','www.shop.example.com']}))
+            events=io.StringIO()
+            with patch('helper.MOVES_ROOT',pathlib.Path(temporary)),patch('helper.shutil.which',return_value=None),patch('helper.EVENT_STREAM',events),patch('helper.run') as command:
+                helper.move_certificate({'moveId':MOVE})
+            result=json.loads(events.getvalue())['result']
+            self.assertEqual(result['status'],'needs-owner');command.assert_not_called()
+            self.assertEqual(result['command'],'certbot --nginx --cert-name docknest-%s -d shop.example.com -d www.shop.example.com'%SITE)
+
 class KeepStoppedTests(unittest.TestCase):
     def test_capture_documents_keep_stopped_only_after_a_complete_capture(self):
         source=pathlib.Path(helper.__file__).read_text()

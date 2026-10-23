@@ -1979,7 +1979,18 @@ def source_site_facts(cfg,tokens):
         match=re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):(\d+)(?:/.*)?',cfg['healthUrl'])
         if match and any(b['hostPort']==int(match[1]) for b in ports):web=int(match[1])
     if web is None:web=next((b['hostPort'] for b in ports if b['protocol']=='tcp'),None)
-    return {'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
+    volumes=[]
+    for name in dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume'):
+        v=json.loads(docker('volume','inspect',name))[0]
+        volumes.append({'name':name,'labels':{k:val for k,val in (v.get('Labels') or {}).items() if k.startswith('com.docker.compose.')}})
+    # One Compose project with its files selected in the site: the move can use a Compose override on the target.
+    project=None
+    labels=[(c.get('Config',{}).get('Labels') or {}) for c in cs]
+    names={l.get('com.docker.compose.project') for l in labels}
+    files=[f.strip() for f in (labels[0].get('com.docker.compose.project.config_files','') if labels else '').split(',') if f.strip()]
+    if compose and len(names)==1 and all(l.get('com.docker.compose.service') for l in labels) and files and all(f in cfg.get('composeFiles',[]) for f in files):
+        project={'project':labels[0]['com.docker.compose.project'],'workingDir':labels[0].get('com.docker.compose.project.working_dir',''),'files':files,'services':{c['Name'].lstrip('/'):l['com.docker.compose.service'] for c,l in zip(cs,labels)}}
+    return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
         'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
         'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens)}
@@ -2004,6 +2015,7 @@ def move_facts(req):
         'webPortOwner':None if 80 not in ports else ('nginx' if nginx.get('running') else 'other'),
         'certbot':{'installed':bool(shutil.which('certbot')),'account':pathlib.Path('/etc/letsencrypt/accounts').is_dir()},'addresses':host_addresses()}
     facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}'])
+    facts['firewall']={'mailBlocking':firewall_ready()}
     tokens=[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)]+[a for a in facts['addresses'] if not a.startswith(('127.','::1'))]
     if req.get('role')=='source':facts['site']=source_site_facts(cfg,list(dict.fromkeys(tokens)))
     if req.get('probe'):facts['probe']=target_probe(req['probe'])
@@ -2024,11 +2036,12 @@ def place_tree(archive,target,d,state,mid):
     if len(entries)!=1:raise ValueError('Archive must hold exactly one entry')
     os.replace(entries[0],target);temporary.rmdir()
     return target
-def place_volume(archive,name,d,state,mid,mode):
+def place_volume(archive,name,d,state,mid,mode,labels=None):
     if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported volume name')
     if docker('volume','ls','-q','--filter','name=^'+re.escape(name)+'$').decode().split():raise ValueError('A volume named %s already exists on this server. DockNest never replaces it.'%name)
     journal_resource(d,state,'volumes',name)
-    docker('volume','create','--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,name)
+    extra=[part for k,v in (labels or {}).items() if k.startswith('com.docker.compose.') and SAFE_NAME.fullmatch(k) and isinstance(v,str) and len(v)<256 for part in ['--label',k+'='+v]]
+    docker('volume','create','--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,*extra,name)
     mountpoint=pathlib.Path(json.loads(docker('volume','inspect',name))[0]['Mountpoint'])
     if any(mountpoint.iterdir()):raise ValueError('New volume is not empty')
     temporary=mountpoint.parent/('.docknest-move-'+uuid.uuid4().hex[:8])
@@ -2066,11 +2079,14 @@ def mapped_port(port_map,binding,mode):
     elif ':' in ip:host='['+ip+']:'
     else:host=ip+':'
     return host+str(to)+':'+str(binding['containerPort'])+'/'+binding['protocol'],to
+def firewall_ready():
+    """Docker's DOCKER-USER chain exists, so DockNest can reject SMTP from test containers without touching other rules."""
+    if not shutil.which('iptables'):return False
+    try:run(['iptables','-S','DOCKER-USER'],timeout=10);return True
+    except Exception:return False
 def block_mail(d,state,mid,ips):
     """Test copies must not send mail: reject outbound SMTP from their addresses where the host firewall allows it."""
-    if not ips or not shutil.which('iptables'):return False
-    try:run(['iptables','-S','DOCKER-USER'],timeout=10)
-    except Exception:return False
+    if not ips or not firewall_ready():return False
     for ip in ips:
         if not is_ip(ip):continue
         journal_resource(d,state,'firewall',ip)
@@ -2197,7 +2213,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
     for c in containers:restore_network_plan([c])  # refuses host privileges, shared namespaces and static IPs
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
     if shutil.disk_usage(unpacked).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+1024**3:raise ValueError('Insufficient target capacity for extracted data')
-    sources={}
+    sources={};volume_labels={v.get('name'):v.get('labels') for v in req.get('volumes') or [] if isinstance(v,dict)}
     for i,c in enumerate(containers):
         for j,m in enumerate(c['Mounts']):
             key=(m['Type'],m.get('Name') if m['Type']=='volume' else m['Source'])
@@ -2208,7 +2224,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
                     if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths need a manual move')
                 placed.append(str(place_tree(unpacked/('mount-%d-%d.tar'%(i,j)),m['Source'],d,state,mid)))
-            elif m['Type']=='volume':place_volume(unpacked/('mount-%d-%d.tar'%(i,j)),m['Name'],d,state,mid,mode)
+            elif m['Type']=='volume':place_volume(unpacked/('mount-%d-%d.tar'%(i,j)),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
             else:raise ValueError('Unsupported mount type')
             sources[key]=True
     for i,filename in enumerate(manifest.get('configurationFiles',[])):
@@ -2226,7 +2242,9 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
     docker('load','-i',str(unpacked/'images.tar'))
     created=[];ports=[];names=[]
     try:
-        for i,c in enumerate(containers):
+        compose=req.get('compose')
+        if compose:created,names,ports,rewritten=compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rewritten)
+        for i,c in enumerate([] if compose else containers):
             name=c['Name'].lstrip('/')
             if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported container name')
             hc=c.get('HostConfig',{})
@@ -2270,7 +2288,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('The copied containers did not become healthy')
         ips=[n.get('IPAddress') for c in inspect(running) for n in (c.get('NetworkSettings',{}).get('Networks') or {}).values() if n.get('IPAddress')] if running else []
-        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'mailBlocked':block_mail(d,state,mid,ips) if mode=='test' else False}
+        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':block_mail(d,state,mid,ips) if mode=='test' else False}
         if mode=='live' and req.get('nginx'):
             n=req['nginx'];deploy_maintenance_dir(d,state,n)
             result['nginx']=write_nginx(d,state,mid,n)
@@ -2283,6 +2301,50 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             if created:docker('stop','--time','30',*created)
         except Exception:pass
         raise
+def yaml_str(value):return json.dumps(str(value))  # a JSON string is a valid YAML double-quoted scalar
+def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
+    """Override file for the site's own Compose files: snapshot image, remapped host ports (Compose 2.24+ !override),
+    no restart for the test copy, DockNest labels and opted-in setting rewrites. The user's files are never edited."""
+    lines=['# Written by DockNest move %s. The site\'s own Compose files are unchanged.'%mid,'services:'];ports=[];rewritten=0
+    for i,c in enumerate(manifest['containers']):
+        name=c['Name'].lstrip('/');service=compose['services'].get(name)
+        if not service or not SAFE_NAME.fullmatch(service):raise ValueError('The Compose service of %s is unknown'%name)
+        specs=[]
+        for binding in port_bindings(c):
+            spec,to=mapped_port(port_map,binding,mode);specs.append(spec)
+            ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
+        lines+=['  %s:'%yaml_str(service),'    image: %s'%yaml_str(manifest['snapshotImages'][i]),'    pull_policy: never','    ports: !override'+('' if specs else ' []')]
+        lines+=['      - %s'%yaml_str(spec) for spec in specs]
+        if mode=='test':lines.append('    restart: "no"')
+        lines+=['    labels:','      docknest.move: %s'%yaml_str(mid),'      docknest.move.mode: %s'%yaml_str(mode)]
+        env=[]
+        for item in c.get('Config',{}).get('Env') or []:
+            key,_,value=item.partition('=')
+            if key in keys and tokens:
+                new=rewrite_value(value,tokens,target)
+                if new!=value:env.append((key,new.replace('$','$$')))
+        if env:lines+=['    environment:']+['      %s: %s'%(yaml_str(k),yaml_str(v)) for k,v in env];rewritten+=len(env)
+    return '\n'.join(lines)+'\n',ports,rewritten
+def compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rewritten):
+    project=str(compose.get('project',''))
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):raise ValueError('Unsupported Compose project name')
+    workdir=move_path(compose['workingDir']);files=[str(move_path(f)) for f in compose['files']]
+    if not workdir.is_dir() or not all(pathlib.Path(f).is_file() for f in files):raise ValueError('The Compose project files were not copied to this server')
+    text,ports,count=compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target)
+    override=d/('compose.%s.yaml'%mode)
+    fd=os.open(override,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as f:f.write(text)
+    names=[c['Name'].lstrip('/') for c in manifest['containers']]
+    for name in names:journal_resource(d,state,'containers',name)
+    command=['docker','compose','-p',project,'--project-directory',str(workdir)]+[part for f in files for part in ['-f',f]]+['-f',str(override)]
+    # Created only; DockNest starts them in the recorded order and checks health like every restore.
+    run(command+['up','--no-start','--no-build','--pull','never','--no-deps',*[compose['services'][n] for n in names]],timeout=1800)
+    created=[]
+    for name in names:
+        ids=docker('ps','-aq','--filter','label=docknest.move='+mid,'--filter','label=com.docker.compose.project='+project,'--filter','label=com.docker.compose.service='+compose['services'][name]).decode().split()
+        if len(ids)!=1:raise ValueError('Compose did not create %s as expected'%name)
+        created.append(ids[0])
+    return created,names,ports,rewritten+count
 def remove_path(record):
     p=move_path(record['path'])
     if p.is_symlink() or p.is_file():p.unlink()
@@ -2383,13 +2445,84 @@ def move_certificate(req):
     mid=move_id(req);d,state=move_state(mid)
     n=json.loads((d/'nginx.json').read_text()) if (d/'nginx.json').is_file() else None
     if not n:emit(result={'status':'skipped','reason':'no-nginx'});return
-    if not shutil.which('certbot') or not pathlib.Path('/etc/letsencrypt/accounts').is_dir():emit(result={'status':'needs-owner','reason':'no-certbot'});return
     domains=[x for x in n['domains'] if DOMAIN.fullmatch(x)]
+    # The one line the owner runs on the new server (after installing certbot themselves, if needed).
+    command='certbot --nginx --cert-name docknest-%s %s'%(n['siteId'],' '.join('-d '+x for x in domains))
+    if not shutil.which('certbot') or not pathlib.Path('/etc/letsencrypt/accounts').is_dir():emit(result={'status':'needs-owner','reason':'no-certbot' if not shutil.which('certbot') else 'no-account','command':command});return
     try:run(['certbot','certonly','--webroot','-w',str(ACME_ROOT/str(n['siteId'])),'--non-interactive','--keep-until-expiring','--cert-name','docknest-'+str(n['siteId']),*[part for x in domains for part in ['-d',x]]],timeout=300)
-    except Exception:emit(result={'status':'needs-owner','reason':'certbot-failed'});return
+    except Exception:emit(result={'status':'needs-owner','reason':'certbot-failed','command':command});return
     live=pathlib.Path('/etc/letsencrypt/live')/('docknest-'+str(n['siteId']))
     write_nginx(d,state,mid,n,{'cert':str(live/'fullchain.pem'),'key':str(live/'privkey.pem')})
     emit(result={'status':'issued','certName':'docknest-'+str(n['siteId'])})
+def move_stop_target(req):
+    """Switch back: the new copy shows its maintenance page, stops and cannot restart by itself. Nothing is deleted."""
+    mid=move_id(req);d,_=move_state(mid);record=d/'stopped.json'
+    if record.is_file():emit(result=json.loads(record.read_text()));return
+    n=json.loads((d/'nginx.json').read_text()) if (d/'nginx.json').is_file() else None
+    if n:
+        flag=move_path(n['maintenanceDirectory'])/'enabled'
+        if flag.is_symlink():raise ValueError('Maintenance flag cannot be a symbolic link')
+        flag.touch(mode=0o644)
+    ids=docker('ps','-aq','--filter','label=docknest.move='+mid,'--filter','label=docknest.move.mode=live').decode().split()
+    cs=inspect(ids) if ids else []
+    result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'restartPolicy':(c['HostConfig'].get('RestartPolicy') or {}).get('Name') or 'no','running':bool(c['State'].get('Running'))} for c in cs],'maintenance':bool(n)}
+    atomic_json(d/'stopped.pending',result)
+    for c in cs:
+        if c['State'].get('Running'):docker('stop','--time','60',c['Id'])
+        docker('update','--restart=no',c['Id'])
+    atomic_json(record,result);emit(result=result)
+def move_unretire_source(req):
+    """Switch back: the old copy gets its original restart policies, starts in its recorded order and leaves maintenance."""
+    mid=move_id(req);cfg=req['config'];d,_=move_state(mid)
+    record=d/'retired.json';done=d/'unretired.json'
+    if not record.is_file():
+        if done.is_file():emit(result=json.loads(done.read_text()));return
+        raise ValueError('DockNest has no record of the stopped old copy for this move')
+    retired=json.loads(record.read_text())
+    for c in retired.get('containers',[]):
+        policy=c.get('restartPolicy') if c.get('restartPolicy') in ['no','always','unless-stopped','on-failure'] else 'no'
+        docker('update','--restart='+policy,c['id'])
+    running=[c for c in req.get('running') or [] if isinstance(c,str) and SAFE_NAME.fullmatch(c)]
+    if cfg.get('kind')!='static' and running:
+        cfg.setdefault('maintenance',{});skip_refused_probes(cfg);plan=backup_plan(cfg)
+        restart_services([cid for cid in plan['restartOrder'] if cid in running],plan['services'])
+        cfg['_runningContainers']=running
+        until=time.time()+120
+        while time.time()<until and not health(running,probe_url(cfg,'health'),cfg.get('domains',()),fallback=True):time.sleep(2)
+        if not health(running,probe_url(cfg,'health'),cfg.get('domains',()),fallback=True):raise ValueError('The old site did not become healthy after starting it again.')
+        if cfg['maintenance'].get('required') and (pathlib.Path(cfg['maintenance'].get('directory',''))/'enabled').exists():maintenance(cfg,False)
+    result={'started':len(running),'containers':retired.get('containers',[])}
+    atomic_json(done,result);record.unlink();emit(result=result)
+def move_remove_old(req):
+    """Remove the stopped old copy after a move: its containers always; its data only when the owner asked for it.
+    Data still mounted by any other container is never removed; system folders are refused."""
+    mid=move_id(req);cfg=req['config'];d,_=move_state(mid)
+    record=d/'retired.json';done=d/'removed.json'
+    if not record.is_file():
+        if done.is_file():emit(result=json.loads(done.read_text()));return
+        raise ValueError('DockNest has no record of the stopped old copy for this move')
+    retired=json.loads(record.read_text());ids=[c['id'] for c in retired.get('containers',[])]
+    existing=[cid for cid in ids if docker('ps','-aq','--no-trunc','--filter','id='+cid).decode().split()]
+    cs=inspect(existing) if existing else []
+    if any(c['State'].get('Running') for c in cs):raise ValueError('The old copy is running again, so DockNest does not remove it.')
+    volumes=list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume'))
+    binds=list(dict.fromkeys(m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind'))
+    if cfg.get('kind')=='static' and cfg.get('documentRoot'):binds.append(cfg['documentRoot'])
+    for c in cs:docker('rm',c['Id'])
+    result={'containers':len(cs),'volumes':[],'paths':[],'dataKept':not req.get('deleteData')}
+    if req.get('deleteData'):
+        others=docker('ps','-aq').decode().split()
+        used=[m for c in (inspect(others) if others else []) for m in c['Mounts']]
+        for name in volumes:
+            if not any(m['Type']=='volume' and m.get('Name')==name for m in used):docker('volume','rm',name);result['volumes'].append(name)
+        for source in binds:
+            if any(os.path.commonpath([os.path.realpath(m['Source']),os.path.realpath(source)]) in [os.path.realpath(m['Source']),os.path.realpath(source)] for m in used):continue
+            p=move_path(source)
+            if p.is_symlink() or p.is_file():p.unlink()
+            elif p.is_dir():shutil.rmtree(p)
+            else:continue
+            result['paths'].append(str(p))
+    atomic_json(done,result);record.unlink();emit(result=result)
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -2431,6 +2564,9 @@ def main(req):
     elif op=='move-retire-source':move_retire_source(req)
     elif op=='move-finalize-target':move_finalize_target(req)
     elif op=='move-certificate':move_certificate(req)
+    elif op=='move-stop-target':move_stop_target(req)
+    elif op=='move-unretire-source':move_unretire_source(req)
+    elif op=='move-remove-old':move_remove_old(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
