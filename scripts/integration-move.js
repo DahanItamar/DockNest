@@ -108,7 +108,7 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   assert.equal(moves.moveView(composeMove.id).engineState, 'completed', moves.moveView(composeMove.id).statusLine);
   assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}} {{.HostConfig.RestartPolicy.Name}}', 'movecompose-web-1'), 'movecompose unless-stopped');
   assert.equal(await run('exec', target, 'curl', '-s', '-H', 'Host: compose.example.invalid', 'http://127.0.0.1/record'), 'snapshot-record');
-  assert.equal(await run('exec', target, 'cat', '/srv/move-compose/compose.yaml').then(text => text.includes('docknest')), false, 'the Compose file is not edited');
+  assert.equal(await run('exec', target, 'cat', '/srv/move-compose/compose.yaml'), await run('exec', source, 'cat', '/srv/move-compose/compose.yaml'), 'the Compose file arrives unchanged');
   record('A Compose site moves with its own Compose files plus a generated override and stays part of its Compose project');
   moves.removeOldCopy(composeMove.id, { confirmation: 'move-compose', deleteData: true }, 'qa');
   await drive(composeMove.id, state => state === 'cleaned' || !!moves.moveView(composeMove.id).error);
