@@ -1,15 +1,17 @@
-# Moving a site to another server (draft)
+# Moving a site to another server
 
-Status: the move engine and its API exist; the Map page that uses them is being built. Real moves count as validated
+Administrators move sites from the Map page (operators see the map read-only). Real moves count as validated
 only when the two-host Linux Docker integration test (`scripts/integration-move.js`, CI job `linux-integration`)
 passes (see AGENTS.md).
 
 ## The short version
 
-1. On the Map page, drag the line from a site to another server.
-2. Press **Save changes**. DockNest checks both servers and shows one sentence: either the site is ready to move
-   (with the expected downtime), or the one reason it cannot move yet.
-3. Press **Start move**. DockNest copies the site, tests the copy, switches over and tells you when it is done.
+1. On the Map page, drag a site onto another server (on a phone: **Move to…**).
+2. Press **Save changes**. DockNest checks both servers and shows **Ready to move** with how long the move takes,
+   how long the site is offline and how long you can undo, or the one reason it cannot move yet.
+   **Advanced settings** holds the details; most people never need them.
+3. Press **Move**. DockNest copies the site, tests the copy, switches over and tells you when it is done.
+   You can press **Cancel** until the switch.
 
 Your site stays online on the old server while the copy is made and tested. It goes offline only for the final
 copy, behind a maintenance page.
