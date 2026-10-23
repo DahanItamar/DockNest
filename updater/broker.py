@@ -288,7 +288,7 @@ class Limiter:
 
 # ---------------------------------------------------------------- status channel (section 4, R9, I18, I32)
 
-STATUS_FIELDS = ('phase', 'from', 'to', 'startedAt', 'updatedAt', 'ok', 'error', 'rollbackHint', 'requestId', 'warning', 'reason', 'schemaFrom', 'schemaTo')
+STATUS_FIELDS = ('phase', 'from', 'to', 'startedAt', 'updatedAt', 'ok', 'error', 'rollbackHint', 'requestId', 'warning', 'reason', 'schemaFrom', 'schemaTo', 'cleanup')
 
 
 def clean_text(value, cap):
@@ -317,6 +317,9 @@ def validate_status(raw, request_id):
             if item is not None and type(item) is not str: raise ValueError(key)
             if item is not None: item = clean_text(item, 1024 if key == 'warning' else 4096)
             if key == 'warning' and value[key] is not None and len(value[key]) > 1024: raise ValueError('warning longer than 1024')
+        elif key == 'cleanup':  # additive (upgrade.sh after 2.4.1): the one-line retention summary of a success
+            if item is not None and type(item) is not str: raise ValueError(key)
+            if item is not None: item = clean_text(item, 256)
         elif key == 'reason':
             if item is not None: item = item if item in REASONS else 'unknown'
         elif key in ('schemaFrom', 'schemaTo'):
@@ -328,7 +331,8 @@ def validate_status(raw, request_id):
 
 def failed_status(request_id, current, target, started, now, error, reason='unknown'):
     return {'phase': 'failed', 'from': current or '', 'to': target or '', 'startedAt': iso(started), 'updatedAt': iso(now), 'ok': False,
-            'error': error, 'rollbackHint': None, 'requestId': request_id, 'warning': None, 'reason': reason, 'schemaFrom': None, 'schemaTo': None}
+            'error': error, 'rollbackHint': None, 'requestId': request_id, 'warning': None, 'reason': reason, 'schemaFrom': None, 'schemaTo': None,
+            'cleanup': None}
 
 
 def new_current(request_id, target, accepted):

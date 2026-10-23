@@ -210,12 +210,14 @@ class StatusTests(unittest.TestCase):
         self.assertEqual((out['reason'], out['schemaFrom'], out['schemaTo'], out['error']), ('health-timeout', 4, 5, 'bad[31mtext'))
         self.assertEqual(b.validate_status(self.status(reason='rm -rf /'), RID)[0]['reason'], 'unknown')
         self.assertEqual(b.validate_status(self.status(**{'from': ''}), RID)[0]['from'], '')
+        self.assertEqual(b.validate_status(self.status(cleanup='Cleaned up: 2 old DockNest images' + 'x' * 300), RID)[0]['cleanup'][:34], 'Cleaned up: 2 old DockNest images' + 'x')
+        self.assertEqual(len(b.validate_status(self.status(cleanup='c' * 900), RID)[0]['cleanup']), 256)
 
     def test_other_requests_and_invalid_values(self):
         self.assertIsNone(b.validate_status(self.status(requestId='5b0c9c1e-7d0f-4c55-9a0e-2a3c7b0d9f11'), RID))
         self.assertIsNone(b.validate_status(self.status(requestId=...), RID))
         for fields in ({'phase': 'pwned'}, {'phase': ...}, {'ok': 1}, {'ok': 'true'}, {'to': '<script>'}, {'startedAt': 'yesterday'},
-                       {'warning': 'w' * 1025}, {'error': 5}, {'schemaFrom': True}, {'schemaTo': -1}, {'schemaTo': 1.5}):
+                       {'warning': 'w' * 1025}, {'error': 5}, {'schemaFrom': True}, {'schemaTo': -1}, {'schemaTo': 1.5}, {'cleanup': 3}):
             with self.assertRaises(ValueError, msg=fields): b.validate_status(self.status(**fields), RID)
         with self.assertRaises(ValueError): b.validate_status(b'{"phase":"build","x":"%s"}' % (b'a' * 16400), RID)
         with self.assertRaises(ValueError): b.validate_status(b'[1]', RID)

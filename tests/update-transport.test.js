@@ -35,6 +35,8 @@ test('status.json: known fields only, enums and regexes enforced, control charac
   const parsed = parseStatus(base);
   assert.ok(!('extra' in parsed)); assert.equal(parsed.rollbackHint, 'abc'); assert.equal(parsed.warning.length, 1024); assert.equal(parsed.reason, 'unknown');
   assert.equal(parseStatus({ ...base, error: 'e'.repeat(9000) }).error.length, 4096);
+  assert.equal(parseStatus({ ...base, cleanup: 'Cleaned up: 2 old DockNest images' }).cleanup, 'Cleaned up: 2 old DockNest images');
+  assert.equal(parseStatus({ ...base, cleanup: 'c'.repeat(900) }).cleanup.length, 256); assert.equal(parseStatus({ ...base, cleanup: 3 }), null);
   for (const bad of [{ ...base, phase: 'rm' }, { ...base, requestId: 'x' }, { ...base, ok: 'true' }, { ...base, to: '$(id)' }, { ...base, updatedAt: 'now' }, { ...base, schemaTo: 1.5 }, { ...base, error: 5 }, null]) assert.equal(parseStatus(bad), null);
 });
 

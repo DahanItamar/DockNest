@@ -85,6 +85,14 @@ test('upgrades to the newest final release, keeps a rollback copy and releases t
   const calls = await f.read('calls');
   assert.ok(calls.indexOf('deployment-preflight.js hold') < calls.indexOf('compose stop worker'));
   assert.ok(calls.indexOf('compose build') < calls.indexOf('compose stop worker'), 'the old release keeps serving while the new image builds');
+  // The previous image is pinned before the build moves docknest:local, then kept as docknest:previous for the hint.
+  const pin = calls.indexOf(`tag ${fakeId('2.0.0')} docknest:pre-upgrade`);
+  assert.ok(pin > -1 && pin < calls.indexOf('compose build'), 'pinned before the build');
+  const tags = await f.read('tags');
+  assert.match(tags, new RegExp(`^docknest:previous ${fakeId('2.0.0')}$`, 'm')); assert.doesNotMatch(tags, /docknest:pre-upgrade/);
+  assert.match(tags, new RegExp(`^docknest:local ${fakeId('2.1.0')}$`, 'm'));
+  assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.0.0^{commit}')} && docker tag docknest:previous docknest:local && docker compose up -d --no-build`), status.rollbackHint);
+  assert.equal(status.cleanup, 'Cleaned up: 0 old DockNest images'); assert.match(result.stdout, /Optional: 'docker builder prune --filter until=168h'/);
   assert.equal(f.run().status, 0, 'running again on the current release is a no-op');
 });
 
@@ -128,7 +136,8 @@ test('an unhealthy start after an incompatible migration stops with exact rollba
   assert.equal(f.head(), 'v2.2.0-rc.1', 'code stays on the migrated release'); assert.equal(await f.read('schema'), '3');
   const status = await f.status();
   assert.equal(status.ok, false); assert.match(status.rollbackHint, /state-v2-to-v3-\*\.sqlite/);
-  assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.1.0^{commit}')} && docker tag ${fakeId('2.1.0')} docknest:local && docker compose up -d --no-build`), status.rollbackHint);
+  assert.ok(status.rollbackHint.includes(`git checkout ${git(f.work, 'rev-parse', 'v2.1.0^{commit}')} && docker tag docknest:pre-upgrade docknest:local && docker compose up -d --no-build`), status.rollbackHint);
+  assert.match(await f.read('tags'), new RegExp(`^docknest:pre-upgrade ${fakeId('2.1.0')}$`, 'm'), 'the image the hint names still exists');
   assert.equal(await f.read('restores'), ''); assert.equal(await f.read('removed'), '', 'nothing is pruned after exit 5');
   const failed = (await f.backups()).find(name => name.endsWith('-2.1.0-to-2.2.0-rc.1'));
   assert.equal(await readFile(join(f.work, 'data/upgrade-backups', failed, 'result'), 'utf8'), 'format=1\nexit=5\n');
@@ -248,20 +257,25 @@ test('image mode switches only the tag per command, rolls back to the recorded i
   result = f.run('--version', 'v2.1.0');
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(await readFile(env, 'utf8'), /^DOCKNEST_IMAGE=ghcr\.io\/example\/docknest:2\.1\.0$/m); assert.match(await readFile(env, 'utf8'), /APP_ORIGIN/);
-  assert.equal((await f.status()).rollbackHint.includes(fakeId('2.0.0')), true);
+  assert.ok((await f.status()).rollbackHint.includes('DOCKNEST_IMAGE=ghcr.io/example/docknest:previous docker compose up -d --pull never'), (await f.status()).rollbackHint);
+  assert.match(await f.read('tags'), new RegExp(`^ghcr\\.io/example/docknest:previous ${fakeId('2.0.0')}$`, 'm'), 'image mode pins the previous image too');
+  assert.equal((await f.status()).cleanup, 'Cleaned up: 0 old DockNest images');
   assert.equal(await f.read('removed'), fakeId('2.1.0'), 'the running and the previous image are never removed');
   await writeFile(env, 'DOCKNEST_IMAGE=ghcr.io/example/docknest@sha256:' + 'a'.repeat(64) + '\n');
   result = f.run('--version', 'v2.0.0');
   assert.equal(result.status, 2); assert.match(result.stderr, /pinned by digest/);
 });
 
-const forbidden = /image prune|system prune|builder prune|image rm (-f|--force)/;
+const forbidden = /image prune|system prune|builder prune|image rm (-f|--force)/; // the build cache command is only printed
 const win32 = process.platform === 'win32';
 
-test('retention after a success keeps the newest 5 backups and every run that needs manual action, and removes only recorded images of this repository', { skip: !shell }, async t => {
+test('retention after a success keeps the newest 5 backups, every run that needs manual action, the running and previous image, and removes older DockNest images', { skip: !shell }, async t => {
   const f = await fixture(t), dir = join(f.work, 'data/upgrade-backups');
   await writeFile(join(f.state, 'has-prune'), '');
-  await images(f, [['1.0.0'], ['1.1.0', 'docknest:old'], ['1.2.0'], ['1.3.0'], ['busybox', 'busybox:latest'], ['9.9.9']]);
+  // 1.4.0: legacy tags of this repository, never recorded; 1.9.0: the last run's docknest:previous (now two releases
+  // back); 9.8.0: an untagged, labelled build stage; 9.7.0: labelled but tagged in another repository.
+  await images(f, [['1.0.0'], ['1.1.0', 'docknest:old'], ['1.2.0'], ['1.3.0'], ['busybox', 'busybox:latest'], ['9.9.9'], ['1.4.0', 'docknest:sqlite-online', 'docknest:direct-abc123'], ['1.9.0', 'docknest:previous'], ['9.8.0'], ['9.7.0', 'other/app:1']]);
+  await writeFile(join(f.state, 'labelled'), [fakeId('9.8.0'), fakeId('9.7.0')].join('\n') + '\n');
   await writeFile(join(f.state, 'in-use'), fakeId('1.3.0') + '\n'); // a stopped container still uses it
   const old = {
     '20200101T000000Z-1.0.0-to-1.1.0': { imageId: fakeId('1.0.0') }, // written before 2.2.0: no result marker
@@ -288,11 +302,19 @@ test('retention after a success keeps the newest 5 backups and every run that ne
   for (const name of canaries) assert.ok(kept.includes(name), name);
   assert.equal(await readFile(join(outside, 'canary'), 'utf8'), 'keep'); assert.equal(await readFile(join(dir, '20190101T000000Z-file-to-x'), 'utf8'), 'keep');
   assert.match(result.stdout, /Removed data\/upgrade-backups\/20200101T000000Z-1\.0\.0-to-1\.1\.0/); assert.match(result.stdout, /Keeping data\/upgrade-backups\/20200103T000000Z/);
-  // Only the recorded, untagged 1.0.0 image goes: busybox and docknest:old are other repositories, 1.2.0 belongs to a
-  // run that needs manual action, 1.3.0 is in use (reported), 2.0.0 is the previous and 2.1.0 the running image.
-  assert.equal(await f.read('removed'), fakeId('1.0.0'));
+  // Removed: the recorded untagged 1.0.0, docknest:old (1.1.0), both legacy tags of 1.4.0, the old docknest:previous
+  // (1.9.0) and the labelled build stage 9.8.0. Kept: busybox and 9.7.0 (other repositories), 1.2.0 (a run that needs
+  // manual action), 1.3.0 (a stopped container uses it), 9.9.9 (untagged, unrecorded, unlabelled), 2.0.0 (the
+  // previous image, now docknest:previous) and 2.1.0 (running).
+  assert.deepEqual((await f.read('removed')).split('\n').sort(), [fakeId('1.0.0'), fakeId('1.1.0'), fakeId('1.4.0'), fakeId('1.9.0'), fakeId('9.8.0')].sort());
+  const store = await f.read('store');
+  for (const version of ['busybox', '9.7.0', '1.2.0', '1.3.0', '9.9.9', '2.0.0', '2.1.0']) assert.ok(store.includes(fakeId(version)), version);
+  assert.match(await f.read('tags'), new RegExp(`^docknest:previous ${fakeId('2.0.0')}$`, 'm'));
   const status = await f.status(), calls = await f.read('calls');
-  assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.ok(status.warning.includes(`Could not remove image ${fakeId('1.3.0')}`), status.warning);
+  assert.equal(status.phase, 'done'); assert.equal(status.ok, true); assert.equal(status.warning, null);
+  assert.equal(status.cleanup, 'Cleaned up: 5 old DockNest images'); assert.match(result.stdout, /^Cleaned up: 5 old DockNest images$/m);
+  assert.match(result.stdout, new RegExp(`Keeping image ${fakeId('busybox')}: it is also tagged outside`));
+  assert.ok(!calls.includes(`image rm ${fakeId('1.3.0')}`), 'an image a container uses is never even tried');
   assert.match(calls, /^compose exec -T api node scripts\/prune-upgrade-artifacts\.js IMG=$/m); assert.doesNotMatch(calls, forbidden);
   assert.ok(!calls.includes(`image rm ${fakeId('busybox')}`) && !calls.includes(`image rm ${fakeId('1.2.0')}`) && !calls.includes(`image rm ${fakeId('9.9.9')}`));
   assert.equal(await readFile(join(dir, save, 'result'), 'utf8'), 'format=1\nexit=0\n');
