@@ -11,6 +11,11 @@ test('Redis contracts reject unsafe persistence, authentication, shutdown and ke
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Redis contract verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('move helper operations mask settings, journal before effects, never overwrite and keep isolated restore unchanged',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_moves.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for move helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('large SQLite databases are checked online, reused only when byte-identical, and streamed artifacts stay verifiable',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_sqlite_online.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for SQLite capture verification');

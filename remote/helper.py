@@ -1424,8 +1424,14 @@ def capture(req,output=None):
         if archive is not None:archive.fileobj.closed=True;archive.closed=True
         raise
     finally:
-        emit(stage='restarting')
-        try:
+        # Site move final copy: after a complete capture the source stays stopped behind its maintenance page.
+        # Any failure (captured is None) restarts it exactly as an ordinary backup does.
+        keep_stopped=bool(req.get('keepStopped')) and captured is not None
+        if keep_stopped:
+            complete_recovery(root);emit(stage='source_ready')
+        else:emit(stage='restarting')
+        if not keep_stopped:
+          try:
             restart_services(running,plan['services'])
             until=time.time()+120
             while running and time.time()<until and not health(running,probe_url(cfg,'health'),cfg.get('domains',()),fallback=True):time.sleep(2)
@@ -1433,7 +1439,7 @@ def capture(req,output=None):
             maintenance(cfg,False)
             complete_recovery(root)
             emit(stage='source_ready')
-        except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
+          except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
     emit(stage='packing')
     if output is None:docker('save','-o',str(root/'images.tar'),*original_ids,*images)
@@ -1601,8 +1607,8 @@ def external_restore_plan(manifest,references,metadata_only=False):
     fingerprint=hashlib.sha256(json.dumps(sorted(identities,key=lambda p:p['capturedPath']),sort_keys=True,separators=(',',':')).encode()).hexdigest()
     return {'references':plans,'fingerprint':fingerprint}
 
-def restore(req):
-    root=owned_job_root(req)
+def unpack_verified(req,root):
+    """Shared by isolated restore and the move deploy: check the transfer, unpack and verify every artifact."""
     payload=root/'payload.tar.gz'
     digest=__import__('hashlib').sha256()
     with open(payload,'rb') as f:
@@ -1611,7 +1617,10 @@ def restore(req):
     unpacked=root/'unpacked';safe_extract(payload,unpacked)
     manifest=json.loads((unpacked/'manifest.json').read_text())
     if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
-    artifacts_verified=verify_artifacts(unpacked,manifest)
+    return unpacked,manifest,verify_artifacts(unpacked,manifest)
+def restore(req):
+    root=owned_job_root(req)
+    unpacked,manifest,artifacts_verified=unpack_verified(req,root)
     external=external_restore_plan(manifest,req.get('externalReadOnly',[]))
     if req.get('externalFingerprint') and external['fingerprint']!=req['externalFingerprint']:raise ValueError('External restore mount identity changed after planning')
     if manifest.get('kind')=='static':
@@ -1786,6 +1795,600 @@ def cleanup_staging(req):
     # fd-based removal never follows a link planted inside the folder.
     if not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
     shutil.rmtree(root)
+# ---- Site moves (docs/moving-sites.md) ----
+# Rules: facts are read-only and never include env values (masked host and port only); a deploy journals every
+# resource on the target BEFORE creating it, so deploy-teardown removes exactly what this move created and nothing
+# else; existing files, folders, containers, volumes and networks are never replaced; the source is never edited.
+MOVES_ROOT=pathlib.Path('/var/lib/docknest/moves')
+NGINX_CONF_DIRS=['/etc/nginx/conf.d','/etc/nginx/http.d','/etc/nginx/sites-enabled']
+ACME_ROOT=pathlib.Path('/var/lib/docknest/acme')
+SAFE_NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')
+DOMAIN=re.compile(r'(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)+')
+PROTECTED_PATHS={'/','/bin','/boot','/dev','/etc','/home','/lib','/lib64','/media','/mnt','/opt','/proc','/root','/run','/sbin','/srv','/sys','/tmp','/usr','/var','/var/lib','/var/lib/docker','/var/lib/docker/volumes','/var/www','/var/lib/docknest','/var/lib/docker-backup-manager'}
+MAIL_PORTS='25,465,587'
+def move_id(req):
+    value=str(req.get('moveId',''));uuid.UUID(value);return value
+def move_path(value):
+    """An absolute, normalised, non-system path a move may create (and later remove) on the target."""
+    p=pathlib.PurePosixPath(str(value))
+    if not p.is_absolute() or '..' in p.parts or str(p)!=str(value) or str(p) in PROTECTED_PATHS or len(p.parts)<3:raise ValueError('Unsupported path for a move: '+str(value))
+    if any(str(p).startswith(prefix) for prefix in ['/proc/','/sys/','/dev/','/run/','/boot/']):raise ValueError('System paths cannot be moved: '+str(value))
+    return pathlib.Path(str(p))
+def move_state(mid,create=False):
+    d=MOVES_ROOT/mid
+    if create:MOVES_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
+    if d.is_symlink():raise ValueError('Move folder cannot be a symbolic link')
+    file=d/'resources.json'
+    state=json.loads(file.read_text()) if file.is_file() else {}
+    state.setdefault('created',{});state.setdefault('deployed',{})
+    for kind in ['paths','volumes','networks','containers','images','staging','firewall','nginx']:state['created'].setdefault(kind,[])
+    return d,state
+def journal_resource(d,state,kind,value):
+    """Written before the effect: a crash after this line leaves a record teardown can act on."""
+    if value not in state['created'][kind]:state['created'][kind].append(value)
+    atomic_json(d/'resources.json',state)
+def save_state(d,state):atomic_json(d/'resources.json',state)
+def tool_version(args):
+    try:return run(args,timeout=30).decode().strip().splitlines()[0].strip()[:40] or None
+    except Exception:return None
+def listening_ports():
+    ports=set()
+    for name in ['/proc/net/tcp','/proc/net/tcp6']:
+        try:lines=pathlib.Path(name).read_text().splitlines()[1:]
+        except OSError:continue
+        for line in lines:
+            parts=line.split()
+            if len(parts)>3 and parts[3]=='0A':
+                try:ports.add(int(parts[1].rsplit(':',1)[1],16))
+                except ValueError:pass
+    try:
+        for line in docker('ps','--format','{{.Ports}}').decode().splitlines():
+            for match in re.finditer(r':(\d+)->',line):ports.add(int(match[1]))
+    except Exception:pass
+    return sorted(ports)
+def host_addresses():
+    found=[]
+    try:
+        for line in run(['ip','-o','addr','show','scope','global'],timeout=10).decode().splitlines():
+            fields=line.split()
+            if len(fields)<4 or fields[1].startswith(('docker','br-','veth','cni','flannel','virbr')):continue
+            match=re.search(r'\binet6? ([0-9a-fA-F.:]+)/',line)
+            if match and match[1] not in found:found.append(match[1])
+    except Exception:pass
+    return found[:20]
+def process_running(name):
+    try:
+        for entry in os.scandir('/proc'):
+            if entry.name.isdigit():
+                try:
+                    if pathlib.Path(entry.path,'comm').read_text().strip()==name:return True
+                except OSError:pass
+    except OSError:pass
+    return False
+def nginx_conf_dir():
+    try:text=pathlib.Path('/etc/nginx/nginx.conf').read_text(errors='replace')
+    except OSError:return None
+    for d in NGINX_CONF_DIRS:
+        if re.search(r'^\s*include\s+'+re.escape(d)+r'/\*(?:\.conf)?\s*;',text,re.M) and pathlib.Path(d).is_dir():return d
+    return None
+def nginx_facts():
+    if not shutil.which('nginx'):return {'installed':False}
+    try:run(['nginx','-t'],timeout=30);ok=True
+    except Exception:ok=False
+    return {'installed':True,'configOk':ok,'running':process_running('nginx'),'confDir':nginx_conf_dir(),'serverNames':sorted({d.lower() for site in nginx_sites() for d in site['domains']})}
+# Directives the DockNest-owned server block provides itself; others found in the source block are listed (names only).
+COPIED_DIRECTIVES={'listen','server_name','root','index','location','proxy_pass','proxy_set_header','proxy_http_version','try_files','ssl_certificate','ssl_certificate_key','include','return','error_page','set','if','add_header','default_type','internal','access_log','error_log','ssl_protocols','ssl_ciphers','ssl_prefer_server_ciphers','ssl_session_cache','ssl_session_timeout','ssl_dhparam','http2','proxy_redirect','charset'}
+def nginx_domain_facts(domains):
+    """Names of directives in the domain's server blocks and the loopback upstream port. Never contents."""
+    wanted={d.lower() for d in domains};names=set();ports=[]
+    for folder in ['/etc/nginx/sites-enabled','/etc/nginx/conf.d','/etc/nginx/http.d']:
+        directory=pathlib.Path(folder)
+        if not directory.is_dir():continue
+        for file in sorted(directory.iterdir()):
+            if not file.is_file() or file.stat().st_size>1024*1024 or file.name.startswith('docknest-'):continue
+            try:lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True;tokens=list(lexer)
+            except (ValueError,OSError):continue
+            depth=0;stack=[];words=[];blocks=[]
+            for token in tokens:
+                if token=='{':stack.append(words[0] if words else '');blocks.append((words[0] if words else '',words[1:]));words=[]
+                elif token=='}':stack and stack.pop();words=[]
+                elif token==';':
+                    if words:blocks.append((words[0],words[1:]))
+                    words=[]
+                else:words.append(token)
+            # Group directives per top-level server block.
+            current=None;servers=[]
+            for name,args in blocks:
+                if name=='server':current={'names':set(),'directives':set(),'upstreams':[]};servers.append(current);continue
+                if current is None:continue
+                if name=='server_name':current['names'].update(a.lower() for a in args)
+                current['directives'].add(name)
+                if name=='proxy_pass' and args:current['upstreams'].append(args[0])
+            for server in servers:
+                if not server['names']&wanted:continue
+                names.update(n for n in server['directives'] if re.fullmatch(r'[a-z_0-9]+',n) and n not in COPIED_DIRECTIVES)
+                for upstream in server['upstreams']:
+                    match=re.fullmatch(r'https?://(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)(?:/.*)?',upstream)
+                    if match:ports.append(int(match[1]))
+    return {'directives':sorted(names)[:50],'upstreamPorts':list(dict.fromkeys(ports))}
+def is_ip(value):
+    try:ipaddress.ip_address(value);return True
+    except ValueError:return False
+def mask_value(value,token):
+    """Scheme, host and port only: userinfo, paths, queries and every other part of the value are dropped."""
+    parts=urllib.parse.urlsplit(value) if '://' in value else None
+    if parts and parts.hostname:
+        try:port=parts.port
+        except ValueError:port=None
+        return parts.scheme+'://'+parts.hostname+(':%d'%port if port else '')
+    match=re.search(re.escape(token)+r'(:\d{1,5})?',value)
+    return token+(match[1] or '' if match else '')
+def env_token(value,tokens):
+    for token in tokens:
+        if token and re.search(r'(?<![A-Za-z0-9.-])'+re.escape(token)+r'(?![A-Za-z0-9-])',value):return token
+    return None
+def env_findings(containers,files,tokens):
+    findings=[];seen=set()
+    def scan(key,value,where):
+        token=env_token(value,tokens)
+        if token and (key,where) not in seen and SAFE_NAME.fullmatch(key):
+            seen.add((key,where));findings.append({'key':key,'where':where,'kind':'ip' if is_ip(token) else 'host','masked':mask_value(value,token)})
+    for c in containers:
+        for item in c.get('Config',{}).get('Env') or []:
+            key,_,value=item.partition('=');scan(key,value,'container '+c['Name'].lstrip('/'))
+    for filename in files:
+        p=pathlib.Path(filename)
+        if not (p.name=='.env' or p.name.endswith('.env')) or not p.is_file() or p.is_symlink():continue
+        try:lines=p.read_text(errors='replace').splitlines()[:5000]
+        except OSError:continue
+        for line in lines:
+            match=re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$',line)
+            if match:scan(match[1],match[2].strip().strip('"\''),'file '+str(p))
+    return findings[:100]
+def port_bindings(c):
+    result=[]
+    for internal,bindings in (c.get('HostConfig',{}).get('PortBindings') or {}).items():
+        port,_,protocol=internal.partition('/')
+        for binding in bindings or []:
+            host=str(binding.get('HostPort') or '')
+            if host.isdigit() and port.isdigit():result.append({'container':c['Name'].lstrip('/'),'hostIp':binding.get('HostIp') or '0.0.0.0','hostPort':int(host),'containerPort':int(port),'protocol':protocol or 'tcp'})
+    return result
+def source_site_facts(cfg,tokens):
+    domains=[d for d in cfg.get('domains',[]) if isinstance(d,str) and DOMAIN.fullmatch(d)]
+    nginx=nginx_domain_facts(domains) if domains else {'directives':[],'upstreamPorts':[]}
+    m=cfg.get('maintenance',{})
+    ready=bool(m.get('directory')) and pathlib.Path(m['directory'],'ready').is_file()
+    if cfg.get('kind')=='static':
+        root=cfg.get('documentRoot','')
+        return {'kind':'static','domains':domains,'documentRoot':root,'bindPaths':[root],'names':{},'ports':[],'networks':[],'running':[],'containerCount':0,'nginxDirectives':nginx['directives'],'web':None,'maintenanceReady':True,'env':[]}
+    cs=inspect(cfg.get('containers',[]))
+    compose=any((c.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project') for c in cs)
+    ports=[b for c in cs for b in port_bindings(c)]
+    binds=list(dict.fromkeys([m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind']+cfg.get('composeFiles',[])+cfg.get('configFiles',[])))
+    networks={}
+    for c in cs:
+        for name in (c.get('NetworkSettings',{}).get('Networks') or {}):
+            if name in ['bridge','host','none'] or name in networks:continue
+            n=json.loads(docker('network','inspect',name))[0]
+            networks[name]={'name':name,'driver':n.get('Driver'),'internal':bool(n.get('Internal')),'ipv6':bool(n.get('EnableIPv6')),'labels':{k:v for k,v in (n.get('Labels') or {}).items() if k.startswith('com.docker.compose.')}}
+    # The web port nginx proxies to; then the configured loopback health URL; then the first published TCP port.
+    web=None
+    for port in nginx['upstreamPorts']:
+        if any(b['hostPort']==port for b in ports):web=port;break
+    if web is None and cfg.get('healthUrl'):
+        match=re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):(\d+)(?:/.*)?',cfg['healthUrl'])
+        if match and any(b['hostPort']==int(match[1]) for b in ports):web=int(match[1])
+    if web is None:web=next((b['hostPort'] for b in ports if b['protocol']=='tcp'),None)
+    return {'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
+        'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
+        'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
+        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens)}
+def target_probe(probe):
+    paths=[]
+    for value in (probe.get('paths') or [])[:200]:
+        p=pathlib.Path(str(value))
+        if not p.is_absolute() or '..' in p.parts:continue
+        if p.exists() or p.is_symlink():paths.append({'path':str(value),'empty':p.is_dir() and not p.is_symlink() and not any(p.iterdir())})
+    names=probe.get('names') or {}
+    existing={'containers':docker('ps','-a','--format','{{.Names}}').decode().split(),'volumes':docker('volume','ls','-q').decode().split(),'networks':docker('network','ls','--format','{{.Name}}').decode().split()}
+    conflicts={kind:sorted(set(names.get(kind) or [])&set(values)) for kind,values in existing.items()}
+    return {'existingPaths':paths,'conflicts':conflicts}
+def move_facts(req):
+    """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
+    cfg=req.get('config') or {}
+    staging=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
+    existing=next((p for p in [staging,*staging.parents] if p.exists()),pathlib.Path('/'))
+    usage=shutil.disk_usage(existing);ports=listening_ports();nginx=nginx_facts()
+    facts={'helperVersion':VERSION,'uid':os.geteuid(),'dockerVersion':tool_version(['docker','version','--format','{{.Server.Version}}']),'composeVersion':tool_version(['docker','compose','version','--short']),
+        'freeBytes':usage.free,'totalBytes':usage.total,'stagingWritable':os.access(existing,os.W_OK),'usedPorts':ports,'nginx':nginx,
+        'webPortOwner':None if 80 not in ports else ('nginx' if nginx.get('running') else 'other'),
+        'certbot':{'installed':bool(shutil.which('certbot')),'account':pathlib.Path('/etc/letsencrypt/accounts').is_dir()},'addresses':host_addresses()}
+    facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}'])
+    if req.get('role')=='source':facts['site']=source_site_facts(cfg,[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)])
+    if req.get('probe'):facts['probe']=target_probe(req['probe'])
+    emit(result=facts)
+def place_tree(archive,target,d,state,mid):
+    """Extract a one-entry archive to `target`, which must not exist (an empty folder is accepted and recreated on teardown)."""
+    target=move_path(target)
+    if target.is_symlink() or (target.exists() and not (target.is_dir() and not any(target.iterdir()))):raise ValueError('%s already exists on this server. DockNest never overwrites existing folders.'%target)
+    empty=target.exists()
+    missing=[p for p in reversed(target.parents) if not p.exists()]
+    journal_resource(d,state,'paths',{'path':str(missing[0] if missing else target),'restoreEmpty':empty and not missing})
+    for p in missing:p.mkdir(mode=0o755)
+    if empty:target.rmdir()
+    temporary=target.parent/('.docknest-move-%s-%s'%(mid[:8],uuid.uuid4().hex[:8]))
+    if not missing:journal_resource(d,state,'paths',{'path':str(temporary),'restoreEmpty':False})
+    safe_extract(archive,temporary)
+    entries=list(temporary.iterdir())
+    if len(entries)!=1:raise ValueError('Archive must hold exactly one entry')
+    os.replace(entries[0],target);temporary.rmdir()
+    return target
+def place_volume(archive,name,d,state,mid,mode):
+    if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported volume name')
+    if docker('volume','ls','-q','--filter','name=^'+re.escape(name)+'$').decode().split():raise ValueError('A volume named %s already exists on this server. DockNest never replaces it.'%name)
+    journal_resource(d,state,'volumes',name)
+    docker('volume','create','--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,name)
+    mountpoint=pathlib.Path(json.loads(docker('volume','inspect',name))[0]['Mountpoint'])
+    if any(mountpoint.iterdir()):raise ValueError('New volume is not empty')
+    temporary=mountpoint.parent/('.docknest-move-'+uuid.uuid4().hex[:8])
+    safe_extract(archive,temporary)
+    entries=list(temporary.iterdir())
+    if len(entries)!=1:raise ValueError('Archive must hold exactly one entry')
+    mountpoint.rmdir();os.replace(entries[0],mountpoint);temporary.rmdir()
+def rewrite_value(value,tokens,target):
+    token=env_token(value,tokens)
+    return re.sub(r'(?<![A-Za-z0-9.-])'+re.escape(token)+r'(?![A-Za-z0-9-])',target,value) if token else value
+def rewrite_env_file(path,keys,tokens,target):
+    p=pathlib.Path(path)
+    if not p.is_file() or p.is_symlink():return 0
+    lines=p.read_text(errors='replace').split('\n');changed=0
+    for i,line in enumerate(lines):
+        match=re.match(r'(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*)$',line)
+        if match and match[2] in keys:
+            new=rewrite_value(match[4],tokens,target)
+            if new!=match[4]:lines[i]=match[1]+match[2]+match[3]+new;changed+=1
+    if changed:
+        info=p.stat();temporary=p.with_name(p.name+'.docknest-tmp')
+        temporary.write_text('\n'.join(lines));os.chmod(temporary,info.st_mode&0o7777)
+        if hasattr(os,'chown'):os.chown(temporary,info.st_uid,info.st_gid)
+        os.replace(temporary,p)
+    return changed
+def mapped_port(port_map,binding,mode):
+    for entry in port_map:
+        if int(entry.get('from',-1))==binding['hostPort'] and int(entry.get('containerPort',-1))==binding['containerPort'] and entry.get('protocol','tcp')==binding['protocol']:
+            to=int(entry['to'])
+            break
+    else:to=binding['hostPort']
+    if not 1<=to<=65535:raise ValueError('Invalid port in the move plan')
+    ip='127.0.0.1' if mode=='test' else binding['hostIp']
+    if ip in ['','0.0.0.0']:host=''
+    elif ':' in ip:host='['+ip+']:'
+    else:host=ip+':'
+    return host+str(to)+':'+str(binding['containerPort'])+'/'+binding['protocol'],to
+def block_mail(d,state,mid,ips):
+    """Test copies must not send mail: reject outbound SMTP from their addresses where the host firewall allows it."""
+    if not ips or not shutil.which('iptables'):return False
+    try:run(['iptables','-S','DOCKER-USER'],timeout=10)
+    except Exception:return False
+    for ip in ips:
+        if not is_ip(ip):continue
+        journal_resource(d,state,'firewall',ip)
+        run(['iptables','-I','DOCKER-USER','-s',ip,'-p','tcp','-m','multiport','--dports',MAIL_PORTS,'-m','comment','--comment','docknest-move-'+mid,'-j','REJECT'],timeout=10)
+    return True
+def unblock_mail(mid):
+    if not shutil.which('iptables'):return
+    try:rules=run(['iptables','-S','DOCKER-USER'],timeout=10).decode().splitlines()
+    except Exception:return
+    for rule in rules:
+        if rule.startswith('-A DOCKER-USER') and 'docknest-move-'+mid in rule:
+            try:run(['iptables','-D',*shlex.split(rule)[1:]],timeout=10)
+            except Exception:pass
+def nginx_site_conf(mid,n,tls=None):
+    domains=[d for d in n.get('domains',[]) if DOMAIN.fullmatch(d)]
+    if not domains:raise ValueError('A move with nginx needs at least one valid domain')
+    site=str(n['siteId']);uuid.UUID(site);suffix=site.replace('-','')[:12]
+    mdir=str(move_path(n['maintenanceDirectory']));acme=str(ACME_ROOT/site)
+    if re.search(r'[\s;{}"\'$]',mdir):raise ValueError('Unsupported maintenance directory')
+    if n.get('documentRoot'):
+        root=str(move_path(n['documentRoot']))
+        if re.search(r'[\s;{}"\'$]',root):raise ValueError('Unsupported document root')
+        locations='  root %s;\n  index index.html;\n  location / { try_files $uri $uri/ =404; }\n'%root
+        head=''
+    else:
+        port=int(n['upstreamPort'])
+        if not 1<=port<=65535:raise ValueError('Invalid upstream port')
+        proxy='proxy_pass http://127.0.0.1:%d; proxy_http_version 1.1; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $http_connection;'%port
+        head='map $request_method $dn_safe_%s { default 0; GET 1; HEAD 1; }\nmap "$dn_safe_%s:$dn_maint_%s" $dn_reject_%s { default 0; "0:1" 1; }\n'%(suffix,suffix,suffix,suffix)
+        locations=('  root %s;\n  set $dn_maint_%s 0;\n  if (-f %s/enabled) { set $dn_maint_%s 1; }\n  error_page 418 =503 @maintenance_api;\n'
+            '  location @maintenance_api { default_type application/json; add_header Retry-After 30 always; add_header Cache-Control no-store always; return 503 \'{"maintenance":true,"error":"Site temporarily under maintenance"}\'; }\n'
+            '  error_page 503 /maintenance.html;\n  location = /maintenance.html { internal; add_header Retry-After 30 always; add_header Cache-Control no-store always; }\n'
+            '  location / { if ($dn_reject_%s) { return 418; } if ($dn_maint_%s) { return 503; } %s }\n')%(mdir,suffix,mdir,suffix,suffix,suffix,proxy)
+    acme_location='  location /.well-known/acme-challenge/ { root %s; }\n'%acme
+    servers='server {\n  listen 80;\n  listen [::]:80;\n  server_name %s;\n%s%s}\n'%(' '.join(domains),acme_location,locations)
+    if tls:servers+='server {\n  listen 443 ssl;\n  listen [::]:443 ssl;\n  server_name %s;\n  ssl_certificate %s;\n  ssl_certificate_key %s;\n%s}\n'%(' '.join(domains),tls['cert'],tls['key'],locations)
+    return '# Managed by DockNest move %s; safe to delete after the move is cleaned up.\n%s%s'%(mid,head,servers)
+def nginx_reload():
+    run(['nginx','-t'],timeout=60)
+    try:run(['nginx','-s','reload'],timeout=60)
+    except Exception:run(['systemctl','reload','nginx'],timeout=60)
+def write_nginx(d,state,mid,n,tls=None):
+    conf_dir=nginx_conf_dir()
+    if not conf_dir:raise ValueError('nginx on this server does not include a conf.d folder DockNest can add its file to.')
+    path=pathlib.Path(conf_dir)/('docknest-%s.conf'%n['siteId'])
+    if path.exists() and not path.read_text(errors='replace').startswith('# Managed by DockNest move %s;'%mid):raise ValueError('%s already exists and was not written by this move.'%path)
+    journal_resource(d,state,'nginx',str(path))
+    acme=ACME_ROOT/str(n['siteId'])
+    if not acme.exists():journal_resource(d,state,'paths',{'path':str(acme),'restoreEmpty':False});acme.mkdir(parents=True,mode=0o755)
+    previous=path.read_text() if path.exists() else None
+    temporary=path.with_name('.'+path.name+'.docknest-tmp')
+    temporary.write_text(nginx_site_conf(mid,n,tls));os.chmod(temporary,0o644);os.replace(temporary,path)
+    try:nginx_reload()
+    except Exception:
+        if previous is None:path.unlink(missing_ok=True)
+        else:path.write_text(previous)
+        try:nginx_reload()
+        except Exception:pass
+        raise ValueError('nginx refused the new site file, so DockNest removed it again. Check nginx on this server.')
+    atomic_json(d/'nginx.json',n)
+    return str(path)
+def loopback_probe(port,host,path='/',timeout=10):
+    connection=http.client.HTTPConnection('127.0.0.1',int(port),timeout=timeout)
+    try:
+        connection.request('GET',path or '/',headers={'Host':host,'User-Agent':'DockNest-helper/%d'%VERSION,'Cache-Control':'no-cache'})
+        response=connection.getresponse();return response.status,response.read(PROBE_LIMIT)
+    finally:connection.close()
+def wait_probe(port,host,path,seconds=60):
+    deadline=time.time()+seconds;last=(None,b'')
+    while True:
+        try:
+            last=loopback_probe(port,host,path)
+            if last[0] is not None and last[0]<400 and b'dbm-maintenance-v1' not in last[1]:return last
+        except Exception:pass
+        if time.time()>=deadline:return last
+        time.sleep(2)
+def deploy_maintenance_dir(d,state,n):
+    mdir=move_path(n['maintenanceDirectory'])
+    if not mdir.exists():journal_resource(d,state,'paths',{'path':str(mdir),'restoreEmpty':False})
+    mdir.mkdir(parents=True,exist_ok=True,mode=0o755)
+    content=__import__('base64').b64decode(n.get('maintenanceHtml') or '')
+    if content:
+        if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')
+        (mdir/'maintenance.html').write_bytes(content);os.chmod(mdir/'maintenance.html',0o644)
+    return mdir
+def deploy_restore(req):
+    """Live deploy of a verified backup on the move target (test: loopback ports, restart no, outbound mail blocked
+    where possible; live: original bind addresses and restart policies plus a DockNest-owned nginx file)."""
+    mid=move_id(req);mode=req.get('mode')
+    if mode not in ['test','live']:raise ValueError('Unsupported deploy mode')
+    d,state=move_state(mid,create=True)
+    if (d/'finalized').exists():raise ValueError('This move already finished on this server')
+    if mode in state['deployed']:emit(result=state['deployed'][mode]);return
+    if any(state['created'][kind] for kind in ['paths','volumes','networks','containers','nginx']):raise ValueError('An earlier deploy of this move is incomplete; DockNest undoes it before trying again')
+    root=owned_job_root(req);journal_resource(d,state,'staging',str(root))
+    try:
+        unpacked,manifest,artifacts_verified=unpack_verified(req,root)
+        result=deploy_unpacked(req,mid,mode,d,state,unpacked,manifest)
+        result['artifactsVerified']=artifacts_verified
+    finally:
+        # The unpacked payload holds plaintext site data; it never stays in the staging root.
+        if root.exists():shutil.rmtree(root,ignore_errors=True)
+    state['deployed'][mode]=result;save_state(d,state)
+    emit(result=result)
+def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
+    port_map=req.get('portMap') or [];rewrite=req.get('envRewrite') or {}
+    keys=set(rewrite.get('keys') or []);tokens=[t for t in rewrite.get('from') or [] if isinstance(t,str) and t];target=str(rewrite.get('to') or '')
+    if keys and (not tokens or not re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',target)):raise ValueError('Settings rewrite needs the old and new server address')
+    placed=[]
+    if manifest.get('kind')=='static':
+        if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
+        document=place_tree(unpacked/'static-files.tar',manifest['documentRoot'],d,state,mid)
+        if tree_digest(document)!=manifest.get('staticFiles'):raise ValueError('Copied static files differ from the captured website')
+        result={'mode':mode,'kind':'static','documentRoot':str(document),'containers':[],'ports':[],'mailBlocked':False}
+        if mode=='live' and req.get('nginx'):
+            n={**req['nginx'],'documentRoot':str(document)}
+            deploy_maintenance_dir(d,state,n);result['nginx']=write_nginx(d,state,mid,n)
+            status,_=wait_probe(80,n['domains'][0],'/',30)
+            if status is None or status>=400:raise ValueError('nginx on this server did not serve the copied website')
+        return result
+    if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise ValueError('Architecture mismatch')
+    containers=manifest['containers']
+    if not 1<=len(containers)<=30:raise ValueError('Deploy requires 1 to 30 containers')
+    for c in containers:restore_network_plan([c])  # refuses host privileges, shared namespaces and static IPs
+    if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
+    if shutil.disk_usage(unpacked).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+    sources={}
+    for i,c in enumerate(containers):
+        for j,m in enumerate(c['Mounts']):
+            key=(m['Type'],m.get('Name') if m['Type']=='volume' else m['Source'])
+            if key in sources:continue
+            if m['Type']=='bind':
+                for kind,existing in sources:
+                    if kind!='bind':continue
+                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
+                    if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths need a manual move')
+                placed.append(str(place_tree(unpacked/('mount-%d-%d.tar'%(i,j)),m['Source'],d,state,mid)))
+            elif m['Type']=='volume':place_volume(unpacked/('mount-%d-%d.tar'%(i,j)),m['Name'],d,state,mid,mode)
+            else:raise ValueError('Unsupported mount type')
+            sources[key]=True
+    for i,filename in enumerate(manifest.get('configurationFiles',[])):
+        if any(filename==p or filename.startswith(p.rstrip('/')+'/') for p in placed):continue
+        placed.append(str(place_tree(unpacked/('config-%d.tar'%i),filename,d,state,mid)))
+    rewritten=sum(rewrite_env_file(f,keys,tokens,target) for f in manifest.get('configurationFiles',[]) if pathlib.Path(f).name.endswith('.env')) if keys else 0
+    for network in req.get('networks') or []:
+        name=network.get('name','')
+        if not SAFE_NAME.fullmatch(name) or network.get('driver') not in [None,'bridge']:raise ValueError('Only bridge networks can be moved')
+        if docker('network','ls','-q','--filter','name=^'+re.escape(name)+'$').decode().split():raise ValueError('A network named %s already exists on this server. DockNest never replaces it.'%name)
+        journal_resource(d,state,'networks',name)
+        labels=[part for k,v in (network.get('labels') or {}).items() if SAFE_NAME.fullmatch(k) and isinstance(v,str) and len(v)<256 for part in ['--label',k+'='+v]]
+        docker('network','create','--driver','bridge',*(['--internal'] if network.get('internal') else []),*(['--ipv6'] if network.get('ipv6') else []),'--label','docknest.move='+mid,*labels,name)
+    for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
+    docker('load','-i',str(unpacked/'images.tar'))
+    created=[];ports=[];names=[]
+    try:
+        for i,c in enumerate(containers):
+            name=c['Name'].lstrip('/')
+            if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported container name')
+            hc=c.get('HostConfig',{})
+            policy='no' if mode=='test' else (hc.get('RestartPolicy') or {}).get('Name') or 'no'
+            if policy not in ['no','always','unless-stopped','on-failure']:policy='no'
+            networks=[n for n in (c.get('NetworkSettings',{}).get('Networks') or {}) if n!='none']
+            primary=hc.get('NetworkMode') if hc.get('NetworkMode') in networks else (networks[0] if networks else 'none')
+            if primary=='default':primary='bridge'
+            args=['create','--name',name,'--restart',policy,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,'--network',primary]
+            def aliases(network):
+                values=[a for a in (c['NetworkSettings']['Networks'][network].get('Aliases') or []) if a and a!=c['Id'][:12] and SAFE_NAME.fullmatch(a)]
+                return [part for alias in dict.fromkeys(values) for part in ['--alias' if network!=primary else '--network-alias',alias]]
+            if primary not in ['bridge','none']:args+=aliases(primary)
+            for binding in port_bindings(c):
+                spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
+            for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
+            for m in c['Mounts']:
+                if ',' in m['Source'] or ',' in m['Destination']:raise ValueError('Mount paths with commas need a manual move')
+                mount=('type=volume,src='+m['Name'] if m['Type']=='volume' else 'type=bind,src='+m['Source'])+',dst='+m['Destination']
+                if not m.get('RW',True):mount+=',readonly'
+                args+=['--mount',mount]
+            for host in hc.get('ExtraHosts') or []:
+                if re.fullmatch(r'[A-Za-z0-9.-]+:[0-9a-fA-F.:]+|[A-Za-z0-9.-]+:host-gateway',host):args+=['--add-host',host]
+            if hc.get('Init'):args.append('--init')
+            for item in c.get('Config',{}).get('Env') or []:
+                key,_,value=item.partition('=')
+                if key in keys and tokens:
+                    new=rewrite_value(value,tokens,target)
+                    if new!=value:args+=['-e',key+'='+new];rewritten+=1
+            journal_resource(d,state,'containers',name)
+            created.append(docker(*args,manifest['snapshotImages'][i]).decode().strip());names.append(name)
+            if primary not in ['bridge','none']:
+                for other in networks:
+                    if other!=primary:docker('network','connect',*aliases(other),other,created[-1])
+        mapping={c['Id']:cid for c,cid in zip(containers,created)}
+        contracts=manifest.get('backupPlan',{}).get('services',[])
+        ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
+        running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
+        restart_services(running,[{**s,'container':mapping[s['container']],'dependsOn':[mapping[x] for x in s.get('dependsOn',[])]} for s in contracts if s.get('container') in mapping])
+        until=time.time()+120
+        while time.time()<until and not health(running):time.sleep(2)
+        if not health(running):raise ValueError('The copied containers did not become healthy')
+        ips=[n.get('IPAddress') for c in inspect(running) for n in (c.get('NetworkSettings',{}).get('Networks') or {}).values() if n.get('IPAddress')] if running else []
+        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'mailBlocked':block_mail(d,state,mid,ips) if mode=='test' else False}
+        if mode=='live' and req.get('nginx'):
+            n=req['nginx'];deploy_maintenance_dir(d,state,n)
+            result['nginx']=write_nginx(d,state,mid,n)
+            status,_=wait_probe(80,n['domains'][0],n.get('path') or '/',60)
+            if status is None or status>=400:raise ValueError('nginx on this server did not serve the moved site')
+            (move_path(n['maintenanceDirectory'])/'ready').touch(mode=0o644)
+        return result
+    except Exception:
+        try:
+            if created:docker('stop','--time','30',*created)
+        except Exception:pass
+        raise
+def remove_path(record):
+    p=move_path(record['path'])
+    if p.is_symlink() or p.is_file():p.unlink()
+    elif p.is_dir():
+        if not getattr(shutil.rmtree,'avoids_symlink_attacks',False) and os.name=='posix':raise ValueError('Safe directory removal is unavailable on this host')
+        shutil.rmtree(p)
+    if record.get('restoreEmpty'):p.mkdir(mode=0o755)
+def deploy_teardown(req):
+    """Undo a move's deploy on this server: removes only what this move journaled as created, gated by its label."""
+    mid=move_id(req);d=MOVES_ROOT/mid
+    if not d.exists():emit(result={'removed':True,'nothingToDo':True});return
+    d,state=move_state(mid)
+    if (d/'finalized').exists():raise ValueError('This move finished; DockNest never removes a moved site automatically.')
+    unblock_mail(mid)
+    ids=docker('ps','-aq','--filter','label=docknest.move='+mid).decode().split()
+    if ids:docker('rm','-f',*ids)
+    for path in state['created']['nginx']:
+        p=pathlib.Path(path)
+        if p.is_file() and p.read_text(errors='replace').startswith('# Managed by DockNest move %s;'%mid):
+            p.unlink()
+            try:nginx_reload()
+            except Exception:pass
+    for kind,listing in [('networks',['network','ls','-q']),('volumes',['volume','ls','-q'])]:
+        owned=set(docker(*listing,'--filter','label=docknest.move='+mid).decode().split())
+        for name in reversed(state['created'][kind]):
+            if kind=='volumes' and name in owned:docker('volume','rm',name)
+            elif kind=='networks':
+                found=docker('network','ls','-q','--filter','name=^'+re.escape(name)+'$','--filter','label=docknest.move='+mid).decode().split()
+                if found:docker('network','rm',*found)
+    for record in reversed(state['created']['paths']):remove_path(record)
+    for image in state['created']['images']:
+        try:docker('image','rm',image)
+        except Exception:pass
+    for root in state['created']['staging']:
+        p=pathlib.Path(root)
+        if p.exists() and p.parent==pathlib.Path('/var/lib/docker-backup-manager/restore'):shutil.rmtree(p,ignore_errors=True)
+    counts={kind:len(values) for kind,values in state['created'].items()}
+    shutil.rmtree(d,ignore_errors=True)
+    emit(result={'removed':True,'counts':counts})
+def deploy_status(req):
+    mid=move_id(req);d=MOVES_ROOT/mid
+    if not d.exists():emit(result={'present':False,'deployed':[],'finalized':False});return
+    d,state=move_state(mid)
+    emit(result={'present':any(state['created'][k] for k in ['paths','volumes','networks','containers','nginx']),'deployed':sorted(state['deployed']),'finalized':(d/'finalized').exists()})
+def move_test(req):
+    """Checks the copy from the target itself: container health, then an HTTP request to the loopback port with the domain's Host header."""
+    mid=move_id(req)
+    ids=docker('ps','-aq','--filter','label=docknest.move='+mid).decode().split()
+    expected=set(req.get('running') or [])
+    states=inspect(ids) if ids else []
+    running=[c['Id'] for c in states if c['Name'].lstrip('/') in expected]
+    if len(running)!=len(expected):raise ValueError('Not every copied container is present on this server')
+    healthy=health(running)
+    result={'containersHealthy':healthy,'http':None}
+    if not healthy:raise ValueError('The copied containers are not healthy')
+    http=req.get('http')
+    if http:
+        if not DOMAIN.fullmatch(str(http.get('host',''))):raise ValueError('Invalid test domain')
+        path=str(http.get('path') or '/')
+        if not path.startswith('/') or any(ch in path for ch in '\r\n '):raise ValueError('Invalid test path')
+        status,body=wait_probe(int(http['port']),http['host'],path,int(req.get('seconds',60)))
+        result['http']={'port':int(http['port']),'status':status,'ok':status is not None and status<400 and b'dbm-maintenance-v1' not in body}
+        if not result['http']['ok']:raise ValueError('The copy did not answer for %s (HTTP %s).'%(http['host'],status if status is not None else 'no response'))
+    emit(result=result)
+def move_resume_source(req):
+    """Undo of the final copy: start the old site again in its recorded order, then clear the maintenance page."""
+    cfg=req['config'];running=[c for c in req.get('running') or [] if isinstance(c,str) and SAFE_NAME.fullmatch(c)]
+    if cfg.get('kind')=='static':emit(result={'resumed':True,'static':True});return
+    cfg.setdefault('maintenance',{})
+    skip_refused_probes(cfg)
+    plan=backup_plan(cfg)
+    if running:restart_services([cid for cid in plan['restartOrder'] if cid in running],plan['services'])
+    cfg['_runningContainers']=running
+    until=time.time()+120
+    while running and time.time()<until and not health(running,probe_url(cfg,'health'),cfg.get('domains',()),fallback=True):time.sleep(2)
+    if running and not health(running,probe_url(cfg,'health'),cfg.get('domains',()),fallback=True):raise ValueError('The old site did not become healthy; its maintenance page stays on.')
+    if cfg['maintenance'].get('required') and (pathlib.Path(cfg['maintenance'].get('directory',''))/'enabled').exists():maintenance(cfg,False)
+    emit(result={'resumed':True,'running':len(running)})
+def move_retire_source(req):
+    """After the switch: the old copy stays, stopped, and cannot restart by itself. Original restart policies are kept."""
+    mid=move_id(req);cfg=req['config']
+    d,_=move_state(mid,create=True);record=d/'retired.json'
+    if record.is_file():emit(result=json.loads(record.read_text()));return
+    if cfg.get('kind')=='static':result={'containers':[],'static':True}
+    else:
+        cs=inspect(cfg.get('containers',[]))
+        result={'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'restartPolicy':(c['HostConfig'].get('RestartPolicy') or {}).get('Name') or 'no'} for c in cs]}
+        atomic_json(record.with_suffix('.pending'),result)
+        for c in cs:
+            if c['State'].get('Running'):docker('stop','--time',str(int(cfg.get('stopTimeout',60))),c['Id'])
+            docker('update','--restart=no',c['Id'])
+    atomic_json(record,result);emit(result=result)
+def move_finalize_target(req):
+    mid=move_id(req);d,_=move_state(mid,create=True)
+    atomic_json(d/'finalized',{'at':time.time()});emit(result={'finalized':True})
+def move_certificate(req):
+    """Issues a certificate only with a certbot account the owner already set up. DockNest never installs certbot."""
+    mid=move_id(req);d,state=move_state(mid)
+    n=json.loads((d/'nginx.json').read_text()) if (d/'nginx.json').is_file() else None
+    if not n:emit(result={'status':'skipped','reason':'no-nginx'});return
+    if not shutil.which('certbot') or not pathlib.Path('/etc/letsencrypt/accounts').is_dir():emit(result={'status':'needs-owner','reason':'no-certbot'});return
+    domains=[x for x in n['domains'] if DOMAIN.fullmatch(x)]
+    try:run(['certbot','certonly','--webroot','-w',str(ACME_ROOT/str(n['siteId'])),'--non-interactive','--keep-until-expiring','--cert-name','docknest-'+str(n['siteId']),*[part for x in domains for part in ['-d',x]]],timeout=300)
+    except Exception:emit(result={'status':'needs-owner','reason':'certbot-failed'});return
+    live=pathlib.Path('/etc/letsencrypt/live')/('docknest-'+str(n['siteId']))
+    write_nginx(d,state,mid,n,{'cert':str(live/'fullchain.pem'),'key':str(live/'privkey.pem')})
+    emit(result={'status':'issued','certName':'docknest-'+str(n['siteId'])})
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS
     op=req['operation']
@@ -1818,6 +2421,15 @@ def main(req):
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
     elif op=='cleanup':cleanup_staging(req);emit(result={'removed':True})
     elif op=='list-staging':emit(result=list_staging(req['config']))
+    elif op=='move-facts':move_facts(req)
+    elif op=='deploy-restore':deploy_restore(req)
+    elif op=='deploy-teardown':deploy_teardown(req)
+    elif op=='deploy-status':deploy_status(req)
+    elif op=='move-test':move_test(req)
+    elif op=='move-resume-source':move_resume_source(req)
+    elif op=='move-retire-source':move_retire_source(req)
+    elif op=='move-finalize-target':move_finalize_target(req)
+    elif op=='move-certificate':move_certificate(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
