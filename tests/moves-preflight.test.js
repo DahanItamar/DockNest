@@ -175,6 +175,20 @@ test('downtime estimate is honest and explained', () => {
   assert.equal(describeDuration(12), 'about 10 seconds'); assert.equal(describeDuration(240), 'about 4 minutes'); assert.equal(describeDuration(7200), 'about 2 hours');
 });
 
+test('preflightHash ignores volatile facts but changes with the port plan, blockers, Move anyway and rewrites', () => {
+  const hash = preflightHash(evaluateMove(facts()), { dnsMode: 'manual' });
+  const volatile = evaluateMove(facts(f => {
+    f.target.freeBytes = 99 * GiB; f.target.usedPorts = [443, 80, 22, 9999]; f.dns.records = []; f.target.certbot = { installed: false };
+    f.site.timings = { backupSeconds: 31, restoreSeconds: 12 }; f.site.nginxDirectives = ['gzip'];
+  }));
+  assert.equal(preflightHash(volatile, { dnsMode: 'manual' }), hash, 'free space, DNS answers, notes and downtime wording are not decisions');
+  assert.notEqual(preflightHash(evaluateMove(facts(f => { f.target.usedPorts.push(8082); })), { dnsMode: 'manual' }), hash, 'a port now in use changes the plan');
+  assert.notEqual(preflightHash(evaluateMove(facts(f => { f.target.freeBytes = GiB; })), { dnsMode: 'manual' }), hash, 'a disk now too small blocks');
+  assert.notEqual(preflightHash(evaluateMove(facts(f => { f.site.timings = { backupSeconds: 2000 }; })), { dnsMode: 'manual' }), hash, 'Move anyway becomes necessary');
+  const env = f => { f.site.env = [{ key: 'API_URL', where: 'container web', kind: 'ip', masked: 'http://203.0.113.7' }]; };
+  assert.notEqual(preflightHash(evaluateMove(facts(env), { envRewrite: ['API_URL'] }), { dnsMode: 'manual' }), preflightHash(evaluateMove(facts(env)), { dnsMode: 'manual' }));
+});
+
 test('preflightHash binds the reviewed checks, port map and options', () => {
   const base = evaluateMove(facts()), hash = preflightHash(base, { dnsMode: 'cloudflare' });
   assert.match(hash, /^[0-9a-f]{64}$/);

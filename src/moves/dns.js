@@ -49,10 +49,5 @@ export async function currentRecords(domain) {
 
 export const ipv4 = value => isIP(value) === 4;
 
-// Cloudflare automation is a later release. This stub fixes the interface the move engine will call; no token is
-// stored and no request leaves the server until it is implemented and reviewed (docs/security.md).
-export const cloudflare = Object.freeze({
-  available: false,
-  async switchRecord() { throw Object.assign(new Error('Automatic Cloudflare switching is not available yet. Choose "I\'ll change DNS myself".'), { status: 400 }); },
-  async revertRecord() { throw new Error('Automatic Cloudflare switching is not available yet.'); },
-});
+// Optional automatic switching with an owner-supplied Cloudflare token (src/moves/cloudflare.js).
+export * as cloudflare from './cloudflare.js';

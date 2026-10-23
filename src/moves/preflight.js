@@ -177,8 +177,17 @@ export function evaluateMove(facts, options = {}) {
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
+// Only decision-relevant, stable inputs: whether the move can start and why not, whether it needs "Move anyway", the
+// port plan, which settings get rewritten and the chosen options. Informational notes (free space, DNS answers,
+// downtime wording) change between Save and Move without changing what the move does, so they are not hashed.
 export function preflightHash(result, options = {}) {
-  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-  const material = { checks: result.details.checks.map(({ id, status, text }) => ({ id, status, text })), portMap: result.details.portMap, options };
+  const canonical = value => Array.isArray(value) ? value.map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const material = {
+    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway,
+    blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
+    portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
+    env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
+    options,
+  };
   return createHash('sha256').update(JSON.stringify(canonical(material))).digest('hex');
 }

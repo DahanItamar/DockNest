@@ -196,7 +196,7 @@ test('long downtime needs Move anyway; Cloudflare is not offered yet; a changed 
   assert.equal(wrongHash.status, 409); assert.equal((await wrongHash.json()).code, 'PREFLIGHT_CHANGED');
   assert.equal((await start({ ...draft, moveAnyway: true })).status, 202);
   const cloudflare = await post(admin, '/moves', { siteId: siteRow('cf'), targetServerId: newServer, options: { dnsMode: 'cloudflare' } });
-  assert.equal(cloudflare.status, 400); assert.match((await cloudflare.json()).error, /not available yet/);
+  assert.equal(cloudflare.status, 400); assert.match((await cloudflare.json()).error, /Connect Cloudflare in Settings first/);
   await post(admin, `/moves/${draft.id}/cancel`); await drive(20);
 });
 
@@ -220,6 +220,30 @@ test('only administrators manage moves; starting needs a recent re-verification;
   assert.equal((await post(admin, `/moves/${draft.id}/start`, { preflightHash: draft.preflightHash })).status, 409, 'already started');
   await post(admin, `/moves/${draft.id}/cancel`); await drive(20);
   assert.equal(engineState(draft.id), 'cancelled');
+});
+
+test('Start accepts a preview whose volatile facts changed, and refuses one whose decisions changed', async () => {
+  const original = moves.moveTransport.remote;
+  const vary = change => { moves.moveTransport.remote = async (server, request) => { const result = await original(server, request); if (request.operation === 'move-facts' && request.role !== 'source') change(result); return result; }; };
+  const siteId = siteRow('volatile'); backupRow(siteId);
+  const draft = await preview(siteId);
+  vary(result => { result.freeBytes -= 3 * 1024 ** 2; result.usedPorts.push(41234); result.addresses.reverse(); });
+  dnsResolver.resolve = async () => [];
+  try {
+    const started = await start(draft); assert.equal(started.status, 202, await started.clone().text());
+  } finally { moves.moveTransport.remote = original; dnsResolver.resolve = async () => [{ A: ['198.51.100.9'], AAAA: [] }]; }
+  await post(admin, `/moves/${draft.id}/cancel`); await drive(20);
+
+  for (const [name, change] of [['port-taken', null], ['disk-full', result => { result.freeBytes = 1024 ** 3; }]]) {
+    const id = siteRow(name); backupRow(id);
+    const reviewed = await preview(id);
+    const effect = change ?? (result => result.usedPorts.push(reviewed.advanced.ports[0].to));
+    vary(effect);
+    try {
+      const refused = await start(reviewed); assert.equal(refused.status, 409);
+      const body = await refused.json(); assert.equal(body.code, 'PREFLIGHT_CHANGED', name); assert.ok(body.preview, 'the fresh preview comes back');
+    } finally { moves.moveTransport.remote = original; }
+  }
 });
 
 test('a site-move job keeps both of its servers busy', () => {
