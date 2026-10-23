@@ -142,7 +142,7 @@ try{
  // 4. App error boundary: route, area and error name only. The message and stack never appear in the report.
  {
   const {context,page,local,github}=await open({appState:state({servers:[null]})});
-  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
+  // The error screen covers the whole page, so the failing area here is the overview.
   const screen=page.getByRole('alert').filter({hasText:'This page stopped working'});
   await screen.waitFor();
   await screen.getByText('Your backups and settings are safe. Reload the page, or tell us what happened.').waitFor();
@@ -150,15 +150,14 @@ try{
   await screen.getByRole('button',{name:'Open GitHub',exact:true}).click();
   const dialog=await reviewDialog(page);
   const href=await openGitHub(context,page,dialog,local,github),p=paramsOf(href),decoded=decodeURIComponent(href);
-  assert.equal(p.get('template'),'app-error.yml');assert.equal(p.get('route'),'servers');assert.equal(p.get('area'),'page');assert.equal(p.get('error_name'),'TypeError');
-  assert.equal(p.get('title'),'App error: TypeError on servers');
+  assert.equal(p.get('template'),'app-error.yml');assert.equal(p.get('route'),'overview');assert.equal(p.get('area'),'page');assert.equal(p.get('error_name'),'TypeError');
+  assert.equal(p.get('title'),'App error: TypeError on overview');
   for(const key of p.keys())assert.ok(['template','title','version','install_mode','route','area','error_name','docker','compose','git','cosign','os','kernel','arch','free_disk'].includes(key),'unexpected field '+key);
   assert.ok(!/Cannot read|null|reading|\.jsx|at /.test(decoded.replace('App error','')),'no message or stack: '+decoded);
   errors.length=0; // The deliberate render error is reported by React as a page error.
   // Operators see the same screen without the report button.
   await context.close();
   const op=await open({role:'operator',appState:state({servers:[null]})});
-  await op.page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
   await op.page.getByRole('heading',{name:'This page stopped working'}).waitFor();
   assert.equal(await op.page.getByRole('button',{name:'Open GitHub',exact:true}).count(),0);
   await op.context.close();errors.length=0;

@@ -77,6 +77,16 @@ New sites default to `/var/lib/docknest` for remote staging. Saved site configur
 
 For an existing nginx host, publish the API only on a loopback port and proxy the selected hostname to it; preserve unrelated virtual hosts and verify nginx configuration before reload. First administrator setup is a separate page at `/#/setup`; the token stays in the restricted deployment-server data directory.
 
+### Unavailable page for a reverse proxy
+
+`public/unavailable.html` (published as `/unavailable.html` in the built app) is a self-contained page for when DockNest is down or restarting: inline CSS, no scripts and no external requests, light and dark by browser setting. It reloads itself every 10 seconds and has a Retry link. Serve it with status 503 when the proxy gets no answer from the API. Keep a copy outside the DockNest container, because the container is the thing that is down.
+
+- Bundled Caddy (`https` profile): already wired. The proxy mounts the file read-only and `handle_errors` serves it for 502, 503 and 504.
+- Your own Caddy: copy the file to `/srv/docknest/unavailable.html`, then inside the site block add `handle_errors { @down expression {http.error.status_code} in [502, 503, 504]` and `handle @down { root * /srv/docknest; rewrite * /unavailable.html; header Cache-Control no-store; file_server { status 503 } } }`.
+- nginx: copy the file to `/var/www/docknest/unavailable.html`, then in the server block add `error_page 502 503 504 =503 /unavailable.html;` and `location = /unavailable.html { root /var/www/docknest; internal; add_header Cache-Control no-store always; }`. Reload nginx after `nginx -t` passes.
+
+The page cannot show a countdown without a script; the browser refresh header does the retry. These proxy snippets are not exercised by the repository tests: check them once by stopping the API container and loading the site.
+
 New remote backups use this hierarchy inside the selected SFTP storage root:
 
 ```text
