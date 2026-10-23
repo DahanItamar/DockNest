@@ -99,7 +99,11 @@ export function createTransport({ dir = updaterDirectory, socket = process.env.D
         let answer;
         try { answer = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return finish(new TransportError('invalid-answer', true)); }
         if (isObject(answer) && answer.accepted === true && answer.id === id) return finish(null, { accepted: true, code: null });
-        if (isObject(answer) && answer.accepted === false && REFUSALS.includes(answer.code)) return finish(null, { accepted: false, code: answer.code });
+        if (isObject(answer) && answer.accepted === false && REFUSALS.includes(answer.code)) {
+          // 2.4.1: a rate-limited refusal may name which limit applied and when a new run is allowed (additive, validated).
+          const detail = answer.code === 'rate-limited' && ['cooldown', 'daily'].includes(answer.limit) && isTime(answer.retryAt) ? { limit: answer.limit, retryAt: answer.retryAt } : {};
+          return finish(null, { accepted: false, code: answer.code, ...detail });
+        }
         finish(new TransportError('invalid-answer', true));
       });
     });

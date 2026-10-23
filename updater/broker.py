@@ -78,8 +78,8 @@ REQUEST_KEYS = frozenset(('schema', 'id', 'action', 'version', 'requestedBy', 'r
 
 class Refused(Exception):
     """A fixed refusal code (CODES) plus a reason kept in the broker's log and history only."""
-    def __init__(self, code, detail=''):
-        super().__init__(code); self.code, self.detail = code, detail
+    def __init__(self, code, detail='', extra=None):
+        super().__init__(code); self.code, self.detail, self.extra = code, detail, extra or {}
 
 
 def iso(epoch):
@@ -161,8 +161,9 @@ def read_request(conn, now=time.monotonic):
         if size > MAX_REQUEST: raise Refused('invalid', 'oversize')
 
 
-def response(accepted, value):
-    return json.dumps({'accepted': True, 'id': value} if accepted else {'accepted': False, 'code': value}, separators=(',', ':')).encode()
+def response(accepted, value, extra=None):
+    # extra (2.4.1) is additive and only carries the rate-limit detail: {'limit': 'cooldown'|'daily', 'retryAt': ISO time}.
+    return json.dumps({'accepted': True, 'id': value} if accepted else {'accepted': False, 'code': value, **(extra or {})}, separators=(',', ':')).encode()
 
 
 CGROUP_FORMS = (re.compile(r'(?:^|/)system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
@@ -206,6 +207,17 @@ def admit(state, request, now, current, recorded=lambda request_id: False):
     if state['exit4'].get(request['version'], 0) >= 2: return 'needs-host-ack'
     if now - state['lastRunEnd'] < COOLDOWN or len([t for t in state['runs'] if now - t < 86400]) >= RUNS_PER_DAY: return 'rate-limited'
     return None
+
+
+def rate_limit_detail(state, now):
+    """Which limit refused a request and the earliest time a new run is allowed, or None when neither applies. The limits
+    themselves are unchanged: 60 s after a run ends, and at most RUNS_PER_DAY accepted runs in any 24 hours."""
+    cooldown = state['lastRunEnd'] + COOLDOWN if now - state['lastRunEnd'] < COOLDOWN else None
+    recent = sorted(t for t in state['runs'] if now - t < 86400)
+    daily = recent[len(recent) - RUNS_PER_DAY] + 86400 if len(recent) >= RUNS_PER_DAY else None
+    if cooldown is None and daily is None: return None
+    if daily is not None and (cooldown is None or daily >= cooldown): return {'limit': 'daily', 'retryAt': iso(daily)}
+    return {'limit': 'cooldown', 'retryAt': iso(cooldown)}
 
 
 def accept(state, request, now, peer):
@@ -763,7 +775,7 @@ class Broker:
         return {'pid': pid, 'uid': uid, 'container': container}, api
 
     def handle(self, conn):
-        code, request = None, None
+        code, request, extra = None, None, None
         try:
             peer, api = self.peer(conn)
             request = parse_request(read_request(conn))
@@ -771,11 +783,11 @@ class Broker:
             try: code = self.admit(request, peer, api)
             finally: self.lock.release()
         except Refused as refused:
-            code = refused.code
+            code, extra = refused.code, refused.extra
             journal('request refused: %s' % refused.detail, request_id=request and request['id'], result=code)
         except Exception as error:  # noqa: BLE001 - every unexpected error is a refusal, never a crash of the broker
             code = 'invalid'; journal('request failed: %s' % type(error).__name__, result=code)
-        try: conn.settimeout(READ_SECONDS); conn.sendall(response(code is None, request['id'] if code is None else code))
+        try: conn.settimeout(READ_SECONDS); conn.sendall(response(code is None, request['id'] if code is None else code, extra))
         except OSError: pass
         finally: conn.close()
 
@@ -785,7 +797,7 @@ class Broker:
             if self.running: raise Refused('busy', 'a run is active')
             current = self.current_version()
             code = admit(state, request, now, current, lambda rid: os.path.lexists(os.path.join(STATE_DIR, 'history', rid + '.json')))
-            if code: raise Refused(code, 'policy')
+            if code: raise Refused(code, 'policy', rate_limit_detail(state, now) if code == 'rate-limited' else None)
             self.refresh()
             try: reason = self.preconditions(state, current, api)
             except (RuntimeError, OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as error: reason = 'host check failed: %s' % type(error).__name__

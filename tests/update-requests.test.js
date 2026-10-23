@@ -322,6 +322,13 @@ test('broker refusals map to their codes, finish the row as refused and release 
     const saved = db.prepare('SELECT state,refusal FROM update_requests').get(); assert.deepEqual({ ...saved }, { state: 'refused', refusal });
     assert.equal((await call('/api/state')).status, 200);
   }
+  // 2.4.1: a rate-limited refusal passes its limit and retry time through; garbage detail is dropped.
+  const retryAt = '2026-10-23T14:05:00Z';
+  for (const [detail, want] of [[{ limit: 'daily', retryAt }, { limit: 'daily', retryAt }], [{ limit: 'cooldown', retryAt }, { limit: 'cooldown', retryAt }], [{ limit: 'weekly', retryAt }, {}], [{ limit: 'daily', retryAt: 'soon' }, {}]]) {
+    await reset(); await put('service.json', service()); answer = () => ({ accepted: false, code: 'rate-limited', ...detail });
+    const response = await upd('/requests', { method: 'POST', body: { version: TARGET } }), body = await response.json();
+    assert.equal(response.status, 429); assert.equal(body.code, 'UPDATER_RATE_LIMITED'); assert.equal(body.limit, want.limit); assert.equal(body.retryAt, want.retryAt);
+  }
   await reset(); await put('service.json', service()); answer = () => ({ accepted: false, code: 'made-up' });
   assert.equal((await upd('/requests', { method: 'POST', body: { version: TARGET } })).status, 503, 'an unknown refusal code is not trusted');
   assert.equal(db.prepare('SELECT state FROM update_requests').get().state, 'submitted', 'the request was delivered; it stays until the broker shows otherwise');

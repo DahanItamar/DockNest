@@ -155,7 +155,7 @@ export function updateRoutes({ release, fetch, service } = {}) {
       if (!(error instanceof TransportError) || !error.delivered) service.refuse(requestId, 'unavailable');
       return fail(503, 'UPDATER_UNAVAILABLE', 'The host updater did not answer. Check that it is running on the DockNest host.');
     }
-    if (!answer.accepted) { service.refuse(requestId, answer.code); const [status, code] = refusals[answer.code]; return fail(status, code, 'The host updater refused the update.', { refusal: answer.code }); }
+    if (!answer.accepted) { service.refuse(requestId, answer.code); const [status, code] = refusals[answer.code]; return fail(status, code, 'The host updater refused the update.', { refusal: answer.code, ...(answer.limit ? { limit: answer.limit, retryAt: answer.retryAt } : {}) }); }
     service.rebuild();
     res.status(202).json({ requestId });
   });
