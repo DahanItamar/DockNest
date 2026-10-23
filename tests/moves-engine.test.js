@@ -17,7 +17,8 @@ const { db } = await import('../src/db.js');
 const { digest } = await import('../src/crypto.js');
 const { claimJob, executeJob } = await import('../src/engine.js');
 const moves = await import('../src/moves/engine.js');
-const { dnsResolver } = await import('../src/moves/dns.js');
+const { dnsResolver, setProxyRanges } = await import('../src/moves/dns.js');
+setProxyRanges(['192.0.2.0/24']); // stands in for Cloudflare's proxy ranges (documentation addresses only)
 const listener = app.listen(0, '127.0.0.1'); await new Promise(resolve => listener.once('listening', resolve));
 const base = `http://127.0.0.1:${listener.address().port}/api`;
 const at = () => new Date().toISOString();
@@ -410,7 +411,7 @@ test('DNS wait: a Cloudflare proxy is explained and confirmed by the owner, Canc
   const siteId = siteRow('proxied'); backupRow(siteId);
   const draft = await preview(siteId, { askBeforeSwitch: false });
   assert.equal((await start(draft)).status, 202);
-  dnsResolver.resolve = async () => [{ A: ['104.16.1.1'], AAAA: [] }];
+  dnsResolver.resolve = async () => [{ A: ['192.0.2.10'], AAAA: [] }];
   try {
     await drive(40); await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(engineState(draft.id), 'waiting');

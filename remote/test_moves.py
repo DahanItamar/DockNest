@@ -168,6 +168,16 @@ class DeployRestoreTests(unittest.TestCase):
             __import__('shutil').rmtree(base/'volumes');(base/'srv'/'shop').mkdir();(base/'srv'/'shop'/'config.txt').write_text('existing')
             with self.assertRaises(ValueError) as refused:self.deploy(temporary)
             self.assertIn('never overwrites',str(refused.exception))
+    def test_a_test_copy_never_joins_the_shared_default_bridge(self):
+        manifest=fixture_manifest()
+        for c in manifest['containers']:
+            c['HostConfig']['NetworkMode']='bridge';c['NetworkSettings']['Networks']={'bridge':{'Aliases':None}}
+        with tempfile.TemporaryDirectory() as temporary:
+            host,_,_=self.deploy(temporary,manifest=manifest)
+            creates=[c for c in host.calls if c[0]=='create']
+            self.assertTrue(all(c[c.index('--network')+1]=='dn-test-'+MOVE[:12] for c in creates))
+            self.assertFalse(any(c[:2]==['network','connect'] for c in host.calls))
+            self.assertIn(['network','create','--driver','bridge','--label','docknest.move='+MOVE,'dn-test-'+MOVE[:12]],host.calls)
     def test_a_finished_deploy_is_not_repeated(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.deploy(temporary)

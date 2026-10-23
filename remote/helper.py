@@ -2344,7 +2344,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             def aliases(network):
                 values=[a for a in (c['NetworkSettings']['Networks'][network].get('Aliases') or []) if a and a!=c['Id'][:12] and SAFE_NAME.fullmatch(a)]
                 return [part for alias in dict.fromkeys(values) for part in ['--alias' if network!=primary else '--network-alias',alias]]
-            if primary not in ['bridge','none']:args+=aliases(primary)
+            if primary not in ['bridge','none'] and primary in networks:args+=aliases(primary)
             for binding in port_bindings(c):
                 spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
             for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
@@ -2365,7 +2365,8 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             created.append(docker(*args,manifest['snapshotImages'][i]).decode().strip());names.append(name)
             if primary not in ['bridge','none']:
                 for other in networks:
-                    if other!=primary:docker('network','connect',*aliases(other),other,created[-1])
+                    # A test copy never joins Docker's shared default bridge.
+                    if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*aliases(other),other,created[-1])
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
