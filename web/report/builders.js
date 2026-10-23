@@ -34,7 +34,7 @@ function assemble({ template, title, version, installMode, fields, allow, labels
   const v = normVersion(version), mode = INSTALL_MODES.includes(installMode) ? installMode : null;
   const envFields = environmentFields(env), withEnv = includeEnvironment && Object.keys(envFields).length > 0;
   const all = { title, version: v, install_mode: mode, ...fields, ...(withEnv ? envFields : {}), ...extra };
-  const allowList = { ...BASE_FIELDS, ...allow, ...ENV_FIELDS, ...(extra.excerpt !== undefined ? { excerpt: excerptOk } : {}), ...(fields.what_happened !== undefined ? { what_happened: v => whatHappenedOk(v) || excerptOk(v) } : {}) };
+  const allowList = { ...BASE_FIELDS, ...allow, ...ENV_FIELDS, ...(extra.excerpt !== undefined ? { excerpt: excerptOk } : {}), ...(fields.what_happened !== undefined ? { what_happened: whatRule } : {}) };
   const { href, sent } = buildIssueUrl(template, all, allowList);
   const sentMap = Object.fromEntries(sent);
   const shared = [['Title', sentMap.title], ['DockNest', [sentMap.version, sentMap.install_mode].filter(Boolean).join(' · ') || 'Not available']];
@@ -55,9 +55,13 @@ export function buildBugReport({ version, installMode } = {}) {
 
 // "What happened?" (2.4.1): the catalogue text when the message is one of DockNest's own fixed messages, otherwise only the
 // redacted excerpt the person opted into. The URL falls back to no text (and Copy excerpt) when it would be too long.
+// The URL allow-list itself guarantees redaction: free text passes only if redact() leaves it unchanged.
+export const whatRule = v => whatHappenedOk(v) || (excerptOk(v) && redact(v) === v);
+// Redaction repeated until nothing changes, so the text that is sent is exactly what redact() leaves alone.
+function settle(text) { let out = redact(text); for (let i = 0; i < 4; i++) { const next = redact(out); if (next === out) break; out = next; } return out; }
 function withWhat({ message, explanation, excerpt }, make) {
   const auto = whatHappened(message, explanation);
-  const cleaned = !auto && typeof excerpt === 'string' && excerpt.trim() ? limitExcerpt(redact(excerpt)) : null;
+  const cleaned = !auto && typeof excerpt === 'string' && excerpt.trim() ? settle(limitExcerpt(settle(excerpt))) : null;
   const text = auto || cleaned;
   let report = null, tooLong = false;
   if (text) { try { report = make(text); } catch (e) { if (e.code !== 'TOO_LONG') throw e; tooLong = true; } }

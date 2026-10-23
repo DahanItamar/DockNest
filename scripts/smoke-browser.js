@@ -300,7 +300,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByLabel('Storage password',{exact:true}).fill('fixture-only-not-a-real-password');
   await page.getByLabel('Verified SSH host fingerprint').fill('ab'.repeat(32));
   await page.getByRole('button',{name:'Test & connect storage'}).click();
-  await page.getByRole('heading',{name:'Hetzner Storage Box · Selected for new backups'}).waitFor();
+  await page.getByRole('heading',{name:'Hetzner Storage Box',exact:true}).waitFor();await page.locator('.storage-card .status-success',{hasText:'Used for new backups'}).waitFor();
   assert.equal(await page.getByLabel('Storage password',{exact:true}).count(),0,'Successful connection discards the password input');
   await page.route('**/api/storage-targets/storage-fixture/tree',route=>route.fulfill({json:{root:'/home/docknest',managedRoot:'/home/docknest/BACKUP',limited:false,recovery:{folder:'docknest-recovery',files:[{id:'manager-fixture',createdAt:'2026-10-03T12:13:14Z',size:1024,filename:'docknest_fixture.dkit',relativePath:'BACKUP/docknest-recovery/docknest_fixture.dkit',downloadable:true}]},servers:[{id:'host-one',name:'Production',sites:[{id:'fixture-site',name:'Shop',days:[{date:'2026-10-01',backups:[{id:'fixture-backup',capturedAt:'2026-10-01T20:30:00Z',size:1024*1024,pinned:false,verified:true,filename:'backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',relativePath:'BACKUP/production--host-one/shop--fixture-site/backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc'}]}]}]}]}}));
   await page.getByRole('button',{name:'Browse backup folders'}).click();

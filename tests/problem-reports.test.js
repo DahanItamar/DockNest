@@ -325,3 +325,18 @@ test('what_happened is a real field of the four templates and the rule rejects a
   for (const template of ['job-failure.yml', 'storage-failure.yml', 'server-connection.yml', 'self-backup-failure.yml']) assert.ok(TEMPLATE_FIELDS[template].includes('what_happened'), template);
   assert.equal(whatHappenedOk(EXPLAIN.generic + ' ' + CATALOGUE[3]), true); assert.equal(whatHappenedOk('free text'), false); assert.equal(whatHappenedOk(EXPLAIN.generic), false);
 });
+
+test('the URL allow-list itself guarantees redaction: unredacted free text is dropped, redacted text passes', async () => {
+  const { whatRule } = await import('../web/report/builders.js');
+  for (const raw of ['Could not reach canary-host.example.com', 'connect to 203.0.113.77 failed', 'open /home/canaryuser/site failed', 'mail canary.user@example.org', 'token ghp_CANARYtoken0123456789abcdef']) {
+    assert.equal(whatRule(raw), false, 'unredacted: ' + raw);
+    assert.equal(whatRule(redact(raw)), true, 'redacted: ' + raw);
+  }
+  assert.equal(whatRule(''), false);
+  // The builders settle the text (redaction repeated until stable), so whatever they send passes the rule.
+  for (const build of [buildJobReport, buildStorageReport, buildServerReport, buildSelfBackupReport]) {
+    const report = build({ version: '2.4.1', installMode: 'image', message: 'x', excerpt: CANARY + ' failed at 203.0.113.77:22 for user bob in /srv/x' });
+    const sent = fieldOf(report.href, 'what_happened');
+    assert.ok(sent && whatRule(sent) && redact(sent) === sent);
+  }
+});

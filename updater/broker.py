@@ -15,7 +15,7 @@ history/<id>.json and <id>.log (authoritative audit, F5), mirror.git and sigstor
 2.2.0 scope: action "upgrade" only; the read-only "check" action (D19) and self-update (D6) arrive in 2.3.0, until then
 `sudo scripts/install-updater.sh --repair` reinstalls this file.
 """
-import base64, datetime, json, os, posixpath, queue, re, signal, socket, stat, struct, subprocess, sys, tempfile, threading, time, uuid
+import base64, datetime, json, math, os, posixpath, queue, re, signal, socket, stat, struct, subprocess, sys, tempfile, threading, time, uuid
 try: import fcntl, pwd
 except ImportError: fcntl = pwd = None  # Windows: only the pure functions are unit-tested there
 
@@ -216,8 +216,8 @@ def rate_limit_detail(state, now):
     recent = sorted(t for t in state['runs'] if now - t < 86400)
     daily = recent[len(recent) - RUNS_PER_DAY] + 86400 if len(recent) >= RUNS_PER_DAY else None
     if cooldown is None and daily is None: return None
-    if daily is not None and (cooldown is None or daily >= cooldown): return {'limit': 'daily', 'retryAt': iso(daily)}
-    return {'limit': 'cooldown', 'retryAt': iso(cooldown)}
+    if daily is not None and (cooldown is None or daily >= cooldown): return {'limit': 'daily', 'retryAt': iso(math.ceil(daily))}
+    return {'limit': 'cooldown', 'retryAt': iso(math.ceil(cooldown))}
 
 
 def accept(state, request, now, peer):

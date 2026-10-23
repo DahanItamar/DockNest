@@ -17,7 +17,7 @@ export function ReportProvider({api,user,children}){
 }
 export const useReportContext=()=>useContext(ReportContext);
 
-const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text, logs and keys','Backup contents'];
+const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
 export const PUBLIC_WARNING='Issues on the DockNest repository are public and linked to your GitHub account. Anyone can read what you share.';
 
 // The review dialog: the exact title and values that will be sent, then GitHub in a new tab (no opener, no referrer).
@@ -50,7 +50,7 @@ export function ReviewDialog({build,facts,summary,excerptSource,excerptLabel='In
    <section className="rp-never" aria-labelledby={titleId+'-never'}>
     <h3 id={titleId+'-never'}><IconShieldCheck size={18} stroke={2} aria-hidden="true"/>Never shared</h3>
     <ul className="rp-never-list">{NEVER.map(t=><li key={t}><IconMinus size={16} stroke={2} aria-hidden="true"/>{t}</li>)}</ul>
-    <p className="rp-never-line"><IconShieldCheck size={16} stroke={2} aria-hidden="true"/><span>Never shared: names, addresses, paths, user names, error text, logs, keys or backup contents.</span></p>
+    <p className="rp-never-line"><IconShieldCheck size={16} stroke={2} aria-hidden="true"/><span>Never shared: names, addresses, paths, user names, logs, keys or backup contents. Error text is shared only as DockNest{'\u2019'}s own fixed message{withExcerpt?', or the redacted text you ticked and can read above':''}.</span></p>
     <p className="t-caption rp-server-note">DockNest{'’'}s server sends nothing. Your browser opens a pre-filled GitHub form; nothing is posted until you submit it there.</p>
    </section>
   </div>

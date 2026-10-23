@@ -1,4 +1,4 @@
-// 2.4.1 layout checks against a mocked API: wide-screen frame, Overview metric grid, Audit table, collapsed rail,
+﻿// 2.4.1 layout checks against a mocked API: wide-screen frame, Overview metric grid, Audit table, collapsed rail,
 // page filters, several storage destinations. Synthetic fixtures only; no real backup or restore is exercised.
 import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
@@ -96,6 +96,19 @@ try{
   await app.page.locator('.compact-storage-button').hover();await app.page.locator('#compact-storage-details').waitFor();assert.ok((await app.page.locator('#compact-storage-details').innerText()).includes('hetzner-storage-box-frankfurt-primary'),'popover names the destination');
   await app.close();
  }
+ // Phones keep the same 24px gap between the last card or row and the pager, and Audit's details icon shares its label row.
+ {
+  const app=await open(402,900);
+  for(const [route,label,selector] of [['Sites & schedules','Sites','.site-card'],['Servers','Servers','.server-card'],['Audit','Audit','.table-wrap']]){
+   await app.navigate(route);const pager=app.page.getByRole('group',{name:label+' pagination',exact:true}),next=pager.getByRole('button',{name:label+' next page',exact:true});
+   const gap=()=>app.page.evaluate(sel=>{const items=[...document.querySelectorAll(sel)],bottom=Math.max(...items.map(item=>item.getBoundingClientRect().bottom));return Math.round(document.querySelector('.pagination').getBoundingClientRect().top-bottom)},selector);
+   for(let page=1;page<=2;page++){assert.equal(await gap(),24,label+' pager gap on a phone, page '+page);if(await next.isDisabled())break;await next.click();await app.page.waitForTimeout(150);}
+  }
+  await app.navigate('Audit');
+  const row=await app.page.evaluate(()=>{const cell=document.querySelector('td.audit-details'),button=cell.querySelector('button').getBoundingClientRect(),label=getComputedStyle(cell,'::before'),box=cell.getBoundingClientRect();return {height:Math.round(box.height),button:Math.round(button.height),display:getComputedStyle(cell).display,labelMargin:label.marginBottom}});
+  assert.equal(row.display,'flex');assert.ok(row.height<=row.button+32,'details cell is one row ('+row.height+')');assert.equal(row.labelMargin,'0px');
+  await app.close();
+ }
  // 9: the header has no search box; each list page has one funnel filter with the record count.
  {
   const app=await open(1440,1000);assert.equal(await app.page.getByLabel('Search pages').count(),0);assert.equal(await app.page.locator('.berry-header input').count(),0);
@@ -120,3 +133,4 @@ try{
  }
  console.log('2.4.1 layout passed: wide-screen frame at 1920/2560/3840 with the rail expanded and collapsed, Overview 3x2 grid at five widths, Audit labels, names and no truncation, collapsed rail (light, dark, healthy, review), page filters, several storage destinations at 1440, 2560 and 402.');
 }finally{await browser.close();}
+

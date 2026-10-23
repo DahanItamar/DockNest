@@ -84,3 +84,14 @@ a.icon-button{display:inline-flex;align-items:center;justify-content:center;heig
 
 /* 2.4.1 audit: the details icon never widens its cell. */
 .data-table td .audit-actions{min-width:0;width:auto;justify-content:flex-end}
+
+/* 2.4.1 phones: the pager keeps the same 24px gap under the last card or row as on desktop; the audit details icon sits on its label row. */
+@media(max-width:767px){
+ .paginated-list.gapped>.paged-content{margin-bottom:0}
+ .rebrand-page .paginated-list>.pagination{margin-top:var(--section-gap);padding:0}
+ .rebrand-page .paginated-list.gapped>.pagination{border:0;border-radius:0}
+ .rebrand-page .dash-site-history .paginated-list>.pagination{margin-top:var(--edge)}
+ .rebrand-page .data-table.mobile-table td.audit-details{display:flex;align-items:center;justify-content:space-between;gap:12px}
+ .rebrand-page .mobile-table td.audit-details::before{margin:0}
+ .rebrand-page .data-table.mobile-table td.audit-details .audit-actions{width:auto;flex:none}
+}

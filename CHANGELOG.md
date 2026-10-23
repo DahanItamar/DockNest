@@ -14,7 +14,7 @@ See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
 - "What happened?" prefill for job, storage, server and DockNest backup reports from a static catalogue of DockNest's own fixed messages (`web/report/catalogue-data.js`), or from an opt-in, redacted, editable **Include the error message** text.
 - The GitHub mark on every **Open GitHub** button.
 - Host updater: a rate-limited refusal names the limit (`cooldown` or `daily`) and the earliest time a new run is allowed (`limit`, `retryAt`); the limits themselves are unchanged.
-- API (additive): `GET /api/state` gains `actors`; a rate-limited update request returns `limit` and `retryAt`; the progress limiter's 429 returns `retryAfter`.
+- API (additive): `GET /api/state` gains `actors` (names only for accounts in the returned audit rows); a rate-limited update request returns `limit` and `retryAt`; the progress limiter's 429 returns `retryAfter`.
 - `npm run test:layout` browser suite, and a shared count helper (`web/plural.js`).
 
 ### Changed
@@ -28,7 +28,7 @@ See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
 
 ### Fixed
 
-- The pager gap differed between full and partial pages; card pages keep a 24 px gap on every page and width.
+- The pager gap differed between full and partial pages; card pages keep a 24 px gap on every page and width, phones included.
 - "1 successful backups" and other count plurals.
 - The updater rate-limit message said "wait a few minutes" for the daily limit; it now names the limit and the time. The API's own 429 says how many seconds to wait.
 - Truncated Audit cells.

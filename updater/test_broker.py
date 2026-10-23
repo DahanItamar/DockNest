@@ -129,6 +129,9 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(b.response(False, 'rate-limited', {'limit': 'daily', 'retryAt': b.iso(NOW)}),
                          json.dumps({'accepted': False, 'code': 'rate-limited', 'limit': 'daily', 'retryAt': b.iso(NOW)}, separators=(',', ':')).encode())
         self.assertEqual(b.response(False, 'busy'), b'{"accepted":false,"code":"busy"}')
+        # a fractional end time rounds up to the next second, so the reported time is never early
+        self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.4}, NOW), {'limit': 'cooldown', 'retryAt': b.iso(NOW + 40)})
+        self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.0}, NOW)['retryAt'], b.iso(NOW + 40))
 
     def test_accept_records_replay_and_rate_state(self):
         state = b.new_state(); b.accept(state, self.req(), NOW, {'pid': 1})

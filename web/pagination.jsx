@@ -89,7 +89,7 @@ export function Paginated({rows,label,pageSize=5,resetKey='',children,className=
  const pages=Math.max(1,Math.ceil(rows.length/size)),current=Math.min(page,pages),start=(current-1)*size;
  useEffect(()=>{if(page>pages)setPage(pages);},[page,pages]);
  const change=next=>setPage(Math.max(1,Math.min(pages,next)));
- return <div className={'paginated-list '+(stableHeight?'stable-page ':'')+((stableHeight&&!table)||(gappedRequested&&!phone)?'gapped ':'')+(fitViewport?'viewport-page ':'')+className}>
+ return <div className={'paginated-list '+(stableHeight?'stable-page ':'')+((stableRequested&&!table)||gappedRequested?'gapped ':'')+(fitViewport?'viewport-page ':'')+className}>
   <div className="paged-content" style={stableHeight&&pages>1?{'--page-height':(fitViewport?viewport.height:reservedHeight)+'px'}:undefined}><div className="paged-measure" ref={measure}>{children(rows.slice(start,start+size))}</div></div>
   {(pages>1||fitViewport)&&<div ref={pager} className={'pagination'+(pages===1?' pagination-probe':'')} role={pages>1?'group':undefined} aria-hidden={pages===1?true:undefined} inert={pages===1?true:undefined} aria-label={label+' pagination'}>
    <span className="pagination-count" role="status" aria-live="polite">{start+1}-{Math.min(start+size,rows.length)} of {rows.length}</span>
