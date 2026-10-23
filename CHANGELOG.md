@@ -4,9 +4,13 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-23
+
+See [docs/releases/2026-10-23-v2.5.0.md](docs/releases/2026-10-23-v2.5.0.md).
+
 ### Added
 
-- Branded error pages in one shared style (a large heading-weight status code that fades out, one sentence, two actions): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
+- Branded error pages in one shared style (a full-screen page with a large status code that fades out, one sentence and one button): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
 - `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
 - `npm run test:status-pages` browser suite.
 
