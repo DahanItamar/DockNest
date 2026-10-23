@@ -53,6 +53,10 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving sites](docs/moving-sites.md).
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 
+**Alerts**
+- Get a Telegram message or an email when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, or a new version is out.
+- Set it up on the Map: add a Telegram or Email node, draw a line from DockNest, a server or a site, and pick the events. Bot tokens and mail passwords are saved once as encrypted credentials. See [alerts](docs/alerts.md).
+
 **Security**
 - Backups are encrypted with AES-256-GCM.
 - SSH host keys are pinned and checked before connecting.
@@ -172,7 +176,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Alerts](docs/alerts.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Security](docs/security.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |

@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-24
+
+See [docs/releases/2026-10-24-v2.8.0.md](docs/releases/2026-10-24-v2.8.0.md).
+
 ### Added
 
 - Map (2.8.0): solid lines that light up their whole path on hover or selection; nodes can be dragged by their body while you work (grid snap, Undo and Redo, Tidy up, smooth glide when the layout re-sorts, nothing saved); drag items from "+" onto the map; richer details with copy buttons.
