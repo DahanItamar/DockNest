@@ -43,6 +43,9 @@ VOLUME = 'docknest_updater'
 MAX_REQUEST, READ_SECONDS, STATUS_CAP, ASSET_CAP = 4096, 2.0, 16384, 65536
 RUN_LIMIT, RUN_GRACE = 2 * 3600, 15 * 60          # per-run hard stop, then SIGKILL after the grace (AR2-N3)
 COOLDOWN, RUNS_PER_DAY, CONNECTIONS_PER_MINUTE, IDLE_EXIT = 60, 6, 10, 600
+# Runs that end before changing anything (exit 2 or 3) give their daily slot back; this wider cap still bounds how
+# often verification and the pre-checks can be started in 24 hours.
+ATTEMPTS_PER_DAY = 24
 CLOCK_SKEW = 300
 FLOOR_BYTES = 2 * 1024 ** 3                        # plus the last image size (D10)
 POLL = 2.0
@@ -188,7 +191,7 @@ def cgroup_container(text, parent=None):
 # ---------------------------------------------------------------- policy and state machine (sections 6 and 7)
 
 def new_state():
-    return {'schema': 1, 'blocked': False, 'blockedReason': None, 'exit4': {}, 'lastAccepted': None, 'runs': [], 'lastRunEnd': 0,
+    return {'schema': 1, 'blocked': False, 'blockedReason': None, 'exit4': {}, 'lastAccepted': None, 'runs': [], 'attempts': [], 'lastRunEnd': 0,
             'active': None, 'lastResult': None, 'ids': []}
 
 
@@ -205,16 +208,19 @@ def admit(state, request, now, current, recorded=lambda request_id: False):
     except ValueError:
         return 'state-mismatch'
     if state['exit4'].get(request['version'], 0) >= 2: return 'needs-host-ack'
-    if now - state['lastRunEnd'] < COOLDOWN or len([t for t in state['runs'] if now - t < 86400]) >= RUNS_PER_DAY: return 'rate-limited'
+    if now - state['lastRunEnd'] < COOLDOWN or len([t for t in state['runs'] if now - t < 86400]) >= RUNS_PER_DAY \n            or len([t for t in state['attempts'] if now - t < 86400]) >= ATTEMPTS_PER_DAY: return 'rate-limited'
     return None
 
 
 def rate_limit_detail(state, now):
     """Which limit refused a request and the earliest time a new run is allowed, or None when neither applies. The limits
-    themselves are unchanged: 60 s after a run ends, and at most RUNS_PER_DAY accepted runs in any 24 hours."""
+    themselves: 60 s after a run ends, at most RUNS_PER_DAY runs that changed something and ATTEMPTS_PER_DAY accepted runs
+    in any 24 hours."""
     cooldown = state['lastRunEnd'] + COOLDOWN if now - state['lastRunEnd'] < COOLDOWN else None
-    recent = sorted(t for t in state['runs'] if now - t < 86400)
-    daily = recent[len(recent) - RUNS_PER_DAY] + 86400 if len(recent) >= RUNS_PER_DAY else None
+    daily = None
+    for times, cap in ((state['runs'], RUNS_PER_DAY), (state['attempts'], ATTEMPTS_PER_DAY)):
+        recent = sorted(t for t in times if now - t < 86400)
+        if len(recent) >= cap: daily = max(daily or 0, recent[len(recent) - cap] + 86400)
     if cooldown is None and daily is None: return None
     if daily is not None and (cooldown is None or daily >= cooldown): return {'limit': 'daily', 'retryAt': iso(math.ceil(daily))}
     return {'limit': 'cooldown', 'retryAt': iso(math.ceil(cooldown))}
@@ -224,6 +230,7 @@ def accept(state, request, now, peer):
     state['ids'] = (state['ids'] + [request['id']])[-1000:]
     state['lastAccepted'] = {'id': request['id'], 'at': request['at']}
     state['runs'] = [t for t in state['runs'] if now - t < 86400] + [now]
+    state['attempts'] = [t for t in state['attempts'] if now - t < 86400] + [now]
     state['active'] = {'id': request['id'], 'target': request['version'], 'acceptedAt': now, 'runStepStarted': False, 'peer': peer}
 
 
@@ -234,6 +241,8 @@ def block(state, reason):
 def finish(state, code, now, reason=None):
     """Record the end of the active run. code: upgrade.sh exit code, or None for an interrupted run step."""
     active, state['active'], state['lastRunEnd'] = state['active'], None, now
+    # Exit 2 (refused before changing anything) and 3 (jobs still busy) changed nothing: give the daily slot back.
+    if code in (2, 3) and active and active.get('acceptedAt') in state['runs']: state['runs'].remove(active['acceptedAt'])
     target = active['target'] if active else None
     state['lastResult'] = {'requestId': active and active['id'], 'exitCode': code, 'refusal': None,
                            'reason': reason if reason in REASONS else (None if reason is None else 'unknown'), 'finishedAt': iso(now)}

@@ -133,6 +133,17 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.4}, NOW), {'limit': 'cooldown', 'retryAt': b.iso(NOW + 40)})
         self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.0}, NOW)['retryAt'], b.iso(NOW + 40))
 
+    def test_runs_that_change_nothing_give_their_daily_slot_back(self):
+        for code, kept in ((2, []), (3, []), (0, [NOW]), (4, [NOW]), (5, [NOW]), (None, [NOW])):
+            state = b.new_state(); b.accept(state, self.req(), NOW, {'pid': 1}); b.finish(state, code, NOW + 30)
+            self.assertEqual((state['runs'], state['attempts']), (kept, [NOW]), code)
+        # Six refused runs no longer use up the day; the wider attempts cap still bounds them
+        state = {**b.new_state(), 'attempts': [NOW - 600 * i for i in range(1, 7)]}
+        self.assertIsNone(b.admit(state, self.req(), NOW, '2.2.0'))
+        full = {**b.new_state(), 'attempts': [NOW - 600 * i for i in range(1, b.ATTEMPTS_PER_DAY + 1)]}
+        self.assertEqual(b.admit(full, self.req(), NOW, '2.2.0'), 'rate-limited')
+        self.assertEqual(b.rate_limit_detail(full, NOW), {'limit': 'daily', 'retryAt': b.iso(NOW - 600 * b.ATTEMPTS_PER_DAY + 86400)})
+
     def test_accept_records_replay_and_rate_state(self):
         state = b.new_state(); b.accept(state, self.req(), NOW, {'pid': 1})
         self.assertEqual((state['ids'], state['lastAccepted'], state['runs']), ([RID], {'id': RID, 'at': NOW}, [NOW]))
