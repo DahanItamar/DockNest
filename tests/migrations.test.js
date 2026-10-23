@@ -349,7 +349,7 @@ test('a real 2.4.1 database (schema 5) migrates to the current schema with its d
 test('the real 2.4.1 code starts on a schema 7 database without changing it', { skip: noTag241 }, () => temporary(async directory => {
   const v2 = await v241Migrations(), file = join(directory, 'state.sqlite'), db = legacy(file), messages = [];
   try {
-    migrate(db, { file, list: migrations.slice(0, 6), log: quiet });
+    migrate(db, { file, list: migrations.slice(0, 7), log: quiet });
     const after = schema(db);
     assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 7, to: 7, snapshot: null });
     assert.match(messages.join('\n'), /schema v7 is newer than this release \(v5\) but only adds compatible objects/);
@@ -365,7 +365,7 @@ test('a real 2.6.0 database (schema 6) migrates to 7 adding only server_installs
   try {
     assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-23T08:00:00.000Z'), log: quiet }).to, 6);
     const before = schema(db), jobs = db.prepare('SELECT * FROM jobs').all().map(row => ({ ...row }));
-    const result = migrate(db, { file, now: () => new Date('2026-10-24T08:00:00.000Z'), log: quiet });
+    const result = migrate(db, { file, list: migrations.slice(0, 7), now: () => new Date('2026-10-24T08:00:00.000Z'), log: quiet });
     assert.deepEqual({ from: result.from, to: result.to }, { from: 6, to: 7 });
     for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.6.0 objects keep their definition');
     assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), serverInstalls);

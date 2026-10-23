@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle} from '@tabler/icons-react';
+import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle,IconBrandTelegram,IconMail} from '@tabler/icons-react';
 import {IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {containerName,containerGroups} from '../container-groups.js';
@@ -23,9 +23,10 @@ export const Search=({value,onChange,label='Search'})=><label className="map-sea
 const Row=({icon:Icon,title,caption,onClick})=><li><button type="button" className="map-row" onClick={onClick}><Icon size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{title}</b><span className="map-caption">{caption}</span></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>;
 
 // "+" at the top right: adds a server or backup storage with the existing screens.
-export function AddToMap({onAddServer,onAddStorage}){
+export function AddToMap({onAddServer,onAddStorage,onAddAlert}){
  const [q,setQ]=useState('');
- const rows=[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage}].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
+ const rows=[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage},
+  ...(onAddAlert?[{id:'telegram',icon:IconBrandTelegram,title:'Telegram alerts',caption:'Messages in a Telegram chat',go:()=>onAddAlert('telegram')},{id:'email',icon:IconMail,title:'Email alerts',caption:'Messages by email',go:()=>onAddAlert('email')}]:[])].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
  return <>
   <Search value={q} onChange={setQ}/>
   <h3 className="map-group-title">Add</h3>

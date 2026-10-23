@@ -80,3 +80,7 @@ Limits: 20 channels, 200 rules.
 
 Migration 8 adds `alert_channels`, `alert_rules` and `alert_queue` (additive; nothing existing changes). A channel's whole
 configuration is one value sealed with the master key. See `docs/security.md`, "Alerts".
+
+## Map screens
+
+Administrators see alert nodes (Telegram, Email) in a column right of backup storage and a DockNest node top-left. A purple line is a rule, labelled with its events in words; lines run in free lanes above the map and never cross cards. Create a line by dragging from the small circle on a server, site or DockNest to an alert node, or with "Send alerts to…" in the details panel (also the phone path). Click a line, or "Edit" in a details panel, to change events or choose "Remove alerts". "+" at the top right adds Telegram or Email alerts; secrets show "Saved" and Replace, never the value. Operators get no alert data (the API is administrators only), so their Map has no alert parts.

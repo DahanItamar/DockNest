@@ -204,3 +204,36 @@
 .map-root .map-list button{min-height:44px;white-space:nowrap}
 @media(max-width:767px){.map-root .map-panel-foot{padding:16px 16px max(16px,env(safe-area-inset-bottom))}.map-root .map-row{min-height:56px}}
 .map-root .map-dialog-foot .map-panel-foot{border:0;padding:0;min-height:0}
+
+/* Alerts (2.8.0): purple lines from a server, site or DockNest to an alert node, in the band above the map */
+.map-root .map-docknest,.map-root .map-alert{position:absolute;box-sizing:border-box;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 1px 2px var(--shadow);display:flex;align-items:center;justify-content:center;color:var(--accent);cursor:pointer}
+.map-root .map-alert.target{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+.map-root .map-docknest:focus-visible,.map-root .map-alert:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.map-root .map-lines .rule{stroke:var(--accent);stroke-width:2}
+.map-root .map-lines .rule.dragging{stroke-dasharray:6 4}
+.map-root .map-lines .rule-g.off .rule{stroke-dasharray:2 6;stroke-linecap:round}
+.map-root .map-lines .rule-g:hover .rule{stroke-width:3}
+.map-root .map-lines .rule-hit{stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
+.map-root .map-lines .arr-rule{fill:var(--accent)}
+.map-root .map-lines text.rule-label{fill:var(--text-secondary);font-size:var(--fs-caption);stroke:var(--surface-muted);stroke-width:4px;stroke-linejoin:round;paint-order:stroke;pointer-events:none;user-select:none}
+.map-root .map-lines .rule-hit,.map-root .map-lines text{stroke-linecap:round}
+.map-root .map-port.out.grab{border-color:var(--accent)}
+.map-root .map-foot-left{margin-right:auto}
+.map-root .map-events{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;border:0;min-width:0}
+.map-root .map-events legend{padding:0;margin-bottom:8px;font-weight:500;color:var(--heading)}
+.map-root .map-dialog select{min-height:40px}
+.map-root .map-saved{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px;padding:0 0 0 12px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);font-weight:400;color:var(--text-secondary)}
+.map-root .map-saved button{margin:-1px;white-space:nowrap}
+.map-root .map-field .map-caption{font-weight:400}
+.map-root .map-test{display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.map-root .map-test-box{display:flex;flex-direction:column;gap:8px}
+.map-root .map-alert-rows{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column}
+.map-root .map-alert-rows li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border-subtle)}
+.map-root .map-alert-rows li>span{display:flex;flex-direction:column;min-width:0;flex:1}
+.map-root .map-alert-rows .map-caption{overflow-wrap:anywhere}
+.map-root .map-alert-rows button{white-space:nowrap}
+.map-root .map-list .map-list-sentences{margin:8px 0 0;border-top:0;display:flex;flex-direction:column}
+.map-root .map-list .map-list-sentences li{border-bottom:0;padding-block:0;min-height:0;flex-wrap:nowrap;justify-content:space-between}
+.map-root .map-list .map-list-sentences .map-caption{overflow-wrap:anywhere}
+.map-root .map-list-add{margin-top:16px}
+@media(max-width:767px){.map-root .map-dialog select,.map-root .map-saved{min-height:44px}.map-root .map-alert-rows button{min-height:44px}}

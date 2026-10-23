@@ -27,6 +27,55 @@ const state={
 };
 const targets={targets:[{id:'t1',name:'nas-backup',kind:'sftp',status:'connected',capacity_bytes:2e12,trackedBytes:8e11},{id:'t2',name:'offsite-s3',kind:'s3',status:'connected',trackedBytes:5e9}],activeTargetId:'t1'};
 let browser;const errors=[];
+// Alerts (docs/alerts.md): a believable small installation and a mocked /api/alerts that behaves like the real one
+// (write-only secrets, REAUTH_REQUIRED on channel writes, one line per source and channel, plain error sentences).
+const alertState={...state,
+ servers:[
+  {id:'fr',name:'Frankfurt-1',host:'fra.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:84*1024**3,dockerVersion:'27.3.1',composeVersion:'2.29.7',nginx:{installed:true},certbot:{installed:true}}},
+  {id:'ash',name:'Ashburn-1',host:'iad.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:41*1024**3}},
+  {id:'nas',name:'Home NAS',host:'nas.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:3*1024**3}}
+ ],
+ sites:[
+  {id:'s1',name:'roastlane.com',serverId:'fr',config:{containers:[1,2,3],domains:['roastlane.com','www.roastlane.com']}},
+  {id:'s2',name:'harborpaws.com',serverId:'fr',config:{containers:[1,2],domains:['harborpaws.com']}},
+  {id:'s3',name:'northwind-docs.com',serverId:'ash',config:{containers:[1]}},
+  {id:'s4',name:'cedarandsage.shop',serverId:'ash',config:{containers:[1,2]}},
+  {id:'s5',name:'photos.home.lan',serverId:'nas',config:{documentRoot:'/srv/photos'}}
+ ],
+ backups:[{id:'bk1',siteId:'s1',capturedAt:new Date().toISOString()},{id:'bk2',siteId:'s2',capturedAt:new Date().toISOString()}],policies:[{siteId:'s3',enabled:true},{siteId:'s4',enabled:true}]};
+const alertsDb={channels:[],rules:[],seq:1,needReauth:false,testFail:false,reauths:0,calls:[]};
+const resetAlerts=(seed=true)=>{
+ Object.assign(alertsDb,{channels:[],rules:[],seq:1,needReauth:false,testFail:false,reauths:0,calls:[]});
+ if(!seed)return;
+ alertsDb.channels.push({id:'c1',kind:'telegram',name:'Ops chat',config:{chatId:'-1001234567890',tokenSet:true},configReadable:true,lastResult:'ok',lastResultAt:new Date().toISOString(),lastError:null},
+  {id:'c2',kind:'email',name:'Team inbox',config:{host:'smtp.fastmail.com',port:587,security:'starttls',username:'alerts@harborpaws.com',passwordSet:true,from:'alerts@harborpaws.com',to:['ops@harborpaws.com','dana@harborpaws.com']},configReadable:true,lastResult:'failed',lastResultAt:new Date(Date.now()-36e5).toISOString(),lastError:'The mail server refused the login.'});
+ alertsDb.rules.push({id:'r1',channelId:'c1',sourceKind:'docknest',sourceId:null,events:['server.unreachable','update.available'],enabled:true},
+  {id:'r2',channelId:'c1',sourceKind:'server',sourceId:'fr',events:['server.unreachable','server.disk_low','backup.failed'],enabled:true},
+  {id:'r3',channelId:'c2',sourceKind:'site',sourceId:'s1',events:['backup.failed'],enabled:true},
+  {id:'r4',channelId:'c2',sourceKind:'server',sourceId:'nas',events:['server.disk_low'],enabled:true});
+};
+function alertsApi(req,endpoint){
+ const parts=endpoint.split('/').filter(Boolean).slice(2),m=req.method(),body=req.postDataJSON?.()||{},A=alertsDb;
+ const ok=json=>({json}),err=(status,error,code)=>({status,json:{error,...(code?{code}:{})}});
+ if(!parts.length)return ok({channels:A.channels,rules:A.rules,events:['backup.failed','backup.succeeded','move.finished','move.needs_you','server.unreachable','server.disk_low','update.available'],sourceKinds:['docknest','server','site'],limits:{channels:20,rules:200}});
+ if(parts[0]==='channels'){
+  if(parts[2]==='test'){A.calls.push(['test',parts[1]]);const c=A.channels.find(x=>x.id===parts[1]);if(A.testFail){c.lastResult='failed';return err(502,'Telegram did not accept the message. Check the chat ID and that the bot was added to the chat.');}c.lastResult='ok';c.lastResultAt=new Date().toISOString();return ok({sent:true});}
+  if(m!=='GET'&&A.needReauth)return err(403,'Please confirm it is you.','REAUTH_REQUIRED');
+  if(m==='POST'){
+   if(body.kind==='telegram'&&!/^\d{5,15}:[A-Za-z0-9_-]{30,64}$/.test(body.config?.token||''))return err(400,'Paste the bot token exactly as BotFather shows it.');
+   const c={id:'c'+(++A.seq+10),kind:body.kind,name:body.name,config:body.kind==='telegram'?{chatId:body.config.chatId,tokenSet:true}:{host:body.config.host,port:body.config.port,security:body.config.security,username:body.config.username||'',passwordSet:!!body.config.password,from:body.config.from,to:body.config.to},configReadable:true,lastResult:null,lastResultAt:null,lastError:null};
+   A.calls.push(['create',JSON.stringify(body)]);A.channels.push(c);return {status:201,json:c};
+  }
+  if(m==='PATCH'){const c=A.channels.find(x=>x.id===parts[1]);A.calls.push(['update',JSON.stringify(body)]);if(body.name)c.name=body.name;if(body.config){const {token,password,...rest}=body.config;Object.assign(c.config,rest);if(token)c.config.tokenSet=true;if(password)c.config.passwordSet=true}return ok(c);}
+  if(m==='DELETE'){A.calls.push(['delete',parts[1]]);A.channels=A.channels.filter(x=>x.id!==parts[1]);A.rules=A.rules.filter(r=>r.channelId!==parts[1]);return ok({deleted:true});}
+ }
+ if(parts[0]==='rules'){
+  if(m==='POST'){if(A.rules.some(r=>r.channelId===body.channelId&&r.sourceKind===body.sourceKind&&r.sourceId===body.sourceId))return err(409,'This source already has a line to this channel. Edit that line instead.');const r={id:'r'+(++A.seq+10),enabled:true,...body};A.calls.push(['rule',JSON.stringify(body)]);A.rules.push(r);return {status:201,json:r};}
+  if(m==='PATCH'){const r=A.rules.find(x=>x.id===parts[1]);A.calls.push(['rule-update',JSON.stringify(body)]);Object.assign(r,body);return ok(r);}
+  if(m==='DELETE'){A.calls.push(['rule-delete',parts[1]]);A.rules=A.rules.filter(x=>x.id!==parts[1]);return ok({deleted:true});}
+ }
+ return err(404,'Not found.');
+}
 // Mocked move API. Servers: a ok, b home of site 1, c blocked, d long downtime.
 // Shapes follow docs/moving-sites.md, "API for the UI".
 const mock={discovers:0,tests:0,needNginx:false,jobStatus:'running',installs:[],previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',withDns:true};
@@ -63,7 +112,8 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   const endpoint=new URL(route.request().url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
   const req=route.request();
-  if(endpoint==='/api/auth/reauth'){const b=req.postDataJSON();if(b.password==='pw'&&b.code==='123456'){mock.needReauth=false;mock.reauths++;return route.fulfill({json:{ok:true}});}return route.fulfill({status:401,json:{error:'No'}});}
+  if(endpoint.startsWith('/api/alerts')){if(role!=='admin')return route.fulfill({status:403,json:{error:'Only administrators can use alerts.'}});const r=alertsApi(req,endpoint);return route.fulfill(r);}
+  if(endpoint==='/api/auth/reauth'){const b=req.postDataJSON();if(b.password==='pw'&&b.code==='123456'){mock.needReauth=false;alertsDb.needReauth=false;mock.reauths++;alertsDb.reauths++;return route.fulfill({json:{ok:true}});}return route.fulfill({status:401,json:{error:'No'}});}
   if(endpoint==='/api/settings/cloudflare-dns'){if(req.method()==='PUT'&&mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});if(req.method()==='PUT'){const t=req.postDataJSON().token;if(t==='bad')return route.fulfill({status:400,json:{error:'Cloudflare did not accept this token.'}});mock.tokens.push(t);mock.cfSaved=true;return route.fulfill({json:{configured:true,zones:['example.com'],savedAt:'2026-10-23T00:00:00Z'}});}return route.fulfill({json:{configured:mock.cfSaved}});}
   if(endpoint.startsWith('/api/moves')){
    const parts=endpoint.split('/').filter(Boolean),body=req.postDataJSON?.()||{};
@@ -537,9 +587,165 @@ async function installFlow(page,scheme){
  mock.needNginx=false;mock.unsupported=false;
 }
 
+// ---- Alerts (2.8.0) -------------------------------------------------------------------------------------------------
+const portCentre=async(page,sel)=>{const b=await page.locator(sel).first().boundingBox();return [b.x+b.width/2,b.y+b.height/2]};
+async function dragAlert(page,from,channelId){
+ const [x,y]=await portCentre(page,`[data-alert-src="${from}"]`),t=await page.locator(`.map-alert[data-alert="${channelId}"]`).boundingBox();
+ await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(t.x+t.width/2,t.y+t.height/2,{steps:6});
+ await page.locator('.map-alert.target').waitFor();await page.mouse.up();
+}
+// A point on a line's stroke, in screen pixels
+async function pointOnLine(page,ruleId){
+ return page.evaluate(id=>{const p=document.querySelector(`.rule-hit[data-node="rule:${id}"]`),pt=p.getPointAtLength(p.getTotalLength()*0.5),m=p.getScreenCTM();return [m.a*pt.x+m.c*pt.y+m.e,m.b*pt.x+m.d*pt.y+m.f]},ruleId);
+}
+const sheet=page=>page.getByRole('dialog');
+async function alertsFlow(scheme){
+ resetAlerts(true);
+ const {context,page,offOrigin}=await open({scheme,appState:alertState});
+ await page.locator('.map-alert').first().waitFor();
+ assert.equal(await page.locator('.map-alert').count(),2,'two alert nodes');
+ assert.equal(await page.locator('.map-docknest').count(),1,'DockNest source node');
+ assert.equal(await page.locator('.rule-g').count(),4,'one line per rule');
+ await page.getByText('Server unreachable, Update available',{exact:true}).waitFor();
+ await page.getByText('Server unreachable, Disk almost full and 1 more',{exact:true}).waitFor();
+ await fits(page,'alerts map');
+ // Lines never run over a card
+ const cards=await page.evaluate(()=>[...document.querySelectorAll('.map-server,.map-site,.map-storage,.map-alert,.map-docknest')].map(e=>{const r=e.getBoundingClientRect();return {id:e.dataset.node||e.dataset.site,x:r.x,y:r.y,w:r.width,h:r.height}}));
+ const hits=await page.evaluate(cs=>{const out=[];document.querySelectorAll('.rule-hit').forEach(p=>{const L=p.getTotalLength(),m=p.getScreenCTM();for(let i=0;i<=L;i+=4){const q=p.getPointAtLength(i),x=m.a*q.x+m.e,y=m.d*q.y+m.f;for(const c of cs){if(x>c.x+3&&x<c.x+c.w-3&&y>c.y+3&&y<c.y+c.h-3)out.push(p.dataset.node+' over '+c.id)}}});return out},cards);
+ assert.deepEqual([...new Set(hits)],[],'no line runs over a card');
+ await shot(page,scheme,'1440-alerts-map');
+ // Alert node details: no secret anywhere, last result in words, test message
+ await page.locator('.map-alert[data-alert="c1"]').focus();await page.keyboard.press('Enter');
+ const panel=page.locator('.map-panel');await panel.getByRole('heading',{name:'Ops chat'}).waitFor();
+ await panel.getByText('Saved, never shown again').waitFor();
+ assert.equal(await panel.getByText(/\d{5,}:[A-Za-z0-9_-]{20,}/).count(),0,'no token on screen');
+ await panel.getByRole('button',{name:'Send test message'}).click();
+ await panel.getByText('Test message sent. Check your chat.').waitFor();
+ await shot(page,scheme,'1440-alerts-details');
+ alertsDb.testFail=true;await panel.getByRole('button',{name:'Send test message'}).click();
+ await panel.getByText(/Telegram did not accept the message/).waitFor();alertsDb.testFail=false;
+ assert.ok(await panel.getByRole('button',{name:'Edit alerts from roastlane.com'}).count()===0&&await panel.getByRole('button',{name:'Edit alerts from Frankfurt-1'}).count()===1,'lines of this channel are listed');
+ // Drag a site to an alert node: the rule sheet, with events that fit a site
+ await page.keyboard.press('Escape');await page.getByRole('button',{name:'Fit to screen'}).click();
+ await dragAlert(page,'site:s2','c2');
+ const d=sheet(page);await d.getByRole('heading',{name:'Alerts from harborpaws.com to Team inbox'}).waitFor();
+ assert.equal(await d.getByRole('checkbox').count(),4,'a site offers four events');
+ assert.equal(await d.getByRole('checkbox',{name:'Backup failed'}).isChecked(),true);
+ assert.equal(await d.getByRole('checkbox',{name:'Backup succeeded'}).isChecked(),false);
+ assert.equal(await d.getByRole('button',{name:'Remove alerts'}).count(),0,'a new line cannot be removed');
+ const sheetSize=await d.boundingBox(),saveBox=await d.getByRole('button',{name:'Save'}).boundingBox();
+ await d.getByRole('checkbox',{name:'Backup failed'}).uncheck();await d.getByRole('checkbox',{name:'Move needs you'}).uncheck();
+ assert.equal(await d.getByRole('button',{name:'Save'}).isDisabled(),true,'at least one event');
+ await d.getByRole('checkbox',{name:'Backup succeeded'}).check();
+ await shot(page,scheme,'1440-alerts-rule');
+ await d.getByRole('button',{name:'Save'}).click();
+ await page.waitForFunction(()=>document.querySelectorAll('.rule-g').length===5);
+ assert.ok(alertsDb.calls.some(c=>c[0]==='rule'&&JSON.parse(c[1]).events.join()==='backup.succeeded'&&JSON.parse(c[1]).sourceId==='s2'),'rule saved through the API');
+ // A server offers the extra events, DockNest all of them
+ await dragAlert(page,'server:ash','c1');
+ await d.getByRole('heading',{name:'Alerts from Ashburn-1 to Ops chat'}).waitFor();assert.equal(await d.getByRole('checkbox').count(),6,'a server offers six events');
+ const s2=await d.boundingBox();assert.deepEqual([s2.width,s2.height],[sheetSize.width,sheetSize.height],'sheets in a flow have one size');
+ assert.equal((await d.getByRole('button',{name:'Save'}).boundingBox()).x,saveBox.x,'Save stays in the same place');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await dragAlert(page,'docknest:','c2');await d.getByRole('heading',{name:'Alerts from DockNest to Team inbox'}).waitFor();assert.equal(await d.getByRole('checkbox').count(),7,'DockNest offers all seven events');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ // The API's own message when a line already exists (changed behind the page)
+ await dragAlert(page,'site:s5','c1');await d.getByRole('heading',{name:'Alerts from photos.home.lan to Ops chat'}).waitFor();
+ alertsDb.rules.push({id:'rx',channelId:'c1',sourceKind:'site',sourceId:'s5',events:['backup.failed'],enabled:true});
+ await d.getByRole('button',{name:'Save'}).click();await d.getByText('This source already has a line to this channel. Edit that line instead.').waitFor();
+ await d.getByRole('button',{name:'Cancel'}).click();alertsDb.rules=alertsDb.rules.filter(r=>r.id!=='rx');
+ // Click a line: the same sheet, to change or remove it
+ const [lx,ly]=await pointOnLine(page,'r3');await page.mouse.click(lx,ly);
+ await d.getByRole('heading',{name:'Alerts from roastlane.com to Team inbox'}).waitFor();
+ assert.equal(await d.getByRole('checkbox',{name:'Backup failed'}).isChecked(),true,'the saved events are ticked');
+ await d.getByRole('checkbox',{name:'Move finished'}).check();await d.getByRole('button',{name:'Save'}).click();await d.waitFor({state:'detached'});
+ assert.ok(alertsDb.calls.some(c=>c[0]==='rule-update'&&JSON.parse(c[1]).events.join()==='backup.failed,move.finished'));
+ await page.getByText('Backup failed, Move finished',{exact:true}).waitFor();
+ const [mx,my]=await pointOnLine(page,'r3');await page.mouse.click(mx,my);
+ await d.getByRole('button',{name:'Remove alerts'}).click();await d.waitFor({state:'detached'});
+ await page.waitForFunction(()=>![...document.querySelectorAll('.rule-hit')].some(p=>p.dataset.node==='rule:r3'));
+ // Add a channel: the "+" panel, a bad token shows the API sentence, re-verification, then Saved
+ await page.getByRole('button',{name:'Add to the map'}).click();
+ await page.locator('.map-panel').getByRole('button',{name:/Telegram alerts/}).click();
+ await d.getByRole('heading',{name:'Add Telegram alerts'}).waitFor();
+ assert.equal(await d.getByLabel('Bot token').getAttribute('type'),'password','the token is a password field');
+ assert.equal(await d.getByRole('button',{name:'Save'}).isDisabled(),true);
+ await d.getByLabel('Name',{exact:true}).fill('On-call phone');await d.getByLabel('Bot token').fill('nope');await d.getByLabel('Chat ID').fill('123456789');
+ await d.getByRole('button',{name:'Save'}).click();await d.getByText('Paste the bot token exactly as BotFather shows it.').waitFor();
+ await shot(page,scheme,'1440-alerts-channel');
+ alertsDb.needReauth=true;await d.getByLabel('Bot token').fill('123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw_x');
+ await d.getByRole('button',{name:'Save'}).click();await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await shot(page,scheme,'1440-alerts-reauth');
+ await reverify(page);await d.waitFor({state:'detached'});
+ await page.locator('.map-panel').getByRole('heading',{name:'On-call phone'}).waitFor();
+ assert.equal(alertsDb.reauths>=1,true);
+ assert.equal(await page.locator('.map-alert').count(),3,'the new channel is a node');
+ // Edit: secrets stay hidden ("Saved" and Replace); saving without a new secret sends none
+ await page.locator('.map-panel').getByRole('button',{name:'Edit',exact:true}).click();
+ await d.getByRole('heading',{name:'Edit On-call phone'}).waitFor();
+ await d.getByRole('group',{name:'Bot token'}).getByText('Saved').waitFor();assert.equal(await d.locator('input[type=password]').count(),0);
+ await d.getByRole('group',{name:'Bot token'}).getByRole('button',{name:'Replace'}).click();assert.equal(await d.locator('input[type=password]').count(),1);
+ await d.getByLabel('Bot token').fill('');await d.getByLabel('Name',{exact:true}).fill('On-call');await d.getByRole('button',{name:'Save'}).click();await d.waitFor({state:'detached'});
+ const upd=alertsDb.calls.filter(c=>c[0]==='update').at(-1);assert.ok(!/token|password/.test(upd[1]),'no secret is sent when none was typed');
+ // Delete asks first
+ await page.locator('.map-panel').getByRole('button',{name:'Delete'}).click();
+ await d.getByRole('heading',{name:'Delete On-call?'}).waitFor();await d.getByRole('button',{name:'Cancel'}).click();assert.equal(alertsDb.channels.length,3);
+ await page.locator('.map-panel').getByRole('button',{name:'Delete'}).click();await d.getByRole('button',{name:'Delete'}).click();
+ await page.waitForFunction(()=>document.querySelectorAll('.map-alert').length===2);
+ // Email: all fields, encryption, up to 5 recipients
+ await page.getByRole('button',{name:'Add to the map'}).click();
+ await page.locator('.map-panel').getByRole('button',{name:/Email alerts/}).click();
+ await d.getByRole('heading',{name:'Add Email alerts'}).waitFor();
+ await d.getByLabel('SMTP server').fill('smtp.example.com');await d.getByLabel('Encryption').selectOption('tls');assert.equal(await d.getByLabel('Port',{exact:true}).inputValue(),'465');
+ await d.getByLabel('From',{exact:true}).fill('alerts@example.com');await d.getByLabel('Send to').fill('a@example.com, b@example.com');
+ await shot(page,scheme,'1440-alerts-email');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ // The keyboard and phone path: a server's details -> Send alerts to...
+ await page.locator('[data-node="server:nas"]').focus();await page.keyboard.press('Enter');
+ await page.locator('.map-panel').getByRole('button',{name:'Send alerts to…'}).click();
+ await d.getByRole('heading',{name:'Send alerts from Home NAS to'}).waitFor();
+ await d.getByRole('button',{name:/Ops chat/}).click();await d.getByRole('heading',{name:'Alerts from Home NAS to Ops chat'}).waitFor();
+ await d.getByRole('button',{name:'Cancel'}).click();
+ assert.deepEqual(offOrigin,[],'no outside requests');
+ await context.close();
+}
+async function alertsOperatorAndEmpty(){
+ // Operators never receive alert data, so the Map is the plain one for them
+ resetAlerts(true);
+ {const {context,page}=await open({role:'operator',appState:alertState});await page.locator('.map-site').first().waitFor();assert.equal(await page.locator('.map-alert,.map-docknest,.rule-g,[data-alert-src]').count(),0,'operators see no alert nodes');await context.close();}
+ // Admin with no channel yet: the map is unchanged, and the "+" panel offers both kinds
+ resetAlerts(false);
+ {const {context,page}=await open({appState:alertState});await page.locator('.map-site').first().waitFor();assert.equal(await page.locator('.map-alert,.map-docknest,[data-alert-src]').count(),0,'no alert parts before a channel exists');
+  await page.getByRole('button',{name:'Add to the map'}).click();await page.locator('.map-panel').getByRole('button',{name:/Telegram alerts/}).waitFor();await page.locator('.map-panel').getByRole('button',{name:/Email alerts/}).waitFor();
+  await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
+  await page.locator('.map-panel').getByRole('button',{name:'Send alerts to…'}).click();
+  await sheet(page).getByText('You have no alert channels yet.',{exact:false}).waitFor();await sheet(page).getByRole('button',{name:'Add Email alerts'}).waitFor();
+  await context.close();}
+}
+async function alertsPhone(scheme){
+ resetAlerts(true);
+ const {context,page}=await open({scheme,width:402,height:874,appState:alertState});
+ await page.locator('.map-list').waitFor();
+ const sec=page.getByRole('region',{name:'Alerts'});await sec.waitFor();
+ await sec.getByText('Frankfurt-1: Server unreachable, Disk almost full, Backup failed').waitFor();
+ await sec.getByText('DockNest: Server unreachable, Update available').waitFor();
+ await fits(page,'phone alerts');await sec.scrollIntoViewIfNeeded();await shot(page,scheme,'402-alerts-list');
+ await sec.getByRole('button',{name:'Edit alerts from roastlane.com to Team inbox'}).click();
+ const d=sheet(page);await d.getByRole('heading',{name:'Alerts from roastlane.com to Team inbox'}).waitFor();await fits(page,'phone rule sheet');
+ assert.ok((await d.getByRole('button',{name:'Save'}).boundingBox()).height>=44,'44 px buttons on a phone');await shot(page,scheme,'402-alerts-rule');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await sec.getByRole('button',{name:'Add Email alerts'}).click();await d.getByRole('heading',{name:'Add Email alerts'}).waitFor();await fits(page,'phone channel sheet');await shot(page,scheme,'402-alerts-email');
+ await d.getByRole('button',{name:'Cancel'}).click();
+ await sec.getByRole('button',{name:'Details'}).first().click();await page.getByRole('dialog').getByRole('heading',{name:'Ops chat'}).waitFor();await shot(page,scheme,'402-alerts-details');
+ await context.close();
+}
+
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  for(const scheme of ['light','dark']){
+  await alertsFlow(scheme);await alertsPhone(scheme);
+  if(shots){resetAlerts(true);const {context,page}=await open({scheme,width:2551,height:1257,appState:alertState});await page.locator('.map-alert').first().waitFor();await page.waitForTimeout(150);await shot(page,scheme,'2551-alerts');await context.close();}
+  resetAlerts(false);
   // Desktop canvas
   {
    const {context,page,offOrigin}=await open({scheme});
@@ -665,7 +871,7 @@ try{
    await page.locator('.map-list').waitFor();
    assert.equal(await page.locator('.map-canvas').count(),0,'no canvas on phone');
      const heads=await page.locator('.map-list h2').allTextContents();
-   assert.deepEqual(heads,['itamar-Srv','mobiX-Srv','Quiet server with a rather long name that must not break','zeta-Srv','Backup storage']);
+   assert.deepEqual(heads,['itamar-Srv','mobiX-Srv','Quiet server with a rather long name that must not break','zeta-Srv','Backup storage','Alerts']);
    assert.equal(await page.locator('.map-list li').count(),5);
    await page.getByText('No sites on this server yet.').first().waitFor();
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
@@ -715,6 +921,7 @@ try{
    await context.close();
   }
  }
+ await alertsOperatorAndEmpty();
  // Empty state and tablet width list
  {
   const {context,page}=await open({appState:{...state,servers:[],sites:[]}});

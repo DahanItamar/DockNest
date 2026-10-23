@@ -275,7 +275,7 @@ test('an install waits while a site job runs on its server, and an interrupted o
 });
 
 test('schema v7 only adds the server_installs table', () => {
-  assert.equal(migrations.at(-1).name, 'server-installs'); assert.equal(migrations.at(-1).compatible, true);
+  assert.equal(migrations.find(item => item.version === 7).name, 'server-installs'); assert.equal(migrations.find(item => item.version === 7).compatible, true);
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='server_installs'").get());
   assert.throws(() => db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('x',?,'bash','queued','q','[]','a',?)").run(target, at()), /CHECK/);
   assert.equal(typeof migrate, 'function');

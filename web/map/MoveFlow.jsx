@@ -39,7 +39,7 @@ function ReauthBox({client,onVerified,onCancel}){
  </div>;
 }
 // run(fn, onError): runs fn; if the server asks for a fresh sign-in check, shows the check inside the dialog and retries fn once verified.
-function useGuard(client){
+export function useGuard(client){
  const [need,setNeed]=useState(null);
  const run=async(fn,onError)=>{
   try{return await fn()}

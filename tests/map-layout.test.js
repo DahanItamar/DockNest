@@ -65,4 +65,28 @@ test('databases and domains come from existing site data and are never invented'
  assert.deepEqual(domainsOf(site),['a.example.com']);
  assert.deepEqual(databasesOf({id:'2'}),[]);assert.deepEqual(domainsOf({id:'2'}),[]);
 });
+// Alert nodes and lines (2.8.0): purely additive; nothing changes until a channel exists.
+test('without channels the layout has no alert nodes and is unchanged',()=>{
+ const {servers,sites}=make(4,4),a=layoutMap(servers,sites,storageFor(sites)),b=layoutMap(servers,sites,{...storageFor(sites),alerts:{channels:[],rules:[{id:'r',channelId:'x',sourceKind:'docknest',sourceId:null,events:['backup.failed']}]}});
+ assert.deepEqual(a,b);assert.equal(a.docknest,null);assert.deepEqual(a.alerts,[]);assert.deepEqual(a.rulePaths,[]);
+});
+test('alert lines never cross cards or labels and reach their alert node',()=>{
+ const {servers,sites}=make(8,6),o=storageFor(sites),channels=[{id:'c1',name:'Ops chat',kind:'telegram'},{id:'c2',name:'Mail',kind:'email'},{id:'c3',name:'Pager',kind:'telegram'}];
+ const rules=[{id:'d1',channelId:'c1',sourceKind:'docknest',sourceId:null},{id:'d2',channelId:'c2',sourceKind:'docknest',sourceId:null}];
+ servers.forEach((s,i)=>rules.push({id:'sv'+i,channelId:channels[i%3].id,sourceKind:'server',sourceId:s.id}));
+ sites.forEach((s,i)=>{if(i%2)rules.push({id:'st'+i,channelId:channels[(i+1)%3].id,sourceKind:'site',sourceId:s.id})});
+ rules.push({id:'gone',channelId:'c1',sourceKind:'site',sourceId:'missing'},{id:'nochan',channelId:'zzz',sourceKind:'docknest',sourceId:null});
+ const l=layoutMap(servers,sites,{...o,alerts:{channels,rules}});
+ assert.equal(l.rulePaths.length,rules.length-2,'rules for something gone are skipped');
+ assert.equal(l.alerts.length,3);assert.ok(l.docknest);
+ const blocks=[l.docknest,...l.servers,...l.sites,...l.storage,...l.alerts].map(n=>({id:n.id||'docknest',...n.block}));
+ for(const n of blocks)for(const q of blocks)if(n!==q)assert.ok(!overlap(n,q),`${n.id} overlaps ${q.id}`);
+ for(const p of l.rulePaths){
+  const from=p.sourceKind==='docknest'?'docknest':p.sourceId,to=p.channelId,end=p.points.at(-1),node=l.alerts.find(a=>a.id===to);
+  assert.ok(end[0]<node.x&&end[1]===node.in.y,'ends at the alert input');
+  for(const seg of segments(p))for(const b of blocks){if(b.id===from||b.id===to)continue;assert.ok(!hitsRect(seg,b),`line ${p.id} crosses ${b.id}`);}
+ }
+ const top=Math.min(...[...l.servers,...l.sites,...l.storage].map(n=>n.y));
+ assert.ok(top>l.docknest.block.y+l.docknest.block.h,'the map starts below the alert band');
+});
 test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});

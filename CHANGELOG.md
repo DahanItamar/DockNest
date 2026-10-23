@@ -6,7 +6,8 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
-- Alerts engine (2.8.0, backend; the Map screens come separately): Telegram and email channels with a "send test message" button, and lines (rules) that choose which events reach them: backup failed or finished, a move finished or waiting for you, a server not answering or low on disk, and a new DockNest release. Messages are short and plain, retried up to 3 times and never repeated within 10 minutes. Credentials are sealed with the master key and never shown again. Email is always encrypted. See [docs/alerts.md](docs/alerts.md). Upgrade-safe: one new additive database migration (8) and nothing is sent until you add a channel.
+- Alerts on the Map (2.8.0): Telegram and Email alert nodes, a DockNest source node and purple lines for rules. Drag from the small circle on a server, site or DockNest to an alert (or use "Send alerts to…" in its details), tick the events in a sheet, click a line to change or remove it. "+" adds Telegram or Email alerts; secrets are never shown again ("Saved" and Replace), saving needs re-verification, and "Send test message" shows the result in plain words. On phones the list has an Alerts section. Administrators only.
+- Alerts engine (2.8.0, backend): Telegram and email channels with a "send test message" button, and lines (rules) that choose which events reach them: backup failed or finished, a move finished or waiting for you, a server not answering or low on disk, and a new DockNest release. Messages are short and plain, retried up to 3 times and never repeated within 10 minutes. Credentials are sealed with the master key and never shown again. Email is always encrypted. See [docs/alerts.md](docs/alerts.md). Upgrade-safe: one new additive database migration (8) and nothing is sent until you add a channel.
 
 ## [2.7.0] - 2026-10-24
 

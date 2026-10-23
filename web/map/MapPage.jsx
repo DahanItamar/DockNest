@@ -7,6 +7,8 @@ import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
+import {createAlertsClient,EVENTS_FOR,lineLabel,sameSource,KIND_LABEL} from './alerts-client.js';
+import {RuleSheet,PickSheet,ChannelSheet,DeleteChannelSheet,SourceAlerts,ChannelDetails,AlertsList,KindIcon,DockNestIcon} from './Alerts.jsx';
 import './map.css';
 
 const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
@@ -39,7 +41,7 @@ function useNarrow(){
  return narrow;
 }
 
-function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd}){
+function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd,alertsList}){
  return <div className="map-list">
  {canMove&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
  {groups.map(({server,sites})=>{
@@ -54,12 +56,13 @@ function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd}){
   <div className="map-list-head"><IconDatabaseExport size={20} stroke={1.75} aria-hidden="true"/><div><h2 id="map-list-storage">Backup storage</h2></div></div>
   <div className="map-list-store">{storage.map(t=>{const f=storageFacts(t);return <div key={t.id}><span className="map-name">{t.name}</span><span className="map-caption">{f.text}</span>{f.pct!==null&&<div className="map-meter" role="meter" aria-label={t.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'storage',id:t.id},e.currentTarget)}>Details</button></div></div>})}</div>
  </section>}
+ {alertsList}
  </div>;
 }
 
 export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
- const [targets,setTargets]=useState(null);
+ const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
  // state does not name one per backup, so a site with backups or an active schedule uses the active destination.
  useEffect(()=>{if(!canMove||!api)return;let live=true;api('/storage-targets').then(r=>{if(live&&Array.isArray(r?.targets))setTargets(r)}).catch(()=>{});return()=>{live=false}},[canMove,api]);
@@ -70,7 +73,12 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   for(const p of policies||[])if(p.enabled&&p.siteId&&!out[p.siteId]&&known.has(active))out[p.siteId]=active;
   return out;
  },[backups,policies,targets,storage]);
- const layout=useMemo(()=>layoutMap(servers,sites,{storage,backupOf}),[servers,sites,storage,backupOf]);
+ // Alerts (administrators): channels and lines from /api/alerts. Nothing is drawn until a channel exists.
+ const alertsClient=useMemo(()=>createAlertsClient(api||(()=>Promise.reject(new Error('Alerts are not available.')))),[api]);
+ const [alerts,setAlerts]=useState({channels:[],rules:[]}),[aflow,setAflow]=useState(null);
+ const loadAlerts=useCallback(()=>{if(!canMove||!api)return Promise.resolve();return alertsClient.load().then(r=>setAlerts({channels:Array.isArray(r?.channels)?r.channels:[],rules:Array.isArray(r?.rules)?r.rules:[]})).catch(()=>{})},[alertsClient,canMove,api]);
+ useEffect(()=>{loadAlerts();const t=setInterval(loadAlerts,30000);return()=>clearInterval(t)},[loadAlerts]);
+ const layout=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts}),[servers,sites,storage,backupOf,alerts]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
  const view=useRef(null),mode=useRef('home'),pointers=useRef(new Map()),gesture=useRef(null);
@@ -139,6 +147,19 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function choose(siteId,targetId){connect(siteId,targetId);closeFlow(false);}
  function cancelEdit(){setEdit(null);setNote('Change cancelled. Nothing was changed.')}
 
+ // Alert lines. A line is a rule: source -> channel with the events it carries. One rule per source and channel.
+ const sourceOf=r=>({kind:r.sourceKind,id:r.sourceId||null,name:r.sourceKind==='docknest'?'DockNest':(r.sourceKind==='server'?byId.servers[r.sourceId]:byId.sites[r.sourceId])?.name||'Something removed'});
+ const sourceName=r=>sourceOf(r).name;
+ const ruleFor=(source,channelId)=>alerts.rules.find(r=>r.channelId===channelId&&sameSource(r,source))||null;
+ const focusBack=()=>setTimeout(()=>opener.current?.focus?.(),0);
+ function openRule(source,channelId,el){if(el)opener.current=el;setPanel(null);setFlow(null);setAflow({kind:'rule',source,channelId,rule:ruleFor(source,channelId)})}
+ const editRule=(rule,el)=>openRule(sourceOf(rule),rule.channelId,el);
+ function pickChannel(source,el){if(el)opener.current=el;setPanel(null);setFlow(null);setAflow({kind:'pick',source})}
+ function addChannel(kind,el){if(el)opener.current=el;setPanel(null);setFlow(null);setAflow({kind:'channel',channelKind:kind})}
+ function closeAflow(reopen){setAflow(null);if(reopen)setPanel(reopen);else focusBack()}
+ async function afterRule(message){await loadAlerts();setAflow(null);setNote(message);focusBack()}
+ const alertSource=(k,id)=>k==='docknest'?{kind:'docknest',id:null,name:'DockNest',from:layout.docknest?.alertOut}:k==='server'?{kind:'server',id,name:byId.servers[id]?.name,from:layout.servers.find(n=>n.id===id)?.alertOut}:{kind:'site',id,name:byId.sites[id]?.name,from:[...layout.sites,...layout.unassigned].find(n=>n.id===id)?.alertOut};
+
  // The default view is always 100%: centred when the map fits, otherwise the top-left of the content. Only the Fit button and the 0 key shrink it.
  const home=useCallback(()=>{
   const el=view.current;if(!el)return;
@@ -181,13 +202,15 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  },[zoomAt,narrow,servers.length]);
 
  const toCanvas=(e)=>{const r=view.current.getBoundingClientRect();return [(e.clientX-r.left-t.x)/t.k,(e.clientY-r.top-t.y)/t.k]};
+ const alertAt=(px,py)=>layout.alerts.find(n=>px>=n.x-HIT&&px<=n.x+n.w+HIT&&py>=n.y-HIT&&py<=n.y+n.h+HIT);
  const serverAt=(px,py)=>layout.servers.find(s=>{const b=s.block;return px>=s.x-HIT&&px<=s.x+s.w+HIT&&py>=s.y-HIT&&py<=b.y+b.h+HIT&&px>=b.x&&px<=b.x+b.w});
  // Only the end of a site's own incoming line (its port, or the loose end) starts a reconnect. Databases and domains are locked to their site.
  function down(e){
   if(e.button>0)return;
   pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  const port=canMove&&e.target.closest?.('[data-port-site]');
-  if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);}
+  const port=canMove&&e.target.closest?.('[data-port-site]'),aport=canMove&&e.target.closest?.('[data-alert-src]');
+  if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);setAdrag(null);}
+  else if(aport){const [k,...r]=aport.dataset.alertSrc.split(':'),src=alertSource(k,r.join(':')),[px,py]=toCanvas(e);gesture.current={type:'alert',src,x:e.clientX,y:e.clientY,moved:false};setAdrag({src,px,py,over:null});}
   else if(port&&edit&&edit.siteId!==port.dataset.portSite){setNote('Save or cancel the current change first.');gesture.current=null;}
   else if(port){const id=port.dataset.portSite;precheck(id);const [px,py]=toCanvas(e);gesture.current={type:'drag',id,x:e.clientX,y:e.clientY,moved:false};setDrag({id,px,py,over:null});}
   else gesture.current={type:'pan',x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,moved:false,node:e.target.closest?.('[data-node]')||null};
@@ -203,6 +226,11 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }else if(g.type==='pan'){
    if(!g.moved&&Math.hypot(e.clientX-g.sx,e.clientY-g.sy)<=4)return; // a click is not a drag
    g.moved=true;mode.current='user';setT(p=>({...p,x:p.x+e.clientX-prev.x,y:p.y+e.clientY-prev.y}));}
+  else if(g.type==='alert'){
+   if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
+   const [px,py]=toCanvas(e),over=alertAt(px,py);
+   setAdrag({src:g.src,px,py,over:over?over.id:null});
+  }
   else if(g.type==='drag'){
    if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
    const [px,py]=toCanvas(e),over=serverAt(px,py);
@@ -212,12 +240,13 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function up(e){
   pointers.current.delete(e.pointerId);
   const g=gesture.current;
-  if(g?.type==='pan'&&!g.moved&&g.node&&e.type==='pointerup'){const [kind,...rest]=g.node.dataset.node.split(':');openPanel({kind,id:rest.join(':')},g.node);}
+  if(g?.type==='pan'&&!g.moved&&g.node&&e.type==='pointerup'){const [kind,...rest]=g.node.dataset.node.split(':');if(kind==='rule'){const r=alerts.rules.find(x=>x.id===rest.join(':'));if(r){opener.current=view.current;editRule(r,view.current)}}else openPanel({kind,id:rest.join(':')},g.node);}
+  if(g?.type==='alert'&&g.moved&&adrag?.over&&e.type==='pointerup'){opener.current=view.current;openRule(g.src,adrag.over,view.current);}
   if(g?.type==='drag'&&g.moved&&drag){
    if(drag.over)connect(g.id,drag.over,{x:drag.px,y:drag.py});
    else disconnect(g.id,{x:drag.px,y:drag.py});
   }
-  if(!pointers.current.size){gesture.current=null;setDrag(null);}
+  if(!pointers.current.size){gesture.current=null;setDrag(null);setAdrag(null);}
  }
  function key(e){
   const step=48;let handled=true;
@@ -248,6 +277,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
+  {aflow?.kind==='pick'&&<PickSheet source={aflow.source} channels={alerts.channels} rules={alerts.rules} onClose={()=>closeAflow()} onAdd={kind=>setAflow({kind:'channel',channelKind:kind})} onPick={c=>setAflow({kind:'rule',source:aflow.source,channelId:c.id,rule:ruleFor(aflow.source,c.id)})}/>}
+  {aflow?.kind==='rule'&&alerts.channels.some(c=>c.id===aflow.channelId)&&<RuleSheet key={aflow.channelId+':'+aflow.source.kind+':'+(aflow.source.id||'')} source={aflow.source} channel={alerts.channels.find(c=>c.id===aflow.channelId)} rule={aflow.rule} client={alertsClient} onClose={()=>closeAflow()} onSaved={afterRule}/>}
+  {aflow?.kind==='channel'&&<ChannelSheet key={aflow.channel?.id||aflow.channelKind} kind={aflow.channelKind} channel={aflow.channel} client={alertsClient} onClose={()=>closeAflow(aflow.back)} onSaved={async(saved,created)=>{await loadAlerts();setAflow(null);setNote(created?saved.name+' is saved. Send a test message to check it.':'Alert settings saved.');setPanel({kind:'alert',id:saved.id})}}/>}
+  {aflow?.kind==='delete'&&<DeleteChannelSheet channel={aflow.channel} client={alertsClient} onClose={()=>closeAflow()} onDeleted={async()=>{await loadAlerts();setAflow(null);setPanel(null);setNote(aflow.channel.name+' is deleted.');focusBack()}}/>}
  </>;
 
  // Details and add panels (one at a time)
@@ -264,7 +297,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function panelBody(){
   if(!panel)return null;
   const close=()=>closePanel(true);
-  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onAddServer={()=>{closePanel(false);onAddServer?.()}} onAddStorage={()=>{closePanel(false);onAddStorage?.()}}/></SidePanel>;
+  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onAddServer={()=>{closePanel(false);onAddServer?.()}} onAddStorage={()=>{closePanel(false);onAddStorage?.()}} onAddAlert={canMove?kind=>addChannel(kind):undefined}/></SidePanel>;
   if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed';
@@ -273,6 +306,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',doms.join(', ')],names&&['Containers',names],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet']]}/>
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
+    {canMove&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
   if(panel.kind==='server'&&byId.servers[panel.id]){
@@ -280,6 +314,20 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
     <Defs rows={[['Status',serverStatus(sv)],free&&['Disk free',free],(c.os||c.osName)&&['System',c.os||c.osName],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),['Sites',String(mine)]]}/>
+    {canMove&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
+   </SidePanel>;
+  }
+  if(panel.kind==='docknest'&&canMove){
+   const src={kind:'docknest',id:null,name:'DockNest'};
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title="DockNest" onClose={close}>
+    <p>Alerts from DockNest cover everything here: backups, moves, servers, and new DockNest versions.</p>
+    <SourceAlerts source={src} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>
+   </SidePanel>;
+  }
+  if(panel.kind==='alert'&&canMove){
+   const ch=alerts.channels.find(c=>c.id===panel.id);if(!ch)return null;
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={ch.name} onClose={close} footer={<><button type="button" onClick={()=>setAflow({kind:'delete',channel:ch})}>Delete</button><button type="button" className="primary" onClick={()=>{setPanel(null);setAflow({kind:'channel',channelKind:ch.kind,channel:ch,back:{kind:'alert',id:ch.id}})}}>Edit</button></>}>
+    <ChannelDetails channel={ch} rules={alerts.rules} sourceName={sourceName} when={when} client={alertsClient} onEditRule={editRule} onReload={loadAlerts}/>
    </SidePanel>;
   }
   if(panel.kind==='storage'&&byId.storage[panel.id]){
@@ -291,7 +339,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   }
   return null;
  }
- if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)}/>{panelBody()}{dialogs}</div>;
+ const alertsList=canMove&&<AlertsList channels={alerts.channels} rules={alerts.rules} sourceName={sourceName} onDetails={(c,el)=>openPanel({kind:'alert',id:c.id},el)} onEditRule={editRule} onAdd={addChannel} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
+ if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
 
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
@@ -323,13 +372,34 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
      <defs>
-      {['','-warn','-pending'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
+      {['','-warn','-pending','-rule'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
      </defs>
      {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} className="wire" markerEnd="url(#map-arrow)" d={p.d}/>)}
      {layout.backupPaths.map(p=><path key={'b'+p.id} className="backup" markerEnd="url(#map-arrow)" d={p.d}/>)}
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
+     {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId);return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')}>
+      <path className="rule" markerEnd="url(#map-arrow-rule)" d={p.d}/>
+      <text className="rule-label" x={p.labelX} y={p.labelY}>{lineLabel(r?.events)}</text>
+      <path className="rule-hit" data-node={'rule:'+p.ruleId} d={p.d}/>
+     </g>})}
+     {adrag?.src.from&&<path className="rule dragging" markerEnd="url(#map-arrow-rule)" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
     </svg>
+    {layout.docknest&&<div data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className="map-docknest" style={item(layout.docknest)}>
+     <DockNestIcon size={32}/>
+     <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
+    </div>}
+    {layout.docknest&&<span aria-hidden="true" data-alert-src={canMove?'docknest:':undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
+    {layout.servers.filter(()=>layout.docknest).map(r=><span key={'a'+r.id} aria-hidden="true" data-alert-src={canMove?'server:'+r.id:undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='server'&&adrag.src.id===r.id?' active':'')} style={at(r.alertOut.x,r.alertOut.y)}/>)}
+    {[...layout.sites,...layout.unassigned].filter(()=>layout.docknest).map(r=><span key={'a'+r.id} aria-hidden="true" data-alert-src={canMove?'site:'+r.id:undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='site'&&adrag.src.id===r.id?' active':'')} style={at(r.alertOut.x,r.alertOut.y)}/>)}
+    {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed';return <React.Fragment key={'n'+r.id}>
+     <div data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+(adrag?.over===r.id?' target':'')} style={item(r)}>
+      <KindIcon kind={ch.kind} size={32}/>
+      {bad&&<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
+      <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className="map-caption">{KIND_LABEL[ch.kind]}</span></span>
+     </div>
+     <span aria-hidden="true" className={'map-port'+(adrag?.over===r.id?' active':'')} style={at(r.in.x,r.in.y)}/>
+    </React.Fragment>})}
     {layout.servers.map(r=><span key={'o'+r.id} aria-hidden="true" className={'map-port'+(drag?.over===r.id?' active':'')} style={at(r.x+r.w,r.y+r.h/2)}/>)}
     {layout.sites.map(r=>{const lost=!!drag&&drag.id===r.id||unconnected?.siteId===r.id;const grab=canMove&&!lost;const out=r.out;return <React.Fragment key={'p'+r.id}>
      <span aria-hidden="true" data-port-site={grab?r.id:undefined} className={'map-port in'+(grab?' grab':'')+(lost?' lost':'')} style={at(r.x,r.y+r.h/2)}/>
@@ -366,7 +436,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {canMove&&<button type="button" className="map-add" aria-label="Add to the map" aria-expanded={panel?.kind==='add'} onClick={e=>panel?.kind==='add'?closePanel(true):openPanel({kind:'add'},e.currentTarget)}><IconPlus size={20} stroke={1.75} aria-hidden="true"/></button>}
   {panelBody()}
   </div>
-  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. Drag the background to see more. ':''}{canMove?'Click a node for details. Drag the end of a site’s line to another server to move it. Nothing changes until you press Save changes.':'Click a node for details. Drag the background to move around.'}</span></p>
+  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. Drag the background to see more. ':''}{canMove?'Click a node for details. Drag the end of a site’s line to another server to move it. Nothing changes until you press Save changes.'+(layout.alerts.length?' To send alerts, drag from the small circle on a server, a site or DockNest to an alert.':''):'Click a node for details. Drag the background to move around.'}</span></p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
   {dialogs}
  </section>;
