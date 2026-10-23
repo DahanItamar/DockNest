@@ -328,6 +328,8 @@ try{
    const card=page.locator('.map-site',{hasText:'very-long-site-name'});
    assert.ok(await card.locator('.map-name').evaluate(e=>e.scrollWidth>e.clientWidth),'truncated');
    assert.equal(await card.getAttribute('title'),long);
+   // The map takes the height left on screen: the map and the hint below it are fully visible without scrolling
+   assert.ok(await page.locator('.map-hint').evaluate(e=>e.getBoundingClientRect().bottom<=window.innerHeight),'hint in view');
    // Fit shows everything inside the viewport
    const vp=await page.locator('.map-viewport').boundingBox();
    const kFit=await scaleOf(page);assert.ok(kFit>=0.85-0.001&&kFit<=1,"fit scale between 85% and 100%");
