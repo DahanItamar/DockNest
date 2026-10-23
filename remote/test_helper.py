@@ -724,4 +724,43 @@ class ProbeIpv6SpecialRangeTests(unittest.TestCase):
         for address in ['::a9fe:a9fe','::10.0.0.1','64:ff9b::a9fe:a9fe','64:ff9b::a00:1','64:ff9b::7f00:1','64:ff9b:1::1','2002:a9fe:a9fe::1','2002:a00:1::1','2002:7f00:1::1','2002:6464:64c8::1','2001::1','2001:0:4136:e378::1','2001:db8::1','100::1']:
             with self.assertRaises(ProbePolicyError,msg=address):probe_addresses(address,80,['site.example'])
         for address in ['64:ff9b::101:101','2002:101:101::1','::1']:self.assertEqual(probe_addresses(address,80),[address])
+class ProtectedPathTests(unittest.TestCase):
+    def test_protected_system_paths_are_refused_for_every_source_kind(self):
+        from helper import protected_path, refuse_protected_sources
+        for path in ['/etc/shadow','/etc/gshadow','/etc/shadow-','/etc/sudoers','/etc/sudoers.d/admins','/root/.ssh','/root/.ssh/id_ed25519','/home/deploy/.ssh/authorized_keys','/proc/1/environ','/sys/kernel','/dev/sda','/etc/../etc/shadow']:
+            self.assertTrue(protected_path(path),path)
+        for path in ['/etc/nginx/sites-enabled/example.org','/opt/app/.env','/var/www/example.org','/etc/passwd-backup.conf','/srv/app/compose.yaml','/opt/app/ssh.conf']:
+            self.assertFalse(protected_path(path),path)
+        for cfg in [{'configFiles':['/etc/shadow']},{'composeFiles':['/root/.ssh/config']},{'kind':'static','documentRoot':'/proc'}]:
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources(cfg)
+        refuse_protected_sources({'configFiles':['/opt/app/.env'],'composeFiles':['/opt/app/compose.yaml']})
+
+    def test_maintenance_directory_must_be_a_web_root_or_site_path(self):
+        from helper import maintenance_directory_problem as problem
+        cfg={'stagingRoot':'/var/lib/docknest','composeFiles':['/opt/app/compose.yaml']}
+        for path in ['/var/lib/docknest/maintenance/site','/var/www/example.org/maintenance','/srv/maintenance','/usr/share/nginx/html/maintenance','/opt/app/maintenance']:
+            self.assertIsNone(problem(cfg,path),path)
+        self.assertIsNone(problem({'stagingRoot':'/data/docknest'},'/data/docknest/maintenance/site'))
+        for path in ['/etc/cron.d','/root/maintenance','/home/deploy/.ssh','/usr/bin','/opt/other/maintenance','/tmp/maintenance','/var/www/../../etc']:
+            self.assertIsNotNone(problem(cfg,path),path)
+        self.assertIsNotNone(problem({'stagingRoot':'/'},'/opt/x'),'the filesystem root is not a staging root')
+
+    def test_deploy_refuses_new_locations_and_keeps_existing_deployments_with_a_warning(self):
+        import base64,helper
+        with tempfile.TemporaryDirectory() as temp:
+            target=pathlib.Path(temp)/'proxy'/'maintenance'
+            request={'config':{'maintenance':{'directory':str(target)}},'html':base64.b64encode(b'<p>m</p>').decode()}
+            events=[]
+            with patch('helper.emit',side_effect=lambda **kw:events.append(kw)):
+                with self.assertRaisesRegex(ValueError,'outside the site'):helper.deploy_maintenance(request)
+                self.assertFalse(target.exists())
+                target.mkdir(parents=True);(target/'maintenance.html').write_text('old')
+                helper.deploy_maintenance(request)
+            self.assertEqual((target/'maintenance.html').read_bytes(),b'<p>m</p>')
+            self.assertTrue(any('kept because a maintenance page is already deployed' in event.get('warning','') for event in events))
+            if __import__('os').name!='posix':return  # The helper compares POSIX paths; it runs on Linux.
+            staged=pathlib.Path(temp)/'staging'/'maintenance'/'site'
+            with patch('helper.emit'):helper.deploy_maintenance({'config':{'stagingRoot':str(pathlib.Path(temp)/'staging'),'maintenance':{'directory':str(staged)}},'html':request['html']})
+            self.assertTrue((staged/'maintenance.html').is_file())
+
 if __name__=='__main__':unittest.main()
