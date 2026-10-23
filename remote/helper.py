@@ -958,8 +958,11 @@ def maintenance(cfg,enabled):
         # The proxy may share this directory; never follow a planted link as root.
         flag=directory/'enabled'
         if flag.is_symlink():raise ValueError('Maintenance flag cannot be a symbolic link')
-        fd=os.open(flag,os.O_WRONLY|os.O_CREAT|NOFOLLOW,0o600)
+        # O_NONBLOCK: a planted FIFO must fail at once instead of blocking the helper.
+        try:fd=os.open(flag,os.O_WRONLY|os.O_CREAT|NOFOLLOW|getattr(os,'O_NONBLOCK',0),0o600)
+        except OSError:raise ValueError('Maintenance flag must be a regular file')
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('Maintenance flag must be a regular file')
             if m.get('readableFlag'):
                 if hasattr(os,'fchmod'):os.fchmod(fd,0o644)
                 else:os.chmod(flag,0o644)
