@@ -5,12 +5,14 @@ import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
+import {formatDate} from '../date-format.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import './map.css';
 
 const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
 const MIN=0.2,MAX=2,FIT_MIN=0.45; // fit never scales above 100%; below 45% the map is too small to read, so the user pans
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const short=(v,n=40)=>typeof v==='string'&&v.length>n?v.slice(0,Math.ceil((n-1)/2))+'…'+v.slice(-Math.floor((n-1)/2)):v; // long names are shortened in sentences; the full name stays in the title and the details
 const HIT=16; // forgiving drop area around a server
 
 function serverStatus(server){
@@ -124,7 +126,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  }
  // Connect a site to a server (drop on its port, or the keyboard / phone sheet). The same server again undoes the change.
  function connect(siteId,targetId,loose){
-  const name=byId.sites[siteId]?.name,target=byId.servers[targetId]?.name,r=checks[siteId]?.[targetId];
+  const name=short(byId.sites[siteId]?.name),target=short(byId.servers[targetId]?.name),r=checks[siteId]?.[targetId];
   if(targetId===byId.sites[siteId]?.serverId){setEdit(null);setNote(`${name} stays on ${target}. Nothing changes.`);return;}
   if(r&&blocked(r)){setEdit({siteId,targetId:null,loose:loose||edit?.loose||null});setNote(`${name} cannot move to ${target}. ${why(r)} ${name} is not connected.`);return;}
   setEdit({siteId,targetId});setNote(`${name} will move to ${target}. Choose Save changes to continue.`);
@@ -132,7 +134,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function disconnect(siteId,loose){
   const s=layout.sites.find(x=>x.id===siteId);if(!s)return;
   setEdit({siteId,targetId:null,loose:loose||{x:s.x-70,y:s.y+s.h+30}});
-  setNote(`${byId.sites[siteId]?.name} is not connected. Connect it to a server to save.`);
+  setNote(`${short(byId.sites[siteId]?.name)} is not connected. Connect it to a server to save.`);
  }
  function choose(siteId,targetId){connect(siteId,targetId);closeFlow(false);}
  function cancelEdit(){setEdit(null);setNote('Change cancelled. Nothing was changed.')}
@@ -251,7 +253,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  // Details and add panels (one at a time)
  const lastBackup=id=>(backups||[]).find(b=>b.siteId===id),lastJob=id=>(jobs||[]).find(j=>j.siteId===id&&/backup/i.test(j.type||'')&&j.status!=='running'&&j.status!=='queued');
  const siteWarn=s=>!byId.servers[s.serverId]||unconnected?.siteId===s.id||lastJob(s.id)?.status==='failed';
- const fmtDate=v=>{const d=new Date(v);return isNaN(d)?'':d.toLocaleString([], {dateStyle:'medium',timeStyle:'short'})};
+ // "Today 03:00, passed" / "Yesterday 23:00, failed"; older days use the app's date format
+ const when=v=>{const d=new Date(v);if(isNaN(d))return '';const day=new Date(d).setHours(0,0,0,0),today=new Date().setHours(0,0,0,0),time=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});return day===today?'Today '+time:day===today-864e5?'Yesterday '+time:formatDate(v,{shortTime:true})};
+ const lastResult=id=>{const j=lastJob(id);return j?.status==='failed'?'failed':j?'passed':lastBackup(id)?'passed':''};
  const tool=(label,pkg,v,server)=>{
   if(v===undefined)return null;
   if(v)return [label,typeof v==='string'?v:'Installed'];
@@ -264,10 +268,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed';
-   const names=Array.isArray(s.config?.containers)?s.config.containers.map(String):[];
+   const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
-    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',doms.join(', ')],names.length&&['Containers',names.join(', ')],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb?fmtDate(lb.capturedAt)||'Done':'No backup yet']]}/>
+    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',doms.join(', ')],names&&['Containers',names],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet']]}/>
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
    </SidePanel>;
   }

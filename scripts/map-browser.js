@@ -23,7 +23,7 @@ const state={
   {id:'4',name:'api.example.com',serverId:'a'},
   {id:'5',name:'wiki.example.com',serverId:'b'}
  ],
- jobs:[],backups:[{id:'bk1',siteId:'1'},{id:'bk2',siteId:'2'}],policies:[{siteId:'3',enabled:true},{siteId:'4',enabled:false}],audit:[],storage:{used:0,total:1e12},worker:{online:true}
+ jobs:[],backups:[{id:'bk1',siteId:'1',capturedAt:new Date().toISOString()},{id:'bk2',siteId:'2'}],policies:[{siteId:'3',enabled:true},{siteId:'4',enabled:false}],audit:[],storage:{used:0,total:1e12},worker:{online:true}
 };
 const targets={targets:[{id:'t1',name:'nas-backup',kind:'sftp',status:'connected',capacity_bytes:2e12,trackedBytes:8e11},{id:'t2',name:'offsite-s3',kind:'s3',status:'connected',trackedBytes:5e9}],activeTargetId:'t1'};
 let browser;const errors=[];
@@ -331,6 +331,9 @@ async function panelChecks(page,scheme){
  await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
  assert.equal(await panel.getByText('Generic').count()+await panel.getByText('app',{exact:true}).count(),0,'only detected databases are listed');
  await panel.getByText('Moves together with the site.').waitFor();
+ await panel.getByText(/^Today .*, passed$/).waitFor();
+ assert.equal(await panel.locator('dd',{hasText:/^3$/}).count(),1,'containers show a count, never indexes');
+ assert.equal(await panel.getByText('1, 2, 3').count(),0);
  await panel.getByText('nas-backup').waitFor();await panel.getByText('mobiX-Srv').waitFor();
  assert.equal(await panel.getByRole('button',{name:'Open site'}).count(),1);assert.equal(await panel.getByRole('button',{name:'Move to…'}).count(),1);
  assert.equal(await save.isDisabled(),true,'a click is not a change');
@@ -590,6 +593,26 @@ try{
    await fits(page,'desktop '+scheme);
    await shot(page,scheme,'1440');
    assert.deepEqual(offOrigin,[],'off-origin requests');
+   await context.close();
+  }
+  // Disabled Save is a grey filled button in its toolbar row, and a state change never shrinks the map
+  {
+   const {context,page}=await open({scheme});
+   await page.locator('.map-site').first().waitFor();
+   const save=page.getByRole('button',{name:'Save changes'});
+   assert.equal(await save.isDisabled(),true);
+   assert.equal(await save.evaluate(e=>{const bg=el=>getComputedStyle(el).backgroundColor,own=bg(e);let p=e.parentElement;while(p&&/rgba\(0, 0, 0, 0\)|transparent/.test(bg(p)))p=p.parentElement;return own!==bg(p||document.body)&&!/rgba\(0, 0, 0, 0\)/.test(own)}),true,'disabled save is a filled grey button');
+   const row=await page.locator('.map-toolbar').boundingBox(),sb=await save.boundingBox();
+   assert.ok(sb.y>=row.y-1&&sb.y+sb.height<=row.y+row.height+1&&sb.height>=39,'save sits inside its toolbar row');
+   await page.locator('.map-site[data-site="3"]').focus();await page.keyboard.press('Delete');
+   await page.locator('.map-site.lost').waitFor();
+   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'still 100% after disconnecting a site');
+   await page.getByRole('button',{name:'Cancel',exact:true}).click();
+   assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'still 100% after cancelling');
+   await page.locator('.map-site[data-site="3"]').focus();await page.keyboard.press('Delete');
+   const note=await page.locator('.map-live').textContent();assert.ok(note.length<120&&note.includes('…'),'long names are shortened in the status line');
+   assert.equal(await page.locator('.map-live').evaluate(e=>e.getBoundingClientRect().height<=40),true,'status line stays on one or two short lines');
+   await shot(page,scheme,'1440-3c-not-connected-100');
    await context.close();
   }
   // Large screen: still 100%, centred, and fully in view

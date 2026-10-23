@@ -24,7 +24,7 @@
 .map-root .map-list li .map-name{flex:1;white-space:normal;overflow-wrap:anywhere}
 .map-root .map-none{margin:16px 0 0}
 @media(prefers-reduced-motion:reduce){.map-root *{transition:none!important;animation:none!important}}
-.map-root button:disabled,.map-root button:disabled:hover{background:var(--surface-hover);border-color:var(--surface-hover);color:var(--text-muted);opacity:1;cursor:not-allowed}
+.map-root button:disabled,.map-root button:disabled:hover{background:var(--border-subtle);border-color:var(--border-subtle);color:var(--text-muted);opacity:1;cursor:not-allowed}
 /* Move flow. Dialogs are rendered inside .map-root, so the scope still applies. */
 .map-root .map-toolbar button{white-space:nowrap}
 .map-root .map-moveto{margin-left:auto;white-space:nowrap;min-height:44px}
