@@ -25,6 +25,17 @@ test('client key groups an IPv6 /64 and unwraps IPv4-mapped addresses; IPv4 is u
   assert.equal(clientKey('fe80::1%eth0'), 'fe80:0:0:0::/64');
   assert.equal(clientKey('::1'), '0:0:0:0::/64');
   assert.equal(clientKey(undefined), 'unknown');
+  for (const mapped of ['::ffff:cb00:7107', '0:0:0:0:0:ffff:cb00:7107', '::FFFF:CB00:7107']) assert.equal(clientKey(mapped), '203.0.113.7', mapped);
+  assert.equal(clientKey('::fffe:cb00:7107'), '0:0:0:0::/64', 'only ::ffff:0:0/96 is IPv4-mapped');
+});
+
+test('the public update-progress limiter shares one budget per IPv6 /64', async () => {
+  const { progressHandler, createLimiter } = await import('../src/updates/lock.js');
+  const handler = progressHandler({ progress: () => ({ active: false, events: [] }) }, createLimiter({ perMinute: 3 }));
+  const hit = ip => { let status = 200; const res = { set() {}, status(code) { status = code; return this; }, json() { return this; } }; handler({ ip }, res); return status; };
+  assert.deepEqual([1, 2, 3, 4, 5].map(index => hit(`2001:db8:9:9::${index}`)), [200, 200, 200, 429, 429]);
+  assert.equal(hit('2001:db8:9:a::1'), 200);
+  assert.deepEqual([hit('::ffff:cb00:7107'), hit('::ffff:203.0.113.7'), hit('203.0.113.7'), hit('203.0.113.7')], [200, 200, 200, 429], 'mapped forms share the IPv4 budget');
 });
 
 test('sign-in rate limit cannot be reset by rotating addresses inside one IPv6 /64', async () => {

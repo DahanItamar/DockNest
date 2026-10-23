@@ -79,4 +79,43 @@ test('paths reported by discovery are accepted for operators; stagingRoot and th
   assert.deepEqual(sitePathChanges(saved, { serverId: other, config: saved.config }, 's1').maintenanceDirectory, ['/srv/m']);
 });
 
+test('an operator may save paths that discovery reports for the server, and nothing else', async () => {
+  // Loopback SSH server that answers the helper's discover operation with a fixed result.
+  const { default: ssh2 } = await import('ssh2'), { generateHostKey } = await import('./sftp-fixture.js'), { createHash } = await import('node:crypto'), { seal } = await import('../src/crypto.js');
+  const hostKey = generateHostKey(), clientKey = generateHostKey();
+  const discovery = { staticSites: [{ kind: 'static', documentRoot: '/var/www/example.org', configFiles: ['/etc/nginx/sites-enabled/example.org'] }], containers: [{ name: 'fixture-app', backupConfiguration: { composeFiles: ['/opt/app/compose.yaml'], configFiles: ['/opt/app/.env'], directory: '/opt/app' } }] };
+  const operations = [];
+  const ssh = new ssh2.Server({ hostKeys: [hostKey] }, client => {
+    client.on('error', () => {}).on('authentication', context => context.method === 'publickey' ? context.accept() : context.reject(['publickey']));
+    client.on('ready', () => client.on('session', accept => accept().on('exec', accept => {
+      const stream = accept(); let input = '';
+      stream.on('data', chunk => {
+        input += chunk;
+        const lines = input.split('\n');
+        if (lines.length < 3) return;
+        operations.push(JSON.parse(lines[1]).operation);
+        stream.write(JSON.stringify({ result: discovery }) + '\n'); stream.exit(0); stream.end();
+      });
+    })));
+  });
+  await new Promise(resolve => ssh.listen(0, '127.0.0.1', resolve));
+  const discovered = id();
+  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(discovered, 'Discovered', '127.0.0.1', ssh.address().port, 'root', seal(clientKey), createHash('sha256').update(ssh2.utils.parseKey(hostKey).getPublicSSH()).digest('hex'), new Date().toISOString());
+  role('operator');
+  try {
+    const dockerSite = await call('/sites', 'POST', { serverId: discovered, name: 'Discovered app', config: { containers: ['fixture-app'], composeFiles: ['/opt/app/compose.yaml'], configFiles: ['/opt/app/.env'] } });
+    assert.equal(dockerSite.status, 201);
+    assert.equal((await call('/sites', 'POST', { serverId: discovered, name: 'Discovered static', config: { kind: 'static', containers: [], documentRoot: '/var/www/example.org', configFiles: ['/etc/nginx/sites-enabled/example.org'] } })).status, 201);
+    assert.equal((await call('/sites', 'POST', { serverId: discovered, name: 'Not discovered', config: { containers: ['fixture-app'], configFiles: ['/opt/app/.env', '/opt/app/secret.key'] } })).status, 403);
+    assert.equal((await call('/sites', 'POST', { serverId: discovered, name: 'Staging', config: { containers: ['fixture-app'], configFiles: ['/opt/app/.env'], stagingRoot: '/srv/staging' } })).status, 403, 'discovery never approves a staging directory');
+    assert.ok(operations.length >= 3 && operations.every(operation => operation === 'discover'));
+  } finally { role('admin'); await new Promise(resolve => ssh.close(resolve)); }
+});
+
+test('staging roots in system folders and paths starting with // are refused for everyone', async () => {
+  for (const stagingRoot of ['/root/docknest', '/etc/docknest', '/usr/bin/x', '/home/a/.ssh/x']) assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, stagingRoot } })).status, 400, stagingRoot);
+  assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, configFiles: ['//etc/shadow'] } })).status, 400);
+  assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, stagingRoot: '/srv/docknest' } })).status, 201);
+});
+
 test.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); await rm(directory, { recursive: true, force: true }); });

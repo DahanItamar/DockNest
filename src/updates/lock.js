@@ -1,6 +1,7 @@
 // The public progress endpoint and the 423 lock (docs/update-center.md sections 4 and 7). Both read only the in-memory
 // snapshot of the update service: no database read or write per request, and the limiter is in memory too (the shared
 // rateLimit writes SQLite). Nothing here is allowed to fail an update because a browser keeps polling.
+import { clientKey } from '../client-key.js';
 
 export const progressLimit = Object.freeze({ perMinute: 120, windowMs: 60_000, clients: 10_000 });
 
@@ -22,7 +23,7 @@ export function createLimiter({ perMinute = progressLimit.perMinute, windowMs = 
 export function progressHandler(service, limiter = createLimiter()) {
   return (req, res) => {
     res.set('Cache-Control', 'no-store');
-    const wait = limiter(req.ip ?? 'unknown');
+    const wait = limiter(clientKey(req.ip));
     if (wait) { res.set('Retry-After', String(wait)); return res.status(429).json({ error: 'Too many requests. Try again in ' + wait + (wait === 1 ? ' second.' : ' seconds.'), code: 'RATE_LIMITED', retryAfter: wait }); }
     const { active, phase, to, state, stale, updatedAt, events } = service.progress();
     res.json({ active, phase, to, state, stale, updatedAt, events: events.map(({ phase: eventPhase, at }) => ({ phase: eventPhase, at })) });

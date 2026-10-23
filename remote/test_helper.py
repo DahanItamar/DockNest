@@ -735,6 +735,28 @@ class ProtectedPathTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources(cfg)
         refuse_protected_sources({'configFiles':['/opt/app/.env'],'composeFiles':['/opt/app/compose.yaml']})
 
+    def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
+        from helper import protected_path, maintenance_directory_problem
+        for path in ['//etc/shadow','///etc/shadow','//root/.ssh/id_rsa','/etc//shadow','/etc/ssh/ssh_host_ed25519_key','/etc/ssh/ssh_host_rsa_key','//etc/ssh/ssh_host_ecdsa_key']:
+            self.assertTrue(protected_path(path),path)
+        for path in ['/etc/ssh/sshd_config','/etc/ssh/ssh_host_rsa_key.pub']:
+            self.assertFalse(protected_path(path),path)
+        self.assertIsNotNone(maintenance_directory_problem({},'//etc/cron.d'))
+
+    @unittest.skipUnless(__import__('os').name=='posix','Symlinks to system folders need a POSIX host')
+    def test_symlinks_into_system_folders_are_followed(self):
+        import os,base64,helper
+        from helper import protected_path, refuse_protected_sources, maintenance_directory_problem, maintenance_link_escape
+        with tempfile.TemporaryDirectory() as temp:
+            parent=pathlib.Path(temp)/'opt-x';os.symlink('/etc',parent)
+            self.assertTrue(protected_path(str(parent/'shadow')),'a parent symlink to /etc is resolved')
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources({'kind':'static','documentRoot':str(parent/'ssh')})
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources({'kind':'static','documentRoot':'/'})
+            link=pathlib.Path(temp)/'www';os.symlink('/etc',link)
+            cfg={'stagingRoot':temp,'maintenance':{'directory':str(link)}}
+            self.assertIsNotNone(maintenance_directory_problem(cfg,str(link)));self.assertTrue(maintenance_link_escape(str(link)))
+            with patch('helper.emit'),self.assertRaisesRegex(ValueError,'system folder'):helper.deploy_maintenance({'config':cfg,'html':base64.b64encode(b'x').decode()})
+
     def test_maintenance_directory_must_be_a_web_root_or_site_path(self):
         from helper import maintenance_directory_problem as problem
         cfg={'stagingRoot':'/var/lib/docknest','composeFiles':['/opt/app/compose.yaml']}

@@ -73,7 +73,11 @@ const view = (row, verifications) => {
   if (converted.target) converted.targetId = converted.target;
   return converted;
 };
-const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.');
+const linuxPath = z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value => !value.split('/').includes('..'), 'Parent path traversal is not allowed.').refine(value => !value.startsWith('//'), 'Start the path with a single slash.');
+// Same system folders the helper refuses for maintenance pages (remote/helper.py SYSTEM_TREES), so the default
+// maintenance folder under the staging root is always deployable.
+const systemTrees = ['/etc', '/root', '/boot', '/proc', '/sys', '/dev', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/usr/bin', '/usr/sbin', '/usr/lib', '/usr/local/bin', '/usr/local/sbin', '/var/spool', '/var/log', '/run'];
+const outsideSystemFolders = value => !systemTrees.some(root => value === root || value.startsWith(root + '/')) && !value.split('/').includes('.ssh');
 const healthUrl = z.string().max(2048).refine(value => !value || probeUrlAllowed(value), probeUrlMessage);
 const siteSchema = z.object({
   serverId: z.uuid(), name: z.string().trim().min(1).max(100),
@@ -81,7 +85,7 @@ const siteSchema = z.object({
     kind:z.enum(['docker','static']).default('docker'),
     documentRoot:linuxPath.optional(),
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
-    stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').default('/var/lib/docknest'),
+    stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').refine(value => outsideSystemFolders(value.replace(/\/+$/, '')), 'Use a staging directory outside system folders such as /etc, /root or /usr/bin, for example /var/lib/docknest.').default('/var/lib/docknest'),
     deliveryMode: z.enum(['staged','direct']).default('staged'),
     sqliteIntegrityCheck: z.enum(['full','off']).optional(),
     exclusiveSourcesConfirmed: z.boolean().default(false),
