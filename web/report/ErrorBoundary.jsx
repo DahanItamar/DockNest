@@ -19,7 +19,7 @@ export class AppErrorBoundary extends React.Component{
   const route=routeId(this.props.route),area=this.props.area||'page',name=this.state.name;
   const build=(facts,opts)=>buildAppErrorReport({...facts,...opts,route,area,error:name});
   return <StatusPage code="500" level={2} role="alert" className="rp-crash" title="This page stopped working" footnote="Unexpected app error · shares only the page name and the error type"
-   actions={<><button type="button" className="primary" onClick={()=>location.reload()}><RefreshCw size={18} stroke={1.75} aria-hidden="true"/>Reload page</button><ReportProblem build={build} summary="Unexpected app error"/></>}>
+   actions={<button type="button" className="primary" onClick={()=>location.reload()}><RefreshCw size={18} stroke={1.75} aria-hidden="true"/>Reload page</button>} aside={<ReportProblem build={build} label="Report this problem" className="text status-link" summary="Unexpected app error"/>}>
    Your backups and settings are safe. Reload the page, or tell us what happened.
   </StatusPage>;
  }

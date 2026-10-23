@@ -70,11 +70,9 @@ try{
    assert.equal(await page.title(),'Page not found · DockNest');
    assert.equal(await page.locator('.berry-shell,.berry-sidebar,.berry-header').count(),0,'standalone: no app shell');
    const full=await page.locator('.status-screen').boundingBox();assert.ok(full.width>=width-1&&full.height>=height-1,'full screen');
-   assert.equal(await page.locator('.status-actions button').count(),2);
+   assert.equal(await page.locator('.status-actions button').count(),1);
+   assert.equal(await page.getByRole('button',{name:'Go back'}).count(),0);
    assert.equal(await page.locator('.status-actions button:focus').count(),0,'focus is not forced');
-   await page.getByRole('button',{name:'Go back'}).click();
-   await page.locator('.status-page').waitFor({state:'detached'});
-   await page.evaluate(()=>{location.hash='#/nowhere'});
    await page.getByRole('button',{name:'Go to dashboard'}).click();
    await page.locator('.status-page').waitFor({state:'detached'});
    assert.ok(!/nowhere/.test(page.url()));
@@ -128,7 +126,7 @@ try{
    await checkLook(page,'500','This page stopped working','500 '+tag);
    await page.getByRole('alert').filter({hasText:'This page stopped working'}).waitFor();
    await page.getByRole('button',{name:'Reload page'}).waitFor();
-   await page.getByRole('button',{name:'Open GitHub',exact:true}).waitFor();
+   await page.getByRole('button',{name:'Report this problem'}).waitFor();
    await page.getByText('Unexpected app error').waitFor();
    await shot(page,'500',scheme,width===1440?'1440x900':'402x874');
    errors.length=0;

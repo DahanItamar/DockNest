@@ -9,6 +9,8 @@
 .status-page .status-text{margin:4px 0 0;max-width:44ch;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--text-secondary);text-wrap:balance}
 .status-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px}
 .status-actions>:is(button,a){min-width:152px}
+.status-aside{margin-top:12px;display:flex;justify-content:center}
+.status-page .status-link{min-height:var(--control-height);padding:0 8px;font-weight:400;text-decoration:underline;text-underline-offset:3px;color:var(--link)}
 .status-page .status-note{margin-top:24px;max-width:48ch}
 @media(min-width:1920px){.status-page{max-width:720px}.status-code{font-size:clamp(224px,12vw,320px)}}
 @media(min-width:2560px){.status-page{max-width:880px}.status-code{font-size:clamp(320px,12vw,440px)}}

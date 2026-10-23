@@ -1,7 +1,7 @@
 import React, {useEffect,useState,useRef} from 'react';
 import {count,plural} from './plural.js';
 import {createRoot} from 'react-dom/client';
-import {Archive,LayoutDashboard,Server,Layers,Clock,ShieldCheck,Activity,Wrench,LogOut,Plus,ArrowRight,RefreshCw,Download,Pin,RotateCcw,X,CheckCircle2,HardDrive,Filter,AlertTriangle,Home,ArrowLeft,LogIn} from './icons.jsx';
+import {Archive,LayoutDashboard,Server,Layers,Clock,ShieldCheck,Activity,Wrench,LogOut,Plus,ArrowRight,RefreshCw,Download,Pin,RotateCcw,X,CheckCircle2,HardDrive,Filter,AlertTriangle,Home,LogIn} from './icons.jsx';
 import '@fontsource-variable/roboto';
 import './tokens.css';
 import {BerryShell} from './shell.jsx';
@@ -89,10 +89,8 @@ function Access({user,onSignedOut,onSessionExpired}) {
 // Hash routes the app answers to; any other pathname or '#/...' shows the 404 page.
 const KNOWN_HASH=/^(#\/?|#\/update-center.*|#\/setup|#\/enroll\/[A-Za-z0-9_-]+|#[^/].*)$/;
 const unknownLocation=()=>!['/','/index.html'].includes(location.pathname)||(location.hash!==''&&!KNOWN_HASH.test(location.hash));
-let navigatedInApp=false;addEventListener('hashchange',()=>{navigatedInApp=true});
 function NotFound({onHome}){
- const back=()=>{if(history.length>1&&(navigatedInApp||(document.referrer&&new URL(document.referrer).origin===location.origin)))history.back();else onHome();};
- return <StatusPage code="404" title="Page not found" actions={<><button type="button" className="primary" onClick={onHome}><Home size={18} stroke={1.75} aria-hidden="true"/>Go to dashboard</button><button type="button" onClick={back}><ArrowLeft size={18} stroke={1.75} aria-hidden="true"/>Go back</button></>}>This page doesn't exist or has moved.</StatusPage>;
+ return <StatusPage code="404" title="Page not found" actions={<button type="button" className="primary" onClick={onHome}><Home size={18} stroke={1.75} aria-hidden="true"/>Go to dashboard</button>}>This page doesn't exist or has moved.</StatusPage>;
 }
 function App(){const [serverFailure,setServerFailure]=useState(null),[auth,setAuth]=useState(null),[state,setState]=useState(null),[route,setRoute]=useState(()=>/^#\/update-center/.test(location.hash)?'Update Center':'Overview'),[error,setError]=useState(''),[notice,setNotice]=useState(''),[modal,setModal]=useState(null),[busy,setBusy]=useState(false),[query,setQuery]=useState(''),[selectedServer,setSelectedServer]=useState(''),[plan,setPlan]=useState(null),[enrollToken,setEnrollToken]=useState(()=>location.hash.match(/^#\/enroll\/([A-Za-z0-9_-]{43})$/)?.[1]||null),[idleRemaining,setIdleRemaining]=useState(null);
 const [setupPageOpen,setSetupPageOpen]=useState(()=>location.hash==='#/setup'),[,setLoc]=useState(0),[signIn,setSignIn]=useState(false);

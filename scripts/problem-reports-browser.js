@@ -147,7 +147,7 @@ try{
   await screen.waitFor();
   await screen.getByText('Your backups and settings are safe. Reload the page, or tell us what happened.').waitFor();
   await screen.getByRole('button',{name:'Reload page'}).waitFor();
-  await screen.getByRole('button',{name:'Open GitHub',exact:true}).click();
+  await screen.getByRole('button',{name:'Report this problem'}).click();
   const dialog=await reviewDialog(page);
   const href=await openGitHub(context,page,dialog,local,github),p=paramsOf(href),decoded=decodeURIComponent(href);
   assert.equal(p.get('template'),'app-error.yml');assert.equal(p.get('route'),'overview');assert.equal(p.get('area'),'page');assert.equal(p.get('error_name'),'TypeError');
@@ -159,7 +159,7 @@ try{
   await context.close();
   const op=await open({role:'operator',appState:state({servers:[null]})});
   await op.page.getByRole('heading',{name:'This page stopped working'}).waitFor();
-  assert.equal(await op.page.getByRole('button',{name:'Open GitHub',exact:true}).count(),0);
+  assert.equal(await op.page.getByRole('button',{name:'Report this problem'}).count(),0);
   await op.context.close();errors.length=0;
  }
 
