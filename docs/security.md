@@ -131,6 +131,25 @@ Every report except Report a bug adds the DockNest version and install mode, and
 
 The API adds `errorClass` (and, for server tests, `check`) next to the existing error message of storage and server connection tests; these values come from fixed lists, never from error text.
 
+## Site moves: Cloudflare DNS and DNS checks (outbound requests)
+
+- Without a saved Cloudflare token, site moves make no request to Cloudflare. Waiting for a manual DNS change sends
+  DNS queries only, to 1.1.1.1 and 8.8.8.8.
+- With a token (Settings, administrators, recent re-verification): requests go only to `https://api.cloudflare.com`,
+  a host fixed in code, without redirects, with a 10 second limit. Saving the token makes read calls only (token
+  verify, zone list, one DNS record read per zone). A move changes only the A record (and one AAAA record when the
+  new server has IPv6) of the moved domain, journals the previous content first, and restores it on Undo or Switch back.
+- The token is sealed with the master key (AES-256-GCM, like server SSH keys), decrypted only at the moment of a
+  call, and never returned by the API, written to logs, audit events, job details or the move journal. Error
+  messages carry Cloudflare's own sentence, never the request. Use a token scoped to Zone.DNS:Edit on the site's zone.
+- The test copy of a moved site runs on real data, on networks of its own; before it starts, DockNest rejects its
+  outgoing SMTP by subnet through Docker's `DOCKER-USER` chain (IPv4 and IPv6) where it exists and removes the rules
+  with the copy. HTTP-based mail and webhooks are not blocked.
+- A move writes only outside system folders, Docker storage, `.ssh` and protected files (symlinks followed); the
+  merged Compose configuration must match the backup; removing an old copy deletes only its own read-write data.
+  Every server step of a move holds a per-move lock on the server and stops when DockNest stops waiting for it.
+- Cloudflare: the previous record is journaled before it is changed; a resumed switch reuses that journal.
+
 ## Client address and TRUST_PROXY
 
 By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).

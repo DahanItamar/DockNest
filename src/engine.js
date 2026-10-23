@@ -21,7 +21,7 @@ export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Backup transport; tests replace these members to drive executeJob without SSH.
-export const transport={remote,remoteCaptureStream,download};
+export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
 // Boot recovery copies these files onto the host; other operations stream the current helper each time.
 const bootBundle=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
@@ -53,15 +53,20 @@ export async function verifyRecovery(job){
  return remote(server,{operation:'verify-recovery',job:job.id,config:site.config});
 }
 function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
-function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(siteId);}
+function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(siteId);}
+// A site in an unfinished move (past its preview, before it is done) refuses other mutating work; the move's own
+// backups pass the actor `move:<id>`.
+const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
+export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
+export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
-export function enqueueBackup(siteId,actor='scheduler'){
- requireNoDeploymentHold();
+export function enqueueBackup(siteId,actor='scheduler',extra={}){
+ requireNoDeploymentHold();requireNotMoving(siteId,actor);
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
  if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify(probe?{warnings:[probe.message]}:{}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
@@ -101,7 +106,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  return {backupId,serverId,mode,mappings,capabilities,externalReferences,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
- requireNoDeploymentHold();
+ requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id);}
  const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings});
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
@@ -117,8 +122,9 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  }catch(e){db.exec('ROLLBACK');throw e;}
  return {id:jobId,restoreId};
 }
-export async function setMaintenance(siteId,enabled){const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not use Docker maintenance controls.'),{status:400});const result=await remote(server,{operation:'maintenance',config:site.config,enabled});audit('administrator','maintenance.set',siteId,{enabled});return result;}
-export async function deployMaintenance(siteId){const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not need a maintenance proxy.'),{status:400});const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const font=await readFile(new URL('../dist/fonts/Roboto-Latin.woff2',import.meta.url));const html=renderMaintenancePage(settings,{font:'data:font/woff2;base64,'+font.toString('base64')});return remote(server,{operation:'deploy-maintenance',config:site.config,html:Buffer.from(html).toString('base64')});}
+export async function setMaintenance(siteId,enabled){requireNotMoving(siteId);const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not use Docker maintenance controls.'),{status:400});const result=await remote(server,{operation:'maintenance',config:site.config,enabled});audit('administrator','maintenance.set',siteId,{enabled});return result;}
+export async function maintenanceHtml(){const row=db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();const settings=row?JSON.parse(row.value):{};const font=await readFile(new URL('../dist/fonts/Roboto-Latin.woff2',import.meta.url));return Buffer.from(renderMaintenancePage(settings,{font:'data:font/woff2;base64,'+font.toString('base64')})).toString('base64');}
+export async function deployMaintenance(siteId){requireNotMoving(siteId);const {site,server}=siteInfo(siteId);if(site.config.kind==='static')throw Object.assign(new Error('Static backups keep the website online and do not need a maintenance proxy.'),{status:400});return remote(server,{operation:'deploy-maintenance',config:site.config,html:await maintenanceHtml()});}
 export async function encryptStream(input,output,secret=key()){
  const header=Buffer.concat([Buffer.from('DBM1'),randomBytes(12)]);
  const cipher=createCipheriv('aes-256-gcm',secret,header.subarray(4));cipher.setAAD(header);
@@ -183,6 +189,18 @@ export async function retain(siteId){
  }
 }
 
+export {siteInfo};
+// Streams a verified backup, decrypted only inside the authenticated stream, into `jobId`'s restore staging root on `server`.
+export async function uploadBackupTo(server,backupId,jobId){
+ const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup?.verified)throw new Error('Verified backup not found');
+ const {checksum,size,header,tag,plaintextChecksum}=await inspectEncrypted(backup.path);if(checksum!==backup.checksum)throw new Error('Encrypted backup checksum differs from stored checksum');
+ const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
+ const staging=await transport.remote(server,{operation:'prepare-restore',job:jobId});
+ const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
+ const decrypting=pipeline(await openRead(backup.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
+ try{await transport.uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
+ return {plaintextChecksum};
+}
 async function executeRestoreJob(job){
  const details=typeof job.details==='string'?JSON.parse(job.details):job.details;
  const restore=parse(db.prepare('SELECT * FROM restores WHERE id=?').get(details.restoreId));
@@ -252,7 +270,10 @@ export function trustedCaptureTime(reported,startedMs,nowMs=Date.now(),skewMs=10
  const ms=typeof reported==='number'?reported*1000:NaN;
  return Number.isFinite(ms)&&ms>=startedMs-skewMs&&ms<=nowMs+skewMs?{ms,adjusted:false}:{ms:nowMs,adjusted:true};
 }
+// Site moves register their job runner here (src/moves/engine.js), keeping this module free of a circular import.
+export const jobRunners={};
 export async function executeJob(job){
+ if(jobRunners[job.type])return jobRunners[job.type](job);
  if(job.type==='scrub')return executeScrub(job);
  if(job.type==='restore')return executeRestoreJob(job);
  const startedMs=Date.now();
@@ -269,7 +290,9 @@ export async function executeJob(job){
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';
   let result,published,temporary,captured;
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1'};
+  let jobDetails={};try{jobDetails=JSON.parse(job.details||'{}');}catch{}
+  // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -338,7 +361,7 @@ export function tickScheduler(currentDate=new Date()){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
-   if(next&&next<=currentDate){if(busy(policy.site_id))continue;enqueueBackup(policy.site_id);}
+   if(next&&next<=currentDate){if(busy(policy.site_id)||movingSite(policy.site_id))continue;enqueueBackup(policy.site_id);}
    if(!next||next<=currentDate){
     const upcoming=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate}).next().toISOString();
     db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run(upcoming,policy.site_id);
@@ -349,8 +372,11 @@ export function tickScheduler(currentDate=new Date()){
 export function claimJob(){
  db.exec('BEGIN IMMEDIATE');
  try{
-  const job=db.prepare("SELECT j.* FROM jobs j WHERE j.status='queued' AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required') AND COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id)=COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id))) ORDER BY j.created_at LIMIT 1").get();
-  if(job)db.prepare("UPDATE jobs SET status='running',stage='preflight',started_at=? WHERE id=?").run(now(),job.id);
+  // A job occupies its target (or its site's) server and, for a site move, also its source server.
+  const job=db.prepare("SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) ORDER BY j.created_at LIMIT 1").get();
+  // Site-move jobs use their own statuses so a release without moves (for example after a rollback) never claims
+  // them as backups, and its startup never turns them into recovery work.
+  if(job)db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' ELSE 'running' END,stage='preflight',started_at=? WHERE id=?").run(now(),job.id);
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
 }

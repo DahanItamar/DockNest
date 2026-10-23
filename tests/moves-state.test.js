@@ -9,7 +9,31 @@ import {
 import { siteMovesSchema } from '../src/migrations.js';
 
 const now = '2026-10-23T10:00:00.000Z';
+
+test('a draft preview can only start or be cancelled, does nothing by itself and blocks no other site work', async () => {
+  const { isMoving } = await import('../src/moves/state.js');
+  assert.deepEqual(TRANSITIONS.draft, ['queued', 'cancelled']);
+  assert.equal(isActive('draft'), true, 'it holds the one-move-per-site slot');
+  assert.equal(isMoving('draft'), false); assert.equal(isMoving('queued'), true);
+  assert.deepEqual(nextAction({ id: 'm', state: 'draft', options: { dnsMode: 'manual' } }, []), { type: 'none' });
+  assert.deepEqual(cancelDecision({ id: 'm', state: 'draft', options: { dnsMode: 'manual' } }, []), { allowed: true, next: 'cancelled', label: 'Cancel' });
+  assert.throws(() => assertTransition('draft', 'running'), MoveStateError);
+});
 const move = (changes = {}) => ({ id: 'move', state: 'running', waiting_for: null, cancel_requested: 0, options: { dnsMode: 'manual' }, retain_until: null, ...changes });
+test('a failure after the switch never rolls back: the owner decides, the new copy is never removed', () => {
+  for (const options of [{ dnsMode: 'manual' }, { dnsMode: 'cloudflare' }]) {
+    const names = planSteps(options).map(step => step.name), switchAt = names.indexOf('switch_dns');
+    for (const failing of ['verify_dns', 'certificate', 'finalize']) {
+      const list = steps(options, names.slice(0, names.indexOf(failing)), { [failing]: { state: 'failed', attempt: 1 } });
+      assert.ok(names.indexOf(failing) > switchAt);
+      assert.deepEqual(nextAction(move({ options }), list), { type: 'transition', to: 'recovery_required' }, `${options.dnsMode} ${failing}`);
+      assert.deepEqual(nextAction(move({ options, state: 'rolling_back' }), list), { type: 'transition', to: 'recovery_required' });
+    }
+  }
+  const options = { dnsMode: 'manual' };
+  assert.deepEqual(nextAction(move({ options }), steps(options, ['preflight', 'backup', 'deploy_test'], { test: { state: 'failed', attempt: 1 } })), { type: 'transition', to: 'rolling_back' }, 'before the switch a failure still undoes the copy');
+  assert.ok(canTransition('waiting', 'switching_back'), 'Cancel and go back while waiting for DNS');
+});
 // Steps with the first `done` steps finished (resources recorded) and the rest pending.
 function steps(options, doneNames = [], extra = {}) {
   return initialSteps('move', options).map(step => doneNames.includes(step.step) ? { ...step, state: 'done', attempt: 1, resources: { created: step.step } } : step).map(step => extra[step.step] ? { ...step, ...extra[step.step] } : step);

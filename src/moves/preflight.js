@@ -124,12 +124,15 @@ export function evaluateMove(facts, options = {}) {
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${folder} already exists on ${target.name}. DockNest never overwrites existing folders.`);
-    const labels = { containers: 'container', volumes: 'volume', networks: 'network' };
+    const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `A ${label} named ${name} already exists on ${target.name}. DockNest never replaces it.`);
+    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
 
     const nginx = target.nginx ?? { installed: false };
     if (!nginx.installed) add('nginx', 'block', 'nginx', `nginx is not installed on ${target.name}. DockNest does not install software; install it, then check again.`);
     else if (nginx.configOk === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} has a configuration error that DockNest did not cause. Fix it first.`);
+    else if (nginx.confDir === null) add('nginx', 'block', 'nginx', `nginx on ${target.name} does not include a conf.d folder, so DockNest has nowhere to add its own site file. Add "include /etc/nginx/conf.d/*.conf;" to nginx.conf, then check again.`);
+    else if (nginx.running === false) add('nginx', 'block', 'nginx', `nginx is installed on ${target.name} but not running. Start it, then check again.`);
     else {
       const served = new Set((nginx.serverNames ?? []).map(name => name.toLowerCase()));
       for (const domain of site.domains) if (served.has(domain.toLowerCase())) add('nginx', 'block', 'nginx', `${domain} is already served by nginx on ${target.name}.`);
@@ -159,21 +162,32 @@ export function evaluateMove(facts, options = {}) {
 
   // Honest downtime: the site is offline during the final sync.
   const seconds = estimateDowntime(facts);
-  if (seconds !== null && seconds > FINAL_SYNC_LIMIT_SECONDS) add('downtime', 'block', 'Downtime', `${site.name} is too large to move safely: the final copy would keep it offline for ${describeDuration(seconds)}, longer than the ${FINAL_SYNC_LIMIT_SECONDS / 60} minute limit.`);
+  // Owner decision: long downtime is not refused. It is an amber warning the owner must accept with "Move anyway".
+  if (seconds !== null && seconds > FINAL_SYNC_LIMIT_SECONDS) add('downtime', 'warn', 'Downtime', `${site.name} is large: the final copy will keep it offline for ${describeDuration(seconds)}, longer than ${FINAL_SYNC_LIMIT_SECONDS / 60} minutes. Choose a quiet time, then press Move anyway.`, { requiresConfirmation: true });
   else if (seconds === null) add('downtime', 'warn', 'Downtime', `DockNest cannot estimate the downtime yet because ${site.name} has no timed backup. The move takes a fresh backup first.`);
   const downtime = seconds === null ? null : { seconds, text: dns.mode === 'manual' ? `${describeDuration(seconds)}, then until your DNS change is live` : describeDuration(seconds) };
   if (downtime && !checks.some(item => item.id === 'downtime')) add('downtime', 'info', 'Downtime', `Expected downtime: ${downtime.text}.`);
 
   const blocks = checks.filter(item => item.status === 'block'), warnings = checks.filter(item => item.status === 'warn');
+  const needsMoveAnyway = checks.some(item => item.requiresConfirmation);
   const verdict = blocks.length ? 'blocked' : warnings.length ? 'ready-with-notes' : 'ready';
   const sentence = blocks.length ? blocks[0].text
     : `${site.name} is ready to move to ${target.name}. It stays online while the copy is tested${downtime ? `; expected downtime is ${downtime.text}` : ''}.`;
-  return { verdict, canStart: !blocks.length, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
+  return { verdict, canStart: !blocks.length, needsMoveAnyway, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
+// Only decision-relevant, stable inputs: whether the move can start and why not, whether it needs "Move anyway", the
+// port plan, which settings get rewritten and the chosen options. Informational notes (free space, DNS answers,
+// downtime wording) change between Save and Move without changing what the move does, so they are not hashed.
 export function preflightHash(result, options = {}) {
-  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-  const material = { checks: result.details.checks.map(({ id, status, text }) => ({ id, status, text })), portMap: result.details.portMap, options };
+  const canonical = value => Array.isArray(value) ? value.map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const material = {
+    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway,
+    blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
+    portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
+    env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
+    options,
+  };
   return createHash('sha256').update(JSON.stringify(canonical(material))).digest('hex');
 }
