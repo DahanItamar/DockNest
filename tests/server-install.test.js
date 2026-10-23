@@ -73,9 +73,9 @@ test('the package table is distro packages only, and the helper has the identica
 test('the helper maps the name to fixed argv and never runs a shell or a downloaded script', async () => {
   const source = await readFile(new URL('../remote/helper.py', import.meta.url), 'utf8');
   const section = source.slice(source.indexOf('# ---- Install on server'), source.indexOf('def place_tree(')).split(/\r?\n/).filter(line => !line.startsWith('#')).join('\n');
-  assert.match(section, /'apt-get','-o','DPkg::Lock::Timeout=120','install','-y','--no-install-recommends'\]\+names/);
+  assert.match(section, /'apt-get','-o','DPkg::Lock::Timeout=120','install','-y','--no-install-recommends','--no-remove']\+names/);
   assert.match(section, /command=\['dnf','install','-y'\]\+names/);
-  assert.doesNotMatch(section, /shell=True|os\.system|curl|wget|add-apt-repository|apt-key|\.repo|remove|purge|\bsed\b/);
+  assert.doesNotMatch(section, /shell=True|os\.system|curl|wget|add-apt-repository|apt-key|\.repo|'(auto)?remove'|'purge'|\bsed\b/);
   assert.doesNotMatch(section, /req\.get\('(command|argv|packages|args)'\)/);
 });
 
@@ -245,7 +245,7 @@ test('the worker plays the stages into the four steps and finishes completed', a
 });
 
 test('a failed install marks the running step failed, keeps later steps queued and shows only plain text', async () => {
-  installFault = { stage: 'install', message: 'Another package tool is running on this server (for example automatic updates). Try again in a few minutes.' };
+  installFault = { stage: 'install', message: 'PACKAGE_TOOL_BUSY' };
   const { job } = await (await post(user('admin'), url, { package: 'nginx' })).json();
   await installs.executeInstall(installs.claimInstall());
   const failed = installs.findInstall(job.id);
@@ -279,4 +279,68 @@ test('schema v7 only adds the server_installs table', () => {
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='server_installs'").get());
   assert.throws(() => db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('x',?,'bash','queued','q','[]','a',?)").run(target, at()), /CHECK/);
   assert.equal(typeof migrate, 'function');
+});
+
+// ---------- review fixes ----------
+test('Docker offered by the system below what the site needs is not installable, with a plain reason and the official docs', () => {
+  const facts = { os: { id: 'ubuntu', versionId: '24.04' }, packageManager: 'apt', candidates: { docker: '26.1' } };
+  const multi = plan.installInfo(facts, 'docker', { needDockerMajor: 28 });
+  assert.equal(multi.supported, false);
+  assert.equal(multi.reason, "This server's packages offer Docker 26.1; this site needs 28 or newer. Install Docker from Docker's own repository instead.");
+  assert.match(multi.command, /^# .*https:\/\/docs\.docker\.com\/engine\/install\/$/);
+  assert.doesNotMatch(multi.command, /curl|wget|\| *sh/);
+  assert.equal(plan.installInfo(facts, 'docker', { needDockerMajor: 0 }).supported, true, 'a single container does not need 28');
+  assert.equal(plan.installInfo({ ...facts, candidates: { docker: '28.2' } }, 'docker', { needDockerMajor: 28 }).supported, true);
+  assert.equal(plan.installInfo({ ...facts, candidates: { docker: 'x; rm' } }, 'docker', { needDockerMajor: 28 }).supported, true, 'an unreadable candidate is ignored');
+  const result = evaluateMove(moveFacts(f => { f.target.candidates = { docker: '26.1' }; }));
+  assert.equal(checkFor(result, 'docker')[0].install.supported, false);
+  assert.match(checkFor(result, 'docker')[0].install.reason, /offer Docker 26\.1; this site needs 28 or newer/);
+  const single = evaluateMove(moveFacts(f => { f.target.candidates = { docker: '26.1' }; f.site.containerCount = 1; }));
+  assert.equal(checkFor(single, 'docker')[0].install.supported, true);
+});
+
+test('helper failure codes map to fixed sentences; free text, stdout and unknown codes never reach the job', async () => {
+  for (const code of plan.installErrorCodes) assert.ok(plan.installErrorText(code, 'nginx').length > 10, code);
+  assert.match(plan.installErrorText('TIMEOUT_APT_INSTALL', 'docker'), /sudo dpkg --configure -a/);
+  assert.doesNotMatch(plan.installErrorText('TIMEOUT_INSTALL', 'docker'), /dpkg/);
+  const secret = 'E: password=hunter2 https://user:pw@example.invalid/x';
+  assert.equal(plan.installErrorText(secret, 'nginx'), plan.installErrorText('GENERIC', 'nginx'));
+  assert.equal(plan.installErrorText('__proto__', 'nginx'), plan.installErrorText('GENERIC', 'nginx'));
+  installFault = { stage: 'update', message: secret };
+  const { job } = await (await post(user('admin'), url, { package: 'nginx' })).json();
+  await installs.executeInstall(installs.claimInstall());
+  const failed = installs.findInstall(job.id);
+  assert.equal(failed.error, plan.installErrorText('GENERIC', 'nginx'));
+  assert.doesNotMatch(JSON.stringify(failed), /hunter2|example\.invalid/);
+});
+
+test('Docker already on the server, from any source, is never installed over', async () => {
+  system.installed.docker = true;
+  const response = await post(user('admin'), url, { package: 'docker' });
+  const body = await response.json();
+  assert.equal(response.status, 409); assert.equal(body.code, 'ALREADY_INSTALLED');
+  assert.equal(body.error, 'Docker is installed but not running. Start it, then check again.');
+  assert.equal(installCalls().length, 0);
+});
+
+test('an install never starts while a move touches its server, and a move never starts while an install is queued or running', async () => {
+  const siteId = randomUUID(), other = serverRow('src-srv'), moveId = randomUUID();
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, other, 'guard-site', '{}', at());
+  const { job } = await (await post(user('admin'), url, { package: 'nginx' })).json();
+  const insertMove = (id, source, destination, state) => db.prepare('INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id, siteId, source, destination, state, '{}', '{}', 'x', 'a', at(), at());
+  insertMove(moveId, other, target, 'testing');
+  assert.equal(installs.claimInstall(), undefined, 'the worker leaves the install queued while the move is active');
+  db.prepare("UPDATE site_moves SET state='cleaned' WHERE id=?").run(moveId);
+  assert.equal(installs.claimInstall().id, job.id);
+  // The install is now running on the target: a draft move to it, or from it, cannot start.
+  for (const [source, destination] of [[other, target], [target, other]]) {
+    const draft = randomUUID();
+    insertMove(draft, source, destination, 'draft');
+    const response = await post(user('admin'), `/moves/${draft}/start`, { preflightHash: 'a'.repeat(64) });
+    const body = await response.json();
+    assert.equal(response.status, 409); assert.equal(body.code, 'INSTALL_RUNNING'); assert.match(body.error, /installing software on /);
+    assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(draft).state, 'draft');
+    db.prepare('DELETE FROM site_moves WHERE id=?').run(draft);
+  }
+  db.prepare('DELETE FROM site_moves WHERE site_id=?').run(siteId); db.prepare('DELETE FROM sites WHERE id=?').run(siteId);
 });

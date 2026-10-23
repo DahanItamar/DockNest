@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { db, id, audit } from './db.js';
 import { transport } from './engine.js';
-import { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo } from './install-plan.js';
+import { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo, installErrorText } from './install-plan.js';
 
 export { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo };
 const LABELS = Object.fromEntries(INSTALL_PACKAGES.map(name => [name, installLabel(name)]));
@@ -16,16 +16,21 @@ const bodySchema = z.object({ package: z.enum(INSTALL_PACKAGES) }).strict();
 const ACTIVE_JOB = "('queued','running','recovery_required','move_queued','move_running')";
 const ENDED_MOVE = "('draft','rolled_back','cancelled','failed','switched_back','cleaned')";
 
+// A site move to or from this server that has started and not ended.
+export const moveActive = serverId => !!db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state NOT IN ${ENDED_MOVE}`).get(serverId, serverId);
+// An install on this server that is queued or running (the move start path refuses while one is).
+export const installActive = serverId => !!db.prepare("SELECT 1 FROM server_installs WHERE server_id=? AND status IN ('queued','running')").get(serverId);
+
 // Any queued or running work that uses this server: site jobs on it, moves to or from it, or another install.
 export function serverBusy(serverId) {
   return !!(
     db.prepare(`SELECT 1 FROM jobs j WHERE j.status IN ${ACTIVE_JOB} AND ? IN (COALESCE((SELECT server_id FROM sites WHERE id=j.site_id),''),COALESCE(json_extract(j.details,'$.targetServerId'),''),COALESCE(json_extract(j.details,'$.sourceServerId'),''))`).get(serverId)
-    || db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state NOT IN ${ENDED_MOVE}`).get(serverId, serverId)
-    || db.prepare("SELECT 1 FROM server_installs WHERE server_id=? AND status IN ('queued','running')").get(serverId)
+    || moveActive(serverId)
+    || installActive(serverId)
   );
 }
 
-const plainRemote = (error, name) => (error?.hostKeyRejected ? `The saved host key for ${name} no longer matches. Check the server on the Servers page.` : error?.remoteReported ? String(error.message).slice(0, 300) : `DockNest could not connect to ${name}. Test the connection on the Servers page.`);
+const plainRemote = (error, name) => (error?.hostKeyRejected ? `The saved host key for ${name} no longer matches. Check the server on the Servers page.` : `DockNest could not read ${name}. Test the connection on the Servers page.`);
 
 export async function requestInstall(serverId, body, actor) {
   const { package: name } = bodySchema.parse(body ?? {});
@@ -39,7 +44,7 @@ export async function requestInstall(serverId, body, actor) {
   // Re-verified here, not trusted from the browser: the person saw an earlier preview.
   const info = installInfo(status, name);
   if (!info.supported) throw httpError(409, `DockNest cannot install ${LABELS[name]} on ${server.name}. Use "Show command" or install it yourself.`, 'INSTALL_UNSUPPORTED');
-  if (status?.installed?.[name] !== false) throw httpError(409, `${LABELS[name]} is already installed on ${server.name}.`, 'ALREADY_INSTALLED');
+  if (status?.installed?.[name] !== false) throw httpError(409, name === 'docker' ? installErrorText('DOCKER_NOT_RUNNING', name) : `${LABELS[name]} is already installed on ${server.name}.`, 'ALREADY_INSTALLED');
   // The checks above awaited the network; look again right before writing so two requests cannot both start.
   if (serverBusy(server.id)) throw busy();
   const steps = [{ name: 'Connected', status: 'queued' }, { name: 'Package list updated', status: 'queued' }, { name: `Installing ${LABELS[name]}`, status: 'queued' }, { name: `Checking ${LABELS[name]} works`, status: 'queued' }];
@@ -63,7 +68,7 @@ export const findInstall = jobId => installJobView(db.prepare('SELECT * FROM ser
 export function claimInstall() {
   db.exec('BEGIN IMMEDIATE');
   try {
-    const job = db.prepare("SELECT i.* FROM server_installs i WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running') AND i.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),''))) ORDER BY i.created_at LIMIT 1").get();
+    const job = db.prepare(`SELECT i.* FROM server_installs i WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM site_moves m WHERE (m.source_server_id=i.server_id OR m.target_server_id=i.server_id) AND m.state NOT IN ${ENDED_MOVE}) AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running') AND i.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),''))) ORDER BY i.created_at LIMIT 1`).get();
     if (job) db.prepare("UPDATE server_installs SET status='running',stage='connecting',started_at=? WHERE id=?").run(new Date().toISOString(), job.id);
     db.exec('COMMIT');
     return job;
@@ -75,7 +80,8 @@ export function failInterruptedInstalls(at = new Date().toISOString()) {
 
 // Stage names the helper reports -> which step is running. Earlier steps are done when a later one starts.
 const STAGE_STEP = { connected: 0, update: 1, install: 2, verify: 3 };
-const plainError = (error, name) => String(error?.remoteReported ? error.message : error?.hostKeyRejected ? `The saved host key for ${name} no longer matches.` : `The connection to ${name} failed or was lost. The install may still be finishing on the server; check it before trying again.`).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '').slice(0, 400);
+// Only the helper's short codes are understood; every other failure (lost connection, odd error) gets a fixed sentence.
+const plainError = (error, name, label) => (error?.remoteReported ? installErrorText(String(error.message), label) : error?.hostKeyRejected ? `The saved host key for ${name} no longer matches.` : `The connection to ${name} failed or was lost. The install may still be finishing on the server; check it before trying again.`);
 
 export async function executeInstall(job) {
   const server = db.prepare('SELECT * FROM servers WHERE id=?').get(job.server_id);
@@ -87,7 +93,7 @@ export async function executeInstall(job) {
   const mark = index => { steps = steps.map((step, position) => ({ ...step, status: position < index ? 'done' : position === index ? 'running' : 'queued' })); current = index; };
   mark(0); save(null, 'connecting');
   try {
-    if (!server) throw Object.assign(new Error('This server was removed.'), { remoteReported: true });
+    if (!server) throw Object.assign(new Error('GENERIC'), { remoteReported: true });
     await transport.remote(server, { operation: 'install', package: job.package }, stage => {
       const index = STAGE_STEP[stage];
       if (index === undefined || index < current) return;
@@ -98,7 +104,7 @@ export async function executeInstall(job) {
     audit('worker', 'server.install.completed', job.server_id, { package: job.package, job: job.id });
   } catch (error) {
     steps = steps.map((step, position) => ({ ...step, status: position < current ? 'done' : position === current ? 'failed' : 'queued' }));
-    save('failed', 'failed', { finished_at: new Date().toISOString(), error: plainError(error, server?.name ?? 'the server') });
+    save('failed', 'failed', { finished_at: new Date().toISOString(), error: plainError(error, server?.name ?? 'the server', job.package) });
     audit('worker', 'server.install.failed', job.server_id, { package: job.package, job: job.id, reachedHelper: reached });
   }
 }

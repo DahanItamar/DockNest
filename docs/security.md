@@ -161,15 +161,21 @@ An administrator can ask DockNest to install nginx, Docker, Docker Compose or ce
   from the client is read. The browser's earlier preview is not trusted: the server is re-read and the support,
   already-installed and busy checks run again before a job is queued.
 - The helper (`remote/helper.py`) maps the name to fixed argv in its own table and runs it without a shell:
-  `apt-get update` then `apt-get install -y --no-install-recommends <packages>` with `DEBIAN_FRONTEND=noninteractive`,
-  or `dnf install -y <packages>`, with a clean environment, a fixed `PATH` and a 15 minute limit. Only distribution
+  `apt-get update` (5 minute limit) then `apt-get install -y --no-install-recommends --no-remove <packages>` (15
+  minute limit) with `DEBIAN_FRONTEND=noninteractive`, or `dnf install -y <packages>`, with a clean environment and a
+  fixed `PATH`. Each tool runs in its own process group; on a timeout it gets SIGTERM, 60 seconds to stop, then
+  SIGKILL, and the message tells the person to run `sudo dpkg --configure -a` (apt) before trying again. Only distribution
   packages: no repository is added, no script is downloaded, no configuration file is edited and nothing is removed.
-  Unknown names, unsupported systems and already installed software are refused before any command runs. The
+  Unknown names, unsupported systems and software already present (binary on the PATH, or any matching package known to
+  dpkg or rpm, from any source) are refused before any command runs. The
   operating system is read from `/etc/os-release` and validated; odd values mean "unsupported".
 - nginx and Docker are enabled and started with `systemctl enable --now` only when systemd runs; the result is
   checked with `nginx -v` and `nginx -t`, `docker version`, `docker compose version` or `certbot --version`.
-- Package tool output is never returned, stored or logged. The helper reads a short tail only to choose one of a few
-  plain sentences. Errors shown in the dashboard and stored on the run contain no output, URLs or secrets.
+- Package tool output is never returned, stored or logged. The helper reads a short tail only to choose a short
+  failure code; any unexpected exception becomes the code `GENERIC`, never its text. The API turns each known code into
+  a fixed sentence, so errors shown in the dashboard and stored on the run contain no output, URLs or secrets.
+- A move cannot start while an install runs on its source or target server, and an install waits while a move uses
+  its server.
 - One install at a time per server (a lock on the server), and none while the server has other work.
 - Installing Docker changes the host's firewall rules the way Docker always does (published ports bypass `ufw`).
   DockNest does not alter firewall settings itself.

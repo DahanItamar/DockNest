@@ -78,8 +78,17 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
 - On other systems, and for software the system's own sources do not offer, the plain note stays and "Show command"
   shows the best known line (or none).
 - If the server is busy with a backup, restore or move, or the software is already there, nothing is installed.
-- Docker from Debian and Ubuntu's own `docker.io` can be older than the version 28 DockNest asks for when a site has
-  several containers. Check again after installing; the move tells you if Docker is too old.
+- Before offering Docker, DockNest reads the version the system's own sources offer. When a site has several
+  containers and the offered Docker is older than 28, `supported` is false and the check carries
+  `install.reason`: "This server's packages offer Docker 26.1; this site needs 28 or newer. Install Docker from
+  Docker's own repository instead." `command` is then a comment line pointing to Docker's official instructions
+  (https://docs.docker.com/engine/install/); DockNest never runs a downloaded script.
+- DockNest never installs over software from another source: if the binary exists, or the package manager lists any
+  matching package (for example `docker-ce` or `containerd.io`), the answer is 409 `ALREADY_INSTALLED`. For Docker
+  that reads "Docker is installed but not running. Start it, then check again." apt runs with `--no-remove`, so it
+  can never remove a conflicting package.
+- An install and a move never overlap on a server: starting a move answers 409 `INSTALL_RUNNING` while an install
+  is queued or running on its source or target server, and a queued install waits while a move touches the server.
 
 | Software | apt (Debian, Ubuntu) | dnf (Fedora) | dnf (Rocky, AlmaLinux, RHEL) |
 | --- | --- | --- | --- |
@@ -92,7 +101,8 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
 
 Each check for these four tools that blocks a move (and the certificate note for certbot) carries
 `install: { package: "nginx"|"docker"|"compose"|"certbot", command: string, supported: boolean }`.
-`command` is the line a person would run, for example
+`command` is the line a person would run (or a comment with Docker's documentation link), and `reason` (optional) says in
+one sentence why `supported` is false for this site. For example
 `sudo apt-get update && sudo apt-get install -y --no-install-recommends nginx`; it is empty when no distribution
 package line is known. `supported` is true only for the combinations in the table. The field is absent when the
 tool is present (including an old Docker Compose) or when the server's system could not be read.
@@ -107,7 +117,7 @@ command, answers 400). Administrators only, CSRF token like every API write, and
 `server.install.requested`.
 
 Poll `GET /api/jobs/:id` (same shape as other jobs): `type: "install"`, `status` `queued|running|completed|failed`,
-`error` (one plain sentence, never command output), and
+`error` (one fixed sentence chosen from the helper's short failure code; unknown codes give a generic sentence; never command output or exception text), and
 `details: { serverId, package, steps: [{ name, status }] }` with the four steps `Connected`, `Package list updated`,
 `Installing <name>`, `Checking <name> works`, each `queued|running|done|failed`. Install runs are stored in their own
 table (`server_installs`, schema v7) because a job normally belongs to a site; they do not appear in the site job

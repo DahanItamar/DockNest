@@ -81,7 +81,7 @@ export function describeDuration(seconds) {
 
 const check = (id, status, title, text, extra) => ({ id, status, title, text, ...extra });
 // Only when the tool is missing (never for an old version) and only on a reachable target whose system was read.
-const installable = (target, name) => (target.os ? { install: installInfo(target, name) } : {});
+const installable = (target, name, need) => (target.os ? { install: installInfo(target, name, need) } : {});
 
 /** @param {MoveFacts} facts @param {{ envRewrite?: string[] }} [options] */
 export function evaluateMove(facts, options = {}) {
@@ -108,7 +108,7 @@ export function evaluateMove(facts, options = {}) {
 
     if (docker) {
       const dockerVersion = version(target.dockerVersion);
-      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`, installable(target, 'docker'));
+      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`, installable(target, 'docker', { needDockerMajor: (site.containerCount ?? 1) > 1 ? MIN_DOCKER_MAJOR : 0 }));
       else if ((site.containerCount ?? 1) > 1 && dockerVersion[0] < MIN_DOCKER_MAJOR) add('docker', 'block', 'Docker', `Docker on ${target.name} is too old. Update it to version ${MIN_DOCKER_MAJOR} or newer.`);
       if (site.architecture && target.architecture && site.architecture !== target.architecture) add('docker', 'block', 'Processor type', `${target.name} has a different processor type (${target.architecture}) than ${site.name} (${site.architecture}).`);
       if (dockerVersion && !checks.some(item => item.id === 'docker')) add('docker', 'ok', 'Docker', `Docker ${target.dockerVersion} is ready on ${target.name}.`);
