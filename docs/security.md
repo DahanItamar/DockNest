@@ -150,6 +150,31 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
   Every server step of a move holds a per-move lock on the server and stops when DockNest stops waiting for it.
 - Cloudflare: the previous record is journaled before it is changed; a resumed switch reuses that journal.
 
+## Install on server (root package installs over SSH)
+
+An administrator can ask DockNest to install nginx, Docker, Docker Compose or certbot on a connected server
+(`POST /api/servers/:id/install`, see [moving-sites.md](moving-sites.md)). The controls:
+
+- Administrators only, CSRF token, re-verification within 5 minutes, a rate limit, and an audit event
+  (`server.install.requested`, then `server.install.completed` or `server.install.failed` from the worker).
+- The API accepts only a package name from a fixed list; the body is strict, so no command, argument or package list
+  from the client is read. The browser's earlier preview is not trusted: the server is re-read and the support,
+  already-installed and busy checks run again before a job is queued.
+- The helper (`remote/helper.py`) maps the name to fixed argv in its own table and runs it without a shell:
+  `apt-get update` then `apt-get install -y --no-install-recommends <packages>` with `DEBIAN_FRONTEND=noninteractive`,
+  or `dnf install -y <packages>`, with a clean environment, a fixed `PATH` and a 15 minute limit. Only distribution
+  packages: no repository is added, no script is downloaded, no configuration file is edited and nothing is removed.
+  Unknown names, unsupported systems and already installed software are refused before any command runs. The
+  operating system is read from `/etc/os-release` and validated; odd values mean "unsupported".
+- nginx and Docker are enabled and started with `systemctl enable --now` only when systemd runs; the result is
+  checked with `nginx -v` and `nginx -t`, `docker version`, `docker compose version` or `certbot --version`.
+- Package tool output is never returned, stored or logged. The helper reads a short tail only to choose one of a few
+  plain sentences. Errors shown in the dashboard and stored on the run contain no output, URLs or secrets.
+- One install at a time per server (a lock on the server), and none while the server has other work.
+- Installing Docker changes the host's firewall rules the way Docker always does (published ports bypass `ufw`).
+  DockNest does not alter firewall settings itself.
+
+
 ## Client address and TRUST_PROXY
 
 By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).
