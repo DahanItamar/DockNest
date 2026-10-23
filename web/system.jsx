@@ -1,4 +1,5 @@
 import React from 'react';
+import {statusState} from './status-state.js';
 import {CheckCircle2,Loader,Clock,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
 
 // 2.3.0 shared primitives. Styles live in system.css (.status, .alert-panel, .icon-button).
@@ -9,15 +10,7 @@ const STATES={
  failed:{Icon:CircleX,label:'Failed'},
  'needs-review':{Icon:TriangleAlert,label:'Needs review'}
 };
-// Maps any status string used by the API to one of the five states.
-export function statusState(value){
- const v=String(value||'');
- if(/recovery|review/i.test(v))return 'needs-review';
- if(/fail|error|denied|invalid|revoked/i.test(v))return 'failed';
- if(/running|progress|^active$/i.test(v))return 'running';
- if(/complete|success|succeeded|ready|healthy|verified|online|connected/i.test(v))return 'success';
- return 'queued';
-}
+export {statusState};
 const humanise=v=>{const t=String(v).replace(/[_-]+/g,' ').trim();return t.charAt(0).toUpperCase()+t.slice(1)};
 // value: any status string (shown humanised); state: force one of success|running|queued|failed|needs-review.
 export function StatusLabel({value,state,children}){
