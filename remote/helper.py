@@ -1483,6 +1483,23 @@ def verify_restore_recovery(req):
     ids=docker('ps','-aq','--filter','label=docker-backup-manager.restore='+job).decode().split()
     if ids and any(c['State']['Running'] for c in inspect(ids)):raise ValueError('Stop the interrupted isolated restore containers on the target before acknowledging recovery')
     emit(result={'recoveryReviewed':True,'targetContainersStopped':True,'stagingRetained':True})
+def archive_link_escapes(start,linkname,symlinks):
+    """Follow a relative link through the archive's own symlinks, as the kernel will after extraction."""
+    stack=list(start);pending=list(pathlib.PurePosixPath(linkname).parts);expansions=0
+    while pending:
+        part=pending.pop(0)
+        if part=='.':continue
+        if part=='..':
+            if not stack:return True
+            stack.pop();continue
+        stack.append(part)
+        target=symlinks.get(tuple(stack))
+        if target is not None:
+            expansions+=1
+            # Absolute targets and link loops cannot be proven to stay inside the destination.
+            if expansions>40 or target.startswith('/'):return True
+            stack.pop();pending=list(pathlib.PurePosixPath(target).parts)+pending
+    return False
 def safe_extract(archive,destination):
     if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -1490,7 +1507,8 @@ def safe_extract(archive,destination):
     root=destination.resolve()
     with tarfile.open(archive,'r:*') as tar:
         members=tar.getmembers()
-        symlinks={pathlib.PurePosixPath(m.name) for m in members if m.issym()}
+        links={pathlib.PurePosixPath(m.name).parts:m.linkname for m in members if m.issym()}
+        symlinks={pathlib.PurePosixPath(*parts) for parts in links}
         regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
         seen=set()
         for member in members:
@@ -1506,6 +1524,8 @@ def safe_extract(archive,destination):
                 if link.is_absolute():raise ValueError('Absolute archive link is not portable')
                 linked=(target.parent/member.linkname).resolve() if member.issym() else (root/member.linkname).resolve()
                 if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
+                # A chain of individually contained links (d -> ../.., l -> d/../..) can still leave the destination.
+                if member.issym() and archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
                 if member.islnk() and (link not in regular or any(parent in symlinks for parent in link.parents)):raise ValueError('Hard link must target an archived regular file')
         if os.name=='posix':
             run(['tar','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])

@@ -399,6 +399,25 @@ class ArchiveSecurityTests(unittest.TestCase):
                 entry=tarfile.TarInfo('alias/file');entry.size=1;t.addfile(entry,io.BytesIO(b'x'))
             with self.assertRaises(ValueError):safe_extract(archive,base/'output')
             self.assertFalse((base/'output/alias').exists())
+    def test_chained_symlinks_cannot_escape_destination(self):
+        # Each link alone stays inside lexically; followed together they leave the destination.
+        for chain in [[('x/y/d','../..'),('x/y/l','d/../..')],[('a','b/c'),('b','.'),('a2','a/../../..')],[('loop1','loop2'),('loop2','loop1')]]:
+            with self.subTest(chain=chain), tempfile.TemporaryDirectory() as d:
+                base=pathlib.Path(d);archive=base/'chain.tar'
+                with tarfile.open(archive,'w') as t:
+                    good=tarfile.TarInfo('valid.txt');good.size=1;t.addfile(good,io.BytesIO(b'x'))
+                    for name,target in chain:
+                        link=tarfile.TarInfo(name);link.type=tarfile.SYMTYPE;link.linkname=target;t.addfile(link)
+                with self.assertRaises(ValueError):safe_extract(archive,base/'output')
+                self.assertFalse((base/'output/valid.txt').exists())
+    def test_contained_symlink_chains_are_accepted(self):
+        from helper import archive_link_escapes
+        links={('assets','current'):'v2',('assets','v2'):'releases/2',('assets','up'):'../assets'}
+        self.assertFalse(archive_link_escapes(('assets',),'v2',links))
+        self.assertFalse(archive_link_escapes(('assets',),'current/../photo.txt',links))
+        self.assertFalse(archive_link_escapes(('assets',),'up/current',links))
+        self.assertTrue(archive_link_escapes(('assets',),'up/../..',links))
+        self.assertTrue(archive_link_escapes((),'..',{}))
 
 class MaintenanceTests(unittest.TestCase):
     def setUp(self):
