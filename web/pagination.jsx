@@ -12,7 +12,7 @@ export function Paginated({rows,label,pageSize=5,resetKey='',children,className=
  const table=className.includes('stable-table'),phone=usePhone(),stableHeight=stableRequested&&!phone,fitViewport=fitRequested&&!phone;
  const [page,setPage]=useState(1),[reservedHeight,setReservedHeight]=useState(0),measure=useRef(null),last=useRef({width:0,height:0});
  const pager=useRef(null),[viewport,setViewport]=useState({size:1,height:0});
- const size=fitViewport?viewport.size:(fitRequested&&phone?PHONE_GROUPS:pageSize);
+ const size=fitViewport?viewport.size:(fitRequested&&phone&&!table?PHONE_GROUPS:pageSize);
  // Measure collapsed site summaries and the actual surrounding chrome, rather than
  // assigning a desktop row count. Open histories retain their normal document flow.
  useLayoutEffect(()=>{

@@ -77,3 +77,7 @@ a.icon-button{display:inline-flex;align-items:center;justify-content:center;heig
 .paginated-list.gapped>.paged-content{margin-bottom:var(--section-gap)}
 .rebrand-page .paginated-list.gapped>.pagination{border:1px solid var(--border-subtle);border-radius:var(--radius)}
 .rebrand-page .dash-site-history .paginated-list.gapped>.paged-content{margin-bottom:var(--edge)}
+/* Partial pages: the cards stretch to the reserved height so the pager keeps the same gap on every page. */
+.paginated-list.gapped.stable-page>.paged-content{display:flex;flex-direction:column}
+.paginated-list.gapped.stable-page>.paged-content>.paged-measure{flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
+.paginated-list.gapped.stable-page>.paged-content>.paged-measure>.card-grid,.paginated-list.gapped.stable-page>.paged-content>.paged-measure>.storage-grid{flex:1 1 auto}

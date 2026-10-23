@@ -248,3 +248,4 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 .storage-card-title{display:flex;flex-direction:column;min-width:0}
 .storage-card-name{overflow-wrap:anywhere}
 .storage-selected{font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400;color:var(--success)}
+.rebrand-page .storage-card h3 .storage-card-title{display:flex;flex-direction:column;gap:4px;min-width:0}
