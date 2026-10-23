@@ -31,7 +31,7 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
     stream.on('data',chunk=>{
      buffer+=chunk.toString();
      if(buffer.length>4*1024*1024){stream.destroy();reject(new Error('Remote output exceeds limit'));return;}
-     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
+     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
@@ -72,7 +72,7 @@ export async function remoteCaptureStream(server,request,output,onStage=()=>{},o
     let n;
     while((n=buffer.indexOf('\n'))>=0){
      const line=buffer.slice(0,n);buffer=buffer.slice(n+1);
-     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(event.progress)onProgress(event.progress);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
+     try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.progress)onProgress(event.progress);if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}
     }
    });
    const storageFailed=cause=>{stream.destroy();reject(Object.assign(new Error('Direct capture storage failed; inspect recovery status before retrying'),{cause}));};

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import { clientKey } from './client-key.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import QRCode from 'qrcode';
 import { z } from 'zod';
@@ -31,9 +32,11 @@ export async function qrEnrollment(user){
  const qrDataUrl=await QRCode.toDataURL(uri,{errorCorrectionLevel:'M',margin:2,width:320});
  return {secret,uri,qrDataUrl};
 }
+// IPv6 clients are limited per /64 and IPv4-mapped addresses as IPv4 (src/client-key.js).
+export { clientKey };
 export function rateLimit(scope,limit=10,windowMs=15*60_000){
  return (req,res,next)=>{
-  const key=scope+':'+req.ip,now=Date.now();
+  const key=scope+':'+clientKey(req.ip),now=Date.now();
   const previous=db.prepare('SELECT * FROM rate_limits WHERE key=?').get(key);
   if(previous&&previous.reset_at>now&&previous.attempts>=limit){
    res.set('Retry-After',String(Math.ceil((previous.reset_at-now)/1000)));
