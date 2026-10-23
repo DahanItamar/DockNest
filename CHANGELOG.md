@@ -4,7 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Branded error pages in one shared style (a large heading-weight status code that fades out, one sentence, two actions): 404 for unknown pages, 403 when an operator opens an administrator page, 401 when a session ends, and the 500 "This page stopped working" screen (Reload page and Open GitHub unchanged, same privacy behaviour).
+- `public/unavailable.html`: a self-contained 503 page for reverse proxies that retries every 10 seconds. The bundled Caddy profile serves it automatically; `docs/deployment.md` shows nginx and Caddy setups.
+- `npm run test:status-pages` browser suite.
+
 ### Changed
+
+- Unknown non-API paths now answer with status 404 and the app, which shows its 404 page. API 404s remain JSON.
 
 - Storage card buttons share the full width of the card, so a card with two buttons has no empty space beside them.
 
