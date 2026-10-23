@@ -132,3 +132,15 @@ test('TRUST_PROXY is opt-in and exact; without it X-Forwarded-For never changes 
   assert.match(await run(parseTrustProxy('10.9.9.9')), /127\.0\.0\.1$/, 'a forwarded header from an unlisted peer is ignored');
   assert.equal(await run(parseTrustProxy('127.0.0.1')), '203.0.113.9', 'a listed peer: the forwarded address is used');
 });
+
+test('the progress limiter answers 429 with an accurate Retry-After message', async () => {
+  process.env.DATA_DIR = await mkdtemp(join(tmpdir(), 'docknest-limit-'));
+  const { default: express } = await import('express'), { progressHandler } = await import('../src/updates/lock.js');
+  const app = express(); app.get('/p', progressHandler({ progress: () => ({}) }, () => 7));
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/p`), body = await response.json();
+    assert.equal(response.status, 429); assert.equal(response.headers.get('retry-after'), '7');
+    assert.deepEqual(body, { error: 'Too many requests. Try again in 7 seconds.', code: 'RATE_LIMITED', retryAfter: 7 });
+  } finally { server.close(); }
+});

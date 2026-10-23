@@ -2,3 +2,4 @@
 export { ISSUE_BASE, URL_LIMIT, TEMPLATES, buildIssueUrl } from './core.js';
 export * from './builders.js';
 export { redact, limitExcerpt, excerptFrom, EXCERPT_LINES, EXCERPT_BYTES } from './redact.js';
+export { catalogued, whatHappened, EXPLAIN, EXPLANATIONS, CATALOGUE } from './catalogue.js';

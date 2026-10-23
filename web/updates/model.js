@@ -87,7 +87,14 @@ export function highlightChips(h) {
 }
 export const HISTORY_STATUS = { succeeded: 'Installed', installed: 'Installed', rolled_back: 'Rolled back', needs_action: 'Needs manual action', resolved: 'Resolved on the host', not_changed: 'Not changed', refused: 'Not changed', busy: 'Not changed', lost: 'Closed without a result' };
 // Messages for every submit error code (REQ-05). Unknown codes fall back to the server text.
-export function submitMessage(error) {
+// The earliest time a new run is allowed, as HH:MM in the viewer's time zone; the date is added when it is not today.
+export function retryTime(retryAt, now = new Date()) {
+  const at = new Date(retryAt);
+  if (typeof retryAt !== 'string' || Number.isNaN(at.getTime())) return null;
+  const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  return at.toDateString() === now.toDateString() ? time : at.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' at ' + time;
+}
+export function submitMessage(error, now = new Date()) {
   const code = error?.code, status = error?.status;
   const table = {
     REAUTH_REQUIRED: 'Your sign-in check expired. Enter the password and code again.',
@@ -102,6 +109,16 @@ export function submitMessage(error) {
     UPDATER_RATE_LIMITED: 'Too many update requests. Wait a few minutes and try again.',
     UPDATER_UNAVAILABLE: 'DockNest cannot reach the host updater. Check the connection in the Update Center, then try again.',
   };
+  if (code === 'UPDATER_RATE_LIMITED') {
+    const when = retryTime(error?.retryAt, now);
+    if (error?.limit === 'daily') return 'The updater allows 6 update runs a day.' + (when ? ' The next run is possible at ' + when + '.' : ' Try again later.');
+    if (error?.limit === 'cooldown') return 'The updater needs a minute between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
+    return 'The updater is limiting update runs right now. Try again later.';
+  }
+  if (code === 'RATE_LIMITED' || status === 429) {
+    const wait = Number(error?.retryAfter);
+    if (Number.isInteger(wait) && wait > 0) return 'Too many requests. Try again in ' + wait + (wait === 1 ? ' second.' : ' seconds.');
+  }
   if (table[code]) return table[code];
   if (status === 401) return 'The password or code was not accepted. Check them and try again.';
   if (status === 429) return 'Too many attempts. Wait a minute and try again.';

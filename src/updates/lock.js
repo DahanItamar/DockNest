@@ -23,7 +23,7 @@ export function progressHandler(service, limiter = createLimiter()) {
   return (req, res) => {
     res.set('Cache-Control', 'no-store');
     const wait = limiter(req.ip ?? 'unknown');
-    if (wait) { res.set('Retry-After', String(wait)); return res.status(429).json({ error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED' }); }
+    if (wait) { res.set('Retry-After', String(wait)); return res.status(429).json({ error: 'Too many requests. Try again in ' + wait + (wait === 1 ? ' second.' : ' seconds.'), code: 'RATE_LIMITED', retryAfter: wait }); }
     const { active, phase, to, state, stale, updatedAt, events } = service.progress();
     res.json({ active, phase, to, state, stale, updatedAt, events: events.map(({ phase: eventPhase, at }) => ({ phase: eventPhase, at })) });
   };

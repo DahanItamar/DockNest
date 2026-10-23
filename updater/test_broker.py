@@ -117,6 +117,22 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(b.admit({**state, 'runs': [NOW - 3600 * i for i in range(6)]}, self.req(), NOW, '2.2.0'), 'rate-limited')
         self.assertIsNone(b.admit({**state, 'runs': [NOW - 86400 - i for i in range(6)]}, self.req(), NOW, '2.2.0'))
 
+    def test_rate_limit_detail_names_the_limit_and_the_earliest_retry(self):
+        state = b.new_state()
+        self.assertIsNone(b.rate_limit_detail(state, NOW))
+        self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20}, NOW), {'limit': 'cooldown', 'retryAt': b.iso(NOW + 40)})
+        runs = [NOW - 3600 * i for i in range(1, 7)]  # six runs in the window, the oldest 6 h ago
+        self.assertEqual(b.rate_limit_detail({**state, 'runs': runs, 'lastRunEnd': NOW - 3600}, NOW), {'limit': 'daily', 'retryAt': b.iso(NOW - 6 * 3600 + 86400)})
+        # when both apply the later time wins; a daily limit that ends sooner than the cooldown reports the cooldown
+        late = [NOW - 86400 + 10 - i for i in range(6)]
+        self.assertEqual(b.rate_limit_detail({**state, 'runs': late, 'lastRunEnd': NOW - 1}, NOW)['limit'], 'cooldown')
+        self.assertEqual(b.response(False, 'rate-limited', {'limit': 'daily', 'retryAt': b.iso(NOW)}),
+                         json.dumps({'accepted': False, 'code': 'rate-limited', 'limit': 'daily', 'retryAt': b.iso(NOW)}, separators=(',', ':')).encode())
+        self.assertEqual(b.response(False, 'busy'), b'{"accepted":false,"code":"busy"}')
+        # a fractional end time rounds up to the next second, so the reported time is never early
+        self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.4}, NOW), {'limit': 'cooldown', 'retryAt': b.iso(NOW + 40)})
+        self.assertEqual(b.rate_limit_detail({**state, 'lastRunEnd': NOW - 20.0}, NOW)['retryAt'], b.iso(NOW + 40))
+
     def test_accept_records_replay_and_rate_state(self):
         state = b.new_state(); b.accept(state, self.req(), NOW, {'pid': 1})
         self.assertEqual((state['ids'], state['lastAccepted'], state['runs']), ([RID], {'id': RID, 'at': NOW}, [NOW]))

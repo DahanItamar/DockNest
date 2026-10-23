@@ -44,6 +44,11 @@ code,pre,.mono {font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .brand-lockup{display:flex;flex-direction:column;align-items:center;gap:0}.brand-lockup .brand-image{width:176px;height:auto;object-fit:contain}.brand-lockup small{font-size:var(--fs-caption);line-height:1.4;color:var(--text-muted);letter-spacing:.3px}
 @media(min-width:768px){:root{--edge:24px;--grid-columns:2}}
 @media(min-width:1440px){:root{--edge:32px;--grid-columns:3}}
-@media(min-width:1920px){:root{--fs-title:28px;--lh-title:36px;--fs-card:24px;--lh-card:32px;--fs-section:20px;--lh-section:28px;--fs-body:15px;--lh-body:24px;--fs-caption:13px;--lh-caption:20px;--fs-button:15px;--lh-button:24px;--content-max:1680px;--grid-columns:4}}
-@media(min-width:2560px){:root{--fs-title:32px;--lh-title:40px;--fs-card:28px;--lh-card:36px;--fs-section:24px;--lh-section:32px;--fs-body:16px;--lh-body:24px;--fs-caption:14px;--lh-caption:20px;--fs-button:16px;--lh-button:24px;--content-max:1920px}}
+@media(min-width:1920px){:root{--fs-title:28px;--lh-title:36px;--fs-card:24px;--lh-card:32px;--fs-section:20px;--lh-section:28px;--fs-body:15px;--lh-body:24px;--fs-caption:13px;--lh-caption:20px;--fs-button:15px;--lh-button:24px;--edge:40px;--content-max:none;--grid-columns:4}}
+@media(min-width:2560px){:root{--fs-title:32px;--lh-title:40px;--fs-card:28px;--lh-card:36px;--fs-section:24px;--lh-section:32px;--fs-body:16px;--lh-body:24px;--fs-caption:14px;--lh-caption:20px;--fs-button:16px;--lh-button:24px;--edge:48px;--content-max:2200px}}
+@media(min-width:3200px){:root{--content-max:2800px}}
+@media(min-width:3840px){:root{--content-max:3400px}}
 @media(max-width:480px){:root{--control-height:44px}}
+
+/* 2.4.1 section gap: the space between a list and its pager, and between page sections. */
+:root{--section-gap:24px}

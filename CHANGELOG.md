@@ -4,6 +4,35 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-10-23
+
+See [docs/releases/2026-10-23-v2.4.1.md](docs/releases/2026-10-23-v2.4.1.md).
+
+### Added
+
+- Readable Audit trail: action labels, display names for actors (System, Worker, Scheduler, Unknown user fallbacks), proportional columns, **View details** as an icon button with the raw code inside.
+- "What happened?" prefill for job, storage, server and DockNest backup reports from a static catalogue of DockNest's own fixed messages (`web/report/catalogue-data.js`), or from an opt-in, redacted, editable **Include the error message** text.
+- The GitHub mark on every **Open GitHub** button.
+- Host updater: a rate-limited refusal names the limit (`cooldown` or `daily`) and the earliest time a new run is allowed (`limit`, `retryAt`); the limits themselves are unchanged.
+- API (additive): `GET /api/state` gains `actors` (names only for accounts in the returned audit rows); a rate-limited update request returns `limit` and `retryAt`; the progress limiter's 429 returns `retryAfter`.
+- `npm run test:layout` browser suite, and a shared count helper (`web/plural.js`).
+
+### Changed
+
+- Wide screens (1920 px and up): 40 px edge (48 px from 2560 px), content up to 2200 px at 2560 px and 3400 px at 3840 px, with the sidebar expanded or collapsed.
+- Audit and Jobs size to the viewport (at least 10 rows).
+- The header search box is removed; each list page has a funnel filter with the record count.
+- Collapsed sidebar rail: a 44 px health pulse and a 44 px capacity ring only, no frame at rest, focus ring on keyboard focus only.
+- Sidebar storage readout and rail popover name the destination; the Storage page shows four destinations per page, fitted to the screen.
+- Overview metrics: a 3 x 2 grid from 1024 px; Recovery points opens on Month.
+
+### Fixed
+
+- The pager gap differed between full and partial pages; card pages keep a 24 px gap on every page and width, phones included.
+- "1 successful backups" and other count plurals.
+- The updater rate-limit message said "wait a few minutes" for the daily limit; it now names the limit and the time. The API's own 429 says how many seconds to wait.
+- Truncated Audit cells.
+
 ## [2.4.0] - 2026-10-23
 
 See [docs/releases/2026-10-23-v2.4.0.md](docs/releases/2026-10-23-v2.4.0.md).

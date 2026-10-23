@@ -241,3 +241,14 @@ test('version endpoint is public and exposes only the release and schema version
  const response=await fetch(base+'/version');assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
  assert.deepEqual(await response.json(),{version,schemaVersion});
 });
+
+test('GET /state names only the accounts that appear in the audit rows it returns', async () => {
+ const listed=id(),pending=id(),revoked=id(),stamp=new Date().toISOString();
+ for(const [row,name] of [[listed,'Listed person'],[pending,'Pending invitee'],[revoked,'Revoked person']])db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,0,?,?,?)").run(row,row+'@accounts.invalid','x','x','[]',stamp,name,'operator');
+ db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?)').run(id(),listed,'auth.login',null,'{}',stamp);
+ const state=await (await request('/state')).json();
+ assert.equal(state.actors[listed],'Listed person');
+ assert.equal(state.actors[pending],undefined,'a pending invitation is not listed');
+ assert.equal(state.actors[revoked],undefined,'an account without audit rows is not listed');
+ assert.ok(Object.keys(state.actors).every(actor=>state.audit.some(row=>row.actor===actor)),'every listed id appears in the audit rows');
+});

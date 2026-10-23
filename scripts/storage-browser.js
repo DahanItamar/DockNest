@@ -107,7 +107,7 @@ try{
  const test=page.locator('.storage-card').getByRole('button',{name:'Test connection'});
  await test.focus();await page.keyboard.press('Enter');
  await page.locator('.storage-card [role="alert"]').waitFor({timeout:15000});
- assert.equal(await page.evaluate(()=>document.activeElement?.textContent?.trim()),'Test connection');
+ assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Test connection');
  fixture.faults.status=null;
  // SFTP regression: errors render in the same form alert, a double Enter posts once, session survives.
  await page.getByRole('button',{name:'Add storage destination',exact:true}).click();

@@ -24,7 +24,7 @@ Shared foundation in `web/tokens.css` (tokens), `web/system.css` (primitives) an
 
 Type scale (size / line height / weight), on an 8px rhythm: page title 24/32/600 (`.t-title`), card title 20/28/600 (`.t-card`), section 16/24/500 (`.t-section`), body 14/20/400 (`.t-body`), caption 12/16/400 (`.t-caption`), button 14/20/500. Tokens are `--fs-*` and `--lh-*`. From 1920px every step goes up one size (body 15); from 2560px body is 16.
 
-Breakpoints: edge padding `--edge` is 16px below 768, 24px at 768-1439, 32px from 1440. Content max width is 1680px (centred) from 1920 and 1920px from 2560. `.card-grid` has 1 column below 768, 2 at 768-1439, 3 at 1440-1919, 4 from 1920.
+Breakpoints: edge padding `--edge` is 16px below 768, 24px at 768-1439, 32px from 1440. From 1920 `--edge` is 40px (48px from 2560), and the content grows with the window up to 2200px at 2560, 2800px at 3200 and 3400px at 3840 (centred; side margins stay under 200px with the rail expanded or collapsed). `--section-gap` is 24px: card lists keep it between the last row of cards and the pager on every page. List pages have one funnel filter above the list (no header search); Audit and Jobs size to the viewport (at least 10 rows). Overview metrics are a 3 x 2 grid from 1024px. `.card-grid` has 1 column below 768, 2 at 768-1439, 3 at 1440-1919, 4 from 1920.
 
 Primitives:
 - `StatusLabel` (`.status .status-{success|running|queued|failed|needs-review}`): 16px icon plus text in the semantic colour, weight 500, no background, border or dot. The running icon rotates unless reduced motion is set.

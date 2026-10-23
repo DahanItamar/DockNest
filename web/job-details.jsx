@@ -4,6 +4,7 @@ import {VerificationLevels,verificationSummary} from './verification.jsx';
 import {StatusLabel,AlertPanel} from './system.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildJobReport} from './report/builders.js';
+import {catalogued,EXPLAIN} from './report/catalogue.js';
 
 // Human labels for recorded result fields. Unknown keys fall back to sentence case.
 export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetServerId:'Target server ID',downtimeSeconds:'Service downtime',sourceReady:'Source ready',verification:'Verification',integrity:'Package integrity',isolatedRestore:'Isolated restore',application:'Application check',status:'Status',method:'Method',networkMode:'Network mode',containerIds:'Container IDs',result:'Result',error:'Error',scope:'Check scope',checks:'Checks',passed:'Passed',restoreTested:'Restore tested',diagnostics:'Diagnostics',failure:'Failure point',lastStage:'Last stage',errorType:'Error type',remoteReported:'Reported by server',at:'Recorded at'};
@@ -22,10 +23,10 @@ function useTick(ms){const [,set]=useState(0);useEffect(()=>{const id=setInterva
 function Elapsed({from}){useTick(1000);return duration((Date.now()-Date.parse(from))/1000);}
 
 export function explainError(error){
- if(/Backup plan changed; review configuration before capture/i.test(error||''))return {meaning:'The capture plan no longer matched the plan checked before capture.',next:'Review the site configuration and current Docker mounts, then run readiness checks before retrying.'};
- if(/Redis current graceful-shutdown proof is missing/i.test(error||''))return {meaning:'The helper could not confirm a graceful Redis shutdown for this attempt.',next:'Review Redis shutdown logs and logging configuration before retrying. A previous shutdown log is not proof for this run.'};
- if(/Online SQLite integrity check exceeded/i.test(error||''))return {meaning:'The database health check took longer than this site allows.',next:'Raise sqliteIntegrityCheck time (sqliteOnlineCheckTimeout) or switch the site to sqliteIntegrityCheck "off".'};
- return {meaning:'The worker reported this error for the attempt.',next:'Review the recorded details and relevant server logs before retrying.'};
+ if(/Backup plan changed; review configuration before capture/i.test(error||''))return {meaning:EXPLAIN.plan,next:'Review the site configuration and current Docker mounts, then run readiness checks before retrying.'};
+ if(/Redis current graceful-shutdown proof is missing/i.test(error||''))return {meaning:EXPLAIN.redis,next:'Review Redis shutdown logs and logging configuration before retrying. A previous shutdown log is not proof for this run.'};
+ if(/Online SQLite integrity check exceeded/i.test(error||''))return {meaning:EXPLAIN.sqlite,next:'Raise sqliteIntegrityCheck time (sqliteOnlineCheckTimeout) or switch the site to sqliteIntegrityCheck "off".'};
+ return {meaning:EXPLAIN.generic,next:'Review the recorded details and relevant server logs before retrying.'};
 }
 
 // Translate raw helper diagnostics into plain-language phases.
@@ -195,7 +196,7 @@ export function JobDetails({job,siteName,onRefresh,siteKind,containers,storageTy
    <div className="dn-actions"><button type="button" onClick={refresh} disabled={refreshing} aria-busy={refreshing}>{refreshing?'Refreshing…':'Refresh'}</button>{view==='json'&&<button type="button" onClick={copy}>Copy</button>}<button type="button" onClick={()=>setView(view==='json'?'readable':'json')}>{view==='json'?'Back to summary':'View JSON'}</button></div></section>
   {view==='json'?<pre className="dn-json" tabIndex={0} aria-label="Original job JSON">{json}</pre>:<div className="dn-jd-body">
    <Facts items={[['Started',dateTime(times.startedAt||times.createdAt)],['Duration',running&&times.startedAt?<Elapsed from={times.startedAt}/>:times.startedAt&&times.finishedAt?duration((Date.parse(times.finishedAt)-Date.parse(times.startedAt))/1000):'—'],['Site paused',paused?<PausedFor window={paused}/>:'Not paused'],['Stage',sentence(job.stage||'—')]]}/>
-   {job.error&&<AlertPanel variant="error" title="What happened" action={<><span className="dn-next"><b>Next step</b> {explanation.next}</span>{bad&&<div className="rp-actions"><ReportProblem summary={job.status==='recovery_required'?'Recovery review':'Failed '+type.toLowerCase()} build={(facts,opts)=>buildJobReport({...facts,...opts,...jobFailureFacts(job),siteKind,containers,storage:storageType})}/></div>}</>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
+   {job.error&&<AlertPanel variant="error" title="What happened" action={<><span className="dn-next"><b>Next step</b> {explanation.next}</span>{bad&&<div className="rp-actions"><ReportProblem summary={job.status==='recovery_required'?'Recovery review':'Failed '+type.toLowerCase()} excerptSource={catalogued(job.error)?null:{error:job.error}} excerptLabel="Include the error message" build={(facts,opts)=>buildJobReport({...facts,...opts,...jobFailureFacts(job),siteKind,containers,storage:storageType,message:job.error,explanation:explanation.meaning})}/></div>}</>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
    <TransferProgress job={job}/>
    {Array.isArray(details.diagnostics)&&details.diagnostics.length>0&&<section className="dn-card"><h4>Steps</h4><StepTimeline items={details.diagnostics}/></section>}
    {Object.keys(result).length>0&&<section className="dn-card"><h4>Result</h4><ReadableFields value={result}/></section>}

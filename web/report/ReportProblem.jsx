@@ -1,5 +1,5 @@
 import React,{createContext,useContext,useEffect,useMemo,useRef,useState} from 'react';
-import {IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconAlertCircle,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
+import {IconBrandGithub,IconExternalLink,IconCircleCheck,IconShieldCheck,IconMinus,IconAlertCircle,IconX,IconCopy,IconCheck} from '@tabler/icons-react';
 import {createPortal} from 'react-dom';
 import {excerptFrom} from './redact.js';
 import {createFactsLoader,reportAllowed} from './access.js';
@@ -17,11 +17,11 @@ export function ReportProvider({api,user,children}){
 }
 export const useReportContext=()=>useContext(ReportContext);
 
-const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text, logs and keys','Backup contents'];
+const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
 export const PUBLIC_WARNING='Issues on the DockNest repository are public and linked to your GitHub account. Anyone can read what you share.';
 
 // The review dialog: the exact title and values that will be sent, then GitHub in a new tab (no opener, no referrer).
-export function ReviewDialog({build,facts,summary,excerptSource,onClose}){
+export function ReviewDialog({build,facts,summary,excerptSource,excerptLabel='Include the last error lines',onClose}){
  const ref=useRef(null),opener=useRef(null),titleId=useRef('rp-'+Math.random().toString(36).slice(2,8)).current;
  const [includeEnvironment,setIncludeEnvironment]=useState(true),[withExcerpt,setWithExcerpt]=useState(false);
  const initialExcerpt=useMemo(()=>excerptSource?excerptFrom(excerptSource):'',[excerptSource]);
@@ -43,33 +43,33 @@ export function ReviewDialog({build,facts,summary,excerptSource,onClose}){
     {report?<dl className="def-list rp-list">{report.shared.map(([k,v])=><div className="def-row" key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>:<p role="alert">This report could not be prepared.</p>}
     {report?.timeline?.length>0&&<div className="rp-timeline"><span className="t-caption">Timeline: phase, seconds from start, seconds taken</span><span className="rp-timeline-line">{report.timeline.join(' · ')}</span></div>}
     {hasEnvironment&&<label className="rp-check"><input type="checkbox" checked={includeEnvironment} onChange={e=>setIncludeEnvironment(e.target.checked)}/><span><span className="rp-check-title">Include environment</span><span className="t-caption">{report.environment.map(([k,v])=>k+' '+v).join(' · ')}</span></span></label>}
-    {excerptSource&&initialExcerpt&&<><label className="rp-check"><input type="checkbox" checked={withExcerpt} onChange={e=>{setWithExcerpt(e.target.checked);setCopied('')}}/><span><span className="rp-check-title">Include the last error lines</span><span className="t-caption">Off by default. Addresses, paths, names and keys are replaced with [redacted]; you can edit the text before sharing.</span></span></label>
+    {excerptSource&&initialExcerpt&&<><label className="rp-check"><input type="checkbox" checked={withExcerpt} onChange={e=>{setWithExcerpt(e.target.checked);setCopied('')}}/><span><span className="rp-check-title">{excerptLabel}</span><span className="t-caption">Off by default. Addresses, paths, names and keys are replaced with [redacted]; you can edit the text before sharing.</span></span></label>
      {withExcerpt&&<div className="rp-excerpt"><label htmlFor={titleId+'-excerpt'} className="t-caption">Error lines (at most 40 lines, 2 KiB)</label><textarea id={titleId+'-excerpt'} rows={6} value={excerpt} onChange={e=>setExcerpt(e.target.value)} spellCheck={false}/><p className="t-caption rp-warn-text">This may still contain private text. Read it before sharing.</p>
       {report?.excerptTooLong&&<div className="rp-copy"><p className="t-caption">The excerpt does not fit in the GitHub link. Copy it and paste it into the issue by hand.</p><button type="button" onClick={copyExcerpt}>{copied.startsWith('Excerpt')?<IconCheck size={18} aria-hidden="true"/>:<IconCopy size={18} aria-hidden="true"/>}Copy excerpt</button>{copied&&<span className="t-caption" role="status">{copied}</span>}</div>}</div>}</>}
    </section>
    <section className="rp-never" aria-labelledby={titleId+'-never'}>
     <h3 id={titleId+'-never'}><IconShieldCheck size={18} stroke={2} aria-hidden="true"/>Never shared</h3>
     <ul className="rp-never-list">{NEVER.map(t=><li key={t}><IconMinus size={16} stroke={2} aria-hidden="true"/>{t}</li>)}</ul>
-    <p className="rp-never-line"><IconShieldCheck size={16} stroke={2} aria-hidden="true"/><span>Never shared: names, addresses, paths, user names, error text, logs, keys or backup contents.</span></p>
+    <p className="rp-never-line"><IconShieldCheck size={16} stroke={2} aria-hidden="true"/><span>Never shared: names, addresses, paths, user names, logs, keys or backup contents. Error text is shared only as DockNest{'\u2019'}s own fixed message{withExcerpt?', or the redacted text you ticked and can read above':''}.</span></p>
     <p className="t-caption rp-server-note">DockNest{'’'}s server sends nothing. Your browser opens a pre-filled GitHub form; nothing is posted until you submit it there.</p>
    </section>
   </div>
   <div className="rp-note" role="note"><IconAlertCircle size={20} stroke={2} aria-hidden="true"/><span>{PUBLIC_WARNING}</span></div></div>
   <footer className="rp-foot">
    <button type="button" onClick={onClose}>Cancel</button>
-   {report?<a className="button primary rp-open" href={report.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={()=>setTimeout(onClose,0)}>Open GitHub<IconExternalLink size={16} stroke={2} aria-hidden="true"/><span className="sr-only"> (opens a new tab)</span></a>:<button type="button" className="primary" disabled>Open GitHub</button>}
+   {report?<a className="button primary rp-open" href={report.href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" onClick={()=>setTimeout(onClose,0)}><IconBrandGithub size={18} stroke={1.75} aria-hidden="true"/>Open GitHub<IconExternalLink size={16} stroke={2} aria-hidden="true"/><span className="sr-only"> (opens a new tab)</span></a>:<button type="button" className="primary" disabled><IconBrandGithub size={18} stroke={1.75} aria-hidden="true"/>Open GitHub</button>}
   </footer>
  </dialog>;
 }
 
 // The report button. audience "all" is only for Report a bug in About; every other report is admin-only.
-export function ReportProblem({build,label='Open GitHub',summary,audience='admin',role,excerptSource,className=''}){
+export function ReportProblem({build,label='Open GitHub',summary,audience='admin',role,excerptSource,excerptLabel,className=''}){
  const ctx=useReportContext();
  const [open,setOpen]=useState(false),[facts,setFacts]=useState(null);
  if(!reportAllowed(role,ctx.role,audience))return null;
  async function start(){const f=await ctx.load().catch(()=>({}));setFacts(f||{});setOpen(true)}
  return <>
-  <button type="button" className={('rp-button '+className).trim()} onClick={start} aria-haspopup="dialog">{label}</button>
-  {open&&facts&&createPortal(<ReviewDialog build={build} facts={facts} summary={summary} excerptSource={excerptSource} onClose={()=>setOpen(false)}/>,document.body)}
+  <button type="button" className={('rp-button '+className).trim()} onClick={start} aria-haspopup="dialog">{label==='Open GitHub'&&<IconBrandGithub size={18} stroke={1.75} aria-hidden="true"/>}{label}</button>
+  {open&&facts&&createPortal(<ReviewDialog build={build} facts={facts} summary={summary} excerptSource={excerptSource} excerptLabel={excerptLabel} onClose={()=>setOpen(false)}/>,document.body)}
  </>;
 }

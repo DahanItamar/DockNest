@@ -26,29 +26,29 @@ try{
  const navigate=async name=>{if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);};
  await navigate('Audit');
  const auditPager=()=>page.getByRole('group',{name:'Audit pagination',exact:true});
- assert.equal(await page.locator('tbody tr').count(),10);
+ const per=await page.locator('tbody tr').count(),auditPages=Math.ceil(137/per);assert.ok(per>=10,'Tables show at least ten rows ('+per+')');
  await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
  await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await auditPager().getByRole('status').filter({hasText:'11-20 of 137'}).waitFor();
- assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 2 of 14','Refresh preserves page');
+ await auditPager().getByRole('status').filter({hasText:(per+1)+'-'+2*per+' of 137'}).waitFor();
+ assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 2 of '+auditPages,'Refresh preserves page');
  await page.getByLabel('Filter Audit').fill('fixture.audit.136');
- await page.getByText('fixture.audit.136',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),1);
- await page.getByLabel('Filter Audit').fill('');await page.getByText('fixture.audit.0',{exact:true}).waitFor();
- assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 14','Search resets page');
+ await page.getByText('Fixture audit 136',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),1);
+ await page.getByLabel('Filter Audit').fill('');await page.getByText('Fixture audit 0',{exact:true}).waitFor();
+ assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of '+auditPages,'Search resets page');
  const auditY=(await auditPager().boundingBox()).y+await page.evaluate(()=>scrollY);
- for(let i=1;i<14;i++)await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
- await auditPager().getByRole('status').filter({hasText:'131-137 of 137'}).waitFor();
+ for(let i=1;i<auditPages;i++)await auditPager().getByRole('button',{name:'Audit next page',exact:true}).click();
+ await auditPager().getByRole('status').filter({hasText:((auditPages-1)*per+1)+'-137 of 137'}).waitFor();
  assert.equal(await auditPager().getByRole('button',{name:'Audit next page',exact:true}).isDisabled(),true);assert.ok(Math.abs((await auditPager().boundingBox()).y+await page.evaluate(()=>scrollY)-auditY)<1,'Audit pager stays in place on a partial last page');
  state.audit=audit.slice(0,4);await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await page.getByText('fixture.audit.0',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),4,'Shrinking collection clamps the page');
+ await page.getByText('Fixture audit 0',{exact:true}).waitFor();assert.equal(await page.locator('tbody tr').count(),4,'Shrinking collection clamps the page');
  state.audit=audit;await page.getByRole('button',{name:'Refresh dashboard'}).click();
- await auditPager().getByLabel('Audit page',{exact:true}).waitFor();assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of 14');
+ await auditPager().getByLabel('Audit page',{exact:true}).waitFor();assert.equal(await auditPager().getByLabel('Audit page',{exact:true}).textContent(),'Page 1 of '+auditPages);
  assert.equal(await auditPager().locator('select,input[type=range]').count(),0,'Fixed pagination has no dropdowns, sliders or page-size controls');
  const tableBox=await page.locator('.table-wrap').evaluate(el=>({height:el.clientHeight,scroll:el.scrollHeight}));
  assert.equal(tableBox.height,tableBox.scroll,'Tables use natural height, with no forced vertical scrollbar');assert.equal(await page.locator('input[type=range]').count(),0,'Pagination has no sliders');
 
- await navigate('Jobs');const jobPager=page.getByRole('group',{name:'Jobs pagination',exact:true});assert.equal(await page.locator('tbody tr').count(),10);const jobY=(await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY);
- for(let i=1;i<8;i++)await jobPager.getByRole('button',{name:'Jobs next page',exact:true}).click();assert.equal(await page.locator('tbody tr').count(),6);assert.ok(Math.abs((await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY)-jobY)<1,'Jobs pager stays in place on a partial last page');
+ await navigate('Jobs');const jobPager=page.getByRole('group',{name:'Jobs pagination',exact:true});const jobRows=await page.locator('tbody tr').count(),jobPages=Math.ceil(76/jobRows);assert.ok(jobRows>=10);const jobY=(await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY);
+ for(let i=1;i<jobPages;i++)await jobPager.getByRole('button',{name:'Jobs next page',exact:true}).click();assert.equal(await page.locator('tbody tr').count(),76-(jobPages-1)*jobRows);assert.ok(Math.abs((await jobPager.boundingBox()).y+await page.evaluate(()=>scrollY)-jobY)<1,'Jobs pager stays in place on a partial last page');
  const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const pagerY=async pager=>(await pager.boundingBox()).y+await page.evaluate(()=>scrollY);
  async function partialPage(label,selector,fullCount){
@@ -121,7 +121,7 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',10],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',10],['Storage','storage','.storage-card',2],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
@@ -138,5 +138,19 @@ try{
   }
  }
  assert.deepEqual(errors,[]);
+
+ // 2.4.1: the pager keeps one section gap (24px) below the last row of cards on every page, at every desktop width, and stays put.
+ for(const [width,height] of [[1024,900],[1440,1000],[1920,1100],[2560,1300],[3840,1600]]){
+  await page.setViewportSize({width,height});
+  for(const [route,label,selector] of [['Sites & schedules','Sites','.site-card'],['Servers','Servers','.server-card'],['Storage','Storage destinations','.storage-card']]){
+   await navigate(route);await settle();
+   const pager=page.getByRole('group',{name:label+' pagination',exact:true}),next=pager.getByRole('button',{name:label+' next page',exact:true});
+   const gap=()=>page.evaluate(sel=>{const cards=[...document.querySelectorAll(sel)],bottom=Math.max(...cards.map(card=>card.getBoundingClientRect().bottom));return Math.round(document.querySelector('.pagination').getBoundingClientRect().top-bottom)},selector);
+   const y=await pagerY(pager);let seen=0;
+   do{assert.equal(await gap(),24,label+' keeps a 24px gap above the pager at '+width+' (page '+(++seen)+')');assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place at '+width);if(await next.isDisabled())break;await next.click();await settle();}while(true);
+   assert.ok(seen>=2,label+' has more than one page in the fixture');
+  }
+ }
+ await page.setViewportSize({width:1440,height:1000});
  console.log('Large-data pagination passed: responsive backup capacity at three heights, stable partial pages, every main route bounded across six widths, search reset, refresh preservation, shrink clamping and original backup/restore actions.');
 }finally{await browser.close();}

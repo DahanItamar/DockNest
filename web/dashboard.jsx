@@ -1,4 +1,5 @@
 import React,{useState} from 'react';
+import {count} from './plural.js';
 import {ActivityChart,Sparkline,bucketActivity} from './charts.jsx';
 import {ArrowRight,Check,ChevronDown,TriangleAlert} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
@@ -23,7 +24,7 @@ function IconButton({label,children,...props}) {
 }
 
 export function Dashboard({s,active,busy,user,name,bytes,date,open,action,navigate,Empty}) {
-  const [period,setPeriod]=useState('week'),[metricPeriod,setMetricPeriod]=useState('year');
+  const [period,setPeriod]=useState('week'),[metricPeriod,setMetricPeriod]=useState('month');
   const activity=bucketActivity(s,period),metricData=bucketActivity(s,metricPeriod);
   const backups=newest(s.backups),jobs=newest(s.jobs);
   const week=backups.filter(b=>new Date(b.capturedAt||b.createdAt)>new Date(Date.now()-7*86400000));
@@ -41,7 +42,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
      <div className="metric-stack"><section className="dash-metric berry-metric-compact blue"><span className="metric-tile"><Activity size={24}/></span><div><strong>{active.length}</strong><span className="metric-label">Active jobs</span></div></section><section className="dash-metric berry-metric-compact"><span className="metric-tile"><Clock size={24}/></span><div><strong>{downtime.length?`${(downtime.reduce((sum,b)=>sum+b.downtimeMs,0)/downtime.length/1000).toFixed(1)} s`:'\u2014'}</strong><span className="metric-label">Average capture downtime</span></div></section></div>
     </div>
     <div className="dash-layout">
-        <section className="dash-panel dash-growth" aria-labelledby="growth-title"><header className="dash-panel-head"><div><span className="growth-subtitle">Capture activity</span><h2 id="growth-title">{activity.series.slice(0,2).reduce((sum,x)=>sum+x.values.reduce((a,b)=>a+b,0),0)} recovery points</h2></div><label className="chart-period"><span className="sr-only">Activity period</span><select aria-label="Activity period" value={period} onChange={event=>setPeriod(event.target.value)}><option value="week">Last 7 days</option><option value="month">Last 30 days</option><option value="year">Last 12 months</option></select></label></header><ActivityChart s={s} period={period}/></section>
+        <section className="dash-panel dash-growth" aria-labelledby="growth-title"><header className="dash-panel-head"><div><span className="growth-subtitle">Capture activity</span><h2 id="growth-title">{count(activity.series.slice(0,2).reduce((sum,x)=>sum+x.values.reduce((a,b)=>a+b,0),0),'recovery point')}</h2></div><label className="chart-period"><span className="sr-only">Activity period</span><select aria-label="Activity period" value={period} onChange={event=>setPeriod(event.target.value)}><option value="week">Last 7 days</option><option value="month">Last 30 days</option><option value="year">Last 12 months</option></select></label></header><ActivityChart s={s} period={period}/></section>
         <section className="dash-panel dash-activity" aria-labelledby="dash-activity-title"><header className="dash-panel-head"><div><span className="dash-eyebrow">OPERATIONS</span><h2 id="dash-activity-title">Recent activity</h2></div><IconButton label="View all jobs" onClick={()=>navigate('Jobs')}><ArrowRight size={17}/></IconButton></header>
           <div className="activity-feature"><div><span>Integrity-checked captures<small>Last 7 days</small></span><b>{week.filter(isIntegrityChecked).length}</b></div><Sparkline values={bucketActivity(s,'week').series[0].values} color="#4527A0" area label="Integrity-checked captures in the last seven days"/></div>
           {jobs.length?<div className="dash-job-list">{jobs.slice(0,5).map(job=>{
