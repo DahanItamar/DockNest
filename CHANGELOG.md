@@ -7,6 +7,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Fixed
 
 - Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
+- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "phaseX needs nginx. Install it, then try again." instead of a longer technical one.
 
 ### Changed
 
