@@ -74,9 +74,9 @@ test('the updater rate-limit message names the limit and the earliest time, and 
  const now=new Date(2026,9,23,12,0,0),later=new Date(2026,9,23,14,5,0),tomorrow=new Date(2026,9,24,9,30,0);
  const hhmm=d=>d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
  assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'cooldown',retryAt:later.toISOString()},now),'The updater needs a minute between runs. Try again at '+hhmm(later)+'.');
- assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:later.toISOString()},now),'The updater allows 6 update runs a day. The next run is possible at '+hhmm(later)+'.');
+ assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:later.toISOString()},now),'The updater has reached its daily limit for updates, so nothing was changed. You can update again at '+hhmm(later)+'.');
  const next=submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:tomorrow.toISOString()},now);
- assert.match(next,/^The updater allows 6 update runs a day\. The next run is possible at .+ at \d\d:\d\d\.$/);assert.ok(next.includes(hhmm(tomorrow)));
+ assert.match(next,/^The updater has reached its daily limit for updates, so nothing was changed\. You can update again at .+ at \d\d:\d\d\.$/);assert.ok(next.includes(hhmm(tomorrow)));
  assert.ok(!/few minutes/.test(submitMessage({code:'UPDATER_RATE_LIMITED'},now)),'no detail: no wrong claim about minutes');
  assert.equal(submitMessage({status:429,code:'RATE_LIMITED',retryAfter:12}),'Too many requests. Try again in 12 seconds.');
  assert.equal(submitMessage({status:429,code:'RATE_LIMITED',retryAfter:1}),'Too many requests. Try again in 1 second.');

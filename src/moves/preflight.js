@@ -89,54 +89,54 @@ export function evaluateMove(facts, options = {}) {
 
   // Eligibility comes first; if the target cannot be reached nothing else can be trusted.
   if (state.sameServer || source.id === target.id) add('eligibility', 'block', 'Same server', `This site is already on ${target.name}.`);
-  if (!target.reachable || target.hostKeyOk === false) add('eligibility', 'block', 'Server not reachable', `${target.name} could not be reached. Open Servers and test the connection.`);
-  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'Site is busy', `Finish or resolve the current work on ${site.name} first.`);
+  if (!target.reachable || target.hostKeyOk === false) add('eligibility', 'block', 'Server not reachable', `DockNest cannot connect to ${target.name}. Test it on the Servers page.`);
+  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'Site is busy', `${site.name} is busy with another job. Try again when it finishes.`);
   const reachable = !checks.some(item => item.title === 'Server not reachable');
 
   if (reachable) {
-    if (target.uid !== 0) add('root', 'block', 'Root access', `DockNest needs root SSH on ${target.name} to restore file ownership.`);
-    if (target.stagingWritable === false) add('staging', 'block', 'Working folder', `DockNest cannot write to /var/lib/docknest on ${target.name}. Check that the disk is not full or read-only.`);
+    if (target.uid !== 0) add('root', 'block', 'Root access', `DockNest must sign in to ${target.name} as root.`);
+    if (target.stagingWritable === false) add('staging', 'block', 'Working folder', `DockNest cannot save files on ${target.name}. Its disk may be full.`);
 
     const need = site.packageBytes * 3 + GiB;
-    if (target.freeBytes < need) add('disk', 'block', 'Disk space', `Needs about ${gb(need)} GB. ${target.name} has ${gb(target.freeBytes)} GB free.`);
+    if (target.freeBytes < need) add('disk', 'block', 'Disk space', `Not enough space on ${target.name}: needs about ${gb(need)} GB, has ${gb(target.freeBytes)} GB free.`);
     else if (target.totalBytes > 0 && (target.totalBytes - target.freeBytes + need) / target.totalBytes > 0.85) add('disk', 'warn', 'Disk space', `${target.name} will be more than 85% full after the move.`);
     else add('disk', 'ok', 'Disk space', `${target.name} has enough free space.`);
-    if (facts.backupStorage && facts.backupStorage.freeBytes < GiB) add('backup', 'block', 'Backup storage', 'Backup storage has less than 1 GB free. Free some space before moving.');
+    if (facts.backupStorage && facts.backupStorage.freeBytes < GiB) add('backup', 'block', 'Backup storage', 'Your backup storage is almost full. Free some space first.');
 
     if (docker) {
       const dockerVersion = version(target.dockerVersion);
-      if (!dockerVersion) add('docker', 'block', 'Docker', `Docker is not installed on ${target.name}. DockNest does not install software; install it, then check again.`);
-      else if ((site.containerCount ?? 1) > 1 && dockerVersion[0] < MIN_DOCKER_MAJOR) add('docker', 'block', 'Docker', `Docker ${target.dockerVersion} on ${target.name} is too old for this site (needs ${MIN_DOCKER_MAJOR} or newer).`);
-      if (site.architecture && target.architecture && site.architecture !== target.architecture) add('docker', 'block', 'Processor type', `${target.name} is ${target.architecture}; ${site.name} was built for ${site.architecture}.`);
+      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`);
+      else if ((site.containerCount ?? 1) > 1 && dockerVersion[0] < MIN_DOCKER_MAJOR) add('docker', 'block', 'Docker', `Docker on ${target.name} is too old. Update it to version ${MIN_DOCKER_MAJOR} or newer.`);
+      if (site.architecture && target.architecture && site.architecture !== target.architecture) add('docker', 'block', 'Processor type', `${target.name} has a different processor type (${target.architecture}) than ${site.name} (${site.architecture}).`);
       if (dockerVersion && !checks.some(item => item.id === 'docker')) add('docker', 'ok', 'Docker', `Docker ${target.dockerVersion} is ready on ${target.name}.`);
     }
     if (site.kind === 'compose') {
       const compose = version(target.composeVersion);
-      if (!compose || below(compose, MIN_COMPOSE)) add('compose', 'block', 'Docker Compose', `Docker Compose 2 is not installed on ${target.name}.`);
+      if (!compose || below(compose, MIN_COMPOSE)) add('compose', 'block', 'Docker Compose', `${target.name} needs Docker Compose 2. Install it, then try again.`);
       else if (below(compose, OVERRIDE_COMPOSE)) add('compose', 'warn', 'Docker Compose', `Docker Compose ${target.composeVersion} on ${target.name} is older than 2.24, so DockNest recreates the containers itself instead of using a Compose override.`);
     }
 
     const plan = planPorts(site.ports ?? [], [...(target.usedPorts ?? []), ...(target.reservedPorts ?? [])]);
-    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `Port ${binding.hostPort} and the next ${PORT_SEARCH_RANGE} ports are all used on ${target.name}.`);
+    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `${target.name} has no free port for this site (tried ${binding.hostPort} and the next ${PORT_SEARCH_RANGE}).`);
     for (const entry of plan.map.filter(item => item.from !== item.to)) add('port', 'warn', 'Ports', `Port ${entry.from} is already used on ${target.name}. The site will listen on ${entry.to} instead. Its own settings stay the same.`, { automatic: true });
     if (!plan.exhausted.length && plan.map.every(item => item.from === item.to)) add('port', 'ok', 'Ports', 'The site keeps its ports.');
     portMap = plan.map;
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
-    for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${folder} already exists on ${target.name}. DockNest never overwrites existing folders.`);
+    for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${target.name} already has a folder ${folder}. DockNest never overwrites folders.`);
     const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
-    for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `A ${label} named ${name} already exists on ${target.name}. DockNest never replaces it.`);
+    for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `${target.name} already has a ${label} called ${name}. DockNest never replaces it.`);
     for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
 
     const nginx = target.nginx ?? { installed: false };
-    if (!nginx.installed) add('nginx', 'block', 'nginx', `nginx is not installed on ${target.name}. DockNest does not install software; install it, then check again.`);
-    else if (nginx.configOk === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} has a configuration error that DockNest did not cause. Fix it first.`);
+    if (!nginx.installed) add('nginx', 'block', 'nginx', `${target.name} needs nginx. Install it, then try again.`);
+    else if (nginx.configOk === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} has a setup error. Fix it, then try again.`);
     else if (nginx.confDir === null) add('nginx', 'block', 'nginx', `nginx on ${target.name} does not include a conf.d folder, so DockNest has nowhere to add its own site file. Add "include /etc/nginx/conf.d/*.conf;" to nginx.conf, then check again.`);
-    else if (nginx.running === false) add('nginx', 'block', 'nginx', `nginx is installed on ${target.name} but not running. Start it, then check again.`);
+    else if (nginx.running === false) add('nginx', 'block', 'nginx', `nginx on ${target.name} is stopped. Start it, then try again.`);
     else {
       const served = new Set((nginx.serverNames ?? []).map(name => name.toLowerCase()));
-      for (const domain of site.domains) if (served.has(domain.toLowerCase())) add('nginx', 'block', 'nginx', `${domain} is already served by nginx on ${target.name}.`);
-      if (target.webPortOwner === 'other') add('nginx', 'block', 'nginx', `Another program uses port 80 on ${target.name}, so nginx cannot serve ${site.domains[0] ?? site.name}.`);
+      for (const domain of site.domains) if (served.has(domain.toLowerCase())) add('nginx', 'block', 'nginx', `${target.name} already serves ${domain}.`);
+      if (target.webPortOwner === 'other') add('nginx', 'block', 'nginx', `Another program uses port 80 on ${target.name}.`);
     }
     if (site.nginxDirectives?.length) add('nginx', 'warn', 'nginx settings', `These nginx settings will not be copied: ${[...new Set(site.nginxDirectives)].sort().join(', ')}.`, { advanced: true });
     if (nginx.installed && !checks.some(item => item.id === 'nginx')) add('nginx', 'ok', 'nginx', `nginx is ready on ${target.name}.`);

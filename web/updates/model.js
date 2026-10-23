@@ -111,7 +111,7 @@ export function submitMessage(error, now = new Date()) {
   };
   if (code === 'UPDATER_RATE_LIMITED') {
     const when = retryTime(error?.retryAt, now);
-    if (error?.limit === 'daily') return 'The updater allows 6 update runs a day.' + (when ? ' The next run is possible at ' + when + '.' : ' Try again later.');
+    if (error?.limit === 'daily') return 'The updater has reached its daily limit for updates, so nothing was changed.' + (when ? ' You can update again at ' + when + '.' : ' Try again later.');
     if (error?.limit === 'cooldown') return 'The updater needs a minute between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
     return 'The updater is limiting update runs right now. Try again later.';
   }

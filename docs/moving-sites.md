@@ -60,9 +60,9 @@ it. It never deletes your data by itself.
 
 DockNest refuses a move rather than risk breaking a site. It tells you the reason in one sentence, for example:
 
-- "Needs about 7 GB. new-srv has 5 GB free."
-- "nginx is not installed on new-srv. DockNest does not install software; install it, then check again."
-- "/srv/shop/data already exists on new-srv. DockNest never overwrites existing folders."
+- "Not enough space on new-srv: needs about 7 GB, has 5 GB free."
+- "new-srv needs nginx. Install it, then try again."
+- "new-srv already has a folder /srv/shop/data. DockNest never overwrites folders."
 
 Fix the reason, then press **Save changes** again to re-check.
 

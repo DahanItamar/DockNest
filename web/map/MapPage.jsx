@@ -92,7 +92,18 @@ export function MapPage({servers=[],sites=[],user,api}){
   const k=clamp(Math.min(w/layout.width,h/layout.height),FIT_MIN,1);
   setT({k,x:Math.max(0,(w-layout.width*k)/2),y:Math.max(0,(h-layout.height*k)/2)});
  },[layout.width,layout.height]);
- useLayoutEffect(()=>{if(narrow||!servers.length)return;touched.current=false;fit();},[narrow,fit,servers.length]);
+ // The map takes the height that is left on screen, so the page never scrolls and the hint below stays in view
+ const [viewH,setViewH]=useState(null);
+ const size=useCallback(()=>{
+  // From the map's top edge (as if the page were not scrolled) to the window bottom, minus the hint and status line below it
+  const el=view.current;if(!el)return;
+  const box=el.getBoundingClientRect(),last=el.parentElement.querySelector('.map-live')||el;
+  const below=last.getBoundingClientRect().bottom-box.bottom,top=box.top+window.scrollY;
+  const next=Math.max(360,Math.floor(window.innerHeight-top-below-24));
+  if(Math.abs(next-box.height)>1)setViewH(next);
+ },[]);
+ useLayoutEffect(()=>{if(narrow||!servers.length)return;size();window.addEventListener('resize',size);return()=>window.removeEventListener('resize',size)},[narrow,size,servers.length,note,!!strip]);
+ useLayoutEffect(()=>{if(narrow||!servers.length)return;touched.current=false;fit();},[narrow,fit,servers.length,viewH]);
  useEffect(()=>{
   const el=view.current;if(!el||typeof ResizeObserver==='undefined')return;
   const ro=new ResizeObserver(()=>{if(!touched.current)fit()});ro.observe(el);return()=>ro.disconnect();
@@ -184,7 +195,7 @@ const vh=view.current?.clientHeight||0,vw=view.current?.clientWidth||0,clipped=!
    </>}
   </div>
   {strip}
-  <div ref={view} className="map-viewport" tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+  <div ref={view} className="map-viewport" style={viewH?{height:viewH}:undefined} tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
    <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
     <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`} aria-hidden="true">
      {layout.paths.map(p=><path key={p.id} d={p.d} className={drag?.id===p.id?'dim':undefined}/>)}

@@ -186,7 +186,7 @@ try{
   await dialog.getByRole('alert').getByText(/The updater needs a minute between runs\. Try again at \d\d:\d\d\./).waitFor();
   assert.equal(await dialog.locator('.alert-panel.alert-error').count(),1,'The rate limit is a red alert panel');
   mock.request={status:429,body:{error:'raw',code:'UPDATER_RATE_LIMITED',refusal:'rate-limited',limit:'daily',retryAt:tomorrow}};await start.click();
-  await dialog.getByRole('alert').getByText(/The updater allows 6 update runs a day\. The next run is possible at .*\d\d:\d\d\./).waitFor();
+  await dialog.getByRole('alert').getByText(/The updater has reached its daily limit for updates, so nothing was changed\. You can update again at .*\d\d:\d\d\./).waitFor();
   assert.ok(!(await dialog.getByRole('alert').innerText()).includes('few minutes'),'No wrong claim about minutes');
   mock.request={status:202,body:{requestId:'req-1'}};mock.locked=true;mock.progress=running;
   await start.click();

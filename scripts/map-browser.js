@@ -328,6 +328,8 @@ try{
    const card=page.locator('.map-site',{hasText:'very-long-site-name'});
    assert.ok(await card.locator('.map-name').evaluate(e=>e.scrollWidth>e.clientWidth),'truncated');
    assert.equal(await card.getAttribute('title'),long);
+   // The map takes the height left on screen: the map and the hint below it are fully visible without scrolling
+   assert.ok(await page.locator('.map-hint').evaluate(e=>e.getBoundingClientRect().bottom<=window.innerHeight),'hint in view');
    // Fit shows everything inside the viewport
    const vp=await page.locator('.map-viewport').boundingBox();
    const kFit=await scaleOf(page);assert.ok(kFit>=0.85-0.001&&kFit<=1,"fit scale between 85% and 100%");
@@ -393,6 +395,9 @@ try{
    assert.equal(await d.getByRole('button',{name:/Quiet server/}).isDisabled(),true,'blocked target greyed');
    await page.waitForFunction(()=>[...document.querySelectorAll('dialog button')].every(b=>!/Checking/.test(b.textContent)));
    const box=await d.boundingBox();assert.ok(box.width>=401&&box.height>=873,'full-screen sheet');
+   // Long reasons wrap inside their card, and opening the sheet focuses the title, not Cancel
+   assert.equal(await d.locator('.map-targets button').evaluateAll(bs=>bs.every(b=>[b,...b.children].every(e=>e.scrollWidth<=e.clientWidth+1))),true,'target text stays inside the card');
+   assert.equal(await page.evaluate(()=>document.activeElement?.tagName),'H2','title focused on open');
    await shot(page,scheme,'402-1-target');
    await d.getByRole('button',{name:/^itamar-Srv/}).click();
    await d.getByRole('heading',{name:'Ready to move'}).waitFor();

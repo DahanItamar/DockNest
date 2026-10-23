@@ -5,7 +5,8 @@ import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly} from 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
 function Sheet({title,labelId,onClose,children,actions}){
  const ref=useRef(null);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();return()=>{if(d?.open)d.close()}},[]);
+ // Focus the title on open, so no button shows a focus ring until the user moves focus
+ useEffect(()=>{const d=ref.current;if(d&&!d.open){d.showModal();d.querySelector('h2')?.focus()}return()=>{if(d?.open)d.close()}},[]);
  function trap(e){
   if(e.key!=='Tab')return;
   const items=[...ref.current.querySelectorAll('button,input,a[href],select,textarea,[tabindex]')].filter(el=>!el.disabled&&el.tabIndex>=0&&el.offsetParent!==null);
@@ -15,7 +16,7 @@ function Sheet({title,labelId,onClose,children,actions}){
   else if(!e.shiftKey&&(a===last||!ref.current.contains(a))){e.preventDefault();first.focus();}
  }
  return <dialog ref={ref} className="map-dialog" aria-labelledby={labelId} onKeyDown={trap} onCancel={e=>{e.preventDefault();onClose?.()}}>
-  <div className="map-dialog-body"><h2 id={labelId}>{title}</h2>{children}</div>
+  <div className="map-dialog-body"><h2 id={labelId} tabIndex={-1}>{title}</h2>{children}</div>
   <div className="map-dialog-foot">{actions}</div>
  </dialog>;
 }

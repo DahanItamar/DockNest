@@ -37,26 +37,26 @@ test('manual DNS says the downtime lasts until the DNS change is live', () => {
 test('blocked moves lead with one plain sentence naming the first reason', () => {
   const cases = [
     [f => { f.target.id = 'old'; }, 'This site is already on new-srv.'],
-    [f => { f.target.reachable = false; }, 'new-srv could not be reached. Open Servers and test the connection.'],
-    [f => { f.target.hostKeyOk = false; }, 'new-srv could not be reached. Open Servers and test the connection.'],
-    [f => { f.state.busy = true; }, 'Finish or resolve the current work on Shop first.'],
-    [f => { f.state.deploymentHold = true; }, 'Finish or resolve the current work on Shop first.'],
-    [f => { f.target.uid = 1000; }, 'DockNest needs root SSH on new-srv to restore file ownership.'],
-    [f => { f.target.stagingWritable = false; }, 'DockNest cannot write to /var/lib/docknest on new-srv. Check that the disk is not full or read-only.'],
-    [f => { f.target.freeBytes = 5 * GiB; }, 'Needs about 7 GB. new-srv has 5 GB free.'],
-    [f => { f.backupStorage.freeBytes = GiB / 2; }, 'Backup storage has less than 1 GB free. Free some space before moving.'],
-    [f => { f.target.architecture = 'aarch64'; }, 'new-srv is aarch64; Shop was built for x86_64.'],
-    [f => { f.target.dockerVersion = '27.5.1'; }, 'Docker 27.5.1 on new-srv is too old for this site (needs 28 or newer).'],
-    [f => { f.target.dockerVersion = null; }, 'Docker is not installed on new-srv. DockNest does not install software; install it, then check again.'],
-    [f => { f.target.composeVersion = null; }, 'Docker Compose 2 is not installed on new-srv.'],
-    [f => { f.target.composeVersion = '1.29.2'; }, 'Docker Compose 2 is not installed on new-srv.'],
-    [f => { f.target.existingPaths = [{ path: '/srv/shop/data', empty: false }]; }, '/srv/shop/data already exists on new-srv. DockNest never overwrites existing folders.'],
-    [f => { f.target.conflicts = { volumes: ['shop_db'] }; }, 'A volume named shop_db already exists on new-srv. DockNest never replaces it.'],
-    [f => { f.target.nginx = { installed: false }; }, 'nginx is not installed on new-srv. DockNest does not install software; install it, then check again.'],
-    [f => { f.target.nginx.configOk = false; }, 'nginx on new-srv has a configuration error that DockNest did not cause. Fix it first.'],
-    [f => { f.target.nginx.serverNames = ['SHOP.example.com']; }, 'shop.example.com is already served by nginx on new-srv.'],
-    [f => { f.target.webPortOwner = 'other'; }, 'Another program uses port 80 on new-srv, so nginx cannot serve shop.example.com.'],
-    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'Port 8082 and the next 100 ports are all used on new-srv.'],
+    [f => { f.target.reachable = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
+    [f => { f.target.hostKeyOk = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
+    [f => { f.state.busy = true; }, 'Shop is busy with another job. Try again when it finishes.'],
+    [f => { f.state.deploymentHold = true; }, 'Shop is busy with another job. Try again when it finishes.'],
+    [f => { f.target.uid = 1000; }, 'DockNest must sign in to new-srv as root.'],
+    [f => { f.target.stagingWritable = false; }, 'DockNest cannot save files on new-srv. Its disk may be full.'],
+    [f => { f.target.freeBytes = 5 * GiB; }, 'Not enough space on new-srv: needs about 7 GB, has 5 GB free.'],
+    [f => { f.backupStorage.freeBytes = GiB / 2; }, 'Your backup storage is almost full. Free some space first.'],
+    [f => { f.target.architecture = 'aarch64'; }, 'new-srv has a different processor type (aarch64) than Shop (x86_64).'],
+    [f => { f.target.dockerVersion = '27.5.1'; }, 'Docker on new-srv is too old. Update it to version 28 or newer.'],
+    [f => { f.target.dockerVersion = null; }, 'new-srv needs Docker. Install it, then try again.'],
+    [f => { f.target.composeVersion = null; }, 'new-srv needs Docker Compose 2. Install it, then try again.'],
+    [f => { f.target.composeVersion = '1.29.2'; }, 'new-srv needs Docker Compose 2. Install it, then try again.'],
+    [f => { f.target.existingPaths = [{ path: '/srv/shop/data', empty: false }]; }, 'new-srv already has a folder /srv/shop/data. DockNest never overwrites folders.'],
+    [f => { f.target.conflicts = { volumes: ['shop_db'] }; }, 'new-srv already has a volume called shop_db. DockNest never replaces it.'],
+    [f => { f.target.nginx = { installed: false }; }, 'new-srv needs nginx. Install it, then try again.'],
+    [f => { f.target.nginx.configOk = false; }, 'nginx on new-srv has a setup error. Fix it, then try again.'],
+    [f => { f.target.nginx.serverNames = ['SHOP.example.com']; }, 'new-srv already serves shop.example.com.'],
+    [f => { f.target.webPortOwner = 'other'; }, 'Another program uses port 80 on new-srv.'],
+    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'new-srv has no free port for this site (tried 8082 and the next 100).'],
     [f => { f.dns.records = [{ type: 'CNAME', name: 'shop.example.com', value: 'shop.host.example.net' }]; }, 'shop.example.com is a CNAME record, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
     [f => { f.dns.records.push({ type: 'A', name: 'shop.example.com', value: '203.0.113.8' }); }, 'shop.example.com has 2 A records, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
   ];
@@ -149,7 +149,7 @@ test('planPorts remaps only conflicts, keeps host IPs, honours reservations and 
 
 test('nginx without a conf.d include, a stopped nginx and non-bridge networks are refused with a reason', () => {
   assert.match(evaluateMove(facts(f => { f.target.nginx.confDir = null; })).sentence, /does not include a conf\.d folder/);
-  assert.match(evaluateMove(facts(f => { f.target.nginx.running = false; })).sentence, /not running/);
+  assert.match(evaluateMove(facts(f => { f.target.nginx.running = false; })).sentence, /is stopped. Start it/);
   assert.match(evaluateMove(facts(f => { f.site.networks = [{ name: 'mesh', driver: 'overlay' }]; })).sentence, /overlay driver/);
   assert.equal(evaluateMove(facts(f => { f.site.networks = [{ name: 'shop_default', driver: 'bridge' }]; })).canStart, true);
 });
