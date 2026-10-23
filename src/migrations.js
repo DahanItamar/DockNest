@@ -93,6 +93,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS site_moves_active ON site_moves(site_id) WHERE
 CREATE INDEX IF NOT EXISTS site_moves_created ON site_moves(created_at,id);
 CREATE TABLE IF NOT EXISTS site_move_steps (move_id TEXT NOT NULL REFERENCES site_moves(id) ON DELETE CASCADE,step TEXT NOT NULL CHECK (length(step) <= 32),attempt INTEGER NOT NULL DEFAULT 0 CHECK (typeof(attempt) = 'integer' AND attempt >= 0),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped','undone','undo_failed')),started_at TEXT,finished_at TEXT,resources TEXT NOT NULL DEFAULT '{}' CHECK (length(resources) <= 65536),result TEXT NOT NULL DEFAULT '{}' CHECK (length(result) <= 65536),PRIMARY KEY (move_id,step));
 `;
+// Optional "Install on server" runs (docs/moving-sites.md). Kept apart from jobs because a job always belongs to a site.
+export const serverInstallsSchema = `
+CREATE TABLE IF NOT EXISTS server_installs (id TEXT PRIMARY KEY,server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,package TEXT NOT NULL CHECK (package IN ('nginx','docker','compose','certbot')),status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),stage TEXT NOT NULL CHECK (length(stage) <= 32),steps TEXT NOT NULL CHECK (length(steps) <= 8192),actor TEXT NOT NULL,error TEXT CHECK (error IS NULL OR length(error) <= 1024),created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT);
+CREATE INDEX IF NOT EXISTS server_installs_status ON server_installs(status,created_at);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -115,6 +120,8 @@ export const migrations = [
   { version: 5, name: 'update-center', compatible: true, up: db => db.exec(updateCenterSchema) },
   // Site moves (docs/moving-sites.md): two tables and their indexes, no rows, nothing altered.
   { version: 6, name: 'site-moves', compatible: true, up: db => db.exec(siteMovesSchema) },
+  // Install on server: one additive table, nothing altered.
+  { version: 7, name: 'server-installs', compatible: true, up: db => db.exec(serverInstallsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
