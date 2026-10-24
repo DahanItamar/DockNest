@@ -14,7 +14,7 @@ import { openRead,statFile } from './storage.js';
 // discards the plaintext; the download reads it again and streams the ZIP straight to the browser, re-verifying
 // everything (GCM tag and stored checksum) before the response is allowed to finish.
 export const LEGACY_ZIP_LIMIT=500*1024**2;
-const READY_MS=60*60*1000,KEEP_MS=10*60*1000,MAX_MANIFEST=16*1024*1024;
+const READY_MS=process.env.NODE_ENV==='test'&&Number(process.env.DOCKNEST_TEST_ZIP_READY_MS)>0?Number(process.env.DOCKNEST_TEST_ZIP_READY_MS):60*60*1000,KEEP_MS=10*60*1000,MAX_MANIFEST=16*1024*1024;
 const MESSAGES={
  busy:'Another full ZIP is being prepared or downloaded. Try again after it finishes.',
  verify:'The backup could not be verified, so no ZIP was prepared. The encrypted download remains available.',
@@ -79,29 +79,54 @@ async function verifyPass(backup,item,onBytes){
  return {manifest,pin:fingerprint(before),size};
 }
 
+// Holds back the last bytes of the ZIP (its central directory and end record) until everything has been verified.
+// Without them the file cannot be opened, whatever the transport does with an aborted response (an HTTP/1.0 proxy can
+// turn a destroyed connection into a normal end).
+const HOLD_BACK=1024*1024;
+function holdBack(){
+ const chunks=[];let total=0;
+ const stream=new Transform({
+  transform(chunk,_encoding,callback){
+   chunks.push(chunk);total+=chunk.length;const out=[];
+   while(chunks.length&&total-chunks[0].length>=HOLD_BACK){const first=chunks.shift();total-=first.length;out.push(first);}
+   callback(null,out.length?Buffer.concat(out):undefined);
+  }
+ });
+ stream.held=()=>Buffer.concat(chunks);
+ return stream;
+}
+// Before any byte is sent, errors reach the browser as one of the fixed sentences, never as a path or system message.
+function plain(error){
+ if(error?.status&&Object.values(MESSAGES).includes(error.message))return error;
+ if(Object.values(MESSAGES).includes(error?.message))return httpError(error.message,500);
+ return httpError(authFailure(error)?MESSAGES.verify:MESSAGES.failed,authFailure(error)?422:500);
+}
+
 // Pass 2: two authenticated reads of the same ciphertext feed one helper process that writes the ZIP to the response.
 // The first read produces recovery-originals/, the second the browsable site-files/ and configuration/ copies (a ZIP can
-// only write one entry at a time). The response is only ended after both reads verified and the helper succeeded;
-// otherwise the connection is destroyed so the browser shows a failed download.
+// only write one entry at a time). The last megabyte of the ZIP is only sent after both reads verified (GCM tag and
+// checksum) and the helper succeeded; otherwise the connection is destroyed and that tail is never sent, so the browser
+// shows a failed download and the file is not a valid ZIP.
 async function streamPass(token,backup,response,signal){
- const attrs=await statFile(backup.path);
- if(fingerprint(attrs)!==token.pin)throw httpError(MESSAGES.changed,409);
- const size=attrs.size,plain=Buffer.alloc(16);plain.writeBigUInt64BE(BigInt(size-32),0);plain.writeBigUInt64BE(BigInt(token.manifest.length),8);
- const child=zipProcess('--stream');
- const cancel=()=>{if(response.writableFinished)return;child.kill('SIGTERM');};
+ let child;
+ const cancel=()=>{if(!response.writableFinished)child?.kill('SIGTERM');};
  response.once('close',cancel);
  try{
-  child.stdin.write(Buffer.concat([plain,token.manifest]));
+  const attrs=await statFile(backup.path);
+  if(fingerprint(attrs)!==token.pin)throw httpError(MESSAGES.changed,409);
+  const size=attrs.size,head=Buffer.alloc(16);head.writeBigUInt64BE(BigInt(size-32),0);head.writeBigUInt64BE(BigInt(token.manifest.length),8);
+  child=zipProcess('--stream');
+  child.stdin.write(Buffer.concat([head,token.manifest]));
   response.attachment(backup.site_id+'_'+backup.id+'_full-site.zip');response.set({'Content-Type':'application/zip','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
   response.flushHeaders?.();
-  const piped=pipeline(child.stdout,response,{signal,end:false});piped.catch(()=>{});
+  const tail=holdBack(),piped=pipeline(child.stdout,tail,response,{signal,end:false});piped.catch(()=>{});
   await decryptInto(backup,size,child.stdin,{signal,end:false});
   await decryptInto(backup,size,child.stdin,{signal,end:true});
   await child.completed;await piped;
   if(fingerprint(await statFile(backup.path))!==token.pin)throw new Error(MESSAGES.changed);
-  response.end();
- }catch(error){response.destroy();throw error;}
- finally{response.removeListener('close',cancel);child.kill('SIGTERM');}
+  response.end(tail.held());
+ }catch(error){if(!response.headersSent)throw plain(error);response.destroy();throw error;}
+ finally{response.removeListener('close',cancel);child?.kill('SIGTERM');}
 }
 const acquire=()=>{if(busy)throw httpError(MESSAGES.busy,409);busy=true;};
 
@@ -109,10 +134,13 @@ const acquire=()=>{if(busy)throw httpError(MESSAGES.busy,409);busy=true;};
 export async function exportFullZip(backup,response){
  acquire();
  try{
-  const size=(await statFile(backup.path)).size;if(size>LEGACY_ZIP_LIMIT)throw httpError(MESSAGES.tooLarge,413);
   const abort=new AbortController(),cancel=()=>{if(!response.writableFinished)abort.abort();};response.once('close',cancel);
-  try{const checked=await verifyPass(backup,{abort,bytesTotal:0});await streamPass({...checked},backup,response,abort.signal);}
-  finally{response.removeListener('close',cancel);}
+  try{
+   let size;try{size=(await statFile(backup.path)).size;}catch(error){throw plain(error);}
+   if(size>LEGACY_ZIP_LIMIT)throw httpError(MESSAGES.tooLarge,413);
+   let checked;try{checked=await verifyPass(backup,{abort,bytesTotal:0});}catch(error){throw plain(error);}
+   await streamPass({...checked},backup,response,abort.signal);
+  }finally{response.removeListener('close',cancel);}
  }finally{busy=false;}
 }
 
@@ -122,9 +150,11 @@ function publicState(item){
  const etaSeconds=item.status==='preparing'&&elapsed>=2&&item.bytesDone>0?Math.max(1,Math.ceil((item.bytesTotal-item.bytesDone)/(item.bytesDone/elapsed))):null;
  return {id:item.id,backupId:item.backupId,status:item.status,bytesDone:item.bytesDone,bytesTotal:item.bytesTotal,etaSeconds,expiresAt:item.status==='ready'?new Date(item.expiresAt).toISOString():null,error:item.error};
 }
-function expire(item){
+// Expiry only stops new downloads; one already streaming finishes. Cancelling ends it.
+function expire(item,{cancel=false}={}){
+ if(cancel)item.streamAbort?.abort();
  if(item.status==='expired')return;
- item.status='expired';clearTimeout(item.timer);item.manifest=undefined;item.abort.abort();item.streamAbort?.abort();
+ item.status='expired';clearTimeout(item.timer);item.manifest=undefined;item.abort.abort();
  setTimeout(()=>exportsById.delete(item.id),KEEP_MS).unref();
 }
 
@@ -152,7 +182,7 @@ export const zipExportState=publicState;
 export function activeZipExportFor(backupId){const item=[...exportsById.values()].find(entry=>entry.backupId===backupId&&(entry.status==='preparing'||entry.status==='ready'));return item&&publicState(item).status!=='expired'?publicState(item):null;}
 export function cancelZipExport(item){
  if(item.status==='preparing'){item.abort.abort();item.status='expired';item.error=MESSAGES.canceled;}
- else expire(item);
+ else expire(item,{cancel:true});
  exportsById.delete(item.id);
 }
 // A complete, verified download ends the token. An interrupted one keeps it so the same link can be tried again.
@@ -160,7 +190,7 @@ export async function streamZipExport(item,backup,response){
  if(publicState(item).status!=='ready')throw httpError(MESSAGES.gone,410);
  acquire();const release=lease(backup.id);item.streamAbort=new AbortController();
  const cancel=()=>{if(!response.writableFinished)item.streamAbort.abort();};response.once('close',cancel);
- try{await streamPass(item,backup,response,item.streamAbort.signal);expire(item);}
+ try{await streamPass({pin:item.pin,manifest:item.manifest},backup,response,item.streamAbort.signal);expire(item);}
  catch(error){if(error.status===409&&error.message===MESSAGES.changed)expire(item);throw error;}
  finally{response.removeListener('close',cancel);release();busy=false;}
 }

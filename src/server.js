@@ -322,20 +322,23 @@ const verifiedBackup=backupId=>{
 };
 const zipExportOf=req=>{const backup=verifiedBackup(req.params.id),item=findZipExport(backup.id,req.params.exportId)||notFound('ZIP preparation not found.');return {backup,item};};
 app.post('/api/backups/:id/zip-exports', (req, res) => {
-  const backup=verifiedBackup(req.params.id);
-  const {item,created}=startZipExport(backup);
-  if(created)audit(req.user.id,'backup.zip_prepare',backup.id);
-  res.status(202).json(item);
+  // The retention check and the lease that protects the backup while it is read happen in one transaction.
+  const {backup,result}=transaction(()=>{const row=verifiedBackup(req.params.id);return {backup:row,result:startZipExport(row)};});
+  if(result.created)audit(req.user.id,'backup.zip_prepare',backup.id);
+  res.status(202).json(result.item);
 });
 app.get('/api/backups/:id/zip-exports', (req, res) => { const backup=verifiedBackup(req.params.id); res.json({ export: activeZipExportFor(backup.id) }); });
 app.get('/api/backups/:id/zip-exports/:exportId', (req, res) => res.json(zipExportState(zipExportOf(req).item)));
 app.delete('/api/backups/:id/zip-exports/:exportId', (req, res) => { const {backup,item}=zipExportOf(req); cancelZipExport(item); audit(req.user.id,'backup.zip_cancel',backup.id); res.json({ id: item.id, status: 'expired' }); });
 app.get('/api/backups/:id/zip-exports/:exportId/download', async (req, res, next) => {
   try{
-    const {backup,item}=zipExportOf(req);
     if(req.headers.range)return res.status(416).json({error:'Full ZIP downloads do not support byte ranges. Start a new download.'});
-    audit(req.user.id,'backup.download_zip',backup.id,{decrypted:true,streamed:true});
-    try{await streamZipExport(item,backup,res);}
+    // streamZipExport takes its download lease before its first await, so the retention check and the lease share this transaction.
+    let streaming,target;
+    transaction(()=>{const found=zipExportOf(req);target=found.backup;streaming=streamZipExport(found.item,found.backup,res);streaming.catch(()=>{});});
+    audit(req.user.id,'backup.download_zip',target.id,{decrypted:true,streamed:true});
+    const backup=target;
+    try{await streaming;}
     catch(error){audit(req.user.id,'backup.zip_download_failed',backup.id,{reason:error.status?error.message:'verification or export failure'});throw error;}
   }catch(error){if(!res.headersSent)next(error);else res.destroy();}
 });

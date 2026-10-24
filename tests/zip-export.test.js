@@ -8,7 +8,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 const directory=await mkdtemp(join(tmpdir(),'docknest-zip-'));
-Object.assign(process.env,{DATA_DIR:directory,BACKUP_DIR:join(directory,'backups'),BACKUP_STORAGE:'local',MASTER_KEY_FILE:join(directory,'master.key'),SETUP_TOKEN_FILE:join(directory,'setup.token'),SECURE_COOKIES:'false',NODE_ENV:'test',APP_ORIGIN:'http://127.0.0.1:3000'});
+Object.assign(process.env,{DATA_DIR:directory,BACKUP_DIR:join(directory,'backups'),BACKUP_STORAGE:'local',MASTER_KEY_FILE:join(directory,'master.key'),SETUP_TOKEN_FILE:join(directory,'setup.token'),SECURE_COOKIES:'false',NODE_ENV:'test',DOCKNEST_TEST_ZIP_READY_MS:'3000',APP_ORIGIN:'http://127.0.0.1:3000'});
 await writeFile(process.env.MASTER_KEY_FILE,randomBytes(32).toString('base64'));
 const {app}=await import('../src/server.js');
 const {db,id}=await import('../src/db.js');
@@ -37,8 +37,8 @@ manifest=json.dumps({'formatVersion':1,'complete':True,'containers':[{'Name':'/a
 with tarfile.open(sys.argv[1],'w:gz') as t:
     add(t,'images.tar',open(sys.argv[2],'rb').read());add(t,'mount-0-0.tar',nested.getvalue());add(t,'restore-guide.md',b'# Restore');add(t,'manifest.json',manifest)
 `;
-async function makeBackup(name,{broken=false}={}){
- const filler=join(process.env.BACKUP_DIR,name+'.filler');await writeFile(filler,randomBytes(3*1024*1024));
+async function makeBackup(name,{broken=false,megabytes=3}={}){
+ const filler=join(process.env.BACKUP_DIR,name+'.filler');await writeFile(filler,randomBytes(megabytes*1024*1024));
  const plain=join(process.env.BACKUP_DIR,name+'.tar.gz');
  if(broken)await writeFile(plain,Buffer.from('this is not a gzip tar'));else execFileSync(python,['-I','-c',BUILD,plain,filler]);
  const file=join(process.env.BACKUP_DIR,name+'.enc');await encryptStream(createReadStream(plain),createWriteStream(file));
@@ -65,7 +65,7 @@ test('prepare verifies without writing any file, then streams a valid ZIP that c
  for(let i=0;i<200;i++){state=await (await request('/backups/zip-a/zip-exports/'+started.id)).json();seen.push(state.bytesDone);if(state.status!=='preparing')break;assert.deepEqual(Object.keys(state).sort(),['backupId','bytesDone','bytesTotal','error','etaSeconds','expiresAt','id','status']);await sleep(20);}
  assert.equal(state.status,'ready');assert.equal(state.bytesDone,state.bytesTotal);assert.ok(state.bytesTotal>3*1024*1024);
  assert.deepEqual(seen,[...seen].sort((a,b)=>a-b),'progress never goes backwards');
- const left=(new Date(state.expiresAt)-Date.now())/60000;assert.ok(left>59&&left<=60);
+ assert.ok(new Date(state.expiresAt)>new Date());
  assert.deepEqual(await list(directory),before,'preparing wrote no file');
  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM downloads').get().n,0);
  // Interrupted download: read a little, then drop the connection. The token must stay usable.
@@ -101,9 +101,29 @@ test('a backup changed between the two passes is refused or the download fails',
  const tampered=Buffer.from(bytes);tampered[tampered.length-40]^=1;await writeFile(file,tampered);await utimes(file,original.atime,original.mtime);
  const failures=audits('backup.zip_download_failed');
  response=await request('/backups/zip-b/zip-exports/'+started.id+'/download');
- await assert.rejects(async()=>{await response.arrayBuffer();});
+ const received=[];let failed=false;
+ try{const reader=response.body.getReader();for(;;){const {done,value}=await reader.read();if(done)break;received.push(Buffer.from(value));}}catch{failed=true;}
+ assert.ok(failed,'the connection is destroyed');
+ assert.ok(!Buffer.concat(received).includes(Buffer.from([0x50,0x4b,0x05,0x06])),'the end-of-central-directory record is never sent');
  await sleep(200);assert.equal(audits('backup.zip_download_failed'),failures+1);
  assert.deepEqual((await list(directory)).filter(name=>name.startsWith('private-exports')&&name!=='private-exports'),[]);
+});
+
+test('expiry stops new downloads but never aborts one that is streaming; storage errors stay plain',async()=>{
+ await makeBackup('zip-h',{megabytes:48});
+ const started=await prepare('zip-h');await until('zip-h',started.id,'ready');
+ const url='/backups/zip-h/zip-exports/'+started.id+'/download';
+ const response=await request(url);assert.equal(response.status,200);
+ const reader=response.body.getReader();const received=[(await reader.read()).value];
+ await sleep(3500);
+ assert.equal((await (await request('/backups/zip-h/zip-exports/'+started.id)).json()).status,'expired');
+ assert.equal((await request(url)).status,410);
+ for(;;){const {done,value}=await reader.read();if(done)break;received.push(value);}
+ const files=await zipEntries(Buffer.concat(received.map(c=>Buffer.from(c))));assert.equal(files['site-files/app/var/data/a.txt'],'alpha');
+ const file=await makeBackup('zip-i');const again=await prepare('zip-i');await until('zip-i',again.id,'ready');
+ await rm(file);
+ const missing=await request('/backups/zip-i/zip-exports/'+again.id+'/download');
+ assert.ok(missing.status>=400);const body=await missing.json();assert.doesNotMatch(body.error,/ENOENT|[\/]|no such file/i);assert.match(body.error,/could not be prepared/);
 });
 
 test('a tampered or invalid backup ends in failed with nothing on disk',async()=>{
