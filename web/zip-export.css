@@ -1,0 +1,9 @@
+dialog.zip-dialog{width:min(520px,calc(100vw - 2 * var(--edge,16px)))}
+.zip-body{display:grid;gap:12px}
+.zip-body p{margin:0}
+.zip-step{display:flex;justify-content:space-between;gap:12px;color:var(--heading)}
+.zip-meta{color:var(--text-secondary)}
+.zip-note{color:var(--text-muted);font-size:var(--fs-caption)}
+.zip-foot{display:flex;justify-content:flex-end}
+.zip-foot button{min-height:40px}
+@media (max-width:640px){.zip-foot button{min-height:44px}}

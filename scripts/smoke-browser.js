@@ -308,7 +308,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByText('backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',{exact:true}).waitFor();
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit'}).getAttribute('href'),'/api/self-backup/download');
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Encrypted backup'}).getAttribute('href'),'/api/backups/fixture-backup/download');
-  assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Full ZIP'}).getAttribute('href'),'/api/backups/fixture-backup/download?format=zip');
+  assert.equal(await page.locator('.backup-tree').getByRole('button',{name:'Download full ZIP fixture-backup'}).count(),1);
   await page.screenshot({path:path.join(screenshotDir,'storage-desktop.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');

@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-10-24
+
+See [docs/releases/2026-10-24-v2.8.2.md](docs/releases/2026-10-24-v2.8.2.md).
+
+### Fixed
+
+- Full ZIP download behind Cloudflare and other proxies: **Download ZIP** now opens a "Preparing your ZIP" window that checks the whole backup first (progress, percent and time left, "ready for 60 minutes"), then starts the download immediately, so no request sits silent long enough to be cut (error 524). The ZIP is still never stored on the server: the backup is read once to verify it and again while the ZIP streams to your computer, and the download fails visibly if the backup changed in between. Hard links inside a backup appear in the ZIP as small notes (the original archives keep them). New API: `POST/GET/DELETE /api/backups/:id/zip-exports` and `.../download`; the old `?format=zip` link keeps working for backups up to 500 MB. See [docs/backup-format.md](docs/backup-format.md) and [docs/security.md](docs/security.md).
+
 ## [2.8.1] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.1.md](docs/releases/2026-10-24-v2.8.1.md).

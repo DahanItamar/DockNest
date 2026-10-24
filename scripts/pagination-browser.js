@@ -116,8 +116,7 @@ try{
  const historyPager=page.getByRole('group',{name:'Recovery points for Website 0 pagination',exact:true});
  assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),3);
  await historyPager.getByRole('button',{name:'Recovery points for Website 0 next page',exact:true}).click();
- const link=page.getByRole('link',{name:'Download full ZIP backup-3',exact:true});
- assert.equal(await link.getAttribute('href'),'/api/backups/backup-3/download?format=zip');
+ assert.equal(await page.getByRole('button',{name:'Download full ZIP backup-3',exact:true}).count(),1);
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();

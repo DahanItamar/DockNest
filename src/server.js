@@ -29,7 +29,7 @@ import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, e
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
-import { exportFullZip,clearInterruptedExports } from './backup-export.js';
+import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 await clearInterruptedExports();
 
@@ -315,6 +315,29 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   }
   db.prepare("UPDATE jobs SET status='failed',stage='failed',error='Remote recovery reviewed and verified' WHERE id=?").run(job.id);
   audit(req.user.id, 'job.recovery_acknowledged', job.id); res.json({ status: 'failed', ...result });
+});
+const verifiedBackup=backupId=>{
+  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
+  return db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(backupId)||notFound('Verified backup not found.');
+};
+const zipExportOf=req=>{const backup=verifiedBackup(req.params.id),item=findZipExport(backup.id,req.params.exportId)||notFound('ZIP preparation not found.');return {backup,item};};
+app.post('/api/backups/:id/zip-exports', (req, res) => {
+  const backup=verifiedBackup(req.params.id);
+  const {item,created}=startZipExport(backup);
+  if(created)audit(req.user.id,'backup.zip_prepare',backup.id);
+  res.status(202).json(item);
+});
+app.get('/api/backups/:id/zip-exports', (req, res) => { const backup=verifiedBackup(req.params.id); res.json({ export: activeZipExportFor(backup.id) }); });
+app.get('/api/backups/:id/zip-exports/:exportId', (req, res) => res.json(zipExportState(zipExportOf(req).item)));
+app.delete('/api/backups/:id/zip-exports/:exportId', (req, res) => { const {backup,item}=zipExportOf(req); cancelZipExport(item); audit(req.user.id,'backup.zip_cancel',backup.id); res.json({ id: item.id, status: 'expired' }); });
+app.get('/api/backups/:id/zip-exports/:exportId/download', async (req, res, next) => {
+  try{
+    const {backup,item}=zipExportOf(req);
+    if(req.headers.range)return res.status(416).json({error:'Full ZIP downloads do not support byte ranges. Start a new download.'});
+    audit(req.user.id,'backup.download_zip',backup.id,{decrypted:true,streamed:true});
+    try{await streamZipExport(item,backup,res);}
+    catch(error){audit(req.user.id,'backup.zip_download_failed',backup.id,{reason:error.status?error.message:'verification or export failure'});throw error;}
+  }catch(error){if(!res.headersSent)next(error);else res.destroy();}
 });
 app.get('/api/backups/:id/download', async (req, res, next) => {
   const leaseId=id();

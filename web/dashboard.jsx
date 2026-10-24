@@ -3,6 +3,7 @@ import {count} from './plural.js';
 import {ActivityChart,Sparkline,bucketActivity} from './charts.jsx';
 import {ArrowRight,Check,ChevronDown,TriangleAlert} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
+import {ZipButton} from './zip-export.jsx';
 import {StatusLabel,AlertPanel} from './system.jsx';
 import {describeSchedule} from './schedule.js';
 import './dashboard.css';
@@ -74,7 +75,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
                   {history.length?<Paginated rows={history} label={"Dashboard recovery points for "+site.name} pageSize={3}>{points=>points.map(backup=><div className="dash-backup" key={backup.id}>
                     <BrandIcon name="backups" size={16}/><div className="dash-backup-date"><b>{shortDate(backup.capturedAt||backup.createdAt)}</b><small><span>{bytes(backup.size||backup.sizeBytes)}{backup.pinned?' · Pinned':''}{(s=><> · <span className={s.failed?'dash-failed':undefined}>{s.badge}</span> · {s.line}</>)(recoveryStatus(backup))}</span></small></div>
                     <div className="dash-backup-actions">
-                      <a className="dash-icon" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Download full ZIP"><BrandIcon name="download" size={22}/></a>
+                      <ZipButton backupId={backup.id} className="dash-icon" label={`Download full ZIP ${backup.id}`} title="Download full ZIP"><BrandIcon name="download" size={22}/></ZipButton>
                       <a className="dash-icon" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted backup"><BrandIcon name="encrypted-download" size={22}/></a>
                       <IconButton label={`${backup.pinned?'Unpin':'Pin'} backup ${backup.id}`} aria-pressed={!!backup.pinned} disabled={busy} onClick={()=>action(`/backups/${backup.id}/pin`,{pinned:!backup.pinned},backup.pinned?'Backup unpinned.':'Backup pinned.')}><BrandIcon name="pin" size={22}/></IconButton>
                       <IconButton label={`Restore backup ${backup.id}`} onClick={()=>open({type:'restore',item:backup})}><BrandIcon name="restore" size={22}/></IconButton>

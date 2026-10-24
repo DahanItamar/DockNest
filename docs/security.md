@@ -201,6 +201,10 @@ DockNest treats what a managed server returns as untrusted data. Commands for th
 
 These checks are covered by unit tests. GNU `tar` extraction of real archives, link handling under `O_NOFOLLOW` and the end-to-end restore run only in the Linux Docker integration job (`npm run test:integration`).
 
+## Full ZIP downloads (decrypted, streamed)
+
+A full ZIP is decrypted data, so it is never written to the server's disk. Preparing a ZIP authenticates the whole encrypted backup and discards the plaintext; the download then decrypts it again while streaming the ZIP to the browser. The guarantee is: verified in full before the download starts, re-verified while streaming (GCM tag and stored checksum, pinned storage size, time and ETag or version). A backup changed between the two passes is refused before the first byte, or the connection is destroyed so the browser shows a failed download and the audit log records it. Plaintext can reach the browser before the final tag check of the streaming pass; this is accepted because the same bytes were fully authenticated moments earlier and any later change fails the download. Requests need a signed-in session and a CSRF token like every other API call; preparing, downloading, failing and cancelling are audited (`backup.zip_prepare`, `backup.download_zip`, `backup.zip_download_failed`, `backup.zip_cancel`). Prepared downloads live in memory for at most 60 minutes.
+
 ## Alerts: Telegram and email (outbound requests, credentials)
 
 - No alert channel means no alert traffic. With channels, DockNest connects only to `https://api.telegram.org` (a host

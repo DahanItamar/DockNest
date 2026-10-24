@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {BrandIcon} from './brand.jsx';
+import {ZipButton} from './zip-export.jsx';
 import {AlertPanel,StatusLabel} from './system.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildStorageReport} from './report/builders.js';
@@ -28,7 +29,7 @@ function StorageTree({api,target,refreshKey,onSessionExpired}) {
       <summary>Site: {site.name}</summary>
       <Paginated rows={site.days.flatMap(day=>day.backups)} label={'Stored backups for '+site.name} pageSize={5}>{points=>points.map(backup=><div className="backup-tree-file" key={backup.id}>
        <div><b>{filename(backup)}</b><small>{formatDate(backup.capturedAt)} · {(backup.size/1024/1024).toFixed(1)} MB · {backup.verified?'Integrity checked':'Integrity unchecked'}{backup.pinned?' · Pinned':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div>
-       <div className="actions"><a className="button" href={'/api/backups/'+backup.id+'/download?format=zip'}>Full ZIP</a><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a><button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>
+       <div className="actions"><ZipButton backupId={backup.id} className="button" label={'Download full ZIP '+backup.id}>Full ZIP</ZipButton><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a><button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>
       </div>)}</Paginated>
      </details>)}</Paginated>
     </details>)}</Paginated>}
