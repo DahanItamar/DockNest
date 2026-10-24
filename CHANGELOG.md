@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-10-24
+
+See [docs/releases/2026-10-24-v2.8.1.md](docs/releases/2026-10-24-v2.8.1.md).
+
+### Fixed
+
+- Full ZIP download: the ZIP is streamed to the browser instead of being saved on the server first, and the space check asks for the backup's size plus 2 GiB instead of eight times its size. A 11.5 GB backup on a server with 61 GB free was refused before; it now downloads. The backup is still fully authenticated before the first byte is sent, and the export stops cleanly if the server runs low on space.
+
 ## [2.8.0] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.0.md](docs/releases/2026-10-24-v2.8.0.md).

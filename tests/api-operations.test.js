@@ -219,6 +219,18 @@ test('full ZIP refuses tampered ciphertext before sending bytes and cleans priva
  assert.deepEqual(await readdir(join(directory,'private-exports')),[]);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM downloads').get().n,0);
  assert.equal((await request('/backups/zip-auth/download?format=zip',{headers:{Range:'bytes=0-9'}})).status,416);
 });
+test('full ZIP streams an authenticated backup without a second copy on disk',async()=>{
+ const {encryptStream}=await import('../src/engine.js');const {createReadStream,createWriteStream}=await import('node:fs');const {readFile,readdir}=await import('node:fs/promises');const {createHash}=await import('node:crypto');const {execFileSync}=await import('node:child_process');
+ // A minimal, complete backup package: manifest and restore guide in a tar.gz, then encrypted like a real backup.
+ const plain=join(process.env.BACKUP_DIR,'zip-ok.tar.gz');
+ execFileSync(process.platform==='win32'?'python':'python3',['-I','-c',"import io,json,sys,tarfile\nwith tarfile.open(sys.argv[1],'w:gz') as t:\n for n,d in (('manifest.json',json.dumps({'formatVersion':1,'complete':True}).encode()),('restore-guide.md',b'# Restore')):\n  i=tarfile.TarInfo(n);i.size=len(d);t.addfile(i,io.BytesIO(d))",plain]);
+ const file=join(process.env.BACKUP_DIR,'zip-ok.enc');await encryptStream(createReadStream(plain),createWriteStream(file));
+ const bytes=await readFile(file);backup('zip-ok',file,bytes.length);db.prepare('UPDATE backups SET checksum=? WHERE id=?').run(createHash('sha256').update(bytes).digest('hex'),'zip-ok');
+ const response=await request('/backups/zip-ok/download?format=zip');assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'application/zip');
+ const zip=Buffer.from(await response.arrayBuffer());assert.equal(zip.subarray(0,2).toString(),'PK');
+ for(const name of ['START-HERE.txt','recovery-originals/manifest.json','recovery-originals/restore-guide.md'])assert.ok(zip.includes(Buffer.from(name)),name);
+ assert.deepEqual(await readdir(join(directory,'private-exports')),[]);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM downloads').get().n,0);
+});
 test('static-site settings persist without Docker services and maintenance controls are disabled',async()=>{
  const config={kind:'static',documentRoot:'/var/www/example.org',containers:[],domains:['example.org'],healthUrl:'https://example.org',configFiles:['/etc/nginx/sites-available/example'],externalReferencesConfirmed:true,exclusiveSourcesConfirmed:true};
  let response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Static website',config})});assert.equal(response.status,201);const saved=await response.json();
