@@ -36,10 +36,10 @@ export async function exportFullZip(backup,response){
   const digest=new Transform({transform(chunk,_encoding,callback){hash.update(chunk);callback(null,chunk);}});
   // No decrypted bytes reach the browser until complete GCM authentication and checksum verification succeed.
   // Stop cleanly before the disk fills if something else uses the space meanwhile.
-  let lowDisk=false;const watch=setInterval(async()=>{try{const now=await statfs(root);if(now.bavail*now.bsize<RESERVE/2){lowDisk=true;abort.abort();}}catch{}},2000);
+  let lowDisk=false,stopped=false;const watch=setInterval(async()=>{try{const now=await statfs(root);if(!stopped&&now.bavail*now.bsize<RESERVE/2){lowDisk=true;abort.abort();}}catch{}},2000);
   try{await pipeline(await openRead(backup.path,{start:16,end:size-17}),digest,decipher,createWriteStream(payload,{flags:'wx',mode:0o600}),{signal:abort.signal});}
   catch(error){if(lowDisk)throw new Error('The server ran low on disk space while preparing the full ZIP. The encrypted download remains available.');throw error;}
-  finally{clearInterval(watch);}
+  finally{stopped=true;clearInterval(watch);}
   hash.update(tag);if(hash.digest('hex')!==backup.checksum)throw new Error('Backup checksum verification failed');
   if(abort.signal.aborted)throw new Error('Download canceled');
   // The ZIP is written straight to the response; no second copy on disk. A failure after the first byte ends the
