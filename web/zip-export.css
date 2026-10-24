@@ -1,9 +1,14 @@
-dialog.zip-dialog{width:min(520px,calc(100vw - 2 * var(--edge,16px)))}
-.zip-body{display:grid;gap:12px}
+.rebrand-page dialog.zip-dialog,dialog.zip-dialog{width:min(520px,calc(100vw - 2 * var(--edge,16px)));height:min(380px,calc(100dvh - 2 * var(--edge,16px)))}
+.rebrand-page dialog.zip-dialog[open],dialog.zip-dialog[open]{display:flex;flex-direction:column;overflow:hidden}
+.zip-body{display:grid;align-content:start;gap:12px;flex:1 1 auto;min-height:0;overflow-y:auto}
 .zip-body p{margin:0}
 .zip-step{display:flex;justify-content:space-between;gap:12px;color:var(--heading)}
 .zip-meta{color:var(--text-secondary)}
 .zip-note{color:var(--text-muted);font-size:var(--fs-caption)}
-.zip-foot{display:flex;justify-content:flex-end}
-.zip-foot button{min-height:40px}
-@media (max-width:640px){.zip-foot button{min-height:44px}}
+dialog.zip-dialog .zip-foot{display:flex;justify-content:flex-end;gap:12px;margin:0;padding:16px 24px;border-top:1px solid var(--border-subtle);flex:none}
+dialog.zip-dialog .zip-foot button{min-height:40px;min-width:140px}
+@media (max-width:640px){
+ .rebrand-page dialog.zip-dialog,dialog.zip-dialog{width:100%;max-width:100%;height:100dvh;max-height:100dvh;border-radius:0}
+ dialog.zip-dialog .zip-foot{gap:8px;padding:16px 16px max(16px,env(safe-area-inset-bottom))}
+ dialog.zip-dialog .zip-foot button{flex:1 1 0;min-width:0;min-height:44px}
+}

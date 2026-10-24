@@ -31,47 +31,70 @@ async function open(theme,width){
  await page.locator('.backup-group>summary').first().click();
  return page;
 }
+const shot=async(page,name,theme,width)=>{if(process.env.SHOTS_DIR)await page.screenshot({path:`${process.env.SHOTS_DIR}/zip-${name}-${theme}-${width}.png`});};
+const geometry=async dialog=>dialog.evaluate(el=>{const box=n=>{const r=n.getBoundingClientRect();return [Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)];};const buttons=[...el.querySelectorAll('.zip-foot button')];return {dialog:box(el),buttons:buttons.map(box),foot:getComputedStyle(el.querySelector('.zip-foot')).padding};});
 for(const [theme,width] of [['light',1440],['dark',1440],['light',402],['dark',402]]){
  exportState.current=null;calls.length=0;
  const page=await open(theme,width);
- await page.getByRole('button',{name:'Download full ZIP fleur-latest'}).click();
- const dialog=page.getByRole('dialog',{name:'Preparing your ZIP'});await dialog.waitFor();
+ const trigger=page.getByRole('button',{name:'Download full ZIP fleur-latest'});
+ await trigger.click();
+ const dialog=page.locator('dialog.zip-dialog');await dialog.waitFor();
+ await page.waitForFunction(()=>true);
+ for(let i=0;i<100&&!calls.includes('POST /api/backups/fleur-latest/zip-exports');i++)await page.waitForTimeout(50);
  assert.ok(calls.includes('POST /api/backups/fleur-latest/zip-exports'),'starts the preparation');
- // Preparing: step, progress bar, percent, time left, close note.
  exportState.current={...exportState.current,bytesDone:40,etaSeconds:200};
- await dialog.getByText('Checking the backup',{exact:true}).first().waitFor();
  await dialog.getByText('40%',{exact:true}).waitFor({timeout:6000});
  await dialog.getByText('About 4 min left',{exact:true}).waitFor();
  assert.equal(await dialog.locator('progress').getAttribute('value'),'40');
  await dialog.getByText('You can close this window, the ZIP keeps preparing',{exact:false}).waitFor();
+ assert.equal(await dialog.getByRole('button',{name:'Download ZIP',exact:true}).isDisabled(),true,'Download is disabled while preparing');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal overflow');
- // Close and reopen: the same preparation is shown, not a second one.
- await dialog.getByRole('button',{name:'Close dialog'}).click();await dialog.waitFor({state:'detached'});
+ const preparing=await geometry(dialog);await shot(page,'preparing',theme,width);
+ if(width<500){assert.deepEqual(preparing.dialog.slice(0,2),[0,0]);assert.equal(preparing.dialog[2],width);}
+ // Escape closes and returns focus to the trigger; reopening reuses the running preparation.
+ await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Download full ZIP fleur-latest');
  const posts=calls.filter(c=>c.startsWith('POST')).length;
- await page.getByRole('button',{name:'Download full ZIP fleur-latest'}).click();
- await page.getByRole('dialog',{name:'Preparing your ZIP'}).getByText('40%',{exact:true}).waitFor();
+ await trigger.click();
+ await dialog.getByText('40%',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.startsWith('POST')).length,posts,'reopening reuses the running preparation');
- // Ready.
+ // Ready: same dialog size and the same button positions.
  exportState.current={...exportState.current,status:'ready',bytesDone:100,etaSeconds:null,expiresAt:new Date(Date.now()+3600000).toISOString()};
  const ready=page.getByRole('dialog',{name:'Your ZIP is ready'});await ready.waitFor({timeout:6000});
  await ready.getByText('Ready for 60 minutes',{exact:true}).waitFor();
- const download=ready.getByRole('button',{name:'Download ZIP',exact:true});
- const height=await download.evaluate(el=>el.getBoundingClientRect().height);assert.ok(height>=(width<500?44:40),'button height '+height);
- const [request]=await Promise.all([page.waitForRequest(r=>r.url().endsWith('/zip-exports/e1/download')).catch(()=>null),page.evaluate(()=>0),download.click().catch(()=>{})]);
+ const readyBox=await geometry(ready);await shot(page,'ready',theme,width);
+ assert.deepEqual(readyBox,preparing,'Dialog and buttons keep their size and place between states');
+ assert.equal(readyBox.foot,width<500?'16px':'16px 24px');
+ for(const b of readyBox.buttons)assert.ok(b[3]>=(width<500?44:40),'button height '+b[3]);
+ await Promise.all([page.waitForRequest(r=>r.url().endsWith('/zip-exports/e1/download')).catch(()=>null),ready.getByRole('button',{name:'Download ZIP',exact:true}).click().catch(()=>{})]);
  await page.waitForTimeout(300);
- await ready.getByRole('button',{name:'Discard'}).click();
- assert.ok(calls.includes('DELETE /api/backups/fleur-latest/zip-exports/e1'),'cancel deletes the preparation');
- // Failure and retry.
- exportState.current=null;
- await page.getByRole('button',{name:'Download full ZIP fleur-latest'}).click();
- const second=page.getByRole('dialog');await second.waitFor();
- while(!exportState.current)await page.waitForTimeout(50);
- exportState.current={...exportState.current,status:'failed',error:'The backup could not be verified, so no ZIP was prepared. The encrypted download remains available.'};
- const failed=page.getByRole('dialog',{name:'The ZIP could not be prepared'});await failed.waitFor({timeout:6000});
- await failed.getByText('could not be verified',{exact:false}).waitFor();
- await failed.getByRole('button',{name:'Try again',exact:true}).waitFor();
- if(process.env.SHOTS_DIR)await page.screenshot({path:`${process.env.SHOTS_DIR}/zip-failed-${theme}-${width}.png`});
- await failed.getByRole('button',{name:'Try again',exact:true}).click();
+ if(await ready.count()===0)await trigger.click();
+ await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
+ assert.ok(calls.includes('DELETE /api/backups/fleur-latest/zip-exports/e1'),'Cancel deletes the prepared ZIP');
+ await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Download full ZIP fleur-latest');
+ // Failed, expired and cancelled-elsewhere states: plain text, Try again, same geometry.
+ for(const [name,title,patch,text] of [
+  ['failed','The ZIP could not be prepared',{status:'failed',error:'The backup could not be verified, so no ZIP was prepared. The encrypted download remains available.'},'could not be verified'],
+  ['expired','This ZIP is no longer available',{status:'expired'},'ready time ran out'],
+  ['cancelled','The ZIP was cancelled',null,'cancelled from another window']]){
+  exportState.current=null;
+  await trigger.click();
+  while(!exportState.current)await page.waitForTimeout(50);
+  const open=page.locator('dialog.zip-dialog');await open.waitFor();
+  if(patch)exportState.current={...exportState.current,...patch};else{exportState.current=undefined;}
+  if(!patch)await page.route('**/api/backups/fleur-latest/zip-exports/e1',r=>r.fulfill({status:404,json:{error:'ZIP preparation not found.'}}));
+  const shown=page.getByRole('dialog',{name:title});await shown.waitFor({timeout:6000});
+  await shown.getByText(text,{exact:false}).waitFor();
+  await shown.getByRole('button',{name:'Try again',exact:true}).waitFor();
+  assert.deepEqual(await geometry(shown),preparing,name+' keeps the dialog geometry');
+  await shot(page,name,theme,width);
+  await shown.getByRole('button',{name:'Cancel',exact:true}).click();await shown.waitFor({state:'detached'});
+  if(!patch)await page.unroute('**/api/backups/fleur-latest/zip-exports/e1');
+ }
+ // Retry starts a new preparation.
+ exportState.current=null;await trigger.click();while(!exportState.current)await page.waitForTimeout(50);
+ exportState.current={...exportState.current,status:'failed',error:'The full ZIP could not be prepared. The encrypted download remains available.'};
+ await page.getByRole('button',{name:'Try again',exact:true}).click();
  await page.getByRole('dialog',{name:'Preparing your ZIP'}).waitFor({timeout:6000});
  await page.close();
 }

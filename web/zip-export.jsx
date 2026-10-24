@@ -34,7 +34,7 @@ export function ZipDialog({backupId,onClose}){
  const live=state&&(state.status==='preparing'||state.status==='ready');
  useEffect(()=>{
   if(!live)return;
-  const timer=setInterval(async()=>{try{setState(await call(base+'/'+state.id));}catch(e){if(e.status===404)setState({status:'expired'});}},2000);
+  const timer=setInterval(async()=>{try{setState(await call(base+'/'+state.id));}catch(e){if(e.status===404)setState({status:'cancelled'});}},2000);
   return()=>clearInterval(timer);
  },[live,state?.id]);
  async function cancel(){
@@ -51,7 +51,8 @@ export function ZipDialog({backupId,onClose}){
  }
  const status=state?.status;
  const percent=state&&state.bytesTotal?Math.min(100,Math.floor(state.bytesDone/state.bytesTotal*100)):0;
- const title=status==='ready'?'Your ZIP is ready':status==='failed'?'The ZIP could not be prepared':status==='expired'?'This ZIP is no longer available':'Preparing your ZIP';
+ const title=status==='ready'?'Your ZIP is ready':status==='failed'?'The ZIP could not be prepared':status==='expired'?'This ZIP is no longer available':status==='cancelled'?'The ZIP was cancelled':'Preparing your ZIP';
+ const retry=status==='failed'||status==='expired'||status==='cancelled'||(error&&!state);
  return <dialog ref={ref} className="zip-dialog" aria-labelledby="zip-title" onCancel={e=>{e.preventDefault();onClose();}} onClick={e=>{if(e.target===ref.current)onClose();}}>
   <div className="modal-head"><h2 id="zip-title">{title}</h2><button type="button" className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>
   <div className="modal-body zip-body">
@@ -67,19 +68,21 @@ export function ZipDialog({backupId,onClose}){
     <p className="zip-meta">{readyText(state.expiresAt)}</p>
    </>}
    {status==='failed'&&<p role="alert">{state.error}</p>}
-   {status==='expired'&&<p>Prepare it again to download.</p>}
+   {status==='expired'&&<p>The ready time ran out. Prepare it again to download.</p>}
+   {status==='cancelled'&&<p>This ZIP was cancelled from another window. Prepare it again to download.</p>}
   </div>
   <div className="modal-foot zip-foot">
-   {status==='ready'?<><button type="button" onClick={cancel}>Discard</button><button type="button" className="primary" onClick={download}>Download ZIP</button></>
-   :status==='failed'||status==='expired'||(error&&!state)?<><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setState(null);begin();}}>Try again</button></>
-   :<button type="button" onClick={cancel}>Cancel</button>}
+   <button type="button" onClick={cancel}>Cancel</button>
+   {retry?<button type="button" className="primary" onClick={()=>{setState(null);begin();}}>Try again</button>
+   :<button type="button" className="primary" disabled={status!=='ready'} onClick={download}>Download ZIP</button>}
   </div>
  </dialog>;
 }
 export function ZipButton({backupId,className,label,title,children}){
- const [open,setOpen]=useState(false);
+ const [open,setOpen]=useState(false),trigger=useRef();
+ const close=()=>{setOpen(false);requestAnimationFrame(()=>trigger.current?.focus());};
  return <>
-  <button type="button" className={className} aria-label={label} title={title} onClick={()=>setOpen(true)}>{children}</button>
-  {open&&<ZipDialog backupId={backupId} onClose={()=>setOpen(false)}/>}
+  <button type="button" ref={trigger} className={className} aria-label={label} title={title} onClick={()=>setOpen(true)}>{children}</button>
+  {open&&<ZipDialog backupId={backupId} onClose={close}/>}
  </>;
 }
