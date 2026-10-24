@@ -1,0 +1,15 @@
+.rebrand-page dialog.zip-dialog,dialog.zip-dialog{width:min(520px,calc(100vw - 2 * var(--edge,16px)));height:min(380px,calc(100dvh - 2 * var(--edge,16px)))}
+.rebrand-page dialog.zip-dialog[open],dialog.zip-dialog[open]{display:flex;flex-direction:column;overflow:hidden}
+.zip-body{display:grid;align-content:start;gap:12px;flex:1 1 auto;min-height:0;overflow-y:auto}
+.zip-body p{margin:0}
+.zip-step{display:flex;justify-content:space-between;gap:12px;color:var(--heading)}
+.zip-meta{color:var(--text-secondary)}
+.zip-note{color:var(--text-muted);font-size:var(--fs-caption)}
+dialog.zip-dialog .zip-foot{display:flex;justify-content:flex-end;gap:12px;margin:0;padding:16px 24px;border-top:1px solid var(--border-subtle);flex:none}
+dialog.zip-dialog .zip-foot button{min-height:40px;min-width:140px}
+@media (max-width:640px){
+ /* Bottom sheet: as tall as its content (same height in every state), buttons right under the text */
+ .rebrand-page dialog.zip-dialog,dialog.zip-dialog{position:fixed;inset:auto 0 0 0;width:100%;max-width:100%;height:min(320px,calc(100dvh - 48px));max-height:none;margin:0;border-radius:16px 16px 0 0}
+ dialog.zip-dialog .zip-foot{gap:8px;padding:16px 16px max(16px,env(safe-area-inset-bottom))}
+ dialog.zip-dialog .zip-foot button{flex:1 1 0;min-width:0;min-height:44px}
+}

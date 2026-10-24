@@ -23,7 +23,7 @@ await mkdir('data/screenshots/dashboard',{recursive:true});
 await page.screenshot({path:'data/screenshots/dashboard/dashboard-desktop.png',fullPage:true,animations:'disabled'});
 await page.locator('.dash-site summary').first().click();
 assert.equal(await page.locator('.dash-site[open] .dash-backup').count(),2);
-assert.equal(await page.getByRole('link',{name:'Download full ZIP fleur-latest'}).getAttribute('href'),'/api/backups/fleur-latest/download?format=zip');
+assert.equal(await page.getByRole('button',{name:'Download full ZIP fleur-latest'}).count(),1);
 assert.equal(await page.getByRole('link',{name:'Download encrypted backup fleur-latest'}).getAttribute('href'),'/api/backups/fleur-latest/download');
 // Legacy verified packages (API legacy shape and bare verified flag) agree across counter, rows and details.
 assert.equal(await page.locator('.activity-feature b').first().textContent(),String(state.backups.length),'Integrity-checked captures count every legacy verified package');

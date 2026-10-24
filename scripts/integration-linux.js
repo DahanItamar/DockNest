@@ -173,15 +173,20 @@ try {
   assert.equal(await run('exec', hosts[1], 'docker', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', result.containerId), 'none');
   assert.equal(await run('exec',hosts[1],'docker','exec',result.containerId,'python','-c',"from pathlib import Path;import os;assert not Path('/tmp/ephemeral.txt').exists();assert os.stat('/tmp').st_mode&0o7777==0o1777;assert ' /tmp tmpfs ' in Path('/proc/mounts').read_text();print('temporary-empty')"),'temporary-empty');
   record('Declared temporary RAM folders are recreated empty with original permissions, while persistent database data survives');
-  const {exportFullZip}=await import('../src/backup-export.js');const {createWriteStream}=await import('node:fs');
+  // Prepare (verify only), poll until ready, then stream the ZIP; nothing is staged on disk.
+  const {startZipExport,findZipExport,zipExportState,streamZipExport}=await import('../src/backup-export.js');const {createWriteStream}=await import('node:fs');
+  const prepared=startZipExport(backup).item;let zipState=prepared;
+  for(let i=0;i<600&&zipState.status==='preparing';i++){await new Promise(resolve=>setTimeout(resolve,500));zipState=zipExportState(findZipExport(backup.id,prepared.id));}
+  assert.equal(zipState.status,'ready',zipState.error||'ZIP preparation did not finish');
   const fullZip=join(directory,'full-site.zip'),zipResponse=createWriteStream(fullZip);zipResponse.attachment=()=>zipResponse;zipResponse.set=()=>zipResponse;
-  await exportFullZip(backup,zipResponse);
+  await streamZipExport(findZipExport(backup.id,prepared.id),backup,zipResponse);
+  await new Promise(resolve=>zipResponse.writableFinished?resolve():zipResponse.once('finish',resolve));
   const {execFileSync}=await import('node:child_process');
   execFileSync(process.platform==='win32'?'python':'python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);bad=z.testzip();assert bad is None,repr(bad)",fullZip],{stdio:['ignore','ignore','pipe']});
   await run('cp',fullZip,hosts[1]+':/full-site.zip');
   assert.equal(await run('exec',hosts[1],'python3','-c',"import zipfile;z=zipfile.ZipFile('/full-site.zip');bad=z.testzip();assert bad is None,repr(bad);assert z.read('site-files/site-a/site/asset.txt')==b'snapshot-asset';assert 'site-files/site-a/site/database.sqlite' in z.namelist();assert 'recovery-originals/images.tar' in z.namelist();assert 'recovery-originals/manifest.json' in z.namelist();print('full-zip-verified')"),'full-zip-verified');
-  await rm(fullZip);assert.deepEqual(await readdir(join(process.env.DATA_DIR,'private-exports')),[]);
-  record('Full ZIP authenticates the encrypted SFTP backup, exports browsable database/files and original image archives, passes every ZIP CRC and removes temporary plaintext');
+  await rm(fullZip);assert.deepEqual((await readdir(process.env.DATA_DIR,{recursive:true})).filter(name=>/(^|[\\/])(export-[A-Za-z0-9]+|payload\.tar\.gz)([\\/]|$)/.test(name)),[],'No export files exist anywhere under the data directory');
+  record('Full ZIP is prepared (verify only), then streamed from the encrypted SFTP backup with browsable database/files and original image archives, passes every ZIP CRC and never stores plaintext on the server');
   record('Clean second-host restore loads bundled images without pulling; original database rows, asset, mode and writable layer survive live-source edits; copy has network none');
   const chunks=[];for await(const chunk of await openRead(backup.path))chunks.push(chunk);
   const bytes = Buffer.concat(chunks); bytes[40] ^= 1;

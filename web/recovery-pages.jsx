@@ -1,5 +1,6 @@
 ﻿import React from 'react';
 import {Paginated} from './pagination.jsx';
+import {ZipButton} from './zip-export.jsx';
 import {count} from './plural.js';
 import {ChevronDown} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
@@ -56,7 +57,7 @@ export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onC
     <div className="recovery-status">{(s=>[<Badge key="badge" value={s.badge}/>,<small key="level" title={s.title}>{s.line}{backup.pinned?', pinned':''}</small>])(recoveryStatus(backup))}</div>
     <div className="recovery-size"><b>{bytes(backup.size||backup.sizeBytes)}</b><small>{backup.downtimeMs!=null?(backup.downtimeMs/1000).toFixed(1)+' s offline':'Downtime not reported'}</small></div>
     <div className="recovery-actions">
-     <a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download?format=zip`} aria-label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={20}/></a>
+     <ZipButton backupId={backup.id} className="icon-button recovery-action" label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={20}/></ZipButton>
      <a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted original"><BrandIcon name="encrypted-download" size={20}/></a>
      <Control label={`${backup.pinned?'Unpin':'Pin'} backup ${backup.id}`} icon="pin" aria-pressed={!!backup.pinned} disabled={busy} onClick={()=>onPin(backup)}/>
      <Control label={`Restore backup ${backup.id}`} icon="restore" onClick={()=>onRestore(backup)}/>

@@ -28,7 +28,7 @@ try{
    if(route==='Sites & schedules')await equalCards('.site-card');
    if(route==='Storage'){await equalCards('.storage-card');const bars=await page.locator('.storage-card-actions').evaluateAll(elements=>elements.map(el=>({y:el.getBoundingClientRect().y,height:el.getBoundingClientRect().height})));assert.ok(Math.abs(bars[0].y-bars[1].y)<1,'Storage action baselines');assert.ok(Math.abs(bars[0].height-bars[1].height)<1,'Storage action heights');}
    if(route==='Access')await equalCards('.access-grid>.panel');
-   if(route==='Backups'){await page.locator('.backup-group>summary').first().click();assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),2);assert.equal(await page.getByRole('link',{name:'Download full ZIP acme-latest'}).getAttribute('href'),'/api/backups/acme-latest/download?format=zip');}
+   if(route==='Backups'){await page.locator('.backup-group>summary').first().click();assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),2);assert.equal(await page.getByRole('button',{name:'Download full ZIP acme-latest'}).count(),1);}
    await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:`${directory}/${slug}-${theme}.png`,fullPage:true});
    for(const width of [1920,1280,1024,768,390,320]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,route+' fits '+width);}
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:`${directory}/${slug}-${theme}-mobile.png`,fullPage:true});
