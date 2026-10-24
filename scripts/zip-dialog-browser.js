@@ -50,7 +50,8 @@ for(const [theme,width] of [['light',1440],['dark',1440],['light',402],['dark',4
  assert.equal(await dialog.getByRole('button',{name:'Download ZIP',exact:true}).isDisabled(),true,'Download is disabled while preparing');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal overflow');
  const preparing=await geometry(dialog);await shot(page,'preparing',theme,width);
- if(width<500){assert.deepEqual(preparing.dialog.slice(0,2),[0,0]);assert.equal(preparing.dialog[2],width);}
+ // Phone: a bottom sheet, full width, attached to the bottom edge, buttons right under the content
+ if(width<500){assert.equal(preparing.dialog[0],0);assert.equal(preparing.dialog[2],width);assert.equal(preparing.dialog[1]+preparing.dialog[3],874,'sheet sits on the bottom edge');assert.ok(preparing.dialog[3]<=340,'sheet is not full height');}
  // Escape closes and returns focus to the trigger; reopening reuses the running preparation.
  await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
  await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Download full ZIP fleur-latest');
