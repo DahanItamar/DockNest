@@ -64,7 +64,8 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
     await run('exec', host, 'test', '!', '-e', '/var/lib/docknest/restore-tests/' + testId);
     assert.deepEqual(await hostRules(host), [], 'no restore-test firewall rule on the host');
     assert.equal((await remote(server, { operation: 'restore-test-status', testId })).present, false);
-    const reaperGone = `for p in /proc/[0-9]*; do grep -q 'restore-tests/${testId}' "$p/cmdline" 2>/dev/null && exit 1; done; exit 0`;
+    // [.] keeps this shell's own command line from matching the pattern it searches for.
+    const reaperGone = `for p in /proc/[0-9]*; do [ "\${p#/proc/}" = "$$" ] && continue; grep -q 'restore-tests/${testId}/reaper[.]py' "$p/cmdline" 2>/dev/null && exit 1; done; exit 0`;
     await until(async () => { await run('exec', host, 'sh', '-c', reaperGone); return true; }, 'The reaper did not exit after clean-up', 60);
   }
   async function copies(testId, host = target) {
