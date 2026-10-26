@@ -16,7 +16,7 @@ try{
  await health.filter({hasText:'Checking connection'}).waitFor();await page.clock.fastForward(20000);await health.filter({hasText:'Connection interrupted'}).waitFor();
  mode='online';for(const route of pending.splice(0))await route.fulfill({json:state});await refresh();
  await health.filter({hasText:'API & worker online'}).waitFor();
- assert.equal(await health.evaluate(el=>getComputedStyle(el).color),'rgb(30, 136, 229)');
+ assert.equal(await health.evaluate(el=>getComputedStyle(el).color),'rgb(47, 115, 207)');
  assert.equal(await health.locator('.health-wide .health-sweep').evaluate(el=>getComputedStyle(el).animationName),'health-sweep');
  assert.equal(await page.locator('.berry-version,.workspace>footer').count(),0);
  assert.ok(await health.evaluate(el=>el.nextElementSibling.classList.contains('berry-sidebar-storage')));

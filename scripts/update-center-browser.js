@@ -405,7 +405,7 @@ try{
   assert.equal(new Set(widths).size,1,'Rows stack full width at 480 px and below');
   await noWrap(page,'.progress-view');
   await page.getByRole('button',{name:'Switch to dark theme'}).click();
-  assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('.progress-view')).backgroundColor),'rgb(16, 23, 36)','Dark tokens apply to the lock view');
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('.progress-view')).backgroundColor),'rgb(18, 17, 19)','Dark tokens apply to the lock view');
   await context.close();
  }
  assert.deepEqual(errors,[]);

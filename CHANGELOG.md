@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- New Mauve ink colour palette in light and dark: neutrals carry a hint of the brand purple, better contrast for charts.
+
 ## [2.8.2] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.2.md](docs/releases/2026-10-24-v2.8.2.md).
