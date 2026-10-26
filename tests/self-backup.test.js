@@ -73,13 +73,18 @@ test('worker creates an encrypted consistent kit, replaces one copy only after s
 test('scheduled runs deduplicate and imported kits pause self-backup and revoke sessions',async()=>{
  saveSelfBackupSettings({...settings,enabled:true},administrator);
  const due=new Date(selfBackupStatus().settings.nextRun);tickSelfBackup(new Date(due.getTime()-1));assert.equal(selfBackupStatus().active,null);
+ db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('kit-test-server','kit','192.0.2.9',22,'root',?,'0',?)").run(seal('fixture-key'),new Date().toISOString());
+ db.prepare("INSERT INTO sites VALUES('kit-test-site','kit-test-server','kit','{}',?)").run(new Date().toISOString());
+ db.prepare("INSERT INTO restore_tests(id,site_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,started_at) VALUES('kit-test','kit-test-site','x','kit-test-server','manual','{}','a','x','x')").run();
  tickSelfBackup(due);tickSelfBackup(due);assert.equal(db.prepare("SELECT COUNT(*) AS n FROM manager_backups WHERE status='queued'").get().n,1);
  await executeSelfBackup(claimSelfBackup());
+ db.prepare("UPDATE restore_tests SET result='cancelled',cleanup='done' WHERE id='kit-test'").run();
  const fresh=join(root,'fresh-manager'),input=join(root,'downloaded.dkit');await writeFile(input,(await readLatestSelfBackup()).bytes);
  await restoreRecoveryKit({input,directory:fresh,passphrase});
  const restored=new DatabaseSync(join(fresh,'state.sqlite'));
  assert.equal(restored.prepare("SELECT value FROM settings WHERE key='fixture_metadata'").get().value,'preserved');
  assert.equal(JSON.parse(restored.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get().value).enabled,false);
+ assert.equal(restored.prepare("SELECT cancel_requested FROM restore_tests WHERE id='kit-test'").get().cancel_requested,1,'independent recovery stops unfinished restore tests');
  assert.equal(restored.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,0);assert.equal(restored.prepare('SELECT COUNT(*) AS n FROM manager_backups').get().n,0);restored.close();
  assert.equal(await readFile(join(fresh,'master.key'),'utf8'),await readFile(process.env.MASTER_KEY_FILE,'utf8'));
 });
