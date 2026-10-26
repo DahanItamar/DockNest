@@ -191,4 +191,4 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 ## License
 
-[GNU AGPL-3.0](LICENSE), with one additional term under section 7(b) in [NOTICE](NOTICE): keep the "Powered by DockNest" credit and its link on visitor pages. Bundled fonts and dependencies keep their own licenses.
+[GNU AGPL-3.0](LICENSE). Bundled fonts and dependencies keep their own licenses.
