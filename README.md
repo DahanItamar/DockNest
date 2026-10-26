@@ -1,6 +1,6 @@
 <div align="center">
   <img src="docs/media/logo-blue.png" alt="DockNest" width="320" />
-  <p><strong>Back up Docker sites. Verify recovery points. Restore a private copy.</strong></p>
+  <p><strong>Self-hosted Docker backup and restore with a visual server map. Move sites between servers safely.</strong></p>
   <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=5E35B1&sort=semver&display_name=tag" alt="Latest release" /></a>
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
   <img src="https://img.shields.io/badge/status-beta-orange?style=flat-square" alt="Status: beta" />
@@ -16,7 +16,36 @@
   <a href="https://github.com/DahanItamar/DockNest/releases/latest">Latest release</a>
 </p>
 
-![DockNest dashboard with synthetic sites, activity and storage metrics](docs/media/dashboard.png)
+![The DockNest Map: a site's line is dragged from one server to another, then the move is reviewed](docs/media/map-move.gif)
+
+## Quick start
+
+```sh
+git clone https://github.com/DahanItamar/DockNest.git && cd DockNest
+npm ci && npm run setup
+docker compose --profile https up -d --build
+```
+
+Set your domain in `.env` first. See [Install](#install) for the details.
+
+## How it compares
+
+These tools solve different problems. This is a short, honest view. Check each project for its current features.
+
+| | DockNest | Coolify | Backrest / restic | Duplicati | offen/docker-volume-backup |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| Site-aware backup (containers, database, volumes) | Yes | Database backups to S3 for apps it deploys | No, backs up files and folders | No, backs up files and folders | Volumes, with hooks for databases |
+| Server-to-server move | Yes, from the Map | No built-in migration | No | No | No |
+| Verified restore to a separate copy | Yes | No | Manual restore | Manual restore | Manual restore |
+| Encrypted storage | AES-256-GCM, SFTP or S3-compatible | Check its docs | Yes | Yes | Optional (GPG or age) |
+| Web UI | Yes | Yes | Yes (Backrest) | Yes | No |
+| Deduplication | No | No | Yes | Yes | No |
+
+DockNest does not deduplicate. Every backup is a full copy, so it uses more storage than restic. If you want deduplicated file backups, use Backrest or restic.
+
+## Roadmap
+
+Next: automatic restore tests. They are coming soon and are not available yet.
 
 ## What it does
 

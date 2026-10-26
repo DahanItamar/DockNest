@@ -67,3 +67,7 @@ A release pull request (version bump) is not complete until all of these are don
 ## License
 
 By contributing, you agree that your contributions are licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+## Traffic snapshots
+
+GitHub keeps repository traffic for only 14 days. `node scripts/traffic-snapshot.mjs [folder]` uses the GitHub CLI (`gh`, signed in with push access) to save views, clones, top referrers, top paths and the star count as one dated JSON file in a folder outside the repository (default `%USERPROFILE%/DockNest-traffic`). Run it weekly.
