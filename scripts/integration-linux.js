@@ -86,6 +86,7 @@ try {
   await run('cp','remote',hosts[0]+':/qa-helper');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
   await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
