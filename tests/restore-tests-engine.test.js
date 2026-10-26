@@ -169,6 +169,10 @@ test('a failed authentication is backup-side; a lost connection is not; reasons 
   const bad = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, actor: 'a' }).id);
   assert.equal(bad.result, 'failed'); assert.equal(bad.failed_step, 'copy_backup');
   assert.equal(backupVerification(f.backupId).integrity.status, 'failed'); assert.equal(backupVerification(f.backupId).isolatedRestore.status, 'not-tested');
+  assert.equal(db.prepare('SELECT verified FROM backups WHERE id=?').get(f.backupId).verified, 0, 'the corrupt package is never picked again');
+  assert.equal(rt.latestTestableBackup(f.siteId), null);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM backup_verification_history WHERE backup_id=? AND kind='integrity'").get(f.backupId).n, 1, 'one integrity record');
+  db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(f.backupId);
   answers.upload = async ({ prepare }) => { await prepare(); throw Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET' }); };
   const lost = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, actor: 'a' }).id);
   assert.equal(lost.result, 'couldnt_run'); assert.equal(lost.reason, 'The backup could not be copied to the test server.'); assert.equal(lost.cleanup, 'done', 'clean-up ran after prepare');

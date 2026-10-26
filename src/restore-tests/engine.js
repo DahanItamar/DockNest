@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, uploadBackupTo, jobRunners } from '../engine.js';
-import { recordTestVerification } from '../recovery-evidence.js';
+import { recordTestVerification, recordVerification } from '../recovery-evidence.js';
 import { secretValue } from '../moves/state.js';
 import { validateLimits, cpuProblem } from './limits.js';
 import { heldBy } from './hold.js';
@@ -122,7 +122,8 @@ function evidenceFor(test, result, failedStep, checks) {
   const base = { testId: test.id, internet: !!test.limits.internet, checks: checks.length };
   const evidence = [];
   const authentic = checks.find(item => item.kind === 'authentic');
-  if (authentic) evidence.push(['integrity', { ...base, status: authentic.status === 'passed' ? 'passed' : 'failed' }]);
+  // A failed authentication is recorded at once like a scrub does (copy_backup), so only a pass is added here.
+  if (authentic?.status === 'passed') evidence.push(['integrity', { ...base, status: 'passed' }]);
   if (result === 'passed') evidence.push(['isolatedRestore', { ...base, status: 'passed' }]);
   else if (failedStep !== 'copy_backup') evidence.push(['isolatedRestore', { ...base, status: 'failed', failedStep }]);
   const data = checks.filter(item => ['database', 'sqlite'].includes(item.kind));
@@ -289,6 +290,12 @@ const STEP_RUNNERS = {
     catch (error) {
       if (signal.aborted) throw error;
       if (/checksum differs|unable to authenticate|Unsupported backup format|Truncated backup/i.test(String(error?.message))) {
+        // As a scrub does: the package is marked unverified, so no test, restore or move picks it again.
+        transaction(() => {
+          recordVerification(test.backup_id, 'integrity', { status: 'failed', method: 'full package authentication failed during an automatic restore test', testId: test.id }, test.job_id);
+          db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(test.backup_id);
+          audit('worker', 'backup.integrity_failed', test.backup_id, { test: test.id });
+        });
         conclude(loadTest(test.id), 'failed', { step: 'copy_backup', reason: 'The backup did not pass authentication (AES-256-GCM and its stored SHA256).', checks: [{ name: 'Backup authentic', kind: 'authentic', target: null, status: 'failed', detail: null }] });
         return;
       }
