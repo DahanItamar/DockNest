@@ -43,7 +43,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
 | PM-21 | Timed clean-VPS onboarding walkthrough | 2.4.0 | Reality Checker | sonnet-medium | PM-20 |
 | PM-22 | Scheduled restore drill ADR | 2.9.0 | Software Architect + Security Engineer | opus-high | PM-15, PM-16 |
 | PM-23 | Scheduled restore drills | 2.9.0 | Backend Architect | opus-high | PM-22 |
-| PM-24 | Per-site RPO/RTO targets and report | 2.5.0 | Backend Architect | sonnet-high | PM-23 |
+| PM-24 | Per-site RPO/RTO targets and report | After PM-23 | Backend Architect | sonnet-high | PM-23 |
 | PM-25 | Install-report and interview templates | 2.2.0 | Technical Writer | haiku-medium | — |
 
 ---
@@ -250,7 +250,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
   - RPO actual = now minus the capture time of the latest *usable* package (integrity passed, not quarantined). RTO actual = the latest drill's measured restore duration, never capture duration.
   - A dashboard view and a CSV export.
   - Sites without drill data show "RTO unknown".
-- **Owner role:** [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) · **Tier:** sonnet-high · **Depends on:** PM-23 · **Target:** 2.5.0
+- **Owner role:** [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) · **Tier:** sonnet-high · **Depends on:** PM-23 · **Target:** after PM-23 (2.9.0 or later)
 
 ## Docs and research
 
