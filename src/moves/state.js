@@ -117,7 +117,7 @@ export function undoFailedStep(step, result, now) {
 // Journal rows are shown in the UI and kept for audit, so they must never hold secret values. Key names that look
 // like credentials, and values with URL userinfo or bearer tokens, are refused rather than silently stored.
 const secretKey = /pass(word|wd)?|secret|token|private|credential|authorization|api[-_]?key|cookie|session/i;
-const secretValue = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@|\bbearer\s+\S|-----BEGIN [A-Z ]*PRIVATE KEY/i;
+export const secretValue = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@|\bbearer\s+\S|-----BEGIN [A-Z ]*PRIVATE KEY/i;
 export function journalSafe(value, path = 'journal') {
   if (Array.isArray(value)) { value.forEach((item, index) => journalSafe(item, `${path}[${index}]`)); return value; }
   if (value && typeof value === 'object') {

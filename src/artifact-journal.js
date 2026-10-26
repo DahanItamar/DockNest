@@ -41,6 +41,8 @@ export function deletionBlocked(backupId){
   ||db.prepare("SELECT id FROM restores WHERE backup_id=? AND status IN ('queued','running','recovery_required')").get(backupId)
   ||db.prepare('SELECT id FROM downloads WHERE backup_id=? AND expires_at>?').get(backupId,Date.now())
   ||db.prepare("SELECT id FROM jobs WHERE type='scrub' AND status IN ('queued','running','recovery_required') AND json_extract(details,'$.backupId')=?").get(backupId)
+  // A restore test's lease on its package: an unfinished test or clean-up keeps the backup (docs/restore-tests.md).
+  ||db.prepare("SELECT id FROM restore_tests WHERE backup_id=? AND (result IS NULL OR cleanup IN ('pending','failed'))").get(backupId)
   ||db.prepare("SELECT b.id FROM backups b WHERE b.verified=1 AND b.site_id=(SELECT site_id FROM backups WHERE id=?) AND EXISTS(SELECT 1 FROM backup_verification_history v WHERE v.backup_id=b.id AND v.kind='application' AND v.status='passed') ORDER BY b.captured_at DESC,b.id DESC LIMIT 1").get(backupId)?.id===backupId
   // Preserve the older currently passing point when the newest historical pass
   // has a later failed recovery attempt. Attempt history remains conservative.
