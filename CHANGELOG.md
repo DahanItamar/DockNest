@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Map details panel: copy is now an icon on the right of each value, long values no longer get cut off, and the Alerts section matches the rest of the panel.
+
 ## [2.8.2] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.2.md](docs/releases/2026-10-24-v2.8.2.md).
