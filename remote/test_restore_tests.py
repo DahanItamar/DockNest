@@ -423,6 +423,18 @@ class ReaperAndStatusTests(unittest.TestCase):
             with patch('helper.process_cmdline',return_value=b'nginx: worker process'),patch('helper.os.kill') as kill:
                 helper.restore_test_teardown({'testId':TID})
             kill.assert_not_called()
+    def test_teardown_never_signals_a_reused_pid_and_is_idempotent_when_the_reaper_is_gone(self):
+        reaper=b'python3\x00-I\x00/var/lib/docknest/restore-tests/'+TID.encode()+b'/reaper.py'
+        for start,error,expected in [(111,None,False),(None,ProcessLookupError(),True)]:
+            with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.systemd_present',return_value=False),patch('helper.os.geteuid',return_value=0,create=True),patch('helper.process_start',return_value=100):
+                popen.return_value.pid=4242
+                helper.restore_test_prepare({'testId':TID,'deadline':5,'reaper':__import__('base64').b64encode(b'print(1)').decode()})
+                self.assertEqual(box.state()['reaperStart'],100)
+                with patch('helper.process_cmdline',return_value=reaper),patch('helper.process_start',return_value=start or 100),patch('helper.os.kill',side_effect=error) as kill:
+                    helper.restore_test_teardown({'testId':TID})
+                self.assertEqual(kill.called,expected);self.assertTrue(box.results()[-1]['removed'])
+    def test_process_start_reads_field_22(self):
+        with patch('helper.pathlib.Path.read_text',return_value='42 (py thon) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 98765 0 0'):self.assertEqual(helper.process_start(42),98765)
     def test_reaper_does_nothing_when_the_manager_already_cleaned_up(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown') as teardown:
             box.prepare(deadline=1000);now=[0]

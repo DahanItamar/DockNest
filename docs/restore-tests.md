@@ -202,8 +202,10 @@ Teardown (`restore-test-teardown`, idempotent):
    has other tags; otherwise removing the image by ID takes the tag with it, and a kept image keeps its only name.
 4. Remove the staging root (always this test's `/var/lib/docker-backup-manager/restore/<testId>`, journalled or not)
    and the journal directory (only under `/var/lib/docknest/restore-tests/`), with symlinks resolved.
-5. Stop this test's reaper (its PID is journalled; only a process whose command line is this test's `reaper.py` is
-   signalled), then remove the journal.
+5. Stop this test's reaper (an event, no polling): its PID and kernel start time are journalled, and SIGTERM goes
+   only to a process whose command line is this test's `reaper.py` and whose start time matches, so a reused PID is
+   never signalled. The reaper exits at once on SIGTERM without acting. A reaper that is already gone is fine, so
+   teardown stays idempotent. Then remove the journal.
 6. `restore-test-status` must then report nothing left. Only then is `clean_up` done.
 
 Restart and failure paths:
