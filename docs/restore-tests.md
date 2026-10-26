@@ -89,11 +89,16 @@ the feature ships with its own "beta" label, like moves did.
 - **Allow internet** (Advanced, administrator only with re-verification, off by default). Groups then use fresh
   non-internal bridge networks of their own (never the default bridge); single containers get one such network. Still
   no published ports. The warning: "The copy runs with your live keys and passwords. With internet it can call
-  webhooks, payment and other APIs, and run scheduled jobs once. Outgoing mail is blocked."
-- Outgoing mail is blocked with the moves' `DOCKER-USER` rules (`block_mail`: ports 25, 465 and 587, IPv4 and IPv6),
-  added before any container starts and journalled for removal. Mail through an HTTP API is not blocked. Where the
-  chain is missing (`iptables: false`, rootless Docker, nftables-only) the test refuses to start with internet and
-  says why.
+  webhooks, payment and other APIs, take jobs from shared queues (for example Redis or SQS workers), and run
+  scheduled jobs once. Outgoing mail on the standard mail ports (25, 465, 587, 2525) is blocked."
+- Outgoing mail is blocked with the moves' `DOCKER-USER` rules (`block_mail`, extended with port 2525, IPv4 and IPv6),
+  commented `docknest-restore-test-<id>`, added before any container starts and journalled for removal. Mail through
+  an HTTP API is not blocked. Where the chain is missing (`iptables: false`, rootless Docker, nftables-only), or
+  `block_mail` returns a partial result (`covered=False`: any network or address family not covered), the test refuses
+  to start with internet and says why.
+- The rules are inserted once, so they can disappear (a firewalld or ufw reload, `iptables -F`, a Docker restart).
+  Every health poll re-checks the `docknest-restore-test-<id>` rules in both `iptables` and `ip6tables`. If any is
+  missing, the test stops its containers at once and ends `couldnt_run` with "mail blocking was removed".
 - Evidence records `internet: true`; the result reads "Passed (tested with internet)".
 
 ## What "passed" means
@@ -119,7 +124,7 @@ Checks run in order. The first failure ends the test at that step.
 - Each check is stored as `passed`, `failed`, `skipped` or `not-configured`.
 - Test-side, not backup-side (`couldnt_run`): the container was `OOMKilled`, a pids or memory limit was hit, the disk
   watchdog fired, the time limit ran out, the test server was unreachable or full, or (with internet) the mail block
-  could not be set. The card says, for example, "Test couldn't finish: memory limit. Raise it in Advanced."
+  could not be set or was removed. The card says, for example, "Test couldn't finish: memory limit. Raise it in Advanced."
 - A pass cannot prove logins, payments, emails, background jobs, anything that needs the internet (by default), or
   data beyond the configured checks. The card says: "Your site started from this backup and passed {n} checks. It does
   not prove every page works."
@@ -139,7 +144,8 @@ Checks run in order. The first failure ends the test at that step.
   `tickRestoreTests()` runs each tick, every server-touching step is one short `restore-test` job, and waits (health,
   stability) are polls on later ticks that release the worker in between.
 - Honest effect: while `copy_backup` and `restore_copy` run, other sites' backups wait for the worker, as with a manual
-  restore today. For a 5 GB package that is minutes. The waits in `check_health` do not delay other servers.
+  restore today. The copy grows with package size: a 5 GB package takes minutes, a 50 GB site can hold the worker for
+  about an hour. The waits in `check_health` do not delay other servers.
 - `cancel_requested` on the test row is polled between steps and inside long helper calls, as moves do. The current
   step stops, then clean-up runs. The result is `cancelled`.
 - `restore_seconds` runs from the start of `copy_backup` to healthy containers at the end of `start_containers`,
@@ -327,8 +333,9 @@ The number is the next free one at merge time (currently 9). New objects only; n
   deadline_at, created_by, created_at, started_at, finished_at)`.
 - `restore_test_steps(test_id → restore_tests, step CHECK six keys, state, started_at, finished_at, detail CHECK
   length <= 500, PRIMARY KEY(test_id, step))`.
-- Partial unique indexes: `restore_tests(site_id)` and `restore_tests(server_id)`, both `WHERE result IS NULL OR
-  cleanup IN ('pending','failed')`. Plain indexes: `(site_id, created_at, id)` for keyset paging,
+- Partial unique indexes: `restore_tests(site_id) WHERE result IS NULL OR cleanup IN ('pending','failed')`, and
+  `restore_tests(server_id) WHERE started_at IS NOT NULL AND (result IS NULL OR cleanup IN ('pending','failed'))`, so
+  queued tests for one test server wait in line instead of hitting a constraint error. Plain indexes: `(site_id, created_at, id)` for keyset paging,
   `(backup_id, created_at)`, `restore_test_settings(next_due_at) WHERE enabled = 1`.
 - Triggers: refuse `DELETE` on both tables; refuse changing `result`, `failed_step`, `reason`, `checks`,
   `restore_seconds`, `total_seconds` once `result` is set.
@@ -356,7 +363,7 @@ reinstalled. If a helper protocol version is ever needed, it becomes a separate 
    teardown. Settings, steps, checks, reasons, audit details and alerts hold no secret values; the probe stores no body.
 2. Isolation: no internet by default, no published ports, no privileged settings, restart `no`, unique names and labels,
    Compose project label replaced. Live server and internet each need an administrator and re-verification; with
-   internet, mail is blocked or the test refuses to start.
+   internet, mail is blocked (re-checked every poll) or the test refuses to start or stops.
 3. Image tags are restored right after `docker load`, so a test never changes what a later `docker compose up` runs.
 4. Resource abuse: memory, swap, CPU, pids and log limits, a time limit, a disk watchdog, one test per server, memory
    and CPU prechecks, at most daily scheduling and 6 manual runs per site per day. Disk is not capped.
@@ -377,7 +384,9 @@ Sign-off before PM-23 merges: Security Engineer and Reality Checker (per PM-22).
 - Grouped Compose site (web + PostgreSQL with a row-count check and a web check on `/`): passes. Isolation asserts
   from inside a container: no route to the host gateway IP, to `169.254.169.254`, to a public IPv4 or IPv6 address,
   and no public DNS answer.
-- Grouped site with Allow internet: outbound HTTPS works, SMTP ports are rejected, rules are gone afterwards.
+- Grouped site with Allow internet: outbound HTTPS works, ports 25, 465, 587 and 2525 are rejected, rules are gone
+  afterwards. Flush the rules mid-test (`iptables -F DOCKER-USER`, and the `ip6tables` chain): the next poll stops the
+  containers and the test ends `couldnt_run` ("mail blocking was removed").
 - Static site: passes on the digest.
 - Failures: a container that exits after 20 seconds fails at "Still running"; one that exceeds its memory ends
   `couldnt_run` (memory limit) with no backup evidence written.
