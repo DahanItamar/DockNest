@@ -27,7 +27,8 @@ assert.equal(await page.getByRole('button',{name:'Download full ZIP fleur-latest
 assert.equal(await page.getByRole('link',{name:'Download encrypted backup fleur-latest'}).getAttribute('href'),'/api/backups/fleur-latest/download');
 // Legacy verified packages (API legacy shape and bare verified flag) agree across counter, rows and details.
 assert.equal(await page.locator('.activity-feature b').first().textContent(),String(state.backups.length),'Integrity-checked captures count every legacy verified package');
-assert.equal(await page.locator('.dash-site[open] .dash-backup-date small').evaluateAll(rows=>rows.every(row=>row.textContent.includes('Integrity checked'))),true);
+// 2.9.0: each recovery point shows its restore-test status (no restore-test API in this fixture, so Not tested).
+assert.equal(await page.locator('.dash-site[open] .dash-backup-date small').evaluateAll(rows=>rows.every(row=>/Not tested$/.test(row.textContent.trim()))),true);
 await page.getByRole('button',{name:'Backup details fleur-latest',exact:true}).click();
 await page.getByRole('dialog',{name:'Backup details'}).waitFor();
 assert.match(await page.locator('.dn-levels').textContent(),/Integrity checked/);
@@ -75,9 +76,9 @@ const passed={status:'passed',checkedAt:time(1)},untested={status:'not-tested'},
 const evidenceState={...state,jobs:[],backups:[{id:'tested',siteId:'DemoShop',createdAt:time(2),verified:true,size:1024**3,verification:levels(passed)},{id:'helper-failed',siteId:'store',createdAt:time(3),verified:true,size:1024**3,verification:levels({status:'failed',method:'helper health check',checkedAt:time(1)})},{id:'attempt',siteId:'journal',createdAt:time(4),verified:true,size:1024**3,verification:levels({status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)},{status:'failed',method:'isolated recovery attempt did not complete',checkedAt:time(1)})}]};
 await page.route('**/api/state',r=>r.fulfill({json:evidenceState}));
 await page.getByRole('button',{name:'Refresh dashboard',exact:true}).click();
-await page.locator('.dash-state').filter({hasText:'restore tested'}).waitFor();
-const states=await page.locator('.dash-site .dash-state').evaluateAll(items=>items.map(item=>[item.className.replace('dash-state ',''),item.textContent]));
-assert.deepEqual(states,[['stored','Recovery point stored · restore tested'],['warning','Recovery point stored · restore test failed'],['warning','Recovery point stored · restore attempt did not complete'],['neutral','No integrity-checked backup']]);
+// The overview's Last test column follows restore tests only; recovery evidence stays in the library and the details.
+await page.locator('.dash-site-latest .status').first().waitFor();
+assert.deepEqual((await page.locator('.dash-site-latest').allTextContents()).map(x=>x.trim()),['Not tested','Not tested','Not tested','Not tested']);
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();
 for(const group of await page.locator('.backup-group>summary').all())await group.click();
 const failedRow=page.locator('.recovery-row').filter({hasText:'helper-failed'});
