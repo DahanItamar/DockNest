@@ -284,7 +284,7 @@ const STEP_RUNNERS = {
   async copy_backup(test, signal) {
     db.prepare("UPDATE restore_tests SET cleanup='pending' WHERE id=? AND cleanup IS NULL").run(test.id);
     const target = server(test.server_id);
-    const prepare = () => call(test, { operation: 'restore-test-prepare', testId: test.id, deadline: Date.parse(test.deadline_at) / 1000, reaper: reaperSource }, signal);
+    const prepare = () => call(test, { operation: 'restore-test-prepare', testId: test.id, deadline: Date.parse(test.deadline_at) / 1000, grace: Math.min(3600, Math.max(60, Math.round(testTiming.cleanupSeconds * testTiming.scale))), reaper: reaperSource }, signal);
     let upload;
     try { upload = await testTransport.upload(target, test.backup_id, null, { prepare, signal }); }
     catch (error) {
