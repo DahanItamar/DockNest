@@ -209,7 +209,8 @@ Restart and failure paths:
 - Reaper: at `copy_backup` (in `restore-test-prepare`, before any plaintext reaches the server) the manager sends the
   reaper source, the reviewed helper itself (as `install-boot-recovery` does); the helper writes it into the journal
   directory (0700) and starts it in a new session (`python3 -I reaper.py`, operation `restore-test-reap`). It has one
-  timer and no periodic work: it sleeps until the deadline plus 10 minutes, and then runs teardown once only if the
+  timer and no periodic work: it sleeps until the deadline plus the manager's clean-up time (10 minutes, sent as
+  `grace`), and then runs teardown once only if the
   journal directory is still there (the manager did not finish), and exits.
 - Reaper and logind: a new session survives the SSH channel closing, but systemd-logind with `KillUserProcesses=yes`
   kills every process of the SSH login session when it ends. Where systemd runs, the reaper is therefore started with

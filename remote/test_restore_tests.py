@@ -398,6 +398,15 @@ class ReaperAndStatusTests(unittest.TestCase):
             def sleep(seconds):slept.append(seconds);now[0]+=seconds
             helper.restore_test_reap({'testId':TID},sleep=sleep,clock=lambda:now[0])
             self.assertEqual(slept,[1000+helper.REAPER_GRACE],'one timer, no periodic work')
+    def test_reaper_waits_the_managers_clean_up_time_when_given(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown'):
+            with patch('helper.os.geteuid',return_value=0,create=True):helper.restore_test_prepare({'testId':TID,'deadline':1000,'grace':150})
+            now=[0];slept=[]
+            def sleep(seconds):slept.append(seconds);now[0]+=seconds
+            helper.restore_test_reap({'testId':TID},sleep=sleep,clock=lambda:now[0])
+            self.assertEqual(slept,[1150])
+        for grace in [59,3601,'150',True]:
+            with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.os.geteuid',return_value=0,create=True),self.assertRaises(ValueError):helper.restore_test_prepare({'testId':TID,'deadline':1,'grace':grace})
             teardown.assert_called_once_with({'testId':TID})
             self.assertFalse(any(c[0] in ('ps','inspect','stop') for c in box.docker.calls),'the reaper does nothing while it waits')
     def test_reaper_does_nothing_when_the_manager_already_cleaned_up(self):

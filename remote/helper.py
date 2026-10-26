@@ -3006,6 +3006,9 @@ def restore_test_prepare(req):
     """Copy backup, first half: the journal, the private staging root and the reaper. The package follows over SFTP."""
     if hasattr(os,'geteuid') and os.geteuid()!=0:raise ValueError('Restore tests need root SSH on the test server.')
     tid=test_id(req);deadline=float(req['deadline'])
+    # The reaper waits the manager's own clean-up time after the deadline (default 10 minutes).
+    grace=req.get('grace',REAPER_GRACE)
+    if not isinstance(grace,int) or isinstance(grace,bool) or not 60<=grace<=3600:raise ValueError('The clean-up time must be 60 to 3600 seconds')
     d,state=test_state(tid,create=True)
     if state.get('prepared'):raise ValueError('This restore test already ran on this server; DockNest cleans it up first.')
     root=test_staging(tid)
@@ -3013,7 +3016,7 @@ def restore_test_prepare(req):
     test_journal(d,state,'paths',str(root))
     if root.exists() or root.is_symlink():raise ValueError('Restore test staging already exists')
     RESTORE_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);root.mkdir(mode=0o700)
-    state['deadline']=deadline;state['prepared']=time.time();save_state(d,state)
+    state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time();save_state(d,state)
     pid=start_reaper(d,tid,req['reaper']) if req.get('reaper') else None
     emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None})
 def backup_side(error):
@@ -3431,9 +3434,11 @@ def restore_test_reap(req,sleep=time.sleep,clock=time.time):
     """The detached reaper: one timer until the deadline plus the clean-up time, no periodic work. Then, only if the
     manager did not finish (the journal is still there), it runs teardown once and exits."""
     tid=test_id(req);file=test_dir(tid)/'resources.json'
-    try:deadline=float(json.loads(file.read_text()).get('deadline'))
+    try:
+        state=json.loads(file.read_text());deadline=float(state.get('deadline'))
+        grace=state.get('grace') if isinstance(state.get('grace'),int) and 60<=state.get('grace')<=3600 else REAPER_GRACE
     except (OSError,ValueError,TypeError):return
-    while (remaining:=deadline+REAPER_GRACE-clock())>0:sleep(remaining)  # re-arms only if the sleep ended early
+    while (remaining:=deadline+grace-clock())>0:sleep(remaining)  # re-arms only if the sleep ended early
     if not file.is_file():return
     lock=None
     try:
