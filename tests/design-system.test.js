@@ -22,6 +22,6 @@ test('maintenance design remains compatible with old settings and rejects unsafe
 test('visitor page preserves the maintenance probe marker and availability recovery loop',async()=>{
  const html=await readFile('remote/maintenance.html','utf8');
  assert.ok(html.slice(0,1024).includes('dbm-maintenance-v1'));assert.ok(html.includes("fetch('/__backup_status'"));assert.ok(html.includes('AbortSignal.timeout(4000)'));assert.ok(html.includes('},15000)'));
- assert.ok(html.includes('maintenance-animation'));assert.ok(html.includes('@keyframes site-float'));assert.ok(html.includes('prefers-reduced-motion'));assert.ok(!html.includes('<img'));assert.ok(html.includes('data:font/woff2;base64,'));assert.ok(!html.includes('https://'));
+ assert.ok(html.includes('maintenance-animation'));assert.ok(html.includes('@keyframes site-float'));assert.ok(html.includes('prefers-reduced-motion'));assert.ok(!html.includes('<img'));assert.ok(html.includes('data:font/woff2;base64,'));assert.ok(!html.replace('href="https://github.com/DahanItamar/DockNest"','').includes('https://'),'no external addresses except the Powered by DockNest link');
  const preview=renderMaintenancePage(maintenanceDefaults,{interactive:false});assert.ok(!preview.includes('<script>'));assert.ok(preview.includes(' disabled'));
 });
