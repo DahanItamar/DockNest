@@ -1,0 +1,17 @@
+DockNest
+Copyright (C) 2026 Itamar Dahan
+
+DockNest is licensed under the GNU Affero General Public License, version 3
+(see LICENSE), with the following additional term.
+
+Additional term under section 7(b) of the GNU AGPL-3.0
+------------------------------------------------------
+
+You must preserve the author attribution "Powered by DockNest", together with
+its link to the DockNest project (https://github.com/DahanItamar/DockNest), in
+the maintenance pages and other visitor-facing pages that DockNest or a
+modified version of it displays. The attribution must stay readable and must
+not be hidden, obscured or replaced by other text.
+
+This term does not restrict any other change you make under the AGPL-3.0.
+Bundled fonts and dependencies keep their own licenses.

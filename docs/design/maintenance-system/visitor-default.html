@@ -26,6 +26,7 @@ h1{font-size:clamp(36px,4.8vw,60px);font-weight:600;line-height:1.12;letter-spac
 @keyframes signal-orbit{to{transform:rotate(360deg)}}
 @keyframes site-breathe{0%,100%{transform:scaleX(1)}50%{transform:scaleX(.88)}}
 footer{border-top:1px solid var(--line);padding-top:24px;font-size:10px;line-height:1.6}
+footer .powered{color:inherit;font-weight:600;text-decoration:none}footer .powered:hover,footer .powered:focus-visible{text-decoration:underline}
 .editorial .layout{grid-template-columns:1fr;gap:32px;padding:48px 0;text-align:center}.editorial .copy{grid-row:2;max-width:800px;margin:auto}.editorial .message{margin-left:auto;margin-right:auto}.editorial .scene{grid-row:1;width:240px;min-height:200px;aspect-ratio:auto;margin:auto;border:0;background:transparent;padding:0}.editorial .scene svg{max-height:220px}.editorial .scene:before,.editorial .scene figcaption{display:none}
 .compact .layout{grid-template-columns:1fr;text-align:center}.compact .copy{max-width:760px;margin:0 auto}.compact .scene{display:none}.compact .message{margin-left:auto;margin-right:auto}
 @media(max-width:640px){.shell{padding:24px}header{font-size:10px;gap:12px}header>span{display:none}.status{padding:8px 12px}.layout{grid-template-columns:1fr;gap:32px;padding:48px 0 32px}.copy{text-align:center}h1{font-size:36px;letter-spacing:-1.2px}.bold h1{font-size:40px}.message{font-size:14px;line-height:1.7;margin:0 auto 24px}.scene{max-width:320px;width:100%;aspect-ratio:auto;min-height:250px;margin:auto;padding:20px}.scene svg{max-height:280px;width:100%}.scene figcaption{bottom:20px}.scene:before{top:20px;left:20px}footer{gap:16px;font-size:9px}.editorial .layout{padding-top:24px}.editorial .scene svg{max-height:190px}}
@@ -43,6 +44,6 @@ footer{border-top:1px solid var(--line);padding-top:24px;font-size:10px;line-hei
 <rect class="content-line" x="237" y="233" width="131" height="9" rx="4.5" fill="#C5DDF0"/><rect class="content-line second" x="237" y="254" width="100" height="6" rx="3" fill="#DEE6EF"/><rect class="content-line third" x="237" y="271" width="121" height="6" rx="3" fill="#DEE6EF"/>
 <rect x="237" y="299" width="62" height="46" rx="6" fill="#E3F2FD"/><rect x="309" y="299" width="62" height="46" rx="6" fill="#EDE7F6"/>
 <circle cx="396" cy="354" r="36" fill="var(--accent)"/><path d="M387 342v24m18-24v24" stroke="#FFF" stroke-width="6" stroke-linecap="round"/></g>
-</svg><figcaption>A brief pause for a better website.</figcaption></figure></main><footer><span>Thank you for your patience.</span><span>Powered by DockNest</span></footer></div>
+</svg><figcaption>A brief pause for a better website.</figcaption></figure></main><footer><span>Thank you for your patience.</span><a class="powered" href="https://github.com/DahanItamar/DockNest" target="_blank" rel="noopener">Powered by DockNest</a></footer></div>
 <script>if(document.referrer||location.href){setInterval(async()=>{try{const response=await fetch('/__backup_status',{cache:'no-store',signal:AbortSignal.timeout(4000)});if(response.ok)location.replace(location.href)}catch{}},15000)}</script>
 </body></html>
