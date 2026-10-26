@@ -19,7 +19,7 @@ a new Administration page, Connections. Alert nodes stay on the Map. Existing no
 | Migration | Pure SQL and JSON copy at upgrade. Sealed values are copied byte for byte, never opened. Same ids for nodes and lines. |
 | Outbound | Every request goes through one guarded client: HTTPS, own DNS check pinned to the socket, no redirects, 10 s, 64 KB. |
 | Private network | Refused by default. An admin setting "Allow private network" opens RFC 1918, ULA and CGNAT for self-hosted ntfy, Gotify, Matrix, Mattermost and webhooks. Loopback, link-local and metadata are always refused. |
-| Who | Administrators only, as today. Creating, replacing or deleting a Connection needs a recent re-verification. |
+| Who | Administrators, plus operators when an admin turns on "Operators can manage alerts" (off by default). Creating, replacing or deleting a Connection needs a recent re-verification. |
 | Message | One template for every provider: title, site and server, a plain reason, a link to the job. Each provider formats it natively. |
 
 ## Data model (migration `alert-connections`, `compatible: true`)
@@ -109,10 +109,35 @@ The result, for every 2.8 install: the same nodes, lines and messages, to the sa
 - Audit events (actor, target id, detail with no values):
   `connection.create {provider}`, `connection.update {provider, fields}` (field names only),
   `connection.delete {provider}`, `connection.test {provider, ok}`, `alert.node.create|update|delete {provider}`,
-  `alert.node.test {provider, ok}`, `alert.rule.*` as today, `alerts.private_network {enabled}`.
-- Roles: administrators only, as in 2.8. Operators get no Connection or alert data, and their Map has no alert parts.
-  Recent re-verification for create, replace, delete of a Connection and for "Allow private network". Tests and node
-  changes need an administrator only.
+  `alert.node.test {provider, ok}`, `alert.rule.*` as today, `alerts.private_network {enabled}`,
+  `alerts.operators_manage {enabled}`. Every event records the actor and the actor's role.
+
+## Who may do what
+
+An admin setting, "Operators can manage alerts" (Administration, Connections; settings key
+`alerts_operators_manage`), decides whether operators take part. It is **off by default**, and the migration does not
+set it, so every existing install behaves exactly as 2.8. Only an administrator can turn it on or off, with a recent
+re-verification and the `alerts.operators_manage` audit event.
+
+| Action | Administrator | Operator, setting off | Operator, setting on |
+|---|---|---|---|
+| See alert nodes, lines and Connections (no secrets) | Yes | No (no alert data, no alert parts on the Map) | Yes |
+| Create, edit, delete nodes and lines; send tests | Yes | No | Yes |
+| Create, replace a secret, delete a Connection | Yes, re-verification | No | Yes, same re-verification |
+| Create or edit an "Other (webhook URL)" Connection | Yes, re-verification | No | No (shown, not editable) |
+| "Allow private network" | Yes, re-verification | No | No |
+| "Operators can manage alerts" | Yes, re-verification | No | No |
+
+- When the setting is on, an operator may still pick an existing Other Connection for a node and test it; it can
+  only reach the URL an administrator saved.
+- Turning the setting off takes effect on the next request. Operators keep nothing: their views carried no secrets.
+- Honest risk: with the setting on, an operator (or anyone holding a stolen operator session that passes
+  re-verification) can create a Connection to an account they control and receive alert text: site and server
+  names, event times, plain reasons and job links. They never receive saved secrets, which are write-only, and the
+  link still needs a DockNest sign-in. Operators already see those names and jobs in DockNest itself, so the alert
+  text tells them nothing new. The remaining risks are the ones kept admin-only: Other can aim a fixed JSON body at
+  any public URL, and "Allow private network" opens the LAN. That is why the setting is an explicit admin opt-in and
+  is audited.
 
 ## Provider registry
 
@@ -192,7 +217,10 @@ alias, so no extra lookup request is ever made. Other's header is one line `Name
   language `en`, body `DockNest alert: {{1}}. {{2}}. {{3}} Open DockNest for details.` (title, site and server,
   reason; Meta refuses a body that ends with a variable). DockNest sends a `template` message with those three text
   parameters when the Connection has a template name, else free-form text.
-- Two optional fields under "More options": Template name (default empty) and Template language (default `en`).
+- Two optional fields under "More options": Template name (default empty) and Language (default `en`). Help text:
+  "WhatsApp only delivers alerts outside a 24-hour chat with an approved template. Create a Utility template named
+  docknest_alert in WhatsApp Manager and enter its name here. Leave it empty to send plain messages, which arrive only
+  if you messaged the business number in the last 24 hours."
   "Send test" reports 131047 in words: "WhatsApp only delivers this outside a 24-hour chat with a template. Add your
   template name, or send any message to the business number and test again."
 - The link is in the body text; templates cannot carry a dynamic button without more setup. Accepted.
@@ -259,18 +287,21 @@ All HTTP providers send through one client in `src/alerts/outbound.js`. Nothing 
   page shows a warning panel ("Phone alerts failed. The last message did not reach ntfy.") and the node's Map
   caption turns to warn. No alert is sent about a failed alert, so there are no loops.
 - **Tests**: "Send test" in the dialog (unsaved values, sent once and not stored), in the Connections row and in the
-  node panel. Shared limit 10 per 10 minutes per administrator, as today.
+  node panel. Shared limit 10 per 10 minutes per user, as today.
 
-## API (administrators only)
+## API
+
+All routes need a signed-in administrator, or an operator when "Operators can manage alerts" is on, plus the
+usual CSRF header. Rows marked *admin* stay admin-only. Operators get 403 `ALERTS_ADMIN_REQUIRED` otherwise.
 
 | Method and path | Purpose |
 |---|---|
 | `GET /api/connections`, `GET /api/connections/providers` | List with `usedBy`, statuses; provider field lists |
-| `POST /api/connections` | `{ provider, name, values }`. Re-verification |
-| `PATCH /api/connections/:id` | `{ name?, values? }`. Re-verification when a secret or a `rebind` field changes |
-| `DELETE /api/connections/:id` | 409 `CONNECTION_IN_USE` with node names. Re-verification |
+| `POST /api/connections` | `{ provider, name, values }`. Re-verification. `provider: "webhook"` *admin* |
+| `PATCH /api/connections/:id` | `{ name?, values? }`. Re-verification when a secret or a `rebind` field changes. Webhook *admin* |
+| `DELETE /api/connections/:id` | 409 `CONNECTION_IN_USE` with node names. Re-verification. Webhook *admin* |
 | `POST /api/connections/:id/test`, `POST /api/connections/test` | Test a saved Connection, or unsaved values |
-| `PUT /api/connections/settings` | `{ allowPrivateNetwork }`. Re-verification |
+| `PUT /api/connections/settings` | `{ allowPrivateNetwork?, operatorsManage? }`. Re-verification. *admin* |
 | `GET/POST/PATCH/DELETE /api/alerts/nodes`, `POST /api/alerts/nodes/:id/test` | Nodes: `{ name, provider, connectionId }` |
 | `/api/alerts/rules` | Unchanged, `channelId` renamed `nodeId` (old name accepted for one release) |
 
@@ -285,7 +316,10 @@ The 2.8 `/api/alerts/credentials` and `/api/alerts/channels` routes are removed;
 - **New or Edit connection dialog**: Provider first (searchable, grouped; Other sits under Advanced), then Name and
   the provider's fields. Cancel, Send test, Save; Test and Save stay disabled with "Add the missing details." Edit
   locks the provider and shows secrets as "Saved, hidden". Other shows the amber "For advanced users" note and the
-  exact JSON it sends. WhatsApp shows "How to get these" and the Meta note.
+  exact JSON it sends. WhatsApp shows "How to get these", the Meta note and, under "More options", Template name and
+  Language. Email has Subject prefix under "More options". Operators see Other as read-only.
+- **Connections settings** (admin only): "Allow private network" and "Operators can manage alerts", each a switch
+  that asks for re-verification.
 - **Node panel** (desktop side panel, phone sheet): Name, Provider (searchable), Connection (only that provider's,
   plus "New connection" prefilled with the provider and any `prefill`, and a pencil to edit), Send test. Tab "Sends
   when": one block per connected source with its events and Disconnect, then "Connect another source". New sources
@@ -326,6 +360,11 @@ The 2.8 `/api/alerts/credentials` and `/api/alerts/channels` routes are removed;
 - **Secrets**: no secret, URL or response text in logs, audit rows, outbox, `last_error`, API errors or views (scan
   every captured string for the planted values); PATCH without secrets keeps them; changing a `rebind` field without
   the secret is refused.
+- **Permissions** (`tests/alert-permissions.test.js`): setting off, an operator gets 403 on every alert and Connection
+  route and no alert data in Map payloads; setting on, an operator can list, create, edit, test and delete nodes and
+  Connections, with re-verification where an admin needs it; Other create, edit and delete, "Allow private network"
+  and the setting itself stay 403 for operators; only an admin can toggle the setting, with re-verification and an
+  audit event; turning it off applies on the next request; audit rows carry the actor's role.
 - **Delivery**: dedup across two nodes on one Connection; rate limit defers, never drops; 401 is final; 429 respects
   `Retry-After`; `last_send` and `last_test` updates.
 - **Browser** (from the mockup boards): node panel with provider and Connection combos, New connection from the
@@ -341,17 +380,16 @@ The 2.8 `/api/alerts/credentials` and `/api/alerts/channels` routes are removed;
    registry, delivery dedup and rate limits. Migration, SSRF and secret tests.
 2. **Providers**: WhatsApp, Discord, Slack, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix, Other,
    the message template with reasons and the job deep link. Fake-server tests.
-3. **API and Connections page**: routes, re-verification, audit events, Connections list, dialog, settings toggle.
-   API and browser tests.
+3. **API and Connections page**: routes, the operator permission gate, re-verification, audit events, Connections
+   list, dialog, both settings. API, permission and browser tests.
 4. **Map and docs**: node panel, grid delete, phone list, browser tests and design review. Rewrite `alerts.md`,
-   update `security.md`, `upgrading.md`, README and the release note.
+   update `security.md` (operator opt-in and its risk), `upgrading.md`, README and the release note.
 
-## Questions for the owner
+## Owner answers (2026-10-27)
 
-1. WhatsApp: add the two optional template fields under "More options" (recommended), or ship free-form text only,
-   which reliably works only inside the 24-hour window?
-2. Email subject prefix is not in the mockup. Keep it as an optional field so 2.8 setups stay identical (recommended)?
-3. Should operators see alert nodes read-only on the Map, or stay with no alert data as in 2.8 (recommended)?
+1. WhatsApp: yes, the optional Template name and Language fields under "More options", with the 24-hour help text.
+2. Email: yes, keep the optional Subject prefix field (under "More options") so 2.8 setups stay identical.
+3. Operators: yes, behind the admin setting "Operators can manage alerts", off by default (see "Who may do what").
 
 ## Roles used
 
