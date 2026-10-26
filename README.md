@@ -37,7 +37,7 @@ These tools solve different problems. This is a short, honest view. Check each p
 | Site-aware backup (containers, database, volumes) | Yes | Database backups to S3 for apps it deploys | No, backs up files and folders | No, backs up files and folders | Volumes, with hooks for databases |
 | Server-to-server move | Yes, from the Map | No built-in migration | No | No | No |
 | Verified restore to a separate copy | Yes | No | Manual restore | Manual restore | Manual restore |
-| Encrypted storage | AES-256-GCM, SFTP or S3-compatible | Check its docs | Yes | Yes | Optional (GPG or age) |
+| Encrypted storage | AES-256-GCM, SFTP or S3-compatible | Not documented (depends on your S3 bucket) | Yes | Yes | Optional (GPG or age) |
 | Web UI | Yes | Yes | Yes (Backrest) | Yes | No |
 | Deduplication | No | No | Yes | Yes | No |
 
