@@ -41,8 +41,8 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
 | PM-19 | Storage-cost benchmark vs restic and Kopia | 2.3.0 (parallel) | Performance Benchmarker | sonnet-medium | — |
 | PM-20 | Prerequisite checker and first-restore checklist | 2.4.0 | Frontend Developer | sonnet-high | — |
 | PM-21 | Timed clean-VPS onboarding walkthrough | 2.4.0 | Reality Checker | sonnet-medium | PM-20 |
-| PM-22 | Scheduled restore drill ADR | 2.5.0 | Software Architect + Security Engineer | opus-high | PM-15, PM-16 |
-| PM-23 | Scheduled restore drills | 2.5.0 | Backend Architect | opus-high | PM-22 |
+| PM-22 | Scheduled restore drill ADR | 2.9.0 | Software Architect + Security Engineer | opus-high | PM-15, PM-16 |
+| PM-23 | Scheduled restore drills | 2.9.0 | Backend Architect | opus-high | PM-22 |
 | PM-24 | Per-site RPO/RTO targets and report | 2.5.0 | Backend Architect | sonnet-high | PM-23 |
 | PM-25 | Install-report and interview templates | 2.2.0 | Technical Writer | haiku-medium | — |
 
@@ -233,7 +233,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
     - concurrency (one drill per target; never alongside a capture on the same server, as `claimJob` already serializes per server);
     - evidence linkage (a drill result is per package).
   - Security Engineer and Reality Checker sign off.
-- **Owner role:** [Software Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-software-architect.md) + [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) · **Tier:** opus-high · **Depends on:** PM-15, PM-16 · **Target:** 2.5.0
+- **Owner role:** [Software Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-software-architect.md) + [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) · **Tier:** opus-high · **Depends on:** PM-15, PM-16 · **Target:** 2.9.0 (ADR: [restore-tests.md](../restore-tests.md))
 
 ### PM-23 — Scheduled restore drills
 - **Acceptance criteria:**
@@ -242,7 +242,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
   - Teardown happens after the configured checks or the TTL, whichever comes first, and leaves no containers, networks, images loaded only for the drill, or paths. This is verified by a Linux integration test.
   - Failure raises a notification and keeps evidence. The append-only history is preserved.
   - Not called validated until Linux integration passes for single-container, grouped and static sites.
-- **Owner role:** [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) · **Tier:** opus-high · **Depends on:** PM-22 · **Target:** 2.5.0
+- **Owner role:** [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) · **Tier:** opus-high · **Depends on:** PM-22 · **Target:** 2.9.0 (product name "Automatic restore tests")
 
 ### PM-24 — Per-site RPO/RTO targets and report
 - **Acceptance criteria:**
