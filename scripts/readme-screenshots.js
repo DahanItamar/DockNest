@@ -72,31 +72,59 @@ async function social(file){
   await card.screenshot({path:file,scale:'css'});
  }finally{await context.close()}
 }
+// Story GIF: dashboard, a backup job with live progress, a verified recovery point, then a Map move. Each scene is its own page, so the cuts are clean.
+const fleetJobs=(running,fraction)=>{
+ const site=fleet.sites[0],id=running?'fx-job-live':'fx-job-done',total=1024**3;
+ const steps=[['docker inspect',900],['docker stop',2100],['docker commit',5200],['docker save',14000],['tar volumes',22000],['pg_dump',6400],['docker start',1800]];
+ const shown=running?Math.max(2,Math.round(steps.length*fraction)):steps.length;
+ const live={id,siteId:site.id,type:'backup',status:running?'running':'completed',stage:running?'transferring':'completed',createdAt:time(0.1),startedAt:time(0.1),...(running?{}:{finishedAt:time(0.02)}),details:{transfer:{done:running?Math.round(total*fraction):total,total,startedAt:time(0.05),updatedAt:iso},diagnostics:steps.slice(0,shown).map(([c,ms],i)=>diag(c,400-i*40,ms))}};
+ const past=fleet.sites.slice(1).map((st,i)=>({id:'fx-job-'+i,siteId:st.id,type:'backup',status:'completed',stage:'completed',createdAt:time(i*5+3),startedAt:time(i*5+3),finishedAt:time(i*5+2.95)}));
+ return [live,...past];
+};
 async function hero(){
- const out='docs/media',frames=await (async()=>{const d=nodePath.join(tmpdir(),'docknest-hero-'+process.pid);await mkdir(d,{recursive:true});return d})();
- const {context,page}=await open({width:1280,height:1000,scale:1,fx:{state:fleet.state,route:fleetRoute}});
+ const out='docs/media',dir=await (async()=>{const d=nodePath.join(tmpdir(),'docknest-hero-'+process.pid);await mkdir(d,{recursive:true});return d})();
+ const list=[];let n=0;
+ const still=(page,name)=>page.screenshot({path:out+'/'+name,animations:'disabled'});
+ const snap=async(page,hold)=>{hold=hold>0.2?hold*0.75:hold;const f=nodePath.join(dir,'f'+String(n++).padStart(4,'0')+'.png');await page.screenshot({path:f,animations:'disabled'});list.push([f,hold])};
+ const scene=async(opts,fn)=>{const {context,page}=await open({width:1280,height:860,scale:1,...opts});try{await fn(page)}finally{await context.close()}};
+ const jobsScene=(running,fraction,hold,still_)=>scene({fx:{state:{...fleet.state,jobs:fleetJobs(running,fraction)},route:fleetRoute}},async page=>{
+  await go(page,'Jobs');await settle(page);
+  await page.locator('tr',{hasText:'cinderbean.com'}).first().getByRole('button',{name:'View job'}).click();
+  await page.getByRole('dialog').waitFor();await settle(page);await snap(page,hold);if(still_)await still(page,still_);
+ });
  try{
-  await go(page,'Map');await page.locator('.map-site').first().waitFor();
-  await page.getByRole('button',{name:'Fit to screen'}).click();await settle(page);
-  
-  assert.equal(await page.locator('.map-site').count(),fleet.sites.length);
-  const list=[];let n=0;
-  const snap=async hold=>{const f=nodePath.join(frames,'f'+String(n++).padStart(3,'0')+'.png');await page.screenshot({path:f,animations:'disabled'});list.push([f,hold])};
-  const center=async selector=>{const b=await page.locator(selector).first().boundingBox();return {x:b.x+b.width/2,y:b.y+b.height/2}};
-  await page.mouse.move(640,360);await snap(1.4);
-  const moving=fleet.sites[1],port=await center('[data-port-site="'+moving.id+'"]'),target=await center('[data-node="server:fx-ash"]');
-  await page.mouse.move(port.x,port.y);await page.mouse.down();
-  const steps=14;
-  for(let i=1;i<=steps;i++){const k=i/steps,e=k*k*(3-2*k);await page.mouse.move(port.x+(target.x-port.x)*e,port.y+(target.y-port.y)*e);await settle(page);await snap(i===steps?0.7:0.07)}
-  await page.mouse.up();await settle(page);
-  await page.getByText(/will move to/).first().waitFor();await page.mouse.move(640,700);await snap(1.8);
-  await page.getByRole('button',{name:'Save changes'}).click();await page.getByRole('dialog').waitFor();await settle(page);await snap(1.6);
-  await page.getByRole('button',{name:'Advanced settings'}).click();await settle(page);await snap(2.6);
-  const q=f=>f.split(nodePath.sep).join('/');
-  await writeFile(nodePath.join(frames,'list.txt'),list.map(([f,d])=>"file '"+q(f)+"'"+String.fromCharCode(10)+'duration '+d).join(String.fromCharCode(10))+String.fromCharCode(10)+"file '"+q(list.at(-1)[0])+"'"+String.fromCharCode(10));
-  const ff=spawnSync('ffmpeg',['-y','-v','error','-f','concat','-safe','0','-i',nodePath.join(frames,'list.txt'),'-vf','fps=20,scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5','-loop','0',out+'/map-move.gif'],{encoding:'utf8'});
+  await scene({fx:{state:{...fleet.state,jobs:fleetJobs(false,1)},route:fleetRoute}},async page=>{await settle(page);await snap(page,2.6)});
+  await jobsScene(true,0.3,1.3);await jobsScene(true,0.62,1.3,'why-capture.png');await jobsScene(true,0.92,1.3);await jobsScene(false,1,2.2);
+  await scene({fx:{state:{...fleet.state,jobs:fleetJobs(false,1)},route:fleetRoute}},async page=>{
+   await go(page,'Backups');await page.locator('.backup-group').first().waitFor();await settle(page);await snap(page,2.8);await still(page,'why-verified.png');
+  });
+  const moving=fleet.sites[0],mv={state:'running',progress:5,statusLine:'Backing up '+moving.name+'.',actions:{cancel:true},sourceName:'Frankfurt-1',steps:[]};
+  const stepList=done=>[['Back up the site','Test a copy on Ashburn-1','Wait for your DNS change','Switch to Ashburn-1'].map((label,i)=>({step:'s'+i,label,state:i<done?'done':i===done?'running':'pending'}))][0];
+  const route=(path,method)=>path==='/api/moves/fx-move/start'?{ok:true}:path==='/api/moves/fx-move'&&method==='GET'?{id:'fx-move',...mv}:fleetRoute(path,method);
+  await scene({height:860,fx:{state:{...fleet.state,jobs:fleetJobs(false,1)},route}},async page=>{
+   await go(page,'Map');await page.locator('.map-site').first().waitFor();
+   await page.getByRole('button',{name:'Fit to screen'}).click();await settle(page);
+   assert.equal(await page.locator('.map-site').count(),fleet.sites.length);
+   const center=async selector=>{const b=await page.locator(selector).first().boundingBox();return {x:b.x+b.width/2,y:b.y+b.height/2}};
+   await page.mouse.move(640,360);await snap(page,0.8);
+   const port=await center('[data-port-site="'+moving.id+'"]'),target=await center('[data-node="server:fx-ash"]');
+   await page.mouse.move(port.x,port.y);await page.mouse.down();
+   const steps=14;
+   for(let i=1;i<=steps;i++){const k=i/steps,e=k*k*(3-2*k);await page.mouse.move(port.x+(target.x-port.x)*e,port.y+(target.y-port.y)*e);await settle(page);await snap(page,i===steps?0.5:0.07)}
+   await page.mouse.up();await settle(page);
+   await page.getByText(/will move to/).first().waitFor();await page.mouse.move(640,840);await snap(page,1.2);await still(page,'why-map.png');
+   await page.getByRole('button',{name:'Save changes'}).click();await page.getByRole('dialog').waitFor();await settle(page);await snap(page,2);
+   await page.getByRole('button',{name:'Move',exact:true}).click();
+   mv.steps=stepList(0);await page.getByText('Backing up '+moving.name).waitFor();await settle(page);await snap(page,1.2);
+   Object.assign(mv,{progress:55,statusLine:'Testing a copy on Ashburn-1.',steps:stepList(1)});await page.getByText('Testing a copy on Ashburn-1.').waitFor({timeout:6000});await settle(page);await snap(page,1.2);
+   Object.assign(mv,{state:'done',progress:100,actions:{switchBack:true},dns:{type:'A',name:moving.name,value:'192.0.2.12'},steps:stepList(4)});
+   await page.getByText('All done.').waitFor({timeout:6000});await settle(page);await snap(page,2.8);
+  });
+  const q=f=>f.split(nodePath.sep).join('/'),nl=String.fromCharCode(10);
+  await writeFile(nodePath.join(dir,'list.txt'),list.map(([f,d])=>"file '"+q(f)+"'"+nl+'duration '+d).join(nl)+nl+"file '"+q(list.at(-1)[0])+"'"+nl);
+  const ff=spawnSync('ffmpeg',['-y','-v','error','-f','concat','-safe','0','-i',nodePath.join(dir,'list.txt'),'-vf','fps=12,scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5','-loop','0',out+'/map-move.gif'],{encoding:'utf8'});
   if(ff.status!==0)throw new Error('ffmpeg failed: '+ff.stderr);
- }finally{await context.close();await rm(frames,{recursive:true,force:true});}
+ }finally{await rm(dir,{recursive:true,force:true});}
 }
 const settle=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 const go=(page,name)=>page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();

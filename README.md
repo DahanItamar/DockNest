@@ -1,6 +1,6 @@
 <div align="center">
   <img src="docs/media/logo-blue.png" alt="DockNest" width="320" />
-  <p><strong>Self-hosted Docker backup and restore with a visual server map. Move sites between servers safely.</strong></p>
+  <p><strong>Self-hosted Docker backup and restore with a visual server map.</strong></p>
   <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=5E35B1&sort=semver&display_name=tag" alt="Latest release" /></a>
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
   <img src="https://img.shields.io/badge/status-beta-orange?style=flat-square" alt="Status: beta" />
@@ -9,14 +9,18 @@
 </div>
 
 <p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#why-docknest">Why DockNest</a> ·
   <a href="#install">Install</a> ·
-  <a href="#using-docknest">Using DockNest</a> ·
-  <a href="#updating">Updating</a> ·
   <a href="#documentation">Documentation</a> ·
   <a href="https://github.com/DahanItamar/DockNest/releases/latest">Latest release</a>
 </p>
 
-![The DockNest Map: a site's line is dragged from one server to another, then the move is reviewed](docs/media/map-move.gif)
+- **Back up whole sites, not just files.** Containers, databases and volumes, together.
+- **Prove every backup restores.** Restore it to a separate copy and look.
+- **Move a site to another server in a few clicks.** Drag its line on the Map.
+
+![DockNest in use: sites protected, a backup running, a verified recovery point, then a site moved between servers on the Map](docs/media/map-move.gif)
 
 ## Quick start
 
@@ -28,82 +32,43 @@ docker compose --profile https up -d --build
 
 Set your domain in `.env` first. See [Install](#install) for the details.
 
-## How it compares
+## Why DockNest
 
-These tools solve different problems. This is a short, honest view. Check each project for its current features.
+### Backups that capture the whole site
+DockNest connects to your Linux servers over SSH and finds your Docker and static nginx sites. It captures images, volumes, bind mounts, writable layers and databases (PostgreSQL, MySQL/MariaDB and Redis). Each site has its own schedule, retention and pinned backups. Watch every step on the Jobs page.
 
-| | DockNest | Coolify | Backrest / restic | Duplicati | offen/docker-volume-backup |
-| :-- | :-- | :-- | :-- | :-- | :-- |
-| Site-aware backup (containers, database, volumes) | Yes | Database backups to S3 for apps it deploys | No, backs up files and folders | No, backs up files and folders | Volumes, with hooks for databases |
-| Server-to-server move | Yes, from the Map | No built-in migration | No | No | No |
-| Verified restore to a separate copy | Yes | No | Manual restore | Manual restore | Manual restore |
-| Encrypted storage | AES-256-GCM, SFTP or S3-compatible | Not documented (depends on your S3 bucket) | Yes | Yes | Optional (GPG or age) |
-| Web UI | Yes | Yes | Yes (Backrest) | Yes | No |
-| Deduplication | No | No | Yes | Yes | No |
+![A backup job with live transfer progress and a timeline of steps](docs/media/why-capture.png)
 
-DockNest does not deduplicate. Every backup is a full copy, so it uses more storage than restic. If you want deduplicated file backups, use Backrest or restic.
+### Backups you have proven
+Restore any recovery point to a separate copy. The live site is not touched. Open the copy, check it, then delete it. Every backup also shows whether it was verified.
 
-## Roadmap
+![The backup library with verified recovery points for each site](docs/media/why-verified.png)
 
-Next: automatic restore tests. They are coming soon and are not available yet.
+### A map of your servers, and one-drag moves
+The Map shows your servers, sites and backup storage as connected nodes. To move a site, drag its line to another server and press Save changes. DockNest shows how long the move takes and how long the site is offline. It backs up the site, tests a copy on the new server, waits for your DNS change, then switches. The old copy stays stopped for 7 days, so you can switch back. See [moving sites](docs/moving-sites.md).
 
-## What it does
+![The Map with a site's line dragged from Frankfurt-1 to Ashburn-1](docs/media/why-map.png)
 
-DockNest is a self-hosted web app. It connects to your Linux servers over SSH, backs up each Docker or static nginx site to storage you own, and lets you restore any backup to a separate copy to check that it works.
-
-- Discovers the Docker projects and static nginx sites on each server you connect.
-- Backs up each site on its own schedule to encrypted SFTP or S3-compatible storage.
-- Verifies recovery points and restores them to a separate copy. The live site is not overwritten.
-- Shows live progress, the steps of each job and the reason when one fails.
+### And the rest
+- **Encrypted storage.** Backups are encrypted with AES-256-GCM before they leave your server. Store them on SFTP or S3-compatible storage you own.
+- **Plain-language jobs.** Live progress, a step timeline, and a clear reason when something fails.
+- **Alerts.** Telegram or email when a backup fails or passes, a move needs you, or a server is low on disk. See [alerts](docs/alerts.md).
+- **Click-to-update.** An opt-in update check and one-click updates through a host updater.
+- **Safe by design.** Pinned SSH host keys, password plus authenticator app, and no Docker socket on the dashboard.
+- **Also:** a maintenance page while a site is paused, light and dark themes, a phone layout, and downloads as an encrypted file or ZIP.
 
 > [!NOTE]
-> DockNest is in beta. The [support matrix](docs/support-matrix.md) states what has been tested and what has not. S3-compatible storage is in beta: it is tested against a simulated S3 endpoint, not yet against real providers. Automatic recovery after a server reboot is not ready for production use.
+> DockNest is in beta. The [support matrix](docs/support-matrix.md) states what has been tested and what has not. S3-compatible storage is tested against a simulated endpoint, not yet against real providers. Automatic recovery after a server reboot is not ready for production use.
 
-## Features
+## Why people pick DockNest
 
-**Backup and restore**
-- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis.
-- Per-site schedules, retention, and pinned backups.
-- Restore to a separate copy; DockNest does not replace a live site by itself.
-- Download a backup as an encrypted file or as a ZIP.
-- Optional maintenance page, designed in a visual editor, while a site is paused.
-
-**Operation**
-- Jobs page with transfer progress, a step timeline and plain-language error explanations.
-- DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
-- Update Center with an opt-in update check and click-to-update through a host updater.
-- Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
-- Light and dark themes, and a layout for phones.
-
-**Map and moving sites**
-- A Map page shows your servers, their sites and your backup storage as connected nodes. Click any node for its details, such as the databases that move with a site.
-- The "+" on a server lists sites DockNest found there that you have not added yet.
-- Administrators move a site to another server by dragging it to that server and pressing Save changes. DockNest shows how long the move takes and how long the site is offline, then backs up the site, tests a copy on the new server and waits for your DNS change before switching.
-- The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving sites](docs/moving-sites.md).
-- When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
-
-**Alerts**
-- Get a Telegram message or an email when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, or a new version is out.
-- Set it up on the Map: add a Telegram or Email node, draw a line from DockNest, a server or a site, and pick the events. Bot tokens and mail passwords are saved once as encrypted credentials. See [alerts](docs/alerts.md).
-
-**Security**
-- Backups are encrypted with AES-256-GCM.
-- SSH host keys are pinned and checked before connecting.
-- Every user signs in with a password and an authenticator app.
-- The dashboard never uses the Docker socket.
-
-![Map page with three synthetic servers and the sites on each one](docs/media/map.png)
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/media/servers.png" alt="Servers page with three synthetic servers" /></td>
-    <td width="50%"><img src="docs/media/backups.png" alt="Backup library listing recovery points per synthetic site" /></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/media/update-center.png" alt="Update Center showing an available update and the host updater status" /></td>
-    <td width="50%"><img src="docs/media/job-details.png" alt="Job details for a running backup of a synthetic site, with transfer progress and a step timeline" /></td>
-  </tr>
-</table>
+| | DockNest | Coolify | restic / Backrest | Duplicati |
+| :-- | :-: | :-: | :-: | :-: |
+| Backs up whole sites | Yes | Partly | No | No |
+| Moves sites between servers | Yes | No | No | No |
+| Proves backups restore | Yes | No | Manual | Manual |
+| Encrypted storage | Yes | Not documented | Yes | Yes |
+| Easy web dashboard | Yes | Yes | Backrest only | Yes |
 
 ## Requirements
 
