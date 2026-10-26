@@ -111,7 +111,9 @@ test('a Docker test runs every step as short jobs, passes, writes evidence and c
   assert.deepEqual(order.slice(0, 6), ['restore-test-check', 'upload', 'restore-test-prepare', 'restore-test-run:restore', 'restore-test-run:start', 'restore-test-run:poll']);
   assert.ok(order.filter(item => item === 'restore-test-run:poll').length >= 6, 'health and stability are polled across ticks');
   assert.deepEqual(order.slice(-2), ['restore-test-teardown', 'restore-test-status']);
-  assert.ok(jobs >= 10, 'every server step and every poll is its own job');
+  assert.ok(jobs >= 10, 'every server step and every poll is its own claim');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=?").get(testId).n, 6, 'one job row per step: polls reuse the check_health job');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=? AND status<>'completed'").get(testId).n, 0);
   const prepare = calls.find(call => call.request.operation === 'restore-test-prepare');
   assert.equal(prepare.request.reaper.length > 1000, true, 'the reaper source is sent'); assert.equal(prepare.options.keepStdinOpen, true); assert.equal(prepare.request.watchStdin, true);
   assert.deepEqual(calls.find(call => call.request.phase === 'restore').request.limits, { memoryMb: 1024, cpus: 1, internet: false });

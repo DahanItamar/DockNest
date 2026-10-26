@@ -1,7 +1,9 @@
 // Automatic restore test engine (docs/restore-tests.md): test rows, the ticked step machine and its worker jobs.
 // - tickRestoreTests() runs each worker tick. Every step that touches the test server is one short `restore-test` job
 //   (statuses test_queued/test_running, which releases before 2.9.0 never claim). Waits for health and stability are
-//   polls on later ticks, so the worker is never held for a whole test.
+//   polls on later ticks, so the worker is never held for a whole test: between polls the check_health job rests in
+//   test_waiting (never claimed) and the tick queues it again when the next poll is due, so a test leaves one job row
+//   per step.
 // - A started test holds its test server until its clean-up is done or acknowledged (src/restore-tests/hold.js). It
 //   never makes its site busy, so a stuck clean-up blocks only the test server.
 // - The result is written once (a trigger enforces it). Backup evidence is written only for passed and failed, and
@@ -137,6 +139,7 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
     const changed = db.prepare("UPDATE restore_tests SET result=?,failed_step=?,reason=?,checks=?,restore_seconds=?,total_seconds=?,finished_at=?,step='clean_up',cleanup=COALESCE(cleanup,'done') WHERE id=? AND result IS NULL")
       .run(result, failedStep, text, JSON.stringify(all), restoreSeconds, test.started_at ? Math.round((at - Date.parse(test.started_at)) / 1000) : 0, iso(at), test.id).changes;
     if (!changed) return false;
+    db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE type='restore-test' AND json_extract(details,'$.testId')=? AND status='test_waiting'").run(iso(at), test.id);
     if (failedStep && failedStep !== 'clean_up') setStep(test.id, failedStep, result === 'cancelled' ? 'skipped' : 'failed', text);
     for (const row of loadSteps(test.id)) if (row.step !== 'clean_up' && ['pending', 'running'].includes(row.state)) setStep(test.id, row.step, 'skipped');
     const cleanup = db.prepare('SELECT cleanup FROM restore_tests WHERE id=?').get(test.id).cleanup;
@@ -148,7 +151,7 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
 }
 
 // ---------- the tick ----------
-const activeJob = testId => db.prepare("SELECT id,status FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=? AND status IN ('test_queued','test_running')").get(testId);
+const activeJob = testId => db.prepare("SELECT id,status FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=? AND status IN ('test_queued','test_running','test_waiting')").get(testId);
 function ensureJob(test, step) {
   if (activeJob(test.id)) return;
   const jobId = id();
@@ -170,7 +173,7 @@ export function tickRestoreTests() {
 function advance(test) {
   const job = activeJob(test.id);
   if (test.result === null) {
-    if (job) return;
+    if (job && job.status !== 'test_waiting') return;
     if (!test.started_at) {
       if (test.cancel_requested) { conclude(test, 'cancelled', { step: null, reason: 'The test was cancelled before it started.' }); return; }
       if (deploymentHeld(db)) return;
@@ -183,6 +186,7 @@ function advance(test) {
     if (test.cancel_requested) { conclude(test, 'cancelled', { reason: 'The test was cancelled.' }); return; }
     if (clock() >= Date.parse(test.deadline_at)) { conclude(test, 'couldnt_run', { reason: `Test couldn't finish: time limit (${test.limits.timeLimitMinutes} minutes). Raise it in Advanced.` }); return; }
     if (test.step === 'check_health' && (test.progress.nextPollAt ?? 0) > clock()) return;
+    if (job) { db.prepare("UPDATE jobs SET status='test_queued' WHERE id=? AND status='test_waiting'").run(job.id); return; }
     ensureJob(test, test.step);
     return;
   }
@@ -200,7 +204,9 @@ export async function executeRestoreTestJob(job) {
     if (step === 'clean_up') await runCleanup(test);
     else if (test.result === null && (test.step === step || (step === 'check_space' && !test.started_at))) await runStep(test, step);
   } catch (caught) { error = plainReason(caught?.message, 'The restore test step failed.'); console.error(`Restore test ${testId} step ${step} failed: ${caught?.code ?? caught?.name}`); }
-  db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='test_running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', iso(clock()), error, job.id);
+  const after = !error && step === 'check_health' ? loadTest(testId) : null;
+  if (after?.result === null && after.step === 'check_health') db.prepare("UPDATE jobs SET status='test_waiting' WHERE id=? AND status='test_running'").run(job.id);
+  else db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='test_running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', iso(clock()), error, job.id);
 }
 // Cancel and the time limit stop the current helper call (its stdin closes and the helper ends itself).
 async function guarded(test, work) {
