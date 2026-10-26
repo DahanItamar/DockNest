@@ -11,6 +11,7 @@ These decisions belong to the owner. Each has a PM recommendation, the date by w
 | Q4 | **Update check: ask once at first admin login ("Check GitHub daily for new versions?"); no outbound call until answered; toggle in Settings. No telemetry.** |
 | Q7 | **Click-to-update only; never install unattended.** |
 | Q8 | **Primary persona: the web agency owner.** |
+| Q9 | **(2026-10-26) Restore tests run on a test server the owner picks per site; the site's own live server only with an explicit opt-in and a clear warning. See [restore-tests.md](../restore-tests.md).** |
 
 ## Still open
 
@@ -24,7 +25,6 @@ These decisions belong to the owner. Each has a PM recommendation, the date by w
 | Q6 | Storage efficiency: accept full packages, own dedup, or a restic/Kopia layer? | After the PM-19 benchmark | Accept full packages; prototype a restic layer only if cost blocks adoption |
 | Q7 | Unattended automatic updates? | Before 2.2.0 | Never by default |
 | Q8 | Confirm the primary persona (agency owner) | Before 2.4.0 planning | Yes, agency owner |
-| Q9 | Where do scheduled restore drills run by default? | Before PM-22 (2.5.0) | A dedicated drill server; source server only with an explicit opt-in |
 | Q10 | Ever support in-place replacement restore / production cutover? | Before 2.7 planning | Not in 2.x; guided migration checklist at most |
 | Q11 | When does DockNest drop the "beta" label? | Before 2.5.0 | After explicit, evidence-based exit criteria are met |
 | Q12 | Keep root SSH as a requirement on source servers? | Revisit after 2.4.0 install reports | Keep it, documented; revisit with data |
@@ -80,7 +80,8 @@ These decisions belong to the owner. Each has a PM recommendation, the date by w
 - **Recommendation: confirm the agency owner (P1)** as primary, with the solo developer (P2) as the early-adopter channel ([personas](personas.md)). This decides whether the 2.6.0 Agency pack outranks P3 features such as online capture and scale.
 - **Would change if:** interviews (PM-25) show agencies standardize on provider snapshots and do not want site-level tools.
 
-### Q9 — Where scheduled drills run
+### Q9 — Where scheduled drills run (answered 2026-10-26)
+- **Owner decision:** a test server picked per site; the live server only with an explicit opt-in and a warning. Design: [restore-tests.md](../restore-tests.md).
 - **Recommendation:** a designated drill server by default. The source server is allowed only with explicit opt-in, CPU/memory limits and the existing capacity check (`backup.size*3 + 1 GiB` free). This avoids drills competing with production resources.
 - **Trade-off:** agencies need one extra (cheap) server. The onboarding flow should explain why.
 
