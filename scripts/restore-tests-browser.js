@@ -143,7 +143,7 @@ async function failedAlert(scheme,width){
  assert.match(await alert.textContent(),/The database didn\u2019t start in 30 minutes\./);
  const actions=await alert.locator('.rp-actions button').allTextContents();
  assert.deepEqual(actions,['Run again','Open job']);
- assert.equal(await page.locator('.dash-sites .dash-summary').count(),0,'the alert takes the strip’s place');
+ assert.equal(await page.locator('.dash-sites .dash-summary').count(),1,'the intro strip stays; only the job-attention alert hides it');
  assert.equal(await alert.locator('.rp-actions button').first().getAttribute('class'),'primary');
  assert.match((await row(page,'cinderbean.com').locator('.dash-site-latest').textContent()).trim(),/^Failed · yesterday$/);
  assert.equal((await row(page,'cinderbean.com').locator('.dash-site-latest .status').getAttribute('class')).includes('status-failed'),true);

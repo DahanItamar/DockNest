@@ -23,7 +23,6 @@ dialog.rt-dialog{scrollbar-width:none}dialog.rt-dialog::-webkit-scrollbar{displa
 
 /* Approved hover motion: arrow 2px right, restore icons rotate, closed-row and Advanced chevrons dip 2px. */
 .dash-link svg,.dash-icon svg,.rt-adv summary .rt-chev{transition:transform var(--dur-base) var(--ease)}
-.rt-chev{transition:transform var(--dur-base) var(--ease)}
 .rt-adv[open] .rt-chev{transform:rotate(180deg)}
 @media(hover:hover){
  .dash-link:hover .tabler-icon-arrow-right{transform:translateX(2px)}

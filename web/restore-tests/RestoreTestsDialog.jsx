@@ -7,16 +7,16 @@ import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit
 
 // One preset select plus a plain text input for "Custom". The input appears (with the page's enter motion) only on Custom.
 function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMode,aria,error,focusRef}){
- const custom=state.pick==='custom',input=useRef(null);
+ const custom=state.pick==='custom',input=useRef(null),id='rt-'+label.replace(/\W+/g,'-').toLowerCase();
  useEffect(()=>{if(custom&&focusRef.current===aria){focusRef.current=null;input.current?.focus()}},[custom]);
- return <label className="field"><span>{label}</span>
-  <select value={state.pick} disabled={disabled} onChange={event=>{focusRef.current=event.target.value==='custom'?aria:null;onChange({...state,pick:event.target.value})}}>
+ return <div className="field"><label htmlFor={id}>{label}</label>
+  <select id={id} value={state.pick} disabled={disabled} onChange={event=>{focusRef.current=event.target.value==='custom'?aria:null;onChange({...state,pick:event.target.value})}}>
    {spec.presets.map(([value,text])=><option key={value} value={String(value)}>{text}</option>)}
    <option value="custom">Custom</option>
   </select>
   {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
   <small className={error?'rt-err':undefined} role={error?'alert':undefined}>{error||help}</small>
- </label>;
+ </div>;
 }
 
 export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
