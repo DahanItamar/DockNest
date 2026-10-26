@@ -25,7 +25,7 @@ class FakeDocker:
     """Containers, networks, images and tags with labels. Every create first asserts the journal already lists it."""
     def __init__(self,journal,archive_tags=(),existing_images=(),existing_tags=None):
         self.journal=journal;self.calls=[];self.containers={};self.networks={};self.images=set(existing_images);self.tags=dict(existing_tags or {})
-        self.archive_tags=list(archive_tags);self.loaded=['sha256:snap0','sha256:snap1','sha256:snap2','sha256:orig'];self.in_use=set();self.counter=0
+        self.archive_tags=list(archive_tags);self.loaded=['sha256:snap0','sha256:snap1','sha256:snap2','sha256:orig'];self.in_use=set();self.counter=0;self.events=[]
     def journalled(self,kind,value):
         state=json.loads((self.journal()/'resources.json').read_text())
         assert value in state['created'][kind],'%s %s was created before it was journalled'%(kind,value)
@@ -51,6 +51,8 @@ class FakeDocker:
         if args[:2]==['images','-aq']:return ('\n'.join(sorted(self.images))+'\n').encode()
         if args[:2]==['image','inspect']:
             ref=args[-1]
+            image=self.tags.get(ref,ref if ref in self.images else None)
+            if image and '{{json .RepoTags}}' in args:return json.dumps([tag for tag,value in self.tags.items() if value==image]).encode()
             if ref in self.tags:return (self.tags[ref]+'\n').encode()
             if ref in self.images:return (ref+'\n').encode()
             fail()
@@ -65,15 +67,19 @@ class FakeDocker:
                 image=self.tags.pop(ref)
                 if image not in self.tags.values() and image not in self.in_use:self.images.discard(image)
                 return b''
-            if ref in self.in_use or ref in self.tags.values() or ref not in self.images:fail()
-            self.images.discard(ref);return b''
+            # Like Docker without -f: refused while a container uses it or when more than one tag names it.
+            if ref in self.in_use or ref not in self.images or list(self.tags.values()).count(ref)>1:fail()
+            self.images.discard(ref);self.tags={tag:value for tag,value in self.tags.items() if value!=ref};return b''
         if args[:2]==['network','create']:
             name=args[-1];self.journalled('networks',name)
             self.networks[name]={'labels':self.labels(args),'internal':'--internal' in args,'opts':[args[i+1] for i,a in enumerate(args) if a=='--opt']};return (name+'-id\n').encode()
         if args[:2]==['network','inspect']:
             n=self.networks[args[2]]
-            return json.dumps([{'Internal':n['internal'],'EnableIPv6':False,'Options':dict(o.split('=',1) for o in n['opts']),'IPAM':{'Config':[{'Subnet':'172.30.%d.0/24'%len(self.networks)}]}}]).encode()
-        if args[:2]==['network','connect']:return b''
+            index=list(self.networks).index(args[2])+1
+            return json.dumps([{'Internal':n['internal'],'EnableIPv6':False,'Options':dict(o.split('=',1) for o in n['opts']),'IPAM':{'Config':[{'Subnet':'172.30.%d.0/24'%index,'Gateway':'172.30.%d.1'%index}]}}]).encode()
+        if args[:2]==['network','connect']:self.events.append(('connect',args[-2],args[-1]));return b''
+        if args[0]=='inspect' and '--format' in args:return ('true /var/run/docker/netns/%s\n'%hashlib.md5(args[-1].encode()).hexdigest()[:12]).encode()
+        if args[0]=='start':self.events.extend(('start',cid) for cid in args[1:]);return b''
         if args[:2]==['network','ls']:
             fs=self.filters(args);names=[f[6:-1] for f in fs if f.startswith('name=^')]
             found=[n for n,v in self.networks.items() if self.match(v['labels'],[f for f in fs if f.startswith('label=')]) and (not names or n==names[0].replace('\\',''))]
@@ -99,7 +105,7 @@ class Sandbox:
         self.base=pathlib.Path(temporary);self.manifest=m or manifest()
         self.restore_root=self.base/'restore';self.tests_root=self.base/'restore-tests'
         self.docker=FakeDocker(lambda:self.tests_root/TID,archive_tags=tags)
-        self.events=io.StringIO();self.tags=tags;self.iptables=[]
+        self.events=io.StringIO();self.tags=tags;self.iptables=[];self.netns={};self.fail_tool=None
     def unpack(self,req,root):
         unpacked=root/'unpacked';unpacked.mkdir()
         (unpacked/'manifest.json').write_text(json.dumps(self.manifest))
@@ -110,19 +116,29 @@ class Sandbox:
     def extract(self,archive,destination):
         destination=pathlib.Path(destination);destination.mkdir(parents=True,exist_ok=True);(destination/'entry').mkdir()
     def fake_run(self,args,timeout=3600,input=None):
+        error=lambda:(_ for _ in ()).throw(subprocess.CalledProcessError(1,args[:1]))
+        if args[:3]==['ip','-o','addr']:
+            return b'1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 203.0.113.5/24 scope global eth0\n2: eth0    inet6 2001:db8::5/64 scope global\n2: eth0    inet6 fe80::1/64 scope link\n3: docker0    inet 172.17.0.1/16 scope global docker0\n'
+        if args[0].endswith('nsenter') and args[1].startswith('--net='):
+            key=args[1][6:];tool=pathlib.Path(args[2]).name;action=args[4];rule=(tool,tuple(args[6:]))
+            if args[3]!='-w' or args[5]!='OUTPUT':raise AssertionError(args)
+            if action=='-I':
+                if tool==self.fail_tool:error()
+                self.netns.setdefault(key,[]).append(rule);self.docker.events.append(('rule',key,rule));return b''
+            if action=='-C':
+                if rule not in self.netns.get(key,[]):error()
+                return b''
         if args[0] in ('iptables','ip6tables'):
-            if args[1]=='-S':return ('-N DOCKER-USER\n'+''.join('-A DOCKER-USER '+rule+'\n' for tool,rule in self.iptables if tool==args[0])).encode()
-            if args[1]=='-I':
-                rule=' '.join(args[3:5]+args[5:]).replace('--comment docknest','--comment docknest')
-                self.iptables.append((args[0],' '.join(args[3:])));return b''
+            if args[1]=='-S':return ('-N '+args[2]+'\n'+''.join('-A '+rule+'\n' for tool,rule in self.iptables if tool==args[0] and rule.startswith(args[2]+' '))).encode()
             if args[1]=='-D':
-                text=' '.join(args[3:]);self.iptables=[item for item in self.iptables if not (item[0]==args[0] and item[1]==text)];return b''
+                text=' '.join(args[2:]);self.iptables=[item for item in self.iptables if not (item[0]==args[0] and item[1]==text)];return b''
         raise AssertionError('unexpected command %r'%args)
+    def key(self,cid):return '/var/run/docker/netns/'+hashlib.md5(cid.encode()).hexdigest()[:12]
     def __enter__(self):
         self.patches=[patch('helper.RESTORE_ROOT',self.restore_root),patch('helper.RESTORE_TESTS_ROOT',self.tests_root),patch('helper.docker',side_effect=self.docker),
             patch('helper.unpack_verified',side_effect=self.unpack),patch('helper.safe_extract',side_effect=self.extract),patch('helper.EVENT_STREAM',self.events),
             patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':10**15})()),patch('helper.run',side_effect=self.fake_run),
-            patch('helper.shutil.which',side_effect=lambda name:'/usr/sbin/'+name),patch('helper.time.sleep',return_value=None)]
+            patch('helper.shutil.which',side_effect=lambda name:'/usr/sbin/'+name),patch('helper.time.sleep',return_value=None),patch('helper.health',return_value=True)]
         for item in self.patches:item.start()
         return self
     def __exit__(self,*_):
@@ -134,6 +150,8 @@ class Sandbox:
         helper.restore_test_run({'testId':TID,'phase':'restore','plaintextChecksum':'x','limits':{'memoryMb':memory,'cpus':cpus,'internet':internet}})
         return self.results()[-1]
     def state(self):return json.loads((self.tests_root/TID/'resources.json').read_text())
+    def start(self):
+        helper.restore_test_run({'testId':TID,'phase':'start'});return self.results()[-1]
 
 class LimitTests(unittest.TestCase):
     def test_presets_and_custom_values_inside_the_ranges_are_accepted(self):
@@ -183,29 +201,54 @@ class RestoreTests(unittest.TestCase):
             self.assertEqual(box.docker.tags['shop:latest'],'sha256:old','a moved tag points back at its old image right after load')
             load=next(i for i,c in enumerate(box.docker.calls) if c[0]=='load');retag=next(i for i,c in enumerate(box.docker.calls) if c[0]=='tag')
             self.assertGreater(retag,load)
-    def test_internet_creates_own_networks_and_blocks_all_four_mail_ports_before_start(self):
-        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
+    def test_internet_starts_isolated_and_adds_only_an_egress_network_never_host_rules(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,manifest(True)) as box:
             box.prepare();result=box.restore(internet=True)
-            self.assertEqual(result['outcome'],'ok',result);self.assertTrue(result['mailBlocked']);self.assertEqual(result['networkMode'],'internet')
-            [(name,n)]=box.docker.networks.items();self.assertFalse(n['internal'])
-            [(tool,rule)]=box.iptables
-            self.assertEqual(tool,'iptables');self.assertIn('--dports 25,465,587,2525',rule);self.assertIn('docknest-restore-test-'+TID,rule);self.assertIn('REJECT',rule)
-            self.assertEqual(box.state()['created']['firewall'],[{'tool':'iptables','subnet':'172.30.1.0/24'}])
-            self.assertFalse(any(c[0]=='start' for c in box.docker.calls),'nothing starts in the restore phase')
-    def test_mail_rule_flush_is_seen_by_the_next_poll_which_stops_the_copy(self):
+            self.assertEqual(result['outcome'],'ok',result);self.assertEqual(result['networkMode'],'internet')
+            internal=[n for n,v in box.docker.networks.items() if v['internal']];egress=[n for n,v in box.docker.networks.items() if not v['internal']]
+            self.assertEqual(egress,['dbm-test-'+TID[:12]+'-egress']);self.assertEqual(len(internal),1)
+            for c in box.docker.containers.values():
+                self.assertEqual(c['args'][c['args'].index('--network')+1],internal[0],'every copy starts on the internal network only')
+                self.assertIn('NET_ADMIN',c['args'][c['args'].index('--cap-drop')+1]);self.assertNotIn('--dns',c['args'])
+            self.assertEqual(box.iptables,[],'no host firewall rules for restore tests')
+            self.assertFalse(any(e[0]=='connect' for e in box.docker.events),'nothing reaches the egress network before start')
+    def test_rules_go_into_each_copy_namespace_and_are_verified_before_it_joins_the_egress_network(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,manifest(True)) as box:
+            box.prepare();box.restore(internet=True);result=box.start()
+            self.assertEqual(result['outcome'],'ok',result)
+            running=box.state()['restored']['running'];egress='dbm-test-'+TID[:12]+'-egress'
+            for cid in running:
+                rules=box.netns[box.key(cid)];events=box.docker.events
+                for tool in ['iptables','ip6tables']:
+                    self.assertIn((tool,('-p','tcp','-m','multiport','--dports','25,465,587,2525','-j','REJECT')),rules)
+                self.assertIn(('iptables',('-d','169.254.169.254/32','-j','REJECT')),rules);self.assertIn(('ip6tables',('-d','fd00:ec2::254/128','-j','REJECT')),rules)
+                for address,tool in [('203.0.113.5','iptables'),('172.17.0.1','iptables'),('2001:db8::5','ip6tables')]:self.assertIn((tool,('-d',address,'-j','REJECT')),rules,address)
+                self.assertTrue(any(rule[1][:2]==('-d','172.30.') or (rule[1][0]=='-d' and rule[1][1].startswith('172.30.') and rule[1][1].endswith('.1')) for rule in rules),'the Docker gateway of the egress network is rejected')
+                self.assertFalse(any(rule[1][1] in ('127.0.0.1','fe80::1') for rule in rules),'loopback and link-local stay usable')
+                started=events.index(('start',cid));joined=events.index(('connect',egress,cid))
+                last_rule=max(i for i,e in enumerate(events) if e[0]=='rule' and e[1]==box.key(cid))
+                self.assertLess(started,last_rule);self.assertLess(last_rule,joined,'egress only after every rule is in place')
+            stopped=[c for c in box.docker.containers if c not in running]
+            self.assertFalse(any(e[0]=='connect' and e[2] in stopped for e in box.docker.events),'a service stopped at capture never joins the egress network')
+            box.iptables.clear()  # a host firewall reload or `iptables -F` on the host
+            _,state=helper.test_state(TID);ids=state['restored']['running']
+            self.assertTrue(helper.egress_intact(TID,ids),'a host firewall flush does not touch the copy namespace rules')
+            box.netns[box.key(ids[0])].pop(0);self.assertFalse(helper.egress_intact(TID,ids))
+    def test_a_rule_that_cannot_be_inserted_stops_the_test_before_egress(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
-            box.prepare();box.restore(internet=True)
-            with patch('helper.inspect',return_value=[{'Id':'dbm-test-'+TID[:12]+'-id','State':{'Running':True}}]):
-                helper.restore_test_run({'testId':TID,'phase':'poll'});self.assertEqual(box.results()[-1]['outcome'],'ok')
-                box.iptables.clear()
-                helper.restore_test_run({'testId':TID,'phase':'poll'})
-            result=box.results()[-1]
-            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('Mail blocking was removed',result['reason'])
-            self.assertTrue(any(c[0]=='stop' for c in box.docker.calls))
-    def test_missing_firewall_chain_refuses_internet(self):
-        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.firewall_ready',return_value=False):
+            box.prepare();box.restore(internet=True);box.fail_tool='ip6tables'
+            result=box.start()
+            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('ip6tables',result['reason'])
+            self.assertFalse(any(e[0]=='connect' for e in box.docker.events));self.assertTrue(any(c[0]=='stop' for c in box.docker.calls))
+    def test_internet_is_refused_for_net_admin_shared_namespaces_or_missing_tools(self):
+        for change,expected in [({'CapAdd':['NET_ADMIN']},'adds NET_ADMIN'),({'CapAdd':['CAP_NET_RAW']},'adds NET_RAW'),({'NetworkMode':'container:abc'},"another container's network")]:
+            m=manifest();m['containers'][0]['HostConfig'].update(change)
+            with tempfile.TemporaryDirectory() as t,Sandbox(t,m) as box:
+                box.prepare();result=box.restore(internet=True)
+                self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('Allow internet is refused',result['reason']);self.assertIn(expected,result['reason'])
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.shutil.which',side_effect=lambda name:None if name=='ip6tables' else '/usr/sbin/'+name):
             box.prepare();result=box.restore(internet=True)
-            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('mail could not be blocked',result['reason'])
+            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('nsenter, iptables and ip6tables',result['reason'])
     def test_package_problems_are_backup_side_and_transfer_or_disk_problems_are_not(self):
         cases=[('Backup artifacts are missing, changed or unexpected','failed'),('Restore transfer checksum mismatch','couldnt_run'),('Insufficient target capacity to extract the archive','couldnt_run')]
         for message,outcome in cases:
@@ -244,12 +287,15 @@ class PollTests(unittest.TestCase):
             self.assertEqual(result['outcome'],'failed');self.assertEqual(result['checks'][0]['name'],'Still running')
             result=self.poll(box,[{'Id':cid,'State':{'Running':False,'ExitCode':137,'OOMKilled':True}}])
             self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('memory limit',result['reason'])
-    def test_disk_watchdog_stops_the_copy(self):
+    def test_free_space_is_checked_at_step_transitions_not_on_every_poll(self):
         cid='dbm-test-'+TID[:12]+'-id'
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
             box.prepare();box.restore()
-            with patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':10**8})()):result=self.poll(box,[{'Id':cid,'State':{'Running':True}}])
-            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('low on disk',result['reason']);self.assertTrue(any(c[0]=='stop' for c in box.docker.calls))
+            with patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':10**8})()):
+                self.assertEqual(box.start()['reason'],'The test server ran low on disk.')
+                self.assertEqual(self.poll(box,[{'Id':cid,'State':{'Running':True}}])['outcome'],'ok','a middle poll does no disk work')
+                result=self.poll(box,[{'Id':cid,'State':{'Running':True}}],final=True)
+            self.assertEqual(result['outcome'],'couldnt_run');self.assertIn('low on disk',result['reason'])
     def test_final_poll_passes_running_health_and_stability(self):
         cid='dbm-test-'+TID[:12]+'-id'
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
@@ -261,15 +307,17 @@ class PollTests(unittest.TestCase):
         for probe in [{'port':0},{'port':70000},{'port':80,'path':'no-slash'},{'port':80,'path':'/a b'},{'port':'80'}]:self.assertEqual(helper.restore_test_probe('c',probe,'web')['status'],'skipped',probe)
         calls=[]
         def fake(args,timeout=3600,input=None):calls.append(args);return b'{"status": 302, "ms": 12}\n'
-        with patch('helper.shutil.which',side_effect=lambda name:'/usr/bin/'+name),patch('helper.docker',return_value=b'4242\n'),patch('helper.run',side_effect=fake):
+        with patch('helper.shutil.which',side_effect=lambda name:'/usr/bin/'+name),patch('helper.docker',return_value=b'true /var/run/docker/netns/abc123\n'),patch('helper.run',side_effect=fake):
             check=helper.restore_test_probe('c',{'port':8080,'path':'/health'},'web')
         self.assertEqual(check['status'],'passed');self.assertEqual(check['detail'],'HTTP 302 in 12 ms')
         argv=calls[0]
-        self.assertEqual(argv[:4],['/usr/bin/nsenter','--target','4242','--net'])
-        self.assertEqual(argv[4:11],['/usr/bin/setpriv','--reuid','65534','--regid','65534','--clear-groups','--no-new-privs'])
-        self.assertEqual(argv[12],'-I');self.assertEqual(argv[-2:],['8080','/health'])
+        self.assertEqual(argv[:2],['/usr/bin/nsenter','--net=/var/run/docker/netns/abc123'],'by the sandbox key, never a PID')
+        self.assertEqual(argv[2:9],['/usr/bin/setpriv','--reuid','65534','--regid','65534','--clear-groups','--no-new-privs'])
+        self.assertEqual(argv[10],'-I');self.assertEqual(argv[-2:],['8080','/health'])
+        for answer in [b'false /var/run/docker/netns/abc123\n',b'true /proc/1/ns/net\n']:
+            with patch('helper.shutil.which',side_effect=lambda name:'/usr/bin/'+name),patch('helper.docker',return_value=answer):self.assertEqual(helper.restore_test_probe('c',{'port':8080},'web')['status'],'failed',answer)
         self.assertIn('read(65536)',helper.PROBE_SCRIPT);self.assertIn('timeout=10',helper.PROBE_SCRIPT)
-        with patch('helper.shutil.which',side_effect=lambda name:'/usr/bin/'+name),patch('helper.docker',return_value=b'4242\n'),patch('helper.run',return_value=b'{"status": 500, "ms": 3}\n'):
+        with patch('helper.shutil.which',side_effect=lambda name:'/usr/bin/'+name),patch('helper.docker',return_value=b'true /var/run/docker/netns/abc123\n'),patch('helper.run',return_value=b'{"status": 500, "ms": 3}\n'):
             self.assertEqual(helper.restore_test_probe('c',{'port':8080},'web')['status'],'failed')
 
 class TeardownTests(unittest.TestCase):
@@ -278,7 +326,7 @@ class TeardownTests(unittest.TestCase):
             box.docker.images|={'sha256:old','sha256:orig','sha256:base'};box.docker.tags['shop:latest']='sha256:old'
             box.docker.containers['live-id']={'name':'live','labels':{'com.docker.compose.project':'shop'},'args':[]}
             box.docker.networks['shop_default']={'labels':{},'internal':False,'opts':[]}
-            box.prepare();box.restore(internet=True)
+            box.prepare();box.restore(internet=True);box.start()
             self.assertTrue((box.restore_root/TID).exists())
             helper.restore_test_teardown({'testId':TID})
             result=box.results()[-1];self.assertTrue(result['removed'])
@@ -305,6 +353,19 @@ class TeardownTests(unittest.TestCase):
                 return original(*args)
             with patch('helper.docker',side_effect=stuck),self.assertRaises(ValueError):helper.restore_test_teardown({'testId':TID})
             self.assertTrue((box.tests_root/TID).exists())
+    def test_staging_is_removed_even_when_it_was_never_journalled(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
+            (box.restore_root/TID).mkdir(parents=True);helper.restore_test_teardown({'testId':TID})
+            self.assertFalse((box.restore_root/TID).exists())
+    def test_a_new_tag_is_untagged_only_when_its_image_has_other_tags(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,tags=['fresh:1']) as box:
+            box.prepare();box.restore();box.docker.in_use.add('sha256:snap0')
+            helper.restore_test_teardown({'testId':TID})
+            self.assertEqual(box.docker.tags.get('fresh:1'),'sha256:snap0','an image another container uses keeps its only name')
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,tags=['fresh:1','fresh:2']) as box:
+            box.prepare();box.restore()
+            helper.restore_test_teardown({'testId':TID})
+            self.assertNotIn('sha256:snap0',box.docker.images);self.assertEqual(box.docker.tags,{})
     def test_image_used_by_another_container_is_kept_and_reported(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box:
             box.prepare();box.restore();box.docker.in_use.add('sha256:snap0')
@@ -331,24 +392,29 @@ class ReaperAndStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown') as teardown:
             helper.restore_test_reap({'testId':TID},sleep=lambda s:self.fail('slept'),clock=lambda:0)
             teardown.assert_not_called()
-    def test_reaper_waits_for_deadline_plus_grace_then_tears_down_once(self):
+    def test_reaper_sleeps_once_until_the_deadline_then_tears_down_once(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown') as teardown:
             box.prepare(deadline=1000);now=[0];slept=[]
             def sleep(seconds):slept.append(seconds);now[0]+=seconds
             helper.restore_test_reap({'testId':TID},sleep=sleep,clock=lambda:now[0])
-            self.assertGreaterEqual(now[0],1000+helper.REAPER_GRACE);self.assertTrue(all(s<=30 for s in slept))
+            self.assertEqual(slept,[1000+helper.REAPER_GRACE],'one timer, no periodic work')
             teardown.assert_called_once_with({'testId':TID})
-    def test_reaper_stops_when_the_manager_cleaned_up_while_it_waited(self):
+            self.assertFalse(any(c[0] in ('ps','inspect','stop') for c in box.docker.calls),'the reaper does nothing while it waits')
+    def test_reaper_does_nothing_when_the_manager_already_cleaned_up(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown') as teardown:
             box.prepare(deadline=1000);now=[0]
             def sleep(seconds):
-                now[0]+=seconds
-                if now[0]>100:
-                    import shutil;shutil.rmtree(box.tests_root/TID,ignore_errors=True)
+                import shutil;shutil.rmtree(box.tests_root/TID,ignore_errors=True);now[0]+=seconds
             helper.restore_test_reap({'testId':TID},sleep=sleep,clock=lambda:now[0])
             teardown.assert_not_called()
+    def test_reaper_runs_in_its_own_systemd_scope_when_systemd_is_there(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.systemd_present',return_value=True),patch('helper.os.geteuid',return_value=0,create=True):
+            popen.return_value.poll.return_value=None
+            helper.restore_test_prepare({'testId':TID,'deadline':5,'reaper':__import__('base64').b64encode(b'print(1)').decode()})
+            argv=popen.call_args.args[0]
+            self.assertTrue(argv[0].endswith('systemd-run'));self.assertIn('--scope',argv);self.assertTrue(popen.call_args.kwargs['start_new_session'])
     def test_prepare_writes_the_reaper_privately_and_starts_it_detached(self):
-        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.os.geteuid',return_value=0,create=True):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.systemd_present',return_value=False),patch('helper.os.geteuid',return_value=0,create=True):
             popen.return_value.pid=4242
             helper.restore_test_prepare({'testId':TID,'deadline':5,'reaper':__import__('base64').b64encode(b'print(1)').decode()})
             d=box.tests_root/TID
@@ -366,7 +432,7 @@ class CheckTests(unittest.TestCase):
         events=io.StringIO()
         with patch('helper.docker',side_effect=lambda *a:b'x86_64\n' if 'Architecture' in a[-1] else b'29.1.0\n' if a[0]=='version' else b''),patch('helper.EVENT_STREAM',events),\
             patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':50*1024**3})()),patch('helper.mem_available',return_value=helper.mem_available(meminfo)),\
-            patch('helper.cpu_count',return_value=nproc),patch('helper.test_mail_rules',return_value=[]),patch('helper.firewall_ready',return_value=True),\
+            patch('helper.cpu_count',return_value=nproc),patch('helper.test_mail_rules',return_value=[]),\
             patch('helper.shutil.which',return_value='/usr/bin/x'),patch('helper.os.geteuid',return_value=0,create=True):
             helper.restore_test_check({'testId':TID,'need':need,'limits':limits or {'memoryMb':1024,'cpus':1}})
         return json.loads(events.getvalue().splitlines()[-1])['result']

@@ -18,8 +18,8 @@ the feature ships with its own "beta" label, like moves did.
 | Where | A test server the owner picks per site. The site's own (live) server only with an explicit opt-in and a warning. |
 | Which backup | The latest backup that is `verified=1` and not in retention. "Run test now" may name another backup. |
 | When | Off by default. Daily, weekly (suggested) or monthly, 30 minutes after the site's next scheduled backup. |
-| Network | No internet by default (`--network none` or fresh `--internal` isolated networks). Admin-only "Allow internet" in Advanced, with outgoing mail still blocked. No published ports. |
-| Limits | Presets or a custom number: memory per container (default 1 GB, swap equal), CPUs per container (default 1), time limit (default 30 minutes); pids 1024, log size. Free space `size*3 + 1 GiB` plus a watchdog. Disk is not capped. |
+| Network | No internet by default (`--network none` or fresh `--internal` isolated networks). Admin-only "Allow internet" in Advanced: rules inside each copy's own network namespace block mail, the metadata service and this server before the copy gets a route out. No published ports. |
+| Limits | Presets or a custom number: memory per container (default 1 GB, swap equal), CPUs per container (default 1), time limit (default 30 minutes); pids 1024, log size. Free space `size*3 + 1 GiB`, re-checked at step changes. Disk is not capped. |
 | Passed | Services that ran at capture run, are Docker-healthy and still run after 60 seconds; configured database checks match; the optional internal web check answers 200-399. |
 | Results | `passed`, `failed` (the backup did not come back), `couldnt_run` (the test server or a test limit stopped it), `cancelled`. |
 | Worker | A ticked step machine like moves. Only the copy and restore steps hold the worker for long; health waits are polled across ticks. |
@@ -82,8 +82,14 @@ the feature ships with its own "beta" label, like moves did.
 - Disk is not capped. Docker has no portable per-container disk quota for bind mounts. Instead:
   - "Check space" requires free space at the staging root of `backup.size*3 + 1 GiB` (the `planRestore` rule; the
     helper re-checks extracted size as it does today);
-  - while containers run, each health poll re-reads free space; below 1 GiB the test stops its containers and ends
-    `couldnt_run` ("the test server ran low on disk").
+  - free space (staging and the Docker root) is re-checked at each step change: before the containers start and at
+    the end of the health checks; below 1 GiB the test stops its containers and ends `couldnt_run` ("The test server
+    ran low on disk."). There is no polling loop for disk (owner decision: event-driven checks only);
+  - the log limits (10 MB x 3 per container) cap what logs can take.
+  - Remaining risk: between two step changes a copy can still write into its restored bind mounts or writable layer
+    until the time limit. A very fast writer could fill the disk of the test server before the next check. The
+    preflight reserve (`size*3 + 1 GiB`), the time limit and choosing a test server that is not the live server limit
+    this; it is documented on the live-server warning.
 - "Check space" also requires `MemAvailable` (from `/proc/meminfo`) of at least containers x M (2 x on the live
   server), Docker 28+ for grouped sites, the same architecture, root SSH, and no leftovers labelled
   `docknest.restore-test`. A miss ends the test `couldnt_run` at "Check space" with one plain reason.
@@ -97,21 +103,28 @@ the feature ships with its own "beta" label, like moves did.
   charge cards, call webhooks or fight the live site for a lock.
 - An app that needs an outside service to start (an external database, a licence server, OAuth at boot) fails with
   "The copy may need a service outside the server; restore tests run without internet."
-- **Allow internet** (Advanced, administrator only with re-verification, off by default). Groups then use fresh
-  non-internal bridge networks of their own (never the default bridge); single containers get one such network. Still
-  no published ports. The warning: "The copy runs with your live keys and passwords. With internet it can call
-  webhooks, payment and other APIs, take jobs from shared queues (for example Redis or SQS workers), and run
-  scheduled jobs once. Outgoing mail on the standard mail ports (25, 465, 587, 2525) is blocked."
-- Outgoing mail is blocked with the moves' `DOCKER-USER` rules (the `block_mail` pattern; the test's own copy adds
-  port 2525 and leaves moves unchanged), one rule per test network subnet (IPv4 with `iptables`, an IPv6 subnet with
-  `ip6tables`), commented `docknest-restore-test-<id>`, added before any container starts and journalled for removal. Mail through
-  an HTTP API is not blocked. Where the chain is missing (`iptables: false`, rootless Docker, nftables-only), or
-  `block_mail` returns a partial result (`covered=False`: any network or address family not covered), the test refuses
-  to start with internet and says why.
-- The rules are inserted once, so they can disappear (a firewalld or ufw reload, `iptables -F`, a Docker restart).
-  Every health poll (and the start step) re-checks each journalled `docknest-restore-test-<id>` rule in `iptables`
-  and `ip6tables`; `restore-test-mail-check` runs the same check on its own. If any is missing, the test stops its
-  containers at once and ends `couldnt_run` with "mail blocking was removed".
+- **Allow internet** (Advanced, administrator only with re-verification, off by default). Still no published ports.
+  The warning: "The copy runs with your live keys and passwords. With internet it can call webhooks, payment and other
+  APIs, take jobs from shared queues (for example Redis or SQS workers), and run scheduled jobs once. Outgoing mail on
+  the standard mail ports (25, 465, 587, 2525), the cloud metadata service and this server's own addresses are
+  blocked; mail sent through an HTTP API is not."
+- Fail-closed by construction (owner decision, no polling): every copy is created on the fresh internal isolated
+  networks only, exactly as without internet (a single container gets one such network), so it has no route out. The
+  helper hooks the start of each restart level: right after `docker start`, inside that container's own network
+  namespace (`nsenter --net=<SandboxKey>`, the host's `iptables` and `ip6tables`, `OUTPUT` chain) it inserts REJECT
+  rules for TCP 25/465/587/2525, `169.254.169.254` (IPv4) and `fd00:ec2::254` (IPv6), and every address of this
+  server (all interfaces, so also the Docker gateway of the egress network; loopback and link-local stay usable). It
+  verifies each rule once with `-C` (an event, not a loop) and only then connects the container to the test's own
+  non-internal egress bridge (`dbm-test-<id12>-egress`, never the default bridge). Services stopped at capture never
+  start, so they never get egress.
+- Host firewalld or ufw reloads, `iptables -F` on the host and Docker's own host rules cannot remove rules that live
+  in the copy's namespace; they disappear only with the container. Teardown therefore has no firewall rules to
+  remove. Test containers get `--cap-drop NET_ADMIN`, so a copy cannot change its own rules.
+- Allow internet is refused with a plain reason (and the test can run without internet) when a container adds
+  `NET_ADMIN`, `NET_RAW`, `SYS_ADMIN` or `ALL`, is privileged, or shares the host's or another container's network,
+  or when the test server lacks `nsenter`, `iptables` or `ip6tables`. If inserting or verifying any rule fails, the
+  container is stopped before it reaches the egress network and the test ends `couldnt_run`.
+- `restore-test-mail-check` checks the rules in each running copy on request; nothing re-checks them periodically.
 - Evidence records `internet: true`; the result reads "Passed (tested with internet)".
 
 ## What "passed" means
@@ -129,15 +142,16 @@ Checks run in order. The first failure ends the test at that step.
 | Database checks | configured services | Existing `data_checks` row counts and SQLite proofs match the values recorded at capture. |
 | Internal web check | optional, Docker sites | GET `http://127.0.0.1:{port}{path}` in the chosen container's network namespace returns 200-399 within 10 seconds. |
 
-- The web check runs `nsenter --net --target <pid> setpriv --reuid 65534 --regid 65534 --clear-groups
-  --no-new-privs python3 -I -c '<inline probe>'`. No tool is needed in the image and no port is opened. It reads at
+- The web check runs `nsenter --net=<SandboxKey> setpriv --reuid 65534 --regid 65534 --clear-groups
+  --no-new-privs python3 -I -c '<inline probe>'`, only while Docker reports the container running; the namespace
+  comes from Docker's sandbox path, never from a PID that could be reused. No tool is needed in the image and no port is opened. It reads at
   most 64 KiB, follows no redirects and stores only the status code and time. If `nsenter` or `setpriv` (util-linux)
   is missing, the check is `skipped` with that reason.
 - The port defaults to the first web port `web_hints` finds; the owner can set service, port and path.
 - Each check is stored as `passed`, `failed`, `skipped` or `not-configured`.
 - Test-side, not backup-side (`couldnt_run`): the container was `OOMKilled`, a pids or memory limit was hit, the disk
-  watchdog fired, the time limit ran out, the test server was unreachable or full, or (with internet) the mail block
-  could not be set or was removed. The card says, for example, "Test couldn't finish: memory limit. Raise it in Advanced."
+  check fired, the time limit ran out, the test server was unreachable or full, or (with internet) the mail block
+  could not be set inside the copy. The card says, for example, "Test couldn't finish: memory limit. Raise it in Advanced."
 - A pass cannot prove logins, payments, emails, background jobs, anything that needs the internet (by default), or
   data beyond the configured checks. The card says: "Your site started from this backup and passed {n} checks. It does
   not prove every page works."
@@ -180,12 +194,14 @@ Two journals, the move pattern (`site_move_steps` plus the helper's `resources.j
 
 Teardown (`restore-test-teardown`, idempotent):
 
-1. `docker rm -f` containers with the label. Remove journalled firewall rules.
+1. `docker rm -f` containers with the label (their namespaces, and with them any in-copy rules, go too). Any host
+   rule carrying the test's comment is removed as well, although tests add none.
 2. `docker network rm` journalled networks that still have the label.
-3. `docker image rm` (never `-f`) each test-only image. One a non-test container now uses is kept and reported. Tags
-   that did not exist before are removed only if they still point at the test image.
-4. Remove the staging root (only under `/var/lib/docker-backup-manager/restore/`) and the journal directory (only
-   under `/var/lib/docknest/restore-tests/`), with symlinks resolved.
+3. `docker image rm` (never `-f`) each test-only image. One a non-test container now uses is kept and reported. A
+   tag that did not exist before is untagged on its own only when it still points at the test image and that image
+   has other tags; otherwise removing the image by ID takes the tag with it, and a kept image keeps its only name.
+4. Remove the staging root (always this test's `/var/lib/docker-backup-manager/restore/<testId>`, journalled or not)
+   and the journal directory (only under `/var/lib/docknest/restore-tests/`), with symlinks resolved.
 5. `restore-test-status` must then report nothing left. Only then is `clean_up` done.
 
 Restart and failure paths:
@@ -197,8 +213,14 @@ Restart and failure paths:
   again at once.
 - Reaper: at `copy_backup` (in `restore-test-prepare`, before any plaintext reaches the server) the manager sends the
   reaper source, the reviewed helper itself (as `install-boot-recovery` does); the helper writes it into the journal
-  directory (0700) and starts it in a new session (`python3 -I reaper.py`, operation `restore-test-reap`). At the deadline plus 10 minutes it runs teardown once and
-  exits; it also exits at once if the journal directory is gone. It covers a manager that is down or rolled back. It
+  directory (0700) and starts it in a new session (`python3 -I reaper.py`, operation `restore-test-reap`). It has one
+  timer and no periodic work: it sleeps until the deadline plus 10 minutes, and then runs teardown once only if the
+  journal directory is still there (the manager did not finish), and exits.
+- Reaper and logind: a new session survives the SSH channel closing, but systemd-logind with `KillUserProcesses=yes`
+  kills every process of the SSH login session when it ends. Where systemd runs, the reaper is therefore started with
+  `systemd-run --scope` (its own transient scope outside the session); if `systemd-run` is missing or refuses, it falls
+  back to the plain new session. On such a host without `systemd-run`, a reaper may not survive the SSH session; the
+  manager's own clean-up and its retries still run. It covers a manager that is down or rolled back. It
   does not survive a reboot of the test server; containers have restart `no`, so they stay stopped, and the next
   manager tick cleans up.
 - Clean-up that fails is retried after 5, 15 and 60 minutes. Then the test's `cleanup` becomes `failed` (state
@@ -383,14 +405,14 @@ arguments (they hold data paths).
 
 | Operation | Step | What it does |
 |---|---|---|
-| `restore-test-check` | `check_space` | Read-only facts and plain problems: root, free space, `MemAvailable`, `nproc`, Docker version, architecture, leftovers, firewall chain, `nsenter`/`setpriv`. |
+| `restore-test-check` | `check_space` | Read-only facts and plain problems: root, free space, `MemAvailable`, `nproc`, Docker version, architecture, leftovers, `iptables`/`ip6tables`/`nsenter` (internet), `setpriv`. |
 | `restore-test-prepare` | `copy_backup` | Journal directory, staging root (journalled first), deadline, reaper. Returns the SFTP path. |
 | `restore-test-run` `phase: restore` | `restore_copy` | Verify and unpack, static digest or SQLite proofs, image IDs and tags recorded, `docker load`, tags restored, networks and containers created with limits and labels, mail blocked with internet. Starts nothing. |
-| `restore-test-run` `phase: start` | `start_containers` | Mail rules re-checked, containers started in restart order (each level waits for the one before to be healthy). |
-| `restore-test-run` `phase: poll` | `check_health` | Mail rules and free space (staging and Docker root) first, then running and health; `final: true` adds database checks and the web check. |
+| `restore-test-run` `phase: start` | `start_containers` | Free space checked; containers started in restart order (each level waits for the one before to be healthy); with internet, rules go into each copy's namespace before it joins the egress network. |
+| `restore-test-run` `phase: poll` | `check_health` | Running and health; `final: true` (the end of the step) adds free space, database checks and the web check. |
 | `restore-test-teardown` | `clean_up` | The teardown above. Waits up to 200 seconds for a stopped step to let go. Keeps the journal while anything is left. |
 | `restore-test-status` | recovery | Counts of labelled containers, networks, firewall rules, and whether staging or the journal exist (`present`). |
-| `restore-test-mail-check` | any | Whether every journalled mail rule is still in place. |
+| `restore-test-mail-check` | any | On request: whether every rule is still in each running copy's namespace. |
 | `restore-test-reap` | reaper | Started by `prepare` only. |
 
 ## Upgrade safety
@@ -409,15 +431,17 @@ arguments (they hold data paths).
    teardown. Settings, steps, checks, reasons, audit details and alerts hold no secret values; the probe stores no body.
 2. Isolation: no internet by default, no published ports, no privileged settings, restart `no`, unique names and labels,
    Compose project label replaced. Live server and internet each need an administrator and re-verification; with
-   internet, mail is blocked (re-checked every poll) or the test refuses to start or stops.
+   internet, mail, the metadata service and this server are rejected inside each copy's namespace before it gets a
+   route out, or the test refuses to start.
 3. Image tags are restored right after `docker load`, so a test never changes what a later `docker compose up` runs.
-4. Resource abuse: memory, swap, CPU, pids and log limits, a time limit, a disk watchdog, one test per server, memory
+4. Resource abuse: memory, swap, CPU, pids and log limits, a time limit, free-space checks at step changes, one test per server, memory
    and CPU prechecks, at most daily scheduling and 6 manual runs per site per day. Disk is not capped.
 5. Probe: nobody uid with no new privileges, loopback in the container's namespace, isolated Python, capped size and
    time, no redirects.
 6. Clean-up: label and journal must agree; fixed roots only; never `docker image rm -f`; a failure blocks only the test
    server and alerts.
-7. Reaper: reviewed source sent by the manager, root-owned 0700, one teardown, exits if its journal is gone.
+7. Reaper: reviewed source sent by the manager, root-owned 0700, one timer, one teardown only if the journal is still
+   there, its own systemd scope where available.
 
 Sign-off before PM-23 merges: Security Engineer and Reality Checker (per PM-22).
 
@@ -430,9 +454,10 @@ Sign-off before PM-23 merges: Security Engineer and Reality Checker (per PM-22).
 - Grouped Compose site (web + PostgreSQL with a row-count check and a web check on `/`): passes. Isolation asserts
   from inside a container: no route to the host gateway IP, to `169.254.169.254`, to a public IPv4 or IPv6 address,
   and no public DNS answer.
-- Grouped site with Allow internet: outbound HTTPS works, ports 25, 465, 587 and 2525 are rejected, rules are gone
-  afterwards. Flush the rules mid-test (`iptables -F DOCKER-USER`, and the `ip6tables` chain): the next poll stops the
-  containers and the test ends `couldnt_run` ("mail blocking was removed").
+- Grouped site with Allow internet: outbound HTTPS works; ports 25, 465, 587 and 2525, `169.254.169.254` and the host
+  gateway are rejected; the in-namespace rules exist for IPv4 and IPv6. A host iptables flush mid-test (`iptables -F`,
+  `ip6tables -F`) leaves the in-namespace rules intact and mail is still blocked.
+- Allow internet is refused when a container adds `NET_ADMIN`.
 - Static site: passes on the digest.
 - Failures: a container that exits after 20 seconds fails at "Still running"; one that exceeds its memory ends
   `couldnt_run` (memory limit) with no backup evidence written.
@@ -442,6 +467,8 @@ Sign-off before PM-23 merges: Security Engineer and Reality Checker (per PM-22).
   reaper cleans up.
 - After every case: no labelled container or network, the image ID set and every tag equal to before, no staging or
   journal path, no firewall rule, `restore-test-status` reports nothing left.
+- Not possible on GitHub-hosted runners: real IPv6 egress (the runners have no IPv6 route), so the IPv6 case asserts
+  the `ip6tables` rules inside the copy instead of sending IPv6 mail.
 
 Not "validated" until all cases pass in CI on Linux.
 
