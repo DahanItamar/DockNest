@@ -409,6 +409,20 @@ class ReaperAndStatusTests(unittest.TestCase):
             self.assertEqual(slept,[1150])
         for grace in [59,3601,'150',True]:
             with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.os.geteuid',return_value=0,create=True),self.assertRaises(ValueError):helper.restore_test_prepare({'testId':TID,'deadline':1,'grace':grace})
+    def test_teardown_stops_only_this_tests_reaper(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.systemd_present',return_value=False),patch('helper.os.geteuid',return_value=0,create=True):
+            popen.return_value.pid=4242
+            helper.restore_test_prepare({'testId':TID,'deadline':5,'reaper':__import__('base64').b64encode(b'print(1)').decode()})
+            self.assertEqual(box.state()['reaperPid'],4242)
+            with patch('helper.process_cmdline',return_value=b'python3\x00-I\x00/var/lib/docknest/restore-tests/'+TID.encode()+b'/reaper.py'),patch('helper.os.kill') as kill:
+                helper.restore_test_teardown({'testId':TID})
+            kill.assert_called_once_with(4242,helper.signal.SIGTERM)
+        with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.subprocess.Popen') as popen,patch('helper.systemd_present',return_value=False),patch('helper.os.geteuid',return_value=0,create=True):
+            popen.return_value.pid=4242
+            helper.restore_test_prepare({'testId':TID,'deadline':5,'reaper':__import__('base64').b64encode(b'print(1)').decode()})
+            with patch('helper.process_cmdline',return_value=b'nginx: worker process'),patch('helper.os.kill') as kill:
+                helper.restore_test_teardown({'testId':TID})
+            kill.assert_not_called()
     def test_reaper_does_nothing_when_the_manager_already_cleaned_up(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t) as box,patch('helper.restore_test_teardown') as teardown:
             box.prepare(deadline=1000);now=[0]

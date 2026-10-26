@@ -3018,6 +3018,7 @@ def restore_test_prepare(req):
     RESTORE_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);root.mkdir(mode=0o700)
     state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time();save_state(d,state)
     pid=start_reaper(d,tid,req['reaper']) if req.get('reaper') else None
+    if isinstance(pid,int) and not isinstance(pid,bool):state['reaperPid']=pid;save_state(d,state)
     emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None})
 def backup_side(error):
     """Errors from checking and unpacking the package: the backup did not come back, unless the server ran out of room."""
@@ -3392,6 +3393,17 @@ def remove_test_path(value,tid):
     if not p.exists():return
     if os.name=='posix' and not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
     shutil.rmtree(p)
+def process_cmdline(pid):
+    try:return pathlib.Path('/proc/%d/cmdline'%pid).read_bytes()
+    except OSError:return b''
+def stop_reaper(tid,state):
+    """Event, at teardown: the manager finished, so this test's reaper has nothing left to do. Only a process whose
+    command line is this test's reaper is signalled, never a reused PID."""
+    pid=state.get('reaperPid')
+    if not isinstance(pid,int) or isinstance(pid,bool) or pid<=1 or pid==os.getpid():return False
+    if ('restore-tests/%s/reaper.py'%tid).encode() not in process_cmdline(pid):return False
+    try:os.kill(pid,signal.SIGTERM);return True
+    except OSError:return False
 def restore_test_teardown(req):
     """Idempotent. Containers by label, firewall rules by comment, then journalled networks that still carry the label,
     test-only tags and images (never -f), the staging folder and last the journal, once nothing is left."""
@@ -3423,6 +3435,7 @@ def restore_test_teardown(req):
     if any(left.values()):raise ValueError('Clean-up left %s on the test server.'%', '.join('%d %s'%(n,kind) for kind,n in left.items() if n))
     if d.is_dir():
         if os.path.realpath(d.parent)!=os.path.realpath(RESTORE_TESTS_ROOT):raise ValueError('Restore test clean-up refused a linked journal folder')
+        stop_reaper(tid,state)
         shutil.rmtree(d)
     emit(result={'removed':True,'counts':counts,'keptImages':kept})
 def restore_test_status(req):
