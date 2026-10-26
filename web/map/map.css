@@ -288,6 +288,9 @@
 .map-root .map-val-text a{color:var(--link)}
 .map-root .map-vals{display:flex;flex-direction:column;gap:4px;width:100%;min-width:0}
 .map-root .map-copy.icon-button{width:32px;min-width:32px;height:32px;min-height:32px;margin-right:-8px;display:inline-flex;align-items:center;justify-content:center;flex:none;transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.map-root .map-dialog h3.map-group-title{margin:0;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;color:var(--text-muted)}
+.map-root .map-copy,.map-root .map-alert-rows .icon-button{position:relative}
+@media(max-width:480px){.map-root .map-copy::after,.map-root .map-alert-rows .icon-button::after{content:'';position:absolute;inset:-6px}}
 .map-root .map-copy.done{color:var(--success)}
 .map-root .map-copy:focus-visible,.map-root .map-alert-rows .icon-button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .map-root .map-alert-rows .icon-button{width:32px;min-width:32px;height:32px;min-height:32px;margin-right:-8px;display:inline-flex;align-items:center;justify-content:center}

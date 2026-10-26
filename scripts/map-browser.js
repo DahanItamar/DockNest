@@ -166,7 +166,7 @@ async function panelShot(loc,scheme,name){if(!shots)return;
  await loc.evaluate(e=>{e.style.height=e.dataset.h;e.style.bottom='';e.style.maxHeight='';const b=e.querySelector('.map-panel-body');if(b)b.style.overflow=''});}
 // Copy icons sit on the right edge of their row, values on the left, and nothing is cut off at the panel edge
 async function copyLayout(panel){const pb=await panel.boundingBox();
- for(const b of await panel.locator('.map-copy').all()){const bb=await b.boundingBox(),vb=await b.locator('xpath=preceding-sibling::*[1]').boundingBox();assert.ok(bb.width===32&&bb.height===32,'32 px copy button '+bb.width+'x'+bb.height);assert.ok(bb.x+bb.width<=pb.x+pb.width+0.5&&vb.x+vb.width<=bb.x,'copy icon is right of its value, inside the panel');}
+ for(const b of await panel.locator('.map-copy').all()){const bb=await b.boundingBox(),vb=await b.locator('xpath=preceding-sibling::*[1]').boundingBox();assert.ok(bb.width===32&&bb.height===32,'32 px copy button '+bb.width+'x'+bb.height);const hit=await b.evaluate(e=>{const r=getComputedStyle(e,'::after');return [parseFloat(r.width),parseFloat(r.height),innerWidth]});if(hit[2]<=480)assert.ok(hit[0]>=44&&hit[1]>=44,'44 px copy touch target '+hit);assert.ok(bb.x+bb.width<=pb.x+pb.width+0.5&&vb.x+vb.width<=bb.x,'copy icon is right of its value, inside the panel');}
  assert.equal(await panel.locator('.map-panel-body,.map-dialog-body').first().evaluate(e=>e.scrollWidth<=e.clientWidth),true,'no horizontal clipping in the panel');}
 async function shot(page,scheme,size){if(shots)await page.screenshot({path:path.join(shots,`map-${size}-${scheme}.png`)});}
 const scaleOf=page=>page.locator('.map-canvas').evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).a);
@@ -815,7 +815,10 @@ async function detailsPhone(scheme){
   await copyLayout(sheet);await panelShot(sheet,scheme,tag+'-390');
   await page.keyboard.press('Escape');await sheet.waitFor({state:'hidden'});
  }
- await context.close();
+ await context.close();resetAlerts(false);const e=await open({scheme,width:390,height:844,appState:alertState});const page2=e.page;await page2.locator('.map-list').waitFor();
+ await page2.getByRole('listitem').filter({hasText:'cinderbean.com'}).getByRole('button',{name:'Details'}).first().click();
+ {const sheet=dialog(page2);await sheet.getByText('No alerts yet.').waitFor();await panelShot(sheet,scheme,'site-390-empty');}
+ await e.context.close();
 }
 async function alertsPhone(scheme){
  resetAlerts(true);
