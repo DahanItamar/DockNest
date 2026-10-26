@@ -1,0 +1,46 @@
+/* Restore tests (2.9.0). Layout glue and the approved app-wide tweaks. Every colour, size, radius and motion value is a
+   product token. */
+
+/* Restore tests dialog */
+.rt-why{margin-right:auto;align-self:center}
+.rt-form .alert-panel{margin:var(--edge) 0}.rt-form .check{margin:var(--spacing) 0 0}
+.rt-form .sb-switch-row{border-top:0}
+.rt-form button[role=switch]:focus:not(:focus-visible):before{outline:none}
+.rt-err{color:var(--error)}
+.rt-form input[aria-invalid=true]{border-color:var(--error)}
+.rt-adv summary{list-style:none;display:flex;align-items:center;gap:var(--spacing);min-height:var(--control-height);cursor:pointer;color:var(--link);font-weight:500}
+.rt-adv summary::-webkit-details-marker{display:none}
+.rt-adv[open]>label,.rt-form .field>input,.rt-why.rt-done{animation:dn-enter var(--dur-base) var(--ease) both}
+.rt-why.rt-done{color:var(--success)}
+dialog.rt-dialog{scrollbar-width:none}dialog.rt-dialog::-webkit-scrollbar{display:none}
+
+/* Overview and jobs */
+.rt-links{display:flex;gap:var(--edge)}
+.rt-meta .status{font-size:inherit;line-height:inherit;font-weight:400}
+.rt-main{display:flex;align-items:center;gap:var(--spacing);color:var(--text-secondary)}.rt-main .status{font-weight:500}
+.rt-tl-ic{display:flex;justify-content:center}.rt-tl-ic.ok{color:var(--success)}.rt-tl-ic.bad{color:var(--error)}.rt-tl-ic.run{color:var(--link)}
+.dn-tl-item:not(.is-bad) .dn-tl-name small{color:var(--text-muted)}
+
+/* Approved hover motion: arrow 2px right, restore icons rotate, closed-row and Advanced chevrons dip 2px. */
+.dash-link svg,.dash-icon svg,.rt-adv summary .rt-chev{transition:transform var(--dur-base) var(--ease)}
+.rt-chev{transition:transform var(--dur-base) var(--ease)}
+.rt-adv[open] .rt-chev{transform:rotate(180deg)}
+@media(hover:hover){
+ .dash-link:hover .tabler-icon-arrow-right{transform:translateX(2px)}
+ .dash-link:hover .tabler-icon-restore,.dash-icon:hover .tabler-icon-restore{transform:rotate(-45deg)}
+ .dash-site:not([open])>summary:hover .dash-chevron{transform:translateY(2px)}
+ .rt-adv:not([open]) summary:hover .rt-chev{transform:translateY(2px)}
+}
+@media(prefers-reduced-motion:reduce){
+ .dash-link svg,.dash-icon svg,.rt-adv summary .rt-chev,.dash-chevron,.rt-chev{transition:none!important;transform:none!important}
+ .rt-adv[open] .rt-chev,.dash-site[open] .dash-chevron{transform:rotate(180deg)!important}
+ .rt-adv[open]>label,.rt-form .field>input,.rt-why{animation:none!important}
+}
+
+/* Approved switch OFF state: solid control track, light knob, muted hover. Focus ring only for the keyboard. */
+button[role=switch][role=switch]:not([aria-checked=true]):before{background:var(--border-control);border-color:var(--border-control)}
+button[role=switch][role=switch]:not([aria-checked=true]):hover:before{background:var(--text-muted);border-color:var(--text-muted)}
+button[role=switch][role=switch]:not([aria-checked=true]):after{background:var(--primary-foreground)}
+
+/* Approved select pickers: open downward first, hidden picker scrollbar. */
+@supports (appearance:base-select){select::picker(select){position-area:block-end span-inline-end;position-try-order:normal;position-try-fallbacks:flip-block;scrollbar-width:none}}

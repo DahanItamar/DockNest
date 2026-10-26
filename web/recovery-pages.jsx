@@ -11,10 +11,10 @@ import {recoveryStatus} from './verification.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
-const SiteIcons=Object.fromEntries(['edit','readiness','schedule','remove'].map(n=>[n,({size})=><BrandIcon name={n} size={size}/>]));
+const SiteIcons=Object.fromEntries(['edit','readiness','schedule','restore','remove'].map(n=>[n,({size})=><BrandIcon name={n} size={size}/>]));
 function Control({label,icon,className='',...props}){return <button type="button" className={`icon-button recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={20}/></button>;}
 
-export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onReady,onSchedule,onRemove,onBackup,query}){
+export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onTests,onReady,onSchedule,onRemove,onBackup,query}){
  if(!allSites.length)return <section className="panel"><Empty icon={SiteIcon} title="Choose the sites to protect">Connect a server, discover Docker containers, and group the containers that make up each site.</Empty></section>;
  if(!sites.length)return <section className="panel"><Empty icon={SiteIcon} title="No matching sites" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another site name, server or container.</Empty></section>;
  return <Paginated rows={sites} label="Sites" pageSize={4} stableHeight resetKey={query}>{visible=><div className="card-grid site-grid" aria-label="Sites and schedules">{visible.map(site=>{
@@ -35,6 +35,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <IconButton label="Edit configuration" icon={SiteIcons.edit} onClick={()=>onEdit(site)}/>
      <IconButton label="Check readiness" icon={SiteIcons.readiness} disabled={busy} onClick={()=>onReady(site)}/>
      <IconButton label="Schedule" icon={SiteIcons.schedule} onClick={()=>onSchedule(site,policy)}/>
+     <IconButton label="Restore tests" icon={SiteIcons.restore} onClick={()=>onTests(site)}/>
      {user?.role==='admin'&&<IconButton className="site-remove" label="Remove site" icon={SiteIcons.remove} onClick={()=>onRemove(site)}/>}
     </div>
     <button className="primary" disabled={busy} onClick={()=>onBackup(site)}>Back up now</button>
