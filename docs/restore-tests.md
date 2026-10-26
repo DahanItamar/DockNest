@@ -19,7 +19,7 @@ the feature ships with its own "beta" label, like moves did.
 | Which backup | The latest backup that is `verified=1` and not in retention. "Run test now" may name another backup. |
 | When | Off by default. Daily, weekly (suggested) or monthly, 30 minutes after the site's next scheduled backup. |
 | Network | No internet by default (`--network none` or fresh `--internal` isolated networks). Admin-only "Allow internet" in Advanced, with outgoing mail still blocked. No published ports. |
-| Limits | Per container memory (default 1 GiB, swap equal), CPUs (default 1), pids 1024, log size. Time limit 30 minutes. Free space `size*3 + 1 GiB` plus a watchdog. Disk is not capped. |
+| Limits | Presets or a custom number: memory per container (default 1 GB, swap equal), CPUs per container (default 1), time limit (default 30 minutes); pids 1024, log size. Free space `size*3 + 1 GiB` plus a watchdog. Disk is not capped. |
 | Passed | Services that ran at capture run, are Docker-healthy and still run after 60 seconds; configured database checks match; the optional internal web check answers 200-399. |
 | Results | `passed`, `failed` (the backup did not come back), `couldnt_run` (the test server or a test limit stopped it), `cancelled`. |
 | Worker | A ticked step machine like moves. Only the copy and restore steps hold the worker for long; health waits are polled across ticks. |
@@ -63,11 +63,22 @@ the feature ships with its own "beta" label, like moves did.
 ## Resource limits
 
 - Every test container gets `--memory M --memory-swap M --cpus C --pids-limit 1024 --restart no` and
-  `--log-driver local --log-opt max-size=10m --log-opt max-file=3`. Defaults M = 1 GiB, C = 1. Advanced allows
-  M 256 MiB-16 GiB and C 0.25-8; C is refused above the test server's `nproc`.
+  `--log-driver local --log-opt max-size=10m --log-opt max-file=3`.
+- Each limit offers presets and a Custom value the administrator types. DockNest stores the number, never a preset
+  name, and refuses anything else with a plain validation error (the engine, the database CHECKs and the helper all
+  enforce the same ranges):
+
+  | Limit | Presets | Custom | Default |
+  |---|---|---|---|
+  | Time limit | 15, 30, 60, 120 minutes | a whole number from 10 to 120 minutes | 30 minutes |
+  | Memory per container (M) | 512 MB, 1 GB, 2 GB, 4 GB, 8 GB | a whole number from 256 to 16384 MB | 1 GB (1024 MB) |
+  | CPU per container (C) | 0.5, 1, 2, 4 | 0.5 to 16 in steps of 0.25 | 1 |
+
+  At "Check space" C is also refused above the test server's `nproc`, with a plain reason ("The test server has 2
+  CPUs, so it cannot give each container 4. Lower the CPU limit.").
 - Captures already refuse privileged containers, devices, added capabilities and host namespaces
   (`restore_network_plan`), so a test never gets them either.
-- Time limit default 30 minutes, allowed 10-120, from claim to the end of the checks. Clean-up has its own 10 minutes.
+- The time limit runs from claim to the end of the checks. Clean-up has its own 10 minutes.
 - Disk is not capped. Docker has no portable per-container disk quota for bind mounts. Instead:
   - "Check space" requires free space at the staging root of `backup.size*3 + 1 GiB` (the `planRestore` rule; the
     helper re-checks extracted size as it does today);
@@ -91,14 +102,16 @@ the feature ships with its own "beta" label, like moves did.
   no published ports. The warning: "The copy runs with your live keys and passwords. With internet it can call
   webhooks, payment and other APIs, take jobs from shared queues (for example Redis or SQS workers), and run
   scheduled jobs once. Outgoing mail on the standard mail ports (25, 465, 587, 2525) is blocked."
-- Outgoing mail is blocked with the moves' `DOCKER-USER` rules (`block_mail`, extended with port 2525, IPv4 and IPv6),
-  commented `docknest-restore-test-<id>`, added before any container starts and journalled for removal. Mail through
+- Outgoing mail is blocked with the moves' `DOCKER-USER` rules (the `block_mail` pattern; the test's own copy adds
+  port 2525 and leaves moves unchanged), one rule per test network subnet (IPv4 with `iptables`, an IPv6 subnet with
+  `ip6tables`), commented `docknest-restore-test-<id>`, added before any container starts and journalled for removal. Mail through
   an HTTP API is not blocked. Where the chain is missing (`iptables: false`, rootless Docker, nftables-only), or
   `block_mail` returns a partial result (`covered=False`: any network or address family not covered), the test refuses
   to start with internet and says why.
 - The rules are inserted once, so they can disappear (a firewalld or ufw reload, `iptables -F`, a Docker restart).
-  Every health poll re-checks the `docknest-restore-test-<id>` rules in both `iptables` and `ip6tables`. If any is
-  missing, the test stops its containers at once and ends `couldnt_run` with "mail blocking was removed".
+  Every health poll (and the start step) re-checks each journalled `docknest-restore-test-<id>` rule in `iptables`
+  and `ip6tables`; `restore-test-mail-check` runs the same check on its own. If any is missing, the test stops its
+  containers at once and ends `couldnt_run` with "mail blocking was removed".
 - Evidence records `internet: true`; the result reads "Passed (tested with internet)".
 
 ## What "passed" means
@@ -177,8 +190,9 @@ Restart and failure paths:
 
 - Worker restart: the startup line that marks `running` jobs `recovery_required` does not match test jobs. A new
   startup step sets interrupted tests to `cleanup='pending'`; the next tick runs teardown first on that server.
-- Reaper: at `restore_copy` the manager sends the reaper source (as `install-boot-recovery` does), the helper writes it
-  into the journal directory and starts it with `setsid`. At the deadline plus 10 minutes it runs teardown once and
+- Reaper: at `copy_backup` (in `restore-test-prepare`, before any plaintext reaches the server) the manager sends the
+  reaper source, the reviewed helper itself (as `install-boot-recovery` does); the helper writes it into the journal
+  directory (0700) and starts it in a new session (`python3 -I reaper.py`, operation `restore-test-reap`). At the deadline plus 10 minutes it runs teardown once and
   exits; it also exits at once if the journal directory is gone. It covers a manager that is down or rolled back. It
   does not survive a reboot of the test server; containers have restart `no`, so they stay stopped, and the next
   manager tick cleans up.
@@ -323,8 +337,8 @@ The number is the next free one at merge time (currently 9). New objects only; n
 
 - `restore_test_settings(site_id PK → sites, enabled 0/1 DEFAULT 0, cadence CHECK daily|weekly|monthly DEFAULT
   'weekly', server_id → servers NULL, allow_live_server 0/1 DEFAULT 0, allow_internet 0/1 DEFAULT 0,
-  time_limit_minutes CHECK 10..120 DEFAULT 30, memory_mb CHECK 256..16384 DEFAULT 1024, cpus REAL CHECK 0.25..8
-  DEFAULT 1, probe TEXT NULL CHECK length <= 512, next_due_at TEXT, skip_reason TEXT, updated_at, updated_by)`.
+  time_limit_minutes INTEGER CHECK 10..120 DEFAULT 30, memory_mb INTEGER CHECK 256..16384 DEFAULT 1024, cpus REAL
+  CHECK 0.5..16 in steps of 0.25 DEFAULT 1, probe TEXT NULL CHECK length <= 512, next_due_at TEXT, skip_reason TEXT, updated_at, updated_by)`.
   No row means off.
 - `restore_tests(id PK, site_id → sites, backup_id → backups ON DELETE SET NULL, backup_captured_at, server_id →
   servers, job_id → jobs, trigger CHECK schedule|manual, result CHECK passed|failed|couldnt_run|cancelled NULL,
@@ -346,6 +360,26 @@ The number is the next free one at merge time (currently 9). New objects only; n
 raising it would refuse every existing backup. New operations are detected by name. Boot recovery's "outdated" flag
 is hash based (`bootRecoveryBundle.sha256`), so any helper change already shows installed copies as outdated until
 reinstalled. If a helper protocol version is ever needed, it becomes a separate constant from the format version.
+
+## Helper operations
+
+All take `testId` (a canonical UUID). The ones that change the server hold a per-test lock and stop when DockNest
+stops waiting (stdin closes), as moves do. Verdicts come back as a result, not an error: `outcome` is `ok`, `failed`
+(the backup did not come back) or `couldnt_run` (the test server or a limit stopped it), with one plain `reason` of at
+most 300 characters and the `checks` so far. Docker errors report only the command name and exit code, never
+arguments (they hold data paths).
+
+| Operation | Step | What it does |
+|---|---|---|
+| `restore-test-check` | `check_space` | Read-only facts and plain problems: root, free space, `MemAvailable`, `nproc`, Docker version, architecture, leftovers, firewall chain, `nsenter`/`setpriv`. |
+| `restore-test-prepare` | `copy_backup` | Journal directory, staging root (journalled first), deadline, reaper. Returns the SFTP path. |
+| `restore-test-run` `phase: restore` | `restore_copy` | Verify and unpack, static digest or SQLite proofs, image IDs and tags recorded, `docker load`, tags restored, networks and containers created with limits and labels, mail blocked with internet. Starts nothing. |
+| `restore-test-run` `phase: start` | `start_containers` | Mail rules re-checked, containers started in restart order (each level waits for the one before to be healthy). |
+| `restore-test-run` `phase: poll` | `check_health` | Mail rules and free space (staging and Docker root) first, then running and health; `final: true` adds database checks and the web check. |
+| `restore-test-teardown` | `clean_up` | The teardown above. Waits up to 200 seconds for a stopped step to let go. Keeps the journal while anything is left. |
+| `restore-test-status` | recovery | Counts of labelled containers, networks, firewall rules, and whether staging or the journal exist (`present`). |
+| `restore-test-mail-check` | any | Whether every journalled mail rule is still in place. |
+| `restore-test-reap` | reaper | Started by `prepare` only. |
 
 ## Upgrade safety
 
@@ -415,8 +449,8 @@ Not "validated" until all cases pass in CI on Linux.
 
 ## Implementation PRs
 
-1. Helper: `restore-test-check`, `-prepare`, `-run`, `-teardown`, `-status`, reaper, limits, tag restore, mail block
-   reuse, Python tests. Security-critical review.
+1. Helper: `restore-test-check`, `-prepare`, `-run` (phases `restore`, `start`, `poll`), `-teardown`, `-status`,
+   `-mail-check`, the reaper (`-reap`), limits, tag restore, mail block, Python tests. Security-critical review.
 2. Engine: migration, test rows, step machine in the worker tick, `claimJob`/`claimInstall`/`busy()` changes,
    startup clean-up, lease, evidence rules, Linux integration script.
 3. API, scheduler, alerts and audit events, with API tests.
