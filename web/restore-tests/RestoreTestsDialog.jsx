@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
+import {useGuard} from '../map/MoveFlow.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
 
@@ -21,7 +22,7 @@ function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMo
 export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
  const [card,setCard]=useState(null),[loaded,setLoaded]=useState(false),[loadError,setLoadError]=useState('');
  const [form,setForm]=useState(null),[startN,setStartN]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[started,setStarted]=useState(false),[tried,setTried]=useState(false),[advOpen,setAdvOpen]=useState(false);
- const focusRef=useRef(null);
+ const focusRef=useRef(null),guard=useGuard(client);
 
  useEffect(()=>{
   let alive=true;
@@ -57,26 +58,27 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
   const probe=form.path.trim()?{...(form.probe||{}),path:form.path.trim()}:null;
   return {enabled:form.enabled,cadence:form.cadence,serverId:form.serverId||null,allowLiveServer:live&&form.allow,allowInternet:form.allowInternet,timeLimitMinutes:time.value,memoryMb:memory.value,cpus:cpu.value,probe};
  }
- // Returns true when the settings are saved (or there is nothing to save as an operator).
- async function persist(){
+ // Checks the page before anything is sent. Operators have no settings to check.
+ function check(){
   setTried(true);
   if(!isAdmin)return true;
   if(invalid){setAdvOpen(true);return false}
   if(form.enabled&&!form.serverId){setError(settingsError({code:'TEST_SERVER_REQUIRED'}));return false}
-  try{await client.saveSettings(site.id,settingsBody());return true}
-  catch(e){if(e.status===401){onSessionExpired?.();return false}setError(settingsError(e));return false}
+  return true;
  }
+ const fail=e=>{if(e.status===401){onSessionExpired?.();return}setError(e.during==='run'?runError(e):settingsError(e))};
+ // guard.run shows the app's "Please confirm it is you" step when the API asks for it, then repeats the action.
  async function save(event){
-  event.preventDefault();if(busy)return;setBusy(true);setError('');
-  try{if(await persist()){onSaved();}}finally{setBusy(false)}
+  event.preventDefault();if(busy||guard.waiting||!check())return;setBusy(true);setError('');
+  try{await guard.run(async()=>{await client.saveSettings(site.id,settingsBody());onSaved()},fail)}finally{setBusy(false)}
  }
  async function run(){
-  if(busy||reason)return;setBusy(true);setError('');setStarted(false);
-  try{
-   if(!await persist())return;
-   try{await client.run(site.id);setStarted(true);setStartN(n=>n+1);onChanged?.()}
-   catch(e){if(e.status===401){onSessionExpired?.();return}setError(runError(e))}
-  }finally{setBusy(false)}
+  if(busy||guard.waiting||reason||!check())return;setBusy(true);setError('');setStarted(false);
+  try{await guard.run(async()=>{
+   if(isAdmin)await client.saveSettings(site.id,settingsBody());
+   try{await client.run(site.id)}catch(e){e.during='run';throw e}
+   setStarted(true);setStartN(n=>n+1);onChanged?.();
+  },fail)}finally{setBusy(false)}
  }
 
  return <form className="modal-body site-wizard rt-form" onSubmit={save} noValidate>
@@ -101,17 +103,23 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
     <LimitField label="Time limit" spec={TIME} state={form.time} onChange={time=>set({time})} disabled={!isAdmin} help="The test stops after this." placeholder="10 to 120 minutes" inputMode="numeric" aria="Custom time limit in minutes" error={shown(form.time,time)} focusRef={focusRef}/>
     <LimitField label="Memory" spec={MEMORY} state={form.memory} onChange={memory=>set({memory})} disabled={!isAdmin} help="Per container." placeholder="256 to 16384 MB" inputMode="numeric" aria="Custom memory in MB" error={shown(form.memory,memory)} focusRef={focusRef}/>
     <LimitField label="CPU" spec={CPU} state={form.cpu} onChange={cpu=>set({cpu})} disabled={!isAdmin} help="Per container." placeholder="0.5 to the server’s cores" inputMode="decimal" aria="Custom CPU in cores" error={shown(form.cpu,cpu)} focusRef={focusRef}/>
+    <div className="sb-switch-row">
+     <span className="sb-switch-text"><span id="rt-net" className="sb-switch-label">Allow internet</span><span id="rt-net-help" className="t-caption">Off keeps the test copy offline.</span></span>
+     <button type="button" role="switch" className="switch" aria-checked={form.allowInternet} aria-labelledby="rt-net" aria-describedby="rt-net-help" disabled={!isAdmin} onPointerDown={event=>event.preventDefault()} onClick={()=>set({allowInternet:!form.allowInternet})}></button>
+    </div>
+    {form.allowInternet&&<AlertPanel variant="warning" title="Internet access">The test copy can reach the internet with your live keys. Email stays blocked.</AlertPanel>}
     <label className="field"><span>Health check path</span>
      <input type="text" value={form.path} disabled={!isAdmin} maxLength={200} autoComplete="off" spellCheck={false} onChange={event=>set({path:event.target.value})}/>
      <small>Optional</small>
     </label>
    </details>
+  {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title="Could not finish">{error}</AlertPanel>}
   <div className="modal-foot">
    <span key={started?'started'+startN:'idle'} className={'t-caption rt-why'+(started?' rt-done':'')} role="status">{started?'Test started.':reason}</span>
    <button type="button" onClick={onClose}>Cancel</button>
-   <button type="button" disabled={busy||!!reason} onClick={run}>Run test</button>
-   {isAdmin&&<button type="submit" className="primary" disabled={busy}>Save</button>}
+   <button type="button" disabled={busy||guard.waiting||!!reason} onClick={run}>Run test</button>
+   {isAdmin&&<button type="submit" className="primary" disabled={busy||guard.waiting}>Save</button>}
   </div>
  </form>;
 }

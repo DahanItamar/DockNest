@@ -35,7 +35,7 @@ const detailFor=(id,siteId,result,failedAt)=>({id,siteId,backupId:'bk-'+siteId+'
   return {step,label:LABEL[step],state,startedAt:new Date(NOW-26*3600000+i*60000).toISOString(),finishedAt:new Date(NOW-26*3600000+i*60000+(i===at?1800000:[2,60,120,14,20,8][i]*1000)).toISOString(),detail:step===failedAt?REASON:step==='clean_up'?'Test copy removed':null}})});
 let mock;
 function freshMock({failed=false}={}){
- mock={saves:[],runs:[],cancels:[],cleanups:[],runError:null,saveError:null,cardFail:false,
+ mock={needReverify:false,reverified:false,reauths:0,saves:[],runs:[],cancels:[],cleanups:[],runError:null,saveError:null,cardFail:false,
   cards:{
    s1:{settings:settings({enabled:true,cadence:'daily',serverId:'ash'}),last:failed?last('t1','failed',30,{failedStep:'check_health',reason:REASON}):last('t1','passed',48),active:null,items:[],next:null},
    s2:{settings:settings({enabled:true,serverId:'nas'}),last:last('t2','passed',24*5),active:null,items:[],next:null},
@@ -64,8 +64,10 @@ async function open({role='admin',width=1440,height=900,scheme='light',motion=tr
   const req=route.request(),url=new URL(req.url()),endpoint=url.pathname,method=req.method(),body=method==='GET'?null:req.postDataJSON?.()||{};
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
   let m;
+  if(endpoint==='/api/auth/reauth'){if(body.password==='pw'&&body.code==='123456'){mock.reverified=true;mock.reauths++;return json(route,{ok:true})}return json(route,{error:'No'},401)}
   if((m=endpoint.match(/^\/api\/sites\/([^/]+)\/restore-tests\/settings$/))&&method==='PUT'){
    if(role!=='admin')return json(route,{error:'Only administrators can change restore tests.'},403);
+   if(mock.needReverify&&!mock.reverified&&(body.allowInternet||body.allowLiveServer))return json(route,{error:'raw',code:'REVERIFY_REQUIRED'},403);
    if(mock.saveError)return json(route,{error:'raw',code:mock.saveError},mock.saveError==='REVERIFY_REQUIRED'?403:409);
    mock.saves.push({siteId:m[1],body});mock.cards[m[1]].settings={...mock.cards[m[1]].settings,...body};return json(route,mock.cards[m[1]].settings);
   }
@@ -108,6 +110,7 @@ async function overview(scheme,width){
  const summaries=(await page.locator('.dash-site > summary').allTextContents()).join(' ');
  assert.doesNotMatch(summaries,/recovery points?|\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/i,'no date and no recovery-point count in the summary');
  assert.equal(await page.locator('.dash-site-schedule small,.dash-site-latest small,.dash-site-latest b').count(),0,'summary has nothing but the status and the schedule');
+ assert.equal(await page.locator('.dash-sites .dash-summary').count(),1,'the intro strip stays on a healthy overview');
  // Consistency: the summary equals the card's latest test, for every site
  for(const site of sites){
   const c=mock.cards[site.id],expected=c.last?{passed:'Passed',failed:'Failed',couldnt_run:'Couldn\u2019t run'}[c.last.result]:'Not tested';
@@ -140,6 +143,7 @@ async function failedAlert(scheme,width){
  assert.match(await alert.textContent(),/The database didn\u2019t start in 30 minutes\./);
  const actions=await alert.locator('.rp-actions button').allTextContents();
  assert.deepEqual(actions,['Run again','Open job']);
+ assert.equal(await page.locator('.dash-sites .dash-summary').count(),0,'the alert takes the strip’s place');
  assert.equal(await alert.locator('.rp-actions button').first().getAttribute('class'),'primary');
  assert.match((await row(page,'cinderbean.com').locator('.dash-site-latest').textContent()).trim(),/^Failed · yesterday$/);
  assert.equal((await row(page,'cinderbean.com').locator('.dash-site-latest .status').getAttribute('class')).includes('status-failed'),true);
@@ -330,9 +334,6 @@ async function dialogErrors(){
  mock.runError={code:'NO_VERIFIED_BACKUP',message:'raw'};
  await d.getByRole('button',{name:'Run test'}).click();
  await d.getByText('This site has no verified backup yet.').waitFor();
- mock.saveError='REVERIFY_REQUIRED';
- await d.getByRole('button',{name:'Save'}).click();
- await d.getByText('Confirm it is you first, then save again.').waitFor();
  mock.saveError='LIVE_SERVER_NOT_ALLOWED';
  await d.getByRole('button',{name:'Save'}).click();
  await d.getByText('Allow live server to use that server.').waitFor();
@@ -345,6 +346,46 @@ async function dialogErrors(){
  await context.close();
 }
 
+async function internetAndReverify(){
+ const {context,page,card}=await settingsDialog();
+ mock.needReverify=true;
+ await card.getByRole('button',{name:'Restore tests'}).click();
+ const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();
+ await d.getByLabel('Test server').selectOption({label:'Home NAS'});
+ await d.locator('details.rt-adv summary').click();
+ const net=d.getByRole('switch',{name:'Allow internet'});
+ assert.equal(await net.getAttribute('aria-checked'),'false','internet is off by default');
+ assert.equal(await d.locator('.sb-switch-row').count(),2);
+ assert.equal(await d.getByText('Internet access').count(),0);
+ await net.click();
+ const warn=d.locator('.alert-panel.alert-warning');
+ assert.match(await warn.textContent(),/Internet accessThe test copy can reach the internet with your live keys\. Email stays blocked\./);
+ await shot(page,'dialog-internet');
+ await d.getByRole('button',{name:'Save'}).click();
+ // The app's own confirm-it-is-you step appears inside the dialog, nothing is saved yet
+ const box=d.getByRole('group',{name:'Please confirm it is you'});
+ await box.waitFor();
+ assert.equal(mock.saves.length,0);
+ await box.getByLabel('Password').fill('bad');await box.getByLabel('Authenticator code').fill('000000');
+ await box.getByRole('button',{name:'Verify and continue'}).click();
+ await box.getByText('That password or code was not right. Try again.').waitFor();
+ await box.getByLabel('Password').fill('pw');await box.getByLabel('Authenticator code').fill('123456');
+ await box.getByRole('button',{name:'Verify and continue'}).click();
+ await page.getByRole('status').filter({hasText:'Restore test settings saved.'}).waitFor();
+ assert.equal(mock.saves.at(-1).body.allowInternet,true);assert.equal(mock.reauths,1);
+ // Live server needs the same check
+ mock.reverified=false;
+ await card.getByRole('button',{name:'Restore tests'}).click();
+ const d2=dialog(page);await d2.getByRole('switch',{name:'Auto tests'}).waitFor();
+ await d2.getByLabel('Test server').selectOption({label:'Ashburn-1 (live server)'});
+ await d2.getByLabel('Allow live server').check();
+ await d2.getByRole('button',{name:'Save'}).click();
+ await d2.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+ await d2.getByRole('button',{name:'Not now'}).click();
+ assert.equal(await d2.getByRole('group',{name:'Please confirm it is you'}).count(),0);
+ await context.close();
+}
+
 async function operator(){
  const {context,page,card}=await settingsDialog({role:'operator'});
  await card.getByRole('button',{name:'Restore tests'}).click();
@@ -353,6 +394,8 @@ async function operator(){
  assert.equal(await switchOf(d).isDisabled(),true);
  assert.equal(await d.getByLabel('Test server').isDisabled(),true);
  assert.match(await d.textContent(),/Only an administrator can change these settings\./);
+ await d.locator('details.rt-adv summary').click();
+ assert.equal(await d.getByRole('switch',{name:'Allow internet'}).isDisabled(),true);
  await context.close();
  // An operator with a saved server can run a test and sees the API's limit message
  freshMock();
@@ -434,7 +477,7 @@ try{
   await overview(scheme,1440);await failedAlert(scheme,1440);await jobs(scheme,1440);await dialogFlow(scheme);await phone(scheme);
  }
  await overview('light',390);await failedAlert('dark',390);await jobs('light',390);
- await runningJob();await dialogErrors();await operator();await motion();await pickerRules();
+ await runningJob();await dialogErrors();await internetAndReverify();await operator();await motion();await pickerRules();
  assert.deepEqual(errors,[],'no page errors');
  console.log('Restore tests browser suite passed.');
 }finally{await browser.close()}

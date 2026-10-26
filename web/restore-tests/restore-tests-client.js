@@ -7,7 +7,10 @@ export function createRestoreTestsClient(api){
   // The site's card: {settings, last, active, items, next}. `cursor` pages through `items`.
   card:(siteId,cursor)=>api('/sites/'+id(siteId)+'/restore-tests'+(cursor?'?cursor='+id(cursor):'')),
   // Administrator only. Takes the settings fields without nextDueAt and skipReason.
-  saveSettings:(siteId,settings)=>api('/sites/'+id(siteId)+'/restore-tests/settings',settings,'PUT'),
+  // REVERIFY_REQUIRED (turning on live server or internet) is raised as REAUTH_REQUIRED, the code the app's re-verify prompt (useGuard) reacts to.
+  saveSettings:(siteId,settings)=>api('/sites/'+id(siteId)+'/restore-tests/settings',settings,'PUT').catch(e=>{if(e?.code==='REVERIFY_REQUIRED')e.code='REAUTH_REQUIRED';throw e}),
+  // The shared password and a fresh authenticator code, as everywhere else.
+  reauth:(password,code)=>api('/auth/reauth',{password,code}),
   // Administrators and operators. Optional backupId. Returns {id, jobId}.
   run:(siteId,backupId)=>api('/sites/'+id(siteId)+'/restore-tests',backupId?{backupId}:{}),
   detail:testId=>api('/restore-tests/'+id(testId)),
@@ -36,7 +39,7 @@ export const isTestJob=job=>job?.type===JOB_TYPE;
 const SETTINGS_ERRORS={
  TEST_SERVER_REQUIRED:'Choose a test server first.',
  LIVE_SERVER_NOT_ALLOWED:'Allow live server to use that server.',
- REVERIFY_REQUIRED:'Confirm it is you first, then save again.',
+ REAUTH_REQUIRED:'Confirm it is you first, then save again.',
  PROBE_STATIC:'A static site has no container to check.',
  CPUS_ABOVE_SERVER:'The test server has fewer cores than that.'
 };
