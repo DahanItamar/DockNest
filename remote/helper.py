@@ -735,13 +735,16 @@ def shutdown_evidence(services,containers,stopped_at,staging_root=None):
         evidence.append(item)
     return evidence
 
-def restart_services(ids,services=None):
+def restart_services(ids,services=None,started=None):
+    # `started(level)` runs right after each level starts (restore tests isolate egress there); None changes nothing.
     by_id={s['container']:s for s in services or []};pending=list(ids)
     while pending:
         # Independent services start together; their health may depend on one another.
         level=[cid for cid in pending if not set(by_id.get(cid,{}).get('dependsOn',[])).intersection(pending)]
         if not level:raise ValueError('Recovery dependency cycle; operator review required')
-        docker('start',*level);deadline=time.time()+120
+        docker('start',*level)
+        if started:started(level)
+        deadline=time.time()+120
         def ready():
             if not health(level):return False
             for cid in level:
@@ -2933,14 +2936,17 @@ def cpu_count():
 def docker_major():
     try:return int(docker('version','--format','{{.Server.Version}}').decode().strip().split('.')[0])
     except (ValueError,IndexError):return 0
+TEST_CHAINS=('DOCKER-USER','INPUT')
 def test_mail_rules(tid=None):
+    """Every firewall rule a restore test added (comment docknest-restore-test-<id>), in both chains and families."""
     marker='docknest-restore-test-'+(tid or '')
     rules=[]
     for tool in ['iptables','ip6tables']:
         if not shutil.which(tool):continue
-        try:lines=run([tool,'-S','DOCKER-USER'],timeout=10).decode().splitlines()
-        except Exception:continue
-        rules+=[(tool,line) for line in lines if line.startswith('-A DOCKER-USER') and marker in line]
+        for chain in TEST_CHAINS:
+            try:lines=run([tool,'-S',chain],timeout=10).decode().splitlines()
+            except Exception:continue
+            rules+=[(tool,line) for line in lines if line.startswith('-A '+chain+' ') and marker in line]
     return rules
 def test_leftovers(tid=None):
     selector='label='+TEST_LABEL+('='+tid if tid else '')
@@ -2967,8 +2973,8 @@ def restore_test_check(req):
         if cpus>facts['nproc']:problems.append('The test server has %d CPU%s, so it cannot give each container %g. Lower the CPU limit.'%(facts['nproc'],'' if facts['nproc']==1 else 's',cpus))
         left=test_leftovers()
         if any(left.values()):problems.append('An earlier restore test left containers, networks or firewall rules on the test server. DockNest cleans them up first.')
-        facts['firewall']={'ipv4':firewall_ready(),'ipv6':bool(shutil.which('ip6tables'))}
-        if internet and not facts['firewall']['ipv4']:problems.append("Outgoing mail cannot be blocked on the test server (Docker's DOCKER-USER firewall chain is missing), so the test cannot run with internet.")
+        facts['firewall']={'iptables':bool(shutil.which('iptables')),'ip6tables':bool(shutil.which('ip6tables')),'nsenter':bool(shutil.which('nsenter'))}
+        if internet and not all(facts['firewall'].values()):problems.append('The test server needs nsenter, iptables and ip6tables to block outgoing mail inside the copy, so the test cannot run with internet.')
         facts['probeTools']=bool(shutil.which('nsenter') and shutil.which('setpriv'))
     emit(result={'ok':not problems,'problems':problems,'facts':facts})
 def write_private(path,content):
@@ -2984,8 +2990,17 @@ def start_reaper(d,tid,source):
     if len(content)>1024*1024:raise ValueError('The reaper exceeds its size limit')
     write_private(d/'reaper.py',content)
     atomic_json(d/'reaper.json',{'operation':'restore-test-reap','testId':tid})
-    with open(d/'reaper.json','rb') as request:
-        process=subprocess.Popen([sys.executable or 'python3','-I',str(d/'reaper.py')],stdin=request,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,cwd=str(d),close_fds=True,start_new_session=True)
+    argv=[sys.executable or 'python3','-I',str(d/'reaper.py')]
+    def spawn(command):
+        with open(d/'reaper.json','rb') as request:
+            return subprocess.Popen(command,stdin=request,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,cwd=str(d),close_fds=True,start_new_session=True)
+    # A new session survives the SSH channel closing. Under systemd, logind with KillUserProcesses=yes would still end
+    # it with the SSH session, so it runs in its own transient scope; if systemd-run refuses, the plain session is used.
+    if systemd_present() and shutil.which('systemd-run'):
+        process=spawn([shutil.which('systemd-run'),'--scope','--quiet','--description=DockNest restore test reaper',*argv])
+        time.sleep(0.5)
+        if process.poll() not in (None,0):process=spawn(argv)
+    else:process=spawn(argv)
     return process.pid
 def restore_test_prepare(req):
     """Copy backup, first half: the journal, the private staging root and the reaper. The package follows over SFTP."""
@@ -3025,6 +3040,9 @@ def image_archive_tags(archive):
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return None
+def image_tags(reference):
+    try:return [tag for tag in json.loads(docker('image','inspect','--format','{{json .RepoTags}}',reference)) or [] if isinstance(tag,str)]
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,TypeError):return []
 def restore_test_tags(state):
     """Point every tag the load moved back at the image it named before, so a later `docker compose up` on this server
     runs exactly what it ran before the test."""
@@ -3033,25 +3051,82 @@ def restore_test_tags(state):
         previous=record.get('previous')
         if previous and image_id_of(record['tag'])!=previous:docker('tag',previous,record['tag']);changed.append(record['tag'])
     return changed
-def test_block_mail(d,state,tid,subnets):
-    """Outbound SMTP from the copy's networks is rejected in DOCKER-USER (IPv4 iptables, IPv6 ip6tables) before any
-    container starts. True only when every subnet is covered."""
-    if not subnets or not firewall_ready():return False
-    covered=True
-    for subnet in subnets:
-        tool='ip6tables' if ':' in subnet else 'iptables'
-        try:ipaddress.ip_network(subnet);run([tool,'-S','DOCKER-USER'],timeout=10)
-        except Exception:covered=False;continue
-        test_journal(d,state,'firewall',{'tool':tool,'subnet':subnet})
-        run([tool,'-I','DOCKER-USER','-s',subnet,'-p','tcp','-m','multiport','--dports',TEST_MAIL_PORTS,'-m','comment','--comment','docknest-restore-test-'+tid,'-j','REJECT'],timeout=10)
-    return covered
-def test_mail_intact(tid,state):
-    """The rules are inserted once, so a firewall reload or flush can remove them; every poll checks each one."""
-    records=state['created']['firewall']
-    if not records:return False
-    rules=test_mail_rules(tid)
-    return all(any(tool==record['tool'] and '-s '+record['subnet'] in line and TEST_MAIL_PORTS in line and 'REJECT' in line for tool,line in rules) for record in records)
+TEST_METADATA={'iptables':'169.254.169.254/32','ip6tables':'fd00:ec2::254/128'}
+TEST_EGRESS_REFUSED={'NET_ADMIN','NET_RAW','SYS_ADMIN','ALL'}
+SANDBOX_KEY=re.compile(r'/(?:var/)?run/docker/netns/[0-9a-zA-Z]{1,64}')
+def internet_problem(containers):
+    """Allow internet relies on rules inside each copy's own network namespace, which a copy that can change its
+    firewall (NET_ADMIN and friends) or shares another namespace could undo. Such sites are tested without internet."""
+    for c in containers:
+        hc=c.get('HostConfig',{});mode=hc.get('NetworkMode') or ''
+        caps={str(cap).upper().removeprefix('CAP_') for cap in hc.get('CapAdd') or []}&TEST_EGRESS_REFUSED
+        name=c.get('Name','').lstrip('/') or 'A container'
+        if caps:return 'Allow internet is refused: %s adds %s, which could remove the mail block inside the copy. Test this site without internet.'%(name,', '.join(sorted(caps)))
+        if hc.get('Privileged') or mode=='host' or mode.startswith('container:'):return 'Allow internet is refused: %s shares the host or another container\'s network. Test this site without internet.'%name
+    return None
+def sandbox_key(cid):
+    """The network namespace of a running container, by Docker's own sandbox path (never by PID)."""
+    info=docker('inspect','--format','{{.State.Running}} {{.NetworkSettings.SandboxKey}}',cid).decode().split()
+    if len(info)!=2 or info[0]!='true' or not SANDBOX_KEY.fullmatch(info[1]):return None
+    return info[1]
+def host_reject_addresses(extra=()):
+    """Every address of this server (all interfaces, Docker bridges included, so also the Docker gateway), without
+    loopback or link-local, which the copy needs for itself."""
+    found=list(extra)
+    try:
+        for line in run(['ip','-o','addr','show'],timeout=10).decode().splitlines():
+            match=re.search(r'\binet6? ([0-9a-fA-F.:]+)/',line)
+            if not match:continue
+            address=ipaddress.ip_address(match[1])
+            if address.is_loopback or address.is_link_local:continue
+            found.append(str(address))
+    except Exception:raise TestOutcome('couldnt_run','The test server did not list its own addresses, so the copy cannot be kept away from it. The test does not run with internet.',stop=True)
+    return list(dict.fromkeys(found))
+def egress_rules(addresses):
+    """OUTPUT rules for one copy: outbound mail, the cloud metadata service and this server itself, both families."""
+    rules=[]
+    for tool in ['iptables','ip6tables']:
+        family=6 if tool=='ip6tables' else 4
+        rules.append((tool,['-p','tcp','-m','multiport','--dports',TEST_MAIL_PORTS,'-j','REJECT']))
+        rules.append((tool,['-d',TEST_METADATA[tool],'-j','REJECT']))
+        rules+=[(tool,['-d',address,'-j','REJECT']) for address in addresses if ipaddress.ip_address(address).version==family]
+    return rules
+def isolate_egress(tid,ids,egress):
+    """Event, once per container after `docker start`: the copy runs only on its internal isolated networks (no route
+    out), its OUTPUT rules go into its own network namespace and are verified, and only then does it join the egress
+    network. A host firewall reload or flush cannot remove these rules; any failure stops the test before egress."""
+    gateways=[c.get('Gateway') for c in (json.loads(docker('network','inspect',egress))[0].get('IPAM') or {}).get('Config') or [] if c.get('Gateway')]
+    rules=egress_rules(host_reject_addresses(gateways))
+    nsenter=shutil.which('nsenter')
+    for cid in ids:
+        key=sandbox_key(cid)
+        if not key or not nsenter:raise TestOutcome('couldnt_run','Outgoing mail could not be blocked inside the copy, so the test stopped before it reached the internet.',stop=True)
+        for tool,args in rules:
+            binary=shutil.which(tool)
+            try:
+                if not binary:raise ValueError(tool)
+                run([nsenter,'--net='+key,binary,'-w','-I','OUTPUT',*args],timeout=20)
+                run([nsenter,'--net='+key,binary,'-w','-C','OUTPUT',*args],timeout=20)
+            except Exception:raise TestOutcome('couldnt_run','Outgoing mail could not be blocked inside the copy (%s), so the test stopped before it reached the internet.'%tool,stop=True)
+        docker('network','connect',egress,cid)
+def egress_intact(tid,ids):
+    """On demand (restore-test-mail-check): every OUTPUT rule is still in each running copy's namespace."""
+    nsenter=shutil.which('nsenter');rules=egress_rules([]);result=bool(ids)
+    for cid in ids:
+        key=sandbox_key(cid)
+        if not key:continue
+        for tool,args in rules:
+            try:run([nsenter,'--net='+key,shutil.which(tool),'-w','-C','OUTPUT',*args],timeout=20)
+            except Exception:result=False
+    return result
+def test_disk_low(tid):
+    roots=[test_staging(tid)]
+    try:roots.append(pathlib.Path(docker('info','--format','{{.DockerRootDir}}').decode().strip() or '/var/lib/docker'))
+    except Exception:pass
+    return min(shutil.disk_usage(existing_ancestor(root)).free for root in roots)<TEST_MIN_FREE
+DISK_LOW='The test server ran low on disk.'
 def test_unblock_mail(tid):
+    """Belt and braces: restore tests add no host rules, but teardown removes any rule carrying their comment."""
     removed=0
     for tool,rule in test_mail_rules(tid):
         try:run([tool,'-D',*shlex.split(rule)[1:]],timeout=10);removed+=1
@@ -3085,6 +3160,8 @@ def restore_test_restore(req):
         emit(result={'outcome':'ok','kind':'static','checks':checks});return
     if manifest['architecture']!=docker('info','--format','{{.Architecture}}').decode().strip():raise TestOutcome('couldnt_run','The test server has a different CPU architecture than the backup.',checks)
     containers=manifest['containers']
+    if internet and internet_problem(containers):raise TestOutcome('couldnt_run',internet_problem(containers),checks)
+    if internet and not (shutil.which('nsenter') and shutil.which('iptables') and shutil.which('ip6tables')):raise TestOutcome('couldnt_run','The test server needs nsenter, iptables and ip6tables to block outgoing mail inside the copy, so the test does not run with internet.',checks)
     try:plans=restore_network_plan(containers)
     except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise TestOutcome('failed','The backup is missing snapshot images.',checks)
@@ -3097,6 +3174,7 @@ def restore_test_restore(req):
     for i,c in enumerate(containers):
         name=prefix+('-'+str(i) if multi else '')
         args=['create','--name',name,'--network','none',*labels,*limit_args(memory,cpus)]
+        if internet:args+=['--cap-drop','NET_ADMIN']
         if multi and plans[i] and not internet:args+=['--dns','127.0.0.1']
         try:
             for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
@@ -3141,16 +3219,21 @@ def restore_test_restore(req):
     try:docker('load','-i',str(unpacked/'images.tar'))
     finally:restore_test_tags(state)
     networks={};created=[]
+    # Every copy starts on fresh internal isolated networks only. With internet, a single container gets one such
+    # network too (a `none` container cannot join the egress network later).
     originals=list(dict.fromkeys(name for plan in plans for name in plan))
     if internet and not any(plans):originals=['']
     for index,original in enumerate(originals):
         name=prefix+'-net-'+str(index)
         test_journal(d,state,'networks',name)
-        if internet:docker('network','create','--driver','bridge','--label',TEST_LABEL+'='+tid,name)
-        else:docker('network','create','--internal','--driver','bridge','--opt','com.docker.network.bridge.gateway_mode_ipv4=isolated','--opt','com.docker.network.bridge.gateway_mode_ipv6=isolated','--label',TEST_LABEL+'='+tid,name)
+        docker('network','create','--internal','--driver','bridge','--opt','com.docker.network.bridge.gateway_mode_ipv4=isolated','--opt','com.docker.network.bridge.gateway_mode_ipv6=isolated','--label',TEST_LABEL+'='+tid,name)
         networks[original]=name
         n=json.loads(docker('network','inspect',name))[0]
-        if not internet and (not n['Internal'] or n.get('EnableIPv6') or n.get('Options',{}).get('com.docker.network.bridge.gateway_mode_ipv4')!='isolated'):raise TestOutcome('couldnt_run','The test server did not create an isolated network.',checks)
+        if not n['Internal'] or n.get('EnableIPv6') or n.get('Options',{}).get('com.docker.network.bridge.gateway_mode_ipv4')!='isolated':raise TestOutcome('couldnt_run','The test server did not create an isolated network.',checks)
+    egress=None
+    if internet:
+        egress=prefix+'-egress';test_journal(d,state,'networks',egress)
+        docker('network','create','--driver','bridge','--label',TEST_LABEL+'='+tid,egress)
     for i,(name,args) in enumerate(definitions):
         primary=next(iter(plans[i]),None) if plans[i] else ('' if '' in networks else None)
         if primary is not None:
@@ -3160,16 +3243,12 @@ def restore_test_restore(req):
         cid=docker(*args).decode().strip();created.append(cid)
         for original,aliases in list(plans[i].items())[1:]:
             docker('network','connect',*[part for alias in aliases for part in ['--alias',alias]],networks[original],cid)
-    mail_blocked=False
-    if internet:
-        mail_blocked=test_block_mail(d,state,tid,network_subnets(list(networks.values())))
-        if not mail_blocked:raise TestOutcome('couldnt_run','Outgoing mail could not be blocked on every test network, so the test does not run with internet.',checks)
     ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
-    state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet}
+    state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet,'egress':egress}
     save_state(d,state)
-    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':mail_blocked,'checks':checks})
+    emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks})
 def cgroup_counter(cid,filename,key):
     for base in ['/sys/fs/cgroup/system.slice/docker-%s.scope'%cid,'/sys/fs/cgroup/docker/%s'%cid]:
         try:
@@ -3204,10 +3283,11 @@ def test_contracts(manifest,restored):
 def restore_test_start(req):
     """Start containers in the captured restart order; a level starts once the level before it is healthy."""
     tid=test_id(req);d,state,restored=restored_state(tid)
-    if restored.get('internet') and not test_mail_intact(tid,state):raise TestOutcome('couldnt_run','Mail blocking was removed on the test server, so DockNest stopped the test.',stop=True)
+    if test_disk_low(tid):raise TestOutcome('couldnt_run',DISK_LOW)
     _,contracts=test_contracts(test_manifest(tid),restored)
     running=restored['running']
-    try:restart_services(running,contracts)
+    started=(lambda ids:isolate_egress(tid,ids,restored['egress'])) if restored.get('internet') else None
+    try:restart_services(running,contracts,started=started)
     except ValueError as error:
         if STOPPING:raise
         states=inspect(running) if running else []
@@ -3232,9 +3312,9 @@ def restore_test_probe(cid,probe,target):
     if not isinstance(port,int) or isinstance(port,bool) or not 1<=port<=65535 or not isinstance(path,str) or not TEST_PATH.fullmatch(path):return test_check('Internal web check','http',target,'skipped','The web check settings are not valid.')
     nsenter,setpriv=shutil.which('nsenter'),shutil.which('setpriv')
     if not nsenter or not setpriv:return test_check('Internal web check','http',target,'skipped','nsenter or setpriv (util-linux) is missing on the test server.')
-    pid=int(docker('inspect','--format','{{.State.Pid}}',cid).decode().strip() or 0)
-    if pid<=0:return test_check('Internal web check','http',target,'failed','The container is not running.')
-    try:output=run([nsenter,'--target',str(pid),'--net',setpriv,'--reuid','65534','--regid','65534','--clear-groups','--no-new-privs',shutil.which('python3') or sys.executable,'-I','-c',PROBE_SCRIPT,str(port),path],timeout=20)
+    key=sandbox_key(cid)
+    if not key:return test_check('Internal web check','http',target,'failed','The container is not running.')
+    try:output=run([nsenter,'--net='+key,setpriv,'--reuid','65534','--regid','65534','--clear-groups','--no-new-privs',shutil.which('python3') or sys.executable,'-I','-c',PROBE_SCRIPT,str(port),path],timeout=20)
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return test_check('Internal web check','http',target,'failed','The web check could not run.')
     try:answer=json.loads(output.decode().strip().splitlines()[-1])
     except (ValueError,IndexError):return test_check('Internal web check','http',target,'failed','The web check gave no answer.')
@@ -3242,14 +3322,10 @@ def restore_test_probe(cid,probe,target):
     if isinstance(status,int) and 200<=status<=399:return test_check('Internal web check','http',target,'passed','HTTP %d in %d ms'%(status,ms))
     return test_check('Internal web check','http',target,'failed','HTTP %d'%status if isinstance(status,int) else 'No answer within 10 seconds')
 def restore_test_poll(req):
-    """One health poll across ticks: watchdogs first (mail rules, disk), then container state. The final poll, 60
-    seconds after start, also runs the configured database checks and the internal web check."""
+    """One health poll across ticks: container state. The final poll, 60 seconds after start, is the end of the step:
+    it re-checks free space and runs the configured database checks and the internal web check."""
     tid=test_id(req);d,state,restored=restored_state(tid);final=req.get('final') is True
-    if restored.get('internet') and not test_mail_intact(tid,state):raise TestOutcome('couldnt_run','Mail blocking was removed on the test server, so DockNest stopped the test.',stop=True)
-    roots=[test_staging(tid)]
-    try:roots.append(pathlib.Path(docker('info','--format','{{.DockerRootDir}}').decode().strip() or '/var/lib/docker'))
-    except Exception:pass
-    if min(shutil.disk_usage(existing_ancestor(root)).free for root in roots)<TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',stop=True)
+    if final and test_disk_low(tid):raise TestOutcome('couldnt_run',DISK_LOW,stop=True)
     items={item['id']:item for item in restored['containers']}
     states=inspect(list(items)) if items else []
     running=set(restored['running'])
@@ -3329,14 +3405,16 @@ def restore_test_teardown(req):
     try:restore_test_tags(state)
     except Exception:pass  # the earlier image is gone; nothing to point the tag back at
     for record in state['created']['tags']:
-        if record.get('previous') is None and image_id_of(record['tag']) in test_images:
+        # A tag the load added is untagged only when its image has other tags too; otherwise removing the image by
+        # ID below takes the tag with it, and an image another container uses keeps its only name.
+        if record.get('previous') is None and image_id_of(record['tag']) in test_images and len(image_tags(record['tag']))>1:
             try:docker('image','rm',record['tag']);counts['tags']+=1
             except Exception:pass
     for image in state['created']['images']:
         if image_id_of(image) is None:continue
         try:docker('image','rm',image);counts['images']+=1
         except Exception:kept+=1  # a non-test container uses it now; kept and reported
-    for value in state['created']['paths']:
+    for value in dict.fromkeys(state['created']['paths']+[str(test_staging(tid))]):
         if pathlib.Path(value).exists() or pathlib.Path(value).is_symlink():remove_test_path(value,tid);counts['paths']+=1
     left=test_leftovers(tid);left['staging']=int(test_staging(tid).exists())
     if any(left.values()):raise ValueError('Clean-up left %s on the test server.'%', '.join('%d %s'%(n,kind) for kind,n in left.items() if n))
@@ -3350,16 +3428,13 @@ def restore_test_status(req):
     result['present']=bool(any(left.values()) or result['staging'] or result['journal'])
     emit(result=result)
 def restore_test_reap(req,sleep=time.sleep,clock=time.time):
-    """The detached reaper: wait for the deadline plus the clean-up time, run teardown once and exit. It exits at
-    once when the journal is gone (the manager cleaned up)."""
+    """The detached reaper: one timer until the deadline plus the clean-up time, no periodic work. Then, only if the
+    manager did not finish (the journal is still there), it runs teardown once and exits."""
     tid=test_id(req);file=test_dir(tid)/'resources.json'
-    while True:
-        if not file.is_file():return
-        try:deadline=float(json.loads(file.read_text()).get('deadline'))
-        except (OSError,ValueError,TypeError):deadline=clock()
-        remaining=deadline+REAPER_GRACE-clock()
-        if remaining<=0:break
-        sleep(min(30,remaining))
+    try:deadline=float(json.loads(file.read_text()).get('deadline'))
+    except (OSError,ValueError,TypeError):return
+    while (remaining:=deadline+REAPER_GRACE-clock())>0:sleep(remaining)  # re-arms only if the sleep ended early
+    if not file.is_file():return
     lock=None
     try:
         lock=test_lock(tid,600) if os.name=='posix' else None
@@ -3466,7 +3541,8 @@ def main(req):
     elif op=='restore-test-teardown':restore_test_teardown(req)
     elif op=='restore-test-status':restore_test_status(req)
     elif op=='restore-test-mail-check':
-        tid=test_id(req);_,state=test_state(tid);emit(result={'intact':test_mail_intact(tid,state),'rules':len(state['created']['firewall'])})
+        tid=test_id(req);_,state=test_state(tid);ids=[item['id'] for item in (state.get('restored') or {}).get('containers',[]) if item['id'] in (state.get('restored') or {}).get('running',[])]
+        emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__':
