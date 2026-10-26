@@ -3018,7 +3018,7 @@ def restore_test_prepare(req):
     RESTORE_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);root.mkdir(mode=0o700)
     state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time();save_state(d,state)
     pid=start_reaper(d,tid,req['reaper']) if req.get('reaper') else None
-    if isinstance(pid,int) and not isinstance(pid,bool):state['reaperPid']=pid;save_state(d,state)
+    if isinstance(pid,int) and not isinstance(pid,bool):state['reaperPid']=pid;state['reaperStart']=process_start(pid);save_state(d,state)
     emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None})
 def backup_side(error):
     """Errors from checking and unpacking the package: the backup did not come back, unless the server ran out of room."""
@@ -3393,6 +3393,10 @@ def remove_test_path(value,tid):
     if not p.exists():return
     if os.name=='posix' and not getattr(shutil.rmtree,'avoids_symlink_attacks',False):raise ValueError('Safe directory removal is unavailable on this host')
     shutil.rmtree(p)
+def process_start(pid):
+    """The kernel's start time of a process (field 22 of /proc/<pid>/stat), which a reused PID does not share."""
+    try:return int(pathlib.Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[19])
+    except (OSError,ValueError,IndexError):return None
 def process_cmdline(pid):
     try:return pathlib.Path('/proc/%d/cmdline'%pid).read_bytes()
     except OSError:return b''
@@ -3401,9 +3405,10 @@ def stop_reaper(tid,state):
     command line is this test's reaper is signalled, never a reused PID."""
     pid=state.get('reaperPid')
     if not isinstance(pid,int) or isinstance(pid,bool) or pid<=1 or pid==os.getpid():return False
-    if ('restore-tests/%s/reaper.py'%tid).encode() not in process_cmdline(pid):return False
+    if ('restore-tests/%s/reaper.py'%tid).encode() not in process_cmdline(pid):return False  # already gone
+    if state.get('reaperStart') is not None and process_start(pid)!=state['reaperStart']:return False  # a reused PID
     try:os.kill(pid,signal.SIGTERM);return True
-    except OSError:return False
+    except OSError:return False  # exited meanwhile; teardown stays idempotent
 def restore_test_teardown(req):
     """Idempotent. Containers by label, firewall rules by comment, then journalled networks that still carry the label,
     test-only tags and images (never -f), the staging folder and last the journal, once nothing is left."""
@@ -3447,6 +3452,8 @@ def restore_test_reap(req,sleep=time.sleep,clock=time.time):
     """The detached reaper: one timer until the deadline plus the clean-up time, no periodic work. Then, only if the
     manager did not finish (the journal is still there), it runs teardown once and exits."""
     tid=test_id(req);file=test_dir(tid)/'resources.json'
+    # The manager's teardown sends SIGTERM when it finished first: exit at once without acting.
+    signal.signal(signal.SIGTERM,lambda *_:os._exit(0))
     try:
         state=json.loads(file.read_text());deadline=float(state.get('deadline'))
         grace=state.get('grace') if isinstance(state.get('grace'),int) and 60<=state.get('grace')<=3600 else REAPER_GRACE
