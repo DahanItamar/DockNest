@@ -68,7 +68,10 @@ export function saveSettings(site, input, { actor, recentlyVerified }) {
   const live = !!server && server.id === site.server_id;
   if (live && !data.allowLiveServer) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'This is the site’s own server. Allow live server to test on it.');
   const allowLiveServer = live && data.allowLiveServer;
-  if (((allowLiveServer && !before.allowLiveServer) || (data.allowInternet && !before.allowInternet)) && !recentlyVerified)
+  // Re-verify whenever the result is "test on the live server" and it was not already allowed for this server:
+  // turning the switch on, pointing tests at the site's own server, or a move that made the test server the live one.
+  const liveBefore = before.allowLiveServer && before.serverId === site.server_id;
+  if (((allowLiveServer && !liveBefore) || (data.allowInternet && !before.allowInternet)) && !recentlyVerified)
     throw httpError(403, 'REVERIFY_REQUIRED', 'Confirm it is you before allowing the live server or internet for restore tests.');
   const kind = typeof site.config === 'string' ? JSON.parse(site.config || '{}').kind : site.config?.kind;
   if (data.probe && kind === 'static') throw httpError(409, 'PROBE_STATIC', 'A static site has no container for a web check.');

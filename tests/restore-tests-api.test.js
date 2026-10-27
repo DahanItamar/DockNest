@@ -370,4 +370,67 @@ test('no secrets in errors: a refused setting never echoes the request', async (
   assert.doesNotMatch(JSON.stringify(response.body), /hunter2/);
 });
 
+test('review fixes: claimed-then-cancelled steps, one step job, nproc range, double acknowledge', async () => {
+  const { siteId, testServer } = fixture('review');
+  await put(admin, siteId, good(testServer));
+  // One active step job, however often the test is advanced.
+  const { body: { id: testId, jobId } } = await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}));
+  assert.equal(rt.advanceRestoreTest(testId), jobId); rt.tickRestoreTests();
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=?").get(testId).n, 1);
+  // Cancel after a worker claimed the first step: the step's own guard ends it cancelled.
+  const claimed = claimJob();
+  assert.equal(JSON.parse(claimed.details).testId, testId); assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId).status, 'test_running');
+  assert.equal((await operator('POST', `/restore-tests/${testId}/cancel`, {})).status, 202);
+  assert.equal(rt.loadTest(testId).result, null, 'a claimed step is not withdrawn');
+  await executeJob(claimed);
+  const ended = await drive(testId);
+  assert.equal(ended.result, 'cancelled', 'the next tick ends it'); assert.equal(ended.cleanup, 'done');
+  // A withdrawn test_queued job is never claimed.
+  now += 1000;
+  const second = (await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}))).body;
+  await operator('POST', `/restore-tests/${second.id}/cancel`, {});
+  assert.equal(db.prepare('SELECT status,stage FROM jobs WHERE id=?').get(second.jobId).stage, 'cancelled');
+  assert.notEqual(claimJob()?.id, second.jobId);
+  // Check space keeps a sane CPU count only.
+  for (const [nproc, expected] of [[8, 8], [99999, 8], [0, 8]]) {
+    answers = { 'restore-test-check': () => ({ ok: true, problems: [], facts: { nproc } }) };
+    now += 1000;
+    const run = (await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}))).body;
+    await drive(run.id);
+    assert.equal(JSON.parse(db.prepare('SELECT capabilities FROM servers WHERE id=?').get(testServer).capabilities).cpus, expected, 'nproc ' + nproc);
+  }
+  answers = {};
+  // Two acknowledges at once: one wins, the other is NOT_NEEDED and writes no audit row.
+  const failed = randomUUID();
+  db.prepare("INSERT INTO restore_tests(id,site_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,started_at,finished_at,result,cleanup) VALUES(?,?,?,?,'manual','{}','x',?,?,?,'failed','failed')").run(failed, fixture('ack').siteId, at(), testServer, at(), at(), at());
+  const results = await Promise.allSettled([rt.acknowledgeRestoreTestCleanup(failed, 'a'), rt.acknowledgeRestoreTestCleanup(failed, 'b')]);
+  assert.deepEqual(results.map(item => item.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(results.find(item => item.status === 'rejected').reason.code, 'NOT_NEEDED');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='restore_test.recovery_acknowledged' AND detail LIKE ?").get('%' + failed + '%').n, 1);
+});
+
+test('review fixes: re-verify whenever tests would run on the live server', async () => {
+  const { siteId, live, testServer } = fixture('livemove');
+  assert.equal((await put(admin, siteId, good(live, { allowLiveServer: true }))).status, 200);
+  assert.equal((await put(staleAdmin, siteId, good(testServer))).status, 200, 'moving off the live server needs nothing');
+  const back = await put(staleAdmin, siteId, good(live, { allowLiveServer: true }));
+  assert.equal(back.status, 403); assert.equal(back.body.code, 'REVERIFY_REQUIRED', 'back onto the live server re-verifies');
+  // The site moves onto the test server: the opt-in was never given for it, so testing there needs it and a re-verify.
+  db.prepare('UPDATE sites SET server_id=? WHERE id=?').run(testServer, siteId);
+  assert.equal((await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}))).body.code, 'LIVE_SERVER_NOT_ALLOWED');
+  assert.equal((await put(staleAdmin, siteId, good(testServer, { allowLiveServer: true }))).body.code, 'REVERIFY_REQUIRED');
+});
+
+test('review fixes: a due test waiting on a failed clean-up says why and keeps its due time', async () => {
+  const { siteId, testServer } = fixture('waiting');
+  db.prepare('UPDATE restore_test_settings SET enabled=0').run();
+  await put(admin, siteId, good(testServer, { cadence: 'daily' }));
+  db.prepare("INSERT INTO restore_tests(id,site_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,started_at,finished_at,result,cleanup) VALUES(?,?,?,?,'manual','{}','x',?,?,?,'failed','failed')").run(randomUUID(), siteId, at(), testServer, at(), at(), at());
+  const due = settingsModule.settingsRow(siteId).next_due_at;
+  now = Date.parse(due) + 1000;
+  assert.equal(scheduler.tickRestoreTestSchedule(), 0);
+  const row = settingsModule.settingsRow(siteId);
+  assert.equal(row.skip_reason, 'Waiting for the clean-up to be fixed.'); assert.equal(row.next_due_at, due);
+});
+
 test.after(() => listener.close());
