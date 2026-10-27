@@ -4,12 +4,18 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Automatic restore tests (beta, 2.9.0): per site, DockNest restores the latest verified backup onto a test server you choose, starts it, runs checks (containers running and healthy, still running after 60 seconds, database checks, optional internal web check), records the result and removes everything it created. Off by default; daily, weekly or monthly. Limits for time, memory and CPU; no internet unless an administrator turns on **Allow internet** (mail ports, the metadata service and the test server's own addresses are blocked inside the copy). Testing on the site's own server is opt-in. Results: passed, failed, couldn't run, cancelled. New alerts: failed, couldn't run, passed again, needs you. Clean-up survives restarts. See [docs/restore-tests-guide.md](docs/restore-tests-guide.md) and [docs/restore-tests.md](docs/restore-tests.md).
+- Storage report on the Storage page: space per site and per storage, growth over the last 30 days and a labelled best-case estimate of what incremental backups could save. New API: `GET /api/storage-report` (administrators). It reads metadata only.
+
 ### Changed
 
 - Redesigned sign-in and first-run setup pages: a split screen with the DockNest logo and a calm animated backdrop, a monochrome look, a show/hide password button, and one short inline error ("Invalid password or code." never says which part was wrong).
 - New Mauve ink colour palette in light and dark: neutrals carry a hint of the brand purple, better contrast for charts.
 - Maintenance page: "Powered by DockNest" in the footer now links to the DockNest project on GitHub. It is part of the page and is always shown.
 - License: a NOTICE file adds one AGPL-3.0 section 7(b) term: the "Powered by DockNest" credit and its link must be kept on visitor pages, including in modified versions.
+- Database migration 9 adds restore test tables only; nothing existing changes, and releases before 2.9.0 keep working on it. Finish or cancel tests before rolling back. See [docs/upgrading.md](docs/upgrading.md) and [docs/security.md](docs/security.md).
 
 ### Fixed
 

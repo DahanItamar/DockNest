@@ -3,6 +3,8 @@
 Before rolling back to 2.5.0 or older, finish or cancel every site move ([moving-sites.md](moving-sites.md)): older
 releases ignore move jobs but cannot continue or undo a move.
 
+Before rolling back to 2.8.x or older, finish or cancel every automatic restore test and its clean-up ([restore-tests-guide.md](restore-tests-guide.md)). Older releases ignore test jobs and cannot continue a test or clean up its copy on the test server. The test server's safety timer removes leftovers in that case, but it is better to see "Clean up" finish first. Releases from 2.9.0 add new tables only (migration 9, `compatible: true`), so older releases run on the upgraded database. Restore test settings and history stay in the database and show again after you upgrade.
+
 This page covers upgrades and rollbacks for a server installed with `git clone`, `scripts/setup.js` and `docker compose up -d --build`. It also lists what stays stable between versions.
 
 Upgrades never move, rename or delete your volumes, secrets, certificates, site configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.

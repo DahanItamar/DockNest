@@ -26,7 +26,7 @@ try{
  await page.route('**/api/**',route=>{
   const endpoint=new URL(route.request().url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'admin',name:'Fixture administrator',role:'admin'},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
-  return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?state:endpoint==='/api/access'?accounts:endpoint==='/api/self-backup'?selfBackup:endpoint==='/api/updates'?updatesState:endpoint==='/api/storage-targets'?{targets:[{id:'t1',name:'Fixture SFTP storage',kind:'sftp',host:'storage.example.invalid',port:22,username:'fixture',root:'/backups',status:'connected'}],activeTargetId:'t1'}:endpoint==='/api/auth/activity'?auth:{}});
+  return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?state:endpoint==='/api/access'?accounts:endpoint==='/api/self-backup'?selfBackup:endpoint==='/api/updates'?updatesState:endpoint==='/api/storage-targets'?{targets:[{id:'t1',name:'Fixture SFTP storage',kind:'sftp',host:'storage.example.invalid',port:22,username:'fixture',root:'/backups',status:'connected'}],activeTargetId:'t1'}:endpoint==='/api/storage-report'?{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}:endpoint==='/api/auth/activity'?auth:{}});
  });
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:'+server.address().port);
  await page.locator('.dash-metrics').waitFor();

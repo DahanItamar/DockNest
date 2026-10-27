@@ -1,0 +1,11 @@
+/* Storage report: layout comes from .card-grid, .card, .def-list and .activity-feature; only report specifics live here. */
+.sr-grid{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:var(--section-gap,24px)}
+.sr-wide{grid-column:1/-1}
+.sr-store+.sr-store{margin-top:var(--edge)}
+.sr-store progress{display:block;width:100%}
+.sr-feature{margin:var(--edge) 0 0}
+.card-footer.sr-estimate{justify-content:space-between;gap:var(--edge)}
+.sr-info{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;color:var(--text-muted)}
+.sr-info:hover,.sr-info:focus-visible{color:var(--heading)}
+.sr-empty{margin-bottom:var(--section-gap,24px)}
+@media(max-width:767px){.sr-grid{grid-template-columns:minmax(0,1fr)}}
