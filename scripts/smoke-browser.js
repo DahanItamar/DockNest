@@ -278,6 +278,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await removeDialog.getByRole('button',{name:'Remove site',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
   await page.getByRole('heading',{name:'Choose the sites to protect',exact:true}).waitFor();
   let storageFixture=[];
+  await page.route('**/api/storage-report',route=>route.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}}));
   await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
   await page.route('**/api/storage-targets/connect',route=>{
     const body=route.request().postDataJSON();
