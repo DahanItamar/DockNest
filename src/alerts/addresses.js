@@ -17,7 +17,7 @@ for (const [address, prefix] of [
 ]) refused4.addSubnet(address, prefix, 'ipv4');
 for (const [address, prefix] of [['10.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16], ['100.64.0.0', 10]]) private4.addSubnet(address, prefix, 'ipv4');
 for (const [address, prefix] of [
-  ['fd00:ec2::254', 128], // AWS IPv6 metadata, inside the unique local range
+  ['fd00:ec2::', 32], // AWS IPv6 metadata (::254), DNS (::253), time sync and the rest of AWS's reserved block, inside the unique local range
   ['2001::', 32], ['2001:2::', 48], ['2001:10::', 28], ['2001:20::', 28], ['2001:db8::', 32], ['3fff::', 20], // Teredo, benchmark, ORCHID, documentation
 ]) refused6.addSubnet(address, prefix, 'ipv6');
 private6.addSubnet('fc00::', 7, 'ipv6');
