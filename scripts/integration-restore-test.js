@@ -288,12 +288,13 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   const loaded = (await step('build loaded image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/rt-collide-site')).trim();
   await step('save tagged archive', 'exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');
   const kept = (await step('build kept image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=kept', '/rt-collide-site')).trim();
-  await step('remove loaded image', 'exec', target, 'docker', 'image', 'rm', loaded);
+  // The first image stays (untagged): the containerd store refuses to remove that build image, and the collision only
+  // needs the tag to name the other image before the load.
   const collision = await step('helper tag restore', 'exec', target, 'python3', '-c', "import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;tags=helper.image_archive_tags('/tmp/rt-collide.tar');state={'created':{'tags':[{'tag':t,'previous':helper.image_id_of(t)} for t in tags]}};helper.docker('load','-i','/tmp/rt-collide.tar');moved=helper.image_id_of('rt-collide:1');changed=helper.restore_test_tags(state);print(json.dumps({'tags':tags,'moved':moved,'changed':changed,'now':helper.image_id_of('rt-collide:1')}))");
   const collided = JSON.parse(collision.split('\n').at(-1));
   assert.deepEqual(collided.tags, ['rt-collide:1'], 'the archive names its tag'); assert.notEqual(collided.moved, kept, 'docker load moved the tag');
   assert.deepEqual(collided.changed, ['rt-collide:1']); assert.equal(collided.now, kept, 'the tag points back at the image it named before');
-  await run('exec', target, 'sh', '-c', `docker image rm ${collided.moved} rt-collide:1 >/dev/null 2>&1; rm -f /tmp/rt-collide.tar; true`);
+  await run('exec', target, 'sh', '-c', `docker image rm -f rt-collide:1 ${loaded} ${kept} >/dev/null 2>&1; rm -rf /tmp/rt-collide.tar /rt-qa-helper /rt-collide-site; true`);
   record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load (${store} image store)`);
 
   // 11. A worker killed during Restore copy: the next worker ends the test couldnt_run and cleans up first.
