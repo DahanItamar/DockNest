@@ -279,6 +279,37 @@ test('a new destination starts with no dedup history: a real alert to the new ch
   assert.equal(delivery.emit(done, { at: t0 + 60_000 }), 1, 'the new inbox gets it');
 });
 
+test('a node moved to another Connection takes its pending items along; an unused Connection taken over keeps none', async () => {
+  db.exec('DELETE FROM alert_outbox;UPDATE alert_lines SET enabled=0');
+  const first = (await call('POST', '/alerts/credentials', { kind: 'telegram', name: 'Old bot', config: { token: TOKEN } })).body;
+  const second = (await call('POST', '/alerts/credentials', { kind: 'telegram', name: 'New bot', config: { token: NEW_TOKEN } })).body;
+  const node = (await call('POST', '/alerts/channels', tgNode('Switching', '-8001', first.id))).body;
+  store.createRule({ channelId: node.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  const t0 = Date.parse('2026-11-02T00:00:00Z'), failed = key => ({ type: 'backup.failed', key, siteName: 's', serverName: 'v' });
+  assert.equal(delivery.emit(failed('site:w'), { at: t0 }), 1);
+  // The bot is replaced by another credential before the retry: the waiting alert goes out with the new bot, once.
+  assert.equal((await call('PATCH', `/alerts/channels/${node.id}`, { credentialId: second.id })).status, 200);
+  const calls = mockFetch(ok);
+  assert.equal(await delivery.deliverDue({ at: t0 }), 1, 'the pending alert is not lost');
+  assert.equal(calls.length, 1); assert.ok(calls[0].url.includes(NEW_TOKEN)); assert.equal(JSON.parse(calls[0].init.body).chat_id, '-8001');
+  // Moving into a destination that already has the same event pending sends it once, not twice.
+  const other = (await call('POST', '/alerts/channels', tgNode('Other', '-8002', second.id))).body;
+  store.createRule({ channelId: other.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  assert.equal(delivery.emit(failed('site:dup'), { at: t0 + 1000 }), 2);
+  await call('PATCH', `/alerts/channels/${node.id}`, { config: { chatId: '-8002' } });
+  calls.length = 0; await delivery.deliverDue({ at: t0 + 1000 });
+  assert.deepEqual(calls.map(item => JSON.parse(item.init.body).chat_id), ['-8002'], 'one message to the shared chat');
+  // A deleted node's waiting item never reaches the next destination of its Connection.
+  await call('DELETE', `/alerts/channels/${other.id}`); await call('DELETE', `/alerts/channels/${node.id}`);
+  const gone = (await call('POST', '/alerts/channels', tgNode('Gone soon', '-8003', first.id))).body;
+  store.createRule({ channelId: gone.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  assert.equal(delivery.emit(failed('site:left'), { at: t0 + 2000 }), 1);
+  await call('DELETE', `/alerts/channels/${gone.id}`);
+  await call('POST', '/alerts/channels', tgNode('Newcomer', '-8004', first.id));
+  calls.length = 0; await delivery.deliverDue({ at: t0 + 2000 });
+  assert.equal(calls.length, 0, 'nothing meant for -8003 goes to -8004');
+});
+
 test('cap: events folded into "N more alerts" keep their dedup entry, so a repeat inside the window is not counted again', async () => {
   db.exec('DELETE FROM alert_outbox;UPDATE alert_lines SET enabled=0');
   const bot = (await call('POST', '/alerts/credentials', { kind: 'telegram', name: 'Fold', config: { token: TOKEN } })).body;

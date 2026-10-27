@@ -171,7 +171,9 @@ function connectionFor(credential, settings, nodeName, nodeId = null) {
     sealedWrite(() => db.prepare('UPDATE connections SET settings=?,updated_at=?,last_send=NULL,last_send_at=NULL,last_error=NULL WHERE id=?').run(key, now(), reuse.id));
     // A new destination starts with no dedup history, so a real alert to it is never suppressed by one the old
     // destination got. Pending items stay: they go to the new destination, as a 2.8 node's queue did after an edit.
-    db.prepare("DELETE FROM alert_outbox WHERE connection_id=? AND status<>'pending'").run(reuse.id);
+    // An unused Connection taken over by another node keeps nothing: its pending items were for a destination no node
+    // uses (a deleted node's), and must not reach this one.
+    db.prepare("DELETE FROM alert_outbox WHERE connection_id=? AND (status<>'pending' OR ?)").run(reuse.id, reuse === own ? 0 : 1);
     return reuse.id;
   }
   if (connectionCount() >= connectionLimits.connections) throw connectionsFull();
@@ -203,10 +205,22 @@ export function updateChannel(channelId, input, actor) {
   transaction(() => {
     // Without a credential the node keeps its destination as `prefill` and sends nothing, as in 2.8.
     if (!credential) db.prepare('UPDATE alert_nodes SET name=?,connection_id=NULL,prefill=?,updated_at=? WHERE id=?').run(title, JSON.stringify(config.data), now(), channelId);
-    else db.prepare('UPDATE alert_nodes SET name=?,connection_id=?,prefill=NULL,updated_at=? WHERE id=?').run(title, connectionFor(credential, config.data, title, channelId), now(), channelId);
+    else {
+      const target = connectionFor(credential, config.data, title, channelId);
+      db.prepare('UPDATE alert_nodes SET name=?,connection_id=?,prefill=NULL,updated_at=? WHERE id=?').run(title, target, now(), channelId);
+      carryPending(row.connection_id, target, channelId);
+    }
   });
   audit(actor, 'alert.channel.update', channelId, { kind: row.provider, fields: Object.keys(patch.data.config ?? {}).slice(0, 12), credentialChanged: Boolean(patch.data.credentialId) });
   return channelView(getChannel(channelId));
+}
+// A node moved to another Connection (another credential, or a destination another Connection already reaches) takes
+// its pending items along when no node is left on the old one, as a 2.8 node's queue followed the node. An item whose
+// event the new Connection already has pending, or handled at or after it, stays behind (and fails unsent), so nothing
+// is sent twice to one destination.
+function carryPending(from, to, nodeId) {
+  if (!from || from === to || nodesUsing(from).length) return;
+  db.prepare("UPDATE alert_outbox SET connection_id=? WHERE connection_id=? AND node_id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM alert_outbox t WHERE t.connection_id=? AND t.dedupe_key=alert_outbox.dedupe_key AND (t.status='pending' OR t.created_at>=alert_outbox.created_at))").run(to, from, nodeId, to);
 }
 // Removes the node and its lines. Its Connection stays (a credential outlives its nodes, as in 2.8); its sent and
 // pending messages keep their dedup history with node_id NULL, and nothing is sent through a Connection no node uses.
