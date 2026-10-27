@@ -25,7 +25,7 @@ test('migration 9 is one compatible `{ version: 9,` line named restore-tests, so
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/), lines = source.filter(line => /^\s*\{\s*version:\s*9\b/.test(line));
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^ {2}\{ version: 9, name: 'restore-tests', compatible: true, up: db => db\.exec\(restoreTestsSchema\) \},$/);
-  assert.equal(schemaVersion, 9); assert.equal(compatFloor(migrations), 1);
+  assert.ok(schemaVersion >= 9, 'later migrations append after 9'); assert.equal(compatFloor(migrations), 1);
 });
 
 test('an 8-schema (2.8.x) database gains only the restore test objects, keeps every row and upgrades with tests off', () => withDatabase(8, async (db, file) => {
@@ -33,14 +33,15 @@ test('an 8-schema (2.8.x) database gains only the restore test objects, keeps ev
   db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('s','n','h',22,'root','k','f','2026-01-01')").run();
   db.prepare("INSERT INTO sites VALUES('site','s','shop','{}','2026-01-01')").run();
   const before = schema(db), settings = db.prepare('SELECT key,value FROM settings WHERE key<>? ORDER BY key').all('schema_compat_floor').map(row => ({ ...row }));
-  const result = migrate(db, { file, now: () => new Date('2026-10-26T08:00:00.000Z'), log: quiet });
+  // The 2.9.0 list (up to 9): later migrations have their own tests.
+  const upTo9 = migrations.slice(0, 9), result = migrate(db, { file, list: upTo9, now: () => new Date('2026-10-26T08:00:00.000Z'), log: quiet });
   assert.equal(result.from, 8); assert.equal(result.to, 9); assert.match(result.snapshot, /state-v8-to-v9-/);
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'existing objects keep their definition');
   assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), ['restore_test_settings', 'restore_test_settings_due', 'restore_test_steps', 'restore_test_steps_no_delete', 'restore_tests', 'restore_tests_backup', 'restore_tests_no_delete', 'restore_tests_result_once', 'restore_tests_server_active', 'restore_tests_site_active', 'restore_tests_site_created']);
   assert.deepEqual(db.prepare('SELECT key,value FROM settings WHERE key<>? ORDER BY key').all('schema_compat_floor').map(row => ({ ...row })), settings);
   for (const table of ['restore_test_settings', 'restore_tests', 'restore_test_steps']) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, `${table} starts empty: tests are off`);
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
-  assert.deepEqual(migrate(db, { file, log: quiet }), { from: 9, to: 9, snapshot: null }, 'restarting is a no-op');
+  assert.deepEqual(migrate(db, { file, list: upTo9, log: quiet }), { from: 9, to: 9, snapshot: null }, 'restarting is a no-op');
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 }));
 

@@ -1,6 +1,6 @@
 # Alert channels and Connections (ADR)
 
-Status: accepted design for the release after 2.9.0. Not implemented yet. Date: 2026-10-27.
+Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store) is done, see "Notes from PR 1a". Date: 2026-10-27.
 Spec: the owner-approved mockup "Alert channels, final design, Option C". This doc turns it into decisions.
 Builds on [alerts.md](alerts.md) (2.8.0) and [security.md](security.md), "Alerts".
 
@@ -483,6 +483,33 @@ switches to the new routes (PR 4), so main never has a broken alerts UI. They ar
    Connections list and dialog, node panel, grid delete, phone list; the Map switches to the new routes and the 2.8
    routes go in the same PR. API, permission and browser tests, design review. Docs: rewrite `alerts.md`, update
    `security.md` (operator opt-in, its risk, the SMTP loopback wording), `upgrading.md`, README, release note.
+
+## Notes from PR 1a
+
+What PR 1a settled where this document left room, or chose a narrower step:
+
+- The migration is number 10, `alert-connections`. Besides the tables above it adds the `connections_origin` and
+  `alert_nodes_connection` indexes and a one-row table `alert_legacy_import (imported_at)`: it marks the copy as done
+  (a repeated start copies nothing twice) and is the migration time the "older version changes" warning compares with.
+- `alert_outbox.payload` has a 4 KB `CHECK` like the other text columns.
+- Queue rows of a 2.8 node with no matching credential are not copied: `connection_id` is required and such a node
+  could never send them.
+- The newest 2.8 node result of a group becomes its Connection's `last_send`, so the Map caption stays as it was.
+- Until the Map moves to the new routes (PR 4), a node test through the 2.8 route records `last_send` (what the node
+  caption shows), and a credential check records `last_test`, exactly as the 2.8 fields behaved.
+- Adapter: a node whose new chat or recipients no Connection of its credential has takes its own Connection in place
+  when no other node uses it, else an unused one of that credential, else a new copy. So a credential holds at most one
+  Connection more than it has destinations.
+- Every write to a `connections` row runs with `secure_delete` on, not only deletes: SQLite rewrites the whole row
+  on any update, so the old sealed value would otherwise stay in free page space.
+- Delivery: dedup per Connection, the 50-item cap with "N more alerts", the 24-hour maximum age and final failures
+  (a rejected bot token) are in. The per-Connection rate limit and `Retry-After` come with the outbound client (1b).
+  Telegram keeps the 2.8 request shape (`disable_web_page_preview`) until the message template (PR 3).
+- Nothing is sent through a Connection that no node uses any more; its pending items are marked failed.
+- A Connection whose destination changes (a new chat, new recipients) loses its finished dedup history, so a real
+  alert to the new destination is never suppressed. Pending items stay and go to the new destination.
+- An event folded into "N more alerts" still leaves a dedup entry (status `sent`, payload `{ foldedInto }`, never
+  delivered on its own), so a repeat inside its window is not counted again.
 
 ## Owner answers (2026-10-27)
 
