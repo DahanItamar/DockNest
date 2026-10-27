@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-27
+
+See [docs/releases/2026-10-27-v2.10.0.md](docs/releases/2026-10-27-v2.10.0.md).
+
 ### Added
 
 - Alert channels: alerts can now go to 13 providers. Telegram and Email are joined by WhatsApp (Meta WhatsApp Cloud API, with an approved template by default), Discord, Slack, Microsoft Teams (Workflows), Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix and "Other (webhook URL)" under Advanced. One message template for all of them: a title, the site and server, a plain reason and a link that opens the job after sign-in.
