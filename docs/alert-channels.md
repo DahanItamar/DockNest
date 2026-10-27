@@ -1,6 +1,6 @@
 # Alert channels and Connections (ADR)
 
-Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store) is done, see "Notes from PR 1a". Date: 2026-10-27.
+Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store) and PR 1b (the guarded outbound client) are done, see "Notes from PR 1a" and "Notes from PR 1b". Date: 2026-10-27.
 Spec: the owner-approved mockup "Alert channels, final design, Option C". This doc turns it into decisions.
 Builds on [alerts.md](alerts.md) (2.8.0) and [security.md](security.md), "Alerts".
 
@@ -326,7 +326,8 @@ All HTTP providers send through one client in `src/alerts/outbound.js`. Nothing 
 - **Redirects**: never followed. A 3xx is a failure: "The server answered with a redirect. Paste the final URL."
 - **Limits**: 10 seconds for the whole request, request body at most 16 KB, response read at most 64 KB then
   dropped. One request at a time per Connection.
-- **TLS**: system CAs, TLS 1.2 or newer, certificate must match the host name. There is no "skip verification".
+- **TLS**: Node's bundled CA store (the operating system's certificate store is not added), TLS 1.2 or newer,
+  certificate must match the host name. There is no "skip verification".
 - **Checked twice**: at save (format and policy, with a DNS check) and again at every send, because DNS changes.
 - **Email** keeps the 2.8 rule in `src/alerts/smtp.js` word for word: TLS or STARTTLS with a valid certificate; the
   host is resolved once, the address checked and the connection made to that address; refused are `0.0.0.0/8`,
@@ -510,6 +511,49 @@ What PR 1a settled where this document left room, or chose a narrower step:
   alert to the new destination is never suppressed. Pending items stay and go to the new destination.
 - An event folded into "N more alerts" still leaves a dedup entry (status `sent`, payload `{ foldedInto }`, never
   delivered on its own), so a repeat inside its window is not counted again.
+
+## Notes from PR 1b
+
+What PR 1b settled where this document left room, or chose a narrower step:
+
+- No migration. "Allow private network" is the `settings` row `alerts_private_network` (`'true'` or `'false'`); a
+  missing row is off, so every upgraded install starts with it off. It is read at every send, so turning it off stops
+  private sends with the next request. `setAllowPrivateNetwork` refuses anyone but an administrator and writes
+  `alerts.private_network {enabled, role}`; its route (`PUT /api/connections/settings`) and the re-verification come
+  with PR 4.
+- `private_ok` is stamped by one function, `privateOkFor` (connections.js), with the rule from "Data model". The 2.8
+  routes are administrators only, so they stamp as an administrator: Email gets 1 (as before), Telegram 0. Changing the
+  mail server or port re-stamps; renames and token changes keep the saved value.
+- The address lists live in `src/alerts/addresses.js`, not shared with `src/probe-url.js`: probe URLs follow a
+  different rule (loopback probes are allowed there, and the helper on the source server decides). Beyond the list in
+  "Outbound safety" it also refuses `192.88.99.0/24` (6to4 relay), `168.63.129.16` (Azure host endpoint), Teredo
+  `2001::/32`, ORCHID, the `3fff::/20` documentation range, all of `64:ff9b::/32` except the well-known NAT64
+  `/96` (which is judged by the IPv4 it carries, as are IPv4-mapped, IPv4-translated and 6to4 forms), and every IPv6
+  address outside global unicast `2000::/3` and ULA `fc00::/7` (so link-local, site-local, multicast, discard and
+  IPv4-compatible forms).
+- A name whose answers mix public and private addresses is refused even with the setting on: it is neither a public
+  nor a private host.
+- Pinning: `outbound.js` resolves the name once (with the 10 second limit running), checks every answer, and gives
+  the socket a `lookup` that answers only those checked addresses (honouring `all: true` and `family`), so Node never
+  resolves the name itself. HTTP and ports other than 443 are refused before DNS unless private addresses are allowed,
+  and after DNS unless every answer is private.
+- `Retry-After` is clamped to 1 second .. 15 minutes; a 429 with no readable wait waits 60 seconds. A 429 uses up no
+  try and moves every pending item of that Connection to the same time. `last_send` records the attempt as failed. A
+  provider that answers 429 forever is tried once per wait until the 24-hour maximum age fails the item.
+- The rate limit counts delivered messages (`status = 'sent'` with at least one attempt, so folded dedup entries do
+  not count) by `finished_at`. Over the limit, the Connection's pending items move to the end of the window, with no
+  try used. Other Connections are not held back.
+- Fold race: an item is marked sent only while its `message` and `payload` are what was sent. When "N more alerts"
+  grew during the send, the part that was sent is done and the rest stays pending as a smaller count.
+- Final failures added: Telegram 403 (bot blocked, removed or never started) and an SMTP sign-in rejection (534, 535,
+  or no supported sign-in method). Telegram 400 and 5xx still retry.
+- Email: a relay with `private_ok = 1` keeps the 2.8 address rule word for word. With `private_ok = 0` (a host set by
+  an operator, from PR 4) the address must be public by the outbound policy above. `docs/security.md` now says that
+  loopback is refused (the "SMTP loopback wording" item from PR 4 is done here).
+- "One request at a time per Connection" holds inside the worker (deliveries are sent one after another). A test sent
+  from the API process can overlap with a worker send; that is not locked across processes.
+- Test seams, like `smtpIo`: `outboundIo.resolve`, `outboundIo.dial` (points a checked address and port at a local fake
+  server) and `outboundIo.ca`. No setting or API reaches them.
 
 ## Owner answers (2026-10-27)
 

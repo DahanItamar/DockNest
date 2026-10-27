@@ -1,31 +1,37 @@
 // Alert delivery (docs/alerts.md, docs/alert-channels.md "Delivery, dedup, rate limits and failures"). The detector
 // (detect.js) calls `emit`; the worker drains the outbox with `deliverDue`. Each provider (providers/) says what to send;
-// this file makes the request. Outbound traffic goes only to https://api.telegram.org (fixed host, no redirects, 10 s
-// limit, 64 KB response cap) and to the SMTP host of an Email Connection (src/alerts/smtp.js). Messages are short plain
-// text built in events.js. Sealed logins are opened only at the moment of a send and never appear in a log line, an
-// audit event or an error.
-import { db, id, audit } from '../db.js';
+// HTTP requests go only through the guarded client in outbound.js (own DNS check pinned to the socket, HTTPS on 443 to
+// public addresses, no redirects, 10 s, 64 KB), and Email through src/alerts/smtp.js. Messages are short plain text built
+// in events.js. Sealed logins are opened only at the moment of a send and never appear in a log line, an audit event or
+// an error.
+import { db, id, audit, transaction } from '../db.js';
 import { messageFor, ruleMatches, DEDUPE_MS, STATE_DEDUPE_MS } from './events.js';
 import { enabledRules, getChannel, getCredential, nodeConnection, recordResult, recordCredentialTest, httpError } from './store.js';
-import { getConnection, openSecret, recordConnectionSend } from './connections.js';
+import { getConnection, openSecret, recordConnectionSend, privateAllowed } from './connections.js';
 import { provider } from './providers/index.js';
 import { sendMail, SmtpError } from './smtp.js';
+import { outboundRequest, OutboundError, retryAfterMs, outboundLimits } from './outbound.js';
 
 // pendingCap: pending items per Connection before new ones fold into one "N more alerts" item. maxAgeMs: an item older
-// than that is marked failed without sending; a stale "server unreachable" helps no one.
-export const deliveryPolicy = Object.freeze({ attempts: 3, backoffMs: [60_000, 5 * 60_000], batch: 20, keepDays: 7, timeoutMs: 10_000, responseBytes: 64 * 1024, pendingCap: 50, maxAgeMs: 24 * 3600_000 });
+// than that is marked failed without sending; a stale "server unreachable" helps no one. rateLimit: messages per
+// Connection per rateWindowMs; over that, items wait for the next window. retryAfterMs: the wait after a 429 that names
+// none (a 429 never uses up a try; the wait it names is capped at 15 minutes in outbound.js).
+export const deliveryPolicy = Object.freeze({ attempts: 3, backoffMs: [60_000, 5 * 60_000], batch: 20, keepDays: 7, timeoutMs: outboundLimits.totalMs, responseBytes: outboundLimits.responseBytes, pendingCap: 50, maxAgeMs: 24 * 3600_000, rateLimit: 20, rateWindowMs: 10 * 60_000, retryAfterMs: 60_000 });
 export const COLLAPSE_KEY = 'collapse:pending';
 export const collapsedText = count => `${count} more ${count === 1 ? 'alert' : 'alerts'}. Open DockNest to see ${count === 1 ? 'it' : 'them'}.`;
-// Tests replace `alertHttp.fetch` with a fixture; the timeout and the refusal to follow redirects live here.
-export const alertHttp = { fetch: (url, init) => fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(deliveryPolicy.timeoutMs) }) };
+// Every HTTP provider request. Tests replace `alertHttp.fetch` with a fixture (same (url, init) shape, answering a Response).
+export const alertHttp = { fetch: (url, init, guard) => outboundRequest(url, init, guard) };
 
+// At most 64 KB of an answer, from the guarded client or from a test's Response.
 async function boundedText(response) {
-  const reader = response.body?.getReader(); if (!reader) return '';
+  const reader = response.body?.getReader?.();
+  if (!reader) { try { return String(await response.text()).slice(0, deliveryPolicy.responseBytes); } catch { return ''; } }
   const parts = []; let size = 0;
   for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > deliveryPolicy.responseBytes) { await reader.cancel(); break; } parts.push(value); }
   return Buffer.concat(parts).toString('utf8');
 }
-class DeliveryError extends Error { constructor(message, final = false) { super(message); this.final = final; } }
+// final: not worth retrying (a rejected login, a gone destination). wait: a 429's wait in ms, which uses up no try.
+class DeliveryError extends Error { constructor(message, final = false, wait = null) { super(message); this.final = final; this.wait = wait; } }
 const unreadable = () => new DeliveryError('The saved settings cannot be read. Enter them again.');
 // The sealed login and the plain destination of a Connection, checked against its provider. Never returned anywhere.
 function valuesOf(connection) {
@@ -34,22 +40,34 @@ function valuesOf(connection) {
   const destination = item.settingsSchema.safeParse(settings); if (!destination.success) throw unreadable();
   return { item, secret, settings: destination.data };
 }
-async function request(item, call, verifying = false) {
-  let response, body = {};
-  try { response = await alertHttp.fetch(`https://${item.target().hosts[0]}${call.path}`, { method: call.method, ...(call.json ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(call.json) } : {}) }); }
-  catch { throw new DeliveryError(item.unreachable); } // never the error: its text can carry the URL with the token
-  try { body = JSON.parse(await boundedText(response)); } catch { /* not JSON */ }
-  const problem = item.explain(response.status, body, { verifying }); if (problem) throw new DeliveryError(problem.message, problem.final);
+// What the guarded client may reach for this Connection: the provider's fixed hosts (or any host for a user host), and
+// private addresses only when the Connection is stamped `private_ok` and "Allow private network" is on right now.
+export function guardFor(connection, item = provider(connection?.provider)) {
+  const hosts = item?.target?.({})?.hosts;
+  return { hosts: Array.isArray(hosts) ? hosts : null, privateAllowed: privateAllowed(connection) };
 }
+async function request(item, call, guard, verifying = false) {
+  let response, body = {};
+  const headers = { ...(call.headers ?? {}), ...(call.json ? { 'Content-Type': 'application/json' } : {}) };
+  try { response = await alertHttp.fetch(`https://${guard.hosts?.[0] ?? item.target().hosts[0]}${call.path}`, { method: call.method, ...(Object.keys(headers).length ? { headers } : {}), ...(call.json ? { body: JSON.stringify(call.json) } : {}) }, guard); }
+  catch (error) { throw new DeliveryError(error instanceof OutboundError && error.code === 'redirect' ? error.message : item.unreachable); } // never the error: its text can carry the URL with the token
+  try { body = JSON.parse(await boundedText(response)); } catch { /* not JSON */ }
+  const problem = item.explain(response.status, body, { verifying });
+  if (response.status === 429) throw new DeliveryError(problem?.message ?? 'The service asked DockNest to slow down.', false, retryAfterMs(response, body) ?? deliveryPolicy.retryAfterMs);
+  if (problem) throw new DeliveryError(problem.message, problem.final);
+}
+// SMTP: a rejected user name or password is final (the provider's 401); everything else may pass with a retry.
+const mailError = (error, item) => new DeliveryError(error instanceof SmtpError ? error.message : item.unreachable, error instanceof SmtpError && error.code === 'auth');
 // One message through one Connection. Throws a DeliveryError with a plain, secret-free sentence.
 export async function sendWith(connection, text, subject = 'DockNest alert') {
   const { item, secret, settings } = valuesOf(connection);
   if (item.id === 'email') {
-    try { await sendMail({ ...secret, to: settings.to }, { subject: `${settings.subjectPrefix ? settings.subjectPrefix + ' ' : ''}${subject}`, text }); }
-    catch (error) { throw new DeliveryError(error instanceof SmtpError ? error.message : item.unreachable); }
+    // The relay host follows `private_ok` (set by an administrator, or migrated from 2.8): the 2.8 rule; else public only.
+    try { await sendMail({ ...secret, to: settings.to }, { subject: `${settings.subjectPrefix ? settings.subjectPrefix + ' ' : ''}${subject}`, text }, { privateOk: connection.private_ok === 1 }); }
+    catch (error) { throw mailError(error, item); }
     return;
   }
-  return request(item, item.format({ text, subject }, { ...secret, ...settings }));
+  return request(item, item.format({ text, subject }, { ...secret, ...settings }), guardFor(connection, item));
 }
 // One message through one node (2.8 name). A node without a Connection of its provider sends nothing.
 export async function sendThrough(row, text, subject = 'DockNest alert') {
@@ -62,8 +80,8 @@ export async function verifyCredential(credentialId, actor) {
   try {
     const item = provider(credential.rows[0].provider);
     const secret = (() => { try { return openSecret(credential); } catch { throw unreadable(); } })();
-    if (item.id === 'telegram') await request(item, item.verify(secret), true);
-    else { try { await sendMail(secret, null); } catch (error) { throw new DeliveryError(error instanceof SmtpError ? error.message : item.unreachable); } }
+    if (item.id === 'telegram') await request(item, item.verify(secret), guardFor(credential.rows[0], item), true);
+    else { try { await sendMail(secret, null, { privateOk: credential.rows[0].private_ok === 1 }); } catch (error) { throw mailError(error, item); } }
   } catch (error) { recordCredentialTest(credentialId, false, error instanceof DeliveryError ? error.message : 'The check failed.'); audit(actor, 'alert.credential.test', credentialId, { kind: credential.kind, ok: false }); throw httpError(502, error instanceof DeliveryError ? error.message : 'The check failed.'); }
   recordCredentialTest(credentialId, true); audit(actor, 'alert.credential.test', credentialId, { kind: credential.kind, ok: true });
   return { verified: true };
@@ -113,6 +131,26 @@ function fold(connectionId, nodeId, type, key, text, at) {
   db.prepare("INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,payload,status,attempts,next_attempt_at,expires_at,created_at,finished_at) VALUES(?,?,?,?,?,?,?,'sent',0,?,?,?,?)").run(id(), connectionId, nodeId, type, key, text, JSON.stringify({ foldedInto: collapseId }), at, at + deliveryPolicy.maxAgeMs, created, created);
 }
 
+// Rate limit per Connection: real deliveries (attempts > 0; folded dedup entries have none) in the last window. Returns
+// when the next window opens, or null while there is room.
+function rateLimited(connectionId, at) {
+  const row = db.prepare("SELECT COUNT(*) AS n, MIN(finished_at) AS first FROM alert_outbox WHERE connection_id=? AND status='sent' AND attempts>0 AND finished_at>?").get(connectionId, new Date(at - deliveryPolicy.rateWindowMs).toISOString());
+  return row.n >= deliveryPolicy.rateLimit ? Date.parse(row.first) + deliveryPolicy.rateWindowMs : null;
+}
+// Marks an item sent only if it is still what was sent. The "N more alerts" item can grow while its send is in flight
+// (emit folds into it in place); then only the part that was sent is done, and the rest stays pending as a smaller count.
+function markSent(item, attempts, finished, at) {
+  const changes = db.prepare("UPDATE alert_outbox SET status='sent',attempts=?,finished_at=? WHERE id=? AND status='pending' AND message IS ? AND payload IS ?").run(attempts, finished, item.id, item.message, item.payload).changes;
+  if (changes || item.dedupe_key !== COLLAPSE_KEY) return;
+  transaction(() => {
+    const now = db.prepare("SELECT payload FROM alert_outbox WHERE id=? AND status='pending'").get(item.id); if (!now) return;
+    const count = payload => { try { return Number(JSON.parse(payload ?? '{}').collapsed) || 0; } catch { return 0; } };
+    const rest = count(now.payload) - count(item.payload);
+    if (rest <= 0) db.prepare("UPDATE alert_outbox SET status='sent',attempts=?,finished_at=? WHERE id=?").run(attempts, finished, item.id);
+    else db.prepare('UPDATE alert_outbox SET message=?,payload=?,attempts=0,next_attempt_at=? WHERE id=?').run(collapsedText(rest), JSON.stringify({ collapsed: rest }), at, item.id);
+  });
+}
+
 let draining = false;
 export async function deliverDue({ at = Date.now() } = {}) {
   if (draining) return 0;
@@ -121,14 +159,21 @@ export async function deliverDue({ at = Date.now() } = {}) {
     const finished = new Date(at).toISOString();
     db.prepare("UPDATE alert_outbox SET status='failed',finished_at=? WHERE status='pending' AND expires_at<=?").run(finished, at);
     const due = db.prepare("SELECT * FROM alert_outbox WHERE status='pending' AND next_attempt_at<=? ORDER BY next_attempt_at,created_at LIMIT ?").all(at, deliveryPolicy.batch);
+    const held = new Set(); // Connections that asked to slow down (429) or are over their rate limit in this run
     for (const item of due) {
+      if (held.has(item.connection_id)) continue;
       const connection = getConnection(item.connection_id), attempts = item.attempts + 1;
       // Nothing goes through a Connection that no node uses any more (its nodes were deleted after the item was queued).
       if (!connection || !db.prepare('SELECT 1 FROM alert_nodes WHERE connection_id=? LIMIT 1').get(item.connection_id)) { db.prepare("UPDATE alert_outbox SET status='failed',finished_at=? WHERE id=?").run(finished, item.id); continue; }
+      // Over the limit: this Connection's items wait for the next window, without using up a try.
+      const opens = rateLimited(item.connection_id, at);
+      if (opens !== null) { db.prepare("UPDATE alert_outbox SET next_attempt_at=? WHERE connection_id=? AND status='pending' AND next_attempt_at<?").run(opens, item.connection_id, opens); held.add(item.connection_id); continue; }
       let error = null;
       try { await sendWith(connection, item.message, item.message.split(':')[0].slice(0, 80)); } catch (caught) { error = caught instanceof DeliveryError ? caught : new DeliveryError('The message could not be sent.'); }
-      if (!error) { db.prepare("UPDATE alert_outbox SET status='sent',attempts=?,finished_at=? WHERE id=?").run(attempts, finished, item.id); recordConnectionSend(item.connection_id, true); sent++; continue; }
+      if (!error) { markSent(item, attempts, finished, at); recordConnectionSend(item.connection_id, true); sent++; continue; }
       recordConnectionSend(item.connection_id, false, error.message);
+      // 429: the provider's wait (capped), no try used up; the Connection's other pending items wait as long.
+      if (error.wait !== null) { const next = at + error.wait; db.prepare("UPDATE alert_outbox SET next_attempt_at=? WHERE connection_id=? AND status='pending' AND next_attempt_at<?").run(next, item.connection_id, next); held.add(item.connection_id); continue; }
       if (error.final || attempts >= deliveryPolicy.attempts) db.prepare("UPDATE alert_outbox SET status='failed',attempts=?,finished_at=? WHERE id=?").run(attempts, finished, item.id);
       else db.prepare('UPDATE alert_outbox SET attempts=?,next_attempt_at=? WHERE id=?').run(attempts, at + deliveryPolicy.backoffMs[attempts - 1], item.id);
     }

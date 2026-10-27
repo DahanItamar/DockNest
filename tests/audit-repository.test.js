@@ -16,6 +16,9 @@ test('Cloudflare network addresses are allowed only in the site-move DNS check, 
  const result=await audit('proxy '+[104,16,0,0].join('.'));
  assert.equal(result.status,1,'notes.md may not name them');assert.match(result.stderr,/non-example IP address/);
 });
+test('the alert outbound policy addresses are allowed only in the outbound policy files, not anywhere else',async()=>{
+ for(const value of [[168,63,129,16],[192,88,99,1]]){const result=await audit('endpoint '+value.join('.'));assert.equal(result.status,1,'notes.md may not name them');assert.match(result.stderr,/non-example IP address/);}
+});
 test('privacy audit allows protocol-defined special-purpose ranges but still reports public addresses',async()=>{
  const reserved=['169.254.169.254','100.100.100.200','100.64.0.1','192.0.0.192','198.18.0.1','224.0.0.1','240.0.0.1'].join(' ');
  assert.equal((await audit(reserved)).status,0);
