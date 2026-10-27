@@ -43,21 +43,31 @@ function gate(req, res, next) {
   return res.status(403).json({ error: 'Alerts are managed by an administrator.', code: 'ALERTS_ADMIN_REQUIRED' });
 }
 // Per user, not per address: people behind one proxy must not share one budget.
-function perUser(scope, limit, windowMs) {
+function perUser(scope, limit, windowMs, sentence) {
   return (req, res, next) => {
     const key = `${scope}:user:${req.user.id}`, now = Date.now(), previous = db.prepare('SELECT * FROM rate_limits WHERE key=?').get(key);
-    if (previous && previous.reset_at > now && previous.attempts >= limit) { res.set('Retry-After', String(Math.ceil((previous.reset_at - now) / 1000))); return res.status(429).json({ error: 'Too many tests. Try again in a few minutes.' }); }
+    if (previous && previous.reset_at > now && previous.attempts >= limit) { res.set('Retry-After', String(Math.ceil((previous.reset_at - now) / 1000))); return res.status(429).json({ error: sentence }); }
     db.prepare('INSERT INTO rate_limits VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET attempts=excluded.attempts,reset_at=excluded.reset_at').run(key, previous && previous.reset_at > now ? previous.attempts + 1 : 1, previous && previous.reset_at > now ? previous.reset_at : now + windowMs);
     next();
   };
 }
 export const alertRateLimits = Object.freeze({ tests: 10, testWindowMs: 10 * 60_000, writes: 120, writeWindowMs: 10 * 60_000 });
-const testLimit = perUser('alert-test', alertRateLimits.tests, alertRateLimits.testWindowMs), writeLimit = perUser('alert-write', alertRateLimits.writes, alertRateLimits.writeWindowMs);
+const testLimit = perUser('alert-test', alertRateLimits.tests, alertRateLimits.testWindowMs, 'Too many tests. Try again in a few minutes.');
+const writeLimit = perUser('alert-write', alertRateLimits.writes, alertRateLimits.writeWindowMs, 'Too many changes. Try again in a few minutes.');
 // A test: administrators get the answer as it comes. An operator's failure, of any kind, answers one fixed sentence at a
-// fixed time after the request arrived.
+// fixed time after the request arrived. An operator test still running at that time (an SMTP relay has its own 20 second
+// limit) is answered as failed then too, so a slow or silent host is never told apart from a refused one.
+const OVERDUE = Symbol('overdue');
 const testing = fn => handle(async (req, res) => {
   const started = Date.now();
-  try { res.json(await fn(req)); }
+  try {
+    if (req.user.role === 'admin') return res.json(await fn(req));
+    const running = Promise.resolve().then(() => fn(req)); running.catch(() => {}); // a late failure after the answer is no crash
+    let timer; const deadline = new Promise(resolve => { timer = setTimeout(() => resolve(OVERDUE), operatorPolicy.failMs); });
+    const result = await Promise.race([running, deadline]).finally(() => clearTimeout(timer));
+    if (result === OVERDUE) throw Object.assign(new Error(OPERATOR_TEST_FAILED), { code: 'TEST_FAILED' });
+    res.json(result);
+  }
   catch (error) {
     if (req.user.role === 'admin' || error.code !== 'TEST_FAILED') throw error;
     await wait(operatorPolicy.failMs - (Date.now() - started));

@@ -137,7 +137,7 @@ export async function testConnection(connectionId, actor, { role }) {
 
 // "Send test" with unsaved values: sent once, stored nowhere. Editing a saved Connection merges its saved secrets by the
 // same rules as a save (a changed host needs them typed again). Private addresses follow who would save it now.
-export async function testValues(input, actor, { role }) {
+export async function testValues(input, actor, { role, recent }) {
   const body = z.object({ provider: z.string().max(32), name: z.string().max(200).optional(), values: values.default({}), connectionId: z.uuid().optional() }).strict().safeParse(input); if (!body.success) throw issue(body.error);
   const item = mustProvider(body.data.provider);
   if (item.adminOnly && role !== 'admin') throw adminRequired();
@@ -145,6 +145,9 @@ export async function testValues(input, actor, { role }) {
   if (body.data.connectionId) {
     const row = mustConnection(body.data.connectionId); if (row.provider !== item.id) throw httpError(400, 'This connection is for another provider.');
     const change = merge(item, row, body.data.values); ({ secret, settings } = change);
+    // A saved login sent to a new destination (another chat, recipient or number) is the same act as saving that
+    // destination, so it needs the same recent re-verification.
+    if (change.destinationChanged && !recent) throw reauthRequired();
     privateOk = privateOkFor({ provider: item, role, hostChanged: change.hostChanged, previous: row.private_ok });
   } else { ({ secret, settings } = parseValues(item, body.data.values)); privateOk = privateOkFor({ provider: item, role }); }
   const probe = { id: 'unsaved', provider: item.id, secret: seal(JSON.stringify(secret)), settings: JSON.stringify(settings), private_ok: privateOk };

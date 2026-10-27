@@ -241,8 +241,9 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
   every alert and Connection route and no alert data anywhere. While it is on, operators can add and change alert
   nodes, lines and Connections, with the same re-verification as administrators, and turning it off applies to their
   next request. Other (webhook URL) and both settings stay admin-only, a Connection whose server an operator set
-  reaches public addresses only, and every failed operator test answers one fixed sentence exactly 10 seconds after the
-  request, so neither the words nor the timing reveal anything about the network behind an address.
+  reaches public addresses only, and every failed or unfinished operator test answers one fixed sentence exactly 10
+  seconds after the request, so neither the words nor the timing reveal anything about the network behind an address.
+  A test that sends a saved login to a changed destination needs the same re-verification as saving it.
 - The honest risk of turning it on: an operator, or anyone with a stolen operator session that passes the
   re-verification, can create a Connection to an account they control, or move an existing one there, and receive alert
   text (site and server names, event times, plain reasons and job links). They never receive saved secrets, the job

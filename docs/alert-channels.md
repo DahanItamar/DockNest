@@ -638,8 +638,12 @@ What PR 4 settled where this document left room, or chose a narrower step:
   data, so the menu and the Map know whether to ask.
 - **Re-verification.** Create and delete always; PATCH only when a secret is typed, or a `host` or `destination` field
   changes (a rename needs none). A delete of a Connection in use answers 409 first, so nobody re-verifies to learn that.
+  A "Send test" with unsaved values that sends a saved login (`connectionId`) to a changed `destination` field needs the
+  same re-verification as saving it (security review of PR 4).
 - **Operator answers.** Only a delivery failure (`TEST_FAILED`) gets the fixed sentence at `operatorPolicy.failMs` (the
-  10 second request limit) after the request arrived. Format errors in unsaved values keep their plain sentence: they
+  10 second request limit) after the request arrived. An operator test still running at that time (an SMTP relay has
+  its own 20 second limit) is answered as failed then, so a slow or silent host looks like any other failure; the send
+  itself may still finish in the background. Format errors in unsaved values keep their plain sentence: they
   come from the provider schema, before any network step, so they reveal nothing about the network. An operator's
   failed test is also recorded with the fixed sentence, so the view cannot carry the cause either.
 - **Rate limits** are per user (`<scope>:user:<id>`), not per address: 10 tests per 10 minutes, 120 writes per 10 minutes.

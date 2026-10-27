@@ -228,6 +228,44 @@ test('an operator\'s failed test is one sentence at one fixed time, for a refusa
   assert.equal(passed.status, 200); assert.ok(passed.ms < 590, 'a success answers at once');
 });
 
+test('an operator test still running at the fixed time (a slow or silent host) is answered as failed at that time', async () => {
+  reset(); operatorsOn(true); routes.operatorPolicy.failMs = 400;
+  const made = (await operator('POST', '/connections', telegram())).body;
+  let release; const pending = new Promise(resolve => { release = resolve; });
+  mockFetch(async () => { await pending; return ok(); });
+  for (const [route, body] of [[`/connections/${made.id}/test`, undefined], ['/connections/test', telegram()]]) {
+    const answer = await operator('POST', route, body);
+    assert.equal(answer.status, 502, route); assert.deepEqual(answer.body, { error: 'DockNest could not deliver to this address.', code: 'TEST_FAILED' });
+    assert.ok(answer.ms >= 390 && answer.ms < 700, `answered after ${answer.ms} ms`);
+  }
+  release(); await new Promise(resolve => setTimeout(resolve, 50));
+  routes.operatorPolicy.failMs = 300;
+});
+
+test('a test that sends a saved login to a new destination needs the same re-verification as saving it', async () => {
+  reset(); operatorsOn(true); mockFetch(ok);
+  const made = (await admin('POST', '/connections', telegram())).body;
+  for (const who of [staleAdmin, staleOperator]) {
+    const moved = await who('POST', '/connections/test', { provider: 'telegram', connectionId: made.id, values: { chatId: '-1004242' } });
+    assert.equal(moved.status, 403); assert.equal(moved.body.code, 'REAUTH_REQUIRED');
+    assert.equal((await who('POST', '/connections/test', { provider: 'telegram', connectionId: made.id, values: { chatId: '-1001234567890' } })).status, 200, 'the saved destination needs none');
+  }
+  assert.equal((await operator('POST', '/connections/test', { provider: 'telegram', connectionId: made.id, values: { chatId: '-1004242' } })).status, 200);
+});
+
+test('a viewer is refused with the setting on too; writes have their own limit and sentence', async () => {
+  reset(); operatorsOn(true);
+  for (const [method, route, body] of [['GET', '/alerts'], ['GET', '/connections'], ['POST', '/connections', telegram()], ['POST', '/connections/test', telegram()], ['PUT', '/connections/settings', { operatorsManage: false }]]) {
+    const answer = await viewer(method, route, body);
+    assert.equal(answer.status, 403, `${method} ${route}`); assert.ok(['ALERTS_ADMIN_REQUIRED', 'ADMIN_REQUIRED'].includes(answer.body.code));
+  }
+  assert.equal((await viewer('GET', '/state')).body.alertsAccess, false);
+  db.prepare('INSERT INTO rate_limits VALUES (?,?,?)').run(`alert-write:user:${operator.id}`, routes.alertRateLimits.writes, Date.now() + 600_000);
+  const limited = await operator('POST', '/alerts/nodes', { name: 'One more', provider: 'telegram' });
+  assert.equal(limited.status, 429); assert.match(limited.body.error, /Too many changes/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_nodes').get().n, 0);
+});
+
 test('the operator answer time is the 10 second request limit by default', { timeout: 30_000 }, async () => {
   reset(); operatorsOn(true); routes.operatorPolicy.failMs = 10_000;
   const made = (await operator('POST', '/connections', telegram())).body;
