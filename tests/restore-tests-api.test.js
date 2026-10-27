@@ -333,7 +333,7 @@ test('settings due-time helpers step by the cadence', () => {
 });
 
 test('alerts: failed, couldn’t run, passed again and clean-up needs you, once each, with names only', async () => {
-  db.exec("DELETE FROM alert_queue;DELETE FROM alert_rules;DELETE FROM alert_channels;DELETE FROM alert_credentials;DELETE FROM settings WHERE key='alerts_cursor'");
+  db.exec("DELETE FROM alert_outbox;DELETE FROM alert_lines;DELETE FROM alert_nodes;DELETE FROM connections;DELETE FROM settings WHERE key='alerts_cursor'");
   const { siteId, live, testServer, backupId } = fixture('alert.example.com');
   db.prepare("UPDATE servers SET name='Ashburn-1' WHERE id=?").run(testServer);
   const credential = store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35) } }, 'test');
@@ -349,7 +349,7 @@ test('alerts: failed, couldn’t run, passed again and clean-up needs you, once 
   db.prepare("INSERT INTO audit_events VALUES (?,?,?,?,?,?)").run(randomUUID(), 'worker', 'restore_test.cleanup_failed', siteId, JSON.stringify({ test: randomUUID(), server: testServer, attempts: 4 }), new Date().toISOString());
   assert.equal(detect.detectJobsAndMoves(), 4);
   assert.equal(detect.detectJobsAndMoves(), 0, 'seen once');
-  const messages = db.prepare('SELECT event,message FROM alert_queue ORDER BY event').all().map(row => `${row.event}|${row.message}`);
+  const messages = db.prepare('SELECT event,message FROM alert_outbox ORDER BY event').all().map(row => `${row.event}|${row.message}`);
   assert.deepEqual(messages, [
     "restore_test.couldnt_run|Restore test couldn't run: alert.example.com on Ashburn-1 at 04:00 UTC. Open DockNest to see why.",
     'restore_test.failed|Restore test failed: alert.example.com on Ashburn-1 at 03:00 UTC. Open DockNest to see why.',

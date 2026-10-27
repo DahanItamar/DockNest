@@ -39,11 +39,12 @@ const send = (as, method, route, body) => as(route, { method, ...(body === undef
 const TOKEN = '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35), PASSWORD = 'hunter2-correct-horse';
 const server = (name, host = '203.0.113.7') => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(serverId, name, host, 22, 'root', 'fixture', '0'.repeat(64), at()); return serverId; };
 const site = (serverId, name) => { const siteId = randomUUID(); db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, serverId, name, '{}', at()); return siteId; };
-const tgCredential = () => (db.prepare("SELECT id FROM alert_credentials WHERE kind='telegram' ORDER BY created_at LIMIT 1").get() ?? store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: TOKEN } }, 'test'));
+const tgCredential = () => (store.listCredentials().find(item => item.kind === 'telegram') ?? store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: TOKEN } }, 'test'));
 const tgNode = (extra = {}) => ({ kind: 'telegram', name: 'Phone', credentialId: tgCredential().id, config: { chatId: '-1001234567890' }, ...extra });
 const mockFetch = handler => { const calls = []; delivery.alertHttp.fetch = async (url, init) => { calls.push({ url, init }); return handler(url, init, calls.length); }; return calls; };
 const ok = () => new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
-const reset = () => { db.exec('DELETE FROM alert_queue;DELETE FROM alert_rules;DELETE FROM alert_channels;DELETE FROM alert_credentials;'); };
+// Alerts live in the Connections tables (docs/alert-channels.md); the 2.8 tables stay frozen and unused.
+const reset = () => { db.exec('DELETE FROM alert_outbox;DELETE FROM alert_lines;DELETE FROM alert_nodes;DELETE FROM connections;'); };
 
 const credBody = { kind: 'telegram', name: 'Bot', config: { token: TOKEN } };
 const smtpBody = { kind: 'smtp', name: 'Mail account', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'docknest@example.com' } };
@@ -56,7 +57,7 @@ test('only administrators reach the alert API, writes need CSRF and credential w
   const stale = await send(staleAdmin, 'POST', '/alerts/credentials', credBody);
   assert.equal(stale.status, 403); assert.equal((await stale.json()).code, 'REAUTH_REQUIRED');
   assert.equal((await send(staleAdmin, 'GET', '/alerts')).status, 200, 'reading is allowed without re-verification');
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_credentials').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM connections').get().n, 0);
   const credential = await (await send(admin, 'POST', '/alerts/credentials', credBody)).json();
   assert.equal((await send(staleAdmin, 'PATCH', `/alerts/credentials/${credential.id}`, { name: 'x' })).status, 403);
   assert.equal((await send(staleAdmin, 'DELETE', `/alerts/credentials/${credential.id}`)).status, 403);
@@ -68,17 +69,17 @@ test('credential secrets are sealed, never returned, never audited, and kept whe
   reset();
   const created = await send(admin, 'POST', '/alerts/credentials', credBody), view = await created.json();
   assert.equal(created.status, 201); assert.deepEqual(view.config, { tokenSet: true });
-  const row = db.prepare('SELECT * FROM alert_credentials WHERE id=?').get(view.id);
-  assert.ok(!row.config.includes(TOKEN) && !row.config.includes('123456789'), 'stored sealed, not as text');
+  const row = db.prepare('SELECT * FROM connections WHERE id=?').get(view.id);
+  assert.ok(!row.secret.includes(TOKEN) && !row.secret.includes('123456789'), 'stored sealed, not as text');
   const mail = await (await send(admin, 'POST', '/alerts/credentials', smtpBody)).json();
   assert.deepEqual(mail.config, { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', passwordSet: true, from: 'docknest@example.com' });
   const node = await (await send(admin, 'POST', '/alerts/channels', tgNode({ credentialId: view.id }))).json();
   for (const route of ['/alerts', '/alerts/credentials', '/alerts/channels']) { const text = await (await send(admin, 'GET', route)).text(); assert.ok(!text.includes(TOKEN) && !text.includes(PASSWORD), route); }
-  assert.ok(!db.prepare('SELECT config FROM alert_channels WHERE id=?').get(node.id).config.includes(TOKEN), 'the node holds no secret');
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM alert_nodes WHERE id=?').get(node.id)).includes(TOKEN) && !JSON.stringify(db.prepare('SELECT settings FROM connections').all()).includes(TOKEN), 'the node and the destination hold no secret');
   const renamed = await (await send(admin, 'PATCH', `/alerts/credentials/${view.id}`, { name: 'Renamed' })).json();
   assert.equal(renamed.name, 'Renamed'); assert.equal(renamed.config.tokenSet, true);
   const { open } = await import('../src/crypto.js');
-  assert.equal(JSON.parse(open(db.prepare('SELECT config FROM alert_credentials WHERE id=?').get(view.id).config)).token, TOKEN, 'token survived the update');
+  assert.equal(JSON.parse(open(db.prepare('SELECT secret FROM connections WHERE id=?').get(view.id).secret)).token, TOKEN, 'token survived the update');
   for (const change of [{ port: 25 }, { security: 'tls' }, { host: 'smtp.other.example' }]) assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: change })).status, 400, 'needs the password again: ' + JSON.stringify(change));
   assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: { port: 587, from: 'other@example.com' } })).status, 200, 'unchanged server values and other fields need no password');
   assert.equal((await send(admin, 'PATCH', `/alerts/credentials/${mail.id}`, { config: { host: 'smtp.other.example', password: PASSWORD } })).status, 200);
@@ -111,7 +112,7 @@ test('nodes need a matching credential, share one credential, and a credential i
   assert.equal((await send(admin, 'DELETE', `/alerts/channels/${two.id}`)).status, 200);
   assert.equal((await send(admin, 'DELETE', `/alerts/credentials/${bot.id}`)).status, 200);
   // A node whose credential is gone (for example changed directly in the database) is flagged and sends nothing.
-  db.prepare('UPDATE alert_channels SET credential_id=NULL WHERE id=?').run(email.id);
+  db.prepare('UPDATE alert_nodes SET connection_id=NULL WHERE id=?').run(email.id);
   const orphan = (await (await send(admin, 'GET', '/alerts/channels')).json()).channels.find(item => item.id === email.id);
   assert.equal(orphan.needsCredential, true);
   assert.equal((await send(admin, 'POST', `/alerts/channels/${email.id}/test`)).status, 502);
@@ -126,13 +127,13 @@ test('a node test sends through the credential with the exact Telegram request s
   assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/sendMessage`);
   assert.equal(calls[0].init.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1001234567890', text: 'This is a test message from DockNest. Your alerts are connected.', disable_web_page_preview: true });
-  assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'ok');
+  assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'ok');
   calls = mockFetch(() => { throw Object.assign(new Error(`connect failed https://api.telegram.org/bot${TOKEN}/sendMessage`), { cause: TOKEN }); });
   const failed = await send(admin, 'POST', `/alerts/channels/${node.id}/test`), text = await failed.text();
   assert.equal(failed.status, 502); assert.ok(!text.includes(TOKEN));
-  const stored = JSON.stringify(db.prepare('SELECT * FROM alert_channels').all()) + JSON.stringify(db.prepare('SELECT * FROM audit_events').all());
+  const stored = JSON.stringify(db.prepare('SELECT id,name,settings,last_error FROM connections').all()) + JSON.stringify(db.prepare('SELECT * FROM alert_nodes').all()) + JSON.stringify(db.prepare('SELECT * FROM audit_events').all());
   assert.ok(!stored.includes(TOKEN), 'last_error and audit never hold the token');
-  assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'failed');
+  assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'failed');
   mockFetch(() => new Response('{"ok":false,"description":"Unauthorized"}', { status: 401 }));
   assert.match((await (await send(admin, 'POST', `/alerts/channels/${node.id}/test`)).json()).error, /bot token/);
 });
@@ -143,7 +144,7 @@ test('a credential test verifies the login without sending: Telegram getMe, SMTP
   const calls = mockFetch(() => new Response('{"ok":true,"result":{"id":1}}', { status: 200 }));
   assert.equal((await send(admin, 'POST', `/alerts/credentials/${bot.id}/test`)).status, 200);
   assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/getMe`); assert.equal(calls[0].init.method, 'GET');
-  assert.equal(db.prepare('SELECT last_test FROM alert_credentials').get().last_test, 'ok');
+  assert.equal(db.prepare('SELECT last_test FROM connections').get().last_test, 'ok');
   mockFetch(() => new Response('{}', { status: 401 }));
   const bad = await send(admin, 'POST', `/alerts/credentials/${bot.id}/test`); assert.equal(bad.status, 502); assert.ok(!(await bad.text()).includes(TOKEN));
   if (noTls) return;
@@ -178,7 +179,7 @@ test('rules are validated and a line to a channel exists once per source', async
   assert.equal((await send(operator, 'POST', '/alerts/rules', { channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] })).status, 403);
   assert.equal((await send(admin, 'DELETE', `/alerts/rules/${made.id}`)).status, 200);
   assert.equal((await send(admin, 'DELETE', `/alerts/channels/${channel.id}`)).status, 200);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_rules').get().n, 0, 'rules go with their channel');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_lines').get().n, 0, 'rules go with their channel');
 });
 
 test('rule matching: docknest lines match everything, server and site lines only their own, disabled never', () => {
@@ -205,7 +206,7 @@ test('messages are short, plain and carry only the names the owner typed', () =>
 
 test('dedupe: one message per channel and event+source inside 10 minutes, occurrences never twice, other sources unaffected', async () => {
   reset();
-  const channel = store.createChannel(tgNode(), 'test'), other = store.createChannel(tgNode({ name: 'Second' }), 'test');
+  const channel = store.createChannel(tgNode(), 'test'), other = store.createChannel(tgNode({ name: 'Second', config: { chatId: '-1009876543210' } }), 'test'); // another chat: dedup is per Connection
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed', 'move.needs_you'] }, 'test');
   store.createRule({ channelId: other.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
   store.createRule({ channelId: other.id, sourceKind: 'site', sourceId: site(server('d-srv'), 'd-site'), events: ['backup.failed'] }, 'test');
@@ -227,19 +228,19 @@ test('delivery retries with backoff three times, then gives up; success records 
   const t0 = Date.parse('2026-10-23T03:00:00Z'); let healthy = false;
   const calls = mockFetch(() => healthy ? ok() : new Response('{}', { status: 500 }));
   delivery.emit({ type: 'backup.failed', key: 'site:r', siteName: 'shop', serverName: 'srv' }, { at: t0 });
-  const state = () => db.prepare('SELECT status,attempts,next_attempt_at FROM alert_queue').get();
+  const state = () => db.prepare('SELECT status,attempts,next_attempt_at FROM alert_outbox').get();
   assert.equal(await delivery.deliverDue({ at: t0 }), 0); assert.deepEqual({ ...state() }, { status: 'pending', attempts: 1, next_attempt_at: t0 + 60_000 });
   await delivery.deliverDue({ at: t0 + 30_000 }); assert.equal(calls.length, 1, 'not before the backoff');
   await delivery.deliverDue({ at: t0 + 60_000 }); assert.deepEqual({ ...state() }, { status: 'pending', attempts: 2, next_attempt_at: t0 + 60_000 + 300_000 });
   await delivery.deliverDue({ at: t0 + 360_000 }); assert.equal(state().status, 'failed'); assert.equal(state().attempts, 3);
   await delivery.deliverDue({ at: t0 + 3600_000 }); assert.equal(calls.length, 3, 'no fourth try');
-  assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'failed');
+  assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'failed');
   healthy = true;
   delivery.emit({ type: 'backup.failed', key: 'site:s', siteName: 'shop', serverName: 'srv' }, { at: t0 + 7200_000 });
   assert.equal(await delivery.deliverDue({ at: t0 + 7200_000 }), 1);
   assert.equal(calls.length, 4); assert.match(JSON.parse(calls[3].init.body).text, /^Backup failed: shop on srv/);
-  assert.equal(db.prepare("SELECT status FROM alert_queue WHERE dedupe_key='backup.failed:site:s'").get().status, 'sent');
-  assert.equal(db.prepare('SELECT last_result FROM alert_channels').get().last_result, 'ok');
+  assert.equal(db.prepare("SELECT status FROM alert_outbox WHERE dedupe_key='backup.failed:site:s'").get().status, 'sent');
+  assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'ok');
   await delivery.deliverDue({ at: t0 + 7300_000 }); assert.equal(calls.length, 4, 'a sent message is never sent again');
 });
 
@@ -256,25 +257,25 @@ test('the detector reads backups, moves, updates and disk without replaying hist
   assert.equal(detect.detectJobsAndMoves('2026-01-01T07:00:00.000Z'), 2);
   assert.equal(JSON.stringify(db.prepare('SELECT * FROM jobs ORDER BY id').all()), before, 'read only');
   assert.equal(detect.detectJobsAndMoves('2026-01-01T08:00:00.000Z'), 0, 'seen once');
-  const messages = db.prepare('SELECT event,message FROM alert_queue ORDER BY created_at').all().map(row => ({ ...row }));
+  const messages = db.prepare('SELECT event,message FROM alert_outbox ORDER BY created_at').all().map(row => ({ ...row }));
   assert.deepEqual(messages.map(row => row.event).sort(), ['backup.failed', 'backup.succeeded']);
   assert.ok(messages.some(row => row.message === 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. Open DockNest to see why.'));
   assert.ok(!messages.some(row => /203\.0\.113|\d+\.\d+\.\d+\.\d+/.test(row.message)), 'no addresses');
   const move = (state, waiting, updated) => { const moveId = randomUUID(); db.prepare('INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,waiting_for,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(moveId, state === 'waiting' ? siteId : site(srv, 'shop.example.com'), srv, target, state, waiting, '{}', '{}', 'h', 'a', updated, updated); return moveId; };
-  db.exec('DELETE FROM alert_queue');
+  db.exec('DELETE FROM alert_outbox');
   const waiting = move('waiting', 'dns', '2026-01-01T09:00:00.000Z');
   move('running', null, '2026-01-01T09:30:00.000Z'); move('completed', null, '2026-01-01T10:00:00.000Z');
   assert.equal(detect.detectJobsAndMoves('2026-01-01T11:00:00.000Z'), 2);
-  const texts = db.prepare('SELECT event,message FROM alert_queue').all().map(row => `${row.event}|${row.message}`).sort();
+  const texts = db.prepare('SELECT event,message FROM alert_outbox').all().map(row => `${row.event}|${row.message}`).sort();
   assert.deepEqual(texts, ['move.finished|Move finished: shop.example.com now runs on new-srv.', 'move.needs_you|Move waiting for you: change the DNS record for shop.example.com to new-srv. Open DockNest for the record.']);
   db.prepare("UPDATE site_moves SET updated_at='2026-01-01T12:00:00.000Z' WHERE id=?").run(waiting);
   assert.equal(detect.detectJobsAndMoves('2026-01-01T13:00:00.000Z'), 0, 'a touched row in the same state does not alert again');
   // Disk.
-  db.exec('DELETE FROM alert_queue');
+  db.exec('DELETE FROM alert_outbox');
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 2 * 1024 ** 3 }), srv);
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 500 * 1024 ** 3 }), target);
   assert.equal(detect.detectDisk(), 1); assert.equal(detect.detectDisk(), 0, 'once a day at most');
-  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Low disk space on mobiX-Srv: 2\.0 GB free/);
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Low disk space on mobiX-Srv: 2\.0 GB free/);
 });
 
 test('update.available fires once per new release, only when update checks are on', () => {
@@ -286,7 +287,7 @@ test('update.available fires once per new release, only when update checks are o
   assert.equal(detect.detectUpdate(), 0, 'checks are not enabled');
   db.prepare('INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,1,?,?)').run(owner, at());
   assert.equal(detect.detectUpdate(), 1); assert.equal(detect.detectUpdate(), 0);
-  assert.equal(db.prepare('SELECT message FROM alert_queue').get().message, 'DockNest 99.1.0 is available. Open DockNest to update.');
+  assert.equal(db.prepare('SELECT message FROM alert_outbox').get().message, 'DockNest 99.1.0 is available. Open DockNest to update.');
   db.prepare("UPDATE update_checks SET latest_version='v0.0.1' WHERE id=1").run();
   assert.equal(detect.detectUpdate(), 0, 'an older release is not news');
   db.exec('DELETE FROM update_preferences;DELETE FROM update_checks');
@@ -303,7 +304,7 @@ test('reachability needs two misses in a row, then alerts once per window', asyn
     assert.equal(await detect.detectUnreachable(), 0, 'the answer reset the count');
     assert.equal(await detect.detectUnreachable(), 1, 'second miss in a row');
     assert.equal(await detect.detectUnreachable(), 0, 'deduped');
-    assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Server unreachable: flaky-srv has not answered/);
+    assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Server unreachable: flaky-srv has not answered/);
   } finally { detect.probe.connect = original; db.prepare('DELETE FROM servers WHERE id=?').run(srv); }
 });
 
@@ -426,11 +427,11 @@ test('message times use the site schedule zone, then the self-backup zone, then 
   detect.detectJobsAndMoves('2026-06-01T00:00:00.000Z');
   db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone) VALUES(?,1,'0 3 * * *','Asia/Jerusalem')").run(siteId);
   fail('2026-06-01T06:00:00.000Z'); detect.detectJobsAndMoves();
-  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /at 09:00 GMT\+3\./, 'site policy zone wins');
-  db.prepare('DELETE FROM policies WHERE site_id=?').run(siteId); db.exec('DELETE FROM alert_queue');
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /at 09:00 GMT\+3\./, 'site policy zone wins');
+  db.prepare('DELETE FROM policies WHERE site_id=?').run(siteId); db.exec('DELETE FROM alert_outbox');
   db.prepare("INSERT INTO settings VALUES('manager_backup_config',?)").run(JSON.stringify({ timezone: 'America/New_York' }));
   fail('2026-06-01T07:00:00.000Z'); detect.detectJobsAndMoves();
-  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /at 03:00 (EDT|GMT-4)\./, 'self-backup zone next');
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /at 03:00 (EDT|GMT-4)\./, 'self-backup zone next');
   db.exec("DELETE FROM settings WHERE key='manager_backup_config'");
 });
 
@@ -451,8 +452,8 @@ test('a server line also carries the backups of the sites on that server, never 
   const fail = (siteId, finished) => db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup','failed','failed',?,?,'{}')").run(randomUUID(), siteId, finished, finished);
   fail(theirs, '2026-07-01T01:00:00.000Z'); fail(mine, '2026-07-01T02:00:00.000Z');
   assert.equal(detect.detectJobsAndMoves(), 1, 'one message even though the server line and the site line both match');
-  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Backup failed: mine on itamar-Srv/);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_queue').get().n, 1);
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Backup failed: mine on itamar-Srv/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_outbox').get().n, 1);
 });
 
 test.after(() => { listener.close(); listener.closeAllConnections?.(); });
