@@ -9,9 +9,10 @@ export const freeze = Object.freeze;
 export const field = value => Object.freeze(value);
 
 // ---- Text ---------------------------------------------------------------------------------------------------------
-// One clean line: control characters and line breaks become a space. Text is never altered otherwise (Hebrew and other
-// right-to-left text pass through untouched).
-export const line = (value, fallback = '') => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
+// One clean line: control characters and line breaks become a space, and bidi overrides and isolates (U+202A-202E,
+// U+2066-2069) are dropped. Text is never altered otherwise (Hebrew and other right-to-left text pass through untouched).
+export const BIDI_CONTROLS = /[\u202a-\u202e\u2066-\u2069]/g;
+export const line = (value, fallback = '') => String(value ?? '').replace(BIDI_CONTROLS, '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim() || fallback;
 const ELLIPSIS = '\u2026';
 // Cut to at most `limit` UTF-16 units without splitting a surrogate pair, ending in an ellipsis when something was cut.
 export function cut(text, limit) {

@@ -15,7 +15,9 @@ export const DISK_FREE_BYTES = 5 * 1024 ** 3;
 export const DEDUPE_MS = 10 * 60_000;
 export const STATE_DEDUPE_MS = Object.freeze({ 'server.unreachable': 6 * 3600_000, 'server.disk_low': 24 * 3600_000 });
 
-const clean = (value, fallback = 'a site') => String(value ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
+// Bidi override and isolate characters (U+202A-202E, U+2066-2069) are dropped: they could make a name read as something
+// else in the alert ("gnp.exe" shown as "exe.png"). Hebrew and other right-to-left text needs none of them.
+const clean = (value, fallback = 'a site') => String(value ?? '').replace(/[\u202a-\u202e\u2066-\u2069]/g, '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
 // Time of day in the event's IANA time zone (the site's schedule zone, else the self-backup schedule zone, else UTC),
 // with the zone abbreviation, for example " at 03:00 UTC" or " at 06:00 GMT+3". An unknown zone falls back to UTC.
 const timeOf = (iso, timeZone = 'UTC') => {

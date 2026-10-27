@@ -4,6 +4,8 @@
 import { z } from 'zod';
 import { parts, cut, urlField, failure, field, freeze } from './common.js';
 
+export const noLink = text => String(text).replace(/\]\s*\(/g, ']\u200b(');
+
 export const TEAMS_HOSTS = freeze(['*.logic.azure.com', '*.api.powerplatform.com']);
 const inTeams = host => host.endsWith('.logic.azure.com') || host.endsWith('.api.powerplatform.com');
 const webhook = urlField({
@@ -26,7 +28,9 @@ export default freeze({
   target: () => ({ hosts: TEAMS_HOSTS }),
   format: (message, values) => {
     const { title, where, reason, url } = parts(message);
-    const block = (value, extra = {}) => ({ type: 'TextBlock', text: cut(value, 1000), wrap: true, ...extra });
+    // TextBlocks read a Markdown subset, so "[text](url)" in a site name would become a link. A zero-width space between
+    // "]" and "(" keeps the text as typed and never makes a link.
+    const block = (value, extra = {}) => ({ type: 'TextBlock', text: cut(noLink(value), 1000), wrap: true, ...extra });
     const body = [block(title, { weight: 'Bolder', size: 'Medium' }), where && block(where), reason && block(reason)].filter(Boolean);
     const card = { type: 'AdaptiveCard', version: '1.4', body, ...(url ? { actions: [{ type: 'Action.OpenUrl', title: 'Open job', url }] } : {}) };
     return { method: 'POST', url: values.url, json: { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }] } };
