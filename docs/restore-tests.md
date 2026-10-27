@@ -167,9 +167,11 @@ Checks run in order. The first failure ends the test at that step.
 | `check_health` | Check health | Health, stability, database and web checks, polled across ticks. | Seconds per poll |
 | `clean_up` | Clean up | Remove everything the journal lists. Always runs, also after a failure or cancel. | Seconds to minutes |
 
-- The worker is serial (`src/worker-loop.js`). Tests therefore run as a ticked step machine like moves:
-  `tickRestoreTests()` runs each tick, every server-touching step is one short `restore-test` job, and waits (health,
-  stability) are polls on later ticks that release the worker in between.
+- The worker is serial (`src/worker-loop.js`). Tests therefore run as a ticked step machine like moves
+  (`src/restore-tests/engine.js`): `tickRestoreTests()` runs each tick, every server-touching step is one short
+  `restore-test` job, and waits (health, stability) are polls on later ticks that release the worker in between.
+  Between polls the `check_health` job rests in `test_waiting` (never claimed) and the tick queues it again when the
+  next poll is due, so a test leaves one job row per step.
 - Honest effect: while `copy_backup` and `restore_copy` run, other sites' backups wait for the worker, as with a manual
   restore today. The copy grows with package size: a 5 GB package takes minutes, a 50 GB site can hold the worker for
   about an hour. The waits in `check_health` do not delay other servers.
@@ -209,7 +211,10 @@ Teardown (`restore-test-teardown`, idempotent):
 Restart and failure paths:
 
 - Worker restart: the startup line that marks `running` jobs `recovery_required` does not match test jobs. A new
-  startup step sets interrupted tests to `cleanup='pending'`; the next tick runs teardown first on that server.
+  startup step (`recoverInterruptedRestoreTests`) fails each `test_running` job; a test whose step was interrupted
+  ends `couldnt_run` ("DockNest restarted during this step, so the test stopped.") with `cleanup='pending'` when
+  anything reached the server, and the next tick runs teardown first on that server. An interrupted clean-up runs
+  again at once.
 - Reaper: at `copy_backup` (in `restore-test-prepare`, before any plaintext reaches the server) the manager sends the
   reaper source, the reviewed helper itself (as `install-boot-recovery` does); the helper writes it into the journal
   directory (0700) and starts it in a new session (`python3 -I reaper.py`, operation `restore-test-reap`). It has one
@@ -230,11 +235,12 @@ Restart and failure paths:
 
 ## Concurrency and fairness
 
-- Jobs: type `restore-test`, statuses `test_queued` and `test_running`. Releases before 2.9.0 claim only `queued` and
-  `move_queued`, so they never start a test step.
-- The test server is held by the test row, not by a job: from `copy_backup` until `cleanup` is `done` or
-  `acknowledged`, `claimJob` and `claimInstall` refuse other work whose server is the test server. Other servers are
-  unaffected.
+- Jobs: type `restore-test`, statuses `test_queued`, `test_running` and `test_waiting`. Releases before 2.9.0 claim
+  only `queued` and `move_queued`, so they never start a test step.
+- The test server is held by the test row, not by a job: from the claim of `check_space` (when `started_at` is set)
+  until `cleanup` is `done` or `acknowledged`, `claimJob`, `claimInstall` and "Install on server" refuse other work
+  whose server is the test server (`src/restore-tests/hold.js`, the same predicate as the partial unique index).
+  Other servers are unaffected.
 - `busy(siteId)` excludes `restore-test` jobs. A pending or failed clean-up never blocks the site's backups, readiness
   checks or restores on its own server (unless that is the test server).
 - Order: `claimJob` sorts `restore-test` jobs after every other queued job, then by `created_at`. A test is not started
@@ -249,7 +255,10 @@ Restart and failure paths:
   `total_seconds` are written once; a trigger refuses later changes and deletes. Steps are never deleted.
 - A deleted backup keeps its tests: `backup_id` becomes NULL and `backup_captured_at` stays.
 - Backup evidence is written only for `passed` and `failed`, never for `couldnt_run` or `cancelled`. It is appended to
-  `backup_verification_history` with method "automatic restore test". The current `backup_verifications` row is
+  `backup_verification_history` with method "automatic restore test": `integrity` from "Backup authentic",
+  `isolatedRestore` passed or failed (not for a failure at `copy_backup`), and `application` only when database or
+  SQLite checks ran. As for manual restores, a backup with an `application` pass is kept by retention's existing
+  "newest proven point" rule. The current `backup_verifications` row is
   replaced only when it is missing, `not-tested`, or itself from an automatic restore test. A manual restore's
   `passed` is never overwritten by a test; the newer test result shows in the history and on the test card.
 - `reason` is one plain sentence, at most 300 characters, scrubbed with the move journal's secret-looking-data check.
@@ -370,8 +379,11 @@ The number is the next free one at merge time (currently 9). New objects only; n
 - `restore_tests(id PK, site_id → sites, backup_id → backups ON DELETE SET NULL, backup_captured_at, server_id →
   servers, job_id → jobs, trigger CHECK schedule|manual, result CHECK passed|failed|couldnt_run|cancelled NULL,
   failed_step, reason CHECK length <= 300, restore_seconds, total_seconds, checks CHECK length <= 8192, limits
-  (includes internet), cleanup CHECK pending|done|failed|acknowledged NULL, cleanup_attempts, cancel_requested 0/1,
-  deadline_at, created_by, created_at, started_at, finished_at)`.
+  (includes internet, live server and probe; at most 1024 characters), cleanup CHECK pending|done|failed|acknowledged
+  NULL, cleanup_attempts, cleanup_next_at, cancel_requested 0/1, deadline_at, created_by, created_at, started_at,
+  finished_at, step (the current step), progress (engine state at most 16384 characters: timings, poll times, the
+  plaintext SHA256 the helper checks the transfer against; never secret values))`. `finished_at` is when the result
+  was written; clean-up may still be pending.
 - `restore_test_steps(test_id → restore_tests, step CHECK six keys, state, started_at, finished_at, detail CHECK
   length <= 500, PRIMARY KEY(test_id, step))`.
 - Partial unique indexes: `restore_tests(site_id) WHERE result IS NULL OR cleanup IN ('pending','failed')`, and
@@ -484,7 +496,8 @@ Not "validated" until all cases pass in CI on Linux.
 1. Helper: `restore-test-check`, `-prepare`, `-run` (phases `restore`, `start`, `poll`), `-teardown`, `-status`,
    `-mail-check`, the reaper (`-reap`), limits, tag restore, mail block, Python tests. Security-critical review.
 2. Engine: migration, test rows, step machine in the worker tick, `claimJob`/`claimInstall`/`busy()` changes,
-   startup clean-up, lease, evidence rules, Linux integration script.
+   startup clean-up, lease, evidence rules, Linux integration script. Engine functions for PR C: `createRestoreTest`,
+   `cancelRestoreTest`, `retryRestoreTestCleanup`, `acknowledgeRestoreTestCleanup`, `latestTestableBackup`.
 3. API, scheduler, alerts and audit events, with API tests.
 4. UI: site settings, run now, timeline, backup Tested state, failure details. Browser tests and design review.
 5. Storage report (API and card) and docs: README, `alerts.md`, `recovery-verification.md`, `upgrading.md`, release

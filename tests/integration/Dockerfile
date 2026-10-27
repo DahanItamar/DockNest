@@ -1,5 +1,7 @@
 FROM docker:29-dind
-RUN apk add --no-cache python3 openssh nginx tar coreutils acl curl \
+# setpriv and nsenter (util-linux) run the restore test's internal web check as nobody inside a copy's network.
+RUN (apk add --no-cache setpriv nsenter || apk add --no-cache util-linux) \
+    && apk add --no-cache python3 openssh nginx tar coreutils acl curl \
     && mkdir -p /root/.ssh /run/sshd \
     && chmod 700 /root/.ssh \
     && passwd -d root \

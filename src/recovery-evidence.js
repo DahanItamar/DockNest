@@ -8,6 +8,17 @@ export function recordVerification(backupId,kind,evidence,jobId=null){
  const write=()=>{const values=[backupId,kind,evidence.status,JSON.stringify(evidence),jobId,new Date().toISOString()];db.prepare('INSERT INTO backup_verifications(backup_id,kind,status,evidence,job_id,checked_at) VALUES(?,?,?,?,?,?) ON CONFLICT(backup_id,kind) DO UPDATE SET status=excluded.status,evidence=excluded.evidence,job_id=excluded.job_id,checked_at=excluded.checked_at').run(...values);db.prepare('INSERT INTO backup_verification_history(backup_id,kind,status,evidence,job_id,checked_at) VALUES(?,?,?,?,?,?)').run(...values);};
  if(db.isTransaction)write();else transaction(write);
 }
+// Automatic restore tests (docs/restore-tests.md, "Evidence and history"): the result is always appended to the
+// history; the current row changes only when it is missing, not-tested, or itself from an automatic restore test, so a
+// test never downgrades (or overwrites) evidence from another method such as a manual restore.
+export const TEST_METHOD='automatic restore test';
+export function recordTestVerification(backupId,kind,evidence,jobId=null){
+ if(!kinds.has(kind)||!statuses.has(evidence?.status))throw new Error('Invalid recovery verification');
+ const write=()=>{const values=[backupId,kind,evidence.status,JSON.stringify({...evidence,method:TEST_METHOD}),jobId,new Date().toISOString()];
+  db.prepare("INSERT INTO backup_verifications(backup_id,kind,status,evidence,job_id,checked_at) VALUES(?,?,?,?,?,?) ON CONFLICT(backup_id,kind) DO UPDATE SET status=excluded.status,evidence=excluded.evidence,job_id=excluded.job_id,checked_at=excluded.checked_at WHERE backup_verifications.status='not-tested' OR json_extract(backup_verifications.evidence,'$.method')=?").run(...values,TEST_METHOD);
+  db.prepare('INSERT INTO backup_verification_history(backup_id,kind,status,evidence,job_id,checked_at) VALUES(?,?,?,?,?,?)').run(...values);};
+ if(db.isTransaction)write();else transaction(write);
+}
 const empty=()=>Object.fromEntries([...kinds].map(kind=>[kind,{status:'not-tested'}]));
 const evidence=row=>({...JSON.parse(row.evidence),status:row.status,checkedAt:row.checked_at,jobId:row.job_id});
 export function backupVerification(backupId){
