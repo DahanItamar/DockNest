@@ -1,3 +1,4 @@
+import { formatBytes } from '../../shared/format-bytes.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
 export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you']);
@@ -18,7 +19,7 @@ const clock = (iso, timeZone = 'UTC') => {
   const format = zone => new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).format(date);
   try { return ` at ${format(timeZone)}`.replace(',', ''); } catch { return ` at ${format('UTC')}`; }
 };
-const gb = bytes => `${(Number(bytes) / 1024 ** 3).toFixed(1)} GB`;
+const gb = formatBytes;
 
 // event: { type, at, siteName?, serverName?, targetName?, detail?, version?, freeBytes?, usedPercent?, key, siteId?, serverId? }
 export function messageFor(event) {

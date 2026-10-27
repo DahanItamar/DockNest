@@ -200,7 +200,7 @@ test('messages are short, plain and carry only the names the owner typed', () =>
   assert.equal(text, 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. Open DockNest to see why.');
   assert.equal(events.messageFor({ type: 'nonsense' }), null);
   assert.ok(!/[\r\n<>]/.test(events.messageFor({ type: 'backup.failed', at: '2026-10-23T03:00:00Z', siteName: 'a\r\nb<script>', serverName: 'x'.repeat(500) })));
-  assert.ok(events.messageFor({ type: 'server.disk_low', serverName: 'srv', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4 }).includes('2.0 GB free (95% used)'));
+  assert.ok(events.messageFor({ type: 'server.disk_low', serverName: 'srv', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4 }).includes('2.1 GB free (95% used)'));
 });
 
 test('dedupe: one message per channel and event+source inside 10 minutes, occurrences never twice, other sources unaffected', async () => {
@@ -274,7 +274,7 @@ test('the detector reads backups, moves, updates and disk without replaying hist
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 2 * 1024 ** 3 }), srv);
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 500 * 1024 ** 3 }), target);
   assert.equal(detect.detectDisk(), 1); assert.equal(detect.detectDisk(), 0, 'once a day at most');
-  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Low disk space on mobiX-Srv: 2\.0 GB free/);
+  assert.match(db.prepare('SELECT message FROM alert_queue').get().message, /^Low disk space on mobiX-Srv: 2.1 GB free/);
 });
 
 test('update.available fires once per new release, only when update checks are on', () => {

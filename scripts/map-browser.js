@@ -774,10 +774,10 @@ async function layoutFlow(scheme){
  // Details: only what DockNest already knows, with copy buttons
  await page.locator('[data-node="server:fr"]').focus();await page.keyboard.press('Enter');
  const panel=page.locator('.map-panel');
- for(const t of ['fra.example.invalid','Port 22, user root','x86_64','84.0 GB free of 160.0 GB'])await panel.getByText(t).waitFor();
+ for(const t of ['fra.example.invalid','Port 22, user root','x86_64','90.2 GB free of 172 GB'])await panel.getByText(t).waitFor();
  await panel.getByRole('button',{name:'Copy address'}).waitFor();await panel.getByRole('button',{name:'Copy host key'}).waitFor();await shot(page,scheme,'1440-details-server');await panelShot(panel,scheme,'server-1440');await copyLayout(panel);
  await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
- await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('412.0 MB').waitFor();await panelShot(panel,scheme,'site-1440');await copyLayout(panel);await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
+ await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('432 MB').waitFor();await panelShot(panel,scheme,'site-1440');await copyLayout(panel);await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
  await page.keyboard.press('Escape');await page.locator('[data-node="storage:t1"]').focus();await page.keyboard.press('Enter');await panel.getByText('Sites using it').waitFor();await panel.getByText('Last upload').waitFor();
  await context.close();
  // Operators cannot move nodes: a body drag only pans
@@ -867,14 +867,14 @@ try{
    assert.equal(await page.locator('.map-storage').count(),2,'backup storage');
    assert.equal(await page.locator('.map-lines path.backup').count(),3,'backup lines');
    assert.equal(await page.locator('.map-stub').count(),2,'open outputs');
-   await page.getByText('1.1 TB free of 1.8 TB').waitFor();
+   await page.getByText('1.2 TB free of 2 TB').waitFor();
    // Order: servers by name
    const names=await page.locator('.map-server .map-name').allTextContents();
    assert.deepEqual(names,[...names].sort((x,y)=>x.toLowerCase()<y.toLowerCase()?-1:1),'server order');
    // Groups and status labels
    const g=page.getByRole('group',{name:'itamar-Srv'});
    assert.equal(await g.locator('.map-site').count(),2);
-   await g.getByText('Connected').waitFor();await g.getByText('2 sites · 57.0 GB free').waitFor();
+   await g.getByText('Connected').waitFor();await g.getByText('2 sites · 61.2 GB free').waitFor();
    await page.getByText('Needs attention').waitFor();
    assert.ok(await page.locator('.map-lines g.decor').getAttribute('aria-hidden')==='true');
    // No overlaps (screen space)
