@@ -20,14 +20,17 @@ ports.
 
 ## Turn it on
 
-Open **Sites & schedules**, pick a site and open its restore test settings. Only administrators can change them.
+Open **Sites & schedules**, find the site and select **Restore tests** on its row. Only administrators can change
+the settings.
 
-- **Test server.** Choose where the copy runs.
+- **Auto tests.** The switch that turns scheduled tests on. It is off by default.
 - **How often.** Daily, weekly (suggested) or monthly. A test starts about 30 minutes after the site's next backup.
-- **Limits.** Time, memory and CPU for each container. Defaults: 30 minutes, 1 GB, 1 CPU.
-- **Web check (optional).** A service, port and path to open inside the copy.
+- **Test server.** Choose where the copy runs.
+- **Time limit, Memory and CPU.** Limits for each container, with presets or a custom value. Defaults: 30 minutes,
+  1 GB, 1 CPU.
+- **Health check path (optional).** A page to open inside the copy, under **Advanced settings**.
 
-Tests are off by default. **Run test now** works for administrators and operators. You can start up to 6 manual tests
+Select **Save** to keep the settings. **Run test** works for administrators and operators. You can start up to 6 manual tests
 per site every 24 hours.
 
 ## Choose a test server
@@ -40,7 +43,7 @@ it.
 
 ### Use the live server (optional)
 
-You can choose the site's own server. DockNest asks you to confirm, and it asks for your password and code again.
+You can choose the site's own server. Tick **Allow live server**. DockNest asks for your password and code again.
 
 The risks:
 
@@ -55,7 +58,7 @@ The test still uses its own container names and never changes live containers.
 By default a copy has no internet. It cannot send mail, charge cards or call webhooks. Some apps need an outside
 service to start. Those tests fail with a message that says so.
 
-You can turn on **Allow internet** under Advanced. Administrators only, with a fresh password and code.
+You can turn on **Allow internet** under **Advanced settings**. Administrators only, with a fresh password and code.
 
 The risks:
 
@@ -86,6 +89,7 @@ internet)".
 | Failed | The backup did not come back. Look at this one first. |
 | Couldn't run | The test server or a test limit stopped it. The backup may be fine. |
 | Cancelled | You stopped it. |
+| Not tested | No test has run for this backup yet. |
 
 A pass means:
 
@@ -100,32 +104,33 @@ checks to cover more.
 Each test lists its steps with times: Check space, Copy backup, Restore copy, Start containers, Check health and
 Clean up. A failed step shows one plain sentence about why.
 
-Each backup shows its newest test result in the library.
+Each backup shows its newest test result in the library, and each site shows its **Last test** result. A failed
+test also appears as a red alert on the Overview, and every test appears in **Jobs** with its steps.
 
 ## Alerts
 
-Turn these on under alerts (Telegram or email):
+Administrators turn these on under **Alerts** on the Map page (Telegram or email):
 
 - **Restore test failed.**
-- **Restore test couldn't run.**
+- **Restore test couldn’t run.**
 - **Restore test passed again,** after an earlier failure.
-- **Restore test needs you,** when clean-up did not finish.
+- **Restore test needs clean-up,** when clean-up did not finish.
 
 Messages contain names and times only.
 
 ## Troubleshooting
 
-### "Couldn't run"
+### "Couldn’t run"
 
 Read the reason on the test. Common ones:
 
-- **Memory limit.** Raise the memory limit in Advanced.
-- **Time limit.** Raise the time limit or use a faster test server.
+- **Memory limit.** Raise the **Memory** limit.
+- **Time limit.** Raise the **Time limit** or use a faster test server.
 - **Low disk.** Free space on the test server.
 - **Test server unreachable.** Check the server's connection.
 - **Needs an outside service.** The app cannot start without internet. Consider **Allow internet** and read the risks
   above.
-- **CPU above the server.** Lower the CPU limit to what the test server has.
+- **CPU above the server.** Lower the **CPU** limit to what the test server has.
 
 ### "Failed"
 
@@ -133,19 +138,20 @@ Restore the backup by hand from the Backups page to see the same problem. The ba
 
 ### Clean-up did not finish
 
-DockNest retries clean-up after 5, 15 and 60 minutes. If it still fails, the test shows **Needs you** and the test
+DockNest retries clean-up after 5, 15 and 60 minutes. If it still fails, the test shows **Needs clean-up** and the test
 server stays blocked for new tests. Your sites keep working.
 
-1. Open the test and select **Retry clean-up**.
+1. Open the test in **Jobs** and select **Retry clean-up**.
 2. If that fails, check the test server for containers and networks labelled `docknest.restore-test`.
-3. When nothing is left, acknowledge the test. DockNest only accepts this when the server reports nothing left.
+3. When nothing is left, use **Acknowledge remote recovery** on the job. DockNest only accepts this when the server
+   reports nothing left.
 
 A safety timer on the test server removes leftovers if DockNest itself is down. It does not survive a reboot of the
 test server. Test containers do not restart on their own, and the next DockNest check cleans up.
 
 ## Storage report
 
-The Storage page shows space used per site and per storage, and growth over the last 30 days. Under it, a line like
+The Storage page shows **By site**, **By storage** and **Last 30 days** (growth). A line like
 "Incremental backups could save about 60% (estimate)" shows what incremental backups might save.
 
 This is a rough best case. DockNest reads package sizes only and cannot see inside encrypted backups. It treats only
