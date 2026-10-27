@@ -124,12 +124,13 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   await verifyClean(live, before, servers[0]);
   record('Restore test on the live server (opt-in): the live container keeps running and every container, tag, image and port on that server is unchanged afterwards');
 
-  // 3. Grouped Compose-labelled site: web + PostgreSQL with a row-count check and a web check.
+  // 3. Grouped site: web + PostgreSQL with a row-count check and a web check. (A real Compose project needs its Compose
+  // files selected; the Compose move case covers those. Copies always get their own docknest-test project label.)
   const password = randomBytes(18).toString('base64url');
   await run('exec', source, 'docker', 'pull', '-q', 'postgres:16');
   await run('exec', source, 'docker', 'network', 'create', 'rt-group');
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-db', '--network', 'rt-group', '--network-alias', 'db', '--label', 'com.docker.compose.project=rtshop', '--tmpfs', '/tmp:size=32m,mode=1777', '-e', 'POSTGRES_PASSWORD=' + password, '-e', 'POSTGRES_DB=fixture', '-v', 'rt-db-data:/var/lib/postgresql/data', 'postgres:16');
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-web', '--network', 'rt-group', '--network-alias', 'web', '--label', 'com.docker.compose.project=rtshop', '-v', 'rt-web-data:/site', 'docknest-rt:local');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-db', '--network', 'rt-group', '--network-alias', 'db', '--tmpfs', '/tmp:size=32m,mode=1777', '-e', 'POSTGRES_PASSWORD=' + password, '-e', 'POSTGRES_DB=fixture', '-v', 'rt-db-data:/var/lib/postgresql/data', 'postgres:16');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-web', '--network', 'rt-group', '--network-alias', 'web', '-v', 'rt-web-data:/site', 'docknest-rt:local');
   const groupCfg = config(['rt-web', 'rt-db'], { stopTimeout: 90, temporaryMemoryFolders: [{ container: 'rt-db', destination: '/tmp' }], services: [{ container: 'rt-db', engine: 'postgres', database: 'fixture', dependsOn: [], checks: [{ name: 'Records', table: 'records' }] }] });
   const groupSite = site('rt-group', groupCfg);
   await until(async () => { try { return Boolean((await planBackup(groupSite)).services.find(service => service.engine === 'postgres')?.version); } catch { return false; } }, 'PostgreSQL fixture did not become ready', 180);
@@ -171,7 +172,7 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   assert.equal(groupedDone.checks.find(check => check.kind === 'http')?.status, 'passed', JSON.stringify(groupedDone.checks));
   assert.equal(backupVerification(groupBackup.id).application.status, 'passed');
   await verifyClean(grouped, before);
-  record('Restore test, grouped Compose-labelled web + PostgreSQL: fresh internal isolated networks, row-count and web checks pass; from inside a copy the host gateway, 169.254.169.254, public IPv4 and IPv6 are unreachable (no route or timeout, never a refusal) and public DNS does not answer');
+  record('Restore test, grouped web + PostgreSQL: fresh internal isolated networks, row-count and web checks pass; from inside a copy the host gateway, 169.254.169.254, public IPv4 and IPv6 are unreachable (no route or timeout, never a refusal) and public DNS does not answer');
 
   // 4. Cancel during copy_backup: the package is still streaming when the owner cancels.
   before = await snapshot(target);
