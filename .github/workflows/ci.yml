@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-          fetch-depth: 0   # tests/migrations.test.js runs the released v2.1.0 code from its tag
+          fetch-depth: 0   # tests/migrations.test.js and tests/alert-connections-compat.test.js run released code from its tags (v2.1.0, v2.9.0)
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
