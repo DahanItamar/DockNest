@@ -15,3 +15,9 @@ description = "Fake credential canaries in the problem-report redaction tests (A
 condition = "AND"
 paths = ['''^tests/problem-reports\.test\.js$''']
 regexes = ['''AKIAIOSFODNN7EXAMPLE''', '''ASIAABCDEFGHIJKLMNOP''', '''github_pat_11ABCDEFG0123456789_abcdefghijklmnop''', '''gho_abcdefghijklmnopqrstuvwx''', '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0\.sig''', '''abcDEF123456789xyz''', '''AKIACANARY0123456789''', '''ghp_CANARYtoken''']
+
+[[allowlists]]
+description = "Made-up fixture values in the alert provider tests (a Discord-shaped webhook id and fake ntfy and Gotify tokens sent only to local fake servers); only these exact values, only in that test file"
+condition = "AND"
+paths = ['''^tests/alert-providers\.test\.js$''']
+regexes = ['''^123456789012345678$''', '''^tk_ntfyFixture0123$''', '''^gotifyFixture01$''']
