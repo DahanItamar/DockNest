@@ -5,9 +5,38 @@
 //   is never returned, logged, audited or written to an error. Views carry plain fields and `<field>Set` flags.
 // - `origin = legacy:<credentialId>` marks a Connection that came from (or through) a 2.8 credential. Replacing its secret
 //   or deleting it also deletes that frozen 2.8 row, with secure_delete, so a removed secret leaves the live database.
-import { db } from '../db.js';
+import { db, audit } from '../db.js';
 import { open } from '../crypto.js';
 import { provider, sealedView } from './providers/index.js';
+
+// "Allow private network" (docs/alert-channels.md, "Outbound safety"): off by default and when the row is missing, so
+// an upgraded install behaves as before. Read at every send, so turning it off stops private sends at once.
+export const PRIVATE_NETWORK_KEY = 'alerts_private_network';
+export const allowPrivateNetwork = () => db.prepare('SELECT value FROM settings WHERE key=?').get(PRIVATE_NETWORK_KEY)?.value === 'true';
+// Administrators only (the route in PR 4 adds the re-verification). Audited with the actor's role, never with values.
+export function setAllowPrivateNetwork(enabled, actor, role) {
+  if (role !== 'admin') throw Object.assign(new Error('Only an administrator can change this setting.'), { status: 403, code: 'ALERTS_ADMIN_REQUIRED' });
+  db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(PRIVATE_NETWORK_KEY, enabled ? 'true' : 'false');
+  audit(actor, 'alerts.private_network', null, { enabled: Boolean(enabled), role });
+  return { allowPrivateNetwork: allowPrivateNetwork() };
+}
+// The `private_ok` a save stamps (docs, "Data model"). It follows who last set the host or URL, not who saved last:
+// - no host or URL change: the saved value stays (an operator renaming or changing recipients keeps an admin's server);
+// - an operator setting a host or URL: 0;
+// - Email: 1 when an administrator set the SMTP host (the 2.8 relay rule, independent of the setting);
+// - a provider with fixed hosts (Telegram): 0, it never needs a private address;
+// - an HTTP provider with a user host (`hosts: 'user'`): 1 only when an administrator set it while the setting was on.
+// `provider` is a registry id, or a provider object (the registry entry itself).
+export function privateOkFor({ provider: which, role, hostChanged = true, previous = 0 }) {
+  if (!hostChanged) return Number(previous) === 1 ? 1 : 0;
+  const item = typeof which === 'string' ? provider(which) : which;
+  if (role !== 'admin' || !item) return 0;
+  if (item.id === 'email') return 1;
+  let hosts; try { hosts = item.target({}).hosts; } catch { hosts = null; }
+  return hosts === 'user' && allowPrivateNetwork() ? 1 : 0;
+}
+// Whether a send through this Connection may reach a private address now: stamped, and the setting on at this moment.
+export const privateAllowed = row => Number(row?.private_ok) === 1 && allowPrivateNetwork();
 
 export const connectionLimits = Object.freeze({ connections: 60, nodes: 40, lines: 200 });
 export const getConnection = connectionId => db.prepare('SELECT * FROM connections WHERE id=?').get(connectionId) ?? null;

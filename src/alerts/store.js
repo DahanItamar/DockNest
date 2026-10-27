@@ -13,7 +13,7 @@ import { seal } from '../crypto.js';
 import { EVENTS } from './events.js';
 import { providers } from './providers/index.js';
 import { cutName } from '../migrations.js';
-import { connectionLimits, getConnection, openSecret, nodesUsing, insertConnection, legacyOrigin, legacyCredentialId, scrubbing, sealedWrite, purgeLegacyCredential, recordConnectionTest, recordConnectionSend } from './connections.js';
+import { connectionLimits, getConnection, openSecret, nodesUsing, insertConnection, legacyOrigin, legacyCredentialId, scrubbing, sealedWrite, purgeLegacyCredential, recordConnectionTest, recordConnectionSend, privateOkFor } from './connections.js';
 
 export const limits = Object.freeze({ credentials: 20, channels: connectionLimits.nodes, rules: connectionLimits.lines });
 export const httpError = (status, message, extra = {}) => Object.assign(new Error(message), { status }, extra);
@@ -77,20 +77,21 @@ const mustCredential = credentialId => getCredential(credentialId) ?? (() => { t
 const connectionCount = () => db.prepare('SELECT COUNT(*) AS n FROM connections').get().n;
 const connectionsFull = () => httpError(409, `You can have up to ${connectionLimits.connections} connections.`);
 
-export function createCredential(input, actor) {
+// The 2.8 routes are for administrators only (routes.js), so `role` is 'admin' there; it decides `private_ok`.
+export function createCredential(input, actor, { role = 'admin' } = {}) {
   const data = credentialCreate.safeParse(input); if (!data.success) fail(data.error);
   if (credentials().length >= limits.credentials) throw httpError(409, `You can have up to ${limits.credentials} credentials.`);
   if (connectionCount() >= connectionLimits.connections) throw connectionsFull();
   const credentialId = id(), providerId = channelKindFor[data.data.kind];
   // Not used yet: empty settings until a node names its chat or recipients. Email keeps the 2.8 relay rule (admin-set).
-  insertConnection({ id: credentialId, provider: providerId, name: data.data.name, secret: seal(JSON.stringify(data.data.config)), settings: {}, origin: legacyOrigin(credentialId), privateOk: providerId === 'email', actor });
+  insertConnection({ id: credentialId, provider: providerId, name: data.data.name, secret: seal(JSON.stringify(data.data.config)), settings: {}, origin: legacyOrigin(credentialId), privateOk: privateOkFor({ provider: providerId, role }) === 1, actor });
   audit(actor, 'alert.credential.create', credentialId, { kind: data.data.kind });
   return credentialView(getCredential(credentialId));
 }
 // Secrets left out of `config` keep their saved value. Changing the mail server, port, encryption or user name requires typing the
 // password again, so a saved password can never be redirected by editing those alone. Every Connection of the credential
 // gets the same new sealed value and name. A replaced secret also removes the frozen 2.8 row that still holds the old one.
-export function updateCredential(credentialId, input, actor) {
+export function updateCredential(credentialId, input, actor, { role = 'admin' } = {}) {
   const credential = mustCredential(credentialId);
   const patch = z.object({ name: name.optional(), config: z.record(z.string(), z.unknown()).optional() }).strict().safeParse(input); if (!patch.success) fail(patch.error);
   let current; try { current = openSecret(credential); } catch { current = {}; }
@@ -102,10 +103,13 @@ export function updateCredential(credentialId, input, actor) {
   const parsed = secretSchemas[credential.kind].safeParse(merged); if (!parsed.success) fail(parsed.error);
   const sealed = seal(JSON.stringify(parsed.data)), title = patch.data.name ?? credential.name, at = now();
   const replaced = Object.keys(incoming).some(typed) || (credential.kind === 'smtp' && current.password && !merged.password);
+  // `private_ok` follows who last set the mail server: an administrator keeps the 2.8 relay rule, anyone else public only.
+  const hostChanged = credential.kind === 'smtp' && ['host', 'port'].some(key => key in incoming && incoming[key] !== current[key]);
   const write = () => transaction(() => {
     for (const row of credential.rows) {
       const suffix = row.id === credentialId ? null : nodesUsing(row.id)[0]?.name;
-      db.prepare('UPDATE connections SET name=?,secret=?,updated_at=?,updated_by=?,last_test=NULL,last_test_at=NULL,last_error=NULL WHERE id=?').run(suffix ? cutName(`${title} (${suffix})`) : title, sealed, at, actor, row.id);
+      const privateOk = privateOkFor({ provider: row.provider, role, hostChanged, previous: row.private_ok });
+      db.prepare('UPDATE connections SET name=?,secret=?,private_ok=?,updated_at=?,updated_by=?,last_test=NULL,last_test_at=NULL,last_error=NULL WHERE id=?').run(suffix ? cutName(`${title} (${suffix})`) : title, sealed, privateOk, at, actor, row.id);
     }
     if (replaced) purgeLegacyCredential(credentialId);
   });
