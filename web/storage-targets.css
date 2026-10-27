@@ -35,9 +35,9 @@
 .storage-usage progress{display:block;width:100%;height:8px}
 @media(min-width:768px){
  .rebrand-page .sr-root .storage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
- .rebrand-page .sr-root .storage-grid>.storage-card:only-child,.rebrand-page .sr-root .storage-grid>.storage-card:last-child:nth-child(odd){grid-column:1/-1}
- .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-list,.rebrand-page .sr-root .storage-grid>.storage-card:last-child:nth-child(odd) .def-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--edge)}
- .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-row:nth-last-child(2),.rebrand-page .sr-root .storage-grid>.storage-card:last-child:nth-child(odd) .def-row:nth-last-child(2){border-bottom:0}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child{grid-column:1/-1}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--edge)}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-row:nth-last-child(2){border-bottom:0}
 }
 /* On phones the list is not height-stabilised, so each card keeps its own height. */
 @media(max-width:767px){.rebrand-page .sr-root .storage-grid{grid-auto-rows:auto}}
