@@ -171,12 +171,23 @@ export function tickRestoreTests() {
     try { advance(loadTest(testId)); } catch (error) { console.error(`Restore test ${testId} could not advance: ${error.code ?? error.name}`); }
   }
 }
+// One test, at once: used when a test is created, cancelled or its clean-up retried, so it does not wait for the tick.
+export function advanceRestoreTest(testId) {
+  const test = loadTest(testId);
+  if (test) advance(test);
+  return test ? activeJob(testId)?.id ?? null : null;
+}
 function advance(test) {
   const job = activeJob(test.id);
   if (test.result === null) {
+    if (!test.started_at && test.cancel_requested) {
+      // A queued first step that no worker has claimed yet is withdrawn, so the test ends at once.
+      const withdrawn = !job || db.prepare("UPDATE jobs SET status='completed',stage='cancelled',finished_at=? WHERE id=? AND status='test_queued'").run(iso(clock()), job.id).changes === 1;
+      if (withdrawn) conclude(test, 'cancelled', { step: null, reason: 'The test was cancelled before it started.' });
+      return;
+    }
     if (job && job.status !== 'test_waiting') return;
     if (!test.started_at) {
-      if (test.cancel_requested) { conclude(test, 'cancelled', { step: null, reason: 'The test was cancelled before it started.' }); return; }
       if (deploymentHeld(db)) return;
       const holder = heldBy(test.server_id);
       if (holder && holder !== test.id) return;
@@ -277,6 +288,8 @@ const STEP_RUNNERS = {
     const manifest = JSON.parse(backup.manifest || '{}');
     const need = { bytes: backup.size, kind: manifest.kind === 'static' ? 'static' : 'docker', containers: manifest.containers?.length || 1, grouped: (manifest.containers?.length || 0) > 1, architecture: manifest.kind === 'static' ? null : manifest.architecture ?? null, liveServer: !!test.limits.liveServer };
     const answer = await call(test, { operation: 'restore-test-check', testId: test.id, need, limits: helperLimits(test) }, signal);
+    // The test server's CPU count is kept with its facts, so the settings sheet and PUT settings can cap the CPU limit.
+    if (Number.isInteger(answer?.facts?.nproc) && answer.facts.nproc > 0) db.prepare("UPDATE servers SET capabilities=json_set(COALESCE(capabilities,'{}'),'$.cpus',?) WHERE id=? AND json_valid(COALESCE(capabilities,'{}'))").run(answer.facts.nproc, test.server_id);
     const problem = answer?.problems?.[0] ?? (manifest.kind !== 'static' ? cpuProblem(test.limits.cpus, answer?.facts?.nproc) : null);
     if (problem || answer?.ok !== true) { conclude(loadTest(test.id), 'couldnt_run', { step: 'check_space', reason: problem ?? 'The test server did not pass Check space.' }); return; }
     advanceTo(test, 'check_space', null, { kind: need.kind, probeTools: !!answer.facts?.probeTools });
