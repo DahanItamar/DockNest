@@ -14,6 +14,8 @@ import { selfBackupRoutes } from './self-backup-routes.js';
 import { moveRoutes, cloudflareRoutes } from './moves/routes.js';
 import { requestInstall, findInstall } from './installs.js';
 import { alertRoutes } from './alerts/routes.js';
+import { restoreTestRoutes, acknowledgeTestJob } from './restore-tests/routes.js';
+import { backupTestStates, notTested } from './restore-tests/views.js';
 import { config, trustedOrigins } from './config.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { schemaVersion } from './migrations.js';
@@ -62,6 +64,7 @@ app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
 app.use('/api/moves', moveRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api', restoreTestRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
@@ -139,7 +142,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: backups.map(({ path: _path, ...backup }) => view(backup, verifications)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: (tested => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested })))(backupTestStates(backups.map(backup => backup.id))), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
@@ -150,7 +153,8 @@ for (const [name, { table, time }] of Object.entries(histories)) app.get('/api/'
   const rows = db.prepare(`SELECT * FROM ${table} ${cursor ? `WHERE (${time},id)<(?,?)` : ''} ORDER BY ${time} DESC,id DESC LIMIT ?`).all(...(cursor || []), limit + 1), page = rows.slice(0, limit), last = page.at(-1);
   // Backup listings never expose storage paths, matching /api/state.
   const backups = name === 'backups', verifications = backups ? backupVerifications(page.map(row => row.id)) : null;
-  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; row = rest; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
+  const tested = backups ? backupTestStates(page.map(row => row.id)) : null;
+  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -194,7 +198,9 @@ app.post('/api/servers/:id/test', async (req, res) => {
   const server = getServer(req.params.id);
   try {
     const result = await testServer(server);
-    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify(result), server.id);
+    // Merged, so facts recorded elsewhere (the CPU count from a restore test's Check space) survive a connection test.
+    let previous = {}; try { previous = JSON.parse(server.capabilities || '{}') || {}; } catch { previous = {}; }
+    db.prepare("UPDATE servers SET status='connected',capabilities=? WHERE id=?").run(JSON.stringify({ ...previous, ...result }), server.id);
     audit(req.user.id, 'server.test', server.id, { success: true }); res.json(result);
   } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
 });
@@ -305,6 +311,7 @@ app.post('/api/sites/:id/boot-recovery', requireAdmin, async (req,res)=>res.json
 app.get('/api/jobs/:id', (req, res) => res.json(parse(db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id)) || findInstall(req.params.id) || notFound('Job not found.')));
 app.post('/api/jobs/:id/recovery', async (req, res) => {
   const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(req.params.id) || notFound('Job not found.');
+  if (job.type === 'restore-test') return acknowledgeTestJob(req, res, job);
   const site = getSite(job.site_id);
   const data = z.object({ confirmation: z.string(), reviewedRemoteRecovery: z.literal(true) }).parse(req.body);
   if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the site name and review its remote recovery before acknowledging.' });

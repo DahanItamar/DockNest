@@ -336,6 +336,25 @@ A failed or couldn't-run test shows `failedStep` and `reason`; the step carries 
 `POST /api/restore-tests/:id/cancel` → 202 (sets `cancel_requested`). `POST /api/restore-tests/:id/cleanup` retries
 clean-up of a `needs_cleanup` test (administrator). Acknowledging uses `POST /api/jobs/:id/recovery`.
 
+Implementation notes (PR C, `src/restore-tests/routes.js`):
+
+- `GET /api/sites/:id/restore-tests/settings` returns the `settings` object (administrator only); the card carries the
+  same object for operators. The card takes `?cursor=` (20 items a page) and `?backupId=` to list one backup's tests.
+- `PUT .../settings` answers with the saved `settings`. Validation errors are 400 `INVALID` with a plain sentence.
+  `CPUS_ABOVE_SERVER` uses the CPU count that "Check space" records in the test server's facts (`capabilities.cpus`);
+  until a first test has run there, the cap is enforced at "Check space" only.
+- A probe of only `{ "path": "/health" }` is completed at test creation: the first container that ran at capture and
+  exposes a TCP port, preferring 80, 8080, 8000, 3000, 5000, 443, 8443, 8081 and 2368. Without one, no web check runs.
+- `POST /api/sites/:id/restore-tests` returns `jobId: null` while the test waits for its server or a due backup; the
+  first step is queued at once otherwise. 429 `TOO_MANY_TESTS` says "You can run 6 tests a day for each site."
+- Cancel of a test whose first step no worker has claimed ends it at once (`cancelled`, nothing reached the server).
+- `POST /api/jobs/:id/recovery` for a `restore-test` job: administrator only, body `{ "confirmation": "<site name>",
+  "reviewedRemoteRecovery": true }`; 409 `LEFTOVERS` while `restore-test-status` reports anything, 502 `UNREACHABLE`
+  when the test server does not answer.
+- The schedule runs inside the worker's existing tick (`tickRestoreTestSchedule`, before `tickRestoreTests`), with no
+  loop or timer of its own. A skipped run stores its reason in `skipReason` and audits `restore_test.skipped` with a
+  reason code only.
+
 `GET /api/backups` and backup detail add `restoreTest: { "status": "passed | failed | not-tested", "testId",
 "testedAt" }` from the newest `passed` or `failed` test of that backup.
 

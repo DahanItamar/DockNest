@@ -2,6 +2,7 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
+import {EVENTS_FOR,EVENT_LABEL} from '../web/map/alerts-client.js';
 
 // Read-only Map page against a mocked API: servers, sites and connectors, stable automatic layout on reload, no overlaps,
 // zoom and fit, the phone list at 402 px, light and dark, names and roles. Run against a dev server:
@@ -652,7 +653,14 @@ async function alertsFlow(scheme){
  alertsDb.testFail=true;await panel.getByRole('button',{name:'Send test message'}).click();await panel.getByText(/Telegram did not accept the message/).waitFor();alertsDb.testFail=false;
  await panel.getByRole('tab',{name:'Sends when'}).click();
  assert.equal(await panel.locator('fieldset.map-src').count(),2,'two sources on Ops chat');
- assert.equal(await panel.getByRole('checkbox').count(),7+6,'DockNest offers 7 events, a server 6');
+ assert.equal(await panel.getByRole('checkbox').count(),EVENTS_FOR.docknest.length+EVENTS_FOR.server.length,'DockNest and a server offer their own event lists');
+ // Each source lists exactly its events, in order, with their plain labels (restore tests included: the test server and
+ // the tested site's server both match a server line, and a DockNest line matches every event).
+ for(const fieldset of await panel.locator('fieldset.map-src').all()){
+  const kind=(await fieldset.getAttribute('data-src')).split(':')[0];
+  assert.deepEqual(await fieldset.locator('label.map-check').allTextContents(),EVENTS_FOR[kind].map(e=>EVENT_LABEL[e]),kind+' events');
+ }
+ assert.ok(EVENTS_FOR.server.filter(e=>e.startsWith('restore_test.')).map(e=>EVENT_LABEL[e]).join('|')==='Restore test failed|Restore test couldn’t run|Restore test passed again|Restore test needs clean-up','restore test labels');
  await shot(page,scheme,'1440-alerts-sends');
  // Cancel discards every change
  await panel.getByRole('checkbox',{name:'Update available'}).uncheck();await panel.getByRole('button',{name:'Disconnect Frankfurt-1'}).click();
@@ -664,7 +672,8 @@ async function alertsFlow(scheme){
  await panel.getByRole('heading',{name:'Team inbox'}).waitFor();
  const block=panel.locator('fieldset[data-src="site:s2"]');await block.waitFor();
  assert.equal(await block.getByRole('checkbox',{name:'Backup failed'}).isChecked(),true);assert.equal(await block.getByRole('checkbox',{name:'Move needs you'}).isChecked(),true);assert.equal(await block.getByRole('checkbox',{name:'Backup succeeded'}).isChecked(),false);
- assert.equal(await block.getByRole('checkbox').count(),4,'a site offers four events');
+ assert.deepEqual(await block.locator('label.map-check').allTextContents(),EVENTS_FOR.site.map(e=>EVENT_LABEL[e]),'a site offers its events, restore tests included');
+ assert.equal(await block.getByRole('checkbox',{name:'Restore test failed'}).isChecked(),false,'new events start unticked');
  assert.equal(alertsDb.rules.length,4,'nothing is saved until Save');
  await shot(page,scheme,'1440-alerts-new-line');
  await block.getByRole('checkbox',{name:'Backup succeeded'}).check();

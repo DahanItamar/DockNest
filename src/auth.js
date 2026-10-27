@@ -69,6 +69,8 @@ export function requireAdmin(req,res,next){
  if(!req.user)return requireAuth(req,res,next);
  return req.user.role==='admin'?next():res.status(403).json({error:'Administrator access required.',code:'ADMIN_REQUIRED'});
 }
+// True when this session re-verified within the last 5 minutes (the check requireRecentAuth makes).
+export const recentlyVerified=req=>Boolean(req.session&&req.session.authenticated_at+RECENT_MS>Date.now());
 export function requireRecentAuth(req,res,next){
  if(!req.user)return requireAuth(req,res,next);
  return req.session.authenticated_at+RECENT_MS>Date.now()?next():res.status(403).json({error:'Verify your own authenticator or recovery code before this change.',code:'REAUTH_REQUIRED'});
