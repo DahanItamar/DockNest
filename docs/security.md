@@ -207,9 +207,12 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
 
 ## Alerts: Telegram and email (outbound requests, credentials)
 
-- No alert channel means no alert traffic. With channels, DockNest connects only to `https://api.telegram.org` (a host
-  fixed in code) and to the SMTP server an administrator entered for an email channel. There are no webhooks and no
-  user-supplied URLs yet.
+- No alert channel means no alert traffic. With channels, DockNest connects only to the official host of the provider
+  (fixed in code: `api.telegram.org`, `graph.facebook.com`, `discord.com` and its `ptb`, `canary` and `discordapp.com`
+  siblings, `hooks.slack.com`, Teams Workflows hosts under `logic.azure.com` and `api.powerplatform.com`,
+  `chat.googleapis.com`, `api.pushover.net`), to the server or webhook URL an administrator saved for ntfy, Gotify,
+  Matrix, Mattermost or "Other", and to the SMTP server of an email channel. A provider with fixed hosts never reaches a
+  private address, whatever its settings say.
 - Every alert HTTP request goes through one guarded client (`src/alerts/outbound.js`, details in
   [alert-channels.md](alert-channels.md), "Outbound safety"): HTTPS on port 443 only, its own DNS lookup with every
   answer checked and that same answer pinned to the socket (no DNS rebinding), IP literals checked in every notation,

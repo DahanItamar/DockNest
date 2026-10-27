@@ -76,7 +76,7 @@ const quadHex = quad => { const [a, b, c, d] = quad.split('.').map(Number); retu
 // Every IPv6 form that carries an IPv4: mapped (dotted and hex), translated, NAT64 and 6to4.
 const ipv6Forms = quad => { const [high, low] = quadHex(quad); return [`::ffff:${quad}`, `::ffff:${high}:${low}`, `0:0:0:0:0:ffff:${high}:${low}`, `::ffff:0:${high}:${low}`, `64:ff9b::${high}:${low}`, `64:ff9b::${quad}`, `2002:${high}:${low}::1`]; };
 const ALWAYS_REFUSED_V4 = ['0.0.0.0', '0.1.2.3', '127.0.0.1', '127.255.255.254', '169.254.169.254', '169.254.0.1', '192.0.0.1', '192.0.0.192', '192.0.2.5', '198.51.100.7', '203.0.113.9', '198.18.0.1', '198.19.255.1', '192.88.99.1', '100.100.100.200', '100.100.100.100', '168.63.129.16', '224.0.0.1', '239.255.255.250', '240.0.0.1', '255.255.255.255'];
-const ALWAYS_REFUSED_V6 = ['::', '::1', '0:0:0:0:0:0:0:1', 'fe80::1', 'febf::1', 'fec0::1', 'ff02::1', 'ff05::1:3', 'fd00:ec2::254', '2001:db8::1', '3fff::1', '2001::1', '2001:2::1', '2001:10::1', '2001:20::1', '100::1', '64:ff9b:1::a00:1', '::a00:1', '::127.0.0.1', '5f00::1', '4000::1'];
+const ALWAYS_REFUSED_V6 = ['::', '::1', '0:0:0:0:0:0:0:1', 'fe80::1', 'febf::1', 'fec0::1', 'ff02::1', 'ff05::1:3', 'fd00:ec2::254', 'fd00:ec2::253', 'fd00:ec2::23', 'fd00:ec2::1', '2001:db8::1', '3fff::1', '2001::1', '2001:2::1', '2001:10::1', '2001:20::1', '100::1', '64:ff9b:1::a00:1', '::a00:1', '::127.0.0.1', '5f00::1', '4000::1'];
 const PRIVATE = ['10.0.0.1', '10.255.255.255', '172.16.0.1', '172.31.255.254', '192.168.1.20', '100.64.0.1', '100.127.255.254', 'fc00::1', 'fd12:3456::1'];
 const PUBLICS = ['1.1.1.1', TELEGRAM_IP, quad(172, 15, 255, 255), quad(172, 32, 0, 1), quad(100, 63, 255, 255), quad(100, 128, 0, 1), quad(192, 0, 1, 1), quad(198, 20, 0, 1), PUBLIC6, '2001:67c:4e8::1', '2a00:1450:4001::1'];
 
@@ -118,7 +118,7 @@ test('IP literals in decimal, octal, hex and short notation are canonicalised an
 test('URL rules: refused names, login details, fragments, length, schemes, ports and fixed hosts', () => {
   for (const name of ['localhost', 'LOCALHOST', 'localhost.', 'api.localhost', 'a.b.localhost', 'metadata', 'metadata.google.internal', 'Metadata.Google.Internal.', 'instance-data', 'instance-data.ec2.internal']) {
     assert.equal(nameRefused(name), true, name);
-    assert.throws(() => checkUrl(`https://${name}/`, { privateAllowed: true }), refusedWith('blocked'), name);
+    assert.throws(() => checkUrl(`https://${name}/`, { privateAllowed: true }), refusedWith(name.endsWith('.') ? 'url' : 'blocked'), name); // a trailing dot is refused as not valid
   }
   assert.equal(nameRefused('localhost.example.com'), false);
   for (const url of ['https://user:pass@hook.test/', 'https://user@hook.test/', 'https://hook.test/#x', 'https://hook.test/' + 'a'.repeat(2048), 'ftp://hook.test/', 'file:///etc/passwd', 'javascript:alert(1)', 'not a url']) assert.throws(() => checkUrl(url), refusedWith('url'), url.slice(0, 40));
@@ -129,7 +129,7 @@ test('URL rules: refused names, login details, fragments, length, schemes, ports
   const telegram = { hosts: ['api.telegram.org'] };
   assert.ok(checkUrl(`https://api.telegram.org/bot${TOKEN}/sendMessage`, telegram));
   assert.ok(checkUrl('https://API.Telegram.org/x', telegram), 'host names compare without case');
-  for (const url of ['https://api.telegram.org.evil.test/', 'https://evil.test/api.telegram.org', 'https://api.telegram.org./', 'https://telegram.org/', 'https://api-telegram.org/']) assert.throws(() => checkUrl(url, telegram), refusedWith('blocked'), url);
+  for (const url of ['https://api.telegram.org.evil.test/', 'https://evil.test/api.telegram.org', 'https://api.telegram.org./', 'https://telegram.org/', 'https://api-telegram.org/']) assert.throws(() => checkUrl(url, telegram), refusedWith(url.endsWith('.org./') ? 'url' : 'blocked'), url);
 });
 
 test('the pinned lookup answers only the checked addresses, honours all: true and family, and nothing else', async () => {
@@ -444,7 +444,7 @@ test('upgrade path: Telegram goes through the guarded client to api.telegram.org
     assert.deepEqual(await delivery.verifyCredential(credential.id, 'test'), { verified: true });
     assert.equal(server.seen[0].url, `/bot${TOKEN}/sendMessage`); assert.equal(server.seen[0].method, 'POST');
     assert.equal(server.seen[0].headers.host, 'api.telegram.org'); assert.equal(server.seen[0].servername, 'api.telegram.org');
-    assert.deepEqual(JSON.parse(server.seen[0].body), { chat_id: '-1001234567890', text: 'This is a test message from DockNest. Your alerts are connected.', disable_web_page_preview: true });
+    assert.deepEqual(JSON.parse(server.seen[0].body), { chat_id: '-1001234567890', text: 'DockNest test message\nYour alerts are connected.', link_preview_options: { is_disabled: true } });
     assert.equal(server.seen[1].url, `/bot${TOKEN}/getMe`); assert.equal(server.seen[1].method, 'GET');
     assert.deepEqual(lookups, ['api.telegram.org', 'api.telegram.org'], 'one lookup per request');
     // A resolver that sends api.telegram.org to the LAN or to metadata is refused with the provider's plain sentence.
@@ -593,7 +593,7 @@ test('guardFor: Telegram gets its fixed host and no private access, whatever its
   try {
     const guard = delivery.guardFor({ provider: 'telegram', private_ok: 0 });
     assert.deepEqual(guard, { hosts: ['api.telegram.org'], privateAllowed: false });
-    assert.equal(delivery.guardFor({ provider: 'telegram', private_ok: 1 }).privateAllowed, true, 'the flag decides, but the fixed host still binds it');
+    assert.equal(delivery.guardFor({ provider: 'telegram', private_ok: 1 }).privateAllowed, false, 'a fixed-host provider never reaches a private address, whatever the row says');
     setting(false);
     assert.equal(delivery.guardFor({ provider: 'telegram', private_ok: 1 }).privateAllowed, false, 'the setting off wins at once');
   } finally { setting(false); }

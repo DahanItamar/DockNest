@@ -98,7 +98,7 @@ test('adapter: a node test and a queued alert go to the node’s own chat with t
   const work = (await call('POST', `/alerts/channels/${LEGACY.work}/test`));
   assert.equal(work.status, 200);
   assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/sendMessage`);
-  assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1002', text: 'This is a test message from DockNest. Your alerts are connected.', disable_web_page_preview: true });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1002', text: 'DockNest test message\nYour alerts are connected.', link_preview_options: { is_disabled: true } });
   assert.equal((await call('GET', '/alerts/channels')).body.channels.find(item => item.id === LEGACY.work).lastResult, 'ok');
 });
 
@@ -222,7 +222,7 @@ test('cap: 50 pending per Connection, then one "N more alerts" item updated in p
   db.prepare("UPDATE alert_outbox SET expires_at=? WHERE dedupe_key='backup.failed:site:young'").run(t0 + 1001);
   const calls = mockFetch(ok);
   assert.equal(await delivery.deliverDue({ at: t0 + 1000 }), 1);
-  assert.equal(calls.length, 1); assert.match(JSON.parse(calls[0].init.body).text, /^Backup failed: syoung/);
+  assert.equal(calls.length, 1); assert.match(JSON.parse(calls[0].init.body).text, /^Backup failed\nsyoung on v/);
   assert.equal(db.prepare("SELECT status FROM alert_outbox WHERE dedupe_key='backup.failed:site:old'").get().status, 'failed');
   assert.equal(delivery.deliveryPolicy.maxAgeMs, 24 * 3600_000); assert.equal(delivery.deliveryPolicy.pendingCap, 50);
 });
@@ -340,9 +340,9 @@ test('secrets never appear in views, API answers, logs, audit rows, outbox rows 
   assert.ok(provider('telegram').fields.find(field => field.key === 'token').secret);
 });
 
-test('the provider registry holds Telegram and Email only, and unknown ids are refused', () => {
-  assert.deepEqual(providerList().map(item => item.id), ['telegram', 'email']);
-  assert.equal(provider('discord'), null); assert.equal(provider('__proto__'), null); assert.equal(provider('constructor'), null);
+test('the provider registry lists every provider, and unknown ids are refused', () => {
+  assert.deepEqual(providerList().map(item => item.id), ['telegram', 'email', 'whatsapp', 'discord', 'slack', 'teams', 'googlechat', 'mattermost', 'ntfy', 'gotify', 'pushover', 'matrix', 'webhook']);
+  assert.equal(provider('aim'), null); assert.equal(provider('__proto__'), null); assert.equal(provider('constructor'), null);
 });
 
 test('an older DockNest changing the frozen 2.8 tables after the upgrade is detected for the Connections page warning', () => {
