@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-10-28
+
+See [docs/releases/2026-10-28-v2.10.1.md](docs/releases/2026-10-28-v2.10.1.md).
+
 ### Changed
 
 - Storage: **Add storage destination** now opens in a dialog instead of a form at the bottom of the page.
