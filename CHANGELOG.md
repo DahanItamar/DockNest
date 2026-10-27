@@ -4,6 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Automatic restore tests (beta, 2.9.0): per site, DockNest restores the latest verified backup onto a test server you choose, starts it, runs checks (containers running and healthy, still running after 60 seconds, database checks, optional internal web check), records the result and removes everything it created. Off by default; daily, weekly or monthly. Limits for time, memory and CPU; no internet unless an administrator turns on **Allow internet** (mail ports, the metadata service and the test server's own addresses are blocked inside the copy). Testing on the site's own server is opt-in. Results: passed, failed, couldn't run, cancelled. New alerts: failed, couldn't run, passed again, needs you. Clean-up survives restarts. See [docs/restore-tests-guide.md](docs/restore-tests-guide.md) and [docs/restore-tests.md](docs/restore-tests.md).
+- Storage report on the Storage page: space per site and per storage, growth over the last 30 days and a labelled best-case estimate of what incremental backups could save. New API: `GET /api/storage-report` (administrators). It reads metadata only.
+
+### Changed
+
+- Database migration 9 adds restore test tables only; nothing existing changes, and releases before 2.9.0 keep working on it. Finish or cancel tests before rolling back. See [docs/upgrading.md](docs/upgrading.md) and [docs/security.md](docs/security.md).
+
 ## [2.8.2] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.2.md](docs/releases/2026-10-24-v2.8.2.md).

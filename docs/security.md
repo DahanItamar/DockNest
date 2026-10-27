@@ -227,3 +227,34 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
   or error text. The alert queue keeps no secrets and is pruned after 7 days.
 - Alert detection only reads existing tables. The reachability check opens a TCP connection to a server's configured
   SSH port without a login.
+
+## Automatic restore tests (isolation, mail, internet)
+
+A restore test puts a full copy of a site, with its live passwords and keys, on a test server. The rules below keep
+that copy from doing harm. Details are in [restore-tests.md](restore-tests.md) and the user guide in
+[restore-tests-guide.md](restore-tests-guide.md).
+
+- **Isolation.** A copy runs on the test server you choose, with its own container names and a label
+  (`docknest.restore-test`). It never reuses live containers or networks. It has no published ports, restart policy
+  `no`, memory, CPU, process and log limits, and no extra privileges. Test containers drop `NET_ADMIN`.
+- **No internet by default.** A copy starts on fresh internal networks with no route out, so it cannot send mail,
+  charge cards or call webhooks.
+- **Allow internet is opt-in.** Administrators only, with re-verification within 5 minutes, off by default and shown in
+  the result ("tested with internet"). DockNest refuses it for containers that are privileged, share the host or
+  another container's network, or add `NET_ADMIN`, `NET_RAW`, `SYS_ADMIN` or `ALL`.
+- **Mail blocking inside the copy.** Before a copy gets a route out, DockNest inserts rules inside that container's own
+  network namespace. They reject TCP 25, 465, 587 and 2525, the cloud metadata address and every address of the test
+  server. The rules are checked once, then the copy is connected. If any rule fails, the container is stopped and the
+  test ends "couldn't run". Host firewall reloads cannot remove these rules, and the copy cannot change them. Mail sent
+  through a web API is not blocked.
+- **Live server is opt-in.** Testing on a site's own server needs `allowLiveServer`, an administrator and re-verification
+  within 5 minutes. The sheet states the limits and that backups there wait.
+- **Roles.** Settings, clean-up retry and acknowledging a stuck clean-up are administrator only. Operators can read
+  results, run a test and cancel one, as they can for a manual restore. Manual runs are limited to 6 per site per 24 hours.
+- **Secrets.** Settings hold no secrets. Reasons are one plain sentence, scrubbed of secret-looking text. Logs, data
+  paths and environment values are never stored. Alerts carry names and times only.
+- **Clean-up.** Everything a test creates is journalled on the manager and on the test server and removed afterwards.
+  A reaper on the test server removes leftovers if the manager is down. A test that cannot clean up blocks only its
+  test server and raises an alert.
+- **Storage report.** The report is computed from backup metadata, reads no backup data and calls no site server.
+  Only administrators can read it, and it never includes storage paths.
