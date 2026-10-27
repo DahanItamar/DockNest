@@ -27,7 +27,7 @@
 .rebrand-page .sr-root .storage-intro{align-items:flex-start;margin-top:8px}
 .rebrand-page .sr-root .storage-intro h2{display:flex;align-items:center;gap:12px;margin:0 0 4px;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600}
 .rebrand-page .sr-root .storage-intro p{margin:0;color:var(--text-muted);font-size:var(--fs-body);line-height:var(--lh-body)}
-.rebrand-page .sr-root .storage-grid{grid-template-columns:minmax(0,1fr);grid-auto-rows:1fr;gap:var(--edge);margin:0}
+.rebrand-page .sr-root .storage-grid{grid-template-columns:minmax(0,1fr);gap:var(--edge);margin:0}
 .rebrand-page .sr-root>.panel,.sr-root>.notice,.sr-root>.alert-panel,.sr-root>p{margin:0}
 .storage-usage{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding-top:12px;border-top:1px solid var(--border-subtle)}
 .storage-usage-text{display:flex;justify-content:space-between;align-items:baseline;gap:16px;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
@@ -39,3 +39,5 @@
  .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-list,.rebrand-page .sr-root .storage-grid>.storage-card:last-child:nth-child(odd) .def-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--edge)}
  .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-row:nth-last-child(2),.rebrand-page .sr-root .storage-grid>.storage-card:last-child:nth-child(odd) .def-row:nth-last-child(2){border-bottom:0}
 }
+/* On phones the list is not height-stabilised, so each card keeps its own height. */
+@media(max-width:767px){.rebrand-page .sr-root .storage-grid{grid-auto-rows:auto}}

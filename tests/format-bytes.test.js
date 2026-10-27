@@ -38,3 +38,9 @@ test('the TB capacity input round-trips: entering 2 TB stores 2e12 and reads bac
   assert.equal(stored, 2e12);
   assert.equal(formatBytes(stored), '2 TB');
 });
+
+test('a TB capacity with decimals converts to a whole number of bytes', () => {
+  const stored = Math.round(Number('4.35') * 1e12);
+  assert.ok(Number.isInteger(stored));
+  assert.equal(formatBytes(stored), '4.4 TB');
+});
