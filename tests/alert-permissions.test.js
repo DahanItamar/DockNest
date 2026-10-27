@@ -318,7 +318,7 @@ test('deleting while in use is refused with the node names; a Connection used by
 test('many Connections: 60 at most, listed in order', async () => {
   reset();
   const at = new Date().toISOString(), { seal } = await import('../src/crypto.js'), sealed = seal(JSON.stringify({ token: TOKEN }));
-  for (let index = 0; index < 59; index++) db.prepare("INSERT INTO connections(id,provider,name,secret,settings,private_ok,created_at,updated_at) VALUES(?,'telegram',?,?,?,0,?,?)").run(randomUUID(), `Bot ${String(index).padStart(2, '0')}`, sealed, '{"chatId":"-1"}', new Date(Date.parse(at) + index).toISOString(), at);
+  for (let index = 0; index < 59; index++) db.prepare("INSERT INTO connections(id,provider,name,secret,settings,private_ok,created_at,updated_at) VALUES(?,'telegram',?,?,?,0,?,?)").run(randomUUID(), `Bot ${String(index).padStart(2, '0')}`, sealed, '{"chatId":"-1"}', new Date(Date.parse(at) - 60000 + index).toISOString(), at);
   assert.equal((await admin('POST', '/connections', telegram('Sixtieth'))).status, 201);
   const full = await admin('POST', '/connections', telegram('One too many'));
   assert.equal(full.status, 409); assert.match(full.body.error, /up to 60/);
