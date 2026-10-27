@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- New connection: opening the Provider list no longer leaves the dialog looking empty and unclickable. The list now opens right under the field.
+
 ## [2.10.0] - 2026-10-27
 
 See [docs/releases/2026-10-27-v2.10.0.md](docs/releases/2026-10-27-v2.10.0.md).

@@ -21,7 +21,8 @@ main#content{padding-block:var(--edge);min-height:calc(100dvh - var(--header-hei
 
 /* Generic Modal: one header, one padding, one footer row */
 dialog{width:min(760px,calc(100vw - 2 * var(--edge)));max-height:calc(100dvh - 2 * var(--edge));overflow:hidden auto;overscroll-behavior:contain;box-shadow:0 12px 48px var(--shadow)}
-dialog[open]{animation:dn-enter var(--dur-slow) var(--ease) both}
+/* backwards, not both: a kept transform makes the dialog the containing block of fixed popups (Combo lists). */
+dialog[open]{animation:dn-enter var(--dur-slow) var(--ease) backwards}
 .modal-head,.rebrand-page .modal-head{min-height:72px;padding:16px 24px;gap:16px}
 .modal-head h2,.rebrand-page .modal-head h2{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;min-width:0;overflow-wrap:anywhere}
 .modal-body,.rebrand-page .modal-body{padding:24px;font-size:var(--fs-body);line-height:var(--lh-body);min-width:0}
