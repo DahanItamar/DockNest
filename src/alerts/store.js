@@ -169,6 +169,9 @@ function connectionFor(credential, settings, nodeName, nodeId = null) {
   const reuse = own ?? rows.find(row => !nodesUsing(row.id).length);
   if (reuse) {
     sealedWrite(() => db.prepare('UPDATE connections SET settings=?,updated_at=?,last_send=NULL,last_send_at=NULL,last_error=NULL WHERE id=?').run(key, now(), reuse.id));
+    // A new destination starts with no dedup history, so a real alert to it is never suppressed by one the old
+    // destination got. Pending items stay: they go to the new destination, as a 2.8 node's queue did after an edit.
+    db.prepare("DELETE FROM alert_outbox WHERE connection_id=? AND status<>'pending'").run(reuse.id);
     return reuse.id;
   }
   if (connectionCount() >= connectionLimits.connections) throw connectionsFull();

@@ -506,6 +506,10 @@ What PR 1a settled where this document left room, or chose a narrower step:
   (a rejected bot token) are in. The per-Connection rate limit and `Retry-After` come with the outbound client (1b).
   Telegram keeps the 2.8 request shape (`disable_web_page_preview`) until the message template (PR 3).
 - Nothing is sent through a Connection that no node uses any more; its pending items are marked failed.
+- A Connection whose destination changes (a new chat, new recipients) loses its finished dedup history, so a real
+  alert to the new destination is never suppressed. Pending items stay and go to the new destination.
+- An event folded into "N more alerts" still leaves a dedup entry (status `sent`, payload `{ foldedInto }`, never
+  delivered on its own), so a repeat inside its window is not counted again.
 
 ## Owner answers (2026-10-27)
 

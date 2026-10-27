@@ -95,18 +95,22 @@ export function emit(event, { at = Date.now() } = {}) {
     const since = event.key.startsWith('occ:') ? '0' : new Date(at - window).toISOString();
     if (db.prepare('SELECT 1 FROM alert_outbox WHERE connection_id=? AND dedupe_key=? AND created_at>=?').get(connectionId, key, since)) continue;
     const pending = db.prepare("SELECT COUNT(*) AS n FROM alert_outbox WHERE connection_id=? AND status='pending' AND dedupe_key<>?").get(connectionId, COLLAPSE_KEY).n;
-    if (pending >= deliveryPolicy.pendingCap) { fold(connectionId, nodeId, at); queued++; continue; }
+    if (pending >= deliveryPolicy.pendingCap) { fold(connectionId, nodeId, event.type, key, text, at); queued++; continue; }
     db.prepare("INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,status,attempts,next_attempt_at,expires_at,created_at) VALUES(?,?,?,?,?,?,'pending',0,?,?,?)").run(id(), connectionId, nodeId, event.type, key, text, at, at + deliveryPolicy.maxAgeMs, created);
     queued++;
   }
   return queued;
 }
 // Over the cap, new items are not stored one by one: one pending item per Connection counts them, updated in place.
-function fold(connectionId, nodeId, at) {
+// Each folded event still leaves a dedup entry (status 'sent', payload { foldedInto }), so a repeat inside its window is
+// not counted again. These entries are never delivered on their own (only pending items are) and are pruned like any.
+function fold(connectionId, nodeId, type, key, text, at) {
   const item = db.prepare("SELECT id,payload FROM alert_outbox WHERE connection_id=? AND status='pending' AND dedupe_key=?").get(connectionId, COLLAPSE_KEY);
   let count = 1; try { count = (JSON.parse(item?.payload ?? '{}').collapsed ?? 0) + 1; } catch { /* restart the count */ }
+  const created = new Date(at).toISOString(), collapseId = item?.id ?? id();
   if (item) db.prepare('UPDATE alert_outbox SET message=?,payload=? WHERE id=?').run(collapsedText(count), JSON.stringify({ collapsed: count }), item.id);
-  else db.prepare("INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,payload,status,attempts,next_attempt_at,expires_at,created_at) VALUES(?,?,?,'alerts.collapsed',?,?,?,'pending',0,?,?,?)").run(id(), connectionId, nodeId, COLLAPSE_KEY, collapsedText(count), JSON.stringify({ collapsed: count }), at, at + deliveryPolicy.maxAgeMs, new Date(at).toISOString());
+  else db.prepare("INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,payload,status,attempts,next_attempt_at,expires_at,created_at) VALUES(?,?,?,'alerts.collapsed',?,?,?,'pending',0,?,?,?)").run(collapseId, connectionId, nodeId, COLLAPSE_KEY, collapsedText(count), JSON.stringify({ collapsed: count }), at, at + deliveryPolicy.maxAgeMs, created);
+  db.prepare("INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,payload,status,attempts,next_attempt_at,expires_at,created_at,finished_at) VALUES(?,?,?,?,?,?,?,'sent',0,?,?,?,?)").run(id(), connectionId, nodeId, type, key, text, JSON.stringify({ foldedInto: collapseId }), at, at + deliveryPolicy.maxAgeMs, created, created);
 }
 
 let draining = false;

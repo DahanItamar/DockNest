@@ -250,6 +250,53 @@ test('a deleted node keeps its outbox history (node_id NULL); a Connection no no
   assert.deepEqual({ ...db.prepare('SELECT status,attempts FROM alert_outbox WHERE connection_id=?').get(connectionId) }, { status: 'failed', attempts: 1 }, 'a rejected bot token is not retried');
 });
 
+test('a new destination starts with no dedup history: a real alert to the new chat or inbox is never suppressed', async () => {
+  db.exec('DELETE FROM alert_outbox;UPDATE alert_lines SET enabled=0');
+  const bot = (await call('POST', '/alerts/credentials', { kind: 'telegram', name: 'Moving', config: { token: TOKEN } })).body;
+  const node = (await call('POST', '/alerts/channels', tgNode('Moving', '-7001', bot.id))).body;
+  store.createRule({ channelId: node.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  const connectionId = group(bot.id)[0].id, t0 = Date.parse('2026-10-31T00:00:00Z'), failed = { type: 'backup.failed', key: 'site:m', siteName: 's', serverName: 'v' };
+  const calls = mockFetch(ok);
+  assert.equal(delivery.emit(failed, { at: t0 }), 1); await delivery.deliverDue({ at: t0 });
+  assert.equal(delivery.emit(failed, { at: t0 + 60_000 }), 0, 'a repeat to the same chat inside the window is dropped');
+  await call('PATCH', `/alerts/channels/${node.id}`, { config: { chatId: '-7002' } });
+  assert.equal(group(bot.id).length, 1, 'the Connection moved in place');
+  assert.equal(delivery.emit(failed, { at: t0 + 120_000 }), 1, 'the new chat gets it');
+  await delivery.deliverDue({ at: t0 + 120_000 });
+  assert.deepEqual(calls.map(item => JSON.parse(item.init.body).chat_id), ['-7001', '-7002']);
+  // Pending items are kept and go to the new destination; only finished history is cleared.
+  delivery.emit({ ...failed, key: 'site:p' }, { at: t0 + 180_000 });
+  await call('PATCH', `/alerts/channels/${node.id}`, { config: { chatId: '-7003' } });
+  assert.deepEqual(db.prepare('SELECT status,dedupe_key FROM alert_outbox WHERE connection_id=?').all(connectionId).map(row => `${row.status}:${row.dedupe_key}`), ['pending:backup.failed:site:p']);
+  // Email: changing the recipients clears the history the same way.
+  const mail = (await call('POST', '/alerts/credentials', { kind: 'smtp', name: 'Moving mail', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: '', password: '', from: 'a@example.com' } })).body;
+  const inbox = (await call('POST', '/alerts/channels', { kind: 'email', name: 'Moving inbox', credentialId: mail.id, config: { to: ['old@example.com'] } })).body;
+  store.createRule({ channelId: inbox.id, sourceKind: 'docknest', events: ['backup.succeeded'] }, 'test');
+  const done = { type: 'backup.succeeded', key: 'site:e', siteName: 's', serverName: 'v' }, mailConnection = group(mail.id)[0].id;
+  delivery.emit(done, { at: t0 }); db.prepare("UPDATE alert_outbox SET status='sent',finished_at='x' WHERE connection_id=?").run(mailConnection);
+  assert.equal(delivery.emit(done, { at: t0 + 60_000 }), 0);
+  await call('PATCH', `/alerts/channels/${inbox.id}`, { config: { to: ['new@example.com'] } });
+  assert.equal(delivery.emit(done, { at: t0 + 60_000 }), 1, 'the new inbox gets it');
+});
+
+test('cap: events folded into "N more alerts" keep their dedup entry, so a repeat inside the window is not counted again', async () => {
+  db.exec('DELETE FROM alert_outbox;UPDATE alert_lines SET enabled=0');
+  const bot = (await call('POST', '/alerts/credentials', { kind: 'telegram', name: 'Fold', config: { token: TOKEN } })).body;
+  const node = (await call('POST', '/alerts/channels', tgNode('Fold', '-8001', bot.id))).body;
+  store.createRule({ channelId: node.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  const t0 = Date.parse('2026-11-01T00:00:00Z'), emit = (key, at = t0) => delivery.emit({ type: 'backup.failed', key, siteName: 's', serverName: 'v' }, { at });
+  for (let index = 0; index < 50; index++) emit(`site:${index}`);
+  const collapsed = () => JSON.parse(db.prepare('SELECT payload FROM alert_outbox WHERE dedupe_key=?').get(delivery.COLLAPSE_KEY).payload).collapsed;
+  assert.equal(emit('site:x'), 1); assert.equal(collapsed(), 1);
+  assert.equal(emit('site:x', t0 + 10 * 60_000), 0, 'a repeat at exactly the 10-minute boundary is dropped'); assert.equal(collapsed(), 1);
+  assert.equal(emit('site:x', t0 + 10 * 60_000 + 1), 1, 'one millisecond later it counts again'); assert.equal(collapsed(), 2);
+  assert.equal(emit('occ:release:9'), 1); assert.equal(emit('occ:release:9', t0 + 86400_000), 0, 'a folded occurrence is never counted twice'); assert.equal(collapsed(), 3);
+  // The entries are never delivered on their own: one send per stored item plus one for the folded count.
+  const calls = mockFetch(ok);
+  for (let round = 0; round < 4; round++) await delivery.deliverDue({ at: t0 + round });
+  assert.equal(calls.length, 51); assert.equal(JSON.parse(calls.at(-1).init.body).text, '3 more alerts. Open DockNest to see them.');
+});
+
 test('secrets never appear in views, API answers, logs, audit rows, outbox rows or errors', async () => {
   for (const route of ['/alerts', '/alerts/credentials', '/alerts/channels', '/alerts/rules']) await call('GET', route);
   const views = JSON.stringify(connections.listConnections()) + JSON.stringify(store.listCredentials()) + JSON.stringify(store.listChannels()) + JSON.stringify(providerList());
