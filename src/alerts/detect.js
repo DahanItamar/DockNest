@@ -18,8 +18,11 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
+  // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
+  const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
+  count += tests.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE j.type='backup' AND j.status IN ('completed','failed','recovery_required') AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -36,8 +39,35 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves) write(CURSOR, { jobs, moves });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups });
   return count;
+}
+
+// Finished restore tests (failed, couldn't run, passed after a failure) and clean-ups that failed after their retries.
+// Clean-up failures are read from the audit row the engine writes, so a retried clean-up that fails again alerts again.
+// The site's own server and the test server both match server rules; {server} in the message is the test server.
+function detectRestoreTests(since, cleanupsSince) {
+  let count = 0, last = since, lastCleanup = cleanupsSince;
+  const finished = db.prepare(`SELECT t.id,t.site_id,t.result,t.finished_at,t.server_id,s.name AS site,s.server_id AS live_id,v.name AS server FROM restore_tests t JOIN sites s ON s.id=t.site_id JOIN servers v ON v.id=t.server_id
+    WHERE t.finished_at>? AND t.result IN ('passed','failed','couldnt_run') ORDER BY t.finished_at,t.id LIMIT 100`).all(since);
+  for (const test of finished) {
+    last = test.finished_at;
+    let type = test.result === 'failed' ? 'restore_test.failed' : test.result === 'couldnt_run' ? 'restore_test.couldnt_run' : null;
+    if (test.result === 'passed') {
+      const previous = db.prepare("SELECT result FROM restore_tests WHERE site_id=? AND id<>? AND result IN ('passed','failed') AND finished_at<=? ORDER BY finished_at DESC,id DESC LIMIT 1").get(test.site_id, test.id, test.finished_at);
+      if (previous?.result === 'failed') type = 'restore_test.recovered';
+    }
+    if (type) count += emit({ type, key: `occ:restore-test:${test.id}:${type}`, at: test.finished_at, siteId: test.site_id, serverId: test.live_id, targetServerId: test.server_id, timeZone: zoneFor(test.site_id), siteName: test.site, serverName: test.server });
+  }
+  const failures = db.prepare(`SELECT a.id,a.created_at,a.target AS site_id,a.detail FROM audit_events a WHERE a.action='restore_test.cleanup_failed' AND a.created_at>? ORDER BY a.created_at,a.id LIMIT 100`).all(cleanupsSince);
+  for (const row of failures) {
+    lastCleanup = row.created_at;
+    let details = {}; try { details = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
+    const info = db.prepare('SELECT s.name AS site,s.server_id AS live_id,v.id AS server_id,v.name AS server FROM sites s JOIN servers v ON v.id=? WHERE s.id=?').get(details.server ?? '', row.site_id);
+    if (!info) continue;
+    count += emit({ type: 'restore_test.needs_you', key: `occ:restore-test-cleanup:${row.id}`, at: row.created_at, siteId: row.site_id, serverId: info.live_id, targetServerId: info.server_id, timeZone: zoneFor(row.site_id), siteName: info.site, serverName: info.server });
+  }
+  return { count, tests: last, cleanups: lastCleanup };
 }
 
 export function detectUpdate() {

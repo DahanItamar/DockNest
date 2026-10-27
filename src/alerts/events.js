@@ -1,6 +1,6 @@
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you']);
 export const SOURCE_KINDS = Object.freeze(['docknest', 'server', 'site']);
 // Disk threshold: low when more than 90 percent is used or less than 5 GB is free.
 export const DISK_USED_PERCENT = 90;
@@ -36,6 +36,11 @@ export function messageFor(event) {
       return `Move needs your decision: ${site}. Open DockNest to continue.`;
     case 'server.unreachable': return `Server unreachable: ${server} has not answered${when}. Open DockNest to check it.`;
     case 'server.disk_low': return `Low disk space on ${server}: ${gb(event.freeBytes)} free (${Math.round(event.usedPercent)}% used). Open DockNest to review.`;
+    // Restore tests (docs/restore-tests.md, "Alerts"): {server} is the test server.
+    case 'restore_test.failed': return `Restore test failed: ${site} on ${server}${when}. Open DockNest to see why.`;
+    case 'restore_test.couldnt_run': return `Restore test couldn't run: ${site} on ${server}${when}. Open DockNest to see why.`;
+    case 'restore_test.recovered': return `Restore test passed again: ${site} on ${server}${when}.`;
+    case 'restore_test.needs_you': return `Restore test could not clean up on ${server}. Open DockNest to check it.`;
     case 'update.available': return `DockNest ${clean(event.version, 'update')} is available. Open DockNest to update.`;
     default: return null;
   }
