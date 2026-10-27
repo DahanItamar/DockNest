@@ -386,7 +386,8 @@ test('SMTP refuses bad addresses, link-local targets and header injection before
   await assert.rejects(smtp.sendMail(mail(587, 'starttls', { to: ['a@example.com\r\nRCPT TO:<x@example.com>'] }), { subject: 's', text: 't' }), error => error.code === 'config');
   await assert.rejects(smtp.sendMail(mail(587, 'starttls', { host: '169.254.169.254' }), { subject: 's', text: 't' }), error => error.code === 'blocked');
   assert.equal(smtp.addressAllowed('::ffff:169.254.169.254'), false);
-  assert.equal(smtp.addressAllowed('192.168.1.10'), true, 'a mail relay on the home network is allowed');
+  assert.equal(smtp.addressAllowed('192.168.1.10', { privateOk: true }), true, 'a mail relay on the home network is allowed when an administrator set it');
+  assert.equal(smtp.addressAllowed('192.168.1.10'), false, 'a relay host set by anyone else must be public');
   const message = smtp.buildMessage({ from: 'a@example.com', to: ['b@example.com'], subject: 'x\r\nBcc: evil@example.com', text: 't', id: '1' });
   assert.ok(!/\r\nBcc:/i.test(message), 'subject cannot add a header');
 });

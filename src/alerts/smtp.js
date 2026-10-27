@@ -1,13 +1,15 @@
 // Minimal SMTP submission client on node:net / node:tls (docs/alerts.md). One message, one recipient list, text only.
 // - Encryption is mandatory: implicit TLS (security 'tls', usually port 465) or STARTTLS (usually 587). Certificates are
 //   verified against the configured host name. There is no plaintext mode, so the password never crosses the network clear.
-// - The host name is resolved once, the address is checked (no link-local or metadata range) and the connection goes to
-//   that address, so a name cannot change between check and connect.
+// - The host name is resolved once, the address is checked (never loopback, link-local or metadata; private only for a
+//   relay host an administrator set, see addressAllowed) and the connection goes to that address, so a name cannot
+//   change between check and connect.
 // - Bounded everywhere: connect and total time, reply size, line length, message size. Server replies are never returned
 //   to callers or logged; failures are reported as short fixed sentences.
 import net, { BlockList, isIP } from 'node:net';
 import tls from 'node:tls';
 import dns from 'node:dns/promises';
+import { classify } from './addresses.js';
 
 export const smtpLimits = Object.freeze({ totalMs: 20_000, replyBytes: 16 * 1024, connectionBytes: 64 * 1024, replyLines: 100, bodyBytes: 4096, lineBytes: 998 });
 export class SmtpError extends Error { constructor(message, code = 'smtp') { super(message); this.code = code; } }
@@ -20,7 +22,22 @@ blocked.addSubnet('127.0.0.0', 8, 'ipv4');
 // Only the test suite sets this, to reach a fake server on 127.0.0.1. There is no setting or API for it.
 export const smtpPolicy = { allowLoopback: false };
 const isLoopback = (address, family) => family === 4 ? address.startsWith('127.') : address === '::1';
-export const addressAllowed = address => { const family = isIP(address); if (!family) return false; const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); if (mapped) return addressAllowed(mapped[1]); if (smtpPolicy.allowLoopback && isLoopback(address, family)) return true; return !blocked.check(address, family === 4 ? 'ipv4' : 'ipv6'); };
+// IPv4-mapped IPv6 in dotted or hex form (::ffff:127.0.0.1, ::ffff:7f00:1) is judged as the IPv4 it carries.
+const mappedIpv4 = address => {
+  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address); if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(address); if (!hex) return null;
+  const [high, low] = [parseInt(hex[1], 16), parseInt(hex[2], 16)]; return [high >> 8, high & 255, low >> 8, low & 255].join('.');
+};
+// privateOk (docs/alert-channels.md, "Outbound safety", Email): true for a relay host set by an administrator or migrated
+// from 2.8, which keeps the 2.8 rule word for word (private relays allowed). False for a host set by anyone else: the
+// address must be public by the outbound policy (addresses.js), so it can never reach the LAN or a refused range.
+export const addressAllowed = (address, { privateOk = false } = {}) => {
+  const family = isIP(address); if (!family) return false;
+  const mapped = mappedIpv4(address); if (mapped) return addressAllowed(mapped, { privateOk });
+  if (smtpPolicy.allowLoopback && isLoopback(address, family)) return true;
+  if (blocked.check(address, family === 4 ? 'ipv4' : 'ipv6')) return false;
+  return privateOk || classify(address) === 'public';
+};
 const unreachable = 'The mail server could not be reached.';
 
 // Tests replace these to talk to a local server.
@@ -58,7 +75,7 @@ class Connection {
   async command(text, expect) {
     if (text !== null) this.socket.write(text + '\r\n');
     const reply = await this.read();
-    if (!expect.includes(reply.code)) throw new SmtpError(reply.code === 535 || reply.code === 534 ? 'The mail server refused the user name or password.' : reply.code >= 500 ? 'The mail server refused the message.' : 'The mail server could not take the message right now.', reply.code === 535 ? 'auth' : 'refused');
+    if (!expect.includes(reply.code)) throw new SmtpError(reply.code === 535 || reply.code === 534 ? 'The mail server refused the user name or password.' : reply.code >= 500 ? 'The mail server refused the message.' : 'The mail server could not take the message right now.', reply.code === 535 || reply.code === 534 ? 'auth' : 'refused');
     return reply;
   }
 }
@@ -77,14 +94,14 @@ export function buildMessage({ from, to, subject, text, date = new Date(), id })
 
 // config: { host, port, security: 'starttls' | 'tls', username, password, from, to: [address] }
 // With `message` null it only connects, encrypts and signs in (to check a credential), then quits without sending.
-export async function sendMail(config, message, { id = String(Date.now()), tlsOptions = {} } = {}) {
+export async function sendMail(config, message, { id = String(Date.now()), tlsOptions = {}, privateOk = false } = {}) {
   const { subject, text } = message ?? {};
   const from = mailbox(config.from), recipients = (config.to ?? []).map(mailbox);
   if (!from || (message && (!recipients.length || recipients.some(item => !item)))) throw new SmtpError('The sender or recipient address is not valid.', 'config');
   let connection, timer;
   const run = async () => {
     const address = await smtpIo.resolve(config.host);
-    if (!addressAllowed(address)) throw new SmtpError(unreachable, 'blocked');
+    if (!addressAllowed(address, { privateOk })) throw new SmtpError(unreachable, 'blocked');
     const implicitTls = config.security === 'tls';
     const socket = await smtpIo.connect({ address, port: config.port, host: config.host, implicitTls, tlsOptions });
     connection = new Connection(socket);

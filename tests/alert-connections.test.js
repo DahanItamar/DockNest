@@ -322,9 +322,10 @@ test('cap: events folded into "N more alerts" keep their dedup entry, so a repea
   assert.equal(emit('site:x', t0 + 10 * 60_000), 0, 'a repeat at exactly the 10-minute boundary is dropped'); assert.equal(collapsed(), 1);
   assert.equal(emit('site:x', t0 + 10 * 60_000 + 1), 1, 'one millisecond later it counts again'); assert.equal(collapsed(), 2);
   assert.equal(emit('occ:release:9'), 1); assert.equal(emit('occ:release:9', t0 + 86400_000), 0, 'a folded occurrence is never counted twice'); assert.equal(collapsed(), 3);
-  // The entries are never delivered on their own: one send per stored item plus one for the folded count.
+  // The entries are never delivered on their own: one send per stored item plus one for the folded count. Each round
+  // starts a new rate window (20 messages per Connection per 10 minutes).
   const calls = mockFetch(ok);
-  for (let round = 0; round < 4; round++) await delivery.deliverDue({ at: t0 + round });
+  for (let round = 0; round < 4; round++) await delivery.deliverDue({ at: t0 + round * delivery.deliveryPolicy.rateWindowMs });
   assert.equal(calls.length, 51); assert.equal(JSON.parse(calls.at(-1).init.body).text, '3 more alerts. Open DockNest to see them.');
 });
 
