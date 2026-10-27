@@ -1,4 +1,4 @@
-// The Connections store under the 2.8 routes (docs/alert-channels.md, "API" adapter rules, "Rollback", "Sealed storage",
+// The Connections store under the 2.8 views (the 2.8 routes themselves are gone) (docs/alert-channels.md, "API" adapter rules, "Rollback", "Sealed storage",
 // "Delivery"). The database starts as a 2.9.0 one with 2.8 alerts sealed by the real master key, so the upgrade copy runs
 // when the API starts. Fake tokens and passwords only.
 import test from 'node:test';
@@ -8,6 +8,7 @@ import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { legacyCalls } from './fixtures/legacy-alert-calls.js';
 
 const directory = await mkdtemp(join(tmpdir(), 'docknest-alert-connections-'));
 Object.assign(process.env, { DATA_DIR: directory, BACKUP_DIR: join(directory, 'backups'), BACKUP_STORAGE: 'local', MASTER_KEY_FILE: join(directory, 'master.key'), SETUP_TOKEN_FILE: join(directory, 'setup.token'), SECURE_COOKIES: 'false', NODE_ENV: 'test', APP_ORIGIN: 'http://127.0.0.1:3000' });
@@ -49,8 +50,11 @@ function user(role) {
   return (route, options = {}) => fetch(base + route, { ...options, headers: { Cookie: 'dbm_session=' + token, Origin: process.env.APP_ORIGIN, 'x-csrf-token': 'csrf', 'Content-Type': 'application/json' } });
 }
 const admin = user('admin');
-const call = async (method, route, body) => { const response = await admin(route, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const text = await response.text(); responses.push(text); return { status: response.status, body: text ? JSON.parse(text) : null }; };
+// The 2.8 routes are gone (the Map uses /api/connections and /api/alerts/nodes); their store functions are the 2.8 view
+// these upgrade tests check, called the way the old routes did (tests/fixtures/legacy-alert-calls.js).
 const responses = [];
+const call = legacyCalls({ store, delivery, actor: 'admin-test', record: text => responses.push(text) });
+const http = async (method, route, body) => { const response = await admin(route, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); const text = await response.text(); responses.push(text); return { status: response.status, body: text ? JSON.parse(text) : null }; };
 const mockFetch = handler => { const calls = []; delivery.alertHttp.fetch = async (url, init) => { calls.push({ url, init }); return handler(url, init, calls.length); }; return calls; };
 const ok = () => new Response('{"ok":true,"result":{}}', { status: 200 });
 const group = credentialId => db.prepare('SELECT * FROM connections WHERE origin=? ORDER BY created_at,id').all(`legacy:${credentialId}`);
@@ -331,6 +335,7 @@ test('cap: events folded into "N more alerts" keep their dedup entry, so a repea
 
 test('secrets never appear in views, API answers, logs, audit rows, outbox rows or errors', async () => {
   for (const route of ['/alerts', '/alerts/credentials', '/alerts/channels', '/alerts/rules']) await call('GET', route);
+  for (const route of ['/alerts', '/alerts/nodes', '/alerts/rules', '/connections', '/connections/providers']) assert.equal((await http('GET', route)).status, 200, route);
   const views = JSON.stringify(connections.listConnections()) + JSON.stringify(store.listCredentials()) + JSON.stringify(store.listChannels()) + JSON.stringify(providerList());
   const stored = JSON.stringify(db.prepare('SELECT * FROM audit_events').all()) + JSON.stringify(db.prepare('SELECT * FROM alert_outbox').all()) + JSON.stringify(db.prepare('SELECT id,name,settings,origin,last_error FROM connections').all()) + JSON.stringify(db.prepare('SELECT * FROM alert_nodes').all());
   for (const secret of [TOKEN, NEW_TOKEN, PASSWORD, '123456789:', sealedBot, sealedMail]) {

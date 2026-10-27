@@ -32,7 +32,7 @@ async function boundedText(response) {
   return Buffer.concat(parts).toString('utf8');
 }
 // final: not worth retrying (a rejected login, a gone destination). wait: a 429's wait in ms, which uses up no try.
-class DeliveryError extends Error { constructor(message, final = false, wait = null) { super(message); this.final = final; this.wait = wait; } }
+export class DeliveryError extends Error { constructor(message, final = false, wait = null) { super(message); this.final = final; this.wait = wait; } }
 const unreadable = () => new DeliveryError('The saved settings cannot be read. Enter them again.');
 // The sealed login and the plain destination of a Connection, checked against its provider. Never returned anywhere.
 function valuesOf(connection) {

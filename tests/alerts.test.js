@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { legacyCalls } from './fixtures/legacy-alert-calls.js';
 
 const directory = await mkdtemp(join(tmpdir(), 'docknest-alerts-'));
 Object.assign(process.env, { DATA_DIR: directory, BACKUP_DIR: join(directory, 'backups'), BACKUP_STORAGE: 'local', MASTER_KEY_FILE: join(directory, 'master.key'), SETUP_TOKEN_FILE: join(directory, 'setup.token'), SECURE_COOKIES: 'false', NODE_ENV: 'test', APP_ORIGIN: 'http://127.0.0.1:3000' });
@@ -34,7 +35,13 @@ function user(role, authenticatedAt = Date.now(), csrfHeader = true) {
   return (route, options = {}) => fetch(base + route, { ...options, headers: { Cookie: 'dbm_session=' + token, Origin: process.env.APP_ORIGIN, ...(csrfHeader ? { 'x-csrf-token': 'csrf' } : {}), 'Content-Type': 'application/json' } });
 }
 const admin = user('admin'), staleAdmin = user('admin', Date.now() - 3600000), operator = user('operator'), noCsrf = user('admin', Date.now(), false);
-const send = (as, method, route, body) => as(route, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+// The 2.8 credential and channel routes are gone; their store functions stay as the 2.8 view that these tests check,
+// called the way the old routes did (tests/fixtures/legacy-alert-calls.js). Everything else goes over HTTP.
+const legacy = legacyCalls({ store, delivery, actor: 'admin' }), legacyRoute = /^[/]alerts[/](credentials|channels)([/]|$)/;
+const send = async (as, method, route, body) => {
+  if ((as === admin || as === staleAdmin) && legacyRoute.test(route)) { const answer = await legacy(method, route, body); return { status: answer.status, json: async () => answer.body, text: async () => JSON.stringify(answer.body) }; }
+  return as(route, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+};
 
 const TOKEN = '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35), PASSWORD = 'hunter2-correct-horse';
 const server = (name, host = '203.0.113.7') => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(serverId, name, host, 22, 'root', 'fixture', '0'.repeat(64), at()); return serverId; };
@@ -49,20 +56,23 @@ const reset = () => { db.exec('DELETE FROM alert_outbox;DELETE FROM alert_lines;
 const credBody = { kind: 'telegram', name: 'Bot', config: { token: TOKEN } };
 const smtpBody = { kind: 'smtp', name: 'Mail account', config: { host: 'smtp.example.com', port: 587, security: 'starttls', username: 'bot', password: PASSWORD, from: 'docknest@example.com' } };
 
-test('only administrators reach the alert API, writes need CSRF and credential writes need a recent re-verification', async () => {
+test('administrators reach the alert API, operators do not while the setting is off, writes need CSRF and Connection writes need a recent re-verification', async () => {
   reset();
+  const connection = { provider: 'telegram', name: 'Bot', values: { token: TOKEN, chatId: '-1001234567890' } };
   assert.equal((await send(operator, 'GET', '/alerts')).status, 403);
-  assert.equal((await send(operator, 'POST', '/alerts/credentials', credBody)).status, 403);
-  assert.equal((await send(noCsrf, 'POST', '/alerts/credentials', credBody)).status, 403);
-  const stale = await send(staleAdmin, 'POST', '/alerts/credentials', credBody);
+  assert.equal((await send(operator, 'GET', '/connections')).status, 403);
+  assert.equal((await send(operator, 'POST', '/connections', connection)).status, 403);
+  assert.equal((await send(noCsrf, 'POST', '/connections', connection)).status, 403);
+  const stale = await send(staleAdmin, 'POST', '/connections', connection);
   assert.equal(stale.status, 403); assert.equal((await stale.json()).code, 'REAUTH_REQUIRED');
   assert.equal((await send(staleAdmin, 'GET', '/alerts')).status, 200, 'reading is allowed without re-verification');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM connections').get().n, 0);
-  const credential = await (await send(admin, 'POST', '/alerts/credentials', credBody)).json();
-  assert.equal((await send(staleAdmin, 'PATCH', `/alerts/credentials/${credential.id}`, { name: 'x' })).status, 403);
-  assert.equal((await send(staleAdmin, 'DELETE', `/alerts/credentials/${credential.id}`)).status, 403);
-  assert.equal((await send(operator, 'POST', '/alerts/channels', tgNode())).status, 403);
-  assert.equal((await send(staleAdmin, 'POST', '/alerts/channels', tgNode())).status, 201, 'nodes hold no secret and need no re-verification');
+  const made = await (await send(admin, 'POST', '/connections', connection)).json();
+  assert.equal((await send(staleAdmin, 'PATCH', `/connections/${made.id}`, { name: 'Renamed' })).status, 200, 'a rename needs no re-verification');
+  assert.equal((await send(staleAdmin, 'PATCH', `/connections/${made.id}`, { values: { chatId: '-100999' } })).status, 403, 'a destination change does');
+  assert.equal((await send(staleAdmin, 'DELETE', `/connections/${made.id}`)).status, 403);
+  assert.equal((await send(operator, 'POST', '/alerts/nodes', { name: 'Phone', provider: 'telegram', connectionId: made.id })).status, 403);
+  assert.equal((await send(staleAdmin, 'POST', '/alerts/nodes', { name: 'Phone', provider: 'telegram', connectionId: made.id })).status, 201, 'nodes hold no secret and need no re-verification');
 });
 
 test('credential secrets are sealed, never returned, never audited, and kept when an update omits them', async () => {

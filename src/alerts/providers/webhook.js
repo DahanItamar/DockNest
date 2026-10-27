@@ -23,7 +23,7 @@ const header = z.string().max(1024, 'The header must be one line of plain charac
 export const body = message => { const { title, event, at, url } = parts(message); return { title, site: line(message?.site), server: line(message?.server), message: plainLine(message), url: url || null, event, at }; };
 
 export default freeze({
-  id: 'webhook', label: 'Other (webhook URL)', icon: 'webhook', group: 'advanced',
+  id: 'webhook', label: 'Other (webhook URL)', icon: 'webhook', group: 'advanced', adminOnly: true,
   fields: freeze([
     field({ key: 'url', label: 'Webhook URL', type: 'url', secret: true, required: true, help: 'For advanced users. DockNest sends a POST with a fixed JSON body.' }),
     field({ key: 'header', label: 'Header', type: 'password', secret: true, more: true, help: 'Optional, one line: Authorization: Bearer ... or X-Name: value.' }),

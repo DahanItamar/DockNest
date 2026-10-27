@@ -30,5 +30,7 @@ export function sealedView(id, secret) {
   const item = provider(id); if (item.view) return item.view(secret);
   return Object.fromEntries(item.fields.filter(field => field.secret).map(field => [`${field.key}Set`, Boolean(secret?.[field.key])]));
 }
-// What the UI renders from (`GET /api/connections/providers`, PR 4): no schema code, no functions.
-export const providerList = () => Object.values(providers).map(({ id, label, icon, group, fields, testNote }) => ({ id, label, icon, group, fields: fields.map(field => ({ ...field })), ...(testNote ? { testNote } : {}) }));
+// What the UI renders from (`GET /api/connections/providers`): no schema code, no functions. `adminOnly`: only
+// administrators create or edit it (Other). `destination` and `host` name the fields whose change needs a re-verification,
+// or the secrets typed again, so the dialog can say so before the API refuses.
+export const providerList = () => Object.values(providers).map(({ id, label, icon, group, fields, testNote, adminOnly, destination, host }) => ({ id, label, icon, group, fields: fields.map(field => ({ ...field })), destination: [...destination], host: [...host], ...(testNote ? { testNote } : {}), ...(adminOnly ? { adminOnly: true } : {}) }));

@@ -13,7 +13,8 @@ import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
 import { moveRoutes, cloudflareRoutes } from './moves/routes.js';
 import { requestInstall, findInstall } from './installs.js';
-import { alertRoutes } from './alerts/routes.js';
+import { alertRoutes, connectionRoutes } from './alerts/routes.js';
+import { canManageAlerts } from './alerts/connections.js';
 import { restoreTestRoutes, acknowledgeTestJob } from './restore-tests/routes.js';
 import { storageReportRoutes } from './storage-report.js';
 import { backupTestStates, notTested } from './restore-tests/views.js';
@@ -65,6 +66,7 @@ app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
 app.use('/api/moves', moveRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/connections', connectionRoutes);
 app.use('/api', restoreTestRoutes);
 app.use('/api', storageReportRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
@@ -144,7 +146,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: (tested => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested })))(backupTestStates(backups.map(backup => backup.id))), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: (tested => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested })))(backupTestStates(backups.map(backup => backup.id))), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });

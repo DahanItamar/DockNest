@@ -20,6 +20,23 @@ export function setAllowPrivateNetwork(enabled, actor, role) {
   audit(actor, 'alerts.private_network', null, { enabled: Boolean(enabled), role });
   return { allowPrivateNetwork: allowPrivateNetwork() };
 }
+// "Operators can manage alerts" (docs/alert-channels.md, "Who may do what"): off by default and when the row is missing,
+// and the migration never sets it, so an upgraded install behaves as 2.8 (administrators only). Read at every request, so
+// turning it off applies to an operator's very next request. Only an administrator changes it (the route adds the
+// re-verification); audited with the actor's role, never with values.
+export const OPERATORS_KEY = 'alerts_operators_manage';
+export const operatorsManage = () => db.prepare('SELECT value FROM settings WHERE key=?').get(OPERATORS_KEY)?.value === 'true';
+export function setOperatorsManage(enabled, actor, role) {
+  if (role !== 'admin') throw Object.assign(new Error('Only an administrator can change this setting.'), { status: 403, code: 'ALERTS_ADMIN_REQUIRED' });
+  db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(OPERATORS_KEY, enabled ? 'true' : 'false');
+  audit(actor, 'alerts.operators_manage', null, { enabled: Boolean(enabled), role });
+  return { operatorsManage: operatorsManage() };
+}
+// Whether this signed-in user may see and manage alerts now: administrators always, operators only with the setting on.
+// The role always comes from the session (req.user), never from a request body.
+export const canManageAlerts = user => user?.role === 'admin' || (user?.role === 'operator' && operatorsManage());
+export const alertSettings = () => ({ allowPrivateNetwork: allowPrivateNetwork(), operatorsManage: operatorsManage() });
+
 // The `private_ok` a save stamps (docs, "Data model"). It follows who last set the host or URL, not who saved last:
 // - no host or URL change: the saved value stays (an operator renaming or changing recipients keeps an admin's server);
 // - an operator setting a host or URL: 0;
@@ -46,6 +63,19 @@ export const legacyOrigin = credentialId => `legacy:${credentialId}`;
 export const legacyCredentialId = row => (typeof row?.origin === 'string' && row.origin.startsWith('legacy:') ? row.origin.slice(7) : null);
 const parsed = text => { try { return JSON.parse(text); } catch { return null; } };
 
+// `last_error` is one column for tests and sends. It holds the sentence of the most recent failure of either kind, so a
+// view gives each failed result its own sentence only when it is that most recent failure; an older failure (or a 2.8
+// credential whose error was not copied at the upgrade) shows a fixed sentence instead of someone else's error.
+export const TEST_FAILED = 'The last test did not go through.', SEND_FAILED = 'The last message could not be sent.';
+export function resultErrors(row) {
+  const testAt = Date.parse(row.last_test_at ?? '') || 0, sendAt = Date.parse(row.last_send_at ?? '') || 0;
+  const latest = row.last_test === 'failed' && (row.last_send !== 'failed' || testAt >= sendAt) ? 'test' : row.last_send === 'failed' ? 'send' : null;
+  return {
+    testError: row.last_test === 'failed' ? (latest === 'test' && row.last_error) || TEST_FAILED : null,
+    sendError: row.last_send === 'failed' ? (latest === 'send' && row.last_error) || SEND_FAILED : null,
+    lastError: row.last_error,
+  };
+}
 // The redacted view. Never carries `secret`; Email shows its sealed server fields as the 2.8 credential view did.
 export function connectionView(row) {
   const item = provider(row.provider);
@@ -53,7 +83,7 @@ export function connectionView(row) {
   return {
     id: row.id, provider: row.provider, name: row.name, values: { ...(sealed ?? {}), ...(parsed(row.settings) ?? {}) }, secretReadable: sealed !== null,
     usedBy: nodesUsing(row.id), createdAt: row.created_at, updatedAt: row.updated_at,
-    lastTest: row.last_test, lastTestAt: row.last_test_at, lastSend: row.last_send, lastSendAt: row.last_send_at, lastError: row.last_error,
+    lastTest: row.last_test, lastTestAt: row.last_test_at, lastSend: row.last_send, lastSendAt: row.last_send_at, ...resultErrors(row),
   };
 }
 export const listConnections = () => db.prepare('SELECT * FROM connections ORDER BY created_at,id').all().map(connectionView);
@@ -71,10 +101,11 @@ export function sealedWrite(fn) {
   try { return fn(); } finally { db.exec(`PRAGMA secure_delete=${Number(before) === 1 ? 'ON' : Number(before) === 2 ? 'FAST' : 'OFF'}`); }
 }
 export function recordConnectionTest(connectionId, ok, error = null) {
-  sealedWrite(() => db.prepare('UPDATE connections SET last_test=?,last_test_at=?,last_error=? WHERE id=?').run(ok ? 'ok' : 'failed', new Date().toISOString(), ok ? null : String(error ?? 'The check failed.').slice(0, 200), connectionId));
+  // A passing test keeps the sentence of a failed real send (the warning panel still needs it), and the other way round.
+  sealedWrite(() => db.prepare("UPDATE connections SET last_test=?,last_test_at=?,last_error=CASE WHEN ?=1 THEN (CASE WHEN last_send='failed' AND COALESCE(last_send_at,'')>=COALESCE(last_test_at,'') THEN last_error END) ELSE ? END WHERE id=?").run(ok ? 'ok' : 'failed', new Date().toISOString(), ok ? 1 : 0, ok ? null : String(error ?? 'The check failed.').slice(0, 200), connectionId));
 }
 export function recordConnectionSend(connectionId, ok, error = null) {
-  sealedWrite(() => db.prepare('UPDATE connections SET last_send=?,last_send_at=?,last_error=? WHERE id=?').run(ok ? 'ok' : 'failed', new Date().toISOString(), ok ? null : String(error ?? 'The message could not be sent.').slice(0, 200), connectionId));
+  sealedWrite(() => db.prepare("UPDATE connections SET last_send=?,last_send_at=?,last_error=CASE WHEN ?=1 THEN (CASE WHEN last_test='failed' AND COALESCE(last_test_at,'')>=COALESCE(last_send_at,'') THEN last_error END) ELSE ? END WHERE id=?").run(ok ? 'ok' : 'failed', new Date().toISOString(), ok ? 1 : 0, ok ? null : String(error ?? 'The message could not be sent.').slice(0, 200), connectionId));
 }
 
 // Replacing or deleting a sealed value: secure_delete zeroes the freed space, then a checkpoint moves the old page images
