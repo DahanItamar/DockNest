@@ -2,6 +2,7 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
+import {EVENTS_FOR,EVENT_LABEL} from '../web/map/alerts-client.js';
 
 // Read-only Map page against a mocked API: servers, sites and connectors, stable automatic layout on reload, no overlaps,
 // zoom and fit, the phone list at 402 px, light and dark, names and roles. Run against a dev server:
@@ -145,6 +146,7 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   if(endpoint==='/api/servers/a/discover'){mock.discovers++;return route.fulfill({json:{containers:[{name:'crm-web',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'web'}},{name:'crm-db',Labels:{'com.docker.compose.project':'crm.example.com','com.docker.compose.service':'db'}},{name:'wiki',Labels:{}}],staticSites:[{documentRoot:'/var/www/landing',name:'landing.example.com',configFiles:[]}]}});}
   if(endpoint==='/api/servers/a/test'){mock.tests++;return route.fulfill({json:{ok:true}});}
   if(endpoint==='/api/storage-targets')return route.fulfill({json:targets});
+  if(endpoint==='/api/storage-report')return route.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}});
   if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});if(mock.alreadyInstalled)return route.fulfill({status:409,json:{error:'Docker is installed but not running. Start it, then check again.',code:'ALREADY_INSTALLED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
   if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to itamar-Srv',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
@@ -159,6 +161,15 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
 const boxes=(page,sel)=>page.locator(sel).evaluateAll(els=>els.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,id:e.dataset.site||e.id}}));
 const overlap=(a,b)=>a.x<b.x+b.w-0.5&&b.x<a.x+a.w-0.5&&a.y<b.y+b.h-0.5&&b.y<a.y+a.h-0.5;
 async function fits(page,label){const o=await page.evaluate(()=>({sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth}));assert.ok(o.sw<=o.cw,label+': horizontal overflow');}
+async function panelShot(loc,scheme,name){if(!shots)return;
+ // the whole panel, not the scrolled part: let it grow for the picture
+ await loc.evaluate(e=>{e.dataset.h=e.style.height;e.style.height='auto';e.style.bottom='auto';e.style.maxHeight='none';const b=e.querySelector('.map-panel-body');if(b)b.style.overflow='visible'});;
+ await loc.screenshot({path:path.join(shots,`panel-${name}-${scheme}.png`)});
+ await loc.evaluate(e=>{e.style.height=e.dataset.h;e.style.bottom='';e.style.maxHeight='';const b=e.querySelector('.map-panel-body');if(b)b.style.overflow=''});}
+// Copy icons sit on the right edge of their row, values on the left, and nothing is cut off at the panel edge
+async function copyLayout(panel){const pb=await panel.boundingBox();
+ for(const b of await panel.locator('.map-copy').all()){const bb=await b.boundingBox(),vb=await b.locator('xpath=preceding-sibling::*[1]').boundingBox();assert.ok(bb.width===32&&bb.height===32,'32 px copy button '+bb.width+'x'+bb.height);const hit=await b.evaluate(e=>{const r=getComputedStyle(e,'::after');return [parseFloat(r.width),parseFloat(r.height),innerWidth]});if(hit[2]<=480)assert.ok(hit[0]>=44&&hit[1]>=44,'44 px copy touch target '+hit);assert.ok(bb.x+bb.width<=pb.x+pb.width+0.5&&vb.x+vb.width<=bb.x,'copy icon is right of its value, inside the panel');}
+ assert.equal(await panel.locator('.map-panel-body,.map-dialog-body').first().evaluate(e=>e.scrollWidth<=e.clientWidth),true,'no horizontal clipping in the panel');}
 async function shot(page,scheme,size){if(shots)await page.screenshot({path:path.join(shots,`map-${size}-${scheme}.png`)});}
 const scaleOf=page=>page.locator('.map-canvas').evaluate(el=>new DOMMatrix(getComputedStyle(el).transform).a);
 
@@ -643,7 +654,14 @@ async function alertsFlow(scheme){
  alertsDb.testFail=true;await panel.getByRole('button',{name:'Send test message'}).click();await panel.getByText(/Telegram did not accept the message/).waitFor();alertsDb.testFail=false;
  await panel.getByRole('tab',{name:'Sends when'}).click();
  assert.equal(await panel.locator('fieldset.map-src').count(),2,'two sources on Ops chat');
- assert.equal(await panel.getByRole('checkbox').count(),7+6,'DockNest offers 7 events, a server 6');
+ assert.equal(await panel.getByRole('checkbox').count(),EVENTS_FOR.docknest.length+EVENTS_FOR.server.length,'DockNest and a server offer their own event lists');
+ // Each source lists exactly its events, in order, with their plain labels (restore tests included: the test server and
+ // the tested site's server both match a server line, and a DockNest line matches every event).
+ for(const fieldset of await panel.locator('fieldset.map-src').all()){
+  const kind=(await fieldset.getAttribute('data-src')).split(':')[0];
+  assert.deepEqual(await fieldset.locator('label.map-check').allTextContents(),EVENTS_FOR[kind].map(e=>EVENT_LABEL[e]),kind+' events');
+ }
+ assert.ok(EVENTS_FOR.server.filter(e=>e.startsWith('restore_test.')).map(e=>EVENT_LABEL[e]).join('|')==='Restore test failed|Restore test couldn’t run|Restore test passed again|Restore test needs clean-up','restore test labels');
  await shot(page,scheme,'1440-alerts-sends');
  // Cancel discards every change
  await panel.getByRole('checkbox',{name:'Update available'}).uncheck();await panel.getByRole('button',{name:'Disconnect Frankfurt-1'}).click();
@@ -655,7 +673,8 @@ async function alertsFlow(scheme){
  await panel.getByRole('heading',{name:'Team inbox'}).waitFor();
  const block=panel.locator('fieldset[data-src="site:s2"]');await block.waitFor();
  assert.equal(await block.getByRole('checkbox',{name:'Backup failed'}).isChecked(),true);assert.equal(await block.getByRole('checkbox',{name:'Move needs you'}).isChecked(),true);assert.equal(await block.getByRole('checkbox',{name:'Backup succeeded'}).isChecked(),false);
- assert.equal(await block.getByRole('checkbox').count(),4,'a site offers four events');
+ assert.deepEqual(await block.locator('label.map-check').allTextContents(),EVENTS_FOR.site.map(e=>EVENT_LABEL[e]),'a site offers its events, restore tests included');
+ assert.equal(await block.getByRole('checkbox',{name:'Restore test failed'}).isChecked(),false,'new events start unticked');
  assert.equal(alertsDb.rules.length,4,'nothing is saved until Save');
  await shot(page,scheme,'1440-alerts-new-line');
  await block.getByRole('checkbox',{name:'Backup succeeded'}).check();
@@ -710,7 +729,7 @@ async function alertsFlow(scheme){
  await panel.getByRole('button',{name:'Cancel'}).click();assert.ok(alertsDb.channels.some(c=>c.id==='c1'));
  // Keyboard and phone path: a server's details -> Send alerts to...
  await page.locator('[data-node="server:nas"]').focus();await page.keyboard.press('Enter');
- await panel.getByRole('button',{name:'Send alerts to…'}).click();
+ await panel.getByRole('button',{name:'Add alert'}).click();
  await d.getByRole('heading',{name:'Send alerts from Home NAS to'}).waitFor();
  await d.getByRole('button',{name:/Ops chat/}).click();await panel.locator('fieldset[data-src="server:nas"]').waitFor();
  await panel.getByRole('button',{name:'Cancel'}).click();
@@ -756,9 +775,9 @@ async function layoutFlow(scheme){
  await page.locator('[data-node="server:fr"]').focus();await page.keyboard.press('Enter');
  const panel=page.locator('.map-panel');
  for(const t of ['fra.example.invalid','Port 22, user root','x86_64','84.0 GB free of 160.0 GB'])await panel.getByText(t).waitFor();
- await panel.getByRole('button',{name:'Copy address'}).waitFor();await panel.getByRole('button',{name:'Copy host key'}).waitFor();await shot(page,scheme,'1440-details-server');
+ await panel.getByRole('button',{name:'Copy address'}).waitFor();await panel.getByRole('button',{name:'Copy host key'}).waitFor();await shot(page,scheme,'1440-details-server');await panelShot(panel,scheme,'server-1440');await copyLayout(panel);
  await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
- await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('412.0 MB').waitFor();await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
+ await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('412.0 MB').waitFor();await panelShot(panel,scheme,'site-1440');await copyLayout(panel);await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
  await page.keyboard.press('Escape');await page.locator('[data-node="storage:t1"]').focus();await page.keyboard.press('Enter');await panel.getByText('Sites using it').waitFor();await panel.getByText('Last upload').waitFor();
  await context.close();
  // Operators cannot move nodes: a body drag only pans
@@ -791,9 +810,25 @@ async function alertsOperatorAndEmpty(){
  {const {context,page}=await open({appState:alertState});await page.locator('.map-site').first().waitFor();assert.equal(await page.locator('.map-alert,.map-docknest,[data-alert-src]').count(),0,'no alert parts before a node exists');
   await page.getByRole('button',{name:'Add to the map'}).click();await page.locator('.map-panel').getByRole('button',{name:/Telegram alerts/}).waitFor();await page.locator('.map-panel').getByRole('button',{name:/Email alerts/}).waitFor();
   await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
-  await page.locator('.map-panel').getByRole('button',{name:'Send alerts to…'}).click();
+  await page.locator('.map-panel').getByRole('button',{name:'Add alert'}).click();
   await sheet(page).getByText('You have no alert channels yet.',{exact:false}).waitFor();await sheet(page).getByRole('button',{name:'Add Email alerts'}).waitFor();
   await context.close();}
+}
+async function detailsPhone(scheme){
+ resetAlerts(true);
+ const {context,page}=await open({scheme,width:390,height:844,appState:alertState});
+ await page.locator('.map-list').waitFor();
+ for(const [name,tag] of [['Frankfurt-1','server'],['cinderbean.com','site']]){
+  await (tag==='server'?page.getByRole('region',{name}):page.getByRole('listitem').filter({hasText:name})).getByRole('button',{name:'Details'}).first().click();
+  const sheet=dialog(page);await sheet.getByRole('heading',{name}).waitFor();
+  assert.equal(await sheet.getByRole('button',{name:'Add alert'}).count(),1,'Add alert in the phone details');
+  await copyLayout(sheet);await panelShot(sheet,scheme,tag+'-390');
+  await page.keyboard.press('Escape');await sheet.waitFor({state:'hidden'});
+ }
+ await context.close();resetAlerts(false);const e=await open({scheme,width:390,height:844,appState:alertState});const page2=e.page;await page2.locator('.map-list').waitFor();
+ await page2.getByRole('listitem').filter({hasText:'cinderbean.com'}).getByRole('button',{name:'Details'}).first().click();
+ {const sheet=dialog(page2);await sheet.getByText('No alerts yet.').waitFor();await panelShot(sheet,scheme,'site-390-empty');}
+ await e.context.close();
 }
 async function alertsPhone(scheme){
  resetAlerts(true);
@@ -816,7 +851,7 @@ async function alertsPhone(scheme){
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  for(const scheme of ['light','dark']){
-  await alertsFlow(scheme);await alertsPhone(scheme);await layoutFlow(scheme);await glideTest(scheme);
+  await alertsFlow(scheme);await alertsPhone(scheme);await detailsPhone(scheme);await layoutFlow(scheme);await glideTest(scheme);
   if(shots){resetAlerts(true);const {context,page}=await open({scheme,width:2551,height:1257,appState:alertState});await page.locator('.map-alert').first().waitFor();await page.waitForTimeout(150);await shot(page,scheme,'2551-alerts');await context.close();}
   resetAlerts(false);
   // Desktop canvas

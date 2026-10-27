@@ -115,7 +115,7 @@ try{
    assert.equal(await page.locator('.status-actions button').count(),1);
    await shot(page,'401',scheme,width===1440?'1440x900':'402x874');
    await page.getByRole('button',{name:'Sign in'}).click();
-   await page.getByLabel('Password').waitFor();
+   await page.getByLabel('Password',{exact:true}).waitFor();
    await context.close();
   }
   // 500: the error boundary keeps Reload page and Open GitHub.

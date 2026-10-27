@@ -15,6 +15,7 @@ try{
  await page.route('**/api/auth/activity',r=>r.fulfill({json:{}}));
  await page.route('**/api/state',r=>r.fulfill({json:state}));
  await page.route('**/api/storage-targets',r=>r.fulfill({json:{targets,activeTargetId:'primary'}}));
+ await page.route('**/api/storage-report',r=>r.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}}));
  await page.route('**/api/access',r=>r.fulfill({json:{users:[{id:'admin',name:'Administrator',email:'admin@example.invalid',role:'admin',status:'active',activeSessions:1},{id:'operator',name:'Sam Operator',email:'sam@example.invalid',role:'operator',status:'active',activeSessions:0}],security:{idleMinutes:30,invitationMinutes:15,absoluteHours:8}}}));
  await page.addInitScript(()=>localStorage.setItem('docknest-theme','light'));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5173');

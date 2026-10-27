@@ -45,7 +45,8 @@
     "test:reports": "node scripts/problem-reports-browser.js",
     "test:status-pages": "node scripts/status-pages-browser.js",
     "test:map": "node scripts/map-browser.js",
-    "test:zip": "node scripts/zip-dialog-browser.js"
+    "test:zip": "node scripts/zip-dialog-browser.js",
+    "test:auth": "node scripts/auth-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

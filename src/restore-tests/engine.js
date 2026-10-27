@@ -153,10 +153,11 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
 
 // ---------- the tick ----------
 const activeJob = testId => db.prepare("SELECT id,status FROM jobs WHERE type='restore-test' AND json_extract(details,'$.testId')=? AND status IN ('test_queued','test_running','test_waiting')").get(testId);
+// The check and the insert share one immediate transaction, so the API and the worker can never both add a step job.
 function ensureJob(test, step) {
-  if (activeJob(test.id)) return;
   const jobId = id();
   transaction(() => {
+    if (activeJob(test.id)) return;
     db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore-test','test_queued',?,?,?)")
       .run(jobId, test.site_id, step, iso(clock()), JSON.stringify({ testId: test.id, step, targetServerId: test.server_id }));
     db.prepare('UPDATE restore_tests SET job_id=? WHERE id=?').run(jobId, test.id);
@@ -289,7 +290,7 @@ const STEP_RUNNERS = {
     const need = { bytes: backup.size, kind: manifest.kind === 'static' ? 'static' : 'docker', containers: manifest.containers?.length || 1, grouped: (manifest.containers?.length || 0) > 1, architecture: manifest.kind === 'static' ? null : manifest.architecture ?? null, liveServer: !!test.limits.liveServer };
     const answer = await call(test, { operation: 'restore-test-check', testId: test.id, need, limits: helperLimits(test) }, signal);
     // The test server's CPU count is kept with its facts, so the settings sheet and PUT settings can cap the CPU limit.
-    if (Number.isInteger(answer?.facts?.nproc) && answer.facts.nproc > 0) db.prepare("UPDATE servers SET capabilities=json_set(COALESCE(capabilities,'{}'),'$.cpus',?) WHERE id=? AND json_valid(COALESCE(capabilities,'{}'))").run(answer.facts.nproc, test.server_id);
+    if (Number.isInteger(answer?.facts?.nproc) && answer.facts.nproc >= 1 && answer.facts.nproc <= 4096) db.prepare("UPDATE servers SET capabilities=json_set(COALESCE(capabilities,'{}'),'$.cpus',?) WHERE id=? AND json_valid(COALESCE(capabilities,'{}'))").run(answer.facts.nproc, test.server_id);
     const problem = answer?.problems?.[0] ?? (manifest.kind !== 'static' ? cpuProblem(test.limits.cpus, answer?.facts?.nproc) : null);
     if (problem || answer?.ok !== true) { conclude(loadTest(test.id), 'couldnt_run', { step: 'check_space', reason: problem ?? 'The test server did not pass Check space.' }); return; }
     advanceTo(test, 'check_space', null, { kind: need.kind, probeTools: !!answer.facts?.probeTools });
@@ -390,7 +391,8 @@ export async function acknowledgeRestoreTestCleanup(testId, actor) {
   if (!test || test.cleanup !== 'failed') throw httpError(409, 'NOT_NEEDED', 'This test does not need clean-up.');
   const status = await call(test, { operation: 'restore-test-status', testId });
   if (status?.present !== false) throw httpError(409, 'LEFTOVERS', 'The test server still has containers, networks, firewall rules or files from this test.');
-  db.prepare("UPDATE restore_tests SET cleanup='acknowledged' WHERE id=? AND cleanup='failed'").run(testId);
+  // Another acknowledge or a retry may have changed the row meanwhile: then nothing is written and nothing audited.
+  if (db.prepare("UPDATE restore_tests SET cleanup='acknowledged' WHERE id=? AND cleanup='failed'").run(testId).changes !== 1) throw httpError(409, 'NOT_NEEDED', 'This test does not need clean-up.');
   audit(actor, 'restore_test.recovery_acknowledged', test.site_id, { test: testId });
   return { cleanup: 'acknowledged' };
 }

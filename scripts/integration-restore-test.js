@@ -240,8 +240,10 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   await verifyClean(refused, before);
   record('Restore test: Allow internet is refused with a plain reason when a container adds NET_ADMIN');
 
+  // A shell as PID 1 ignores SIGTERM; the trap lets capture stop these fixtures cleanly (exit 0), as a real app would.
+  const TERM_TRAP = 'python /app/app.py & app=$!; trap "kill -TERM $app; wait $app; exit 0" TERM; ';
   // 7. A container that exits 20 seconds after start fails at "Still running" (30 s window for this case).
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-exit', '--hostname', 'rt-exit-live', '-v', 'rt-exit-data:/site', 'docknest-rt:local', 'sh', '-c', 'python /app/app.py & sleep 20; [ "$(hostname)" = rt-exit-live ] || exit 3; wait');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-exit', '--hostname', 'rt-exit-live', '-v', 'rt-exit-data:/site', 'docknest-rt:local', 'sh', '-c', TERM_TRAP + 'sleep 20 & wait $!; [ "$(hostname)" = rt-exit-live ] || exit 3; wait $app');
   await healthy('rt-exit');
   const exitSite = site('rt-exit', config(['rt-exit'])); await backup(exitSite);
   before = await snapshot(target);
@@ -254,7 +256,7 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   record('Restore test: a container that exits 20 seconds after start fails at "Still running"');
 
   // 8. The memory limit: a copy that needs more than 512 MB ends couldnt_run with no backup evidence.
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-oom', '--hostname', 'rt-oom-live', '-v', 'rt-oom-data:/site', 'docknest-rt:local', 'sh', '-c', 'python /app/app.py & sleep 8; [ "$(hostname)" = rt-oom-live ] && wait; exec python -c "b=b\'x\'*(800*1024*1024);import time;time.sleep(600)"');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-oom', '--hostname', 'rt-oom-live', '-v', 'rt-oom-data:/site', 'docknest-rt:local', 'sh', '-c', TERM_TRAP + 'sleep 8 & wait $!; if [ "$(hostname)" = rt-oom-live ]; then wait $app; exit 0; fi; exec python -c "b=b\'x\'*(800*1024*1024);import time;time.sleep(600)"');
   await healthy('rt-oom');
   const oomSite = site('rt-oom', config(['rt-oom'])), oomBackup = await backup(oomSite);
   const oomHistory = historyCount(oomBackup.id);
@@ -277,17 +279,22 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
 
   // 10. Tag collision. Packages save images by ID (no tags), so the defensive tag restore is driven directly with a
   // tagged archive on the test server's real image store.
-  await run('cp', 'remote', target + ':/qa-helper');
-  await run('cp', 'tests/integration/site', target + ':/fixture-site');
-  const loaded = (await run('exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/fixture-site')).trim();
-  await run('exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');
-  const kept = (await run('exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=kept', '/fixture-site')).trim();
-  await run('exec', target, 'docker', 'image', 'rm', loaded);
-  const collision = await run('exec', target, 'python3', '-c', "import sys,json;sys.path.insert(0,'/qa-helper');import helper;tags=helper.image_archive_tags('/tmp/rt-collide.tar');state={'created':{'tags':[{'tag':t,'previous':helper.image_id_of(t)} for t in tags]}};helper.docker('load','-i','/tmp/rt-collide.tar');moved=helper.image_id_of('rt-collide:1');changed=helper.restore_test_tags(state);print(json.dumps({'tags':tags,'moved':moved,'changed':changed,'now':helper.image_id_of('rt-collide:1')}))");
+  // Fresh paths: docker cp into an existing folder would nest the copy.
+  // Each step names itself on failure (docker arguments here hold no secrets); the helper step keeps its traceback.
+  const step = async (name, ...args) => { try { return await run(...args); } catch (error) { throw new Error(`Tag collision case: ${name} failed${name === 'helper tag restore' ? ': ' + String(error.stderr || error.message).slice(-800) : ''}`); } };
+  await step('clear paths', 'exec', target, 'rm', '-rf', '/rt-qa-helper', '/rt-collide-site');
+  await step('copy helper', 'cp', 'remote', target + ':/rt-qa-helper');
+  await step('copy fixture', 'cp', 'tests/integration/site', target + ':/rt-collide-site');
+  const loaded = (await step('build loaded image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/rt-collide-site')).trim();
+  await step('save tagged archive', 'exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');
+  const kept = (await step('build kept image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=kept', '/rt-collide-site')).trim();
+  // The first image stays (untagged): the containerd store refuses to remove that build image, and the collision only
+  // needs the tag to name the other image before the load.
+  const collision = await step('helper tag restore', 'exec', target, 'python3', '-c', "import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;tags=helper.image_archive_tags('/tmp/rt-collide.tar');state={'created':{'tags':[{'tag':t,'previous':helper.image_id_of(t)} for t in tags]}};helper.docker('load','-i','/tmp/rt-collide.tar');moved=helper.image_id_of('rt-collide:1');changed=helper.restore_test_tags(state);print(json.dumps({'tags':tags,'moved':moved,'changed':changed,'now':helper.image_id_of('rt-collide:1')}))");
   const collided = JSON.parse(collision.split('\n').at(-1));
   assert.deepEqual(collided.tags, ['rt-collide:1'], 'the archive names its tag'); assert.notEqual(collided.moved, kept, 'docker load moved the tag');
   assert.deepEqual(collided.changed, ['rt-collide:1']); assert.equal(collided.now, kept, 'the tag points back at the image it named before');
-  await run('exec', target, 'sh', '-c', `docker image rm ${collided.moved} rt-collide:1 >/dev/null 2>&1; rm -f /tmp/rt-collide.tar; true`);
+  await run('exec', target, 'sh', '-c', `docker image rm -f rt-collide:1 ${loaded} ${kept} >/dev/null 2>&1; rm -rf /tmp/rt-collide.tar /rt-qa-helper /rt-collide-site; true`);
   record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load (${store} image store)`);
 
   // 11. A worker killed during Restore copy: the next worker ends the test couldnt_run and cleans up first.

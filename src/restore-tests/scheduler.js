@@ -80,7 +80,13 @@ export function tickRestoreTestSchedule() {
   for (const settings of due) {
     try {
       // Waits without moving the due time: the test runs on a later tick, once.
-      if (siteBusy(settings.site_id) || unfinishedTest(settings.site_id)) continue;
+      // Waiting keeps the due time; a stuck clean-up or recovery shows why on the card.
+      const open = unfinishedTest(settings.site_id), recovery = db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('restore-test','site-move') AND status='recovery_required'").get(settings.site_id);
+      const waiting = open?.cleanup === 'failed' ? 'Waiting for the clean-up to be fixed.' : recovery ? 'Waiting for the backup to be recovered.' : null;
+      if (open || siteBusy(settings.site_id)) {
+        if ((settings.skip_reason ?? null) !== waiting && (waiting || /^Waiting for /.test(settings.skip_reason ?? ''))) db.prepare('UPDATE restore_test_settings SET skip_reason=? WHERE site_id=?').run(waiting, settings.site_id);
+        continue;
+      }
       const site = db.prepare('SELECT * FROM sites WHERE id=?').get(settings.site_id);
       const next = followingDueAt(settings.next_due_at, settings.cadence, nowMs);
       let reason = null, code = null, testId = null;

@@ -32,7 +32,7 @@ export function ThemeProvider({children}){
   const key=id?'docknest-theme:user:'+id:'docknest-theme';if(key===storageKey.current)return;storageKey.current=key;
   try{const saved=localStorage.getItem(key);if(saved!==null)changePreference(saved)}catch{}
  }
- useLayoutEffect(()=>{document.documentElement.dataset.theme=theme;document.documentElement.dataset.preference=preference;document.querySelector('meta[name="theme-color"]')?.setAttribute('content',theme==='dark'?'#182131':'#673AB7')},[theme,preference]);
+ useLayoutEffect(()=>{document.documentElement.dataset.theme=theme;document.documentElement.dataset.preference=preference;document.querySelector('meta[name="theme-color"]')?.setAttribute('content',theme==='dark'?'#1A191C':'#673AB7')},[theme,preference]);
  useEffect(()=>{
   const sync=e=>{if(e.key===storageKey.current||(storageKey.current==='docknest-theme'&&e.key==='docknest-theme'))apply(e.newValue)};
   const device=matchMedia('(prefers-color-scheme: dark)'),follow=()=>{if(currentPreference.current==='system')apply('system')};

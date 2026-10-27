@@ -32,6 +32,7 @@ async function open(width,height,{side='expanded',count=3,theme='light',health=t
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'f',user:{id:'admin',name:'Administrator',role:'admin'},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000}}));
  await page.route('**/api/state',r=>r.fulfill({json:state}));
  await page.route('**/api/storage-targets',r=>r.fulfill({json:{targets,activeTargetId:active.id}}));
+ await page.route('**/api/storage-report',r=>r.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}}));
  await page.route('**/api/updates/**',r=>r.fulfill({status:404,json:{}}));
  await page.goto(base);await page.locator('main#content').waitFor();await page.waitForTimeout(500);
  const navigate=async name=>{if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);await page.waitForTimeout(250);};
