@@ -41,3 +41,5 @@
 }
 /* On phones the list is not height-stabilised, so each card keeps its own height. */
 @media(max-width:767px){.rebrand-page .sr-root .storage-grid{grid-auto-rows:auto}}
+/* Connect storage dialog: the form starts right under the header, like New connection. */
+.storage-dialog .modal-body>:first-child{margin-top:0}

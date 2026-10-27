@@ -2,7 +2,6 @@ import React,{useEffect,useRef,useState} from 'react';
 import {IconMap2,IconX,IconSettings,IconLogout,IconDatabase,IconChevronRight,IconPlugConnected} from '@tabler/icons-react';
 import {Brand,BrandIcon,ThemeToggle,ThemePreferences,NotificationSymbol,useTheme} from './brand.jsx';
 import './shell.css';
-import {SystemHealth} from './system-health.jsx';
 import {CompactStorage} from './sidebar-storage.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildBugReport} from './report/builders.js';
@@ -10,7 +9,7 @@ import {buildBugReport} from './report/builders.js';
 function MenuSymbol({open}){
  return <svg className={'menu-symbol'+(open?' open':'')} width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><line className="menu-bar menu-bar-top" x1="4" y1="12" x2="20" y2="12"/><line className="menu-bar menu-bar-middle" x1="4" y1="12" x2="20" y2="12"/><line className="menu-bar menu-bar-bottom" x1="4" y1="12" x2="20" y2="12"/></svg>;
 }
-export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLogout,onRefresh,connection,worker,jobs,updateCount=0,api,children}){
+export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLogout,onRefresh,updateCount=0,api,children}){
  const {bindUser}=useTheme();
  useEffect(()=>{bindUser(user?.id);return()=>bindUser(null)},[user?.id]);
  const [collapsed,setCollapsed]=useState(()=>localStorage.getItem('docknest-sidebar')==='collapsed'),[mobile,setMobile]=useState(false),[customizer,setCustomizer]=useState(false),[notifications,setNotifications]=useState(false);
@@ -33,7 +32,6 @@ export function BerryShell({route,navigate,routes,user,active,storage,bytes,onLo
    <nav aria-label="Main navigation">{[['Dashboard',['Overview']],['Infrastructure',['Map','Servers','Sites & schedules','Backups']],['Operations',['Jobs','Maintenance','Audit']],['Administration',['Storage','DockNest backup','Access','Connections','Update Center']]].map(([group,names])=>{
     const items=routes.filter(([name])=>names.includes(name));return items.length?<div className="berry-nav-group" key={group}><h2>{group}</h2>{group==='Dashboard'&&<button className="berry-nav-toggle menu-control" aria-label="Toggle navigation" title={collapsed?'Expand navigation':'Collapse navigation'} aria-expanded={innerWidth<900?mobile:!collapsed} onClick={()=>{if(innerWidth<900)setMobile(false);else setCollapsed(!collapsed)}}><MenuSymbol open={innerWidth<900?mobile:!collapsed}/><span>Collapse menu</span></button>}{items.map(([name])=><button key={name} aria-label={name==='Update Center'&&updateCount>0?`Update Center, ${updateCount} update${updateCount===1?'':'s'} available`:name} title={collapsed?name:undefined} aria-current={route===name?'page':undefined} className={route===name?'selected':''} onClick={()=>go(name)}>{name==='Map'?<IconMap2 size={20} stroke={1.5} className="brand-icon" aria-hidden="true"/>:name==='Connections'?<IconPlugConnected size={20} stroke={1.5} className="brand-icon" aria-hidden="true"/>:<BrandIcon name={{Overview:'overview',Servers:'server','Sites & schedules':'sites',Backups:'backups',Jobs:'jobs',Maintenance:'maintenance',Audit:'audit',Storage:'storage','DockNest backup':'backups',Access:'access','Update Center':'update'}[name]} size={20}/>}<span>{name==='Overview'?'Dashboard':name==='Sites & schedules'?'Sites & schedules':name}</span>{name==='Jobs'&&active.length>0&&<span className="count">{active.length}</span>}{name==='Update Center'&&updateCount>0&&<span className="count" aria-hidden="true">{updateCount}</span>}</button>)}</div>:null;
    })}</nav>
-   <SystemHealth connection={connection} worker={worker} jobs={jobs}/>
    <div className="berry-sidebar-storage"><div><span className="berry-storage-icon"><IconDatabase size={24}/></span><span><b>Backup storage</b>{storage?.name&&<small className="storage-name" title={storage.name}>{storage.name}</small>}<small>{bytes(storage?.used)}{storage?.total?' / '+bytes(storage.total):''}</small></span></div><p><span>{storage?.total?'Capacity used':'Capacity not reported'}</span><b>{storage?.total?percent+'%':'\u2014'}</b></p><progress aria-label="Sidebar storage used" value={percent} max={100}/></div>
    <CompactStorage active={collapsed} storage={storage} bytes={bytes}/>
   </aside>
