@@ -52,3 +52,9 @@ Subagents in narrow roles built the approved design on `integration/2.2.0`. The 
 ## Restore tests API, scheduler and alerts (2.9.0, 2026-10-27)
 
 - Author: [Backend Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-backend-architect.md) for the routes, read model and the schedule inside the existing worker tick, with [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md) for roles, re-verification of the live server and internet switches, the manual rate limit and keeping secrets and remote output out of errors, audit rows and alerts. Reference material only; no extra permissions. Not validated on Linux Docker yet.
+
+## Restore tests UI (2.9.0, 2026-10-27)
+
+A role used as reference only, with no extra permissions. The UI is built against a mocked API contract (docs/restore-tests.md, "API contract"); nothing here is validated against a real restore.
+
+- Author: [Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md) built the Restore tests dialog, the overview and job screens and `scripts/restore-tests-browser.js` from the approved mockup.
