@@ -1,6 +1,6 @@
 # Alert channels and Connections (ADR)
 
-Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store), PR 1b (the guarded outbound client) and PR 3 (the providers) are done, see "Notes from PR 1a", "Notes from PR 1b" and "Notes from PR 3". Date: 2026-10-27.
+Status: accepted design for the release after 2.9.0. All four implementation PRs are in: PR 1a (migration 10 and the store), PR 1b (the guarded outbound client), PR 3 (the providers) and PR 4 (the API, the Connections page and the Map), see the "Notes from PR ..." sections. Date: 2026-10-27.
 Spec: the owner-approved mockup "Alert channels, final design, Option C". This doc turns it into decisions.
 Builds on [alerts.md](alerts.md) (2.8.0) and [security.md](security.md), "Alerts".
 
@@ -625,6 +625,52 @@ What PR 3 settled where this document left room, or chose a narrower step:
   a line); Matrix HTML is escaped; Google Chat breaks `* _ ~` with a zero-width space and drops `< >`; Telegram sends plain
   text with no parse mode. Text is cut at each provider's limit on a character boundary, with an ellipsis.
 
+## Notes from PR 4
+
+What PR 4 settled where this document left room, or chose a narrower step:
+
+- **Routes.** `src/alerts/routes.js` mounts `/api/connections` and `/api/alerts`; the logic is in `src/alerts/manage.js`.
+  One gate reads the role from the session at every request: administrators, or operators while
+  `alerts_operators_manage` is `'true'` (`canManageAlerts`). Everyone else gets 403 `ALERTS_ADMIN_REQUIRED`.
+  `PUT /api/connections/settings` is `requireAdmin` + `requireRecentAuth`, a strict body (a `role` in it is refused),
+  and both setters check the role again and audit it. `GET /api/alerts` stays as the Map's one summary (nodes, lines,
+  Connections, providers) so the Map makes one request; `/api/state` carries only `alertsAccess` (a boolean), never alert
+  data, so the menu and the Map know whether to ask.
+- **Re-verification.** Create and delete always; PATCH only when a secret is typed, or a `host` or `destination` field
+  changes (a rename needs none). A delete of a Connection in use answers 409 first, so nobody re-verifies to learn that.
+  A "Send test" with unsaved values that sends a saved login (`connectionId`) to a changed `destination` field needs the
+  same re-verification as saving it (security review of PR 4).
+- **Operator answers.** Only a delivery failure (`TEST_FAILED`) gets the fixed sentence at `operatorPolicy.failMs` (the
+  10 second request limit) after the request arrived. An operator test still running at that time (an SMTP relay has
+  its own 20 second limit) is answered as failed then, so a slow or silent host looks like any other failure; the send
+  itself may still finish in the background. Format errors in unsaved values keep their plain sentence: they
+  come from the provider schema, before any network step, so they reveal nothing about the network. An operator's
+  failed test is also recorded with the fixed sentence, so the view cannot carry the cause either.
+- **Rate limits** are per user (`<scope>:user:<id>`), not per address: 10 tests per 10 minutes, 120 writes per 10 minutes.
+- **No DNS check at save.** A save checks the format and the static address policy (refused names and literals, fixed
+  hosts) through the provider schema; the DNS answer is checked at every send and test, where it counts.
+- **Results.** `last_error` stays one column. A passing test keeps a failed send's sentence (and the other way round),
+  and a view gives `testError` and `sendError` their own sentence only when that failure is the newest; otherwise, and
+  for a migrated 2.8 failure whose sentence was not copied, a fixed "The last test did not go through." A secret, host
+  or destination change clears the old results.
+- **The 2.8 routes** (`/api/alerts/credentials`, `/api/alerts/channels`) are removed. Their store functions in
+  `store.js` stay as the 2.8 view of the Connections store: the upgrade and compat tests use them to prove that a 2.8
+  setup reads and behaves the same (`tests/fixtures/legacy-alert-calls.js`). No route reaches them. They go with the
+  legacy tables.
+- **Nodes.** A node test with unsaved panel changes tests the chosen Connection instead. A provider change clears the
+  Connection unless one of the new provider comes with it; its pending items follow it to a new Connection as in 1a.
+- **Names** (Connections and nodes) drop control characters and bidi overrides and isolates; Hebrew and other
+  right-to-left names stay as typed.
+- **Backlog.** Bidi override and isolate characters are removed in `events.js` and in every provider's text
+  (`common.line`). Teams TextBlocks get a zero-width space between `]` and `(`, so a name never becomes a Markdown link.
+  The CA wording ("Node's bundled CA store") was already right after 1b and is now also in `security.md`.
+- **Deep link.** `/?job=<id>` is kept through sign-in, then opens that job's details on Jobs and the address goes back to
+  `/`; a job that no longer exists says so.
+- **UI.** The dropdown (`web/connections/parts.jsx`) is fixed to the viewport below its button, as tall as the space
+  below, so a scrolling panel never clips it; it never opens upward. Popular providers first, Other under Advanced, and
+  one action row ("New connection", "Add custom" for a WhatsApp template language). New class names use the `cx-`
+  prefix: `dn-node` and `dn-muted` already exist elsewhere in the app.
+
 ## Owner answers (2026-10-27)
 
 1. WhatsApp: yes, Template name and Language under "More options", with the 24-hour help text. After the security
@@ -638,4 +684,8 @@ From [agency-agents](https://github.com/msitarzewski/agency-agents):
 [Software Architect](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-software-architect.md)
 for the data model, migration, registry and PR split, and
 [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md)
-for sealed storage, redaction, SSRF and rebinding protection, and abuse limits.
+for sealed storage, redaction, SSRF and rebinding protection, and abuse limits. PR 4 also used
+[Frontend Developer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-frontend-developer.md)
+for the Connections page, the dialog and the Map panel, and
+[Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md) for the
+browser evidence and the use-case list. No subagents were spawned.

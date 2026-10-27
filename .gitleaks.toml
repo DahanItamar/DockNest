@@ -21,3 +21,9 @@ description = "Made-up fixture values in the alert provider tests (a Discord-sha
 condition = "AND"
 paths = ['''^tests/alert-providers\.test\.js$''']
 regexes = ['''^123456789012345678$''', '''^tk_ntfyFixture0123$''', '''^gotifyFixture01$''']
+
+[[allowlists]]
+description = "Pushover's own documented example application token and user key (pushover.net/api), used as fake fixture values in the Connections browser check; only these exact values, only in that script"
+condition = "AND"
+paths = ['''^scripts/connections-browser\.js$''']
+regexes = ['''^azGDORePK8gMaC0QOYAMyEEuzJnyUi$''', '''^uQiRzpo4DXghDmr9QzzfQu27cmVRsG$''']

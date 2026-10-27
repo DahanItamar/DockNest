@@ -723,3 +723,18 @@ test('the 2.8 behaviour is intact: Telegram verify (getMe) and the redirect sent
     await assert.rejects(delivery.sendWith(connection.row(), MSG), error => error.message === 'The server answered with a redirect. Paste the final URL.');
   } finally { restore(); }
 });
+
+// PR 4 backlog: bidi overrides and isolates never reach any provider; a Markdown link in a name is never a link in Teams.
+test('bidi override and isolate characters are dropped from the template and every provider; Teams never renders a name as a link', () => {
+  const controls = [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069].map(code => String.fromCharCode(code));
+  const site = `shop${controls.join('')}gnp.exe`, template = events.templateFor({ type: 'backup.failed', siteName: site, serverName: `srv${controls[4]}`, at: '2026-10-23T03:00:00Z' }, { origin: 'https://dock.example.com' });
+  assert.equal(template.site, 'shopgnp.exe'); assert.equal(template.server, 'srv');
+  const raw = { ...MSG, site, server: `[click](https://evil.example)${controls[4]}` };
+  for (const id of Object.keys(VALUES)) {
+    const values = { ...parse(id, VALUES[id]).secret, ...parse(id, VALUES[id]).settings }, text = JSON.stringify(provider(id).format(raw, values));
+    for (const control of controls) assert.ok(!text.includes(control) && !text.includes(`${String.fromCharCode(92)}u${control.charCodeAt(0).toString(16)}`), `${id}: no U+${control.charCodeAt(0).toString(16)}`);
+  }
+  const card = provider('teams').format(raw, parse('teams', VALUES.teams).secret).json.attachments[0].content;
+  assert.ok(card.body.every(block => !/\]\(/.test(block.text)), 'no "](" left in a TextBlock');
+  assert.ok(card.body.some(block => block.text.includes('[click]') && block.text.includes('(https://evil.example)')), 'the text is kept as typed');
+});

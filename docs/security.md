@@ -205,37 +205,60 @@ These checks are covered by unit tests. GNU `tar` extraction of real archives, l
 
 A full ZIP is decrypted data, so it is never written to the server's disk. Preparing a ZIP authenticates the whole encrypted backup and discards the plaintext; the download then decrypts it again while streaming the ZIP to the browser. The guarantee is: verified in full before the download starts, re-verified while streaming (GCM tag and stored checksum, pinned storage size, time and ETag or version). A backup changed between the two passes is refused before the first byte, or the connection is destroyed so the browser shows a failed download and the audit log records it. Plaintext can reach the browser before the final tag check of the streaming pass; this is accepted because the same bytes were fully authenticated moments earlier and any later change fails the download. Requests need a signed-in session and a CSRF token like every other API call; preparing, downloading, failing and cancelling are audited (`backup.zip_prepare`, `backup.download_zip`, `backup.zip_download_failed`, `backup.zip_cancel`). Prepared downloads live in memory for at most 60 minutes.
 
-## Alerts: Telegram and email (outbound requests, credentials)
+## Alerts: Connections, outbound requests and who may change them
 
-- No alert channel means no alert traffic. With channels, DockNest connects only to the official host of the provider
+- No alert node means no alert traffic. With nodes, DockNest connects only to the official host of the provider
   (fixed in code: `api.telegram.org`, `graph.facebook.com`, `discord.com` and its `ptb`, `canary` and `discordapp.com`
   siblings, `hooks.slack.com`, Teams Workflows hosts under `logic.azure.com` and `api.powerplatform.com`,
-  `chat.googleapis.com`, `api.pushover.net`), to the server or webhook URL an administrator saved for ntfy, Gotify,
-  Matrix, Mattermost or "Other", and to the SMTP server of an email channel. A provider with fixed hosts never reaches a
-  private address, whatever its settings say.
+  `chat.googleapis.com`, `api.pushover.net`), to the server or webhook URL saved in a Connection for ntfy, Gotify,
+  Matrix, Mattermost or "Other", and to the SMTP server of an Email Connection. A provider with fixed hosts never reaches
+  a private address, whatever its settings say.
 - Every alert HTTP request goes through one guarded client (`src/alerts/outbound.js`, details in
   [alert-channels.md](alert-channels.md), "Outbound safety"): HTTPS on port 443 only, its own DNS lookup with every
   answer checked and that same answer pinned to the socket (no DNS rebinding), IP literals checked in every notation,
   no redirects, no proxy (`HTTPS_PROXY` and `NODE_USE_ENV_PROXY` are ignored), 10 seconds for the whole request, 64 KB
-  response cap. Loopback, link-local and cloud-metadata addresses, multicast, reserved and documentation ranges, and
-  their IPv4-mapped, NAT64 and 6to4 forms are always refused. Private ranges (RFC 1918, CGNAT, IPv6 ULA) are refused
-  unless an administrator turns on "Allow private network" and saves the Connection while it is on (off by default).
-- Credentials (Telegram bot token; SMTP host, user name, password, from address) are one value sealed with
-  the master key (AES-256-GCM, like server SSH keys), opened only at the moment of a send. The API never returns a
-  token or password (it shows "set" flags), and they are never written to logs, audit events, queue rows, the
-  channel's last error or error responses. Telegram's URL carries the token, so transport errors are replaced by fixed
-  sentences and never passed on. Audit events name the channel and the changed field names only.
-- Creating, changing or deleting a credential needs an administrator and a recent re-verification, like the Cloudflare
-  token. Changing the mail server, port or encryption requires typing the password again, so a saved password cannot be redirected by
-  editing the host alone. Nodes (chat ID, recipients) hold no secret, and with rules they need an administrator only; a credential in use cannot be deleted. Test messages are rate limited.
+  response cap, TLS 1.2 or newer against Node's bundled CA store (the operating system's store is not added).
+  Loopback, link-local and cloud-metadata addresses, multicast, reserved and documentation ranges, and their
+  IPv4-mapped, NAT64 and 6to4 forms are always refused.
+- **Allow private network** (Administration, Connections settings; off by default, administrators only, with a recent
+  re-verification and the `alerts.private_network` audit event) opens private ranges (RFC 1918, CGNAT, IPv6 ULA) for
+  self-hosted ntfy, Gotify, Matrix, Mattermost and webhooks. It applies only to Connections whose server or URL an
+  administrator saved while it was on, and it is read at every send, so turning it off stops private sends at once.
+- Secrets (bot and access tokens, passwords, the Pushover user key, every webhook URL, the webhook header, the whole SMTP
+  account) are one value per Connection sealed with the master key (AES-256-GCM, like server SSH keys) and opened only
+  at the moment of a send or a test. The API never returns them (views carry `<key>Set` flags), and they are never
+  written to logs, audit events, outbox rows, the stored error sentence or error responses. Transport errors are
+  replaced by fixed sentences because Node's error text can carry the URL. Audit events name the provider, the actor's
+  role and the changed field names only.
+- Creating, replacing or deleting a Connection, and any change of where it sends (chat ID, recipients, number, topic,
+  room, server or URL), needs a recent re-verification. Changing a server or URL requires every saved secret typed
+  again, so a saved token cannot be pointed at a new server by editing the server alone. A Connection in use cannot be
+  deleted. Replacing a secret or deleting a migrated Connection also removes its frozen 2.8 copy (`secure_delete` and a
+  WAL checkpoint); pre-upgrade snapshots and older self-backups still hold the old value, so revoke a leaked login at
+  the provider too. Tests are limited to 10 per 10 minutes per user.
+- **Operators can manage alerts** (off by default, administrators only, with a recent re-verification and the
+  `alerts.operators_manage` audit event; the role always comes from the session). While it is off, operators get 403 on
+  every alert and Connection route and no alert data anywhere. While it is on, operators can add and change alert
+  nodes, lines and Connections, with the same re-verification as administrators, and turning it off applies to their
+  next request. Other (webhook URL) and both settings stay admin-only, a Connection whose server an operator set
+  reaches public addresses only, and every failed or unfinished operator test answers one fixed sentence exactly 10
+  seconds after the request, so neither the words nor the timing reveal anything about the network behind an address.
+  A test that sends a saved login to a changed destination needs the same re-verification as saving it.
+- The honest risk of turning it on: an operator, or anyone with a stolen operator session that passes the
+  re-verification, can create a Connection to an account they control, or move an existing one there, and receive alert
+  text (site and server names, event times, plain reasons and job links). They never receive saved secrets, the job
+  link still needs a DockNest sign-in, and operators already see those names in DockNest. Destination changes are
+  audited with the actor and role. Turn it on only for people you would trust with that.
 - SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
   If a server offers no STARTTLS, DockNest stops before sending any credential. The host name is resolved once and the
-  connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10, fd00:ec2::254), the unspecified
-  and multicast ranges are refused. Private addresses are allowed for a mail server an administrator entered, so a
-  mail relay at home works; loopback is never allowed. A mail server set by anyone else must be public. Server
-  replies are never returned to the browser or logged. Addresses and subjects are validated against line breaks.
-- Messages hold only the site and server names the owner typed and a time. They never include addresses, paths, logs
-  or error text. The alert queue keeps no secrets and is pruned after 7 days.
+  connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16,
+  fe80::/10, fd00:ec2::254), the unspecified and multicast ranges are always refused. A private relay is allowed when
+  an administrator set the mail server (or it came from 2.8), so a mail relay at home works; loopback never is. A mail
+  server set by an operator must be public. Server replies are never returned to the browser or logged. Addresses and
+  subjects are validated against line breaks.
+- Messages hold only the site and server names the owner typed, a time, a fixed reason and the job link. They never
+  include addresses, paths, logs or error text; control and bidi override characters are removed and markup is
+  escaped for each provider, with mentions off. The outbox keeps no secrets and is pruned after 7 days.
 - Alert detection only reads existing tables. The reachability check opens a TCP connection to a server's configured
   SSH port without a login.
 

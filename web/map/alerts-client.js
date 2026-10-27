@@ -1,18 +1,14 @@
-// The only place that knows the alerts API (docs/alerts.md, "API"). `api` is the app's fetch helper: api(path, body, method).
-// Channels hold write-only secrets: nothing here ever receives or keeps one after it is sent.
+// The Map's side of the alert API (docs/alert-channels.md, "API"). `api` is the app's fetch helper: api(path, body, method).
+// A node is one provider plus one Connection; its secrets live in the Connection (web/connections/), never here.
 export function createAlertsClient(api){
  const id=x=>encodeURIComponent(x);
  return {
+  // { nodes, rules, connections (no secrets), providers, events, sourceKinds, limits, settings, role }
   load:()=>api('/alerts'),
-  // Credentials (the secret part of a node, reusable): { id, kind, name, config (no secrets, tokenSet / passwordSet), createdAt }
-  createCredential:body=>api('/alerts/credentials',body),
-  updateCredential:(credentialId,body)=>api('/alerts/credentials/'+id(credentialId),body,'PATCH'),
-  deleteCredential:credentialId=>api('/alerts/credentials/'+id(credentialId),undefined,'DELETE'),
-  testCredential:credentialId=>api('/alerts/credentials/'+id(credentialId)+'/test',{}),
-  createChannel:body=>api('/alerts/channels',body),
-  updateChannel:(channelId,body)=>api('/alerts/channels/'+id(channelId),body,'PATCH'),
-  deleteChannel:channelId=>api('/alerts/channels/'+id(channelId),undefined,'DELETE'),
-  test:channelId=>api('/alerts/channels/'+id(channelId)+'/test',{}),
+  createNode:body=>api('/alerts/nodes',body),
+  updateNode:(nodeId,body)=>api('/alerts/nodes/'+id(nodeId),body,'PATCH'),
+  deleteNode:nodeId=>api('/alerts/nodes/'+id(nodeId),undefined,'DELETE'),
+  testNode:nodeId=>api('/alerts/nodes/'+id(nodeId)+'/test',{}),
   createRule:body=>api('/alerts/rules',body),
   updateRule:(ruleId,body)=>api('/alerts/rules/'+id(ruleId),body,'PATCH'),
   deleteRule:ruleId=>api('/alerts/rules/'+id(ruleId),undefined,'DELETE'),
@@ -24,13 +20,12 @@ export const EVENT_LABEL={'backup.failed':'Backup failed','backup.succeeded':'Ba
 const SITE=['backup.failed','backup.succeeded','move.finished','move.needs_you','restore_test.failed','restore_test.couldnt_run','restore_test.recovered','restore_test.needs_you'];
 // What each kind of source can tell you about
 export const EVENTS_FOR={site:SITE,server:[...SITE,'server.unreachable','server.disk_low'],docknest:[...SITE,'server.unreachable','server.disk_low','update.available']};
-// What a new line starts with: the things that need you, not the good news
-export const DEFAULT_EVENTS={site:['backup.failed','move.needs_you'],server:['server.unreachable','server.disk_low','backup.failed'],docknest:['update.available','server.unreachable']};
-export const KIND_LABEL={telegram:'Telegram',email:'Email'};
-// Nodes are 'telegram' or 'email'; the credential an email node uses has kind 'smtp'
-export const CRED_LABEL={telegram:'Telegram',smtp:'Email'};
-export const credKind=kind=>kind==='email'?'smtp':kind;
+// What a new line starts with (docs/alert-channels.md, "Screens"): the things that need you, not the good news.
+export const DEFAULT_EVENTS={site:['backup.failed','restore_test.failed'],server:['backup.failed','restore_test.failed','server.unreachable','server.disk_low'],docknest:['backup.failed','restore_test.failed','server.unreachable','server.disk_low','update.available']};
 export const words=events=>(events||[]).filter(e=>EVENT_LABEL[e]).map(e=>EVENT_LABEL[e]).join(', ');
 // The tiny label on a line: two events in words, then how many more
 export function lineLabel(events){const list=(events||[]).filter(e=>EVENT_LABEL[e]);return list.length<=2?words(list):list.slice(0,2).map(e=>EVENT_LABEL[e]).join(', ')+` and ${list.length-2} more`}
+export const nodeOf=rule=>rule.nodeId||rule.channelId;
 export const sameSource=(rule,source)=>rule.sourceKind===source.kind&&(rule.sourceId||null)===(source.id||null);
+// How many different sources send to a node (what a delete stops).
+export const sourcesOf=(rules,nodeId)=>new Set(rules.filter(r=>nodeOf(r)===nodeId).map(r=>r.sourceKind+':'+(r.sourceId||''))).size;

@@ -54,8 +54,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 
 **Alerts**
-- Get a Telegram message or an email when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, or a new version is out.
-- Set it up on the Map: add a Telegram or Email node, draw a line from DockNest, a server or a site, and pick the events. Bot tokens and mail passwords are saved once as encrypted credentials. See [alerts](docs/alerts.md).
+- Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, or a new version is out.
+- Save the login once in Administration, Connections (encrypted, never shown again), then add an alert node on the Map, draw a line from DockNest, a server or a site, and pick the events. See [alerts](docs/alerts.md).
 
 **Security**
 - Backups are encrypted with AES-256-GCM.

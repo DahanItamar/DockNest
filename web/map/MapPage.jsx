@@ -2,14 +2,16 @@ import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} fro
 import {formatBytes} from '../../shared/format-bytes.js';
 import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
+import {IconTrash,IconBell} from '@tabler/icons-react';
+import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
-import {createAlertsClient,KIND_LABEL} from './alerts-client.js';
-import {AlertPanel,CredentialsPanel,PickSheet,DeleteChannelSheet,SourceAlerts,AlertsList,KindIcon,DockNestIcon,srcKey} from './Alerts.jsx';
+import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
+import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
 import './map.css';
 
 const bytes=v=>v?formatBytes(v):'';
@@ -17,6 +19,7 @@ const MIN=0.2,MAX=2,FIT_MIN=0.45; // fit never scales above 100%; below 45% the 
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const short=(v,n=40)=>typeof v==='string'&&v.length>n?v.slice(0,Math.ceil((n-1)/2))+'…'+v.slice(-Math.floor((n-1)/2)):v; // long names are shortened in sentences; the full name stays in the title and the details
 const HIT=16; // forgiving drop area around a server
+const NO_ALERTS=Object.freeze({nodes:[],rules:[],connections:[],providers:[],role:null}),listOf=v=>Array.isArray(v)?v:[];
 
 function serverStatus(server){
  if(server.status==='connected')return <StatusLabel state="success">Connected</StatusLabel>;
@@ -49,9 +52,10 @@ function useNarrow(){
  return narrow;
 }
 
-function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd,alertsList}){
+function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
  return <div className="map-list">
- {canMove&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
+ {undo}
+ {canAdd&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
  {groups.map(({server,sites})=>{
   const id='map-list-'+(server?server.id:'unassigned');
   return <section key={id} className="map-list-group" aria-labelledby={id}>
@@ -68,7 +72,7 @@ function MapList({groups,storage,canMove,onMoveTo,onDetails,onAddSite,onAdd,aler
  </div>;
 }
 
-export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
+export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
  const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
@@ -82,13 +86,16 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   for(const p of policies||[])if(p.enabled&&p.siteId&&!out[p.siteId]&&known.has(active))out[p.siteId]=active;
   return out;
  },[backups,policies,targets,storage]);
- // Alerts (administrators): channels and lines from /api/alerts. Nothing is drawn until a channel exists.
- const alertsClient=useMemo(()=>createAlertsClient(api||(()=>Promise.reject(new Error('Alerts are not available.')))),[api]);
- const [alerts,setAlerts]=useState({channels:[],rules:[],credentials:[]}),[aflow,setAflow]=useState(null);
- const loadAlerts=useCallback(()=>{if(!canMove||!api)return Promise.resolve();return alertsClient.load().then(r=>setAlerts({channels:Array.isArray(r?.channels)?r.channels:[],rules:Array.isArray(r?.rules)?r.rules:[],credentials:Array.isArray(r?.credentials)?r.credentials:[]})).catch(()=>{})},[alertsClient,canMove,api]);
+ // Alerts (administrators, and operators while an administrator lets them): nodes, lines, Connections and the provider
+ // list from /api/alerts. Nothing is drawn until a node exists. A 403 (the setting was turned off) hides every alert part.
+ const mayAlert=user?.role==='admin'||!!alertsAccess,fail=()=>Promise.reject(new Error('Alerts are not available.'));
+ const alertsClient=useMemo(()=>createAlertsClient(api||fail),[api]),connClient=useMemo(()=>createConnectionsClient(api||fail),[api]);
+ const [alerts,setAlerts]=useState(NO_ALERTS),[aflow,setAflow]=useState(null),[canAlert,setCanAlert]=useState(false),[undone,setUndo]=useState(null);
+ const loadAlerts=useCallback(()=>{if(!mayAlert||!api){setCanAlert(false);setAlerts(NO_ALERTS);return Promise.resolve()}return alertsClient.load().then(r=>{setCanAlert(true);setAlerts({nodes:listOf(r?.nodes),rules:listOf(r?.rules),connections:listOf(r?.connections),providers:listOf(r?.providers),role:r?.role||null})}).catch(e=>{if(e.status===403){setCanAlert(false);setAlerts(NO_ALERTS)}})},[alertsClient,mayAlert,api]);
  useEffect(()=>{loadAlerts();const t=setInterval(loadAlerts,30000);return()=>clearInterval(t)},[loadAlerts]);
+ const alertsOn=canAlert&&mayAlert,alertLayout=useMemo(()=>({channels:alerts.nodes,rules:alerts.rules}),[alerts]);
  const livePos=useMemo(()=>dragPos?{...positions,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}:positions,[positions,dragPos]);
- const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts,positions:livePos}),[servers,sites,storage,backupOf,alerts,livePos]);
+ const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts:alertLayout,positions:livePos}),[servers,sites,storage,backupOf,alertLayout,livePos]);
  // When the arrangement changes (Tidy up, Save changes, a reconnect, new data) nodes glide to their new places and the lines follow every frame.
  // A fresh page, a node being dragged by hand and "reduce motion" all place nodes at once.
  const anim=useRef(null),shown=useRef(null),[tick,setTick]=useState(0);
@@ -107,7 +114,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   raf=requestAnimationFrame(step);
   return()=>cancelAnimationFrame(raf);
  },[target]);
- const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,alerts,positions:shown.current}):target,[target,tick]);
+ const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,alerts:alertLayout,positions:shown.current}):target,[target,tick]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
  const view=useRef(null),mode=useRef('home'),pointers=useRef(new Map()),gesture=useRef(null);
@@ -186,7 +193,17 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function openAlert(channelId,source,el){if(el)opener.current=el;setFlow(null);setAflow(null);setSel({type:'node',key:'alert:'+channelId});setPanel({kind:'alert',id:channelId,preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
  const editRule=(rule,el)=>openAlert(rule.channelId,sourceOf(rule),el);
  function pickChannel(source,el){if(el)opener.current=el;setPanel(null);setFlow(null);setAflow({kind:'pick',source})}
- function addChannel(kind,el,source){if(el)opener.current=el;setFlow(null);setAflow(null);setPanel({kind:'alert-new',channelKind:kind,preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
+ function addNode(el,source){if(el)opener.current=el;setFlow(null);setAflow(null);setPanel({kind:'alert-new',preselect:source||null,scrollTo:source?srcKey(source):null,n:Date.now()})}
+ // Delete on the grid or in the phone list (docs/alert-channels.md, "Delete on the grid"): a node with sources asks first;
+ // one without sources goes at once, with Undo.
+ async function requestDelete(node,el){
+  if(el)opener.current=el;
+  const count=sourcesOf(alerts.rules,node.id);
+  if(count>0){setAflow({kind:'delete',node,count});return}
+  try{await alertsClient.deleteNode(node.id);if(panel?.kind==='alert'&&panel.id===node.id)setPanel(null);await loadAlerts();setUndo({name:node.name,provider:node.provider,connectionId:node.connectionId});setNote(node.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}
+  catch(e){setNote(e.message||'This node could not be deleted.')}
+ }
+ async function undoDelete(){const u=undone;setUndo(null);if(!u)return;try{await alertsClient.createNode({name:u.name,provider:u.provider,connectionId:u.connectionId||null});await loadAlerts();setNote(u.name+' is back.')}catch(e){setNote(e.message||'The node could not be put back.')}}
  function closeAflow(){setAflow(null);focusBack()}
  const alertSource=(k,id)=>k==='docknest'?{kind:'docknest',id:null,name:'DockNest',from:layout.docknest?.alertOut}:k==='server'?{kind:'server',id,name:byId.servers[id]?.name,from:layout.servers.find(n=>n.id===id)?.alertOut}:{kind:'site',id,name:byId.sites[id]?.name,from:[...layout.sites,...layout.unassigned].find(n=>n.id===id)?.alertOut};
 
@@ -249,7 +266,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function down(e){
   if(e.button>0)return;
   pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  const port=canMove&&e.target.closest?.('[data-port-site]'),aport=canMove&&e.target.closest?.('[data-alert-src]');
+  const port=canMove&&e.target.closest?.('[data-port-site]'),aport=alertsOn&&e.target.closest?.('[data-alert-src]');
   if(pointers.current.size===2){gesture.current={type:'pinch'};const [a,b]=[...pointers.current.values()];gesture.current.d=Math.hypot(a.x-b.x,a.y-b.y);setDrag(null);setAdrag(null);}
   else if(aport){const [k,...r]=aport.dataset.alertSrc.split(':'),src=alertSource(k,r.join(':')),[px,py]=toCanvas(e);if(src.kind==='site')precheck(src.id);gesture.current={type:'alert',src,x:e.clientX,y:e.clientY,moved:false};setAdrag({src,px,py,over:null});}
   else if(port&&edit&&edit.siteId!==port.dataset.portSite){setNote('Save or cancel the current change first.');gesture.current=null;}
@@ -300,12 +317,12 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(!pointers.current.size){gesture.current=null;setDrag(null);setAdrag(null);setDragPos(null);}
  }
  function drop(e){
-  const item=dragItem.current;dragItem.current=null;if(!item||!canMove)return;e.preventDefault();
+  const item=dragItem.current;dragItem.current=null;if(!item||!(canMove||alertsOn))return;e.preventDefault();
   const [px,py]=toCanvas(e),sn=v=>Math.max(0,Math.round(v/16)*16),g={x:sn(px-32),y:sn(py-32),kind:item.kind,name:item.name};
   if(item.kind==='server'){setGhost(g);onAddServer?.()}
   else if(item.kind==='storage'){setGhost(g);onAddStorage?.()}
   else if(item.kind==='site'){setGhost(g);setPanel(null);onAddSite?.(item.serverId,item.name,item.choice)}
-  else{addChannel(item.kind);setGhost(g)}
+  else if(item.kind==='alert'){addNode();setGhost(g)}
  }
  function key(e){
   const step=48;let handled=true;
@@ -336,8 +353,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
-  {aflow?.kind==='pick'&&<PickSheet source={aflow.source} channels={alerts.channels} rules={alerts.rules} onClose={closeAflow} onAdd={kind=>addChannel(kind,null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
-  {aflow?.kind==='delete'&&<DeleteChannelSheet channel={aflow.channel} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{await loadAlerts();setAflow(null);setPanel(null);setNote(aflow.channel.name+' is deleted.');focusBack()}}/>}
+  {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
+  {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
  </>;
 
  // Details and add panels (one at a time)
@@ -354,7 +371,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function panelBody(){
   if(!panel)return null;
   const close=()=>closePanel(true);
-  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onDragItem={canMove?i=>{dragItem.current=i}:undefined} onAddServer={()=>{closePanel(false);onAddServer?.()}} onAddStorage={()=>{closePanel(false);onAddStorage?.()}} onAddAlert={canMove?kind=>addChannel(kind):undefined} onCredentials={canMove?()=>setPanel({kind:'credentials'}):undefined}/></SidePanel>;
+  if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onDragItem={canMove||alertsOn?i=>{dragItem.current=i}:undefined} onAddServer={canMove?()=>{closePanel(false);onAddServer?.()}:undefined} onAddStorage={canMove?()=>{closePanel(false);onAddStorage?.()}:undefined} onAddAlert={alertsOn?()=>addNode():undefined} onConnections={alertsOn&&onOpenConnections?()=>{closePanel(false);onOpenConnections()}:undefined}/></SidePanel>;
   if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} onDragItem={canMove?i=>{dragItem.current={...i,serverId:panel.id}}:undefined} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
@@ -363,7 +380,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
-    {canMove&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
+    {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
   if(panel.kind==='server'&&byId.servers[panel.id]){
@@ -372,20 +389,19 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
     <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Sites',String(mine)]]}/>
     {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add a site found here</button>}
-    {canMove&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>}
+    {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
-  if(panel.kind==='credentials'&&canMove)return <CredentialsPanel narrow={narrow} credentials={alerts.credentials} channels={alerts.channels} client={alertsClient} onClose={close} onReload={loadAlerts}/>;
-  if(panel.kind==='docknest'&&canMove){
+  if(panel.kind==='docknest'&&alertsOn){
    const src={kind:'docknest',id:null,name:'DockNest'};
    return <SidePanel narrow={narrow} labelId="map-panel-title" title="DockNest" onClose={close}>
     <p>Alerts from DockNest cover everything here: backups, moves, servers, and new DockNest versions.</p>
-    <SourceAlerts source={src} rules={alerts.rules} channels={alerts.channels} onEdit={editRule} onAdd={pickChannel}/>
+    <SourceAlerts source={src} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>
    </SidePanel>;
   }
-  if((panel.kind==='alert'||panel.kind==='alert-new')&&canMove){
-   const ch=panel.kind==='alert'?alerts.channels.find(c=>c.id===panel.id):null;if(panel.kind==='alert'&&!ch)return null;
-   return <AlertPanel key={(ch?.id||'new-'+panel.channelKind)+':'+panel.n} narrow={narrow} kind={ch?.kind||panel.channelKind} channel={ch} rules={alerts.rules} credentials={alerts.credentials} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} when={when} onClose={close} onReload={loadAlerts} onDelete={()=>setAflow({kind:'delete',channel:ch})} onSaved={async(saved,created)=>{if(created&&ghost)setPositions(p=>({...p,['alert:'+saved.id]:{x:ghost.x,y:ghost.y}}));await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
+  if((panel.kind==='alert'||panel.kind==='alert-new')&&alertsOn){
+   const ch=panel.kind==='alert'?alerts.nodes.find(c=>c.id===panel.id):null;if(panel.kind==='alert'&&!ch)return null;
+   return <AlertPanel key={(ch?.id||'new')+':'+panel.n} narrow={narrow} node={ch} rules={alerts.rules} connections={alerts.connections} providers={alerts.providers} sourceList={sourceList} sourceName={sourceName} preselect={panel.preselect} scrollTo={panel.scrollTo} client={alertsClient} connClient={connClient} role={alerts.role||user?.role} onClose={close} onReload={loadAlerts} onSaved={async(saved,created)=>{if(created&&ghost)setPositions(p=>({...p,['alert:'+saved.id]:{x:ghost.x,y:ghost.y}}));await loadAlerts();setNote(created?saved.name+' is saved.':'Alert settings saved.');closePanel(true)}}/>;
   }
   if(panel.kind==='storage'&&byId.storage[panel.id]){
    const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
@@ -404,8 +420,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const lineCls=id=>lit.size?(lit.has(id)?' lit':' dim'):'',nodeCls=k=>litNodes.has(k)?' lit':'';
  const hov=(h)=>({onPointerEnter:()=>setHot(h),onPointerLeave:()=>setHot(null)});
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
- const alertsList=canMove&&<AlertsList channels={alerts.channels} rules={alerts.rules} sourceName={sourceName} onDetails={(c,el)=>openPanel({kind:'alert',id:c.id},el)} onEditRule={editRule} onAdd={addChannel} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
- if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
+ const alertsList=alertsOn&&<AlertsList nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} sourceName={sourceName} onOpen={(n,el)=>openPanel({kind:'alert',id:n.id},el)} onEditRule={editRule} onDelete={requestDelete} onAdd={el=>addNode(el)} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
+ const undoBar=undone&&<div className="map-undo" role="status"><span>{undone.name} is deleted.</span><button type="button" onClick={undoDelete}>Undo</button></div>;
+ if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
 
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
@@ -448,28 +465,29 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      </g>
      {layout.rulePaths.map(p=>{const r=alerts.rules.find(x=>x.id===p.ruleId);return <g key={'r'+p.id} className={'rule-g'+(r&&!r.enabled?' off':'')+lineCls('r'+p.id)}>
       <path className="rule" d={p.d}/>
-      <path className="rule-hit" data-node={'rule:'+p.id} tabIndex={0} role="button" aria-label={p.bundle?`Alerts to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`:`Alerts from ${r?sourceName(r):''} to ${alerts.channels.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(p.bundle)openAlert(p.channelId,null,e.currentTarget);else if(r)editRule(r,e.currentTarget)}}} d={p.d}/>
+      <path className="rule-hit" data-node={'rule:'+p.id} tabIndex={0} role="button" aria-label={p.bundle?`Alerts to ${alerts.nodes.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`:`Alerts from ${r?sourceName(r):''} to ${alerts.nodes.find(c=>c.id===p.channelId)?.name}. Press Enter to open.`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(p.bundle)openAlert(p.channelId,null,e.currentTarget);else if(r)editRule(r,e.currentTarget)}}} d={p.d}/>
      </g>})}
      {adrag?.src.from&&<path className="rule dragging hot" d={elbow([[adrag.src.from.x,adrag.src.from.y],[adrag.px,adrag.src.from.y],[adrag.px,adrag.py]],8)}/>}
     </svg>
-    {ghost&&<div className="map-ghost" aria-hidden="true" style={{left:ghost.x,top:ghost.y,width:64,height:64}}>{ghost.kind==='telegram'?<KindIcon kind="telegram" size={28}/>:ghost.kind==='email'?<KindIcon kind="email" size={28}/>:ghost.kind==='server'?<IconServer size={28} stroke={1.5}/>:ghost.kind==='storage'?<IconDatabaseExport size={28} stroke={1.5}/>:<IconBox size={28} stroke={1.5}/>}<span className="map-label"><b className="map-name">New</b></span></div>}
+    {ghost&&<div className="map-ghost" aria-hidden="true" style={{left:ghost.x,top:ghost.y,width:64,height:64}}>{ghost.kind==='alert'?<IconBell size={28} stroke={1.5}/>:ghost.kind==='server'?<IconServer size={28} stroke={1.5}/>:ghost.kind==='storage'?<IconDatabaseExport size={28} stroke={1.5}/>:<IconBox size={28} stroke={1.5}/>}<span className="map-label"><b className="map-name">New</b></span></div>}
     {layout.docknest&&<div {...hov('docknest:root')} data-node="docknest:root" tabIndex={0} aria-label="DockNest. Alerts for the whole installation. Press Enter for details." onKeyDown={e=>enter(e,{kind:'docknest',id:'root'})} className={'map-docknest'+nodeCls('docknest:root')} style={item(layout.docknest)}>
      <DockNestIcon size={32}/>
      <span className="map-label"><b className="map-name">DockNest</b><span className="map-caption">Whole installation</span></span>
     </div>}
-    {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={canMove?'docknest:':undefined} className={'map-port out'+(canMove?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
-    {layout.alerts.map(r=>{const ch=alerts.channels.find(c=>c.id===r.id),bad=ch.lastResult==='failed'||ch.needsCredential||!ch.credentialId;return <React.Fragment key={'n'+r.id}>
-     <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${KIND_LABEL[ch.kind]} alerts${ch.needsCredential||!ch.credentialId?'. Needs a credential':bad?'. The last message could not be sent':''}. Press Enter for details.`} onKeyDown={e=>enter(e,{kind:'alert',id:r.id})} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
-      <KindIcon kind={ch.kind} size={32}/>
+    {layout.docknest&&<span aria-hidden="true" data-handle="out:docknest" data-alert-src={alertsOn?'docknest:':undefined} className={'map-port out'+(alertsOn?' grab':'')+(adrag?.src.kind==='docknest'?' active':'')} style={at(layout.docknest.alertOut.x,layout.docknest.alertOut.y)}/>}
+    {layout.alerts.map(r=>{const ch=alerts.nodes.find(c=>c.id===r.id),pv=providerOf(alerts.providers,ch.provider),needs=ch.needsConnection,failed=ch.lastSend==='failed',bad=failed||needs;return <React.Fragment key={'n'+r.id}>
+     <div {...hov('alert:'+r.id)} data-node={'alert:'+r.id} data-alert={r.id} tabIndex={0} aria-label={`${ch.name}. ${pv?.label||ch.provider} alerts${needs?'. Needs a connection':failed?'. The last message could not be sent':''}. Press Enter for details${alertsOn?', or Delete to delete it':''}.`} onKeyDown={e=>{if(enter(e,{kind:'alert',id:r.id}))return;if(alertsOn&&(e.key==='Delete'||e.key==='Backspace')&&e.target===e.currentTarget){e.preventDefault();e.stopPropagation();requestDelete(ch,e.currentTarget)}}} className={'map-alert'+nodeCls('alert:'+r.id)+(adrag?.over===r.id?' target':'')} style={item(r)}>
+      {alertsOn&&<button type="button" className="cx-del" tabIndex={-1} aria-label={'Delete '+ch.name} title={'Delete '+ch.name} onPointerDown={e=>e.stopPropagation()} onPointerUp={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();requestDelete(ch,e.currentTarget.parentElement)}}><IconTrash size={16} stroke={1.75} aria-hidden="true"/></button>}
+      <NodeIcon provider={pv} size={32}/>
       {bad&&<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
-      <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className="map-caption">{KIND_LABEL[ch.kind]}</span></span>
+      <span className="map-label"><b className="map-name" title={ch.name}>{ch.name}</b><span className={'map-caption'+(bad?' warn':'')}>{needs?'Needs a connection':failed?'Last message failed':pv?.label||ch.provider}</span></span>
      </div>
      <span aria-hidden="true" data-handle={'in:'+r.id} className={'map-port'+(adrag?.over===r.id?' active':'')} style={at(r.in.x,r.in.y)}/>
     </React.Fragment>})}
-    {layout.servers.map(r=><span key={'o'+r.id} aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={canMove&&layout.docknest?'server:'+r.id:undefined} className={'map-port out'+(canMove&&layout.docknest?' grab':'')+(drag?.over===r.id||adrag?.overServer===r.id||(adrag?.src.kind==='server'&&adrag.src.id===r.id)?' active':'')} style={at(r.x+r.w,r.y+r.h/2)}/>)}
+    {layout.servers.map(r=><span key={'o'+r.id} aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={alertsOn&&layout.docknest?'server:'+r.id:undefined} className={'map-port out'+(alertsOn&&layout.docknest?' grab':'')+(drag?.over===r.id||adrag?.overServer===r.id||(adrag?.src.kind==='server'&&adrag.src.id===r.id)?' active':'')} style={at(r.x+r.w,r.y+r.h/2)}/>)}
     {layout.sites.map(r=>{const lost=!!drag&&drag.id===r.id||unconnected?.siteId===r.id;const grab=canMove&&!lost;const out=r.out;return <React.Fragment key={'p'+r.id}>
      <span aria-hidden="true" data-handle={'in:'+r.id} data-port-site={grab?r.id:undefined} className={'map-port in'+(grab?' grab':'')+(lost?' lost':'')} style={at(r.x,r.y+r.h/2)}/>
-     <span aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={canMove&&layout.docknest?'site:'+r.id:undefined} className={'map-port out'+(canMove&&layout.docknest?' grab':'')+(adrag?.src.kind==='site'&&adrag.src.id===r.id?' active':'')} style={at(out.x,out.y)}/>
+     <span aria-hidden="true" data-handle={'out:'+r.id} data-alert-src={alertsOn&&layout.docknest?'site:'+r.id:undefined} className={'map-port out'+(alertsOn&&layout.docknest?' grab':'')+(adrag?.src.kind==='site'&&adrag.src.id===r.id?' active':'')} style={at(out.x,out.y)}/>
      {!r.backupId&&!alerts.rules.some(x=>x.sourceKind==='site'&&x.sourceId===r.id)&&<span aria-hidden="true" className="map-stub" style={at(out.x+8,out.y)}><IconPlus size={14} stroke={2}/></span>}
     </React.Fragment>})}
     {unconnected?.loose&&!drag&&<span aria-hidden="true" data-port-site={canMove?unconnected.siteId:undefined} className="map-port grab loose" style={at(unconnected.loose.x,unconnected.loose.y)}/>}
@@ -500,9 +518,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     <IconButton label="Fit to screen" icon={IconArrowsMaximize} onClick={()=>{mode.current='fit';fit()}}/>
    </div>
   </div>
-  {canMove&&<button type="button" className="map-add" aria-label="Add to the map" aria-expanded={panel?.kind==='add'} onClick={e=>panel?.kind==='add'?closePanel(true):openPanel({kind:'add'},e.currentTarget)}><IconPlus size={20} stroke={1.75} aria-hidden="true"/></button>}
+  {(canMove||alertsOn)&&<button type="button" className="map-add" aria-label="Add to the map" aria-expanded={panel?.kind==='add'} onClick={e=>panel?.kind==='add'?closePanel(true):openPanel({kind:'add'},e.currentTarget)}><IconPlus size={20} stroke={1.75} aria-hidden="true"/></button>}
   {panelBody()}
   </div>
+  {undoBar}
   <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. ':''}{canMove?'Click a node to open it. Drag a site’s line to another server to move it.':'Click a node for details. Drag the background to move around.'}</span></p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
   {dialogs}

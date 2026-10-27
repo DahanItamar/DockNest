@@ -222,7 +222,7 @@ export function updateChannel(channelId, input, actor) {
 // its pending items along when no node is left on the old one, as a 2.8 node's queue followed the node. An item whose
 // event the new Connection already has pending, or handled at or after it, stays behind (and fails unsent), so nothing
 // is sent twice to one destination.
-function carryPending(from, to, nodeId) {
+export function carryPending(from, to, nodeId) {
   if (!from || from === to || nodesUsing(from).length) return;
   db.prepare("UPDATE alert_outbox SET connection_id=? WHERE connection_id=? AND node_id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM alert_outbox t WHERE t.connection_id=? AND t.dedupe_key=alert_outbox.dedupe_key AND (t.status='pending' OR t.created_at>=alert_outbox.created_at))").run(to, from, nodeId, to);
 }
@@ -245,11 +245,11 @@ const events = z.array(z.enum(EVENTS)).min(1).max(EVENTS.length).transform(list 
 export const ruleCreate = z.object({ channelId: z.uuid(), sourceKind: z.enum(['docknest', 'server', 'site']), sourceId: z.uuid().nullable().default(null), events, enabled: z.boolean().default(true) }).strict();
 export const ruleUpdate = z.object({ events: events.optional(), enabled: z.boolean().optional() }).strict();
 const eventList = text => { const list = parsed(text); return Array.isArray(list) ? list : []; };
-export function ruleView(row) { return { id: row.id, channelId: row.node_id, sourceKind: row.source_kind, sourceId: row.source_id, events: eventList(row.events), enabled: row.enabled === 1, createdAt: row.created_at, updatedAt: row.updated_at }; }
+export function ruleView(row) { return { id: row.id, nodeId: row.node_id, channelId: row.node_id, sourceKind: row.source_kind, sourceId: row.source_id, events: eventList(row.events), enabled: row.enabled === 1, createdAt: row.created_at, updatedAt: row.updated_at }; }
 export const listRules = () => db.prepare('SELECT * FROM alert_lines ORDER BY created_at,id').all().map(ruleView);
 export function enabledRules() { return db.prepare('SELECT * FROM alert_lines WHERE enabled=1 ORDER BY created_at,id').all().map(row => ({ ...row, enabled: true, events: eventList(row.events) })); }
 
-export function createRule(input, actor) {
+export function createRule(input, actor, { role } = {}) {
   const data = ruleCreate.safeParse(input); if (!data.success) fail(data.error);
   const { channelId, sourceKind, sourceId } = data.data;
   mustChannel(channelId);
@@ -257,22 +257,22 @@ export function createRule(input, actor) {
   if (sourceKind === 'server' && !db.prepare('SELECT 1 FROM servers WHERE id=?').get(sourceId)) throw httpError(404, 'This server does not exist.');
   if (sourceKind === 'site' && !db.prepare('SELECT 1 FROM sites WHERE id=?').get(sourceId)) throw httpError(404, 'This site does not exist.');
   if (db.prepare('SELECT COUNT(*) AS n FROM alert_lines').get().n >= limits.rules) throw httpError(409, `You can have up to ${limits.rules} alert lines.`);
-  if (db.prepare('SELECT 1 FROM alert_lines WHERE node_id=? AND source_kind=? AND source_id IS ?').get(channelId, sourceKind, sourceId)) throw httpError(409, 'This source already has a line to this channel. Edit that line instead.');
+  if (db.prepare('SELECT 1 FROM alert_lines WHERE node_id=? AND source_kind=? AND source_id IS ?').get(channelId, sourceKind, sourceId)) throw httpError(409, 'This source already has a line to this alert node. Edit that line instead.');
   const ruleId = id(), at = now();
   db.prepare('INSERT INTO alert_lines(id,node_id,source_kind,source_id,events,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(ruleId, channelId, sourceKind, sourceId, JSON.stringify(data.data.events), data.data.enabled ? 1 : 0, at, at);
-  audit(actor, 'alert.rule.create', ruleId, { channelId, sourceKind, sourceId, events: data.data.events });
+  audit(actor, 'alert.rule.create', ruleId, { channelId, sourceKind, sourceId, events: data.data.events, ...(role ? { role } : {}) });
   return ruleView(db.prepare('SELECT * FROM alert_lines WHERE id=?').get(ruleId));
 }
-export function updateRule(ruleId, input, actor) {
+export function updateRule(ruleId, input, actor, { role } = {}) {
   const row = db.prepare('SELECT * FROM alert_lines WHERE id=?').get(ruleId); if (!row) throw httpError(404, 'This line does not exist.');
   const data = ruleUpdate.safeParse(input); if (!data.success) fail(data.error);
   db.prepare('UPDATE alert_lines SET events=?,enabled=?,updated_at=? WHERE id=?').run(JSON.stringify(data.data.events ?? eventList(row.events)), (data.data.enabled ?? row.enabled === 1) ? 1 : 0, now(), ruleId);
-  audit(actor, 'alert.rule.update', ruleId, { events: data.data.events, enabled: data.data.enabled });
+  audit(actor, 'alert.rule.update', ruleId, { events: data.data.events, enabled: data.data.enabled, ...(role ? { role } : {}) });
   return ruleView(db.prepare('SELECT * FROM alert_lines WHERE id=?').get(ruleId));
 }
-export function deleteRule(ruleId, actor) {
+export function deleteRule(ruleId, actor, { role } = {}) {
   if (!db.prepare('SELECT 1 FROM alert_lines WHERE id=?').get(ruleId)) throw httpError(404, 'This line does not exist.');
   db.prepare('DELETE FROM alert_lines WHERE id=?').run(ruleId);
-  audit(actor, 'alert.rule.delete', ruleId, {});
+  audit(actor, 'alert.rule.delete', ruleId, role ? { role } : {});
   return { deleted: true };
 }
