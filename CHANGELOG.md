@@ -9,6 +9,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Maintenance page: "Powered by DockNest" in the footer now links to the DockNest project on GitHub. It is part of the page and is always shown.
 - License: a NOTICE file adds one AGPL-3.0 section 7(b) term: the "Powered by DockNest" credit and its link must be kept on visitor pages, including in modified versions.
 
+### Fixed
+
+- Map details panel: copy is now an icon on the right of each value, long values no longer get cut off, and the Alerts section matches the rest of the panel.
+
 ## [2.8.2] - 2026-10-24
 
 See [docs/releases/2026-10-24-v2.8.2.md](docs/releases/2026-10-24-v2.8.2.md).

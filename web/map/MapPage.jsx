@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
-import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy} from '@tabler/icons-react';
+import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
@@ -37,10 +37,11 @@ function storageFacts(t){
 
 // Only data DockNest already holds is shown; a copy button sits next to values people paste elsewhere.
 function CopyText({text,label}){
- const [done,setDone]=useState(false);
- return <button type="button" className="map-copy" aria-label={'Copy '+label} onClick={async()=>{try{await navigator.clipboard.writeText(text);setDone(true);setTimeout(()=>setDone(false),1500)}catch{}}}><IconCopy size={16} stroke={1.75} aria-hidden="true"/>{done?'Copied':'Copy'}</button>;
+ const [done,setDone]=useState(false),t=useRef(null);
+ useEffect(()=>()=>clearTimeout(t.current),[]);
+ return <button type="button" className={'icon-button map-copy'+(done?' done':'')} title={done?'Copied':'Copy'} aria-label={'Copy '+label} onClick={async()=>{try{await navigator.clipboard.writeText(text);setDone(true);clearTimeout(t.current);t.current=setTimeout(()=>setDone(false),1500)}catch{}}}>{done?<IconCheck size={16} stroke={1.75} aria-hidden="true"/>:<IconCopy size={16} stroke={1.75} aria-hidden="true"/>}</button>;
 }
-const Val=({text,label,children})=><span className="map-val"><span>{children||text}</span><CopyText text={text} label={label}/></span>;
+const Val=({text,label,children})=><span className="map-val"><span className="map-val-text" title={text}>{children||text}</span><CopyText text={text} label={label}/></span>;
 function useNarrow(){
  const q='(max-width:767px)',[narrow,setNarrow]=useState(()=>matchMedia(q).matches);
  useEffect(()=>{const m=matchMedia(q),h=()=>setNarrow(m.matches);m.addEventListener('change',h);return()=>m.removeEventListener('change',h)},[]);
