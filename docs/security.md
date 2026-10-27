@@ -208,8 +208,15 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
 ## Alerts: Telegram and email (outbound requests, credentials)
 
 - No alert channel means no alert traffic. With channels, DockNest connects only to `https://api.telegram.org` (a host
-  fixed in code, no redirects, 10 second limit, 64 KB response cap) and to the SMTP server an administrator entered
-  for an email channel. There are no webhooks and no user-supplied URLs.
+  fixed in code) and to the SMTP server an administrator entered for an email channel. There are no webhooks and no
+  user-supplied URLs yet.
+- Every alert HTTP request goes through one guarded client (`src/alerts/outbound.js`, details in
+  [alert-channels.md](alert-channels.md), "Outbound safety"): HTTPS on port 443 only, its own DNS lookup with every
+  answer checked and that same answer pinned to the socket (no DNS rebinding), IP literals checked in every notation,
+  no redirects, no proxy (`HTTPS_PROXY` and `NODE_USE_ENV_PROXY` are ignored), 10 seconds for the whole request, 64 KB
+  response cap. Loopback, link-local and cloud-metadata addresses, multicast, reserved and documentation ranges, and
+  their IPv4-mapped, NAT64 and 6to4 forms are always refused. Private ranges (RFC 1918, CGNAT, IPv6 ULA) are refused
+  unless an administrator turns on "Allow private network" and saves the Connection while it is on (off by default).
 - Credentials (Telegram bot token; SMTP host, user name, password, from address) are one value sealed with
   the master key (AES-256-GCM, like server SSH keys), opened only at the moment of a send. The API never returns a
   token or password (it shows "set" flags), and they are never written to logs, audit events, queue rows, the
@@ -221,7 +228,8 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
 - SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
   If a server offers no STARTTLS, DockNest stops before sending any credential. The host name is resolved once and the
   connection goes to that address; loopback (127.0.0.0/8, ::1), link-local and cloud-metadata ranges (169.254.0.0/16, fe80::/10, fd00:ec2::254), the unspecified
-  and multicast ranges are refused. Private and loopback addresses are allowed so a mail relay at home works. Server
+  and multicast ranges are refused. Private addresses are allowed for a mail server an administrator entered, so a
+  mail relay at home works; loopback is never allowed. A mail server set by anyone else must be public. Server
   replies are never returned to the browser or logged. Addresses and subjects are validated against line breaks.
 - Messages hold only the site and server names the owner typed and a time. They never include addresses, paths, logs
   or error text. The alert queue keeps no secrets and is pruned after 7 days.
