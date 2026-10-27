@@ -40,6 +40,8 @@ export function testState(connection,provider){
  return {state:'queued',text:'Not tested'};
 }
 export const usedByText=connection=>(connection.usedBy||[]).length?connection.usedBy.map(n=>n.name).join(', '):'Not used';
+// The table shows the first node and a count; the full list goes in the title.
+export const usedByShort=connection=>{const n=(connection.usedBy||[]).map(x=>x.name);return n.length>1?`${n[0]} and ${n.length-1} more`:n[0]||'Not used'};
 export const GROUPS={common:'Popular',advanced:'Advanced'};
 // The template languages people use most; anything else is "Add custom".
 export const LANGUAGES=[['en','English (en)'],['en_US','English, US (en_US)'],['en_GB','English, UK (en_GB)'],['es','Spanish (es)'],['pt_BR','Portuguese, Brazil (pt_BR)'],['de','German (de)'],['fr','French (fr)'],['it','Italian (it)'],['nl','Dutch (nl)'],['he','Hebrew (he)'],['ar','Arabic (ar)'],['hi','Hindi (hi)'],['id','Indonesian (id)'],['tr','Turkish (tr)']];

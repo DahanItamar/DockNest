@@ -3,7 +3,7 @@ import {IconPencil,IconSend,IconTrash,IconPlugConnected,IconPlus,IconEye} from '
 import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
-import {createConnectionsClient,testState,usedByText} from './client.js';
+import {createConnectionsClient,testState,usedByText,usedByShort} from './client.js';
 import {ProviderIcon,SwitchRow} from './parts.jsx';
 import {ConnectionDialog,DeleteConnectionDialog,useReauth} from './ConnectionDialog.jsx';
 import './connections.css';
@@ -37,7 +37,7 @@ export function ConnectionsPage({api,user,openNew=0,onSessionExpired}){
  const rows=visible=>visible.map(c=>{const p=byId[c.provider],s=testState(c,p),mine=c.editable!==false;return <tr key={c.id}>
   <td><b className="cx-trunc" title={c.name}>{c.name}</b></td>
   <td><span className="cx-prov"><ProviderIcon icon={p?.icon}/><span className="cx-trunc">{p?.label||c.provider}</span></span></td>
-  <td><span className="cx-trunc" title={usedByText(c)}>{(c.usedBy||[]).length?usedByText(c):<span className="cx-muted">Not used</span>}</span></td>
+  <td><span className="cx-trunc" title={usedByText(c)}>{(c.usedBy||[]).length?usedByShort(c):<span className="cx-muted">Not used</span>}</span></td>
   <td><StatusLabel state={s.state}>{testing===c.id?'Sending…':s.text}</StatusLabel></td>
   <td><div className="actions row-actions">
    <IconButton label={(mine?'Edit ':'View ')+c.name} icon={mine?IconPencil:IconEye} onClick={()=>setDialog({kind:'edit',connection:c})}/>
