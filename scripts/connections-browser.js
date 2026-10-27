@@ -230,7 +230,7 @@ async function keyboardOnly(){
  const b=await d.locator('.cx-combo').first().boundingBox(),pop=await page.locator('.cx-pop').boundingBox();assert.ok(pop.y>=b.y+b.height,'opens downward');
  await page.keyboard.type('ntf');await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
  await page.locator('.cx-pop').waitFor({state:'detached'});
- assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('cx-combo')),true,'focus returns to the button');
+ assert.ok(await page.waitForFunction(()=>document.activeElement?.classList.contains('cx-combo'),null,{timeout:2000}).then(()=>true,()=>false),'focus returns to the button');
  await page.keyboard.press('Tab');await page.keyboard.press('Tab');await page.keyboard.press('Tab');
  await page.keyboard.type('docknest-cinderbean-7f3k');
  assert.equal(await d.locator('input[data-key="topic"]').inputValue(),'docknest-cinderbean-7f3k','reached Topic by Tab');
