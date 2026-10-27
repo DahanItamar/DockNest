@@ -44,7 +44,7 @@ try{
  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.waitForTimeout(450);
  const storageButton=page.getByRole('button',{name:/Backup storage:.*stored/});await storageButton.focus();await page.locator('#compact-storage-details').waitFor();
  assert.match(await storageButton.locator('b').innerText(),/GB/);assert.match(await storageButton.locator('small').innerText(),/^\/ .*GB$/);
- assert.match(await page.locator('#compact-storage-details').innerText(),/Total capacity/);assert.equal(await page.locator('.health-short').innerText(),'Online');
+ assert.match(await page.locator('#compact-storage-details').innerText(),/Total capacity/);assert.equal(await page.locator('.system-health').count(),0);
  const compactBox=await storageButton.boundingBox();assert.ok(compactBox.y+compactBox.height<=1000,'Compact data fits the rail');
  await page.keyboard.press('Escape');await page.locator('#compact-storage-details').waitFor({state:'hidden'});
  await mkdir('data/theme-verification',{recursive:true});await page.screenshot({path:'data/theme-verification/compact-dark.png',animations:'disabled'});

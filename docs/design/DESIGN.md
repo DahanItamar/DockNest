@@ -14,7 +14,7 @@ Maintenance Studio provides three presets and desktop/phone previews. Saving doe
 
 The header holds branding and useful controls; there is no duplicate bottom status strip. See the [logo guide](homebird-brand/README.md) and [mock screenshots](../media/README.md).
 
-A System health heartbeat sits above storage, using a full-width waveform when expanded and a compact pulse in the collapsed rail. Blue means fresh API data, an online worker and no latest job needing attention; purple identifies connection/worker trouble or failed/recovery-required work. The sweep stops if the API becomes stale and respects reduced motion. Text and accessible labels explain each state. The collapsed rail also shows a capacity ring with used and total amounts; its storage details appear on hover or keyboard focus and dismiss with Escape. Unknown capacity is explicitly marked rather than shown as an empty percentage. This reports observed manager health, not a continuous check of every remote website or storage destination.
+The sidebar ends with backup storage. The collapsed rail shows a capacity ring with used and total amounts; its storage details appear on hover or keyboard focus and dismiss with Escape. Unknown capacity is explicitly marked rather than shown as an empty percentage.
 
 The compact storage readout uses actual stored and total amounts, rather than an unexplained percentage.
 

@@ -101,7 +101,7 @@ try{
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
  await page.setViewportSize({width:1440,height:1000});
- await page.getByRole('button',{name:'Cancel connection',exact:true}).click();
+ await page.getByRole('dialog',{name:'Connect storage'}).getByRole('button',{name:'Cancel',exact:true}).click();await page.getByRole('dialog',{name:'Connect storage'}).waitFor({state:'detached'});
  // B4 + B5 on cards: keyboard focus stays on Test connection and failures appear in the card.
  fixture.faults.status={status:500,code:'InternalError'};
  const test=page.locator('.storage-card').getByRole('button',{name:'Test connection'});

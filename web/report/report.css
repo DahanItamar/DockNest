@@ -1,7 +1,7 @@
 /* Problem reports: the review dialog and report buttons. Tokens only; type scale only; 8 px geometry. */
 .rp-button{white-space:nowrap}
 :root dialog.rp-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 32px));max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 104px);margin:72px auto auto;padding:0;border:0;border-radius:12px;background:var(--surface);color:var(--text-primary);box-shadow:0 24px 64px var(--shadow);overflow:hidden;font-size:var(--fs-body);line-height:var(--lh-body)}
-.rp-dialog[open]{display:flex;flex-direction:column;animation:dn-enter var(--dur-slow) var(--ease) both}
+.rp-dialog[open]{display:flex;flex-direction:column;animation:dn-enter var(--dur-slow) var(--ease) backwards}
 .rp-dialog::backdrop{background:var(--backdrop)}
 .rp-grabber{display:none}
 .rp-main{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}

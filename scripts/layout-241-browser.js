@@ -82,18 +82,12 @@ try{
   const bottom=await app.page.evaluate(()=>document.querySelector('.pagination').getBoundingClientRect().bottom);assert.ok(bottom>1300-200,route+' pager sits near the bottom of a 1300px screen ('+Math.round(bottom)+')');
   await app.close();
  }
- // 7: collapsed rail: a 44px health button and a 44px capacity ring, no text, no frame at rest, ring only on keyboard focus.
- for(const [width,height] of [[1440,1000],[2560,1300]])for(const theme of ['light','dark'])for(const health of [true,false]){
-  const app=await open(width,height,{side:'collapsed',theme,health});
-  const rail=await app.page.evaluate(()=>{const health=document.querySelector('.system-health'),ring=document.querySelector('.compact-storage-button'),box=el=>{const r=el.getBoundingClientRect();return {w:Math.round(r.width),h:Math.round(r.height),top:r.top,bottom:r.bottom,left:r.left,right:r.right}},style=getComputedStyle(health),visibleText=[...document.querySelectorAll('.berry-sidebar .system-health-label,.berry-sidebar .health-short,.berry-sidebar .compact-storage-button b,.berry-sidebar .compact-storage-button small')].filter(el=>{const r=el.getBoundingClientRect();return r.width>2&&r.height>2&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'}).map(el=>el.textContent);return {health:box(health),ring:box(ring),outline:style.outlineStyle,border:style.borderTopWidth,visibleText,label:health.getAttribute('aria-label')};});
-  assert.deepEqual([rail.health.w,rail.health.h,rail.ring.w,rail.ring.h],[44,44,44,44],'44px health and ring buttons');
-  assert.ok(rail.health.bottom<=rail.ring.top+0.5,'health and ring do not overlap');assert.deepEqual(rail.visibleText,[],'no text in the rail');
-  assert.ok(rail.outline==='none'&&rail.border==='0px','no frame at rest');assert.match(rail.label,/System health/);
-  await app.page.locator('.system-health').focus();await app.page.keyboard.press('Shift+Tab');await app.page.keyboard.press('Tab');
-  const focused=await app.page.evaluate(()=>{const style=getComputedStyle(document.querySelector('.system-health'));return {matches:document.querySelector('.system-health').matches(':focus-visible'),width:style.outlineWidth,style:style.outlineStyle}});
-  if(focused.matches)assert.deepEqual([focused.width,focused.style],['2px','solid'],'focus ring only on focus-visible');
-  if(health&&theme==='light')await shot(app.page,'rail-'+width+'-'+theme+'-healthy');
-  if(!health)await shot(app.page,'rail-'+width+'-'+theme+'-review');
+ // 7: collapsed rail: a 44px capacity ring, no text, no frame at rest.
+ for(const [width,height] of [[1440,1000],[2560,1300]])for(const theme of ['light','dark']){
+  const app=await open(width,height,{side:'collapsed',theme});
+  const rail=await app.page.evaluate(()=>{const ring=document.querySelector('.compact-storage-button'),r=ring.getBoundingClientRect(),visibleText=[...document.querySelectorAll('.berry-sidebar .compact-storage-button b,.berry-sidebar .compact-storage-button small')].filter(el=>{const b=el.getBoundingClientRect();return b.width>2&&b.height>2&&getComputedStyle(el).visibility!=='hidden'&&getComputedStyle(el).display!=='none'}).map(el=>el.textContent);return {w:Math.round(r.width),h:Math.round(r.height),visibleText,health:document.querySelectorAll('.system-health').length}});
+  assert.deepEqual([rail.w,rail.h],[44,44],'44px capacity ring');assert.deepEqual(rail.visibleText,[],'no text in the rail');assert.equal(rail.health,0,'no system health card');
+  await shot(app.page,'rail-'+width+'-'+theme);
   await app.page.locator('.compact-storage-button').hover();await app.page.locator('#compact-storage-details').waitFor();assert.ok((await app.page.locator('#compact-storage-details').innerText()).includes('hetzner-storage-box-frankfurt-primary'),'popover names the destination');
   await app.close();
  }
