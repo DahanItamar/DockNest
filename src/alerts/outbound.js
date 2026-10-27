@@ -7,7 +7,8 @@
 //   skip `lookup` in Node, so they are classified here before any connection. The TLS name stays the host name.
 // - A fresh Agent per request with no proxy: HTTP(S)_PROXY and NODE_USE_ENV_PROXY never apply, so no proxy resolves names.
 // - Redirects are never followed (a 3xx is a failure), 10 seconds for the whole request including DNS, request body at
-//   most 16 KB, response read at most 64 KB and then the connection dropped. TLS 1.2 or newer, certificates verified.
+//   most 16 KB, response read at most 64 KB and then the connection dropped. TLS 1.2 or newer, certificates verified
+//   against Node's bundled CA store.
 // - Errors are fixed sentences. Node's own error text can carry the URL (and with it a token), so it is never passed on.
 import http from 'node:http';
 import https from 'node:https';

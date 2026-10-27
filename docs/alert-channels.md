@@ -326,7 +326,8 @@ All HTTP providers send through one client in `src/alerts/outbound.js`. Nothing 
 - **Redirects**: never followed. A 3xx is a failure: "The server answered with a redirect. Paste the final URL."
 - **Limits**: 10 seconds for the whole request, request body at most 16 KB, response read at most 64 KB then
   dropped. One request at a time per Connection.
-- **TLS**: system CAs, TLS 1.2 or newer, certificate must match the host name. There is no "skip verification".
+- **TLS**: Node's bundled CA store (the operating system's certificate store is not added), TLS 1.2 or newer,
+  certificate must match the host name. There is no "skip verification".
 - **Checked twice**: at save (format and policy, with a DNS check) and again at every send, because DNS changes.
 - **Email** keeps the 2.8 rule in `src/alerts/smtp.js` word for word: TLS or STARTTLS with a valid certificate; the
   host is resolved once, the address checked and the connection made to that address; refused are `0.0.0.0/8`,

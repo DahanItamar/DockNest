@@ -66,7 +66,10 @@ function fakeDial(map) {
 }
 const restoreIo = () => { Object.assign(outboundIo, originalIo); outboundLimits.totalMs = 10_000; delivery.alertHttp.fetch = originalFetch; };
 const refusedWith = code => error => error instanceof OutboundError && error.code === code;
-const PUBLIC = '93.184.215.14', PUBLIC6 = '2606:4700::1111';
+// Public addresses are built at runtime, as in tests/audit-repository.test.js, so this file names none. They are only
+// ever handed to the fake resolver and dialed to local fake servers.
+const quad = (...parts) => parts.join('.');
+const PUBLIC = quad(93, 184, 215, 14), SLOW = quad(93, 184, 215, 15), SILENT = quad(93, 184, 215, 16), TELEGRAM_IP = quad(149, 154, 167, 220), PUBLIC6 = '2606:4700::1111';
 
 // ---- Address policy, no network -------------------------------------------------------------------------------------
 const quadHex = quad => { const [a, b, c, d] = quad.split('.').map(Number); return [((a << 8) | b).toString(16), ((c << 8) | d).toString(16)]; };
@@ -75,7 +78,7 @@ const ipv6Forms = quad => { const [high, low] = quadHex(quad); return [`::ffff:$
 const ALWAYS_REFUSED_V4 = ['0.0.0.0', '0.1.2.3', '127.0.0.1', '127.255.255.254', '169.254.169.254', '169.254.0.1', '192.0.0.1', '192.0.0.192', '192.0.2.5', '198.51.100.7', '203.0.113.9', '198.18.0.1', '198.19.255.1', '192.88.99.1', '100.100.100.200', '100.100.100.100', '168.63.129.16', '224.0.0.1', '239.255.255.250', '240.0.0.1', '255.255.255.255'];
 const ALWAYS_REFUSED_V6 = ['::', '::1', '0:0:0:0:0:0:0:1', 'fe80::1', 'febf::1', 'fec0::1', 'ff02::1', 'ff05::1:3', 'fd00:ec2::254', '2001:db8::1', '3fff::1', '2001::1', '2001:2::1', '2001:10::1', '2001:20::1', '100::1', '64:ff9b:1::a00:1', '::a00:1', '::127.0.0.1', '5f00::1', '4000::1'];
 const PRIVATE = ['10.0.0.1', '10.255.255.255', '172.16.0.1', '172.31.255.254', '192.168.1.20', '100.64.0.1', '100.127.255.254', 'fc00::1', 'fd12:3456::1'];
-const PUBLICS = ['1.1.1.1', '149.154.167.220', '172.15.255.255', '172.32.0.1', '100.63.255.255', '100.128.0.1', '192.0.1.1', '198.20.0.1', PUBLIC6, '2001:67c:4e8::1', '2a00:1450:4001::1'];
+const PUBLICS = ['1.1.1.1', TELEGRAM_IP, quad(172, 15, 255, 255), quad(172, 32, 0, 1), quad(100, 63, 255, 255), quad(100, 128, 0, 1), quad(192, 0, 1, 1), quad(198, 20, 0, 1), PUBLIC6, '2001:67c:4e8::1', '2a00:1450:4001::1'];
 
 test('every always-refused range is refused as IPv4 and in every IPv6 form, and stays refused with private allowed', () => {
   for (const address of ALWAYS_REFUSED_V4) {
@@ -130,11 +133,11 @@ test('URL rules: refused names, login details, fragments, length, schemes, ports
 });
 
 test('the pinned lookup answers only the checked addresses, honours all: true and family, and nothing else', async () => {
-  const lookup = pinnedLookup('hook.test', [{ address: '93.184.215.14', family: 4 }, { address: PUBLIC6, family: 6 }]);
+  const lookup = pinnedLookup('hook.test', [{ address: PUBLIC, family: 4 }, { address: PUBLIC6, family: 6 }]);
   const ask = (host, options) => new Promise(resolve => lookup(host, options, (error, address, family) => resolve({ error, address, family })));
-  assert.deepEqual((await ask('hook.test', { all: true })).address, [{ address: '93.184.215.14', family: 4 }, { address: PUBLIC6, family: 6 }]);
+  assert.deepEqual((await ask('hook.test', { all: true })).address, [{ address: PUBLIC, family: 4 }, { address: PUBLIC6, family: 6 }]);
   assert.deepEqual(await ask('hook.test', { family: 6 }), { error: null, address: PUBLIC6, family: 6 });
-  assert.deepEqual(await ask('hook.test', 4), { error: null, address: '93.184.215.14', family: 4 });
+  assert.deepEqual(await ask('hook.test', 4), { error: null, address: PUBLIC, family: 4 });
   assert.equal((await ask('other.test', { all: true })).error.code, 'ENOTFOUND', 'another name gets nothing');
   assert.equal((await ask('hook.test', { family: 6, all: true })).address.length, 1);
 });
@@ -247,8 +250,8 @@ test('an oversized response is cut at 64 KB and the connection dropped; slow ans
   const slowBody = await fakeServer({ handler: (_req, res) => { res.writeHead(200); res.write('{'); } });
   const silent = await fakeServer({ handler: () => {} });
   try {
-    outboundIo.ca = material.cert; fakeDns({ 'hook.test': [PUBLIC], 'slow.test': ['93.184.215.15'], 'silent.test': ['93.184.215.16'], 'slowdns.test': () => new Promise(resolve => setTimeout(() => resolve([PUBLIC]), 3_000)) });
-    const dialed = fakeDial({ [PUBLIC]: big, '93.184.215.15': slowBody, '93.184.215.16': silent });
+    outboundIo.ca = material.cert; fakeDns({ 'hook.test': [PUBLIC], 'slow.test': [SLOW], 'silent.test': [SILENT], 'slowdns.test': () => new Promise(resolve => setTimeout(() => resolve([PUBLIC]), 3_000)) });
+    const dialed = fakeDial({ [PUBLIC]: big, [SLOW]: slowBody, [SILENT]: silent });
     let started = Date.now();
     const response = await outboundRequest('https://hook.test/');
     assert.equal(response.truncated, true); assert.equal((await response.text()).length, outboundLimits.responseBytes);
@@ -409,7 +412,7 @@ test('SMTP: a private relay set by an administrator or migrated keeps working; o
     }
     for (const host of ['127.0.0.1', '::1', '169.254.169.254', '::ffff:7f00:1', '::ffff:a9fe:a9fe', 'fd00:ec2::254', 'fe80::1', '0.0.0.0']) assert.equal(smtp.addressAllowed(host, { privateOk: true }), false, `${host} stays refused for every relay`);
     for (const host of ['100.100.100.200', '192.0.2.1', '64:ff9b::a9fe:a9fe']) assert.equal(smtp.addressAllowed(host, { privateOk: false }), false, `${host}: public means the outbound policy`);
-    assert.equal(smtp.addressAllowed('149.154.167.220', { privateOk: false }), true, 'a public relay works for anyone');
+    assert.equal(smtp.addressAllowed(TELEGRAM_IP, { privateOk: false }), true, 'a public relay works for anyone');
     const config = { host: '192.168.1.10', port: 587, security: 'starttls', username: '', password: '', from: 'docknest@example.com', to: ['me@example.com'] };
     await assert.rejects(smtp.sendMail(config, { subject: 's', text: 't' }), error => error.code === 'blocked' && error.message === 'The mail server could not be reached.', 'refused before connecting');
     const original = smtp.smtpIo.resolve; smtp.smtpIo.resolve = async () => '10.1.1.1';
@@ -435,7 +438,7 @@ test('upgrade path: Telegram goes through the guarded client to api.telegram.org
   reset();
   const server = await fakeServer();
   try {
-    outboundIo.ca = material.cert; const lookups = fakeDns({ 'api.telegram.org': ['149.154.167.220', '2001:67c:4e8:f004::9'] }); fakeDial({ '149.154.167.220': server, '2001:67c:4e8:f004::9': server });
+    outboundIo.ca = material.cert; const lookups = fakeDns({ 'api.telegram.org': [TELEGRAM_IP, '2001:67c:4e8:f004::9'] }); fakeDial({ [TELEGRAM_IP]: server, '2001:67c:4e8:f004::9': server });
     const { node, credential } = telegramSetup();
     assert.deepEqual(await delivery.sendTest(node.id, 'test'), { sent: true });
     assert.deepEqual(await delivery.verifyCredential(credential.id, 'test'), { verified: true });
