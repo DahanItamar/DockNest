@@ -240,8 +240,10 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   await verifyClean(refused, before);
   record('Restore test: Allow internet is refused with a plain reason when a container adds NET_ADMIN');
 
+  // A shell as PID 1 ignores SIGTERM; the trap lets capture stop these fixtures cleanly (exit 0), as a real app would.
+  const TERM_TRAP = 'python /app/app.py & app=$!; trap "kill -TERM $app; wait $app; exit 0" TERM; ';
   // 7. A container that exits 20 seconds after start fails at "Still running" (30 s window for this case).
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-exit', '--hostname', 'rt-exit-live', '-v', 'rt-exit-data:/site', 'docknest-rt:local', 'sh', '-c', 'python /app/app.py & sleep 20; [ "$(hostname)" = rt-exit-live ] || exit 3; wait');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-exit', '--hostname', 'rt-exit-live', '-v', 'rt-exit-data:/site', 'docknest-rt:local', 'sh', '-c', TERM_TRAP + 'sleep 20 & wait $!; [ "$(hostname)" = rt-exit-live ] || exit 3; wait $app');
   await healthy('rt-exit');
   const exitSite = site('rt-exit', config(['rt-exit'])); await backup(exitSite);
   before = await snapshot(target);
@@ -254,7 +256,7 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   record('Restore test: a container that exits 20 seconds after start fails at "Still running"');
 
   // 8. The memory limit: a copy that needs more than 512 MB ends couldnt_run with no backup evidence.
-  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-oom', '--hostname', 'rt-oom-live', '-v', 'rt-oom-data:/site', 'docknest-rt:local', 'sh', '-c', 'python /app/app.py & sleep 8; [ "$(hostname)" = rt-oom-live ] && wait; exec python -c "b=b\'x\'*(800*1024*1024);import time;time.sleep(600)"');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-oom', '--hostname', 'rt-oom-live', '-v', 'rt-oom-data:/site', 'docknest-rt:local', 'sh', '-c', TERM_TRAP + 'sleep 8 & wait $!; if [ "$(hostname)" = rt-oom-live ]; then wait $app; exit 0; fi; exec python -c "b=b\'x\'*(800*1024*1024);import time;time.sleep(600)"');
   await healthy('rt-oom');
   const oomSite = site('rt-oom', config(['rt-oom'])), oomBackup = await backup(oomSite);
   const oomHistory = historyCount(oomBackup.id);
