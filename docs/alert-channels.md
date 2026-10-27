@@ -232,7 +232,7 @@ The test message uses the same template: title "DockNest test message", reason "
 | ntfy | Token (optional) | Server (`https://ntfy.sh`), topic | ntfy.sh or user host | JSON publish: `topic`, `title`, `message`, `click`, `priority` 4 for failures |
 | Gotify | App token | Server | User host | `POST /message`, `X-Gotify-Key`, `title`, `message`, `priority`, click URL in `extras` |
 | Pushover | App token, user key | | `api.pushover.net` | `POST /1/messages.json`, `title`, `message`, `url`, `url_title` |
-| Matrix | Access token | Homeserver, room ID | User host | `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`, `m.text`, room ID URL-encoded; txn = outbox id, so a retry never posts twice |
+| Matrix | Access token | Homeserver, room ID | User host | `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`, `m.text`, room ID URL-encoded; txn = outbox id plus a hash of the content, so a retry never posts twice and changed content is a new event |
 | Other | Webhook URL, header (optional) | | User host | Fixed JSON `{ title, site, server, message, url, event, at }` |
 
 The ntfy topic is plain but treated as sensitive in the UI help: on ntfy.sh anyone who knows a topic can read it, so
@@ -613,7 +613,10 @@ What PR 3 settled where this document left room, or chose a narrower step:
   `messageReplyOption`. **Discord** keeps `?thread_id=` (a thread webhook) and adds `wait=true` when sending.
 - **Matrix** sends `m.mentions: {}` and puts a zero-width space after every `@`, so a site named `@room` mentions nobody.
   A homeserver on a public name must use 443 (the guard rule for public hosts); a custom port such as 8008 works on a
-  private host with "Allow private network" on.
+  private host with "Allow private network" on. The transaction ID is `<outbox id>-<16 hex of a SHA-256 of the time and
+  both bodies>`: a retry of the same item reuses it, while the "N more alerts" item whose count changed in place, or a
+  test message (no outbox item), gets a new one. A homeserver answers a reused transaction ID with the old event and
+  posts nothing.
 - **Other (webhook URL)**: `message` is one 2.8-style sentence ("Backup failed: shop on srv at 03:00 UTC. Reason."). The
   exact body is exported as `body()` from `providers/webhook.js` for the dialog.
 - **Priorities**: ntfy 4, Gotify 8 and Pushover 1 for backup failed, server unreachable, low disk and restore test failed or

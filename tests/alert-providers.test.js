@@ -189,7 +189,8 @@ test('format: each provider renders the one message natively', () => {
   assert.deepEqual(call('ntfy'), { method: 'POST', path: '/', headers: { Authorization: `Bearer ${NTFY_TOKEN}` }, json: { topic: 'docknest-fixture-topic', title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', click: JOB, priority: 4 } });
   assert.deepEqual(call('gotify'), { method: 'POST', path: '/message', headers: { 'X-Gotify-Key': GOTIFY_TOKEN }, json: { title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 8, extras: { 'client::notification': { click: { url: JOB } } } } });
   assert.deepEqual(call('pushover'), { method: 'POST', path: '/1/messages.json', json: { token: PUSH_TOKEN, user: PUSH_USER, title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 1, url: JOB, url_title: 'Open job' } });
-  assert.deepEqual(call('matrix'), { method: 'PUT', path: '/_matrix/client/v3/rooms/%21fixtureRoom%3Aexample.com/send/m.room.message/item-0001', headers: { Authorization: `Bearer ${MATRIX_TOKEN}` }, json: { msgtype: 'm.text', body: `${BODY_TEXT}\nOpen the job: ${JOB}`, format: 'org.matrix.custom.html', formatted_body: `<b>Backup failed</b><br>shop.example.com on mobiX-Srv at 03:00 UTC<br>The backup did not finish. Open DockNest to see why.<br><a href="${JOB}">Open job</a>`, 'm.mentions': {} } });
+  const matrixCall = call('matrix'); assert.match(matrixCall.path, /^\/_matrix\/client\/v3\/rooms\/%21fixtureRoom%3Aexample\.com\/send\/m\.room\.message\/item-0001-[0-9a-f]{16}$/);
+  assert.deepEqual({ ...matrixCall, path: null }, { method: 'PUT', path: null, headers: { Authorization: `Bearer ${MATRIX_TOKEN}` }, json: { msgtype: 'm.text', body: `${BODY_TEXT}\nOpen the job: ${JOB}`, format: 'org.matrix.custom.html', formatted_body: `<b>Backup failed</b><br>shop.example.com on mobiX-Srv at 03:00 UTC<br>The backup did not finish. Open DockNest to see why.<br><a href="${JOB}">Open job</a>`, 'm.mentions': {} } });
   assert.deepEqual(call('webhook'), { method: 'POST', url: 'https://hooks.example.com/in/fixtureHook', headers: { Authorization: 'Bearer webhookFixture01' }, json: { title: 'Backup failed', site: 'shop.example.com', server: 'mobiX-Srv', message: 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. The backup did not finish. Open DockNest to see why.', url: JOB, event: 'backup.failed', at: '2026-10-27T03:00:00Z' } });
 });
 
@@ -562,8 +563,14 @@ test('use case: Matrix retries reuse the transaction id, so a retry never posts 
     reset(); const connection = connect('matrix'); let attempt = 0; const calls = mock(() => reply(++attempt === 1 ? 502 : 200, { event_id: '$fixture' }));
     fire(); await delivery.deliverDue({ at: T0 }); await delivery.deliverDue({ at: T0 + 60_000 });
     assert.equal(calls.length, 2); assert.equal(calls[0].url, calls[1].url, 'same path and transaction id'); assert.equal(outbox(connection.id)[0].status, 'sent');
-    assert.ok(calls[0].url.endsWith(`/send/m.room.message/${outbox(connection.id)[0].id}`), 'the transaction id is the outbox item id');
+    assert.ok(calls[0].url.includes(`/send/m.room.message/${outbox(connection.id)[0].id}-`), 'the transaction id starts with the outbox item id');
     fire({ key: 'site:second' }, T0 + 120_000); await delivery.deliverDue({ at: T0 + 120_000 }); assert.notEqual(calls[2].url, calls[0].url, 'a different message has its own transaction id');
+    // The same item with new text (the "N more alerts" count grew while it was in flight) is a new event, and two test
+    // messages (no outbox item) are two events: a homeserver answers a reused transaction id with the old event.
+    const values = { ...parse('matrix', VALUES.matrix).secret, ...parse('matrix', VALUES.matrix).settings }, txn = message => provider('matrix').format(message, values).path.split('/').pop();
+    assert.equal(txn({ ...MSG, id: 'item-1' }), txn({ ...MSG, id: 'item-1' }), 'a retry of the same message keeps its id');
+    assert.notEqual(txn({ ...events.plainTemplate('2 more alerts. Open DockNest to see them.'), id: 'item-1' }), txn({ ...events.plainTemplate('3 more alerts. Open DockNest to see them.'), id: 'item-1' }), 'new text on the same item');
+    assert.notEqual(txn({ ...events.testMessage(), at: '2026-10-27T10:00:00.000Z' }), txn({ ...events.testMessage(), at: '2026-10-27T10:05:00.000Z' }), 'two test messages');
   } finally { restore(); }
 });
 

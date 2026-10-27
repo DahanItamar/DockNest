@@ -1,7 +1,10 @@
 // Matrix (docs/alert-channels.md, "Providers"). The user's homeserver (a custom port is fine on a private server; a public
 // one is reached on 443 only), an access token (secret) and a room ID (never an alias, so no lookup request is ever made):
 // `!opaque:server`, or the room version 12 form `!opaque` with no server part. The transaction ID is the outbox item's
-// id, so a retry of the same message is the same event and never posts twice.
+// id plus a hash of what is sent, so a retry of the same message is the same event and never posts twice, while an item
+// whose text changed in place (the "N more alerts" count) or a message with no item (a test) is a new event: a homeserver
+// answers a reused transaction ID with the old event and posts nothing.
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { parts, plainText, cut, htmlEscape, noMention, serverUrl, failure, field, freeze } from './common.js';
 
@@ -22,12 +25,15 @@ export default freeze({
   host: freeze(['server']),
   target: values => ({ hosts: 'user', base: values?.server }),
   format: (message, values) => {
-    const { title, where, reason, url } = parts(message), txn = String(message?.id ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'docknest';
+    const { title, where, reason, url } = parts(message);
     const html = [`<b>${htmlEscape(title)}</b>`, where && htmlEscape(where), reason && htmlEscape(reason), url && `<a href="${htmlEscape(url)}">Open job</a>`].filter(Boolean).join('<br>');
+    const body = cut(noMention(plainText(message, { link: 'Open the job' })), 8000), formatted = cut(noMention(html), 12000);
+    const item = String(message?.id ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'docknest';
+    const txn = `${item}-${createHash('sha256').update(JSON.stringify([message?.at ?? '', body, formatted])).digest('hex').slice(0, 16)}`;
     return {
       method: 'PUT', path: `/_matrix/client/v3/rooms/${encodeURIComponent(values.room).replace(/!/g, '%21')}/send/m.room.message/${encodeURIComponent(txn)}`, headers: { Authorization: `Bearer ${values.token}` },
       // `m.mentions` empty: this message mentions nobody; the zero-width space stops a legacy @room as well.
-      json: { msgtype: 'm.text', body: cut(noMention(plainText(message, { link: 'Open the job' })), 8000), format: 'org.matrix.custom.html', formatted_body: cut(noMention(html), 12000), 'm.mentions': {} },
+      json: { msgtype: 'm.text', body, format: 'org.matrix.custom.html', formatted_body: formatted, 'm.mentions': {} },
     };
   },
   // M_UNKNOWN_TOKEN (401), M_FORBIDDEN (403: not in the room, or no right to post), M_NOT_FOUND (404). The wait for a 429 is
