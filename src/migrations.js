@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { closeSync, mkdirSync, openSync, readdirSync, rmSync, renameSync, chmodSync, statSync, statfsSync } from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 // Versioned metadata schema. PRAGMA user_version lives in the database header, changes inside the same
 // transaction as the DDL, survives VACUUM INTO/backup copies and is readable without knowing any table,
@@ -127,6 +128,72 @@ CREATE TRIGGER IF NOT EXISTS restore_tests_no_delete BEFORE DELETE ON restore_te
 CREATE TRIGGER IF NOT EXISTS restore_test_steps_no_delete BEFORE DELETE ON restore_test_steps BEGIN SELECT RAISE(ABORT,'restore test steps are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS restore_tests_result_once BEFORE UPDATE OF result,failed_step,reason,checks,restore_seconds,total_seconds ON restore_tests WHEN OLD.result IS NOT NULL AND (NEW.result IS NOT OLD.result OR NEW.failed_step IS NOT OLD.failed_step OR NEW.reason IS NOT OLD.reason OR NEW.checks IS NOT OLD.checks OR NEW.restore_seconds IS NOT OLD.restore_seconds OR NEW.total_seconds IS NOT OLD.total_seconds) BEGIN SELECT RAISE(ABORT,'a restore test result is written once'); END;
 `;
+// Alert channels and Connections (docs/alert-channels.md, "Data model"). New tables only: the 2.8 alert tables have CHECK
+// lists of kinds that SQLite cannot change without a rebuild, and a rebuild would fire ON DELETE CASCADE on the lines.
+// The 2.8 tables stay frozen for a rollback to 2.9. `provider` is checked in code against the registry, never in SQL.
+// `alert_legacy_import` records when the 2.8 rows were copied, so a later start can tell an older version changed them.
+export const alertConnectionsSchema = `
+CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY,provider TEXT NOT NULL CHECK (length(provider) <= 32),name TEXT NOT NULL CHECK (length(name) <= 80),secret TEXT NOT NULL CHECK (length(secret) <= 8192),settings TEXT NOT NULL CHECK (length(settings) <= 4096),origin TEXT,private_ok INTEGER NOT NULL DEFAULT 0 CHECK (private_ok IN (0,1)),created_by TEXT,updated_by TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,last_test TEXT CHECK (last_test IS NULL OR last_test IN ('ok','failed')),last_test_at TEXT,last_send TEXT CHECK (last_send IS NULL OR last_send IN ('ok','failed')),last_send_at TEXT,last_error TEXT CHECK (last_error IS NULL OR length(last_error) <= 200));
+CREATE INDEX IF NOT EXISTS connections_origin ON connections(origin);
+CREATE TABLE IF NOT EXISTS alert_nodes (id TEXT PRIMARY KEY,provider TEXT NOT NULL CHECK (length(provider) <= 32),name TEXT NOT NULL CHECK (length(name) <= 80),connection_id TEXT REFERENCES connections(id) ON DELETE RESTRICT,prefill TEXT CHECK (prefill IS NULL OR length(prefill) <= 2048),created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS alert_nodes_connection ON alert_nodes(connection_id);
+CREATE TABLE IF NOT EXISTS alert_lines (id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES alert_nodes(id) ON DELETE CASCADE,source_kind TEXT NOT NULL CHECK (source_kind IN ('docknest','server','site')),source_id TEXT,events TEXT NOT NULL CHECK (length(events) <= 2048),enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,CHECK ((source_kind = 'docknest') = (source_id IS NULL)));
+CREATE INDEX IF NOT EXISTS alert_lines_node ON alert_lines(node_id);
+CREATE TABLE IF NOT EXISTS alert_outbox (id TEXT PRIMARY KEY,connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,node_id TEXT REFERENCES alert_nodes(id) ON DELETE SET NULL,event TEXT NOT NULL,dedupe_key TEXT NOT NULL CHECK (length(dedupe_key) <= 200),message TEXT NOT NULL CHECK (length(message) <= 1000),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4096),status TEXT NOT NULL CHECK (status IN ('pending','sent','failed')),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,created_at TEXT NOT NULL,finished_at TEXT);
+CREATE INDEX IF NOT EXISTS alert_outbox_due ON alert_outbox(status,next_attempt_at);
+CREATE INDEX IF NOT EXISTS alert_outbox_dedupe ON alert_outbox(connection_id,dedupe_key,created_at);
+CREATE TABLE IF NOT EXISTS alert_legacy_import (id INTEGER PRIMARY KEY CHECK (id = 1),imported_at TEXT NOT NULL);
+`;
+// The 2.8 copy (docs/alert-channels.md, "Migrating 2.8 alerts"). Pure SQL and JSON: sealed values are copied byte for
+// byte and never opened, so the master key is not needed. Nodes and lines keep their ids. It reads the 2.8 tables and
+// never writes them. It runs once: the import row makes a repeated run (an interrupted start, a restart) a no-op.
+const LEGACY_PROVIDER = Object.freeze({ telegram: 'telegram', smtp: 'email' }), OUTBOX_MAX_AGE_MS = 24 * 3600_000;
+export const cutName = (text, max = 80) => [...String(text)].slice(0, max).join(''); // never inside a character
+function legacyDestination(kind, config) {
+  let value; try { value = JSON.parse(config); } catch { return null; }
+  if (!value || typeof value !== 'object') return null;
+  if (kind === 'telegram') return typeof value.chatId === 'string' && value.chatId ? { chatId: value.chatId } : null;
+  return Array.isArray(value.to) && value.to.length ? { to: value.to, subjectPrefix: typeof value.subjectPrefix === 'string' ? value.subjectPrefix : '' } : null;
+}
+export function importLegacyAlerts(db, { at = new Date().toISOString(), newId = randomUUID } = {}) {
+  if (db.prepare('SELECT 1 FROM alert_legacy_import WHERE id=1').get()) return;
+  const insertConnection = db.prepare('INSERT INTO connections(id,provider,name,secret,settings,origin,private_ok,created_at,updated_at,last_test,last_test_at,last_send,last_send_at,last_error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const channels = db.prepare('SELECT * FROM alert_channels ORDER BY created_at,id').all(), nodeConnection = new Map();
+  for (const credential of db.prepare('SELECT * FROM alert_credentials ORDER BY created_at,id').all()) {
+    const provider = LEGACY_PROVIDER[credential.kind]; if (!provider) continue;
+    // Group this credential's nodes by destination, first seen first. The first group keeps the credential's id and name.
+    const groups = new Map();
+    for (const node of channels.filter(row => row.credential_id === credential.id && row.kind === provider)) {
+      const destination = legacyDestination(credential.kind, node.config), settings = destination && JSON.stringify(destination);
+      if (!settings || settings.length > 4096) continue; // an unreadable destination: the node keeps it as prefill below
+      if (!groups.has(settings)) groups.set(settings, []);
+      groups.get(settings).push(node);
+    }
+    if (!groups.size) groups.set('{}', []); // unused: "Add the chat ID" or "Add recipients"; sends nothing until completed
+    let first = true;
+    for (const [settings, nodes] of groups) {
+      const connectionId = first ? credential.id : newId(), name = first ? credential.name : cutName(`${credential.name} (${nodes[0].name})`);
+      // The newest node result becomes the Connection's last send, so the Map keeps its "Sent" or "Could not send" caption.
+      const last = nodes.filter(node => node.last_result).sort((a, b) => String(b.last_result_at).localeCompare(String(a.last_result_at)))[0];
+      // Email keeps the 2.8 address rule for its relay (private_ok = 1); Telegram only ever reaches its fixed host.
+      insertConnection.run(connectionId, provider, name, credential.config, settings, `legacy:${credential.id}`, provider === 'email' ? 1 : 0, credential.created_at, credential.updated_at, credential.last_test, credential.last_test_at, last?.last_result ?? null, last?.last_result_at ?? null, last ? last.last_error : credential.last_error);
+      for (const node of nodes) nodeConnection.set(node.id, connectionId);
+      first = false;
+    }
+  }
+  // A node without a matching credential keeps its old destination as `prefill` (never a secret) and sends nothing.
+  const insertNode = db.prepare('INSERT INTO alert_nodes(id,provider,name,connection_id,prefill,created_at,updated_at) VALUES(?,?,?,?,?,?,?)');
+  for (const node of channels) { const connectionId = nodeConnection.get(node.id) ?? null; insertNode.run(node.id, node.kind, node.name, connectionId, connectionId || node.config.length > 2048 ? null : node.config, node.created_at, node.updated_at); }
+  db.exec('INSERT INTO alert_lines(id,node_id,source_kind,source_id,events,enabled,created_at,updated_at) SELECT id,channel_id,source_kind,source_id,events,enabled,created_at,updated_at FROM alert_rules');
+  // Every queue row of a node with a Connection, so occurrence keys are never sent twice and repeat windows still hold.
+  // Pending ones are sent as their plain 2.8 text (payload NULL). A node without a Connection could never send its rows.
+  const insertItem = db.prepare('INSERT INTO alert_outbox(id,connection_id,node_id,event,dedupe_key,message,payload,status,attempts,next_attempt_at,expires_at,created_at,finished_at) VALUES(?,?,?,?,?,?,NULL,?,?,?,?,?,?)');
+  for (const item of db.prepare('SELECT * FROM alert_queue ORDER BY created_at,id').all()) {
+    const connectionId = nodeConnection.get(item.channel_id), created = Date.parse(item.created_at); if (!connectionId) continue;
+    insertItem.run(item.id, connectionId, item.channel_id, item.event, item.dedupe_key, item.message, item.status, item.attempts, item.next_attempt_at, Number.isFinite(created) ? created + OUTBOX_MAX_AGE_MS : 0, item.created_at, item.finished_at);
+  }
+  db.prepare('INSERT INTO alert_legacy_import(id,imported_at) VALUES(1,?)').run(at);
+}
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -155,6 +222,9 @@ export const migrations = [
   { version: 8, name: 'alerts', compatible: true, up: db => db.exec(alertsSchema) },
   // Automatic restore tests (docs/restore-tests.md). Purely additive: renumber before release if another migration lands first.
   { version: 9, name: 'restore-tests', compatible: true, up: db => db.exec(restoreTestsSchema) },
+  // Alert Connections (docs/alert-channels.md): new tables plus a copy of the 2.8 alerts into them. The 2.8 tables are left
+  // as they are, so older code can ignore the new ones and a downgrade keeps the alerts as they were at upgrade time.
+  { version: 10, name: 'alert-connections', compatible: true, up: db => { db.exec(alertConnectionsSchema); importLegacyAlerts(db); } },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
