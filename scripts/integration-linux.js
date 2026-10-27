@@ -86,6 +86,7 @@ try {
   await run('cp','remote',hosts[0]+':/qa-helper');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
   await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
@@ -252,6 +253,8 @@ try {
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
   const {runMoveScenario}=await import('./integration-move.js');
   await runMoveScenario({run,until,hosts,servers,db,record});
+  const {runRestoreTestScenario}=await import('./integration-restore-test.js');
+  await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
   const wrapper=join(directory,'tar-wrapper');
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');

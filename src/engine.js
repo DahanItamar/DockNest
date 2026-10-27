@@ -9,6 +9,7 @@ import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
 import { backupFilename } from './backup-layout.js';
 import { storedProbeProblem } from './probe-url.js';
+import { HELD as TEST_HELD } from './restore-tests/hold.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -53,7 +54,8 @@ export async function verifyRecovery(job){
  return remote(server,{operation:'verify-recovery',job:job.id,config:site.config});
 }
 function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
-function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(siteId);}
+// Restore tests never make their site busy: a test runs on its test server and its clean-up blocks only that server.
+function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type NOT IN ('site-move','restore-test') AND status IN ('queued','running','recovery_required')").get(siteId);}
 // A site in an unfinished move (past its preview, before it is done) refuses other mutating work; the move's own
 // backups pass the actor `move:<id>`.
 const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
@@ -191,14 +193,18 @@ export async function retain(siteId){
 
 export {siteInfo};
 // Streams a verified backup, decrypted only inside the authenticated stream, into `jobId`'s restore staging root on `server`.
-export async function uploadBackupTo(server,backupId,jobId){
+// Restore tests pass `prepare` (their own journalled staging) and `signal` (cancel and time limit stop the transfer).
+export async function uploadBackupTo(server,backupId,jobId,{prepare,signal}={}){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup?.verified)throw new Error('Verified backup not found');
  const {checksum,size,header,tag,plaintextChecksum}=await inspectEncrypted(backup.path);if(checksum!==backup.checksum)throw new Error('Encrypted backup checksum differs from stored checksum');
  const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
- const staging=await transport.remote(server,{operation:'prepare-restore',job:jobId});
+ const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
  const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
+ const stop=()=>pass.destroy(Object.assign(new Error('DockNest stopped this step.'),{aborted:true}));
+ if(signal?.aborted)stop();else signal?.addEventListener('abort',stop,{once:true});
  const decrypting=pipeline(await openRead(backup.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
  try{await transport.uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
+ finally{signal?.removeEventListener('abort',stop);}
  return {plaintextChecksum};
 }
 async function executeRestoreJob(job){
@@ -372,11 +378,14 @@ export function tickScheduler(currentDate=new Date()){
 export function claimJob(){
  db.exec('BEGIN IMMEDIATE');
  try{
-  // A job occupies its target (or its site's) server and, for a site move, also its source server.
-  const job=db.prepare("SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) ORDER BY j.created_at LIMIT 1").get();
-  // Site-move jobs use their own statuses so a release without moves (for example after a rollback) never claims
-  // them as backups, and its startup never turns them into recovery work.
-  if(job)db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' ELSE 'running' END,stage='preflight',started_at=? WHERE id=?").run(now(),job.id);
+  // A job occupies its target (or its site's) server and, for a site move, also its source server. A started restore
+  // test holds its test server (src/restore-tests/hold.js) for every job but its own steps. Restore test steps go
+  // after every other queued job, so backups go first.
+  const job=db.prepare(`SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued','test_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE ${TEST_HELD} AND t.server_id IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) AND NOT (j.type='restore-test' AND json_extract(j.details,'$.testId')=t.id)) ORDER BY j.type='restore-test',j.created_at LIMIT 1`).get();
+  // Site-move and restore-test jobs use their own statuses so a release without them (for example after a rollback)
+  // never claims them as backups, and its startup never turns them into recovery work.
+  // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.
+  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' ELSE 'running' END,stage=CASE status WHEN 'test_queued' THEN stage ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
 }

@@ -23,7 +23,7 @@ try{
  await page.getByRole('button',{name:'Switch to light theme'}).hover();await page.waitForTimeout(280);assert.notEqual(await page.locator('.theme-symbol .moon-star').first().evaluate(el=>getComputedStyle(el).transform),'none');
  // Hold the React bundle to verify the saved dark preference is applied before it runs.
  let release;const gate=new Promise(r=>release=r);await page.route('**/assets/index-*.js',async r=>{await gate;await r.continue()});
- await page.reload({waitUntil:'commit'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),'rgb(24, 33, 49)');release();await page.locator('.dash-metrics').waitFor();await page.unroute('**/assets/index-*.js');
+ await page.reload({waitUntil:'commit'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),'rgb(26, 25, 28)');release();await page.locator('.dash-metrics').waitFor();await page.unroute('**/assets/index-*.js');
  const other=await context.newPage();await other.goto(base);await other.locator('.dash-metrics').waitFor();await other.getByRole('button',{name:'Switch to light theme'}).click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');await other.close();
  await page.getByRole('button',{name:'Switch to dark theme'}).focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
  // Bare header controls, a real fade, System tracking, and saved account choices.

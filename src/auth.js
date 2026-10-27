@@ -69,6 +69,8 @@ export function requireAdmin(req,res,next){
  if(!req.user)return requireAuth(req,res,next);
  return req.user.role==='admin'?next():res.status(403).json({error:'Administrator access required.',code:'ADMIN_REQUIRED'});
 }
+// True when this session re-verified within the last 5 minutes (the check requireRecentAuth makes).
+export const recentlyVerified=req=>Boolean(req.session&&req.session.authenticated_at+RECENT_MS>Date.now());
 export function requireRecentAuth(req,res,next){
  if(!req.user)return requireAuth(req,res,next);
  return req.session.authenticated_at+RECENT_MS>Date.now()?next():res.status(403).json({error:'Verify your own authenticator or recovery code before this change.',code:'REAUTH_REQUIRED'});
@@ -144,7 +146,7 @@ auth.post('/setup',rateLimit('setup',5),async(req,res)=>{
 });
 auth.post('/login',rateLimit('login'),async(req,res)=>{
  const data=z.object({password:passwordSchema,setupToken:z.string().max(256).optional()}).parse(req.body);
- if(!sharedPasswordMatches(data.password)){audit('anonymous','auth.login_failed');return res.status(401).json({error:'Invalid password.'});}
+ if(!sharedPasswordMatches(data.password)){audit('anonymous','auth.login_failed');return res.status(401).json({error:'Invalid password or code.'});}
  const users=db.prepare('SELECT * FROM users ORDER BY created_at,id').all();
  const pending=users[0];
  if(pending&&pending.role==='admin'&&!pending.enrolled&&!pending.disabled&&!users.some(user=>user.role==='admin'&&user.enrolled&&!user.disabled)){
@@ -173,7 +175,7 @@ auth.post('/verify',rateLimit('verify',15),(req,res)=>{
   audit(user.id,match.index>=0?'auth.recovery_login':'auth.login',user.id);
   return result;
  });
- if(!result)return res.status(401).json({error:'Invalid, ambiguous, reused or expired code. Sign in again after five unsuccessful attempts.'});
+ if(!result)return res.status(401).json({error:'Invalid password or code.'});
  res.cookie('dbm_session',result.token,cookieOptions);
  const {token:_token,...view}=result;res.json(view);
 });

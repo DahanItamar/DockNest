@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {IconBrandTelegram,IconMail,IconDownload,IconCircleX,IconCircleCheck,IconInfoCircle,IconAlertTriangle} from '@tabler/icons-react';
+import {IconBrandTelegram,IconMail,IconDownload,IconCircleX,IconCircleCheck,IconInfoCircle,IconAlertTriangle,IconBell,IconChevronRight} from '@tabler/icons-react';
 import {Sheet,Note,useGuard} from './MoveFlow.jsx';
 import {SidePanel} from './Panels.jsx';
 import {friendly} from './moves-client.js';
@@ -186,8 +186,8 @@ export function SourceAlerts({source,rules,channels,onEdit,onAdd}){
  const mine=rules.filter(r=>sameSource(r,source)),name=id=>channels.find(c=>c.id===id)?.name||'a channel';
  return <section aria-labelledby={'map-alerts-'+source.kind}>
   <h3 id={'map-alerts-'+source.kind} className="map-group-title">Alerts</h3>
-  {mine.length>0?<ul className="map-alert-rows">{mine.map(r=><li key={r.id}><span><b className="map-name">To {name(r.channelId)}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" aria-label={`Open alerts to ${name(r.channelId)}`} onClick={e=>onEdit(r,e.currentTarget)}>Open</button></li>)}</ul>:<p className="map-caption">No alerts from here yet.</p>}
-  <button type="button" onClick={e=>onAdd(source,e.currentTarget)}>Send alerts to{'…'}</button>
+  {mine.length>0?<ul className="map-alert-rows">{mine.map(r=><li key={r.id}><span><b className="map-name">To {name(r.channelId)}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" className="icon-button" title="Open" aria-label={`Open alerts to ${name(r.channelId)}`} onClick={e=>onEdit(r,e.currentTarget)}><IconChevronRight size={16} stroke={1.75} aria-hidden="true"/></button></li>)}</ul>:<p className="map-caption map-alerts-none">No alerts yet.</p>}
+  <button type="button" className="map-alerts-add" onClick={e=>onAdd(source,e.currentTarget)}><IconBell size={16} stroke={1.75} aria-hidden="true"/>Add alert</button>
  </section>;
 }
 

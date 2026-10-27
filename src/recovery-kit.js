@@ -89,6 +89,9 @@ export async function restoreRecoveryKit({input,directory,passphrase,updaterStat
   // A kit taken during a deployment hold would otherwise restore a manager that refuses all new work (the hold is
   // cleared below), and in-app update requests belong to the old host's updater (update_requests from schema 5).
   if(hasTable(state,'update_requests'))state.prepare("UPDATE update_requests SET state='lost',finished_at=COALESCE(finished_at,?) WHERE state IN ('submitted','running','needs_action')").run(new Date().toISOString());
+  // Restore tests (schema 9) on the old manager's test servers stop: each one cleans up when the worker runs again, and
+  // its reaper removes what is left on a server the new manager never reaches.
+  if(hasTable(state,'restore_tests'))state.prepare('UPDATE restore_tests SET cancel_requested=1 WHERE result IS NULL').run();
   state.exec("UPDATE policies SET enabled=0,next_run=NULL; UPDATE jobs SET status='failed',stage='failed',error='Queued work cancelled during independent manager recovery' WHERE status='queued'; UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Independent manager recovery: review source state before unlocking' WHERE status='running'; UPDATE restores SET status='failed' WHERE status='queued'; UPDATE restores SET status='recovery_required' WHERE status='running'; DELETE FROM settings WHERE key IN ('worker_heartbeat','artifact_reconciliation','deployment_hold');");
   state.exec('COMMIT');state.close();state=null;
   return {restored:true,release:decoded.release,keyId:decoded.keyId,schedulesPaused:true,sessionsRevoked:true,sourceRecoveryReviewRequired:true};

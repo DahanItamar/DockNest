@@ -110,6 +110,23 @@ CREATE TABLE IF NOT EXISTS alert_queue (id TEXT PRIMARY KEY,channel_id TEXT NOT 
 CREATE INDEX IF NOT EXISTS alert_queue_due ON alert_queue(status,next_attempt_at);
 CREATE INDEX IF NOT EXISTS alert_queue_dedupe ON alert_queue(channel_id,dedupe_key,created_at);
 `;
+// Automatic restore tests (docs/restore-tests.md): per-site settings (no row means off), one append-only row per test and
+// its step journal. Additive only: new tables, indexes and triggers, no rows, nothing altered. The CHECK limits back up
+// the ranges in src/restore-tests/limits.js. The partial unique indexes keep one unfinished test per site and one
+// started, unfinished test (or clean-up) per test server, so queued tests for a server wait in line.
+export const restoreTestsSchema = `
+CREATE TABLE IF NOT EXISTS restore_test_settings (site_id TEXT PRIMARY KEY REFERENCES sites(id),enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),cadence TEXT NOT NULL DEFAULT 'weekly' CHECK (cadence IN ('daily','weekly','monthly')),server_id TEXT REFERENCES servers(id),allow_live_server INTEGER NOT NULL DEFAULT 0 CHECK (allow_live_server IN (0,1)),allow_internet INTEGER NOT NULL DEFAULT 0 CHECK (allow_internet IN (0,1)),time_limit_minutes INTEGER NOT NULL DEFAULT 30 CHECK (typeof(time_limit_minutes) = 'integer' AND time_limit_minutes BETWEEN 10 AND 120),memory_mb INTEGER NOT NULL DEFAULT 1024 CHECK (typeof(memory_mb) = 'integer' AND memory_mb BETWEEN 256 AND 16384),cpus REAL NOT NULL DEFAULT 1 CHECK (cpus BETWEEN 0.5 AND 16 AND cpus * 4 = CAST(cpus * 4 AS INTEGER)),probe TEXT CHECK (probe IS NULL OR length(probe) <= 512),next_due_at TEXT,skip_reason TEXT CHECK (skip_reason IS NULL OR length(skip_reason) <= 300),updated_at TEXT NOT NULL,updated_by TEXT);
+CREATE INDEX IF NOT EXISTS restore_test_settings_due ON restore_test_settings(next_due_at) WHERE enabled = 1;
+CREATE TABLE IF NOT EXISTS restore_tests (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),backup_id TEXT REFERENCES backups(id) ON DELETE SET NULL,backup_captured_at TEXT NOT NULL,server_id TEXT NOT NULL REFERENCES servers(id),job_id TEXT REFERENCES jobs(id),trigger TEXT NOT NULL CHECK (trigger IN ('schedule','manual')),step TEXT CHECK (step IS NULL OR step IN ('check_space','copy_backup','restore_copy','start_containers','check_health','clean_up')),result TEXT CHECK (result IS NULL OR result IN ('passed','failed','couldnt_run','cancelled')),failed_step TEXT CHECK (failed_step IS NULL OR failed_step IN ('check_space','copy_backup','restore_copy','start_containers','check_health','clean_up')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),restore_seconds INTEGER,total_seconds INTEGER,checks TEXT NOT NULL DEFAULT '[]' CHECK (length(checks) <= 8192),limits TEXT NOT NULL CHECK (length(limits) <= 1024),progress TEXT NOT NULL DEFAULT '{}' CHECK (length(progress) <= 16384),cleanup TEXT CHECK (cleanup IS NULL OR cleanup IN ('pending','done','failed','acknowledged')),cleanup_attempts INTEGER NOT NULL DEFAULT 0,cleanup_next_at TEXT,cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0,1)),deadline_at TEXT,created_by TEXT NOT NULL,created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS restore_tests_site_active ON restore_tests(site_id) WHERE result IS NULL OR cleanup IN ('pending','failed');
+CREATE UNIQUE INDEX IF NOT EXISTS restore_tests_server_active ON restore_tests(server_id) WHERE started_at IS NOT NULL AND (result IS NULL OR cleanup IN ('pending','failed'));
+CREATE INDEX IF NOT EXISTS restore_tests_site_created ON restore_tests(site_id,created_at,id);
+CREATE INDEX IF NOT EXISTS restore_tests_backup ON restore_tests(backup_id,created_at);
+CREATE TABLE IF NOT EXISTS restore_test_steps (test_id TEXT NOT NULL REFERENCES restore_tests(id),step TEXT NOT NULL CHECK (step IN ('check_space','copy_backup','restore_copy','start_containers','check_health','clean_up')),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped')),started_at TEXT,finished_at TEXT,detail TEXT CHECK (detail IS NULL OR length(detail) <= 500),PRIMARY KEY (test_id,step));
+CREATE TRIGGER IF NOT EXISTS restore_tests_no_delete BEFORE DELETE ON restore_tests BEGIN SELECT RAISE(ABORT,'restore test history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS restore_test_steps_no_delete BEFORE DELETE ON restore_test_steps BEGIN SELECT RAISE(ABORT,'restore test steps are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS restore_tests_result_once BEFORE UPDATE OF result,failed_step,reason,checks,restore_seconds,total_seconds ON restore_tests WHEN OLD.result IS NOT NULL AND (NEW.result IS NOT OLD.result OR NEW.failed_step IS NOT OLD.failed_step OR NEW.reason IS NOT OLD.reason OR NEW.checks IS NOT OLD.checks OR NEW.restore_seconds IS NOT OLD.restore_seconds OR NEW.total_seconds IS NOT OLD.total_seconds) BEGIN SELECT RAISE(ABORT,'a restore test result is written once'); END;
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -136,6 +153,8 @@ export const migrations = [
   { version: 7, name: 'server-installs', compatible: true, up: db => db.exec(serverInstallsSchema) },
   // Alert channels, rules and delivery queue (docs/alerts.md). Purely additive: renumber before release if another migration lands first.
   { version: 8, name: 'alerts', compatible: true, up: db => db.exec(alertsSchema) },
+  // Automatic restore tests (docs/restore-tests.md). Purely additive: renumber before release if another migration lands first.
+  { version: 9, name: 'restore-tests', compatible: true, up: db => db.exec(restoreTestsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
