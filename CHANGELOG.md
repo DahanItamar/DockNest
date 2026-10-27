@@ -6,6 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Changed
 
+- Redesigned sign-in and first-run setup pages: a split screen with the DockNest logo and a calm animated backdrop, a monochrome look, a show/hide password button, and one short inline error ("Invalid password or code." never says which part was wrong).
 - New Mauve ink colour palette in light and dark: neutrals carry a hint of the brand purple, better contrast for charts.
 - Maintenance page: "Powered by DockNest" in the footer now links to the DockNest project on GitHub. It is part of the page and is always shown.
 - License: a NOTICE file adds one AGPL-3.0 section 7(b) term: the "Powered by DockNest" credit and its link must be kept on visitor pages, including in modified versions.
