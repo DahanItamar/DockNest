@@ -55,9 +55,14 @@ CREATE INDEX alert_lines_node ON alert_lines(node_id);
 - `origin` records where a migrated row came from (`legacy:<credentialId>`), for support and for the clean-up below.
 - `prefill` keeps a 2.8 destination (a chat ID, recipients) for a node that had no matching credential, so
   "New connection" can offer it. It holds no secret.
-- `created_by`, `updated_by`: user ids, for the audit trail and the private-network rule. NULL for migrated rows.
-- `private_ok`: 1 only when the last save that set a host or URL was by an administrator while "Allow private
-  network" was on. Any later change of a host or URL by an operator sets it back to 0.
+- `created_by`, `updated_by`: user ids, for the audit trail only. NULL for migrated rows. They never decide what a
+  Connection may reach.
+- `private_ok`: whether the Connection may reach a private address. It follows who last set the host or URL (for
+  Email, the SMTP host), not who saved last, so an operator renaming or changing recipients never breaks an admin's
+  private server. HTTP providers: 1 when that was an administrator while "Allow private network" was on. Email: 1
+  when that was an administrator (the 2.8 rule, which does not depend on the setting). Migrated Email rows get 1, so a
+  2.8 private relay keeps working; migrated Telegram rows reach only their fixed host. An operator setting a host or
+  URL sets it to 0.
 - Foreign keys: a node's Connection is `ON DELETE RESTRICT` (a Connection in use cannot be deleted); a line is
   `ON DELETE CASCADE` with its node; an outbox item is `ON DELETE CASCADE` with its Connection (it is keyed on the
   Connection) and `ON DELETE SET NULL` on its node, so dedup history survives a deleted node.
@@ -107,7 +112,7 @@ The result, for every 2.8 install: the same nodes, lines and messages, to the sa
 - A credential split into several Connections has one legacy row. Changing the secret of, or deleting, any one of
   them deletes it, so after a downgrade every legacy node of that credential needs a credential, not only one.
 - These deletes run with `PRAGMA secure_delete=ON` (set on the connection for the statement, then restored), so the
-  freed pages are zeroed. Pre-upgrade snapshots and older self-backups still hold the old sealed token. The UI says it
+  freed pages are zeroed, followed by `PRAGMA wal_checkpoint(TRUNCATE)` so the old page images leave the WAL file. Pre-upgrade snapshots and older self-backups still hold the old sealed token. The UI says it
   plainly when a secret is replaced: "If this login leaked, also revoke it at the provider."
 - Pending legacy queue items are not cleared. A downgrade within minutes may send a message a second time. Accepted.
 - A later release drops the legacy tables in its own migration and says so in [upgrading.md](upgrading.md).
@@ -157,11 +162,12 @@ re-verification and the `alerts.operators_manage` audit event.
   only reach the URL an administrator saved.
 - Operators can reach public hosts only. An admin-saved private Connection keeps working when an operator uses it on
   a node, tests it or renames it; if the operator changes its host or URL, `private_ok` drops to 0 and it is checked
-  as public. For Email, an operator-saved Connection must resolve to a public address; admin-saved ones keep the 2.8
-  rule.
+  as public. For Email the same `private_ok` rule decides: a relay host set by an operator must resolve to a public
+  address; one set by an administrator (or migrated) keeps the 2.8 rule.
 - "Send test" with unsaved values follows the same rule. An operator's failed test answers with one fixed sentence,
   "DockNest could not deliver to this address.", for every cause (policy, DNS, refused, timeout, TLS), with no timing
-  or stage in the reply, and never sooner than 3 seconds after the request, so it cannot map the network.
+  or stage in the reply. Every failed operator test, timeouts included, answers exactly 10 seconds after the request
+  (the request limit), so the answer time carries no signal and it cannot map the network.
 - Turning the setting off takes effect on the next request. Operators keep nothing: their views carried no secrets.
 - Honest risk: with the setting on, an operator (or anyone holding a stolen operator session that passes
   re-verification) can create a Connection to an account they control, or move an existing one there, and receive
@@ -310,7 +316,8 @@ All HTTP providers send through one client in `src/alerts/outbound.js`. Nothing 
   re-verification, audited). It exists for self-hosted ntfy, Gotify, Matrix, Mattermost and webhooks, often behind
   Tailscale.
 - **IP literals**: Node skips the custom `lookup` for an IP literal host, so `outbound.js` checks literals itself
-  before any connection, in every notation (decimal, octal, hex, short forms, IPv6 with zone).
+  before any connection, in every notation (decimal, octal, hex, short forms). IPv6 zone ids (`%iface`) are refused
+  outright.
 - **DNS rebinding**: names go through a custom `lookup` that resolves, checks every address and hands the socket only
   checked addresses. It honours `all: true` (returns the checked array) and refuses the whole name if any answer is
   refused. The check and the connection use the same answer. The TLS name stays the host name.
@@ -324,8 +331,8 @@ All HTTP providers send through one client in `src/alerts/outbound.js`. Nothing 
 - **Email** keeps the 2.8 rule in `src/alerts/smtp.js` word for word: TLS or STARTTLS with a valid certificate; the
   host is resolved once, the address checked and the connection made to that address; refused are `0.0.0.0/8`,
   link-local `169.254.0.0/16`, multicast `224.0.0.0/4`, reserved `240.0.0.0/4`, loopback `127.0.0.0/8`, `::`, `::1`,
-  `fe80::/10`, `ff00::/8`, `fd00:ec2::254`, and their IPv4-mapped forms; private relays are allowed. On top, an
-  operator-saved Email Connection must resolve to a public address. Note for the implementation PR: the "Alerts"
+  `fe80::/10`, `ff00::/8`, `fd00:ec2::254`, and their IPv4-mapped forms; private relays are allowed when `private_ok = 1`
+  (host set by an administrator, or migrated). A host set by an operator must resolve to a public address. Note for the implementation PR: the "Alerts"
   part of `docs/security.md` reads as if any host the admin enters is used, but loopback is refused in code; it gets
   corrected there.
 
@@ -371,7 +378,17 @@ usual CSRF header. Rows marked *admin* stay admin-only. Operators get 403 `ALERT
 | Any change of a `destination` field | Re-verification, for admins and operators |
 
 The 2.8 `/api/alerts/credentials` and `/api/alerts/channels` routes keep working on the new store until the Map
-switches to the new routes (PR 4), so main never has a broken alerts UI. They are removed in that PR.
+switches to the new routes (PR 4), so main never has a broken alerts UI. They are removed in that PR. Adapter rules
+(PR 1a):
+
+- A 2.8 credential id is the id of its first Connection (the one that kept the credential's id, or the first with
+  `origin = legacy:<id>`). Credentials made through the 2.8 routes after the upgrade create one Connection with
+  that origin.
+- Creating or editing a 2.8 channel with a chat ID or recipients that no Connection of that origin has creates a new
+  Connection with the same sealed secret copied as is (never opened), the new destination and the same `origin`.
+- Replacing a 2.8 credential's secret, or its name, updates every Connection with the same `origin`. Deleting it
+  deletes them all, refused with 409 while any of their nodes exist.
+- A 2.8 credential view's `usedBy` combines the nodes of all those Connections; its last test is the newest of them.
 
 ## Screens
 
@@ -414,7 +431,8 @@ switches to the new routes (PR 4), so main never has a broken alerts UI. They ar
   shared by two chats (two Connections, names); two nodes with the same chat (one Connection); a node without a
   credential (`prefill`); an unused credential; sealed bytes identical after copy; ids kept; lines and outbox copied;
   every outbox row copied with `payload = NULL` and a pending one sent as plain text; `occ:` keys not resent;
-  idempotent; compat floor unchanged; deleting a migrated Connection removes its legacy row (with `secure_delete`);
+  idempotent; compat floor unchanged; deleting a migrated Connection removes its legacy row (with `secure_delete` and a
+  WAL checkpoint);
   a split credential; the "older version changes" warning when legacy rows are newer.
 - **Previous version still runs**: a CI step checks out the previous release tag in a `git worktree`, points it at a
   database migrated by this branch, and runs that release's alerts store tests and a start-up of api and worker.
@@ -429,8 +447,9 @@ switches to the new routes (PR 4), so main never has a broken alerts UI. They ar
   answers refused; redirects refused; timeout; oversized response; HTTP refused unless private and allowed; metadata
   refused even with the setting on; every "always refused" entry and metadata name; IP literals checked without
   `lookup`; `all: true` lookups; proxy variables ignored; port 443 only for public hosts; operator Connections and
-  operator unsaved tests never reach private addresses and fail with the one sentence after at least 3 seconds;
-  `private_ok` drops when an operator changes a host.
+  operator unsaved tests never reach private addresses and fail with the one sentence at exactly 10 seconds, for a
+  refusal and for a timeout alike; `private_ok` drops when an operator changes a host and stays when an operator
+  renames or changes recipients; a migrated private SMTP relay keeps working; zone ids refused.
 - **Secrets**: no secret, URL or response text in logs, audit rows, outbox, `last_error`, API errors or views (scan
   every captured string for the planted values); PATCH without secrets keeps them; changing a `host` field without
   the secret is refused; a destination change without re-verification is refused and audited by field name.
@@ -453,7 +472,9 @@ switches to the new routes (PR 4), so main never has a broken alerts UI. They ar
 
 1. **1a, migration and store** (security-critical review): migration and copy, Connections and nodes store, sealed
    storage and views, registry with Telegram and Email, dedup, cap, maximum age. The 2.8 routes and UI keep working
-   on the new store, with no behaviour change. Migration, previous-version and secret tests.
+   on the new store, with no behaviour change. Migration, previous-version, secret and adapter tests (a 2.8 credential
+   with two chats through the old routes: ids, new Connection on a new chat, secret copied byte for byte, replace
+   updates all, `usedBy` combined, delete refused while used).
 2. **1b, outbound client** (security-critical review): `outbound.js`, SSRF and rebinding guard, port and proxy rules,
    the private-network setting and `private_ok`, Retry-After parsing. SSRF tests.
 3. **Providers**: WhatsApp, Discord, Slack, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix, Other,
