@@ -1,6 +1,6 @@
-// The only place that knows the restore-test API (docs/restore-tests.md, "API contract"). `api` is the app's fetch
-// helper: api(path, body, method). The routes are mocked in scripts/restore-tests-browser.js until the engine lands;
-// switching to the real API changes nothing here.
+// The only place that knows the restore-test API (docs/restore-tests.md, "API contract"; src/restore-tests/routes.js).
+// `api` is the app's fetch helper: api(path, body, method). scripts/restore-tests-browser.js mocks these routes, and
+// with REAL_API=1 runs the same screens against the real API.
 export function createRestoreTestsClient(api){
  const id=x=>encodeURIComponent(x);
  return {
@@ -16,7 +16,10 @@ export function createRestoreTestsClient(api){
   detail:testId=>api('/restore-tests/'+id(testId)),
   cancel:testId=>api('/restore-tests/'+id(testId)+'/cancel',{}),
   // Administrator only: retries clean-up of a needs_cleanup test.
-  cleanup:testId=>api('/restore-tests/'+id(testId)+'/cleanup',{})
+  cleanup:testId=>api('/restore-tests/'+id(testId)+'/cleanup',{}),
+  // Administrator only: a needs_cleanup test is acknowledged through its job's recovery route, with the site name,
+  // and only when the test server reports nothing left (409 LEFTOVERS otherwise).
+  acknowledge:(jobId,siteName)=>api('/jobs/'+id(jobId)+'/recovery',{confirmation:siteName,reviewedRemoteRecovery:true})
  };
 }
 

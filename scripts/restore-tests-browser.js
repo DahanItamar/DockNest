@@ -7,7 +7,12 @@ import path from 'node:path';
 // failed-test alert, test jobs and their timeline, the Restore tests dialog (switch, live-server gate, presets and
 // custom values), operators, phone 390, both themes and reduced motion. Run against a dev server serving this
 // worktree: TEST_BASE_URL=http://127.0.0.1:5311. SHOTS_DIR also writes screenshots.
-const base=process.env.TEST_BASE_URL||'http://127.0.0.1:5173',origin=new URL(base).origin,shots=process.env.SHOTS_DIR;
+// REAL_API=1 instead runs the main screens against the real API (src/restore-tests/routes.js): it starts DockNest in
+// this process on a throwaway database, serves the built app (run `npm run build` first) and fakes only the test
+// server's helper, so settings, Run test, the 6-a-day limit, re-verification and the job timeline go through the real
+// routes, validation and engine. REAL_PORT picks the port (default 5399).
+const REAL=process.env.REAL_API==='1',realPort=Number(process.env.REAL_PORT||5399);
+const base=REAL?'http://127.0.0.1:'+realPort:process.env.TEST_BASE_URL||'http://127.0.0.1:5173',origin=new URL(base).origin,shots=process.env.SHOTS_DIR;
 if(shots)await mkdir(shots,{recursive:true});
 const NOW=Date.now(),ago=hours=>new Date(NOW-hours*3600000).toISOString();
 const REASON='The database didn\u2019t start in 30 minutes.';
@@ -327,9 +332,9 @@ async function dialogErrors(){
  await card.getByRole('button',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch').waitFor();
  await d.getByLabel('Test server').selectOption({label:'Home NAS'});
- mock.runError={code:'TOO_MANY_TESTS',message:'You have run 6 tests for this site today. Try again tomorrow.'};
+ mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each site.'};
  await d.getByRole('button',{name:'Run test'}).click();
- await d.getByText('You have run 6 tests for this site today. Try again tomorrow.').waitFor();
+ await d.getByText('You can run 6 tests a day for each site.').waitFor();
  assert.equal(await d.locator('.rt-why.rt-done').count(),0);
  mock.runError={code:'NO_VERIFIED_BACKUP',message:'raw'};
  await d.getByRole('button',{name:'Run test'}).click();
@@ -404,9 +409,9 @@ async function operator(){
  await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();
  const d3=dialog(p);await d3.getByRole('switch').waitFor();
  assert.equal(await d3.getByRole('button',{name:'Run test'}).isDisabled(),false);
- mock.runError={code:'TOO_MANY_TESTS',message:'You have run 6 tests for this site today. Try again tomorrow.'};
+ mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each site.'};
  await d3.getByRole('button',{name:'Run test'}).click();
- await d3.getByText('You have run 6 tests for this site today. Try again tomorrow.').waitFor();
+ await d3.getByText('You can run 6 tests a day for each site.').waitFor();
  mock.runError=null;
  await d3.getByRole('button',{name:'Run test'}).click();
  await d3.locator('.rt-why.rt-done').waitFor();
@@ -471,7 +476,113 @@ async function pickerRules(){
  await context.close();
 }
 
+// ---------- REAL_API=1: the real routes, a throwaway database, a fake helper ----------
+async function realApi(){
+ const {existsSync}=await import('node:fs');
+ const {mkdtemp,writeFile:write}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const {randomBytes,randomUUID}=await import('node:crypto');
+ if(!existsSync('dist/index.html'))throw new Error('REAL_API=1 serves the built app: run npm run build first.');
+ const dir=await mkdtemp(path.join(tmpdir(),'docknest-rt-real-'));
+ Object.assign(process.env,{DATA_DIR:dir,BACKUP_DIR:path.join(dir,'backups'),BACKUP_STORAGE:'local',MASTER_KEY_FILE:path.join(dir,'master.key'),SETUP_TOKEN_FILE:path.join(dir,'setup.token'),SECURE_COOKIES:'false',NODE_ENV:'test',APP_ORIGIN:origin});
+ await mkdir(process.env.BACKUP_DIR,{recursive:true});await write(process.env.MASTER_KEY_FILE,randomBytes(32).toString('base64'));
+ const root=new URL('../src/',import.meta.url);
+ if(!existsSync(new URL('restore-tests/routes.js',root)))throw new Error('REAL_API=1 needs the restore test API (src/restore-tests/routes.js).');
+ const {app}=await import(new URL('server.js',root));
+ const {db}=await import(new URL('db.js',root));
+ const {digest}=await import(new URL('crypto.js',root));
+ const {claimJob,executeJob}=await import(new URL('engine.js',root));
+ const rt=await import(new URL('restore-tests/engine.js',root));
+ // The test server's helper answers as a healthy single-container site would.
+ rt.testTiming.scale=0.001;
+ const answer=request=>({
+  'restore-test-check':{ok:true,problems:[],facts:{nproc:2,probeTools:true}},'restore-test-prepare':{root:'/x',remotePath:'/x/p',reaper:true},
+  'restore-test-run:restore':{outcome:'ok',kind:'docker',containers:1,running:1,networkMode:'isolated-internal',checks:[]},'restore-test-run:start':{outcome:'ok',started:1},
+  'restore-test-run:poll':request.final?{outcome:'ok',healthy:true,running:1,checks:[{name:'Containers running',kind:'running',target:null,status:'passed',detail:'1 running'}]}:{outcome:'ok',healthy:true,running:1},
+  'restore-test-teardown':{removed:true,counts:{containers:1},keptImages:0},'restore-test-status':{present:false}
+ })[request.operation+(request.phase?':'+request.phase:'')];
+ rt.testTransport.remote=async(_server,request)=>{const reply=answer(request);if(!reply)throw new Error('unexpected '+request.operation);return reply;};
+ rt.testTransport.upload=async(_server,_backup,_job,{prepare})=>{await prepare();return {plaintextChecksum:'f'.repeat(64)}};
+ const listener=app.listen(realPort,'127.0.0.1');await new Promise((resolve,reject)=>{listener.once('listening',resolve);listener.once('error',reject)});
+ const now=()=>new Date().toISOString();
+ const session=(role,authenticatedAt=Date.now())=>{const userId=randomUUID(),token=randomBytes(32).toString('base64url');
+  db.prepare('INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,?)').run(userId,userId+'@example.invalid','fixture','fixture','[]',now(),'Fixture '+role,role);
+  db.prepare('INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,last_activity_at,created_at,authenticated_at) VALUES(?,?,?,?,?,?,?)').run(digest(token),userId,randomBytes(16).toString('hex'),Date.now()+3600000,Date.now(),Date.now(),authenticatedAt);
+  return token;};
+ const server=(name,caps)=>{const serverId=randomUUID();db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,status,capabilities,created_at) VALUES(?,?,?,?,?,?,?,'connected',?,?)").run(serverId,name,'192.0.2.'+(name.length+10),22,'root','fixture','0'.repeat(64),JSON.stringify(caps),now());return serverId;};
+ const live=server('Frankfurt-1',{freeBytes:84*1024**3}),spare=server('Ashburn-1',{freeBytes:41*1024**3,cpus:2});
+ const siteId=randomUUID(),jobId=randomUUID(),backupId=randomUUID();
+ db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId,live,'cinderbean.com',JSON.stringify({containers:['cinderbean-web'],domains:['cinderbean.com']}),now());
+ db.prepare("INSERT INTO policies VALUES (?,1,'0 2 * * *','UTC',7,?)").run(siteId,new Date(Date.now()+6*3600000).toISOString());
+ db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,started_at,finished_at) VALUES(?,?,'backup','completed','completed',?,?,?)").run(jobId,siteId,now(),now(),now());
+ db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(backupId,siteId,jobId,now(),path.join(dir,'b.enc'),4096,'a'.repeat(64),JSON.stringify({kind:'docker',architecture:'x86_64',containers:[{Name:'/cinderbean-web',State:{Running:true},Config:{ExposedPorts:{'8080/tcp':{}}}}]}),0,1,now());
+ const fresh=session('admin'),stale=session('admin',Date.now()-3600000);
+ // The update check was already answered, so its ask-once dialog stays closed.
+ db.prepare("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,0,(SELECT id FROM users LIMIT 1),?)").run(now());
+ const signedIn=async token=>{const context=await browser.newContext({viewport:{width:1440,height:900}});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();return {context,page};};
+ const goto=async(page,name)=>page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();
+ const openDialog=async page=>{await goto(page,'Sites & schedules');await page.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();return d;};
+ try{
+  // Settings go through the real PUT: off on a fresh install, then on with a spare server.
+  const {context,page}=await signedIn(fresh);
+  await page.waitForFunction(()=>document.querySelector('.dash-site-latest .status'));
+  assert.equal((await page.locator('.dash-site-latest').first().textContent()).trim(),'Not tested');
+  let d=await openDialog(page);
+  assert.equal(await switchOf(d).getAttribute('aria-checked'),'false','tests are off on a fresh install');
+  await d.getByLabel('Test server').selectOption({label:'Ashburn-1'});
+  await switchOf(d).click();
+  await d.locator('details.rt-adv summary').click();
+  await d.getByLabel('CPU',{exact:true}).selectOption('custom');await d.getByLabel('Custom CPU in cores').fill('3');
+  await d.getByText('Enter 0.5 to 2 cores.').waitFor(); // the core count Check space records for the server
+  await d.getByLabel('CPU',{exact:true}).selectOption('1');
+  await d.getByRole('button',{name:'Save'}).click();
+  await page.getByRole('status').filter({hasText:'Restore test settings saved.'}).waitFor();
+  const saved=db.prepare('SELECT * FROM restore_test_settings WHERE site_id=?').get(siteId);
+  assert.equal(saved.enabled,1);assert.equal(saved.server_id,spare);assert.ok(saved.next_due_at,'the schedule has a due time');
+  // Run test through the real POST; the engine then finishes it with the fake helper.
+  d=await openDialog(page);
+  await d.getByRole('button',{name:'Run test'}).click();
+  await d.locator('.rt-why.rt-done').waitFor();
+  const test=db.prepare("SELECT * FROM restore_tests WHERE site_id=? AND trigger='manual'").get(siteId);
+  assert.ok(test,'the test row exists');
+  for(let round=0;round<400;round++){const row=rt.loadTest(test.id);if(row.result!==null&&row.cleanup==='done')break;rt.tickRestoreTests();const job=claimJob();if(job)await executeJob(job);else await new Promise(r=>setTimeout(r,20));}
+  assert.equal(rt.loadTest(test.id).result,'passed');
+  await d.getByRole('button',{name:'Cancel'}).click();
+  await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
+  await page.waitForFunction(()=>/^Passed/.test(document.querySelector('.dash-site-latest')?.textContent.trim()||''));
+  // The Jobs timeline reads GET /api/restore-tests/:id.
+  await goto(page,'Jobs');
+  const first=page.locator('table.data-table tbody tr').first();
+  await first.waitFor();
+  assert.match(await first.textContent(),/testcinderbean\.com/);
+  await first.getByRole('button',{name:'View job'}).click();
+  const jd=dialog(page);
+  await jd.locator('.dn-tl-item').nth(5).waitFor();
+  assert.deepEqual(await jd.locator('.dn-tl-item .dn-tl-name').evaluateAll(els=>els.map(e=>e.firstChild.textContent)),['Check space','Copy backup','Restore copy','Start containers','Check health','Clean up']);
+  assert.match(await jd.locator('.dn-hero').textContent(),/Restore test\s*Passed/);
+  await shot(page,'real-job');
+  await jd.getByRole('button',{name:'Close dialog'}).click();
+  // Six manual tests a day: the API's own sentence reaches the dialog.
+  for(let index=0;index<5;index++)db.prepare("INSERT INTO restore_tests(id,site_id,backup_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,finished_at,result) VALUES(?,?,?,?,?,'manual','{}','fixture',?,?,'cancelled')").run(randomUUID(),siteId,backupId,now(),spare,now(),now());
+  d=await openDialog(page);
+  await d.getByRole('button',{name:'Run test'}).click();
+  await d.getByText('You can run 6 tests a day for each site.').waitFor();
+  await context.close();
+  // Allow internet from a session that has not re-verified: the real REVERIFY_REQUIRED opens the app's check.
+  const second=await signedIn(stale);
+  d=await openDialog(second.page);
+  await d.locator('details.rt-adv summary').click();
+  await d.getByRole('switch',{name:'Allow internet'}).click();
+  await d.getByRole('button',{name:'Save'}).click();
+  await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
+  assert.equal(db.prepare('SELECT allow_internet FROM restore_test_settings WHERE site_id=?').get(siteId).allow_internet,0,'nothing is saved before the check');
+  await d.getByRole('button',{name:'Not now'}).click();
+  await second.context.close();
+ }finally{listener.close()}
+}
+
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
+if(REAL){try{await realApi();assert.deepEqual(errors,[],'no page errors');console.log('Restore tests browser suite passed against the real API.')}finally{await browser.close()}process.exit(0)}
 try{
  for(const scheme of ['light','dark']){
   await overview(scheme,1440);await failedAlert(scheme,1440);await jobs(scheme,1440);await dialogFlow(scheme);await phone(scheme);
