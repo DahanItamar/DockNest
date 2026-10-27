@@ -17,8 +17,9 @@ try {
   await page.getByLabel('Password', { exact: true }).waitFor();
   await page.getByLabel('2FA code').waitFor();
   assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
-  assert.equal(await page.locator('.auth-card .brand-lockup').count(),0,'Login logo belongs only in the header');
-  assert.equal(await page.locator('.auth-header .brand-lockup').count(),1,'Header displays the brand once');
+  assert.equal(await page.locator('.auth-card .brand-lockup,.auth-header .brand-lockup').count(),0,'Login uses the monochrome mask logo, not the app lockup');
+  assert.equal(await page.locator('.lg-logo[role="img"]').count(),2,'Panel logo and phone logo');
+  assert.equal(await page.locator('.alert,.alert-panel').count(),0,'No alert box on the sign-in page');
   assert.equal(await page.title(),'DockNest — Docker Backup & Restore');
   const assetLinks=await page.locator('link[rel="icon"],link[rel="alternate icon"],link[rel="apple-touch-icon"],link[rel="manifest"]').evaluateAll(links=>links.map(x=>x.href));
   const appManifest=await(await page.request.get(await page.locator('link[rel="manifest"]').getAttribute('href').then(href=>new URL(href,baseUrl).href))).json();
