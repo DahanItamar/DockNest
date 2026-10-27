@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- The Storage page has a cleaner, balanced layout: summary tiles, sites by size, a growth chart that starts when your history starts, and destination cards with their capacity used. Sizes now read the same everywhere in DockNest, in decimal units (1 GB = 1,000 MB, 1 TB = 1,000 GB), so a 2 TB destination shows as 2 TB.
+
 ## [2.9.0] - 2026-10-27
 
 See [docs/releases/2026-10-27-v2.9.0.md](docs/releases/2026-10-27-v2.9.0.md).

@@ -244,3 +244,6 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 .berry-sidebar-storage .storage-name{font-size:var(--fs-caption);line-height:var(--lh-caption)}
 .compact-storage-details .storage-name{margin:0 0 8px}
 
+
+/* A long storage name truncates inside the sidebar card instead of running past its edge. */
+.berry-sidebar-storage>div>span:last-child{min-width:0;flex:1}
