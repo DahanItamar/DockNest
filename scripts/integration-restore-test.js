@@ -280,14 +280,16 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   // 10. Tag collision. Packages save images by ID (no tags), so the defensive tag restore is driven directly with a
   // tagged archive on the test server's real image store.
   // Fresh paths: docker cp into an existing folder would nest the copy.
-  await run('exec', target, 'rm', '-rf', '/rt-qa-helper', '/rt-collide-site');
-  await run('cp', 'remote', target + ':/rt-qa-helper');
-  await run('cp', 'tests/integration/site', target + ':/rt-collide-site');
-  const loaded = (await run('exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/rt-collide-site')).trim();
-  await run('exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');
-  const kept = (await run('exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=kept', '/rt-collide-site')).trim();
-  await run('exec', target, 'docker', 'image', 'rm', loaded);
-  const collision = await run('exec', target, 'python3', '-c', "import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;tags=helper.image_archive_tags('/tmp/rt-collide.tar');state={'created':{'tags':[{'tag':t,'previous':helper.image_id_of(t)} for t in tags]}};helper.docker('load','-i','/tmp/rt-collide.tar');moved=helper.image_id_of('rt-collide:1');changed=helper.restore_test_tags(state);print(json.dumps({'tags':tags,'moved':moved,'changed':changed,'now':helper.image_id_of('rt-collide:1')}))");
+  // Each step names itself on failure (docker arguments here hold no secrets); the helper step keeps its traceback.
+  const step = async (name, ...args) => { try { return await run(...args); } catch (error) { throw new Error(`Tag collision case: ${name} failed${name === 'helper tag restore' ? ': ' + String(error.stderr || error.message).slice(-800) : ''}`); } };
+  await step('clear paths', 'exec', target, 'rm', '-rf', '/rt-qa-helper', '/rt-collide-site');
+  await step('copy helper', 'cp', 'remote', target + ':/rt-qa-helper');
+  await step('copy fixture', 'cp', 'tests/integration/site', target + ':/rt-collide-site');
+  const loaded = (await step('build loaded image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/rt-collide-site')).trim();
+  await step('save tagged archive', 'exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');
+  const kept = (await step('build kept image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=kept', '/rt-collide-site')).trim();
+  await step('remove loaded image', 'exec', target, 'docker', 'image', 'rm', loaded);
+  const collision = await step('helper tag restore', 'exec', target, 'python3', '-c', "import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;tags=helper.image_archive_tags('/tmp/rt-collide.tar');state={'created':{'tags':[{'tag':t,'previous':helper.image_id_of(t)} for t in tags]}};helper.docker('load','-i','/tmp/rt-collide.tar');moved=helper.image_id_of('rt-collide:1');changed=helper.restore_test_tags(state);print(json.dumps({'tags':tags,'moved':moved,'changed':changed,'now':helper.image_id_of('rt-collide:1')}))");
   const collided = JSON.parse(collision.split('\n').at(-1));
   assert.deepEqual(collided.tags, ['rt-collide:1'], 'the archive names its tag'); assert.notEqual(collided.moved, kept, 'docker load moved the tag');
   assert.deepEqual(collided.changed, ['rt-collide:1']); assert.equal(collided.now, kept, 'the tag points back at the image it named before');
