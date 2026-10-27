@@ -307,3 +307,35 @@
 .map-root .map-found{align-self:flex-start}
 .map-root .map-hint{max-width:none}
 .map-root .map-hint span{max-width:none}
+
+/* Alert channels (Connections): delete on a node's corner, the Connection row, Undo and the phone list */
+.map-root .map-alert .cx-del{position:absolute;top:-8px;right:-8px;z-index:1;box-sizing:content-box;display:flex;align-items:center;justify-content:center;width:16px;min-width:0;height:16px;min-height:0;padding:4px;border:0;border-radius:var(--radius);background:var(--surface);color:var(--text-muted);opacity:0;transition:opacity var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+.map-root .map-alert:hover .cx-del,.map-root .map-alert:focus-visible .cx-del,.map-root .map-alert:focus-within .cx-del{opacity:1}
+.map-root .map-alert:hover .map-badge,.map-root .map-alert:focus-visible .map-badge{opacity:0}
+.map-root .map-alert .cx-del:hover{background:var(--surface);color:var(--error);border:0}
+.map-root .map-alert .cx-del:focus-visible{outline:2px solid var(--focus-ring);outline-offset:0}
+.map-root .map-alert .cx-del:active{transform:none}
+@media(hover:none){.map-root .map-alert .cx-del{opacity:1}.map-root .map-alert .map-badge{display:none}}
+.map-root .map-caption.warn{color:var(--warning)}
+.map-root .cx-row{display:flex;align-items:center;gap:var(--spacing)}
+.map-root .cx-row>.cx-cw{flex:1;min-width:0}
+.map-root .map-field>.cx-cw,.map-root .map-field .cx-combo{font-weight:400}
+.map-root .map-undo{display:flex;align-items:center;justify-content:space-between;gap:var(--edge);padding:4px 4px 4px var(--edge);margin:0 0 var(--spacing);border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface);animation:dn-enter var(--dur-base) var(--ease) both}
+.map-root .cx-nodes{list-style:none;margin:var(--spacing) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--edge)}
+.map-root .map-list ul.cx-nodes{margin:var(--spacing) 0 0;border-top:0;display:flex;flex-direction:column;gap:var(--edge)}
+.map-root .map-list ul.cx-nodes>li.cx-node{display:flex;flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:0;min-height:0;padding:0;border:0;width:100%;box-sizing:border-box}
+.map-root .cx-node-head{display:flex;align-items:center;gap:var(--spacing);border-bottom:1px solid var(--border-subtle)}
+.map-root .cx-node-open,.map-root .cx-src{display:flex;align-items:center;justify-content:flex-start;gap:var(--edge);flex:1;width:100%;min-width:0;height:auto;min-height:56px;padding:0;border:0;border-radius:var(--radius);background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left;white-space:normal}
+.map-root .cx-node-open:hover,.map-root .cx-src:hover{background:var(--surface-hover)}
+.map-root .cx-node-open>svg:first-child{flex:none;color:var(--accent)}
+.map-root .cx-node-open>svg:last-child,.map-root .cx-src>svg{flex:none;color:var(--text-muted)}
+.map-root .cx-node-text{display:flex;flex-direction:column;flex:1;min-width:0}
+.map-root .cx-node-text .map-name{font-weight:500;color:var(--heading);overflow-wrap:anywhere}
+.map-root .cx-node-text .cx-trunc{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-root .cx-node-head .icon-button{min-width:44px;min-height:44px}
+.map-root .map-list ul.cx-srcs{list-style:none;margin:0;padding:0;border-top:0;display:block}
+.map-root .map-list ul.cx-srcs>li{display:block;min-height:0;padding:0;border-bottom:1px solid var(--border-subtle)}
+.map-root .cx-none{margin:var(--spacing) 0 0}
+.map-root .cx-stack{flex-direction:column;flex-wrap:nowrap}
+.map-root .cx-stack button{width:100%;min-height:44px;white-space:nowrap}
+@media(prefers-reduced-motion:reduce){.map-root .map-alert .cx-del{transition:none}.map-root .map-undo{animation:none}}

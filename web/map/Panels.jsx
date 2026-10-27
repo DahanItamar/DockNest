@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle,IconBrandTelegram,IconMail,IconKey} from '@tabler/icons-react';
+import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle,IconBell,IconPlugConnected} from '@tabler/icons-react';
 import {IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {containerName,containerGroups} from '../container-groups.js';
@@ -24,10 +24,10 @@ export const Search=({value,onChange,label='Search'})=><label className="map-sea
 const Row=({icon:Icon,title,caption,onClick,onDrag})=><li><button type="button" className="map-row" onClick={onClick} draggable={onDrag?true:undefined} onDragStart={onDrag?e=>{e.dataTransfer.setData('text/plain',title);e.dataTransfer.effectAllowed='copy';onDrag()}:undefined}><Icon size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{title}</b><span className="map-caption">{caption}</span></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>;
 
 // "+" at the top right: adds a server or backup storage with the existing screens.
-export function AddToMap({onAddServer,onAddStorage,onAddAlert,onCredentials,onDragItem}){
+export function AddToMap({onAddServer,onAddStorage,onAddAlert,onConnections,onDragItem}){
  const [q,setQ]=useState('');
- const rows=[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer,item:{kind:'server'}},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage,item:{kind:'storage'}},
-  ...(onAddAlert?[{id:'telegram',icon:IconBrandTelegram,title:'Telegram alerts',caption:'Messages in a Telegram chat',go:()=>onAddAlert('telegram'),item:{kind:'telegram'}},{id:'email',icon:IconMail,title:'Email alerts',caption:'Messages by email',go:()=>onAddAlert('email'),item:{kind:'email'}}]:[]),...(onCredentials?[{id:'credentials',icon:IconKey,title:'Credentials',caption:'Logins your alerts use',go:onCredentials}]:[])].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
+ const rows=[...(onAddServer?[{id:'server',icon:IconServer,title:'Server',caption:'Connect another server by SSH',go:onAddServer,item:{kind:'server'}},{id:'storage',icon:IconDatabaseExport,title:'Backup storage',caption:'A place to keep backups',go:onAddStorage,item:{kind:'storage'}}]:[]),
+  ...(onAddAlert?[{id:'alert',icon:IconBell,title:'Alert node',caption:'Messages through one of your connections',go:onAddAlert,item:{kind:'alert'}}]:[]),...(onConnections?[{id:'connections',icon:IconPlugConnected,title:'Connections',caption:'Logins your alerts use',go:onConnections}]:[])].filter(r=>(r.title+' '+r.caption).toLowerCase().includes(q.trim().toLowerCase()));
  return <>
   <Search value={q} onChange={setQ}/>
   <h3 className="map-group-title">Add</h3>
