@@ -43,7 +43,7 @@ test('blocked moves lead with one plain sentence naming the first reason', () =>
     [f => { f.state.deploymentHold = true; }, 'Shop is busy with another job. Try again when it finishes.'],
     [f => { f.target.uid = 1000; }, 'DockNest must sign in to new-srv as root.'],
     [f => { f.target.stagingWritable = false; }, 'DockNest cannot save files on new-srv. Its disk may be full.'],
-    [f => { f.target.freeBytes = 5 * GiB; }, 'Not enough space on new-srv: needs about 7 GB, has 5 GB free.'],
+    [f => { f.target.freeBytes = 5 * GiB; }, 'Not enough space on new-srv: needs about 7.5 GB, has 5.4 GB free.'],
     [f => { f.backupStorage.freeBytes = GiB / 2; }, 'Your backup storage is almost full. Free some space first.'],
     [f => { f.target.architecture = 'aarch64'; }, 'new-srv has a different processor type (aarch64) than Shop (x86_64).'],
     [f => { f.target.dockerVersion = '27.5.1'; }, 'Docker on new-srv is too old. Update it to version 28 or newer.'],

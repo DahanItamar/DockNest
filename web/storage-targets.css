@@ -22,3 +22,22 @@
 @media(max-width:480px){.card-footer.storage-card-actions{flex-direction:column;flex-wrap:nowrap;align-items:stretch;padding:16px}.storage-card-actions button{width:100%}}
 @media(max-width:767px){.storage-grid{grid-template-columns:minmax(0,1fr)}.storage-card-content{min-width:0}}
 .rebrand-page .storage-grid>.storage-card:last-child:nth-child(odd){grid-column:auto}
+
+/* Storage page layout: section header, a grid that shares the report's edges, capacity on each card. */
+.rebrand-page .sr-root .storage-intro{align-items:flex-start;margin-top:8px}
+.rebrand-page .sr-root .storage-intro h2{display:flex;align-items:center;gap:12px;margin:0 0 4px;font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600}
+.rebrand-page .sr-root .storage-intro p{margin:0;color:var(--text-muted);font-size:var(--fs-body);line-height:var(--lh-body)}
+.rebrand-page .sr-root .storage-grid{grid-template-columns:minmax(0,1fr);gap:var(--edge);margin:0}
+.rebrand-page .sr-root>.panel,.sr-root>.notice,.sr-root>.alert-panel,.sr-root>p{margin:0}
+.storage-usage{display:flex;flex-direction:column;gap:8px;margin-top:8px;padding-top:12px;border-top:1px solid var(--border-subtle)}
+.storage-usage-text{display:flex;justify-content:space-between;align-items:baseline;gap:16px;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
+.storage-usage-text b{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:400;color:var(--text-primary);text-align:right}
+.storage-usage progress{display:block;width:100%;height:8px}
+@media(min-width:768px){
+ .rebrand-page .sr-root .storage-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child{grid-column:1/-1}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--edge)}
+ .rebrand-page .sr-root .storage-grid>.storage-card:only-child .def-row:nth-last-child(2){border-bottom:0}
+}
+/* On phones the list is not height-stabilised, so each card keeps its own height. */
+@media(max-width:767px){.rebrand-page .sr-root .storage-grid{grid-auto-rows:auto}}

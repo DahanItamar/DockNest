@@ -1,4 +1,5 @@
 import React, {useEffect,useRef,useState} from 'react';
+import {formatBytes} from '../shared/format-bytes.js';
 import './job-details.css';
 import {VerificationLevels,verificationSummary} from './verification.jsx';
 import {StatusLabel,AlertPanel} from './system.jsx';
@@ -11,7 +12,7 @@ export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetSer
 const HIDDEN_JOB_FIELDS=new Set(['id','siteId','site_id','type','status','stage','error','details','createdAt','created_at','startedAt','started_at','finishedAt','finished_at']);
 
 export function duration(seconds){if(!Number.isFinite(seconds)||seconds<0)return '—';const s=Math.round(seconds),h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60;return h?`${h} h ${m} min`:m?`${m} min ${r} s`:`${r} s`;}
-export function byteSize(value){let n=Number(value);if(!Number.isFinite(n))return '—';const units=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<units.length-1){n/=1024;i++;}return (i>1?n.toFixed(1):Math.round(n))+' '+units[i];}
+export const byteSize=value=>Number.isFinite(Number(value))?formatBytes(value):'—';
 const shortDuration=ms=>ms==null?'':ms<1000?`${ms} ms`:ms<60000?`${(ms/1000).toFixed(1)} s`:`${Math.floor(ms/60000)} min ${Math.round(ms%60000/1000)} s`;
 const clock=value=>{const d=new Date(value);return Number.isNaN(d.getTime())?'':d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});};
 const dateTime=(value,timeStyle='short')=>{const d=new Date(value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString([],{dateStyle:'medium',timeStyle}):'—';};

@@ -4,6 +4,7 @@
 // masked again here in case a collector forgets.
 import { createHash } from 'node:crypto';
 import { installInfo } from '../install-plan.js';
+import { formatBytes } from '../../shared/format-bytes.js';
 
 /**
  * @typedef {{ hostIp?: string, hostPort: number, containerPort: number, protocol?: 'tcp'|'udp' }} PortBinding
@@ -36,7 +37,7 @@ const OVERRIDE_COMPOSE = [2, 24];
 
 const version = text => { const match = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text ?? '')); return match ? match.slice(1).map(part => Number(part ?? 0)) : null; };
 const below = (have, need) => { for (let index = 0; index < need.length; index++) { if ((have[index] ?? 0) !== need[index]) return (have[index] ?? 0) < need[index]; } return false; };
-const gb = bytes => (Math.ceil(bytes / GiB * 10) / 10).toString();
+const gb = formatBytes;
 
 // Masked form of an env value: scheme, host and port only. Strips userinfo, paths, query strings and fragments.
 export function maskValue(value) {
@@ -101,7 +102,7 @@ export function evaluateMove(facts, options = {}) {
     if (target.stagingWritable === false) add('staging', 'block', 'Working folder', `DockNest cannot save files on ${target.name}. Its disk may be full.`);
 
     const need = site.packageBytes * 3 + GiB;
-    if (target.freeBytes < need) add('disk', 'block', 'Disk space', `Not enough space on ${target.name}: needs about ${gb(need)} GB, has ${gb(target.freeBytes)} GB free.`);
+    if (target.freeBytes < need) add('disk', 'block', 'Disk space', `Not enough space on ${target.name}: needs about ${gb(need)}, has ${gb(target.freeBytes)} free.`);
     else if (target.totalBytes > 0 && (target.totalBytes - target.freeBytes + need) / target.totalBytes > 0.85) add('disk', 'warn', 'Disk space', `${target.name} will be more than 85% full after the move.`);
     else add('disk', 'ok', 'Disk space', `${target.name} has enough free space.`);
     if (facts.backupStorage && facts.backupStorage.freeBytes < GiB) add('backup', 'block', 'Backup storage', 'Your backup storage is almost full. Free some space first.');

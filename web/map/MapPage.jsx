@@ -1,4 +1,5 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
+import {formatBytes} from '../../shared/format-bytes.js';
 import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {count} from '../plural.js';
@@ -11,7 +12,7 @@ import {createAlertsClient,KIND_LABEL} from './alerts-client.js';
 import {AlertPanel,CredentialsPanel,PickSheet,DeleteChannelSheet,SourceAlerts,AlertsList,KindIcon,DockNestIcon,srcKey} from './Alerts.jsx';
 import './map.css';
 
-const bytes=v=>{if(!v)return '';const i=Math.min(4,Math.floor(Math.log(v)/Math.log(1024)));return (v/1024**i).toFixed(i?1:0)+' '+['B','KB','MB','GB','TB'][i]};
+const bytes=v=>v?formatBytes(v):'';
 const MIN=0.2,MAX=2,FIT_MIN=0.45; // fit never scales above 100%; below 45% the map is too small to read, so the user pans
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
 const short=(v,n=40)=>typeof v==='string'&&v.length>n?v.slice(0,Math.ceil((n-1)/2))+'…'+v.slice(-Math.floor((n-1)/2)):v; // long names are shortened in sentences; the full name stays in the title and the details
