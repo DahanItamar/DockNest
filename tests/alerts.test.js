@@ -126,7 +126,7 @@ test('a node test sends through the credential with the exact Telegram request s
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `https://api.telegram.org/bot${TOKEN}/sendMessage`);
   assert.equal(calls[0].init.method, 'POST');
-  assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1001234567890', text: 'This is a test message from DockNest. Your alerts are connected.', disable_web_page_preview: true });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { chat_id: '-1001234567890', text: 'DockNest test message\nYour alerts are connected.', link_preview_options: { is_disabled: true } });
   assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'ok');
   calls = mockFetch(() => { throw Object.assign(new Error(`connect failed https://api.telegram.org/bot${TOKEN}/sendMessage`), { cause: TOKEN }); });
   const failed = await send(admin, 'POST', `/alerts/channels/${node.id}/test`), text = await failed.text();
@@ -238,7 +238,7 @@ test('delivery retries with backoff three times, then gives up; success records 
   healthy = true;
   delivery.emit({ type: 'backup.failed', key: 'site:s', siteName: 'shop', serverName: 'srv' }, { at: t0 + 7200_000 });
   assert.equal(await delivery.deliverDue({ at: t0 + 7200_000 }), 1);
-  assert.equal(calls.length, 4); assert.match(JSON.parse(calls[3].init.body).text, /^Backup failed: shop on srv/);
+  assert.equal(calls.length, 4); assert.match(JSON.parse(calls[3].init.body).text, /^Backup failed\nshop on srv/);
   assert.equal(db.prepare("SELECT status FROM alert_outbox WHERE dedupe_key='backup.failed:site:s'").get().status, 'sent');
   assert.equal(db.prepare('SELECT last_send AS last_result FROM connections').get().last_result, 'ok');
   await delivery.deliverDue({ at: t0 + 7300_000 }); assert.equal(calls.length, 4, 'a sent message is never sent again');

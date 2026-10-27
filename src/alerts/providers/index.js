@@ -3,8 +3,19 @@
 // account) or plain (a setting). Secret and sealed fields are sealed together as one value with the master key.
 import telegram from './telegram.js';
 import email from './email.js';
+import whatsapp from './whatsapp.js';
+import discord from './discord.js';
+import slack from './slack.js';
+import teams from './teams.js';
+import googlechat from './googlechat.js';
+import mattermost from './mattermost.js';
+import ntfy from './ntfy.js';
+import gotify from './gotify.js';
+import pushover from './pushover.js';
+import matrix from './matrix.js';
+import webhook from './webhook.js';
 
-export const providers = Object.freeze({ telegram, email });
+export const providers = Object.freeze({ telegram, email, whatsapp, discord, slack, teams, googlechat, mattermost, ntfy, gotify, pushover, matrix, webhook });
 export const providerIds = Object.freeze(Object.keys(providers));
 export const provider = id => (typeof id === 'string' && Object.hasOwn(providers, id) ? providers[id] : null);
 const sealedKeys = item => item.fields.filter(field => field.secret || field.sealed).map(field => field.key);
@@ -20,4 +31,4 @@ export function sealedView(id, secret) {
   return Object.fromEntries(item.fields.filter(field => field.secret).map(field => [`${field.key}Set`, Boolean(secret?.[field.key])]));
 }
 // What the UI renders from (`GET /api/connections/providers`, PR 4): no schema code, no functions.
-export const providerList = () => Object.values(providers).map(({ id, label, icon, group, fields }) => ({ id, label, icon, group, fields: fields.map(field => ({ ...field })) }));
+export const providerList = () => Object.values(providers).map(({ id, label, icon, group, fields, testNote }) => ({ id, label, icon, group, fields: fields.map(field => ({ ...field })), ...(testNote ? { testNote } : {}) }));

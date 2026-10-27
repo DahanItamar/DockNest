@@ -41,7 +41,8 @@ export const outboundIo = {
 };
 
 // The URL rules that need no DNS. Returns the parsed URL, or throws an OutboundError.
-// guard: { hosts: [names] | null (any host), privateAllowed: boolean }
+// guard: { hosts: [names] | null (any host), privateAllowed: boolean }. A host list entry is an exact name, or `*.suffix` for
+// any name below it (Teams Workflows).
 export function checkUrl(value, { hosts = null, privateAllowed = false } = {}) {
   if (typeof value !== 'string' || value.length > outboundLimits.urlChars || value.includes('#')) throw new OutboundError('url');
   let url; try { url = new URL(value); } catch { throw new OutboundError('url'); }
@@ -49,7 +50,8 @@ export function checkUrl(value, { hosts = null, privateAllowed = false } = {}) {
   if (url.protocol === 'http:' && !privateAllowed) throw new OutboundError('blocked');
   if (url.port && url.port !== '443' && !privateAllowed) throw new OutboundError('blocked');
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (Array.isArray(hosts) && !hosts.includes(host)) throw new OutboundError('blocked');
+  if (host.endsWith('.')) throw new OutboundError('url'); // a trailing dot is the same name to DNS but not to a host list or a certificate
+  if (Array.isArray(hosts) && !hosts.some(entry => (entry.startsWith('*.') ? host.length > entry.length - 1 && host.endsWith(entry.slice(1)) : host === entry))) throw new OutboundError('blocked');
   if (nameRefused(host)) throw new OutboundError('blocked');
   // A host that looks numeric but is not a valid literal (the URL parser rewrites every valid IPv4 notation) is refused.
   if (!isIP(host) && /^[0-9a-fx.]+$/i.test(host) && /^(?:0x[0-9a-f]*|\d+)(?:\.(?:0x[0-9a-f]*|\d+))*\.?$/i.test(host)) throw new OutboundError('url');
@@ -153,6 +155,7 @@ const clampWait = ms => Math.min(outboundLimits.maxRetryAfterMs, Math.max(outbou
 // `retry_after` (seconds, may be fractional). Null when none is given or none is readable.
 export function retryAfterMs(response, body = {}, now = Date.now()) {
   const header = parseRetryAfter(response?.headers?.get?.('retry-after'), now); if (header !== null) return header;
+  if (typeof body?.retry_after_ms === 'number' && Number.isFinite(body.retry_after_ms) && body.retry_after_ms >= 0) return clampWait(body.retry_after_ms); // Matrix
   for (const seconds of [body?.parameters?.retry_after, body?.retry_after]) if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) return clampWait(seconds * 1000);
   return null;
 }

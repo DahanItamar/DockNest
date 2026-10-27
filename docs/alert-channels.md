@@ -1,6 +1,6 @@
 # Alert channels and Connections (ADR)
 
-Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store) and PR 1b (the guarded outbound client) are done, see "Notes from PR 1a" and "Notes from PR 1b". Date: 2026-10-27.
+Status: accepted design for the release after 2.9.0. In progress: PR 1a (migration 10 and the store), PR 1b (the guarded outbound client) and PR 3 (the providers) are done, see "Notes from PR 1a", "Notes from PR 1b" and "Notes from PR 3". Date: 2026-10-27.
 Spec: the owner-approved mockup "Alert channels, final design, Option C". This doc turns it into decisions.
 Builds on [alerts.md](alerts.md) (2.8.0) and [security.md](security.md), "Alerts".
 
@@ -232,7 +232,7 @@ The test message uses the same template: title "DockNest test message", reason "
 | ntfy | Token (optional) | Server (`https://ntfy.sh`), topic | ntfy.sh or user host | JSON publish: `topic`, `title`, `message`, `click`, `priority` 4 for failures |
 | Gotify | App token | Server | User host | `POST /message`, `X-Gotify-Key`, `title`, `message`, `priority`, click URL in `extras` |
 | Pushover | App token, user key | | `api.pushover.net` | `POST /1/messages.json`, `title`, `message`, `url`, `url_title` |
-| Matrix | Access token | Homeserver, room ID | User host | `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`, `m.text`, room ID URL-encoded; txn = outbox id, so a retry never posts twice |
+| Matrix | Access token | Homeserver, room ID | User host | `PUT /_matrix/client/v3/rooms/{room}/send/m.room.message/{txn}`, `m.text`, room ID URL-encoded; txn = outbox id plus a hash of the content, so a retry never posts twice and changed content is a new event |
 | Other | Webhook URL, header (optional) | | User host | Fixed JSON `{ title, site, server, message, url, event, at }` |
 
 The ntfy topic is plain but treated as sensitive in the UI help: on ntfy.sh anyone who knows a topic can read it, so
@@ -554,6 +554,76 @@ What PR 1b settled where this document left room, or chose a narrower step:
   from the API process can overlap with a worker send; that is not locked across processes.
 - Test seams, like `smtpIo`: `outboundIo.resolve`, `outboundIo.dial` (points a checked address and port at a local fake
   server) and `outboundIo.ca`. No setting or API reaches them.
+
+## Notes from PR 3
+
+What PR 3 settled where this document left room, or chose a narrower step:
+
+- **No `send()` in a provider file.** The registry contract stays as written above: a provider never opens a socket, and the one
+  `send` is `sendWith` in `delivery.js`. A provider file has `fields`, `secretSchema` and `settingsSchema` (the "schema" of the
+  sketch, split into sealed and plain values), `destination`, `host`, `target(values) -> { hosts, base }` (`hosts` is the
+  exact list of official hosts, or `'user'`; `base` is the origin and path prefix of a path-style call),
+  `format(message, values) -> { method, url | path, headers, json }`, `explain(status, body, { verifying, text }) -> null |
+  { message, final }`, `unreachable`, and where useful `testNote`. A webhook-style provider returns the saved URL as `url`;
+  the others return a `path` that is joined to `base`.
+- **URL building (1b security review).** `delivery.request` no longer builds `https://<first host>/...`. The URL is the
+  saved, validated webhook URL, or `target.base` (a fixed host, or the Connection's saved and validated server) plus the
+  path. The saved secret and settings are parsed against the provider's schemas again at every send, so a row that no longer
+  passes sends nothing ("The saved settings cannot be read. Enter them again.").
+- **Fixed hosts.** `guardFor` returns `privateAllowed: false` for every provider whose `target` lists hosts, whatever the
+  row's `private_ok` and the setting say. `checkUrl` accepts a `*.suffix` entry (any name below the suffix, never the suffix
+  alone) for Teams: `*.logic.azure.com` and `*.api.powerplatform.com`. Everything else is an exact name: Discord
+  `discord.com`, `ptb.discord.com`, `canary.discord.com`, `discordapp.com`; Slack `hooks.slack.com`; Google Chat
+  `chat.googleapis.com`; Pushover `api.pushover.net`; WhatsApp `graph.facebook.com`; Telegram `api.telegram.org`.
+- **AWS IPv6.** The whole `fd00:ec2::/32` block is refused (it holds `::254` metadata, `::253` DNS, `::23` and the rest of
+  AWS's reserved addresses), not only single addresses.
+- **Trailing dot.** A host with a trailing dot is refused, not normalised: `checkUrl` answers "The address is not valid."
+  and every provider's validation says "Remove the dot at the end of the server name." A saved URL is never rewritten.
+- **429 wait.** `retryAfterMs` also reads Matrix's `retry_after_ms`. A rate-limit error that arrives with another status (a
+  WhatsApp throughput code on a 400) is a retryable failure with the normal back-off.
+- **Statuses.** For the new providers every 4xx except 408 and 429 is final (the same request cannot succeed later); 408
+  and 5xx are retried at 1 and 5 minutes. Telegram keeps its 2.8 rule (400 and 5xx retried). Pushover reads its refused
+  login from the body (`token` or `user` is `invalid` on a 400). WhatsApp maps Meta error codes (190 login; 132000 and
+  132001 missing template; 132005 to 132018 template rejected; 131047 outside the 24 hours; 131030 recipient not allowed;
+  100 and 133010 phone number ID) to sentences and never repeats Meta's text.
+- **Message template.** `events.js` builds `{ title, site, server, reason, time, url, event, at }`; `time` is the one field
+  added to the ADR's list ("03:00 UTC", the 2.8 time of day) so providers can keep it. It is stored as the outbox
+  `payload`, so a retry sends exactly what the first try would have. A 2.8 item (`payload` NULL) and the "N more alerts"
+  item are sent as their plain text (title = the part before the first `:` or sentence end).
+- **Reasons** (`reasons.js`) are keyed by event type and, where it helps, by a code: the job status for backups (`failed`,
+  `recovery_required`) and the move state or waiting reason. There is no finer failure code in the database today, so a
+  failed backup always says "The backup did not finish." Two sentences hold a value that is not raw error text: the
+  owner-typed target server name of a move, and the free space and used percent of a low disk.
+- **Job link.** `jobLink` gives `${APP_ORIGIN}/?job=<id>` for a backup job and the app address itself for events without a
+  job, and nothing when `APP_ORIGIN` is a loopback address. The web app does not read `?job=` yet: opening the job after
+  sign-in comes with PR 4 (no UI in this PR).
+- **Telegram** now sends the template as plain text (title, "site on server at time", reason, link) with
+  `link_preview_options: { is_disabled: true }` instead of `disable_web_page_preview`. The first message after the upgrade
+  reads differently from 2.8 ("Upgrade safety" allows this) but says the same things, to the same chat.
+- **Email** sends the title as the subject (after the optional prefix) and the template lines as the plain text body.
+- **WhatsApp** pins Graph API `v23.0` (`GRAPH_VERSION`). Template mode has no link: the template body is fixed text with
+  three parameters, as specified. Every run of whitespace in a parameter becomes one space (so never more than 4 in a
+  row); parameters are cut to 200 characters and are never empty. The number is stored without `+`, spaces and brackets.
+  `testNote` carries the "Accepted by WhatsApp" wording for PR 4.
+- **Teams**: the help says the old connector "is being retired by Microsoft" and names no date. The date was not re-checked
+  in this PR (no internet in the implementation environment); a release check should state it. Only the two host families
+  are accepted, and a port other than 443 is refused.
+- **Slack** accepts `/services/T/B/token` only (not Workflow Builder `/triggers/` URLs). **Mattermost** accepts
+  `<optional sub-path>/hooks/<id>`. **Google Chat** keeps `key`, `token` and the optional `threadKey` and
+  `messageReplyOption`. **Discord** keeps `?thread_id=` (a thread webhook) and adds `wait=true` when sending.
+- **Matrix** sends `m.mentions: {}` and puts a zero-width space after every `@`, so a site named `@room` mentions nobody.
+  A homeserver on a public name must use 443 (the guard rule for public hosts); a custom port such as 8008 works on a
+  private host with "Allow private network" on. The transaction ID is `<outbox id>-<16 hex of a SHA-256 of the time and
+  both bodies>`: a retry of the same item reuses it, while the "N more alerts" item whose count changed in place, or a
+  test message (no outbox item), gets a new one. A homeserver answers a reused transaction ID with the old event and
+  posts nothing.
+- **Other (webhook URL)**: `message` is one 2.8-style sentence ("Backup failed: shop on srv at 03:00 UTC. Reason."). The
+  exact body is exported as `body()` from `providers/webhook.js` for the dialog.
+- **Priorities**: ntfy 4, Gotify 8 and Pushover 1 for backup failed, server unreachable, low disk and restore test failed or
+  not run; quiet events use the provider defaults (Gotify 5, Pushover 0). Pushover's emergency priority is never used.
+- **Escaping**: Slack escapes `& < >`; Discord and Mattermost escape Markdown punctuation (list markers only at the start of
+  a line); Matrix HTML is escaped; Google Chat breaks `* _ ~` with a zero-width space and drops `< >`; Telegram sends plain
+  text with no parse mode. Text is cut at each provider's limit on a character boundary, with an ellipsis.
 
 ## Owner answers (2026-10-27)
 

@@ -3,6 +3,7 @@
 // A provider is data plus small pure functions: it never opens a socket. The core (delivery.js) makes the request
 // through the guarded client (outbound.js), which only ever reaches api.telegram.org on a public address.
 import { z } from 'zod';
+import { plainText, cut } from './common.js';
 
 const token = z.string().trim().regex(/^\d{5,15}:[A-Za-z0-9_-]{30,64}$/, 'Paste the bot token exactly as BotFather shows it.');
 const chatId = z.string().trim().regex(/^(?:-?\d{1,20}|@[A-Za-z0-9_]{5,32})$/, 'Enter the chat ID (a number) or the @name of a public channel.');
@@ -17,9 +18,9 @@ export default Object.freeze({
   settingsSchema: z.object({ chatId }).strict(),
   destination: Object.freeze(['chatId']),
   host: Object.freeze([]),
-  target: () => ({ hosts: ['api.telegram.org'] }),
-  // The 2.8 request shape, kept exactly until the message template lands (PR 3): plain text, no parse mode, no preview.
-  format: (message, values) => ({ method: 'POST', path: `/bot${values.token}/sendMessage`, json: { chat_id: values.chatId, text: message.text, disable_web_page_preview: true } }),
+  target: () => ({ hosts: ['api.telegram.org'], base: 'https://api.telegram.org' }),
+  // Plain text (no parse mode, so nothing in a site name is read as markup) and no link preview, cut to Telegram's 4096.
+  format: (message, values) => ({ method: 'POST', path: `/bot${values.token}/sendMessage`, json: { chat_id: values.chatId, text: cut(plainText(message), 4096), link_preview_options: { is_disabled: true } } }),
   // Checks the login without sending anything.
   verify: values => ({ method: 'GET', path: `/bot${values.token}/getMe` }),
   // One fixed sentence per failure, never the provider's own text. A `final` failure is not worth retrying.
