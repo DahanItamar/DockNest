@@ -29,7 +29,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     jobs = job.finished_at;
     let details = {}; try { details = JSON.parse(job.details); } catch { /* keep {} */ }
     if (details.moveId) continue; // the backups a move takes are part of the move, reported by its own events
-    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: `site:${job.site_id}`, at: job.finished_at, siteId: job.site_id, timeZone: zoneFor(job.site_id), serverId: job.server_id, siteName: job.site, serverName: job.server });
+    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: `site:${job.site_id}`, at: job.finished_at, jobId: job.id, code: job.status, siteId: job.site_id, timeZone: zoneFor(job.site_id), serverId: job.server_id, siteName: job.site, serverName: job.server });
   }
   const changed = db.prepare(`SELECT m.id,m.state,m.waiting_for,m.updated_at,m.site_id,m.source_server_id,m.target_server_id,s.name AS site,a.name AS source,b.name AS target FROM site_moves m JOIN sites s ON s.id=m.site_id JOIN servers a ON a.id=m.source_server_id JOIN servers b ON b.id=m.target_server_id
     WHERE m.updated_at>? AND m.state IN ('completed','rolled_back','failed','waiting','recovery_required') ORDER BY m.updated_at LIMIT 100`).all(cursor.moves);

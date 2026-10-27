@@ -1,4 +1,8 @@
 import { formatBytes } from '../../shared/format-bytes.js';
+import { config } from '../config.js';
+import { isIP } from 'node:net';
+import { classify } from './addresses.js';
+import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
 export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you']);
@@ -14,11 +18,12 @@ export const STATE_DEDUPE_MS = Object.freeze({ 'server.unreachable': 6 * 3600_00
 const clean = (value, fallback = 'a site') => String(value ?? '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || fallback;
 // Time of day in the event's IANA time zone (the site's schedule zone, else the self-backup schedule zone, else UTC),
 // with the zone abbreviation, for example " at 03:00 UTC" or " at 06:00 GMT+3". An unknown zone falls back to UTC.
-const clock = (iso, timeZone = 'UTC') => {
+const timeOf = (iso, timeZone = 'UTC') => {
   const date = new Date(iso); if (Number.isNaN(date.getTime())) return '';
   const format = zone => new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).format(date);
-  try { return ` at ${format(timeZone)}`.replace(',', ''); } catch { return ` at ${format('UTC')}`; }
+  try { return format(timeZone).replace(',', ''); } catch { return format('UTC'); }
 };
+const clock = (iso, timeZone) => { const time = timeOf(iso, timeZone); return time ? ` at ${time}` : ''; };
 const gb = formatBytes;
 
 // event: { type, at, siteName?, serverName?, targetName?, detail?, version?, freeBytes?, usedPercent?, key, siteId?, serverId? }
@@ -54,4 +59,49 @@ export function ruleMatches(rule, event) {
   if (rule.source_kind === 'docknest') return true;
   if (rule.source_kind === 'server') return Boolean(event.serverId) && rule.source_id === event.serverId || Boolean(event.targetServerId) && rule.source_id === event.targetServerId;
   return Boolean(event.siteId) && rule.source_id === event.siteId;
+}
+
+// ---- The message template (docs/alert-channels.md, "Message template") ----------------------------------------------------
+// One structured message for every provider: { title, site, server, reason, time, url, event, at }. Each provider renders
+// it natively (providers/). It is stored as the outbox `payload`, so a retry sends exactly what the first try would have.
+// - site, server: names the owner typed, cleaned as above ('' when the event has none).
+// - reason: one fixed sentence from the reasons catalogue (reasons.js), keyed by event type and `event.code` / `event.detail`.
+// - time: the event's time of day in its time zone, for example "03:00 UTC" ('' for events without one).
+// - url: the job deep link, only when APP_ORIGIN is not a loopback address (no link a phone cannot open).
+const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you' };
+const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered']);
+const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered']);
+const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you']);
+export const loopbackOrigin = origin => {
+  try { const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return host === 'localhost' || host.endsWith('.localhost') || (isIP(host) !== 0 && classify(host) === 'refused'); } catch { return true; }
+};
+// The deep link: opens a job after sign-in (`/?job=<id>`); an event without a job links to the app itself.
+export function jobLink(jobId, origin = config.origin) {
+  if (loopbackOrigin(origin)) return null;
+  return /^[A-Za-z0-9-]{8,64}$/.test(String(jobId ?? '')) ? `${origin}/?job=${jobId}` : `${origin}/`;
+}
+export function templateFor(event, { origin = config.origin } = {}) {
+  const at = event.at ?? new Date().toISOString();
+  if (event.type === 'move.finished' && !event.detail) event = { ...event, detail: 'completed' };
+  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : TITLES[event.type];
+  if (!title) return null;
+  const reason = reasonFor(event.type, event.code ?? event.detail, { target: clean(event.targetName, 'the new server'), version: event.type === 'update.available' ? clean(event.version, 'update') : '', free: event.freeBytes === undefined ? '' : gb(event.freeBytes), used: Math.round(Number(event.usedPercent) || 0) });
+  return {
+    title, site: siteEvents.has(event.type) ? clean(event.siteName) : '', server: serverEvents.has(event.type) ? clean(event.serverName, 'your server') : '', reason,
+    time: timed.has(event.type) ? timeOf(at, event.timeZone) : '', url: event.type === 'test' ? null : jobLink(event.jobId, origin), event: event.type, at,
+  };
+}
+export const testMessage = () => ({ ...templateFor({ type: 'test' }), url: null });
+// The message of an outbox item: its stored template, or for a 2.8 item (payload NULL) and the "N more alerts" item the
+// plain text it has, as a title and a reason.
+export function messageOf(item) {
+  try {
+    const stored = JSON.parse(item.payload ?? 'null');
+    if (stored && typeof stored.title === 'string' && typeof stored.event === 'string') return { ...stored, id: item.id };
+  } catch { /* plain */ }
+  return { ...plainTemplate(item.message), id: item.id };
+}
+export function plainTemplate(text) {
+  const value = String(text ?? '').replace(/\s+/g, ' ').trim(), split = /^([^:.]{1,80})(?::\s*|\.\s+)(.*)$/s.exec(value);
+  return { title: split ? split[1].trim() : value.slice(0, 80) || 'DockNest alert', site: '', server: '', reason: split ? split[2].trim() : '', time: '', url: null, event: 'plain', at: '', text: value };
 }
