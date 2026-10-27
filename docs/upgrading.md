@@ -163,6 +163,29 @@ docker compose exec api node scripts/deployment-preflight.js release
 
 Keep the `pre-rollback-*` folder until you have checked the result. The upgrade backup folder holds the `.env` and secrets that belong to the previous release. Copies made by the host updater can belong to root; after copying `master.key` or `setup.token` back, give them their original owner again (`sudo chown 1000:1000 data/master.key data/setup.token`, the api container's user) or the api cannot read them.
 
+## Alerts after upgrading to 2.10
+
+2.10 moves alert logins from the Map to Administration, **Connections**, and adds eleven providers. Nothing needs doing:
+
+- Migration 10 (`alert-connections`, compatible) adds new tables and copies every 2.8 alert node, line, chat, inbox and
+  waiting message into them. Sealed logins are copied as they are, never opened. Every node keeps its id, its lines and
+  its destination, and the first message after the upgrade goes to the same chat or inbox (it reads a little richer:
+  a title, a plain reason and a link to the job).
+- A Telegram bot used for several chats becomes one Connection per chat, named after the bot and the node. A node that
+  had no credential shows "Needs a connection" and sends nothing, as it showed "Needs a credential" before.
+- A credential no node used becomes a Connection that says "Add the chat ID" or "Add recipients" until you complete it.
+- "Operators can manage alerts" and "Allow private network" start off, so alerts stay administrators only and private
+  addresses stay closed, exactly as in 2.8. An Email relay on a private address that an administrator set keeps working.
+- API: `/api/alerts/credentials` and `/api/alerts/channels` are removed; use `/api/connections` and
+  `/api/alerts/nodes` ([alerts.md](alerts.md), "API"). `channelId` in `/api/alerts/rules` is deprecated in favour of
+  `nodeId` and still accepted in 2.10.
+
+**Going back to 2.9.** The 2.8 alert tables are left as they were, so 2.9 starts on the migrated database and keeps
+sending with the alert setup from upgrade time. Changes made in 2.10 are not visible to 2.9. Changes made in 2.9 after
+that are not copied again when you upgrade once more; the Connections page then says so, and you enter them again.
+Replacing a secret or deleting a migrated Connection in 2.10 also removes its 2.8 copy, so after going back those 2.8
+nodes need a credential and send nothing.
+
 ## Use the published image
 
 Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Only final releases are published; release candidates are validated privately and get no image or GitHub Release. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.

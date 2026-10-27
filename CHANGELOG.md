@@ -4,6 +4,19 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Alert channels: alerts can now go to 13 providers. Telegram and Email are joined by WhatsApp (Meta WhatsApp Cloud API, with an approved template by default), Discord, Slack, Microsoft Teams (Workflows), Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix and "Other (webhook URL)" under Advanced. One message template for all of them: a title, the site and server, a plain reason and a link that opens the job after sign-in.
+- Administration, **Connections**: one page for the logins your alerts use, with Used by, Last test, Send test, Edit (secrets are "Saved, hidden" and can only be replaced) and Delete (refused while a node uses it). A warning shows when a real alert could not be sent. Two settings, both off by default: **Allow private network** (for a self-hosted ntfy, Gotify, Matrix or Mattermost) and **Operators can manage alerts**. On the Map an alert node is now a provider plus a Connection; delete a node with the Delete key or the icon on its corner. Existing Telegram and Email alerts keep working with no action. See [docs/alerts.md](docs/alerts.md) and [docs/upgrading.md](docs/upgrading.md).
+
+### Deprecated
+
+- `channelId` in `/api/alerts/rules`: use `nodeId`. The old name is still accepted in this release.
+
+### Removed
+
+- The 2.8 alert routes `/api/alerts/credentials` and `/api/alerts/channels`. Use `/api/connections` and `/api/alerts/nodes`.
+
 ### Changed
 
 - The Storage page has a cleaner, balanced layout: summary tiles, sites by size, a growth chart that starts when your history starts, and destination cards with their capacity used. Sizes now read the same everywhere in DockNest, in decimal units (1 GB = 1,000 MB, 1 TB = 1,000 GB), so a 2 TB destination shows as 2 TB.
