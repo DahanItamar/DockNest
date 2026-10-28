@@ -191,12 +191,24 @@ Collapsed by default and pre-filled; most moves need no changes here.
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.
   Since 2.11.1, a path the backup names (data folders, configuration files, a static site) must also lie below an
-  application location: any non-standard top-level folder (`/opt`, `/srv`, `/mnt`, `/media`, `/data` ...),
-  `/var/www`, `/var/opt`, or a non-hidden folder inside a home folder (`/home/<user>/<folder>`; also `/var/home`,
-  `/var/srv` and friends on image-based systems). Anything else, such as `/var/lib/<app>`, `/tmp` or `~/.config`, is
-  refused and the site is moved by hand. A backup that names the host network or another container's network, or a
-  configuration path with `..`, is refused; settings are rewritten only in files the move placed, and `docker load`
-  never leaves an existing tag on the new server pointing at a different image.
+  application location:
+  - any non-standard, non-hidden top-level folder (`/opt`, `/srv`, `/mnt`, `/media`, `/data` ...);
+  - `/var/www` or `/var/opt`;
+  - `/var/lib/<app>`, except folders owned by the operating system, package managers, init, container runtimes or
+    cloud-init (for example `cloud`, `docker`, `containerd`, `dpkg`, `apt`, `systemd`, `polkit-1`, `sudo`, `snapd`,
+    `ucf`, `pam`, `NetworkManager`, `dhcp`, `lxcfs`, `private`);
+  - a non-hidden folder inside a home folder other than `~/bin` (`/home/<user>/<folder>`; also `/var/home`,
+    `/var/srv` and friends on image-based systems).
+
+  The path must not pass through a symbolic link on the new server. Below `/var/lib`, an application folder that
+  already holds data and was not created by this move is never written into. Anything else, such as `/tmp`, `/efi`,
+  `/nix`, `~/.config` or `~/bin`, is refused, and the site is moved by hand.
+
+  A bind mount of password files, sudo rules or SSH keys is not copied by backups, so a move refuses a site that has
+  one. A backup that names the host network or another container's network, or a relative or `..` configuration path,
+  is refused. Other spellings (`//`, `./`, a trailing `/`) are normalised first. Settings are rewritten only in files
+  the move placed. An image archive that names any image tag is refused before `docker load`, because DockNest
+  backups save images by ID.
   The maintenance folder on the new server is always DockNest's own `/var/lib/docknest/maintenance/<site>`, never an
   existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
   finish and goes back on Switch back.

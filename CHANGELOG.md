@@ -6,11 +6,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Security
 
-- Backups refuse a container that mounts password files, sudoers, SSH keys or a folder holding them, the same rule that already applied to configuration files.
-- Moves create folders only in application locations (such as /opt, /srv, /var/www, a home folder or another top-level data folder), never in system state or hidden start-up files in a home folder. A site whose data sits elsewhere, such as /var/lib/app, is moved by hand.
-- Moves refuse a backup that names the host network or another container's network, and refuse configuration paths with `..`; settings are only rewritten in files the move itself placed.
-- Restores and moves can no longer change which image an existing tag on the target server points to.
-- Updater: the caller check accepts the api container's cgroup only at its real host location.
+- **This changes what new backups contain.** A container's bind mount of password files, sudo rules or SSH keys is no longer copied. Examples are a `.ssh` folder, `/etc/ssh`, `/etc/sudoers.d`, or a system folder such as `/etc` that contains them. The backup keeps running and an empty placeholder takes the mount's place. The job result and the readiness check name each such mount. Recover these files separately. A move refuses such a site, so move it by hand.
+- Moves create folders only in application locations: /opt, /srv, /var/www, /var/lib/<app>, a home folder or another top-level data folder. They never write into operating system, package manager or cloud-init state (for example /var/lib/cloud or /var/lib/dpkg), into hidden start-up files or ~/bin in a home folder, through a symbolic link, or into a /var/lib folder that already belongs to another program.
+- Moves refuse a backup that names the host network or another container's network, and refuse relative or `..` configuration paths. Settings are only rewritten in files the move itself placed.
+- Restores and moves refuse an image archive that names image tags. DockNest backups save images by ID, so an archive with tags was not made by DockNest. Existing tags on the target server are never changed.
+- Updater: the caller check accepts the api container's cgroup only at its real host location, and logs the cgroup path when it refuses a caller.
 
 ## [2.11.0] - 2026-10-28
 
