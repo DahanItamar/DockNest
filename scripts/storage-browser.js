@@ -42,7 +42,7 @@ try{
  const form=page.locator('form.storage-form');
  await form.getByLabel('Destination name').fill('Fixture bucket');
  await form.getByLabel('Destination type').selectOption('s3');
- await form.locator('.badge',{hasText:'Beta'}).first().waitFor();
+ await form.locator('input[name="bucket"]').waitFor();
  // B6: region follows the endpoint until edited.
  const region=form.locator('input[name="region"]'),endpoint=form.locator('input[name="endpoint"]');
  await endpoint.fill('https://s3.us-west-004.backblazeb2.com');assert.equal(await region.inputValue(),'us-west-004');
@@ -87,7 +87,7 @@ try{
  await form.locator('input[name="secretAccessKey"]').fill(fixture.credentials.secretAccessKey);
  await submit.click();
  await page.locator('p.sr-only[role="status"]',{hasText:'Storage connected.'}).waitFor();
- await page.locator('.storage-card .badge',{hasText:'Beta'}).waitFor();
+ await page.locator('.storage-card',{hasText:'S3 object storage'}).waitFor();assert.equal(await page.locator('.badge',{hasText:'Beta'}).count(),0);
  await page.getByRole('button',{name:'Add storage destination',exact:true}).click();
  assert.equal(await page.locator('form.storage-form').getByLabel('Destination type').inputValue(),'sftp');
  assert.equal(await page.locator('form.storage-form input[name="endpoint"]').count(),0);

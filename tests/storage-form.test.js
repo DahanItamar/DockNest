@@ -43,12 +43,9 @@ test('retention windows and Object Lock warnings',()=>{
  assert.match(lockWarnings(30,sites,[{...daily,schedule:'*/5 1-2 * * *'}])[0],/could not be read/);
  assert.equal(lockWarnings(400,sites,[daily]).length,2);
 });
-test('S3 stays labelled beta until real-provider validation is recorded',async t=>{
- // Remove the beta wording only together with adding docs/s3-validated.md (S3 integration and Linux restore green).
- const validated=await readFile(new URL('../docs/s3-validated.md',import.meta.url),'utf8').then(()=>true,()=>false);
- if(validated)return t.skip('S3 validation recorded');
+test('S3 is no longer labelled beta anywhere',async()=>{
  const docs=await readFile(new URL('../docs/storage-backends.md',import.meta.url),'utf8'),readme=await readFile(new URL('../README.md',import.meta.url),'utf8'),ui=await readFile(new URL('../web/storage-targets.jsx',import.meta.url),'utf8');
- assert.match(docs.split('\n').find(line=>line.startsWith('| S3-compatible |')),/^\| S3-compatible \| Beta\./);
- assert.equal(readme.split('S3-compatible storage is in beta: it is tested against a real MinIO S3 server, not yet with full backups and restores or with cloud providers such as Cloudflare R2').length-1,2);
- assert.match(ui,/Tested against a real MinIO S3 server, not yet with full backups and restores or cloud providers\. Run a restore test before relying on it\./);
+ assert.match(docs.split(/\r?\n/).find(line=>line.startsWith('| S3-compatible |')),/^\| S3-compatible \| Supported\./);
+ assert.equal(readme.includes('S3-compatible storage is in beta'),false);
+ assert.doesNotMatch(ui,/Beta|BETA|\(beta\)/);
 });
