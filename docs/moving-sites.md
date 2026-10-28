@@ -200,8 +200,10 @@ Collapsed by default and pre-filled; most moves need no changes here.
   - a non-hidden folder inside a home folder other than `~/bin` (`/home/<user>/<folder>`; also `/var/home`,
     `/var/srv` and friends on image-based systems).
 
-  The path must not pass through a symbolic link on the new server. Below `/var/lib`, an application folder that
-  already holds data and was not created by this move is never written into. Anything else, such as `/tmp`, `/efi`,
+  The path must not pass through a symbolic link on the new server. The one exception is image-based systems
+  (Fedora CoreOS, Silverblue, IoT): a root-owned top-level `/home`, `/srv`, `/opt` or `/mnt` link whose target is
+  `var/<name>` is accepted when `/var` and `/var/<name>` are not links themselves. Any other link on the way is
+  refused. Below `/var/lib`, an application folder that holds an entry this move did not create is never written into. Anything else, such as `/tmp`, `/efi`,
   `/nix`, `~/.config` or `~/bin`, is refused, and the site is moved by hand.
 
   A bind mount of password files, sudo rules or SSH keys is not copied by backups, so a move refuses a site that has
