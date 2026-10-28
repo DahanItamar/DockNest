@@ -57,7 +57,7 @@ async function legacyBackup(backupId) {
 test('migration 11 is one compatible line, adds only its own tables, and the floor stays 1', () => {
   const entry = migrations.find(item => item.version === 11);
   assert.equal(entry.name, 'backup-copies'); assert.equal(entry.compatible, true);
-  assert.equal(schemaVersion, 11); assert.equal(compatFloor(migrations), 1);
+  assert.ok(schemaVersion >= 11, 'later migrations follow 11'); assert.equal(compatFloor(migrations), 1);
 });
 
 test('a 2.10.1 database with backups: nothing changes, no copies, and the default destination stays the default', async () => {
@@ -73,14 +73,14 @@ test('a 2.10.1 database with backups: nothing changes, no copies, and the defaul
       INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job','site','backup','completed','completed','${at}');
       INSERT INTO backups VALUES('backup','site','job','${at}','sftp:target:/home/u/BACKUP/x.enc',100,'${'b'.repeat(64)}','{}',1,1,'${at}');`);
     const before = schema(old), tables = before.filter(row => row.type === 'table').map(row => row.name), contents = Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
-    const result = migrate(old, { file, now: () => new Date('2026-10-28T08:00:00.000Z'), log: quiet });
+    const result = migrate(old, { file, list: migrations.slice(0, 11), now: () => new Date('2026-10-28T08:00:00.000Z'), log: quiet });
     assert.deepEqual([result.from, result.to], [10, 11]); assert.match(result.snapshot, /state-v10-to-v11-/);
     for (const row of before) assert.deepEqual(schema(old).find(item => item.name === row.name), row, 'existing objects keep their definition');
     assert.deepEqual(Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')])), contents, 'no row of an existing table changes');
     for (const table of ['site_storage', 'site_storage_copies', 'backup_copies', 'backup_main_removed', 'manager_backup_copies']) assert.equal(rowsOf(old, table).length, 0, table + ' starts empty');
     assert.equal(old.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
     assert.equal(old.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
-    assert.deepEqual(migrate(old, { file, log: quiet }), { from: 11, to: 11, snapshot: null }, 'a restart is a no-op');
+    assert.deepEqual(migrate(old, { file, list: migrations.slice(0, 11), log: quiet }), { from: 11, to: 11, snapshot: null }, 'a restart is a no-op');
   } finally { old.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -88,7 +88,7 @@ test('downgrade: 2.10 code starts on the new schema and its retention can still 
   const directory = await mkdtemp(join(tmpdir(), 'docknest-downgrade-')), file = join(directory, 'state.sqlite'), database = new DatabaseSync(file);
   try {
     database.exec('PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;PRAGMA busy_timeout=5000;');
-    migrate(database, { file, log: quiet });
+    migrate(database, { file, list: migrations.slice(0, 11), log: quiet });
     database.exec(`INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('srv','P','h',22,'root','k','${'0'.repeat(64)}','${at}');
       INSERT INTO sites VALUES('site','srv','Shop','{}','${at}');
       INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job','site','backup','completed','completed','${at}');

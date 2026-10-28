@@ -12,7 +12,7 @@ import { migrate, migrations, schemaVersion, listSnapshots, compatFloor, SchemaT
 const run = promisify(execFile), quiet = () => {}, shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 // Objects created by numbered migrations after the v2.0.0 baseline, sorted by name.
 // Sorted by name, matching schema().
-const addedSinceV2 = ['alert_channels','alert_credentials','alert_legacy_import','alert_lines','alert_lines_node','alert_nodes','alert_nodes_connection','alert_outbox','alert_outbox_dedupe','alert_outbox_due','alert_queue','alert_queue_dedupe','alert_queue_due','alert_rules','alert_rules_channel','audit_created','backup_copies','backup_copies_due','backup_copies_target','backup_main_removed','backups_captured','boot_recovery_installs','connections','connections_origin','jobs_created','manager_backup_copies','release_history','restore_test_settings','restore_test_settings_due','restore_test_steps','restore_test_steps_no_delete','restore_tests','restore_tests_backup','restore_tests_no_delete','restore_tests_result_once','restore_tests_server_active','restore_tests_site_active','restore_tests_site_created','restores_created','retention_deferrals','server_installs','server_installs_status','site_move_steps','site_moves','site_moves_active','site_moves_created','site_storage','site_storage_copies','site_storage_copies_target','site_storage_main','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
+const addedSinceV2 = ['alert_channels','alert_credentials','alert_legacy_import','alert_lines','alert_lines_node','alert_nodes','alert_nodes_connection','alert_outbox','alert_outbox_dedupe','alert_outbox_due','alert_queue','alert_queue_dedupe','alert_queue_due','alert_rules','alert_rules_channel','audit_created','backup_copies','backup_copies_due','backup_copies_target','backup_main_removed','backups_captured','boot_recovery_installs','connections','connections_origin','jobs_created','manager_backup_copies','radar_advisories','radar_findings','radar_findings_server','radar_findings_site','radar_inventory','radar_preferences','radar_scans','radar_scans_active','radar_scans_server','release_history','restore_test_settings','restore_test_settings_due','restore_test_steps','restore_test_steps_no_delete','restore_tests','restore_tests_backup','restore_tests_no_delete','restore_tests_result_once','restore_tests_server_active','restore_tests_site_active','restore_tests_site_created','restores_created','retention_deferrals','server_installs','server_installs_status','site_move_steps','site_moves','site_moves_active','site_moves_created','site_storage','site_storage_copies','site_storage_copies_target','site_storage_main','storage_target_settings','update_checks','update_events','update_preferences','update_requests','update_requests_active','whats_new_seen','worker_lease'];
 const fixture = await readFile(new URL('./fixtures/v2.0.0-schema.sql', import.meta.url), 'utf8');
 const schema = db => db.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 const version = db => db.prepare('PRAGMA user_version').get().user_version;
@@ -242,7 +242,7 @@ test('a real 2.1.0 database migrates to the current schema with its data intact,
   assert.equal(result.from, 4); assert.equal(result.to, schemaVersion);
   assert.match(result.snapshot, new RegExp(`state-v4-to-v${schemaVersion}-20261022T080000000Z\\.sqlite$`));
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.1.0 objects keep their definition');
-  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves, ...serverInstalls, 'alert_channels', 'alert_credentials', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel', ...restoreTests, ...alertConnections, ...backupCopies].sort());
+  assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)), [...updateCenter, ...siteMoves, ...serverInstalls, 'alert_channels', 'alert_credentials', 'alert_queue', 'alert_queue_dedupe', 'alert_queue_due', 'alert_rules', 'alert_rules_channel', ...restoreTests, ...alertConnections, ...backupCopies, ...radarObjects].sort());
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1, 'signed-in sessions survive');
   assert.equal(db.prepare("SELECT role FROM users WHERE id='user'").get().role, 'admin');
@@ -283,6 +283,7 @@ test('the real 2.1.0 upgrade.sh and this one read this migrations file as the cu
 const siteMoves = ['site_move_steps','site_moves','site_moves_active','site_moves_created'];
 const serverInstalls = ['server_installs','server_installs_status'];
 const alertConnections = ['alert_legacy_import','alert_lines','alert_lines_node','alert_nodes','alert_nodes_connection','alert_outbox','alert_outbox_dedupe','alert_outbox_due','connections','connections_origin'];
+const radarObjects = ['radar_advisories','radar_findings','radar_findings_server','radar_findings_site','radar_inventory','radar_preferences','radar_scans','radar_scans_active','radar_scans_server'];
 const backupCopies = ['backup_copies','backup_copies_due','backup_copies_target','backup_main_removed','manager_backup_copies','site_storage','site_storage_copies','site_storage_copies_target','site_storage_main'];
 const restoreTests = ['restore_test_settings','restore_test_settings_due','restore_test_steps','restore_test_steps_no_delete','restore_tests','restore_tests_backup','restore_tests_no_delete','restore_tests_result_once','restore_tests_server_active','restore_tests_site_active','restore_tests_site_created'];
 const v241 = released('v2.4.1', 'src/migrations.js'), noTag241 = !v241 && 'v2.4.1 tag not fetched';
@@ -376,5 +377,39 @@ test('a real 2.6.0 database (schema 6) migrates to 7 adding only server_installs
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 7, to: 7, snapshot: null });
     assert.match(messages.join('\n'), /schema v7 is newer than this release \(v6\) but only adds compatible objects/);
+  } finally { db.close(); }
+}));
+
+// Vulnerability radar (2.12.0): migration 12 only adds radar tables, the versions stay contiguous (incremental backups take 13),
+// and the real 2.11.1 code keeps running on the new schema without touching them (downgrade).
+test('migration 12 is the compatible radar migration and versions stay contiguous', () => {
+  assert.deepEqual(migrations.map(item => item.version), migrations.map((_, index) => index + 1));
+  const entry = migrations.find(item => item.version === 12);
+  assert.equal(entry.name, 'vulnerability-radar'); assert.equal(entry.compatible, true); assert.equal(compatFloor(migrations), 1);
+});
+const v2111 = released('v2.11.1', 'src/migrations.js'), noTag2111 = !v2111 && 'v2.11.1 tag not fetched';
+test('a real 2.11.1 database (schema 11) with no radar rows migrates to 12 adding only radar tables, and 2.11.1 code ignores them', { skip: noTag2111 }, () => temporary(async directory => {
+  const file2111 = join(directory, 'migrations-v2.11.1.mjs'); await writeFile(file2111, v2111);
+  const v2 = await import(pathToFileURL(file2111).href), file = join(directory, 'state.sqlite'), db = legacy(file), messages = [];
+  try {
+    assert.equal(v2.migrate(db, { file, now: () => new Date('2026-10-27T08:00:00.000Z'), log: quiet }).to, 11);
+    const before = schema(db), tables = before.filter(row => row.type === 'table').map(row => row.name);
+    const rows = Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row }))]));
+    const result = migrate(db, { file, list: migrations.slice(0, 12), now: () => new Date('2026-10-28T08:00:00.000Z'), log: quiet });
+    assert.deepEqual({ from: result.from, to: result.to }, { from: 11, to: 12 });
+    for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, '2.11.1 objects keep their definition');
+    assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), radarObjects);
+    for (const name of tables.filter(name => name !== 'settings')) assert.deepEqual(db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row })), rows[name], name + ' unchanged');
+    for (const name of radarObjects.filter(name => schema(db).find(row => row.name === name).type === 'table')) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${name}`).get().n, 0, name + ' starts empty');
+    // Rows the radar writes, then the 2.11.1 code: it starts, and deleting a site or server still works (cascade / set null).
+    db.exec(`INSERT INTO radar_scans(id,server_id,reason,status,requested_by,requested_at) VALUES('scan','server','manual','completed','user','2026-10-28');
+      INSERT INTO radar_findings(id,container_key,server_id,site_id,advisory_id,kind,severity,product,source,first_seen_at,last_seen_at,dismissed_at,dismissed_by) VALUES('f','server:name:web','server','site','DN-2024-0001','vulnerable','high','node','runtime','x','x','x','user');
+      INSERT INTO radar_preferences(id,container_probes,changed_by,changed_at) VALUES(1,0,'user','2026-10-28');`);
+    assert.deepEqual(v2.migrate(db, { file, log: message => messages.push(message) }), { from: 12, to: 12, snapshot: null });
+    assert.match(messages.join('\n'), /schema v12 is newer than this release \(v11\) but only adds compatible objects/);
+    db.exec("DELETE FROM sessions WHERE user_id='user'");
+    assert.doesNotThrow(() => db.prepare("UPDATE users SET name='Renamed' WHERE id='user'").run(), 'no radar foreign key points at users');
+    assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
+    assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   } finally { db.close(); }
 }));

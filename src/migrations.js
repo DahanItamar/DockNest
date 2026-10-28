@@ -215,6 +215,23 @@ CREATE INDEX IF NOT EXISTS backup_copies_target ON backup_copies(target_id,statu
 CREATE TABLE IF NOT EXISTS backup_main_removed (backup_id TEXT PRIMARY KEY,original_path TEXT NOT NULL,removed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manager_backup_copies (backup_id TEXT NOT NULL,target_id TEXT NOT NULL,path TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(backup_id,target_id));
 `;
+// Migration 12: vulnerability radar (docs/security.md "Vulnerability radar"). Additive only: new tables and indexes, no rows,
+// nothing altered, so 2.11 code ignores them (downgrade-safe). No foreign key points at users, so an older release can still
+// remove a user who dismissed a finding; rows cascade only with their server, and lose their site link when a site goes.
+// A missing radar_preferences row means the defaults (container probes on).
+// Findings are one row per container_key+advisory_id: resolved_at keeps the history, dismissed_* records an admin decision,
+// alerted_at marks a finding whose radar.finding_critical alert was written (cleared when radar.finding_resolved is).
+export const radarSchema = `
+CREATE TABLE IF NOT EXISTS radar_scans (id TEXT PRIMARY KEY, server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, reason TEXT NOT NULL CHECK (reason IN ('scheduled','discovery','manual')), status TEXT NOT NULL CHECK (status IN ('requested','running','completed','failed')), requested_by TEXT, requested_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, containers INTEGER, findings INTEGER, feed_serial INTEGER, probes INTEGER CHECK (probes IS NULL OR probes IN (0,1)), error TEXT CHECK (error IS NULL OR length(error) <= 1024));
+CREATE INDEX IF NOT EXISTS radar_scans_server ON radar_scans(server_id,requested_at);
+CREATE UNIQUE INDEX IF NOT EXISTS radar_scans_active ON radar_scans(server_id) WHERE status IN ('requested','running');
+CREATE TABLE IF NOT EXISTS radar_inventory (server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, container_key TEXT NOT NULL CHECK (length(container_key) <= 512), container_id TEXT, name TEXT, site_id TEXT REFERENCES sites(id) ON DELETE SET NULL, scan_id TEXT NOT NULL, data TEXT NOT NULL CHECK (length(data) <= 16384), seen_at TEXT NOT NULL, PRIMARY KEY (server_id, container_key));
+CREATE TABLE IF NOT EXISTS radar_findings (id TEXT PRIMARY KEY, container_key TEXT NOT NULL CHECK (length(container_key) <= 512), server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE, site_id TEXT REFERENCES sites(id) ON DELETE SET NULL, container_name TEXT, advisory_id TEXT NOT NULL CHECK (length(advisory_id) <= 64), kind TEXT NOT NULL CHECK (kind IN ('vulnerable','likely','eol','unknown')), severity TEXT NOT NULL CHECK (severity IN ('critical','high','medium','low','info')), product TEXT NOT NULL, version TEXT, source TEXT NOT NULL, fixed_in TEXT, evidence TEXT CHECK (evidence IS NULL OR length(evidence) <= 512), first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, resolved_at TEXT, dismissed_at TEXT, dismissed_by TEXT, dismiss_reason TEXT CHECK (dismiss_reason IS NULL OR length(dismiss_reason) <= 500), alerted_at TEXT, UNIQUE (container_key, advisory_id));
+CREATE INDEX IF NOT EXISTS radar_findings_server ON radar_findings(server_id,resolved_at);
+CREATE INDEX IF NOT EXISTS radar_findings_site ON radar_findings(site_id,resolved_at);
+CREATE TABLE IF NOT EXISTS radar_advisories (id TEXT PRIMARY KEY CHECK (length(id) <= 64), feed_serial INTEGER NOT NULL, data TEXT NOT NULL CHECK (length(data) <= 16384), updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS radar_preferences (id INTEGER PRIMARY KEY CHECK (id = 1), container_probes INTEGER NOT NULL DEFAULT 1 CHECK (container_probes IN (0,1)), changed_by TEXT, changed_at TEXT);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -248,6 +265,8 @@ export const migrations = [
   { version: 10, name: 'alert-connections', compatible: true, up: db => { db.exec(alertConnectionsSchema); importLegacyAlerts(db); } },
   // Storage per site and backup copies (docs/backup-copies.md): new tables and indexes only, so 2.10 code ignores them.
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
+  // Vulnerability radar (docs/security.md): new tables and indexes only, so 2.11 code ignores them. Incremental backups take 13.
+  { version: 12, name: 'vulnerability-radar', compatible: true, up: db => db.exec(radarSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
