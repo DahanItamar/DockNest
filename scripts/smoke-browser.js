@@ -15,8 +15,8 @@ try {
   await page.goto(baseUrl);
   await page.getByRole('heading', { name: 'Sign in' }).waitFor();
   await page.getByLabel('Password', { exact: true }).waitFor();
-  await page.getByLabel('2FA code').waitFor();
-  assert.equal(await page.locator('input').count(), 2, 'Login has only password and code inputs');
+
+  assert.equal(await page.locator('input').count(), 1, 'Step one has only the password input');assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).count(),1);
   assert.equal(await page.locator('.auth-card .brand-lockup,.auth-header .brand-lockup').count(),0,'Login uses the monochrome mask logo, not the app lockup');
   assert.equal(await page.locator('.lg-logo[role="img"]').count(),2,'Panel logo and phone logo');
   assert.equal(await page.locator('.alert,.alert-panel').count(),0,'No alert box on the sign-in page');
@@ -350,8 +350,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await setupPage.goto(baseUrl);
   await setupPage.getByRole('heading',{name:'Sign in',exact:true}).waitFor();
   assert.equal(await setupPage.getByText(/set-admin-password\.ps1/).count(),0,'Login never displays the removed Windows setup instructions');
-  assert.equal(await setupPage.getByRole('button',{name:'Sign in',exact:true}).isEnabled(),true,'First-run sign in is clickable');
-  await setupPage.getByRole('button',{name:'Sign in',exact:true}).click();
+  assert.equal(await setupPage.getByRole('button',{name:'Continue',exact:true}).isEnabled(),true,'First-run continue is clickable');
+  await setupPage.getByRole('button',{name:'Continue',exact:true}).click();
   await setupPage.getByRole('heading',{name:'Set up DockNest',exact:true}).waitFor();
   await setupPage.getByLabel('Administrator name').fill('QA');await setupPage.getByLabel('Administrator email').fill('qa@example.invalid');
   await setupPage.getByLabel('Setup token').fill('fixture-only-token');await setupPage.getByLabel('System password',{exact:true}).fill('fixture-password');await setupPage.getByLabel('Confirm system password').fill('fixture-password');
