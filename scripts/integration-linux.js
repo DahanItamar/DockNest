@@ -261,9 +261,10 @@ try {
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');
   await run('exec',hosts[0],'touch','/tmp/docknest-fail-copy');
+  const backupsBefore=db.prepare('SELECT COUNT(*) AS n FROM backups WHERE site_id=?').get(siteId).n;
   enqueueBackup(siteId,'qa');const failedJob=claimJob();await executeJob(failedJob);
   assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(failedJob.id).status,'failed');
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backups WHERE site_id=?').get(siteId).n,1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backups WHERE site_id=?').get(siteId).n,backupsBefore);
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-a'),'true');
   assert.equal(await run('exec',hosts[0],'test','!','-e',cfg.maintenance.directory+'/enabled'),'');
   record('Copy failure restarts the original site, clears maintenance after health checks, publishes no incomplete package and preserves the previous good backup');
