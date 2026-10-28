@@ -512,7 +512,7 @@ test('a long copy steps aside for a queued site job without counting an attempt'
   const row = copyRow(backupId, bucket);
   assert.deepEqual([row.status, row.attempts, row.alerted], ['pending', 0, 0]);
   await assert.rejects(storage.statFile(row.path + '.partial'));
-  await copies.executeCopy(journal.claimCopy(), engine.verifyEncrypted);
+  await copies.executeCopy(journal.claimCopy(Date.now() + 5000), engine.verifyEncrypted);
   assert.equal(copyRow(backupId, bucket).status, 'verified');
 });
 
@@ -527,4 +527,35 @@ test('copy recovery waits while the deployment hold is set', async () => {
   finally { db.prepare("DELETE FROM settings WHERE key='deployment_hold'").run(); }
   await copies.maintainCopies(Date.now(), engine.verifyEncrypted);
   assert.equal(copyRow(backupId, bucket).status, 'pending', 'resumed by maintenance once the hold is released');
+});
+
+test('a copy never steps aside for a queued job that cannot start, and steps aside at most maxYields times', async () => {
+  const { siteId } = site('blocked.example');
+  const bucket = s3Target(r2, { name: 'Blocked-job bucket', prefix: 'blocked' });
+  setCopies(siteId, [{ targetId: bucket, retention: null }]);
+  const backupId = await publish(siteId);
+  db.prepare("UPDATE backup_copies SET next_attempt_at=? WHERE status IN ('pending','failed') AND backup_id<>?").run(Date.now() + 86400000, backupId);
+  // A queued backup on a server whose previous job needs recovery: claimJob would not start it.
+  const stuck = randomUUID(), queued = randomUUID();
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','recovery_required','recovery_required',?)").run(stuck, siteId, stamp());
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(queued, siteId, stamp());
+  const saved = copies.copyHooks.yieldCheckBytes; copies.copyHooks.yieldCheckBytes = 1;
+  try {
+    assert.equal((await import('../src/job-claim.js')).claimableJobExists(), false, 'the queued job is blocked');
+    const copy = journal.claimCopy(); assert.equal(copy.backup_id, backupId);
+    assert.equal((await copies.executeCopy(copy, engine.verifyEncrypted)).status, 'verified', 'the copy completes instead of looping');
+    // A claimable job: the copy steps aside, waits for the next tick, and after maxYields finishes regardless.
+    db.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(stuck);
+    const other = await publish(siteId);
+    db.prepare("UPDATE backup_copies SET next_attempt_at=? WHERE status IN ('pending','failed') AND backup_id<>?").run(Date.now() + 86400000, other);
+    const results = [];
+    for (let round = 0; round < 6; round++) {
+      const next = journal.claimCopy(Date.now() + 3600000); if (!next) break;
+      results.push((await copies.executeCopy(next, engine.verifyEncrypted)).status);
+      if (results.at(-1) === 'yielded') assert.ok(copyRow(other, bucket).next_attempt_at > Date.now(), 'due at the next tick, not at once');
+      if (results.at(-1) === 'verified') break;
+    }
+    assert.deepEqual(results, ['yielded', 'yielded', 'yielded', 'verified']);
+    assert.equal(copyRow(other, bucket).attempts, 0);
+  } finally { copies.copyHooks.yieldCheckBytes = saved; db.prepare("UPDATE jobs SET status='failed' WHERE id IN (?,?)").run(stuck, queued); }
 });

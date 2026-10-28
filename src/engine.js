@@ -12,7 +12,7 @@ import { siteMainStorage, targetSummary, targetIdOfPath } from './site-storage.j
 import { retainCopies } from './backup-copies.js';
 import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
-import { HELD as TEST_HELD } from './restore-tests/hold.js';
+import { CLAIMABLE_JOB_SQL } from './job-claim.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -426,7 +426,7 @@ export function claimJob(){
   // A job occupies its target (or its site's) server and, for a site move, also its source server. A started restore
   // test holds its test server (src/restore-tests/hold.js) for every job but its own steps. Restore test steps go
   // after every other queued job, so backups go first.
-  const job=db.prepare(`SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued','test_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE ${TEST_HELD} AND t.server_id IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) AND NOT (j.type='restore-test' AND json_extract(j.details,'$.testId')=t.id)) ORDER BY j.type='restore-test',j.created_at LIMIT 1`).get();
+  const job=db.prepare(CLAIMABLE_JOB_SQL).get();
   // Site-move and restore-test jobs use their own statuses so a release without them (for example after a rollback)
   // never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.

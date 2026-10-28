@@ -121,9 +121,8 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   retention may remove the row; it never touches copy files. 2.11 cleans up those orphaned copies when it starts again.
 - Restore uses the main copy, then verified copies newest first; the owner may choose a copy (`sourceTargetId`).
 - A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or a site uses
-  it. "Move them" is deferred: storage migration re-lays files out inside one destination only, so the copies have to be
-  deleted first (`POST /api/storage-targets/:id/copies/delete`). Deleting copies of backups that exist only there needs
-  `includeLastPackages: true`; pinned ones need `includePinned: true`.
+  it. Its copies are deleted first (`POST /api/storage-targets/:id/copies/delete`). Deleting copies of backups that exist
+  only there needs `includeLastPackages: true`; pinned ones need `includePinned: true`.
 - Every other destination that holds packages (copies, or a site's main destination) also receives the newest recovery
   kit. A kit there is removed only after a newer one was written to that same destination.
 - Real copies and restores count as validated only after the Linux integration suite passes.

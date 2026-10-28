@@ -94,8 +94,8 @@ storageTargets.post('/s3/connect',rateLimit('storage-connect',10),async(req,res)
  res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
 });
 // Removing a destination (docs/backup-copies.md, "Safety rules"). Refused while it holds copies, is a site's main or copy
-// destination, holds main packages or recovery kits, or is the default. "Move them" is not offered: storage migration
-// only re-lays files out within one destination, so copies held here have to be deleted first (POST /:id/copies/delete).
+// destination, holds main packages or recovery kits, or is the default. Copies held here are deleted first
+// (POST /:id/copies/delete).
 function knownTarget(req){const target=db.prepare('SELECT id,name FROM storage_targets WHERE id=?').get(req.params.id);if(!target)throw Object.assign(new Error('Storage destination not found.'),{status:404});return target;}
 storageTargets.get('/:id/usage',(req,res)=>{const target=knownTarget(req);res.json(destinationUsage(target.id));});
 storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
@@ -103,7 +103,7 @@ storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
  const removed=transaction(()=>{
   const usage=destinationUsage(target.id);
   if(destinationInUse(usage)){
-   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first; moving copies to another destination is not supported)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'site':'sites'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'site copies':'sites copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
+   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'site':'sites'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'site copies':'sites copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
    return {usage,refused:`${target.name} cannot be removed: ${reasons.join('; ')}.`};
   }
   db.prepare('DELETE FROM storage_targets WHERE id=?').run(target.id);

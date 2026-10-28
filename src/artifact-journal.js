@@ -88,13 +88,15 @@ export async function finishDeletion(backupId){
  const kept=new Set(keptCopies(backupId).map(copy=>copy.target_id));
  try{if(await fileExists(backup.path))await removeFile(backup.path);}
  catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};}
+ // Recorded at once: if a copy deletion below throws, startup checks read the copy, not the gone main package.
+ const verified=db.prepare("SELECT target_id FROM backup_copies WHERE backup_id=? AND status='verified' AND (delete_state IS NULL OR delete_state='deferred') ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(backupId);
+ if(verified)markMainRemoved(backup,verified.target_id);
  for(const copy of liveCopies(backupId)){
   if(kept.has(copy.target_id))continue;
   if(copy.status!=='verified'){await removeCopyFiles(copy,{partialOnly:true});markCopyDeleted(copy);continue;}
   if(!(await deleteCopyFiles(copy)).deferred)markCopyDeleted(copy);
  }
- const survivor=db.prepare("SELECT target_id FROM backup_copies WHERE backup_id=? AND status='verified' AND (delete_state IS NULL OR delete_state='deferred') ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(backupId);
- if(survivor){markMainRemoved(backup,survivor.target_id);return {mainRemoved:true};}
+ if(db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(backupId))return {mainRemoved:true};
  transaction(()=>dropBackupRow(backupId));
 }
 function dropBackupRow(backupId){
@@ -198,9 +200,10 @@ export function failCopy(copy,code,at=Date.now()){
   return plan;
  });
 }
-// A copy step that stepped aside for a queued site job: due again at once, no attempt counted, no alert.
-export function yieldCopy(copy){
- const changed=db.prepare("UPDATE backup_copies SET status=CASE WHEN attempts>0 THEN 'failed' ELSE 'pending' END,next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=? AND status='copying'").run(Date.now(),now(),copy.backup_id,copy.target_id).changes;
+// A copy step that stepped aside for a queued site job: due again at `at` (the next worker tick), no attempt counted,
+// no alert.
+export function yieldCopy(copy,at=Date.now()){
+ const changed=db.prepare("UPDATE backup_copies SET status=CASE WHEN attempts>0 THEN 'failed' ELSE 'pending' END,next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=? AND status='copying'").run(at,now(),copy.backup_id,copy.target_id).changes;
  if(changed)audit('worker','backup.copy_yielded',copy.backup_id,{targetId:copy.target_id});
  return changed===1;
 }

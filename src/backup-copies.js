@@ -7,18 +7,21 @@ import { Transform } from 'node:stream';
 import { db,audit,transaction } from './db.js';
 import { targetOptions,adapters,openRead,openWrite,makeDirectory,syncFile,renameFile,storageCapacity } from './storage.js';
 import { fileExists,completeCopy,failCopy,yieldCopy,authenticateCopyFile,removeCopyFiles,deleteCopyFiles,settleAfterCopyRemoval,markCopyDeleted,deletionBlocked,readLeaseHeld,recoverInterruptedCopies } from './artifact-journal.js';
+import { claimableJobExists } from './job-claim.js';
 import { siteCopyTargets,effectiveRetention,sameLocation,targetIdOfPath,targetSummary } from './site-storage.js';
 
 const now=()=>new Date().toISOString();
 const GiB=1024**3;
 class CopyFailure extends Error{constructor(code){super(code);this.code=code;}}
 class CopyYield extends Error{}
-// A long copy must not hold up a scheduled backup: every `yieldCheckBytes` it looks (one indexed query) for a queued
-// site job and, if there is one, stops, removes its .partial and is due again at once, without counting an attempt.
-const siteJobWaiting=()=>Boolean(db.prepare("SELECT 1 FROM jobs WHERE status IN ('queued','move_queued') LIMIT 1").get());
+// A long copy must not hold up a scheduled backup: every `yieldCheckBytes` it checks whether claimJob would start a
+// queued job now (the same query, src/job-claim.js) and, if so, stops, removes its .partial and waits for the next
+// worker tick, without counting an attempt. A job that cannot start (its server is busy or needs recovery) is never
+// waited for, and a copy steps aside at most `maxYields` times per attempt, then finishes regardless.
+const yields=new Map(),yieldKey=copy=>copy.backup_id+'\0'+copy.target_id;
 // Capacity of the copy destination before each copy: enough room for the package and the 1 GiB every destination keeps
 // free. Object storage reports no fixed size and is checked by the write itself.
-export const copyHooks={capacity:options=>storageCapacity({options}),yieldCheckBytes:64*1024**2};
+export const copyHooks={capacity:options=>storageCapacity({options}),yieldCheckBytes:64*1024**2,maxYields:3,yieldDelayMs:3000};
 async function checkCopyCapacity(options,size){
  const capacity=await copyHooks.capacity(options);
  if(capacity.unbounded)return;
@@ -45,18 +48,19 @@ export async function executeCopy(copy,verify){
   try{input=await openRead(copy.source);}catch{throw new CopyFailure('source');}
   let output;
   let sinceCheck=0;
-  const watch=new Transform({transform(chunk,_e,cb){sinceCheck+=chunk.length;if(sinceCheck>=copyHooks.yieldCheckBytes){sinceCheck=0;if(siteJobWaiting())return cb(new CopyYield());}cb(null,chunk);}});
+  const watch=new Transform({transform(chunk,_e,cb){sinceCheck+=chunk.length;if(sinceCheck>=copyHooks.yieldCheckBytes){sinceCheck=0;if((yields.get(yieldKey(copy))??0)<copyHooks.maxYields&&claimableJobExists())return cb(new CopyYield());}cb(null,chunk);}});
   try{output=await openWrite(temporary);await pipeline(input,watch,output);}
   catch(error){input.destroy();output?.destroy();if(error instanceof CopyFailure||error instanceof CopyYield)throw error;throw new CopyFailure('unreachable');}
   await syncFile(temporary);
   if(!await authenticateCopyFile(temporary,copy,verify)){await removeCopyFiles(copy,{partialOnly:true});throw new CopyFailure('checksum');}
   await renameFile(temporary,copy.path);await syncFile(copy.path);
-  completeCopy(copy);
+  completeCopy(copy);yields.delete(yieldKey(copy));
   await retainCopies(copy.site_id).catch(()=>audit('worker','retention.failed',copy.site_id,{copies:true}));
   return {status:'verified'};
  }catch(error){
   await removeCopyFiles(copy,{partialOnly:true}).catch(()=>{});
-  if(error instanceof CopyYield){yieldCopy(copy);return {status:'yielded'};}
+  if(error instanceof CopyYield){yields.set(yieldKey(copy),(yields.get(yieldKey(copy))??0)+1);yieldCopy(copy,Date.now()+copyHooks.yieldDelayMs);return {status:'yielded'};}
+  yields.delete(yieldKey(copy));
   const plan=failCopy(copy,error instanceof CopyFailure?error.code:'unreachable');
   // Destination names only: the log line never holds a host, path, key or provider message.
   console.error(`Copy of backup ${copy.backup_id} to ${targetSummary(copy.target_id)?.name??'a removed destination'} failed (${error instanceof CopyFailure?error.code:'unreachable'}); ${plan?.status==='gave_up'?'gave up after 7 days':'retrying later'}.`);
