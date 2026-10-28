@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- The S3 beta note now says what has really been tested: a real MinIO S3 server, not yet full backups and restores or cloud providers.
+
 ## [2.10.1] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.10.1.md](docs/releases/2026-10-28-v2.10.1.md).

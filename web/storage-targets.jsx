@@ -56,7 +56,7 @@ function Usage({used,capacity}) {
  return <div className="storage-usage"><div className="storage-usage-text"><span>{percent==null?'Used by DockNest backups':'Capacity used'}</span><b>{percent==null?fmt(used):percent+'% · '+fmt(used)+' of '+fmt(capacity)}</b></div>{percent!=null&&<progress value={percent} max="100" aria-label="Capacity used"/>}</div>;
 }
 
-const BETA='Tested against a simulated S3 server only. Run a restore test before relying on it.';
+const BETA='Tested against a real MinIO S3 server, not yet with full backups and restores or cloud providers. Run a restore test before relying on it.';
 const Beta=()=><span className="badge beta-note" title={BETA}>Beta</span>;
 const initialS3={region:'us-east-1',regionTouched:false,lock:false,lockMode:'GOVERNANCE',lockDays:30,confirmed:false};
 const lockModeHelp={GOVERNANCE:'Administrators with a special permission can remove locked backups early.',COMPLIANCE:'Nobody can remove locked backups early, not even the account owner. You pay for storage until the date passes.'};

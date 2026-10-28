@@ -49,6 +49,6 @@ test('S3 stays labelled beta until real-provider validation is recorded',async t
  if(validated)return t.skip('S3 validation recorded');
  const docs=await readFile(new URL('../docs/storage-backends.md',import.meta.url),'utf8'),readme=await readFile(new URL('../README.md',import.meta.url),'utf8'),ui=await readFile(new URL('../web/storage-targets.jsx',import.meta.url),'utf8');
  assert.match(docs.split('\n').find(line=>line.startsWith('| S3-compatible |')),/^\| S3-compatible \| Beta\./);
- assert.equal(readme.split('S3-compatible storage is in beta: it is tested against a simulated S3 endpoint, not yet against real providers').length-1,2);
- assert.match(ui,/Tested against a simulated S3 server only\. Run a restore test before relying on it\./);
+ assert.equal(readme.split('S3-compatible storage is in beta: it is tested against a real MinIO S3 server, not yet with full backups and restores or with cloud providers such as Cloudflare R2').length-1,2);
+ assert.match(ui,/Tested against a real MinIO S3 server, not yet with full backups and restores or cloud providers\. Run a restore test before relying on it\./);
 });

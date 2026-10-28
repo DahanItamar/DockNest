@@ -5,7 +5,7 @@ DockNest writes encrypted backup packages (`DBM1`, see [backup format](backup-fo
 | Backend | Status | Requirements |
 | :-- | :-- | :-- |
 | SFTP | Supported. Real backup and restore validated by the Linux integration suite. | `fsync@openssh.com` file sync, atomic rename, a pinned SHA256 host key and a dedicated directory. |
-| S3-compatible | Beta. Backup, restore and Object Lock have been tested against an in-process fake S3 endpoint only. Not yet validated against a real provider or by the Linux integration suite. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
+| S3-compatible | Beta. Uploads, byte ranges, multipart, conditional copy and Object Lock are tested in CI against a real MinIO server (job `s3-integration`). Not yet validated with a full backup and restore in the Linux integration suite, or against a cloud provider. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
 | Local directory | Tests and explicitly allowed deployments only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). | A directory on the DockNest server. It is lost with that server. |
 
 > [!WARNING]
