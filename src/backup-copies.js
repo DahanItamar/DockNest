@@ -136,7 +136,7 @@ export function backupCopyViews(backups){
  if(ids.length){
   const list=JSON.stringify(ids);
   for(const row of db.prepare('SELECT backup_id,original_path FROM backup_main_removed WHERE backup_id IN (SELECT value FROM json_each(?))').all(list))removed.set(row.backup_id,row.original_path);
-  for(const row of db.prepare("SELECT * FROM backup_copies WHERE status<>'deleted' AND backup_id IN (SELECT value FROM json_each(?)) ORDER BY created_at,target_id").all(list))(copies.get(row.backup_id)??copies.set(row.backup_id,[]).get(row.backup_id)).push(row);
+  for(const row of db.prepare("SELECT * FROM backup_copies WHERE status<>'deleted' AND backup_id IN (SELECT value FROM json_each(?)) ORDER BY rowid").all(list))(copies.get(row.backup_id)??copies.set(row.backup_id,[]).get(row.backup_id)).push(row);
  }
  const names=new Map(),summary=targetId=>{if(!names.has(targetId))names.set(targetId,targetSummary(targetId)??{id:targetId,name:'Removed destination',mode:null});return names.get(targetId);};
  for(const backup of backups){
