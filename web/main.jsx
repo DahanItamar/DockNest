@@ -77,7 +77,9 @@ function Empty({icon:Icon=Archive,title,children,action}){return <div className=
 function Modal({title,onClose,children,className}){const ref=useRef();useEffect(()=>{ref.current.showModal();return()=>ref.current?.close();},[]);return <dialog ref={ref} className={className} aria-labelledby="dialog-title" onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}}><div className="modal-head"><h2 id="dialog-title">{title}</h2><button className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>{children}</dialog>;}
 function Auth({status,onAuth}) {
  const [error,setError]=useState(''),[bad,setBad]=useState(false),[busy,setBusy]=useState(false),[challenge,setChallenge]=useState(null),[code,setCode]=useState(''),[recovery,setRecovery]=useState(false),[fails,setFails]=useState(0),[pw,setPw]=useState('');
- const reset=()=>{setChallenge(null);setCode('');setRecovery(false);setFails(0);setError('');setBad(false)};
+ const refocus=useRef(false);
+ useEffect(()=>{if(!challenge&&refocus.current){refocus.current=false;document.querySelector('input[name=password]')?.focus()}},[challenge]);
+ const reset=()=>{refocus.current=true;setChallenge(null);setCode('');setRecovery(false);setFails(0);setError('');setBad(false)};
  async function login(e){
   e.preventDefault();setBusy(true);setError('');setBad(false);
   const f=Object.fromEntries(new FormData(e.target));
@@ -89,7 +91,7 @@ function Auth({status,onAuth}) {
   if(busy)return;
   setBusy(true);setError('');setBad(false);
   try{const r=await api('/auth/verify',{challenge,code:value.trim()});csrf=r.csrfToken;onAuth({authenticated:true,...r});}
-  catch(e){setError(authErrorMessage(e));setBad(e.status===401);setCode('');setFails(n=>n+1);}
+  catch(e){setError(authErrorMessage(e));setBad(e.status===401);setCode('');if(e.status===401)setFails(n=>n+1);}
   finally{setBusy(false);}
  }
  const quiet=(off)=>({'aria-disabled':off?'true':undefined,className:'primary wide'+(off?' is-quiet':'')});

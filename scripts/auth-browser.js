@@ -233,6 +233,7 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  await codeInput(page).waitFor();
  await page.getByRole('button',{name:'Back',exact:true}).click();
  await page.getByRole('heading',{name:'Sign in',exact:true}).waitFor();
+ await wait(page,()=>document.activeElement&&document.activeElement.getAttribute('name')==='password');
  assert.equal(await password(page).inputValue(),'','Back returns to step 1 with the challenge dropped');
  assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).count(),1);
  await context.close();
@@ -275,6 +276,38 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  assert.equal(await colour(page,'.otp-caret','animationName'),'otp-blink');
  await codeInput(page).pressSequentially('3456');await page.getByRole('alert').waitFor();
  assert.equal(await colour(page,'.otp-boxes','animationName'),'otp-shake');
+ await context.close();
+}
+{ // empty password: Continue does nothing silently, native validation flags the field and no request is sent
+ const {context,page}=await open();let logins=0;await page.route('**/api/auth/login',r=>{logins++;return r.fulfill({json:{challenge:'c'.repeat(43)}})});
+ await signIn(page);
+ assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).getAttribute('aria-disabled'),'true');
+ await page.getByRole('button',{name:'Continue',exact:true}).click({force:true});
+ await wait(page,()=>document.activeElement===document.querySelector('input[name=password]'));
+ assert.equal(await password(page).evaluate(e=>e.validity.valueMissing),true,'the empty field is flagged');
+ assert.equal(logins,0,'no login request for an empty password');
+ await context.close();
+}
+{ // network or rate-limit errors do not count as failed codes
+ const {context,page}=await open({verify:429});
+ await signIn(page);await step2(page);
+ for(let i=0;i<3;i++){await codeInput(page).pressSequentially('111111');await page.getByRole('alert').getByText('Too many attempts. Try again later.',{exact:true}).waitFor();await wait(page,()=>document.querySelector('.otp-input').value===''&&!document.querySelector('.otp-input').disabled);}
+ assert.equal(await page.getByRole('button',{name:'Back',exact:true}).count(),1,'still Back after three 429s');
+ await context.close();
+}
+for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1) and the swap link and Back are 44px targets on a phone
+ const {context,page}=await open({theme,width:390,height:844});
+ await signIn(page);await step2(page);
+ const r=await page.locator('button.primary.wide').evaluate(b=>{
+  const parse=c=>{const m=c.match(/[\d.]+/g).map(Number);return m.slice(0,3)};
+  const surface=parse(getComputedStyle(document.querySelector('.lg-left')).backgroundColor);
+  const op=Number(getComputedStyle(b).opacity),bg=parse(getComputedStyle(b).backgroundColor),fg=parse(getComputedStyle(b).color);
+  const mix=(c)=>c.map((v,i)=>v*op+surface[i]*(1-op));
+  const lum=c=>{const a=c.map(v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*a[0]+.7152*a[1]+.0722*a[2]};
+  const l1=lum(mix(bg)),l2=lum(mix(fg));return (Math.max(l1,l2)+.05)/(Math.min(l1,l2)+.05)});
+ assert.ok(r>=4.5,theme+': faded primary contrast '+r.toFixed(2));
+ assert.ok((await page.locator('.lg-alt button').boundingBox()).height>=44,theme+': swap link is a 44px target');
+ assert.ok((await page.locator('.lg-back').boundingBox()).height>=44,theme+': Back is a 44px target');
  await context.close();
 }
 { // number inputs show no spin buttons anywhere
