@@ -8,7 +8,7 @@ export const PROVIDER_GROUPS=[
    fingerprint:'Copy the SHA256 fingerprint from the Storage Box overview in Hetzner Console.',
    steps:'Open Hetzner Console, select your Storage Box, and find its SSH host fingerprints in the overview. Copy the SHA256 fingerprint. This is public server identification, not your password or private key.',
    note:'Port 23 needs SSH support turned on for the Storage Box in Hetzner Console.'},
-  {id:'rsyncnet',label:'rsync.net',kind:'sftp',port:22,host:'xxxx.rsync.net',username:'',root:'/data/docknest',
+  {id:'rsyncnet',label:'rsync.net',kind:'sftp',port:22,host:'xxxx.rsync.net',username:'',root:'/home/docknest',
    fingerprint:'Compare it with the host keys rsync.net publishes.',
    steps:'rsync.net publishes the SSH host keys of its servers in its documentation. Copy the SHA256 fingerprint for your server. This is public server identification, not your password or private key.'},
   {id:'sftp',label:'Other SFTP server',kind:'sftp',port:22,host:'sftp.example.com',username:'',root:'/home/docknest',

@@ -109,6 +109,27 @@ try{
  await choose('Own server or NAS');
  assert.equal(await form.locator('input[name="port"]').inputValue(),'22');
  await form.locator('summary').click();await form.getByText('ssh-keyscan -t ed25519',{exact:false}).waitFor();
+ // A typed port and hostname survive a switch between SFTP providers; defaults only fill untouched fields.
+ await form.locator('input[name="host"]').fill('my.nas.lan');await form.locator('input[name="port"]').fill('2222');
+ await choose('Other SFTP server');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'2222');assert.equal(await form.locator('input[name="host"]').inputValue(),'my.nas.lan');
+ await form.locator('input[name="port"]').fill('22');await choose('Hetzner Storage Box');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'22','A port the user typed is kept even when it equals another default');
+ // Secrets never survive a type switch (SFTP <-> S3).
+ await form.locator('input[name="password"]').fill('typed-sftp-secret');
+ await choose('Amazon S3');
+ await choose('Own server or NAS');
+ assert.equal(await form.locator('input[name="password"]').inputValue(),'');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'22');
+ await choose('Cloudflare R2');await form.locator('input[name="secretAccessKey"]').fill('typed-s3-secret');await form.locator('input[name="accessKeyId"]').fill('typed-key');
+ await choose('Own server or NAS');await choose('Cloudflare R2');
+ assert.equal(await form.locator('input[name="secretAccessKey"]').inputValue(),'');assert.equal(await form.locator('input[name="accessKeyId"]').inputValue(),'');
+ // A hand-edited AWS endpoint is not overwritten by a region change; emptying it lets the region build it again.
+ await choose('Amazon S3');
+ await form.locator('input[name="endpoint"]').fill('https://s3.custom.example.com');await form.locator('input[name="region"]').fill('eu-west-1');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.custom.example.com');
+ await form.locator('input[name="endpoint"]').fill('');await form.locator('input[name="region"]').fill('eu-west-2');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.eu-west-2.amazonaws.com');
  await choose('Cloudflare R2');
  assert.equal(await form.locator('input[name="region"]').inputValue(),'auto');
  assert.equal(await form.locator('select[name="addressing"]').inputValue(),'path');
