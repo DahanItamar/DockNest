@@ -630,7 +630,7 @@ test('template: every event has a title, a catalogue reason, the names the owner
     'move.needs_you': ['Move waiting for you', 'The move needs your decision. Open DockNest to continue.'], 'server.unreachable': ['Server unreachable', 'The server has not answered. Open DockNest to check it.'], 'server.disk_low': ['Low disk space', '2.1 GB free, 95% used. Open DockNest to review.'],
     'restore_test.failed': ['Restore test failed', 'The restore test failed. Open DockNest to see why.'], 'restore_test.couldnt_run': ["Restore test couldn't run", 'The restore test could not run. Open DockNest to see why.'], 'restore_test.recovered': ['Restore test passed again', 'The restore test passed again.'],
     'restore_test.needs_you': ['Restore test needs you', 'A restore test could not clean up its test server. Open DockNest to check it.'], 'update.available': ['Update available', 'DockNest 2.10.0 is available. Open DockNest to update.'],
-    'backup.copy_failed': ['Backup copy failed', 'The copy to the copy destination did not finish. DockNest retries automatically.'], 'backup.copy_recovered': ['Backup copy saved', 'The copy to the copy destination is saved now.'],
+    'backup.copy_failed': ['Backup copy failed', 'The copy to the copy destination did not finish. DockNest retries automatically.'], 'backup.copy_recovered': ['Backup copy saved', 'The copy to the copy destination is saved now.'], 'backup.copy_gave_up': ['Backup copy stopped', 'DockNest stopped retrying the copy to the copy destination after 7 days. Open DockNest to retry it.'],
   };
   assert.deepEqual(Object.keys(expected).sort(), [...events.EVENTS].sort(), 'the catalogue covers every event');
   for (const [type, [title, reason]] of Object.entries(expected)) {

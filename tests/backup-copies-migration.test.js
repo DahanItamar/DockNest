@@ -157,3 +157,36 @@ test('the recovery kit goes to every destination that holds copies', async () =>
   assert.deepEqual(kitCopyDestinations(main), [copyTarget]);
   assert.deepEqual(kitCopyDestinations(copyTarget), [], 'never twice to the kit\'s own destination');
 });
+
+test('a backup living only on its copy: storage migration skips its gone main package; retention and restore still use the copy', async () => {
+  const { bytes, path } = await legacyBackup('copyonly');
+  const copyPath = siteStorage.copyPathFor(copyTarget, { id: 'server', name: 'Production' }, { id: 'site', name: 'Shop' }, path);
+  await pipeline(Readable.from([bytes]), await storage.openWrite(copyPath));
+  db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,attempts,verified_at,created_at,updated_at) VALUES('copyonly',?,?,'verified',0,?,?,?)").run(copyTarget, copyPath, at, at, at);
+  db.prepare("INSERT INTO backup_main_removed VALUES('copyonly',?,?)").run(path, at);
+  sftp.files.delete(path.slice('sftp:storage:'.length));
+  db.prepare("INSERT INTO settings VALUES('deployment_hold','true') ON CONFLICT(key) DO UPDATE SET value='true'").run();
+  try { await migrateStorage(); } finally { db.prepare("DELETE FROM settings WHERE key='deployment_hold'").run(); }
+  assert.equal(db.prepare("SELECT path FROM backups WHERE id='copyonly'").get().path, path, 'the main path is kept, not moved');
+  assert.equal(db.prepare("SELECT path FROM backup_copies WHERE backup_id='copyonly'").get().path, copyPath);
+  await engine.retain('site');
+  assert.ok(db.prepare("SELECT 1 FROM backups WHERE id='copyonly'").get(), 'kept by the copy destination count');
+  const saved = engine.transport.uploadStream, received = [];
+  engine.transport.uploadStream = async (_server, stream) => { for await (const chunk of stream) received.push(chunk); };
+  try { assert.equal((await engine.uploadBackupTo({ id: 'server' }, 'copyonly', randomUUID(), { prepare: async () => ({ remotePath: '/tmp/x' }) })).source.role, 'copy'); }
+  finally { engine.transport.uploadStream = saved; }
+  assert.ok(received.length);
+});
+
+test('recovery kit copies are pruned per destination, only once a newer kit was written there', async () => {
+  const { pruneKitCopies } = await import('../src/self-backup.js');
+  const kit = (target, root, run) => `${target === main ? 'sftp' : 's3'}:${target}:${root}/BACKUP/docknest-recovery/docknest_${'a'.repeat(16)}_2026-10-28_00-00-0${run}Z--${randomUUID()}.dkit`;
+  const rows = [[copyTarget, '/docknest', 1], [main, '/backups', 1], [copyTarget, '/docknest', 2]].map(([target, root, run]) => ({ target, file: kit(target, root, run), run: randomUUID() }));
+  await storage.makeDirectory('sftp:storage:/backups/BACKUP/docknest-recovery');
+  for (const row of rows) { await pipeline(Readable.from([randomBytes(64)]), await storage.openWrite(row.file)); db.prepare('INSERT INTO manager_backup_copies VALUES(?,?,?,?)').run(row.run, row.target, row.file, at); }
+  // Run 2's upload to the SFTP destination failed (no row): its run-1 kit stays.
+  await pruneKitCopies();
+  await assert.rejects(storage.statFile(rows[0].file), 'the older kit on the bucket is removed');
+  assert.ok(await storage.statFile(rows[1].file)); assert.ok(await storage.statFile(rows[2].file));
+  assert.deepEqual(db.prepare('SELECT target_id FROM manager_backup_copies ORDER BY rowid').all().map(row => row.target_id), [main, copyTarget]);
+});

@@ -70,6 +70,7 @@ saved token can never be pointed at a new server by editing the server alone.
 | `restore_test.failed`, `restore_test.couldnt_run`, `restore_test.recovered`, `restore_test.needs_you` | Restore tests, see [restore-tests.md](restore-tests.md) | Once per test |
 | `backup.copy_failed` | The first failed attempt of a backup copy (DockNest keeps retrying for 7 days) | Once per copy |
 | `backup.copy_recovered` | A copy that failed earlier was saved | Once per copy |
+| `backup.copy_gave_up` | A copy still failed after 7 days of retries (it can be retried in DockNest) | Once per copy |
 
 New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.

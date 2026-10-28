@@ -116,6 +116,9 @@ export function updateSiteStorage(siteId,body,actor){
   const previous=new Map(siteCopyTargets(siteId).map(row=>[row.target_id,row]));
   db.prepare('DELETE FROM site_storage_copies WHERE site_id=?').run(siteId);
   for(const copy of copies)db.prepare('INSERT INTO site_storage_copies(site_id,target_id,retention,created_at) VALUES(?,?,?,?)').run(siteId,copy.targetId,copy.retention??null,previous.get(copy.targetId)?.created_at??at);
+  // Copies not made yet to a destination the site no longer copies to are cancelled. Made copies stay, under the site's count.
+  const listed=new Set(copies.map(copy=>copy.targetId));
+  for(const targetId of previous.keys())if(!listed.has(targetId))db.prepare("UPDATE backup_copies SET status='deleted',next_attempt_at=NULL,updated_at=? WHERE target_id=? AND status IN ('pending','failed','gave_up') AND backup_id IN (SELECT id FROM backups WHERE site_id=?)").run(at,targetId,siteId);
   // Names only: the audit trail never holds a credential or connection detail.
   audit(actor,'site.storage_update',siteId,{mainTargetId,copies:copies.map(copy=>({targetId:copy.targetId,retention:copy.retention??null}))});
  });

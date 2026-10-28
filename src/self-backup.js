@@ -82,7 +82,7 @@ export async function pruneSelfBackups(){
    if(row.id!==lastAttempt?.id)db.prepare('DELETE FROM manager_backups WHERE id=?').run(row.id);
   }catch{/* Keep the previous copy and retry cleanup later. */}
  }
- if(latest)await pruneKitCopies(latest.id);
+ await pruneKitCopies();
 }
 function validateRemotePath(row){
  const selected=targetOptions(row.target_id),prefix=targetPrefix(selected),runId=z.uuid().parse(row.id);
@@ -137,9 +137,10 @@ async function copyKitToCopyDestinations(run,file,evidence,mainTargetId){
   }catch{audit('worker','manager-backup.copy_failed',run.id,{targetId});}
  }
 }
-// Only the newest kit is kept on each copy destination, as on the main one.
-async function pruneKitCopies(latestId){
- for(const row of db.prepare('SELECT * FROM manager_backup_copies WHERE backup_id<>?').all(latestId||'')){
+// Per destination: a kit copy is removed only once a newer kit was written there successfully (a row exists only after
+// its upload was verified), so a failed upload never leaves a destination without a kit.
+export async function pruneKitCopies(){
+ for(const row of db.prepare('SELECT * FROM manager_backup_copies m WHERE EXISTS(SELECT 1 FROM manager_backup_copies n WHERE n.target_id=m.target_id AND n.rowid>m.rowid)').all()){
   try{
    const selected=targetOptions(row.target_id),recovery=targetPrefix(selected)+backupRoot(selected.root)+'/docknest-recovery/';
    if(!row.path.startsWith(recovery)||!/^docknest_[a-f0-9]{16}_[0-9TZ_-]+--[0-9a-f-]{36}\.dkit$/.test(row.path.slice(recovery.length)))throw new Error('Invalid manager backup copy path');

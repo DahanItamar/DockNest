@@ -49,7 +49,7 @@ storageTargets.get('/:id/tree',(req,res)=>{
  const prefix=targetPrefix({mode:targetMode(target),id:target.id});
  const rows=db.prepare(`SELECT b.id,b.captured_at,b.size,b.pinned,b.verified,b.path,s.id AS site_id,s.name AS site_name,v.id AS server_id,v.name AS server_name
  FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id
- WHERE b.path LIKE ? ORDER BY b.captured_at DESC LIMIT 1001`).all(prefix+'%');
+ WHERE b.path LIKE ? AND b.id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY b.captured_at DESC LIMIT 1001`).all(prefix+'%');
  const limited=rows.length>1000;if(limited)rows.pop();
  const servers=new Map();
  for(const row of rows){
@@ -114,9 +114,9 @@ storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
  res.json({id:target.id,removed:true});
 });
 storageTargets.post('/:id/copies/delete',requireRecentAuth,(req,res)=>{
- const target=knownTarget(req),data=z.object({includePinned:z.boolean().default(false)}).parse(req.body??{});
+ const target=knownTarget(req),data=z.object({includePinned:z.boolean().default(false),includeLastPackages:z.boolean().default(false)}).parse(req.body??{});
  try{res.status(202).json(requestDestinationCopyDeletion(target.id,data,req.user.id));}
- catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});throw error;}
+ catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});if(error.code==='last_packages')return res.status(409).json({error:error.message,code:error.code,lastPackages:error.lastPackages});throw error;}
 });
 storageTargets.post('/:id/test',rateLimit('storage-test',10),async(req,res)=>{
  const result=await testStorageTarget(targetOptions(req.params.id));

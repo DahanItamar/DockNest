@@ -79,23 +79,22 @@ export function deferDeletion(backupId,retainUntil=null,at=Date.now()){
 }
 export const deletionDeferred=(backupId,at=Date.now())=>Boolean(db.prepare('SELECT 1 FROM retention_deferrals WHERE backup_id=? AND retry_after>?').get(backupId,at));
 // The main package ages out (site retention). Copies that their own destination still keeps survive it: the main file is
-// removed and backups.path then names the newest kept copy (backup_main_removed records the original). Copies that no
-// destination keeps go with the backup; an Object-Locked copy is kept, still usable, until its lock ends.
+// removed first (Object Lock on it defers everything, as before), then the copies no destination keeps. backups.path keeps
+// naming the main package (docs/backup-copies.md); backup_main_removed marks it gone and packagePath() then reads the
+// newest verified copy. An Object-Locked copy is kept, still usable, until its lock ends.
 export async function finishDeletion(backupId){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)return;
  if(deletionBlocked(backupId)){db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backupId);return;}
- let kept=keptCopies(backupId);
- if(!kept.length){
-  for(const copy of liveCopies(backupId)){
-   if(copy.path===backup.path)continue;
-   if(copy.status!=='verified'){await removeCopyFiles(copy,{partialOnly:true});markCopyDeleted(copy);continue;}
-   if(!(await deleteCopyFiles(copy)).deferred)markCopyDeleted(copy);
-  }
-  kept=db.prepare("SELECT * FROM backup_copies WHERE backup_id=? AND status='verified' AND delete_state='deferred' ORDER BY verified_at DESC,target_id").all(backupId);
- }
+ const kept=new Set(keptCopies(backupId).map(copy=>copy.target_id));
  try{if(await fileExists(backup.path))await removeFile(backup.path);}
  catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};}
- if(kept.length){promote(backup,kept[0]);return {promoted:true};}
+ for(const copy of liveCopies(backupId)){
+  if(kept.has(copy.target_id))continue;
+  if(copy.status!=='verified'){await removeCopyFiles(copy,{partialOnly:true});markCopyDeleted(copy);continue;}
+  if(!(await deleteCopyFiles(copy)).deferred)markCopyDeleted(copy);
+ }
+ const survivor=db.prepare("SELECT target_id FROM backup_copies WHERE backup_id=? AND status='verified' AND (delete_state IS NULL OR delete_state='deferred') ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(backupId);
+ if(survivor){markMainRemoved(backup,survivor.target_id);return {mainRemoved:true};}
  transaction(()=>dropBackupRow(backupId));
 }
 function dropBackupRow(backupId){
@@ -104,16 +103,21 @@ function dropBackupRow(backupId){
  db.prepare('DELETE FROM backup_main_removed WHERE backup_id=?').run(backupId);
  db.prepare("UPDATE backup_copies SET status='deleted',delete_state=NULL,next_attempt_at=NULL,updated_at=? WHERE backup_id=? AND status<>'deleted'").run(now(),backupId);
 }
-// backups.path (and the completed journal entry that startup checks read) moves to a copy that is still kept.
-function promote(backup,copy){
+function markMainRemoved(backup,keptOn){
  transaction(()=>{
   db.prepare('INSERT INTO backup_main_removed(backup_id,original_path,removed_at) VALUES(?,?,?) ON CONFLICT(backup_id) DO NOTHING').run(backup.id,backup.path,now());
-  db.prepare('UPDATE backups SET path=? WHERE id=?').run(copy.path,backup.id);
-  db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(copy.path,backup.id);
   db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backup.id);
   db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(backup.id);
-  audit('worker','backup.main_removed',backup.id,{keptOn:copy.target_id});
+  audit('worker','backup.main_removed',backup.id,{keptOn});
  });
+}
+export const mainRemoved=backupId=>Boolean(db.prepare('SELECT 1 FROM backup_main_removed WHERE backup_id=?').get(backupId));
+// The package to read for a backup: its main copy, or once that aged out, its newest verified copy (one not being
+// deleted first). Download, ZIP export, scrub, restore, restore tests and startup checks all read through this.
+export function packagePath(backup){
+ if(!mainRemoved(backup.id))return backup.path;
+ const copy=db.prepare("SELECT path FROM backup_copies WHERE backup_id=? AND status='verified' AND (delete_state IS NULL OR delete_state='deferred') ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(backup.id);
+ return copy?.path??backup.path;
 }
 
 // ---- Backup copies (docs/backup-copies.md) ----------------------------------------------------------------------------
@@ -160,10 +164,11 @@ export function claimCopy(at=Date.now()){
   const copy=db.prepare(`SELECT c.*,b.checksum,b.size,b.path AS source,b.site_id FROM backup_copies c JOIN backups b ON b.id=c.backup_id
    WHERE c.status IN ('pending','failed') AND c.delete_state IS NULL AND (c.next_attempt_at IS NULL OR c.next_attempt_at<=?)
    AND NOT EXISTS(SELECT 1 FROM retention_operations r WHERE r.backup_id=c.backup_id)
+   AND EXISTS(SELECT 1 FROM site_storage_copies l WHERE l.site_id=b.site_id AND l.target_id=c.target_id)
    ORDER BY b.captured_at,b.id,c.created_at,c.target_id LIMIT 1`).get(at);
   if(!copy)return null;
   if(db.prepare("UPDATE backup_copies SET status='copying',updated_at=? WHERE backup_id=? AND target_id=? AND status=?").run(now(),copy.backup_id,copy.target_id,copy.status).changes!==1)return null;
-  return {...copy,status:'copying'};
+  return {...copy,source:packagePath({id:copy.backup_id,path:copy.source}),status:'copying'};
  });
 }
 const targetNameOf=targetId=>targetSummary(targetId)?.name??'Removed destination';
@@ -193,6 +198,12 @@ export function failCopy(copy,code,at=Date.now()){
   return plan;
  });
 }
+// A copy step that stepped aside for a queued site job: due again at once, no attempt counted, no alert.
+export function yieldCopy(copy){
+ const changed=db.prepare("UPDATE backup_copies SET status=CASE WHEN attempts>0 THEN 'failed' ELSE 'pending' END,next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=? AND status='copying'").run(Date.now(),now(),copy.backup_id,copy.target_id).changes;
+ if(changed)audit('worker','backup.copy_yielded',copy.backup_id,{targetId:copy.target_id});
+ return changed===1;
+}
 // The owner's retry: a fresh 7-day window, due at once.
 export function retryCopy(backupId,targetId,at=Date.now()){
  return transaction(()=>{
@@ -210,8 +221,10 @@ export async function authenticateCopyFile(file,copy,verify){
 }
 // Worker start: a copy step the previous worker did not finish. A published file is adopted only after full
 // authentication, an authenticated .partial is published, and anything else is removed and the copy tried again.
+// Under the deployment hold nothing is touched; the worker's maintenance step tries again once the hold is released.
 export async function recoverInterruptedCopies(verify){
  const result={adopted:0,retried:0,failed:0};
+ if(deploymentHeld(db))return {...result,held:true};
  for(const copy of db.prepare("SELECT c.*,b.checksum,b.size,b.site_id FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE c.status='copying'").all()){
   try{
    const temporary=copy.path+'.partial';
@@ -230,15 +243,15 @@ export async function recoverInterruptedCopies(verify){
  }
  return result;
 }
-// Copies a destination still keeps once the main package goes: verified, on a destination the site still copies to, and
-// among that destination's newest `retention` unpinned copies of the site. Newest verified first.
+// Copies a destination still keeps once the main package goes: verified and among that destination's newest `retention`
+// unpinned copies of the site. A destination the site no longer copies to keeps the site's own count. Newest verified first.
 export function keptCopies(backupId){
  const backup=db.prepare('SELECT id,site_id,captured_at FROM backups WHERE id=?').get(backupId);if(!backup)return [];
  const counts=new Map(siteCopyTargets(backup.site_id).map(row=>[row.target_id,effectiveRetention(backup.site_id,row.retention)]));
  return db.prepare("SELECT * FROM backup_copies WHERE backup_id=? AND status='verified' AND delete_state IS NULL ORDER BY verified_at DESC,target_id").all(backupId).filter(copy=>{
-  if(!counts.has(copy.target_id))return false;
+  const count=counts.get(copy.target_id)??effectiveRetention(backup.site_id,null);
   const newer=db.prepare("SELECT COUNT(*) AS n FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE c.target_id=? AND c.status='verified' AND c.delete_state IS NULL AND b.site_id=? AND b.pinned=0 AND (b.captured_at>? OR (b.captured_at=? AND b.id>?))").get(copy.target_id,backup.site_id,backup.captured_at,backup.captured_at,backup.id).n;
-  return newer<counts.get(copy.target_id);
+  return newer<count;
  });
 }
 export const liveCopies=backupId=>db.prepare("SELECT * FROM backup_copies WHERE backup_id=? AND status<>'deleted' ORDER BY target_id").all(backupId);
@@ -262,23 +275,22 @@ export async function deleteCopyFiles(copy,at=Date.now()){
 export function markCopyDeleted(copy){
  db.prepare("UPDATE backup_copies SET status='deleted',delete_state=NULL,delete_after=NULL,next_attempt_at=NULL,updated_at=? WHERE backup_id=? AND target_id=?").run(now(),copy.backup_id,copy.target_id);
 }
-// After a copy's package is gone: a backup that lived only on copies points at another verified copy, or, with none
-// left, is removed like any backup whose last package is gone.
+// After a copy's package is gone: a backup whose main package already aged out is removed once no verified copy is left.
 export function settleAfterCopyRemoval(copy){
  return transaction(()=>{
   markCopyDeleted(copy);
-  const backup=db.prepare('SELECT id,path FROM backups WHERE id=?').get(copy.backup_id);
-  if(!backup||backup.path!==copy.path)return 'kept';
-  const next=db.prepare("SELECT * FROM backup_copies WHERE backup_id=? AND status='verified' ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(copy.backup_id);
-  if(next){db.prepare('UPDATE backups SET path=? WHERE id=?').run(next.path,backup.id);db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(next.path,backup.id);return 'moved';}
-  dropBackupRow(backup.id);audit('worker','backup.removed',backup.id,{lastCopyOn:copy.target_id});return 'removed';
+  if(!db.prepare('SELECT 1 FROM backups WHERE id=?').get(copy.backup_id)||!mainRemoved(copy.backup_id))return 'kept';
+  if(db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(copy.backup_id))return 'kept';
+  dropBackupRow(copy.backup_id);audit('worker','backup.removed',copy.backup_id,{lastCopyOn:copy.target_id});return 'removed';
  });
 }
 export async function reconcileArtifacts(verify,{checkCompleted=false,onJobCompleted=async()=>{}}={}){
  const result={published:0,deleted:0,pending:0};
  if(checkCompleted){
   for(const operation of db.prepare("SELECT a.* FROM artifact_operations a JOIN backups b ON b.id=a.backup_id WHERE a.state='completed'").all()){
-   try{if((await statFile(operation.published)).size!==operation.size)throw new Error('Published package size changed');}
+   // A main package that aged out under retention is checked where it now lives (its newest verified copy).
+   const file=mainRemoved(operation.backup_id)?packagePath({id:operation.backup_id,path:operation.published}):operation.published;
+   try{if((await statFile(file)).size!==operation.size)throw new Error('Published package size changed');}
    catch{
     transaction(()=>{db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(operation.backup_id);recordVerification(operation.backup_id,'integrity',{status:'failed',method:'startup published package existence and size check unavailable or failed'},operation.job_id);});
     result.pending++;audit('worker','publication.completed_package_review_required',operation.backup_id,{});

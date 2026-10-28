@@ -10,6 +10,7 @@ import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWr
 import { backupFilename } from './backup-layout.js';
 import { siteMainStorage, targetSummary, targetIdOfPath } from './site-storage.js';
 import { retainCopies } from './backup-copies.js';
+import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
 import { HELD as TEST_HELD } from './restore-tests/hold.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
@@ -80,14 +81,14 @@ export function enqueueScrub(backupId,actor='administrator'){
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
- try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
+ try{stage(job.id,'verifying');if(await verifyEncrypted(packagePath(backup))!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
  catch{transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}audit('worker','backup.scrub.failed',backupId,{job:job.id});});}
 }
 // Where a backup can be restored from (docs/backup-copies.md, "Restore"): the main copy first, then its copies, verified
 // ones newest-verified first. A main package that aged out (its copies keep the backup) is listed as missing.
 export function restoreSources(backup){
  const removed=db.prepare('SELECT original_path FROM backup_main_removed WHERE backup_id=?').get(backup.id);
- const mainPath=removed?removed.original_path:backup.path,mainId=targetIdOfPath(mainPath);
+ const mainPath=backup.path,mainId=targetIdOfPath(mainPath); // backups.path always names the main package
  const sources=[{targetId:mainId,name:targetSummary(mainId)?.name??'Removed destination',role:'main',status:removed?'missing':backup.verified?'verified':'failed',verifiedAt:removed?null:backup.created_at,path:removed?null:mainPath}];
  const copies=db.prepare("SELECT target_id,path,status,verified_at FROM backup_copies WHERE backup_id=? AND status<>'deleted' ORDER BY status<>'verified',verified_at DESC,target_id").all(backup.id);
  for(const copy of copies)sources.push({targetId:copy.target_id,name:targetSummary(copy.target_id)?.name??'Removed destination',role:'copy',status:copy.status,verifiedAt:copy.verified_at,path:copy.status==='verified'?copy.path:null});

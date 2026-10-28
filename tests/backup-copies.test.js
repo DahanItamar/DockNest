@@ -178,7 +178,7 @@ test('alerts: backup.copy_failed once and backup.copy_recovered, with the destin
   const { siteId } = site('alerts.example');
   const credential = store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35) } }, 'test');
   const channel = store.createChannel({ kind: 'telegram', name: 'Phone', credentialId: credential.id, config: { chatId: '-1001234567890' } }, 'test');
-  store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: siteId, events: ['backup.copy_failed', 'backup.copy_recovered'] }, 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: siteId, events: ['backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up'] }, 'test');
   db.prepare("INSERT INTO settings VALUES('alerts_cursor',?)").run(JSON.stringify({ jobs: stamp(), moves: stamp(), tests: stamp(), testCleanups: stamp() }));
   assert.equal(detect.detectJobsAndMoves(), 0, 'a cursor from 2.10 starts the copy cursor now');
   const bucket = s3Target(r2, { name: 'Backblaze B2', prefix: 'alerts' });
@@ -196,7 +196,12 @@ test('alerts: backup.copy_failed once and backup.copy_recovered, with the destin
   assert.match(rows[0].message, /^Backup copy failed: alerts\.example to Backblaze B2 at \d\d:\d\d UTC\. DockNest retries automatically\.$/);
   assert.equal(JSON.parse(rows[1].payload).reason, 'The copy to Backblaze B2 is saved now.');
   assert.doesNotMatch(JSON.stringify(rows), /127\.0\.0\.1|AKIA|docknest-r2|BACKUP\//, 'no host, key, bucket or path');
-  assert.ok(events.EVENTS.includes('backup.copy_failed') && events.EVENTS.includes('backup.copy_recovered'));
+  assert.ok(events.EVENTS.includes('backup.copy_failed') && events.EVENTS.includes('backup.copy_recovered') && events.EVENTS.includes('backup.copy_gave_up'));
+  // 7 days of failures end in backup.copy_gave_up, once.
+  db.prepare("UPDATE backup_copies SET status='copying',attempts=30,first_failed_at=? WHERE backup_id=?").run(Date.now() - 8 * 86400000, backupId);
+  assert.equal(journal.failCopy({ backup_id: backupId, target_id: bucket }, 'unreachable').status, 'gave_up');
+  assert.equal(detect.detectJobsAndMoves(), 2, 'a new failure after the recovery, then gave_up');
+  assert.match(db.prepare("SELECT message FROM alert_outbox WHERE event='backup.copy_gave_up'").get().message, /^Backup copy stopped: alerts\.example to Backblaze B2 failed for 7 days/);
 });
 
 test('copy target == main is refused, also through the default and through a second row for the same bucket', async () => {
@@ -253,6 +258,8 @@ test('the main copy ages out while a copy keeps the backup: restore falls back t
   assert.ok(backup, 'the backup lives on its copies');
   await assert.rejects(readFile(original), 'its main package is gone');
   assert.equal(db.prepare('SELECT original_path FROM backup_main_removed WHERE backup_id=?').get(old).original_path, original);
+  assert.equal(backup.path, original, 'backups.path always names the main package');
+  assert.ok([copyRow(old, keep).path, copyRow(old, second).path].includes(journal.packagePath(backup)), 'reads go to a verified copy');
   const sources = engine.restoreSources(backup);
   assert.deepEqual(sources.map(source => [source.role, source.status]), [['main', 'missing'], ['copy', 'verified'], ['copy', 'verified']]);
   assert.ok(sources[1].verifiedAt >= sources[2].verifiedAt, 'newest verified first');
@@ -311,7 +318,8 @@ test('Object Lock on the copy only: the copy deletion is deferred per copy, the 
   const row = copyRow(first, vault);
   assert.equal(row.delete_state, 'deferred'); assert.equal(row.status, 'verified'); assert.ok(row.delete_after > Date.now());
   await assert.rejects(readFile(mainPath), 'the unlocked main package is deleted');
-  assert.equal(db.prepare('SELECT path FROM backups WHERE id=?').get(first).path, copy.path, 'the backup stays usable on its locked copy');
+  assert.equal(db.prepare('SELECT path FROM backups WHERE id=?').get(first).path, mainPath, 'backups.path keeps the main path');
+  assert.equal(journal.packagePath(db.prepare('SELECT * FROM backups WHERE id=?').get(first)), copy.path, 'the backup stays usable on its locked copy');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM retention_deferrals WHERE backup_id=?').get(first).n, 0, 'no backup-wide deferral');
   // When the lock ends the copy goes, and with it the backup.
   locked.objects.get(key).retainUntil = new Date(Date.now() - 1000).toISOString();
@@ -403,6 +411,12 @@ test('API: site storage, copies in /api/state and history, retry, restore source
   assert.deepEqual((await admin('GET', `/storage-targets/${bucket}/usage`)).body.copies, 1);
   // "Delete these copies": pinned copies need a confirmation; then the worker removes them and the destination is free.
   db.prepare('UPDATE backups SET pinned=1 WHERE id=?').run(backupId);
+  // A backup whose main package aged out and that exists only here: deleting the copies needs its own confirmation.
+  db.prepare('INSERT INTO backup_main_removed VALUES(?,?,?)').run(backupId, db.prepare('SELECT path FROM backups WHERE id=?').get(backupId).path, stamp());
+  assert.equal((await admin('GET', `/storage-targets/${bucket}/usage`)).body.onlyPackageBackups, 1);
+  response = await admin('POST', `/storage-targets/${bucket}/copies/delete`, { includePinned: true });
+  assert.equal(response.status, 409); assert.equal(response.body.code, 'last_packages'); assert.equal(response.body.lastPackages, 1);
+  db.prepare('DELETE FROM backup_main_removed WHERE backup_id=?').run(backupId);
   response = await admin('POST', `/storage-targets/${bucket}/copies/delete`, {});
   assert.equal(response.status, 409); assert.equal(response.body.code, 'pinned_copies');
   assert.equal((await stale('POST', `/storage-targets/${bucket}/copies/delete`, { includePinned: true })).status, 403);
@@ -436,4 +450,81 @@ test('storage report: bytes per destination include copies, listed apart from ma
   assert.deepEqual({ targetId: row.targetId, name: row.name, mode: row.mode, mainBytes: row.mainBytes, copyBytes: row.copyBytes, copyCount: row.copyCount, chainBytes: row.chainBytes, bytes: row.bytes }, { targetId: bucket, name: 'Report copies', mode: 's3', mainBytes: 0, copyBytes: size, copyCount: 1, chainBytes: 0, bytes: size });
   const local = built.storages.find(entry => entry.id === 'local');
   assert.ok(local.mainBytes >= size && local.copyBytes === 0);
+});
+
+test('2.10 retention on a backup whose main package aged out removes the row but never its copy files', async () => {
+  const { siteId } = site('downgrade.example', { retention: 1 });
+  const bucket = s3Target(r2, { name: 'Downgrade copies', prefix: 'downgrade' });
+  setCopies(siteId, [{ targetId: bucket, retention: 5 }]);
+  const old = await publish(siteId, day(1)); await runCopies(); await publish(siteId, day(2)); await runCopies();
+  await engine.retain(siteId);
+  assert.ok(journal.mainRemoved(old));
+  // Exactly what 2.10 finishDeletion does with backups.path (the main path, already gone) and the row.
+  const backup = db.prepare('SELECT * FROM backups WHERE id=?').get(old);
+  if (await journal.fileExists(backup.path)) await storage.removeFile(backup.path);
+  db.prepare('DELETE FROM backups WHERE id=?').run(old);
+  assert.ok(await storage.statFile(copyRow(old, bucket).path), 'its copy file is left alone');
+});
+
+test('finishDeletion removes the main package first: an Object-Locked main keeps every copy', async () => {
+  const { siteId } = site('mainlock.example', { retention: 1 });
+  const vault = s3Target(locked, { name: 'Locked main', prefix: 'mainlock', objectLock: { mode: 'COMPLIANCE', days: 1 } }), bucket = s3Target(r2, { name: 'Unlocked copy', prefix: 'mainlock' });
+  setCopies(siteId, [{ targetId: bucket, retention: 1 }], vault);
+  const first = await publish(siteId, day(1)); await runCopies();
+  await publish(siteId, day(2));
+  assert.equal(journal.claimDeletion(first), true);
+  assert.deepEqual(await journal.finishDeletion(first), { deferred: true });
+  assert.equal(copyRow(first, bucket).status, 'verified', 'nothing of the backup goes while its main package is locked');
+  assert.ok(await storage.statFile(copyRow(first, bucket).path));
+  assert.equal(journal.mainRemoved(first), false);
+});
+
+test('a destination removed from the site list: unmade copies are cancelled, made ones keep the site count and are not retried', async () => {
+  const { siteId } = site('unlisted.example', { retention: 1 });
+  const bucket = s3Target(r2, { name: 'Unlisted later', prefix: 'unlisted' }), dead = deadSftpTarget('Unlisted dead');
+  setCopies(siteId, [{ targetId: bucket, retention: 10 }, { targetId: dead, retention: null }]);
+  const a = await publish(siteId, day(1)); await runCopies();
+  const b = await publish(siteId, day(2));
+  setCopies(siteId, []);
+  assert.equal(copyRow(b, bucket).status, 'deleted', 'a pending copy to a removed destination is cancelled');
+  assert.equal(copyRow(a, dead).status, 'deleted', 'and so is a failed one');
+  db.prepare("UPDATE backup_copies SET status='failed',next_attempt_at=0 WHERE backup_id=? AND target_id=?").run(b, bucket);
+  const claimed = journal.claimCopy();
+  assert.equal([a, b].includes(claimed?.backup_id), false, 'claimCopy checks the site list');
+  if (claimed) db.prepare("UPDATE backup_copies SET status='pending' WHERE backup_id=? AND target_id=?").run(claimed.backup_id, claimed.target_id);
+  await copies.retainCopies(siteId);
+  assert.equal(copyRow(a, bucket).status, 'verified', 'the newest made copy stays under the site count (1)');
+});
+
+test('a long copy steps aside for a queued site job without counting an attempt', async () => {
+  const { siteId } = site('yield.example');
+  const bucket = s3Target(r2, { name: 'Yield bucket', prefix: 'yield' });
+  setCopies(siteId, [{ targetId: bucket, retention: null }]);
+  const backupId = await publish(siteId);
+  db.prepare("UPDATE backup_copies SET next_attempt_at=? WHERE status IN ('pending','failed') AND backup_id<>?").run(Date.now() + 86400000, backupId);
+  const job = randomUUID(); db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(job, siteId, stamp());
+  const saved = copies.copyHooks.yieldCheckBytes; copies.copyHooks.yieldCheckBytes = 1;
+  try {
+    const copy = journal.claimCopy();
+    assert.equal(copy.backup_id, backupId);
+    assert.deepEqual(await copies.executeCopy(copy, engine.verifyEncrypted), { status: 'yielded' });
+  } finally { copies.copyHooks.yieldCheckBytes = saved; db.prepare("UPDATE jobs SET status='failed' WHERE id=?").run(job); }
+  const row = copyRow(backupId, bucket);
+  assert.deepEqual([row.status, row.attempts, row.alerted], ['pending', 0, 0]);
+  await assert.rejects(storage.statFile(row.path + '.partial'));
+  await copies.executeCopy(journal.claimCopy(), engine.verifyEncrypted);
+  assert.equal(copyRow(backupId, bucket).status, 'verified');
+});
+
+test('copy recovery waits while the deployment hold is set', async () => {
+  const { siteId } = site('held.example');
+  const bucket = s3Target(r2, { name: 'Held bucket', prefix: 'held' });
+  setCopies(siteId, [{ targetId: bucket, retention: null }]);
+  const backupId = await publish(siteId);
+  db.prepare("UPDATE backup_copies SET status='copying' WHERE backup_id=?").run(backupId);
+  db.prepare("INSERT INTO settings VALUES('deployment_hold','true')").run();
+  try { assert.equal((await journal.recoverInterruptedCopies(engine.verifyEncrypted)).held, true); assert.equal(copyRow(backupId, bucket).status, 'copying'); }
+  finally { db.prepare("DELETE FROM settings WHERE key='deployment_hold'").run(); }
+  await copies.maintainCopies(Date.now(), engine.verifyEncrypted);
+  assert.equal(copyRow(backupId, bucket).status, 'pending', 'resumed by maintenance once the hold is released');
 });

@@ -26,6 +26,7 @@ const catalogue = Object.freeze({
   'backup.copy_failed:conflict': 'A different file is already on {destination} where the copy goes. Open DockNest to check it.',
   'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
+  'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

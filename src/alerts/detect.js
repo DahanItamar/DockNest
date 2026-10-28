@@ -78,7 +78,7 @@ function detectRestoreTests(since, cleanupsSince) {
 // name the owner typed, never a host, bucket or error text.
 function detectCopies(since) {
   let count = 0, last = since;
-  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('backup.copy_failed','backup.copy_recovered') AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('backup.copy_failed','backup.copy_recovered','backup.copy_gave_up') AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
   for (const row of rows) {
     last = row.created_at;
     let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }

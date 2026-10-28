@@ -37,7 +37,7 @@ import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipE
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
 import { backupCopyViews } from './backup-copies.js';
-import { retryCopy } from './artifact-journal.js';
+import { retryCopy, packagePath } from './artifact-journal.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -340,7 +340,9 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
 });
 const verifiedBackup=backupId=>{
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
-  return db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(backupId)||notFound('Verified backup not found.');
+  const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(backupId)||notFound('Verified backup not found.');
+  // Reads the main package, or its newest verified copy once the main one aged out (docs/backup-copies.md).
+  return {...row,path:packagePath(row)};
 };
 const zipExportOf=req=>{const backup=verifiedBackup(req.params.id),item=findZipExport(backup.id,req.params.exportId)||notFound('ZIP preparation not found.');return {backup,item};};
 app.post('/api/backups/:id/zip-exports', (req, res) => {
@@ -370,7 +372,7 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
     if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(req.params.id))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
     const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id)||notFound('Verified backup not found.');
     db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId,row.id,Date.now()+120000);
-    return row;
+    return {...row,path:packagePath(row)};
   });
   let cleared=false;
   const interval=setInterval(()=>db.prepare('UPDATE downloads SET expires_at=? WHERE id=?').run(Date.now()+120000,leaseId),30000);
