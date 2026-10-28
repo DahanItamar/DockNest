@@ -129,6 +129,6 @@ test('pinning an increment clears Object Lock deferrals of the packages it build
 test('update center: a downgrade warning while incremental backups exist, none otherwise', () => {
   const warning = downgradeWarning(db);
   assert.equal(warning.incrementalBackups, 2); assert.equal(warning.below, '2.12.0');
-  assert.match(warning.message, /versions before 2\.12\.0 cannot restore them/);
+  assert.match(warning.message, /versions before 2.12.0 cannot restore them/); assert.match(warning.message, /Make a full backup and turn incremental off before downgrading to 2.11./);
   assert.equal(downgradeWarning(db, 0), null);
 });

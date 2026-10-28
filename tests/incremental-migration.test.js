@@ -1,4 +1,4 @@
-// Incremental backups, upgrade safety (docs/incremental-backups.md "Upgrade safety"): migration 13 is additive, a
+// Incremental backups, upgrade safety (docs/incremental-backups.md "Upgrade safety"): migration 12 is additive, a
 // 2.11.1 database keeps working unchanged until the owner turns the option on, and 2.11.1 code keeps running on it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { migrations, migrate, schemaVersion, compatFloor, reservedMigrationVersions } from '../src/migrations.js';
+import { migrations, migrate, schemaVersion, compatFloor } from '../src/migrations.js';
 
 const quiet = () => {};
 const temporary = async fn => { const directory = await mkdtemp(join(tmpdir(), 'docknest-incremental-migration-')); try { return await fn(directory); } finally { await rm(directory, { recursive: true, force: true }); } };
@@ -19,21 +19,15 @@ const v2111Migrations = directory => { const file = join(directory, 'migrations-
 const schema = db => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all().map(row => ({ ...row }));
 const contents = (db, tables) => Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row }))]));
 
-test('migration versions are unique and increasing, contiguous apart from the reserved radar version 12', () => {
+test('migration versions are unique, increasing and contiguous from 1, and incremental backups are migration 12', () => {
   const versions = migrations.map(migration => migration.version);
-  assert.deepEqual([...versions].sort((a, b) => a - b), versions, 'increasing');
-  assert.equal(new Set(versions).size, versions.length, 'unique');
-  const missing = [];
-  for (let version = 1; version <= versions.at(-1); version++) if (!versions.includes(version)) missing.push(version);
-  // Version 12 belongs to the radar (merged in parallel); once it lands there is no gap at all.
-  assert.ok(missing.every(version => reservedMigrationVersions.includes(version)), `only reserved versions may be missing: ${missing}`);
-  assert.ok(missing.length <= reservedMigrationVersions.length);
+  assert.deepEqual(versions, versions.map((_, index) => index + 1));
   const incremental = migrations.find(migration => migration.name === 'incremental-backups');
-  assert.equal(incremental.version, 13); assert.equal(incremental.compatible, true);
+  assert.equal(incremental.version, 12); assert.equal(incremental.compatible, true);
   assert.equal(schemaVersion, versions.at(-1)); assert.equal(compatFloor(migrations), 1, 'every migration since 1 stays compatible');
 });
 
-test('migration 13 adds only its two tables and indexes, and the 2.11 positional inserts still work on it', () => temporary(async directory => {
+test('migration 12 adds only its two tables and indexes, and the 2.11 positional inserts still work on it', () => temporary(async directory => {
   const file = join(directory, 'state.sqlite'), db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA foreign_keys=ON');
@@ -64,7 +58,7 @@ test('migration 13 adds only its two tables and indexes, and the 2.11 positional
   } finally { db.close(); }
 }));
 
-test('a real 2.11.1 database upgrades with every row unchanged and no chain, and 2.11.1 code keeps running on schema 13', { skip: noTag }, () => temporary(async directory => {
+test('a real 2.11.1 database upgrades with every row unchanged and no chain, and 2.11.1 code keeps running on schema 12', { skip: noTag }, () => temporary(async directory => {
   const old = await v2111Migrations(directory), file = join(directory, 'state.sqlite'), db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA foreign_keys=ON');

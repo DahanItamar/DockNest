@@ -27,12 +27,13 @@ const site = (id, serverId, config = {}) => { db.prepare('INSERT INTO sites(id,s
 server('srv'); server('srv-2');
 
 // ---- mock helper --------------------------------------------------------------------------------------------------
-const helper = { commits: [], state: new Map(), pending: new Map(), requests: [], calls: [], fingerprint: 'plan-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [] };
+const helper = { commits: [], state: new Map(), pending: new Map(), requests: [], calls: [], chainFingerprint: 'chain-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [] };
 const mountKey = sha('/srv/data');
 transport.remote = async (_server, request) => {
   helper.calls.push(request.operation);
   switch (request.operation) {
-    case 'plan': return { fingerprint: helper.fingerprint };
+    // Like the real plan: `fingerprint` changes on every container restart (EndpointID, MacAddress); `chainFingerprint` does not.
+    case 'plan': return { fingerprint: 'plan-' + randomUUID(), chainFingerprint: helper.chainFingerprint };
     case 'capture': {
       helper.requests.push(request);
       const manifest = { kind: 'docker', complete: true, capturedAt: Date.now() / 1000 + (++helper.clock), downtimeSeconds: 1, originalImages: [{ Id: 'sha256:base', RepoDigests: [] }], architecture: 'amd64', containers: [{ Id: 'c1', Name: '/app', Config: { Image: 'app' }, Mounts: [{ Type: 'bind', Source: '/srv/data', Destination: '/data' }] }], consistency: { status: 'passed' } };
@@ -43,7 +44,7 @@ transport.remote = async (_server, request) => {
       if (mode === 'incremental' && current !== wanted.parentSnapshots[mountKey]) { mode = 'full'; chainId = wanted.fallbackChainId; fallback = { reason: current ? 'snapshot-mismatch' : 'snapshot-missing' }; }
       const snapshot = sha(randomUUID());
       helper.pending.set(request.job, { siteKey: wanted.siteKey, snapshots: { [mountKey]: snapshot } });
-      Object.assign(manifest, { formatVersion: 2, backupKind: mode, chain: { id: chainId, position: mode === 'full' ? 0 : wanted.position, parentBackupId: mode === 'full' ? null : wanted.parentBackupId, parentSha256: mode === 'full' ? null : wanted.parentSha256 }, ...(fallback ? { fallback } : {}), ...(mode === 'incremental' ? { chainImages: wanted.parentImageIds } : {}) });
+      Object.assign(manifest, { chainFingerprint: helper.chainFingerprint, formatVersion: 2, backupKind: mode, chain: { id: chainId, position: mode === 'full' ? 0 : wanted.position, parentBackupId: mode === 'full' ? null : wanted.parentBackupId, parentSha256: mode === 'full' ? null : wanted.parentSha256 }, ...(fallback ? { fallback } : {}), ...(mode === 'incremental' ? { chainImages: wanted.parentImageIds } : {}) });
       manifest.containers[0].Mounts[0].incremental = { snapshotKey: mountKey, level: mode === 'full' ? 0 : 1, snapshotSha256: snapshot };
       helper.forge?.(manifest);
       return { remotePath: '/x/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest };
@@ -132,20 +133,32 @@ test('full reasons: parent unverified, missing (main package gone or a chain row
     { restore: ({ first }) => db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(first.backup.id) });
   await becomesFull('r-locked', ({ first }) => deferDeletion(first.backup.id, new Date(Date.now() + 86400000).toISOString()), 'parent-removing');
 });
-test('full reasons: plan fingerprint (containers, mounts, images), site moved, format changed', async () => {
-  await becomesFull('r-plan', () => { helper.fingerprint = 'plan-b'; }, 'plan-changed');
-  helper.fingerprint = 'plan-a';
+test('full reasons: chain fingerprint (containers, mounts, images), site moved, format changed', async () => {
+  await becomesFull('r-plan', () => { helper.chainFingerprint = 'chain-b'; }, 'plan-changed');
+  helper.chainFingerprint = 'chain-a';
+  // A parent recorded without a chainFingerprint (an older helper) starts a new chain.
+  await becomesFull('r-plan-missing', ({ second }) => { const manifest = JSON.parse(second.backup.manifest); delete manifest.chainFingerprint; db.prepare('UPDATE backups SET manifest=? WHERE id=?').run(JSON.stringify(manifest), second.backup.id); }, 'plan-changed');
   await becomesFull('r-moved', () => db.prepare("UPDATE sites SET server_id='srv-2' WHERE id='r-moved'").run(), 'site-moved');
   await becomesFull('r-format', ({ second }) => { const manifest = JSON.parse(second.backup.manifest); manifest.incremental.format = 3; db.prepare('UPDATE backups SET manifest=? WHERE id=?').run(JSON.stringify(manifest), second.backup.id); }, 'format-changed');
+});
+test('the plan fingerprint changing on every restart does not break a chain; the stable chainFingerprint is stored', async () => {
+  site('restarts', 'srv'); enable('restarts');
+  const backups = [];
+  for (let index = 0; index < 4; index++) backups.push((await run('restarts')).backup);
+  assert.deepEqual(backups.map(backup => link(backup.id).chain_position), [0, 1, 2, 3]);
+  assert.equal(new Set(backups.map(backup => JSON.parse(backup.manifest).backupPlan.fingerprint)).size, 4, 'every plan fingerprint differed');
+  assert.ok(backups.every(backup => JSON.parse(backup.manifest).chainFingerprint === 'chain-a'));
+  // The plan approval fingerprint is still the one sent with the capture.
+  assert.equal(helper.requests.at(-1).planFingerprint, JSON.parse(backups.at(-1).manifest).backupPlan.fingerprint);
 });
 test('full reasons: storage destination changed (the decision compares the main destination of the new backup)', async () => {
   site('r-storage', 'srv'); enable('r-storage'); await run('r-storage');
   const siteRow = { id: 'r-storage', server_id: 'srv', config: {} };
-  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-a' }, directory: join(temporary, 'srv') }).mode, 'incremental');
-  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-a' }, directory: 's3:other-target:/backups/srv' }).reason, 'storage-changed');
+  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-x', chainFingerprint: 'chain-a' }, directory: join(temporary, 'srv') }).mode, 'incremental');
+  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-x', chainFingerprint: 'chain-a' }, directory: 's3:other-target:/backups/srv' }).reason, 'storage-changed');
   // Never incremental: static sites and a site move's own backup.
-  assert.equal(inc.decideCapture({ site: { ...siteRow, config: { kind: 'static' } }, plan: { fingerprint: 'plan-a' }, directory: temporary }), null);
-  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-a' }, directory: temporary, jobDetails: { moveId: 'move' } }), null);
+  assert.equal(inc.decideCapture({ site: { ...siteRow, config: { kind: 'static' } }, plan: { fingerprint: 'plan-x', chainFingerprint: 'chain-a' }, directory: temporary }), null);
+  assert.equal(inc.decideCapture({ site: siteRow, plan: { fingerprint: 'plan-x', chainFingerprint: 'chain-a' }, directory: temporary, jobDetails: { moveId: 'move' } }), null);
 });
 test('full reasons: the helper falls back (snapshot mismatch) and the engine records what the helper made', async () => {
   const next = await becomesFull('r-helper', () => { helper.state.set('r-helper', { [mountKey]: sha('changed on the source') }); }, 'snapshot-mismatch');

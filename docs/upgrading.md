@@ -201,6 +201,17 @@ backs up and restores from the main copy only. Copies already made stay where th
 retention removes it or its main package is missing); the copies of such a backup are left behind, and 2.11 deletes
 them on its next maintenance run after you upgrade again.
 
+## Incremental backups in 2.12
+
+Incremental backups (beta) are new in 2.12 and off for every site. Nothing changes until you turn them on for a site:
+
+- Migration 12 (compatible) only adds tables (the per-site setting and each backup's chain link). Existing backups
+  stay self-contained full packages.
+
+**Going back to 2.11.** Schema 12 is compatible, so 2.11 starts on the same database, but it cannot restore incremental
+backups and its retention does not know that increments depend on their full backup. Make a full backup and turn
+incremental off before downgrading to 2.11. The update center shows this warning while incremental backups exist.
+
 ## Protected mounts are no longer copied (2.11.1)
 
 **This changes what new backups contain.** From 2.11.1, a selected container's bind mount of password files, sudo
