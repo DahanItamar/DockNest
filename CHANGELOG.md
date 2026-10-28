@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Storage report: the **Incremental saving** card is now **Possible saving**, so it is clear DockNest does not make incremental backups yet; the number is a best-case estimate of what they could save.
+
 ### Fixed
 
 - The S3 beta note now says what has really been tested: a real MinIO S3 server, not yet full backups and restores or cloud providers.
