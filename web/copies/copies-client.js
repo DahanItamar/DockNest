@@ -8,7 +8,7 @@ export function createCopiesClient(api){
   destinations:()=>api('/storage-targets'),
   retryCopy:(backupId,targetId)=>api('/backups/'+id(backupId)+'/copies/'+id(targetId)+'/retry',{}),
   removeDestination:targetId=>api('/storage-targets/'+id(targetId),null,'DELETE'),
-  deleteCopies:(targetId,includePinned)=>api('/storage-targets/'+id(targetId)+'/copies/delete',includePinned?{includePinned:true}:{}),
+  deleteCopies:(targetId,{includePinned,includeLastPackages}={})=>api('/storage-targets/'+id(targetId)+'/copies/delete',{...(includePinned?{includePinned:true}:{}),...(includeLastPackages?{includeLastPackages:true}:{})}),
   reauth:(password,code)=>api('/auth/reauth',{password,code})
  };
 }

@@ -5,7 +5,7 @@ const ACTIONS={
  'updater.requested':'Update requested','updater.refused':'Update refused','updater.finished':'Update finished','updater.acknowledged':'Updater acknowledged','updater.resolved':'Update resolved',
  'update.consent':'Update check choice saved','update.settings':'Update settings changed',
  'job.superseded':'Job superseded','job.recovery_acknowledged':'Recovery acknowledged',
- 'backup.enqueue':'Backup queued','backup.completed':'Backup completed','backup.failed':'Backup failed','backup.pin':'Backup pin changed','backup.download':'Backup downloaded','backup.download_zip':'Backup downloaded as zip',
+ 'backup.enqueue':'Backup queued','backup.completed':'Backup completed','backup.failed':'Backup failed','site.storage_update':'Site storage changed','backup.pin':'Backup pin changed','backup.download':'Backup downloaded','backup.download_zip':'Backup downloaded as zip',
  'backup.scrub.enqueue':'Integrity check queued','backup.scrub.completed':'Integrity check completed','backup.scrub.failed':'Integrity check failed',
  'restore.enqueue':'Restore queued','restore.completed':'Restore completed','restore.failed':'Restore failed',
  'server.create':'Server added','server.update':'Server updated','server.details_updated':'Server details updated','server.test':'Server tested','server.connected':'Server connected','server.key_prepared':'Server key prepared',

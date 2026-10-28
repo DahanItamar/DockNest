@@ -45,7 +45,7 @@ const main = { id: 't1', name: TARGETS[0].name, mode: 'sftp' };
 const COPIES = {
   'site-1#3': [copyRow(2, 'verified'), copyRow(3, 'copying')],
   'site-1#2': [copyRow(2, 'gave_up', { lastError: 'The destination refused the upload.' }), copyRow(3, 'failed', { lastError: 'Connection timed out.' })],
-  'site-1#1': [copyRow(2, 'verified'), copyRow(3, 'verified')],
+  'site-1#1': [copyRow(2, 'verified'), copyRow(3, 'verified', { mode: null })],
   'site-1#0': [copyRow(2, 'pending')]
 };
 const siteStorage = { 'site-1': { mainTargetId: null, copyTargetIds: ['t2', 't3'], copyMissing: true }, 'site-2': { mainTargetId: null, copyTargetIds: [], copyMissing: false } };
@@ -65,7 +65,7 @@ async function open(viewport, colorScheme, { copies = true, targets = TARGETS, o
       try { response = await route.fetch(); json = await response.json(); } catch { return; } // the page closed while the state was loading
       if (copies) {
         for (const site of json.sites) site.storage = siteStorage[site.id];
-        for (const backup of json.backups) { const key = idToKey[backup.id]; if (key?.startsWith('site-1')) { backup.mainTarget = main; backup.copies = COPIES[key] || []; } else if (key) { backup.mainTarget = main; backup.copies = []; } }
+        for (const backup of json.backups) { const key = idToKey[backup.id]; if (key?.startsWith('site-1')) { backup.mainTarget = main; backup.copies = COPIES[key] || []; if (key === 'site-1#1') backup.mainRemoved = true; } else if (key) { backup.mainTarget = main; backup.copies = []; } }
       }
       return route.fulfill({ response, json });
     }
@@ -230,6 +230,7 @@ try {
       assert.ok(await withCopies.count() >= 1, label + ': copy labels rendered');
       const labels = (await page.locator('details[open] .cp-label').allInnerTexts()).join(' | ');
       assert.match(labels, /Verified/); assert.match(labels, /Main/);
+      assert.match(labels, /Garage MinIO \(removed\)/); assert.match(labels, /Main removed/);
       await shot(page, 'backups-' + tag);
       const name = page.locator('.cp-label-name', { hasText: 'Cloudflare R2 archive' }).first();
       assert.equal(await name.evaluate(el => el.scrollWidth > el.clientWidth), viewport.width < 600, label + ': long names are cut with an ellipsis only when too wide');
@@ -296,6 +297,42 @@ try {
       assert.deepEqual(errors, [], label);
       await context.close();
     }
+  }
+
+  { // The default destination and main backups block removal: why and what to do, and no Delete copies.
+    const { context, page } = await open(wide, 'light', { onApi: ({ path, method, route }) => {
+      if (path === '/storage-targets/t1' && method === 'DELETE') return route.fulfill({ status: 409, json: { error: 'In use.', code: 'destination_in_use', copies: 0, copyBackups: 0, bytes: 0, mainForSites: [], copyForSites: [], mainBackups: 4, recoveryKits: 1, isDefault: true } });
+    } });
+    await go(page, wide, 'Storage');
+    await page.getByRole('button', { name: 'Remove ' + TARGETS[0].name }).click();
+    await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[0].name }).getByRole('button', { name: 'Remove', exact: true }).click();
+    const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
+    await inUse.waitFor();
+    const text = await inUse.innerText();
+    assert.match(text, /default destination/); assert.match(text, /4 backups keep their main copy here/); assert.match(text, /1 recovery kit/); assert.match(text, /Choose another default/);
+    assert.equal(await inUse.getByRole('button', { name: 'Delete copies' }).count(), 0, 'nothing to delete but main backups');
+    await context.close();
+  }
+
+  { // Copies that are the only package left: an explicit confirm, then the request is resent with includeLastPackages.
+    const { context, page, calls } = await open(wide, 'light', { onApi: ({ path, method, body, route }) => {
+      if (path === '/storage-targets/t2' && method === 'DELETE') return route.fulfill({ status: 409, json: { error: 'In use.', code: 'destination_in_use', copies: 3, copyBackups: 3, bytes: 7 * GB, mainForSites: [], copyForSites: [], onlyPackageBackups: 2 } });
+      if (path === '/storage-targets/t2/copies/delete' && method === 'POST') return body?.includeLastPackages ? route.fulfill({ status: 202, json: { deleting: 3 } }) : route.fulfill({ status: 409, json: { error: 'x', code: 'last_packages', onlyPackageBackups: 2 } });
+    } });
+    await go(page, wide, 'Storage');
+    await page.getByRole('button', { name: 'Remove ' + TARGETS[1].name }).click();
+    await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[1].name }).getByRole('button', { name: 'Remove', exact: true }).click();
+    const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
+    await inUse.waitFor();
+    assert.match(await inUse.innerText(), /2 backups exist only here and will be lost/);
+    await inUse.getByRole('button', { name: 'Delete copies' }).click();
+    const lost = page.getByRole('alert').filter({ hasText: 'Backups would be lost' });
+    await lost.waitFor();
+    assert.equal(calls.filter(c => c.path.endsWith('/copies/delete')).length, 1, 'nothing is lost without the second confirmation');
+    await lost.getByRole('button', { name: 'Delete anyway' }).click();
+    await page.waitForFunction(() => document.body.textContent.includes('Deleting 3 copies'));
+    assert.equal(calls.filter(c => c.path.endsWith('/copies/delete')).at(-1).body.includeLastPackages, true);
+    await context.close();
   }
 
   { // Restore: choose the source, fallback explained, sourceTargetId sent.
