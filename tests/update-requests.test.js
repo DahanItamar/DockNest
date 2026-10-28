@@ -329,6 +329,20 @@ test('broker refusals map to their codes, finish the row as refused and release 
     const response = await upd('/requests', { method: 'POST', body: { version: TARGET } }), body = await response.json();
     assert.equal(response.status, 429); assert.equal(body.code, 'UPDATER_RATE_LIMITED'); assert.equal(body.limit, want.limit); assert.equal(body.retryAt, want.retryAt);
   }
+  // 2.11.1: a pin-missing state-mismatch is kept on the row, passed to the browser and leaves the offer startable.
+  await reset(); await put('service.json', service()); answer = () => ({ accepted: false, code: 'state-mismatch', detail: 'pin-missing' });
+  let response = await upd('/requests', { method: 'POST', body: { version: TARGET } }), body = await response.json();
+  assert.deepEqual([response.status, body.code, body.refusal, body.detail], [409, 'UPDATER_STATE_MISMATCH', 'state-mismatch', 'pin-missing']);
+  assert.deepEqual({ ...db.prepare('SELECT state,refusal,reason FROM update_requests').get() }, { state: 'refused', refusal: 'state-mismatch', reason: 'pin-missing' });
+  let state = await (await upd('')).json();
+  assert.deepEqual([state.state, state.offer.blocked, state.offer.notice.code], ['update-available', null, 'UPDATER_PIN_MISSING']);
+  answer = request => ({ accepted: true, id: request.id }); response = await upd('/requests', { method: 'POST', body: { version: TARGET } });
+  assert.equal(response.status, 202, 'after --repair on the host the next request reaches the broker again');
+  // An older broker sends no detail: the generic, sticky state-mismatch as before.
+  await reset(); await put('service.json', service()); answer = () => ({ accepted: false, code: 'state-mismatch' });
+  body = await (await upd('/requests', { method: 'POST', body: { version: TARGET } })).json(); assert.equal(body.detail, undefined);
+  assert.equal(db.prepare('SELECT reason FROM update_requests').get().reason, null);
+  state = await (await upd('')).json(); assert.equal(state.state, 'updater-state-mismatch'); assert.equal(state.offer.notice, undefined);
   await reset(); await put('service.json', service()); answer = () => ({ accepted: false, code: 'made-up' });
   assert.equal((await upd('/requests', { method: 'POST', body: { version: TARGET } })).status, 503, 'an unknown refusal code is not trusted');
   assert.equal(db.prepare('SELECT state FROM update_requests').get().state, 'submitted', 'the request was delivered; it stays until the broker shows otherwise');

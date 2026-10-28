@@ -94,6 +94,8 @@ export function retryTime(retryAt, now = new Date()) {
   const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   return at.toDateString() === now.toDateString() ? time : at.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' at ' + time;
 }
+export const REPAIR_COMMAND = 'sudo scripts/install-updater.sh --repair';
+export const PIN_MISSING = 'The host updater has not verified the installed version yet, so it refused the update. Nothing was changed. On the DockNest host, run ' + REPAIR_COMMAND + ', then try again.';
 export function submitMessage(error, now = new Date()) {
   const code = error?.code, status = error?.status;
   const table = {
@@ -115,6 +117,8 @@ export function submitMessage(error, now = new Date()) {
     if (error?.limit === 'cooldown') return 'The updater needs a minute between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
     return 'The updater is limiting update runs right now. Try again later.';
   }
+  // 2.11.1: the broker marks a refusal fixed by --repair (no verified record of the installed version) with this detail.
+  if (code === 'UPDATER_STATE_MISMATCH' && (error?.detail ?? error?.data?.detail) === 'pin-missing') return PIN_MISSING;
   if (code === 'RATE_LIMITED' || status === 429) {
     const wait = Number(error?.retryAfter);
     if (Number.isInteger(wait) && wait > 0) return 'Too many requests. Try again in ' + wait + (wait === 1 ? ' second.' : ' seconds.');

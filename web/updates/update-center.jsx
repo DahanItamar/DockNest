@@ -5,7 +5,7 @@ import {createUpdatesClient,LOCKED_EVENT} from './client.js';
 import {UCDialog,ExtLink,CodeBlock,Notes,DOCS_ROLLBACK,DOCS_UPGRADE} from './parts.jsx';
 import {ConsentDialog} from './dialogs.jsx';
 import {UpdateReportButton} from '../report/UpdateReport.jsx';
-import {highlightChips,HISTORY_STATUS,submitMessage,tagUrl,vv} from './model.js';
+import {highlightChips,HISTORY_STATUS,REPAIR_COMMAND,submitMessage,tagUrl,vv} from './model.js';
 import './updates.css';
 
 export const fmt=(value,dateOnly)=>{if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString(undefined,dateOnly?{day:'numeric',month:'short',year:'numeric'}:{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})};
@@ -103,6 +103,9 @@ function Hero({data,offer,meta,up,status,openConfirm,checking,onConsent}){
  else if(tooOld){alert=<AlertPanel variant="warning" title="The host updater needs an update first">The host updater on this server is too old to install DockNest {version}.</AlertPanel>;canStart=false}
  else if(notResponding){alert=<AlertPanel variant="error" title="The host updater is not responding" action={<a href="#/update-center">Follow the steps below</a>}>Updates cannot start until it answers. Run the commands below on the DockNest host, then check the connection again.</AlertPanel>;canStart=false}
  else if(blocked){alert=<AlertPanel variant="error" title="Update blocked">{blocked.message||'Updates cannot start right now.'}</AlertPanel>;canStart=false}
+ // 2.11.1: the last request was refused because the updater has no verified record of this version (fixed with --repair).
+ const pinMissing=!alert&&data.offer?.notice?.code==='UPDATER_PIN_MISSING';
+ if(pinMissing)alert=<AlertPanel variant="warning" title="Repair the host updater, then update again">The host updater has not verified the installed version yet, so it refused the last update. Nothing was changed. This usually happens after an update from the command line.</AlertPanel>;
  const date=meta?.publishedAt||latest?.publishedAt;
  return <article className="card uc-hero"><div className="uc-hero-row"><div className="uc-hero-text">
    <span className="t-caption">{canStart?'Ready to install':'Update available'}</span>
@@ -111,6 +114,7 @@ function Hero({data,offer,meta,up,status,openConfirm,checking,onConsent}){
   {!needsEarlier&&!notInstalled&&!tooOld&&<button type="button" className="primary" aria-disabled={!canStart||undefined} aria-describedby={alert?'uc-update-reason':undefined} onClick={()=>{if(canStart)openConfirm(version)}}>Update now</button>}</div>
   {st==='check-failed'&&<AlertPanel variant="warning" title="The last check failed">{(data.check?.error?data.check.error+'. ':'')+'This offer is the result from '+fmt(data.check?.lastSuccessAt||data.check?.checkedAt)+'.'}</AlertPanel>}
   {alert&&<div id="uc-update-reason">{alert}</div>}
+  {pinMissing&&<div><p className="code-label">Repair the host updater</p><CodeBlock command={REPAIR_COMMAND}/><p className="t-caption">Run this on the DockNest host, from the DockNest folder. Then select Update now again.</p></div>}
   {tooOld&&<div><p className="code-label">Update the host updater</p><CodeBlock command="sudo scripts/install-updater.sh"/><p className="t-caption">Run this on the DockNest host, from the DockNest folder. This page updates itself afterwards.</p></div>}
  </article>;
 }
