@@ -56,7 +56,9 @@ test('migration 10 is one compatible line named alert-connections; 9 stays as re
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/);
   assert.match(source.find(line => /^\s*\{\s*version:\s*10\b/.test(line)), /^ {2}\{ version: 10, name: 'alert-connections', compatible: true, up: /);
   assert.ok(schemaVersion >= 10); assert.equal(compatFloor(migrations), 1);
-  assert.deepEqual(migrations.map(item => item.version), migrations.map((_, index) => index + 1));
+  // Version 12 is reserved for the radar (src/migrations.js reservedMigrationVersions); only that gap is allowed.
+  const reserved = new Set((await import('../src/migrations.js')).reservedMigrationVersions ?? []);
+  assert.deepEqual(migrations.map(item => item.version), Array.from({ length: migrations.at(-1).version }, (_, index) => index + 1).filter(version => !reserved.has(version)));
 });
 
 test('a fresh install gets the new tables, empty, and the import marker', () => withDatabase(10, async db => {
