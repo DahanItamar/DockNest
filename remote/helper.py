@@ -111,6 +111,14 @@ def protected_content(value):
 def refuse_protected_sources(cfg):
     for value in ([cfg['documentRoot']] if cfg.get('kind')=='static' and cfg.get('documentRoot') else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
         if protected_path(value) or protected_content(value):raise ValueError('Protected system path refused: %s. Password databases, sudoers, SSH keys, /proc, /sys and /dev are never captured.'%value)
+def protected_mount(source):
+    return bool(source) and (protected_path(source) or protected_content(source))
+def protected_mounts(containers):
+    """Bind mounts of password databases, sudoers, SSH keys (or folders holding them) are never copied: the backup keeps
+    an empty placeholder in their place and records them here, so they are recovered separately like external data."""
+    return [{'container':c.get('Name','').lstrip('/'),'source':m['Source'],'destination':m.get('Destination','')} for c in containers for m in c.get('Mounts') or [] if m.get('Type')=='bind' and protected_mount(m.get('Source'))]
+def protected_mount_warning(items):
+    return 'Not copied: %s. These mounts hold passwords, sudo rules or SSH keys, which DockNest never copies; recover them separately before using a restored copy.'%'; '.join('%s (mounted into %s)'%(item['source'],item['container'] or 'a container') for item in items)
 # The maintenance page belongs in the site's staging root, its project folders or a web root, never in system folders.
 MAINTENANCE_ROOTS=('/var/lib/docknest','/var/www','/srv','/usr/share/nginx')
 SYSTEM_TREES=('/etc','/root','/boot','/proc','/sys','/dev','/bin','/sbin','/lib','/lib32','/lib64','/usr/bin','/usr/sbin','/usr/lib','/usr/local/bin','/usr/local/sbin','/var/spool','/var/log','/run')
@@ -271,7 +279,7 @@ def stream_document(archive,name,value):
     archive.addfile(info,io.BytesIO(data))
 
 def capture_size(containers,configuration,exclusions,images):
-    sources={m['Source'] for c in containers for m in c['Mounts']}
+    sources={m['Source'] for c in containers for m in c['Mounts'] if not (m['Type']=='bind' and protected_mount(m['Source']))}
     sources.update(configuration)
     size=0
     for source in sources:
@@ -1317,14 +1325,16 @@ def preflight(cfg):
             if not os.path.exists(src) or not os.access(src,os.R_OK):raise ValueError('Unreadable mount source')
             scoped_classify(src,mount_table(),exclusions)
             if os.path.islink(src):raise ValueError('Mount source symlink requires a capture adapter')
-            if os.path.isdir(src):
+            # A protected mount is not copied (an empty placeholder takes its place), so its contents are not walked.
+            if os.path.isdir(src) and not (m['Type']=='bind' and protected_mount(src)):
                 for current,dirs,files in os.walk(src,followlinks=False):
                     dirs[:]=[name for name in dirs if not excluded_path(os.path.join(current,name),exclusions.get(src,[]))]
                     for filename in dirs+files:
                         p=os.path.join(current,filename)
                         if excluded_path(p,exclusions.get(src,[])):continue
                         if os.path.islink(p) and os.path.commonpath([os.path.realpath(src),os.path.realpath(p)])!=os.path.realpath(src):raise ValueError('Mount contains a symlink to uncaptured external data')
-            mounts.append(m)
+            # A protected mount is not copied, so another container sharing it does not make the copy inconsistent.
+            if not (m['Type']=='bind' and protected_mount(src)):mounts.append(m)
     for c in inspect(others) if others else []:
         if c['Id'] in selected:continue
         for m in c['Mounts']:
@@ -1347,7 +1357,8 @@ def readiness(cfg):
         except Exception as error:
             message=str(error) if isinstance(error,ValueError) else 'Could not verify this check. Review the source server connection and URL.'
             checks.append({'name':name,'ok':False,'message':message})
-    check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:preflight(cfg))
+    selected={}
+    check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:selected.update(containers=preflight(cfg)))
     if cfg.get('kind')!='static':
         def contracts():
             backup_plan(cfg,preflight(cfg))
@@ -1356,6 +1367,9 @@ def readiness(cfg):
         try:healthy=health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()))
         except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's health URL."%error)
         if not healthy:raise ValueError('Application health URL must return HTTP 200 from the source server. Check the URL and that all selected services are running.')
+    if cfg.get('kind')!='static':
+        protected=protected_mounts(selected.get('containers') or [])
+        if protected:checks.append({'name':'Mounts that are not copied','ok':False,'required':False,'message':protected_mount_warning(protected)})
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -1397,7 +1411,7 @@ def capture(req,output=None):
     original_images=json.loads(docker('image','inspect',*original_ids))
     exclusions=mount_exclusions(cfg,cs)
     # Shared sources are archived once; account for images/configs and packing.
-    needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])+sum(c.get('SizeRw',0) or 0 for c in cs)
+    needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'] if not (m['Type']=='bind' and protected_mount(m['Source'])))+sum(c.get('SizeRw',0) or 0 for c in cs)
     if output is None:
         if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     else:
@@ -1454,6 +1468,12 @@ def capture(req,output=None):
             if output is not None:atomic_json(root/'snapshot-images.json',images)
             for j,m in enumerate(c['Mounts']):
                 source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j))
+                if m['Type']=='bind' and protected_mount(source):
+                    # Never copied: the archive holds an empty folder or file of the same name instead.
+                    holder=root/('protected-%d-%d'%(i,j))/(pathlib.PurePosixPath(source).name or 'root');holder.parent.mkdir(mode=0o700)
+                    if os.path.isdir(source):holder.mkdir(mode=0o700)
+                    else:holder.touch(mode=0o600)
+                    source=str(holder)
                 if output is not None:
                     link=archives.get(source) if exclusions else None
                     specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[])),link))
@@ -1505,6 +1525,8 @@ def capture(req,output=None):
     if exclusions:
         manifest['backupScope']='application-and-local-state'
         manifest['excludedPaths']=cfg['mountExclusions']
+    protected=protected_mounts(cs)
+    if protected:manifest['protectedMounts']=protected
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
@@ -1513,6 +1535,9 @@ def capture(req,output=None):
     if exclusions:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Selected backup scope\nThis package intentionally excludes the paths listed in manifest.excludedPaths. Recover or reattach that external data separately after validating the isolated application copy. Never replace external storage contents with empty restored directories. Retention of this package does not protect excluded data.\n')
+    if protected:
+        with (root/'restore-guide.md').open('a') as guide:
+            guide.write('\n# Mounts that were not copied\nThe bind mounts listed in manifest.protectedMounts hold passwords, sudo rules or SSH keys. DockNest never copies them; their archives hold an empty placeholder. Recover them separately and never restore the placeholder over the real files.\n')
     if output is not None:
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
@@ -1619,6 +1644,8 @@ def restore_network_plan(containers):
         networks={}
         for name,n in c.get('NetworkSettings',{}).get('Networks',{}).items():
             if name=='none':continue
+            # A network key names the network a copy joins: host or another container's namespace is refused here too.
+            if name=='host' or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*',str(name)):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
             if n.get('IPAMConfig'):raise ValueError('Static IP assignments require a reviewed offline restore')
             aliases=list(dict.fromkeys([c['Name'].lstrip('/'),c.get('Config',{}).get('Hostname','')]+(n.get('Aliases') or [])))
             if any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',alias) for alias in aliases if alias):raise ValueError('Unsupported network alias requires offline restore')
@@ -1727,7 +1754,7 @@ def restore(req):
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
         sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
-    docker('load','-i',str(unpacked/'images.tar'))
+    load_images_keeping_tags(unpacked/'images.tar')
     created=[];networks={};running=[]
     try:
         for index,original in enumerate(dict.fromkeys(name for plan in plans for name in plan)):
@@ -1871,6 +1898,19 @@ def move_id(req):
 # mounted such a path on its old server. Only the move's own DockNest folders below /var/lib/docknest are allowed there.
 MOVE_FORBIDDEN=SYSTEM_TREES+('/usr','/var/lib/docker','/var/lib/containerd','/var/lib/docker-backup-manager','/var/lib/docknest','/var/spool','/var/mail','/var/cache')
 MOVE_OWN_ROOTS=('/var/lib/docknest/moves','/var/lib/docknest/acme','/var/lib/docknest/maintenance')
+# Paths named by a backup are created only below application roots: any non-standard top-level folder (/opt, /srv,
+# /data, /mnt ...), /var/www, /var/opt, and non-hidden folders in a home directory (also /var/home, /var/srv and friends
+# on image-based systems). Package state such as /var/lib/cloud and start-up files such as ~/.profile are never written.
+MOVE_CLOSED_TOP={'bin','boot','cdrom','dev','efi','etc','gnu','home','lib','lib32','lib64','libx32','lost+found','nix','proc','root','run','sbin','snap','sys','tmp','usr','var'}
+# /var/lib/<app> is allowed, except state that belongs to the OS, package managers, init, container runtimes and cloud-init.
+MOVE_VAR_LIB_DENIED={'AccountsService','PackageKit','apk','apt','aptitude','authselect','chrony','cloud','cni','containerd','containers','dbus','dhcp','dnf','docker','docker-backup-manager','docknest','dpkg','firewalld','flatpak','fwupd','grub','incus','initramfs-tools','iptables','k3s','kubelet','landscape','libvirt','logrotate','lxc','lxcfs','lxd','machines','misc','NetworkManager','nftables','nix','os-prober','pacman','pam','plymouth','polkit-1','portables','private','rancher','rpm','selinux','shim-signed','snapd','sss','sudo','systemd','tpm','ubuntu-advantage','ucf','udisks2','ufw','update-manager','update-notifier','upower','yum'}
+def move_root_allowed(path):
+    parts=pathlib.PurePosixPath(path).parts[1:]
+    if parts and parts[0]=='var' and len(parts)>1 and parts[1] in ('home','srv','opt','mnt','www'):parts=parts[1:]
+    if not parts or any(part.startswith('.') for part in parts[:1]):return False
+    if parts[0]=='home':return len(parts)>=3 and not parts[2].startswith('.') and parts[2]!='bin'
+    if parts[:2]==('var','lib'):return len(parts)>=3 and not parts[2].startswith('.') and parts[2] not in MOVE_VAR_LIB_DENIED
+    return parts[0] not in MOVE_CLOSED_TOP
 def move_path(value,own=False):
     """An absolute, normalised, non-system path a move may create (and later remove). Symlinks in the existing part of
     the path are followed for the check, so /srv/x -> /etc is refused too. `own` admits DockNest's own move folders."""
@@ -2252,9 +2292,40 @@ def install_locked(name):
     emit(stage='verify')
     verify_install(name)
     emit(result={'package':name,'installed':True})
+IMAGE_BASED_LINKS=('home','srv','opt','mnt')
+def image_based_form(path):
+    """Fedora CoreOS, Silverblue and IoT link /home, /srv, /opt and /mnt to var/<x> at the root. Only that root-level
+    link is rewritten to its /var form, and only when root owns it and neither /var nor /var/<x> is a link; any other
+    link on the way stays a refusal."""
+    parts=pathlib.PurePosixPath(path).parts
+    if len(parts)<2 or parts[1] not in IMAGE_BASED_LINKS:return path
+    top='/'+parts[1]
+    try:
+        if not os.path.islink(top) or os.lstat(top).st_uid!=0 or os.readlink(top)!='var/'+parts[1]:return path
+        if os.path.islink('/var') or os.path.islink('/var/'+parts[1]):return path
+    except OSError:return path
+    return '/'.join(('/var',)+parts[1:])
+def foreign_app_folder(path,state):
+    """Below /var/lib, an application folder that already holds data belongs to another program unless this move made
+    it (journalled). Other roots keep shared parents such as ~/docker or /opt/stacks, so they are not checked."""
+    parts=pathlib.PurePosixPath(path).parts
+    if parts[1:3]!=('var','lib') or len(parts)<4:return None
+    app='/'.join(parts[:4])[1:]
+    records=[record['path'] for record in (state or {}).get('created',{}).get('paths',[])]
+    if any(within(app,record) for record in records):return None
+    folder=pathlib.Path(app)
+    if not folder.is_dir():return None
+    # An entry this move placed (journalled) is not foreign: a second mount below an empty pre-existing folder is fine.
+    return app if any(not any(within(lexical(str(entry)),record) for record in records) for entry in folder.iterdir()) else None
 def place_tree(archive,target,d,state,mid):
     """Extract a one-entry archive to `target`, which must not exist (an empty folder is accepted and recreated on teardown)."""
     target=move_path(target)
+    # The backup names this path, so it must also lie below an application root, through no symlink on this server.
+    forms=resolved(str(target))
+    if any(path.startswith('/') and not move_root_allowed(path) for path in forms):raise ValueError('%s is outside the folders a move may create (/opt, /srv, /var/www, /var/lib/<app>, a home folder or another top-level data folder); move this site by hand.'%target)
+    if len(forms)==2 and forms[1].startswith('/') and forms[1]!=image_based_form(forms[0]):raise ValueError('%s goes through a symbolic link on this server; DockNest only creates paths without links during a move.'%target)
+    app=foreign_app_folder(forms[0],state)
+    if app:raise ValueError('%s already exists on this server and belongs to another program; DockNest never writes into it during a move.'%app)
     if target.is_symlink() or (target.exists() and not (target.is_dir() and not any(target.iterdir()))):raise ValueError('%s already exists on this server. DockNest never overwrites existing folders.'%target)
     empty=target.exists()
     missing=[p for p in reversed(target.parents) if not p.exists()]
@@ -2284,6 +2355,9 @@ def place_volume(archive,name,d,state,mid,mode,labels=None):
 def rewrite_value(value,tokens,target):
     token=env_token(value,tokens)
     return re.sub(r'(?<![A-Za-z0-9.-])'+re.escape(token)+r'(?![A-Za-z0-9-])',target,value) if token else value
+def placed_by_move(path,placed):
+    real=lexical(os.path.realpath(path))
+    return any(within(real,lexical(os.path.realpath(p))) for p in placed)
 def rewrite_env_file(path,keys,tokens,target):
     p=pathlib.Path(path)
     if not p.is_file() or p.is_symlink():return 0
@@ -2465,6 +2539,8 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             key=(m['Type'],m.get('Name') if m['Type']=='volume' else m['Source'])
             if key in sources:continue
             if m['Type']=='bind':
+                # A protected mount is never copied, so a move never writes it (nor binds the new server's own copy).
+                if protected_mount(m['Source']) or any(item.get('source')==m['Source'] for item in manifest.get('protectedMounts') or [] if isinstance(item,dict)):raise ValueError('%s holds passwords, sudo rules or SSH keys, which DockNest does not copy; move this site by hand.'%m['Source'])
                 for kind,existing in sources:
                     if kind!='bind':continue
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
@@ -2473,10 +2549,17 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             elif m['Type']=='volume':place_volume(unpacked/('mount-%d-%d.tar'%(i,j)),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
             else:raise ValueError('Unsupported mount type')
             sources[key]=True
-    for i,filename in enumerate(manifest.get('configurationFiles',[])):
+    configuration=[]
+    for filename in manifest.get('configurationFiles',[]):
+        # Relative names and '..' are refused; other spellings the site form accepts (//, ./, a trailing /) are
+        # normalised, so the lexical containment test below compares like with like.
+        if not isinstance(filename,str) or not filename.startswith('/') or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('Unsupported path for a move: %s'%filename)
+        configuration.append(lexical(filename))
+    for i,filename in enumerate(configuration):
         if any(filename==p or filename.startswith(p.rstrip('/')+'/') for p in placed):continue
         placed.append(str(place_tree(unpacked/('config-%d.tar'%i),filename,d,state,mid)))
-    rewritten=sum(rewrite_env_file(f,keys,tokens,target) for f in manifest.get('configurationFiles',[]) if pathlib.Path(f).name.endswith('.env')) if keys else 0
+    # Settings are rewritten only in files this move just placed, after following links.
+    rewritten=sum(rewrite_env_file(f,keys,tokens,target) for f in configuration if pathlib.Path(f).name.endswith('.env') and placed_by_move(f,placed)) if keys else 0
     for network in req.get('networks') or []:
         name=network.get('name','')
         if not SAFE_NAME.fullmatch(name) or network.get('driver') not in [None,'bridge']:raise ValueError('Only bridge networks can be moved')
@@ -2491,7 +2574,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         journal_resource(d,state,'networks',test_network)
         docker('network','create','--driver','bridge','--label','docknest.move='+mid,test_network)
     for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
-    docker('load','-i',str(unpacked/'images.tar'))
+    load_images_keeping_tags(unpacked/'images.tar')
     created=[];ports=[];names=[]
     try:
         compose=req.get('compose')
@@ -3041,12 +3124,40 @@ def image_archive_tags(archive):
     tags=[tag for tag in dict.fromkeys(tags) if isinstance(tag,str) and IMAGE_TAG.fullmatch(tag)]
     if len(tags)>200:raise ValueError('The image archive names too many tags')
     return tags
+def image_archive_names(archive):
+    """Every image name an archive would set on load: docker save's manifest.json and repositories, and OCI index.json
+    annotations (containerd image store). A DockNest backup saves images by ID, so this is empty for a real package."""
+    names=[]
+    with tarfile.open(archive,'r:') as tar:
+        for name in ['manifest.json','repositories','index.json']:
+            try:member=tar.getmember(name)
+            except KeyError:continue
+            # Raw content counts, before any name filter: a record this check cannot read is refused too.
+            if not member.isfile() or member.size>4*1024*1024:raise ValueError('Unreadable image archive record')
+            data=json.loads(tar.extractfile(member).read())
+            if name=='manifest.json':names+=[str(tag) for item in (data if isinstance(data,list) else [data]) for tag in ((item.get('RepoTags') if isinstance(item,dict) else item) or [])]
+            elif name=='repositories':
+                if data:names+=[str(repo)+':'+str(tag) for repo,items in (data.items() if isinstance(data,dict) else [('?',data)]) for tag in (items if isinstance(items,dict) and items else [items])]
+            else:
+                for item in (data.get('manifests') or [] if isinstance(data,dict) else [data]):
+                    annotations=item.get('annotations') if isinstance(item,dict) else None
+                    if isinstance(annotations,dict):names+=[str(annotations[key]) for key in ['io.containerd.image.name','org.opencontainers.image.ref.name'] if annotations.get(key)]
+    return list(dict.fromkeys(names))
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):return None
 def image_tags(reference):
     try:return [tag for tag in json.loads(docker('image','inspect','--format','{{json .RepoTags}}',reference)) or [] if isinstance(tag,str)]
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,TypeError):return []
+def load_images_keeping_tags(archive):
+    """docker load for a restore or move. A DockNest backup saves images by ID, so an archive that names any image is not
+    one DockNest made and is refused before loading; the tag restore after the load stays as a second guard."""
+    try:names=image_archive_names(archive)
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
+    if names:raise ValueError('The image archive names images (%s); DockNest backups save images by ID only, so it is not loaded.'%', '.join(names[:3]))
+    state={'created':{'tags':[]}}
+    try:docker('load','-i',str(archive))
+    finally:restore_test_tags(state)
 def restore_test_tags(state):
     """Point every tag the load moved back at the image it named before, so a later `docker compose up` on this server
     runs exactly what it ran before the test."""
@@ -3215,8 +3326,9 @@ def restore_test_restore(req):
     # Images: containers use snapshot image IDs, never tags. Only IDs this server did not have are test-only.
     before=set(docker('images','-aq','--no-trunc').decode().split())
     wanted=list(dict.fromkeys(manifest['snapshotImages']+[item.get('Id') for item in manifest.get('originalImages') or [] if isinstance(item,dict) and isinstance(item.get('Id'),str)]))
-    try:tags=image_archive_tags(unpacked/'images.tar')
-    except (tarfile.TarError,ValueError,OSError):raise TestOutcome('failed','The image archive in the backup cannot be read.',checks)
+    try:tags=image_archive_names(unpacked/'images.tar')
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise TestOutcome('failed','The image archive in the backup cannot be read.',checks)
+    if len(tags)>200 or any(not IMAGE_TAG.fullmatch(tag) for tag in tags):raise TestOutcome('failed','The image archive in the backup names images DockNest cannot put back.',checks)
     for tag in tags:test_journal(d,state,'tags',{'tag':tag,'previous':image_id_of(tag)})
     for image in wanted:
         if image not in before:test_journal(d,state,'images',image)

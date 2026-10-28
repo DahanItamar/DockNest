@@ -334,6 +334,14 @@ class RestoreNetworkTests(unittest.TestCase):
         for c in [self.container('app',{},Privileged=True),self.container('app',{},NetworkMode='container:production'),self.container('app',{},NetworkMode='host'),self.container('app',{'net':{'Aliases':['--unsafe']}}),self.container('app',{'net':{'IPAMConfig':{'IPv4Address':'172.20.0.2'}}})]:
             with self.assertRaises(ValueError):restore_network_plan([c,self.container('db',{})])
         with self.assertRaises(ValueError):restore_network_plan([])
+    def test_a_network_named_host_or_another_container_is_refused_whatever_the_network_mode(self):
+        # A forged manifest can keep NetworkMode bridge and still name host or container:<id> as a network key.
+        for networks in [{'host':{}},{'container:0123456789ab':{}},{'bridge':{},'host':{}},{'-net':{}}]:
+            for c in [self.container('app',networks,NetworkMode='bridge'),self.container('app',networks)]:
+                with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=networks):restore_network_plan([c])
+                with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=networks):restore_network_plan([c,self.container('db',{})])
+        self.assertEqual(restore_network_plan([self.container('app',{'bridge':{},'none':{}},NetworkMode='bridge')]),[{}])
+        restore_network_plan([self.container('app',{'shop_default':{}},NetworkMode='shop_default'),self.container('db',{'shop.back-1':{}})])
 
 class ConfigurationFileTests(unittest.TestCase):
     def test_detection_and_browsing_return_paths_and_names_without_file_contents(self):
@@ -878,6 +886,67 @@ class ProtectedPathTests(unittest.TestCase):
         for cfg in [{'configFiles':['/etc/shadow']},{'composeFiles':['/root/.ssh/config']},{'kind':'static','documentRoot':'/proc'}]:
             with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources(cfg)
         refuse_protected_sources({'configFiles':['/opt/app/.env'],'composeFiles':['/opt/app/compose.yaml']})
+
+    def test_protected_mount_sources_are_listed_as_not_copied_never_refused(self):
+        from helper import protected_mounts, protected_mount_warning
+        def selected(*sources):return [{'Name':'/gitea','Mounts':[{'Type':'bind','Source':source,'Destination':'/x'} for source in sources]+[{'Type':'volume','Name':'v','Source':'/var/lib/docker/volumes/v/_data','Destination':'/v'}]}]
+        for source in ['/etc/shadow','/etc/ssh/ssh_host_ed25519_key','/root/.ssh','/home/git/.ssh','/etc/sudoers.d','//etc/shadow']:
+            self.assertEqual(protected_mounts(selected('/srv/app/data',source)),[{'container':'gitea','source':source,'destination':'/x'}],source)
+            # Upgrade safety: backup_plan keeps working for such a site (2.11.0 backed these up).
+            with patch('helper.service_contracts',return_value=[{'container':'c','engine':'generic'}]),patch('helper.validate_database_contracts'),patch('helper.mount_table',return_value=[]),patch('helper.scoped_classify',side_effect=lambda path,*_:{'path':path}),patch('helper.classify_source',side_effect=lambda path,*_:{'path':path}):
+                backup_plan({'cleanShutdownConfirmed':True},[{'Id':'c','Image':'i','Config':{},'HostConfig':{},'Name':'/gitea','Mounts':selected(source)[0]['Mounts']}])
+        self.assertEqual(protected_mounts(selected('/srv/app/data','/etc/nginx/conf.d','/home/deploy/app')),[])
+        text=protected_mount_warning([{'container':'gitea','source':'/home/git/.ssh','destination':'/data/git/.ssh'}])
+        self.assertIn('/home/git/.ssh (mounted into gitea)',text);self.assertIn('recover them separately',text)
+
+    def test_protected_mounts_are_left_out_of_the_size_estimate_and_the_shared_mount_check(self):
+        import helper
+        from unittest.mock import Mock
+        sized=[]
+        def run(args,**_):sized.append(args[-1]);return b'0\tx'
+        selected=[{'Id':'web','Name':'/web','Mounts':[{'Type':'bind','Source':'/root/.ssh','Destination':'/k'},{'Type':'bind','Source':'/srv/app','Destination':'/d'}]}]
+        with patch('helper.run',side_effect=run):helper.capture_size(selected,[],{},[])
+        self.assertEqual(sized,['/srv/app'])
+        def preflight_with(other_source):
+            other=[{'Id':'ci','Mounts':[{'Type':'bind','Source':other_source}]}]
+            with patch.multiple('helper',inspect=Mock(side_effect=lambda ids:selected if ids==['web'] else other),docker=Mock(return_value=b'ci'),mount_exclusions=Mock(return_value={}),scoped_classify=Mock(),mount_table=Mock(return_value=[]),refuse_protected_sources=Mock()),\
+                 patch('helper.os.path.exists',return_value=True),patch('helper.os.access',return_value=True),patch('helper.os.path.islink',return_value=False),patch('helper.os.path.isdir',return_value=False),patch('helper.os.path.realpath',side_effect=lambda p:p),patch('helper.os.geteuid',return_value=0,create=True),patch('helper.os.path.commonpath',side_effect=__import__('posixpath').commonpath):
+                return preflight({'containers':['web'],'exclusiveSourcesConfirmed':True,'cleanShutdownConfirmed':True})
+        # A protected mount is not copied, so another container sharing it is fine; shared copied data is still refused.
+        self.assertEqual(preflight_with('/root/.ssh'),selected)
+        with self.assertRaisesRegex(ValueError,'shares a mount'):preflight_with('/srv/app')
+
+    @unittest.skipUnless(__import__('os').name=='posix','Folders that contain SSH host keys need a POSIX host')
+    def test_a_mount_of_a_folder_holding_protected_files_is_not_copied(self):
+        from helper import protected_mounts
+        for source in ['/etc','/etc/ssh','/']:
+            self.assertEqual(len(protected_mounts([{'Name':'/x','Mounts':[{'Type':'bind','Source':source}]}])),1,source)
+
+    def test_capture_archives_an_empty_placeholder_for_a_protected_mount_and_records_it(self):
+        import os,collections,helper
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);cfg={'containers':['web'],'stagingRoot':str(base/'staging'),'cleanShutdownConfirmed':True,'maintenance':{}}
+            mounts=[{'Type':'bind','Source':'/root/.ssh','Destination':'/root/.ssh','RW':False},{'Type':'bind','Source':str(base/'data'),'Destination':'/data','RW':True}]
+            container={'Id':'web','Name':'/web','Image':'image-web','State':{'Running':True},'Mounts':mounts,'SizeRw':0}
+            plan={'fingerprint':'plan','services':[{'container':'web','engine':'generic'}],'restartOrder':['web']}
+            tars=[];emitted=Mock()
+            def run(args,**_):
+                if args[0]=='tar':tars.append(list(args))
+                return b'0\tx' if args[0]=='du' else b''
+            def docker(*args):return b'[]' if args[:2]==('image','inspect') else b'snapshot' if args[0]=='commit' else b''
+            with patch.multiple('helper',preflight=Mock(return_value=[container]),backup_plan=Mock(return_value=plan),online_sqlite_checks=Mock(),create_staging_root=Mock(side_effect=lambda p:pathlib.Path(p).mkdir(parents=True)),docker=Mock(side_effect=docker),mount_exclusions=Mock(return_value={}),atomic_json=Mock(),prepare_database_shutdown=Mock(),shutdown_evidence=Mock(return_value=[]),revalidate_sources=Mock(),restart_services=Mock(),inspect=Mock(return_value=[container]),complete_recovery=Mock(),sync_maintenance_flag=Mock(),artifact_inventory=Mock(return_value={}),run=Mock(side_effect=run),maintenance=Mock(),health=Mock(return_value=True),emit=emitted),\
+                 patch('helper.shutil.disk_usage',return_value=collections.namedtuple('Usage','total used free')(1,0,1<<50)),\
+                 patch.object(pathlib.Path,'read_text',return_value='boot'),patch('helper.os.getpgrp',return_value=os.getpid(),create=True),patch('helper.os.fork',return_value=4242,create=True),                 patch('helper.os.path.commonpath',return_value='/'):  # the staging-overlap check is not under test (and mixes drives on Windows)
+                capture({'config':cfg,'job':'00000000-0000-4000-8000-000000000000','planFingerprint':'plan'})
+            sources=[(t[t.index('-C')+1].replace(chr(92),'/'),t[-1]) for t in tars if '-C' in t and 'mount-' in ' '.join(t)]
+            self.assertEqual(len(sources),2)
+            self.assertTrue(sources[0][0].endswith('/protected-0-0') and sources[0][1]=='.ssh','the protected mount is archived from an empty placeholder, never from /root/.ssh')
+            self.assertFalse(any('/root' in ' '.join(t) for t in tars))
+            self.assertEqual(sources[1],(str(base).replace(chr(92),'/'),'data'))
+            manifest=emitted.call_args.kwargs['result']['manifest']
+            self.assertEqual(manifest['protectedMounts'],[{'container':'web','source':'/root/.ssh','destination':'/root/.ssh'}])
+            self.assertNotIn('excludedPaths',manifest)
 
     def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
         from helper import protected_path, maintenance_directory_problem
