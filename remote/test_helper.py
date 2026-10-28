@@ -284,6 +284,14 @@ class FullZipTests(unittest.TestCase):
             output=io.BytesIO();export_zip(payload,output)
             with zipfile.ZipFile(output) as z:
                 self.assertIsNone(z.testzip());self.assertEqual(z.read('site-files/website/index.html'),b'hello');self.assertEqual(z.read('recovery-originals/static-files.tar'),nested.getvalue());self.assertIn(b'static website',z.read('START-HERE.txt'))
+    def test_zip_entries_are_regular_files_even_when_the_tar_mode_says_symlink(self):
+        import stat
+        from export_zip import copy_entry
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w') as archive:copy_entry(archive,'site-files/x.txt',io.BytesIO(b'hi'),2,0o120777)
+        mode=zipfile.ZipFile(buffer).infolist()[0].external_attr>>16
+        self.assertTrue(stat.S_ISREG(mode));self.assertFalse(stat.S_ISLNK(mode));self.assertEqual(mode&0o777,0o777)
+
     def test_zip_includes_browsable_data_and_original_recovery_archives(self):
         with tempfile.TemporaryDirectory() as d:
             mount=io.BytesIO()

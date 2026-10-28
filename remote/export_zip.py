@@ -11,7 +11,7 @@ def safe_name(name):
     return str(p)
 
 def copy_entry(z,name,source,size,mode=0o600):
-    item=zipfile.ZipInfo(safe_name(name));item.create_system=3;item.external_attr=(stat.S_IFREG|mode)<<16
+    item=zipfile.ZipInfo(safe_name(name));item.create_system=3;item.external_attr=(stat.S_IFREG|(mode&0o777))<<16
     item.compress_type=zipfile.ZIP_DEFLATED
     item._compresslevel=1
     with z.open(item,'w',force_zip64=True) as output:shutil.copyfileobj(source,output,1024*1024)
