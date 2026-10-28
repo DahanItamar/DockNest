@@ -114,8 +114,11 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       const backup = db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);
       createdBackups.push(backup.id);
       const link = linkOf(backup.id);
+      // Names only the reason code (no paths or secrets) so a chain that fell back to a full backup is explained in the log.
+      const detail = JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job.id).details || '{}').incremental ?? {};
+      console.log(`Incremental fixture point ${index}: kind=${link?.backup_kind} position=${link?.chain_position} fullReason=${detail.fullReason ?? '-'} size=${mb(Number(backup.size))}`);
       assert.ok(link, 'Point ' + index + ' is part of a chain');
-      assert.equal(link.backup_kind, index === 0 ? 'full' : 'incremental', 'Point ' + index + ' kind');
+      assert.equal(link.backup_kind, index === 0 ? 'full' : 'incremental', 'Point ' + index + ' kind (reason: ' + (detail.fullReason ?? 'none recorded') + ')');
       assert.equal(link.chain_position, index);
       assert.equal(await verifyEncrypted(backup.path), backup.checksum);
       assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', app), 'true', 'The source keeps running after backup ' + index);
