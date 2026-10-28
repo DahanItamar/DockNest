@@ -10,6 +10,7 @@ import { tickSelfBackup,claimSelfBackup,executeSelfBackup,recoverInterruptedSelf
 import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-lease.js';
 import { runWorkerLoop } from './worker-loop.js';
 import { tickUpdateCheck } from './updates/check.js';
+import { tickRadar } from './radar/scan.js';
 import { tickMoves } from './moves/engine.js';
 import { tickRestoreTests, recoverInterruptedRestoreTests } from './restore-tests/engine.js';
 import { tickRestoreTestSchedule } from './restore-tests/scheduler.js';
@@ -49,7 +50,7 @@ for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){co
 try{
  let reconcileAt=0;
  const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickAlerts();tickReachability();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickAlerts();tickReachability();tickRadar({db});},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);
