@@ -279,7 +279,7 @@ def stream_document(archive,name,value):
     archive.addfile(info,io.BytesIO(data))
 
 def capture_size(containers,configuration,exclusions,images):
-    sources={m['Source'] for c in containers for m in c['Mounts']}
+    sources={m['Source'] for c in containers for m in c['Mounts'] if not (m['Type']=='bind' and protected_mount(m['Source']))}
     sources.update(configuration)
     size=0
     for source in sources:
@@ -1333,7 +1333,8 @@ def preflight(cfg):
                         p=os.path.join(current,filename)
                         if excluded_path(p,exclusions.get(src,[])):continue
                         if os.path.islink(p) and os.path.commonpath([os.path.realpath(src),os.path.realpath(p)])!=os.path.realpath(src):raise ValueError('Mount contains a symlink to uncaptured external data')
-            mounts.append(m)
+            # A protected mount is not copied, so another container sharing it does not make the copy inconsistent.
+            if not (m['Type']=='bind' and protected_mount(src)):mounts.append(m)
     for c in inspect(others) if others else []:
         if c['Id'] in selected:continue
         for m in c['Mounts']:
@@ -1410,7 +1411,7 @@ def capture(req,output=None):
     original_images=json.loads(docker('image','inspect',*original_ids))
     exclusions=mount_exclusions(cfg,cs)
     # Shared sources are archived once; account for images/configs and packing.
-    needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'])+sum(c.get('SizeRw',0) or 0 for c in cs)
+    needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'] if not (m['Type']=='bind' and protected_mount(m['Source'])))+sum(c.get('SizeRw',0) or 0 for c in cs)
     if output is None:
         if shutil.disk_usage(root).free<needed*2+1024**3:raise ValueError('Insufficient staging capacity')
     else:
@@ -2291,22 +2292,38 @@ def install_locked(name):
     emit(stage='verify')
     verify_install(name)
     emit(result={'package':name,'installed':True})
+IMAGE_BASED_LINKS=('home','srv','opt','mnt')
+def image_based_form(path):
+    """Fedora CoreOS, Silverblue and IoT link /home, /srv, /opt and /mnt to var/<x> at the root. Only that root-level
+    link is rewritten to its /var form, and only when root owns it and neither /var nor /var/<x> is a link; any other
+    link on the way stays a refusal."""
+    parts=pathlib.PurePosixPath(path).parts
+    if len(parts)<2 or parts[1] not in IMAGE_BASED_LINKS:return path
+    top='/'+parts[1]
+    try:
+        if not os.path.islink(top) or os.lstat(top).st_uid!=0 or os.readlink(top)!='var/'+parts[1]:return path
+        if os.path.islink('/var') or os.path.islink('/var/'+parts[1]):return path
+    except OSError:return path
+    return '/'.join(('/var',)+parts[1:])
 def foreign_app_folder(path,state):
     """Below /var/lib, an application folder that already holds data belongs to another program unless this move made
     it (journalled). Other roots keep shared parents such as ~/docker or /opt/stacks, so they are not checked."""
     parts=pathlib.PurePosixPath(path).parts
     if parts[1:3]!=('var','lib') or len(parts)<4:return None
     app='/'.join(parts[:4])[1:]
-    if any(within(app,record['path']) for record in (state or {}).get('created',{}).get('paths',[])):return None
+    records=[record['path'] for record in (state or {}).get('created',{}).get('paths',[])]
+    if any(within(app,record) for record in records):return None
     folder=pathlib.Path(app)
-    return app if folder.is_dir() and any(folder.iterdir()) else None
+    if not folder.is_dir():return None
+    # An entry this move placed (journalled) is not foreign: a second mount below an empty pre-existing folder is fine.
+    return app if any(not any(within(lexical(str(entry)),record) for record in records) for entry in folder.iterdir()) else None
 def place_tree(archive,target,d,state,mid):
     """Extract a one-entry archive to `target`, which must not exist (an empty folder is accepted and recreated on teardown)."""
     target=move_path(target)
     # The backup names this path, so it must also lie below an application root, through no symlink on this server.
     forms=resolved(str(target))
     if any(path.startswith('/') and not move_root_allowed(path) for path in forms):raise ValueError('%s is outside the folders a move may create (/opt, /srv, /var/www, /var/lib/<app>, a home folder or another top-level data folder); move this site by hand.'%target)
-    if len(forms)==2 and forms[1].startswith('/') and forms[1]!=forms[0]:raise ValueError('%s goes through a symbolic link on this server; DockNest only creates paths without links during a move.'%target)
+    if len(forms)==2 and forms[1].startswith('/') and forms[1]!=image_based_form(forms[0]):raise ValueError('%s goes through a symbolic link on this server; DockNest only creates paths without links during a move.'%target)
     app=foreign_app_folder(forms[0],state)
     if app:raise ValueError('%s already exists on this server and belongs to another program; DockNest never writes into it during a move.'%app)
     if target.is_symlink() or (target.exists() and not (target.is_dir() and not any(target.iterdir()))):raise ValueError('%s already exists on this server. DockNest never overwrites existing folders.'%target)
@@ -3110,15 +3127,21 @@ def image_archive_tags(archive):
 def image_archive_names(archive):
     """Every image name an archive would set on load: docker save's manifest.json and repositories, and OCI index.json
     annotations (containerd image store). A DockNest backup saves images by ID, so this is empty for a real package."""
-    names=list(image_archive_tags(archive))
+    names=[]
     with tarfile.open(archive,'r:') as tar:
-        try:member=tar.getmember('index.json')
-        except KeyError:member=None
-        if member is not None and member.isfile() and member.size<=4*1024*1024:
+        for name in ['manifest.json','repositories','index.json']:
+            try:member=tar.getmember(name)
+            except KeyError:continue
+            # Raw content counts, before any name filter: a record this check cannot read is refused too.
+            if not member.isfile() or member.size>4*1024*1024:raise ValueError('Unreadable image archive record')
             data=json.loads(tar.extractfile(member).read())
-            for item in (data.get('manifests') or [] if isinstance(data,dict) else []):
-                annotations=item.get('annotations') if isinstance(item,dict) else None
-                if isinstance(annotations,dict):names+=[str(annotations[key]) for key in ['io.containerd.image.name','org.opencontainers.image.ref.name'] if annotations.get(key)]
+            if name=='manifest.json':names+=[str(tag) for item in (data if isinstance(data,list) else [data]) for tag in ((item.get('RepoTags') if isinstance(item,dict) else item) or [])]
+            elif name=='repositories':
+                if data:names+=[str(repo)+':'+str(tag) for repo,items in (data.items() if isinstance(data,dict) else [('?',data)]) for tag in (items if isinstance(items,dict) and items else [items])]
+            else:
+                for item in (data.get('manifests') or [] if isinstance(data,dict) else [data]):
+                    annotations=item.get('annotations') if isinstance(item,dict) else None
+                    if isinstance(annotations,dict):names+=[str(annotations[key]) for key in ['io.containerd.image.name','org.opencontainers.image.ref.name'] if annotations.get(key)]
     return list(dict.fromkeys(names))
 def image_id_of(reference):
     try:return docker('image','inspect','--format','{{.Id}}',reference).decode().strip() or None
@@ -3130,7 +3153,7 @@ def load_images_keeping_tags(archive):
     """docker load for a restore or move. A DockNest backup saves images by ID, so an archive that names any image is not
     one DockNest made and is refused before loading; the tag restore after the load stays as a second guard."""
     try:names=image_archive_names(archive)
-    except (tarfile.TarError,ValueError,OSError,AttributeError):raise ValueError('The image archive in the backup cannot be read')
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise ValueError('The image archive in the backup cannot be read')
     if names:raise ValueError('The image archive names images (%s); DockNest backups save images by ID only, so it is not loaded.'%', '.join(names[:3]))
     state={'created':{'tags':[]}}
     try:docker('load','-i',str(archive))
@@ -3303,8 +3326,9 @@ def restore_test_restore(req):
     # Images: containers use snapshot image IDs, never tags. Only IDs this server did not have are test-only.
     before=set(docker('images','-aq','--no-trunc').decode().split())
     wanted=list(dict.fromkeys(manifest['snapshotImages']+[item.get('Id') for item in manifest.get('originalImages') or [] if isinstance(item,dict) and isinstance(item.get('Id'),str)]))
-    try:tags=image_archive_tags(unpacked/'images.tar')
-    except (tarfile.TarError,ValueError,OSError):raise TestOutcome('failed','The image archive in the backup cannot be read.',checks)
+    try:tags=image_archive_names(unpacked/'images.tar')
+    except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise TestOutcome('failed','The image archive in the backup cannot be read.',checks)
+    if len(tags)>200 or any(not IMAGE_TAG.fullmatch(tag) for tag in tags):raise TestOutcome('failed','The image archive in the backup names images DockNest cannot put back.',checks)
     for tag in tags:test_journal(d,state,'tags',{'tag':tag,'previous':image_id_of(tag)})
     for image in wanted:
         if image not in before:test_journal(d,state,'images',image)

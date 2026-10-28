@@ -899,6 +899,23 @@ class ProtectedPathTests(unittest.TestCase):
         text=protected_mount_warning([{'container':'gitea','source':'/home/git/.ssh','destination':'/data/git/.ssh'}])
         self.assertIn('/home/git/.ssh (mounted into gitea)',text);self.assertIn('recover them separately',text)
 
+    def test_protected_mounts_are_left_out_of_the_size_estimate_and_the_shared_mount_check(self):
+        import helper
+        from unittest.mock import Mock
+        sized=[]
+        def run(args,**_):sized.append(args[-1]);return b'0\tx'
+        selected=[{'Id':'web','Name':'/web','Mounts':[{'Type':'bind','Source':'/root/.ssh','Destination':'/k'},{'Type':'bind','Source':'/srv/app','Destination':'/d'}]}]
+        with patch('helper.run',side_effect=run):helper.capture_size(selected,[],{},[])
+        self.assertEqual(sized,['/srv/app'])
+        def preflight_with(other_source):
+            other=[{'Id':'ci','Mounts':[{'Type':'bind','Source':other_source}]}]
+            with patch.multiple('helper',inspect=Mock(side_effect=lambda ids:selected if ids==['web'] else other),docker=Mock(return_value=b'ci'),mount_exclusions=Mock(return_value={}),scoped_classify=Mock(),mount_table=Mock(return_value=[]),refuse_protected_sources=Mock()),\
+                 patch('helper.os.path.exists',return_value=True),patch('helper.os.access',return_value=True),patch('helper.os.path.islink',return_value=False),patch('helper.os.path.isdir',return_value=False),patch('helper.os.path.realpath',side_effect=lambda p:p),patch('helper.os.geteuid',return_value=0,create=True),patch('helper.os.path.commonpath',side_effect=__import__('posixpath').commonpath):
+                return preflight({'containers':['web'],'exclusiveSourcesConfirmed':True,'cleanShutdownConfirmed':True})
+        # A protected mount is not copied, so another container sharing it is fine; shared copied data is still refused.
+        self.assertEqual(preflight_with('/root/.ssh'),selected)
+        with self.assertRaisesRegex(ValueError,'shares a mount'):preflight_with('/srv/app')
+
     @unittest.skipUnless(__import__('os').name=='posix','Folders that contain SSH host keys need a POSIX host')
     def test_a_mount_of_a_folder_holding_protected_files_is_not_copied(self):
         from helper import protected_mounts

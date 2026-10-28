@@ -371,7 +371,33 @@ class MoveSafetyTests(unittest.TestCase):
             # Made by this move (journalled), a second folder in it is fine; a new or empty folder is fine too.
             self.assertIsNone(helper.foreign_app_folder('/var/lib/gitea/repositories',{'created':{'paths':[{'path':'/var/lib/gitea','restoreEmpty':False}]}}))
             self.assertIsNone(helper.foreign_app_folder('/var/lib/myapp/data',{'created':{'paths':[]}}))
+            # An empty pre-existing folder: after the first mount placed data/ (journalled), a second mount is fine,
+            # but an entry the move did not journal still makes the folder foreign.
+            self.assertIsNone(helper.foreign_app_folder('/var/lib/gitea/conf',{'created':{'paths':[{'path':'/var/lib/gitea/data','restoreEmpty':False}]}}))
+            self.assertEqual(helper.foreign_app_folder('/var/lib/gitea/conf',{'created':{'paths':[{'path':'/var/lib/gitea/other','restoreEmpty':False}]}}),'/var/lib/gitea')
             self.assertIsNone(helper.foreign_app_folder('/srv/shop/data',{'created':{'paths':[]}}))
+    def test_image_based_systems_keep_their_root_level_var_links_and_nothing_else(self):
+        import types
+        links={'/home':'var/home','/srv':'var/srv'};owners={'/home':0,'/srv':1000}
+        def patched(var_links=()):
+            return [patch('helper.os.path.islink',side_effect=lambda p:p in links or p in var_links),patch('helper.os.lstat',side_effect=lambda p:types.SimpleNamespace(st_uid=owners.get(p,0))),patch('helper.os.readlink',side_effect=lambda p:links[p])]
+        def run(var_links=(),call=None):
+            items=patched(var_links)
+            for item in items:item.start()
+            try:return call()
+            finally:
+                for item in items:item.stop()
+        self.assertEqual(run(call=lambda:helper.image_based_form('/home/alice/app')),'/var/home/alice/app')
+        self.assertEqual(run(call=lambda:helper.image_based_form('/srv/app')),'/srv/app','a link not owned by root is not rewritten')
+        self.assertEqual(run(('/var',),lambda:helper.image_based_form('/home/alice/app')),'/home/alice/app','/var itself is a link')
+        self.assertEqual(run(('/var/home',),lambda:helper.image_based_form('/home/alice/app')),'/home/alice/app','/var/home is a link')
+        self.assertEqual(run(call=lambda:helper.image_based_form('/data/app')),'/data/app')
+        links['/opt']='/var/opt'
+        self.assertEqual(run(call=lambda:helper.image_based_form('/opt/app')),'/opt/app','only the relative var/<x> target is accepted')
+        real={'/home/alice/app':'/var/home/alice/app','/home/alice/link/app':'/var/home/alice/real/app'}
+        def place(target):
+            with patch('helper.os.path.realpath',side_effect=lambda p:real.get(p.replace(chr(92),'/'),p)):return run(call=lambda:helper.place_tree(pathlib.Path('unused.tar'),target,None,{'created':{'paths':[]}},MOVE))
+        with self.assertRaisesRegex(ValueError,'symbolic link'):place('/home/alice/link/app')
     def test_only_an_image_archive_saved_by_id_is_loaded(self):
         def archive(path,manifest=None,index=None):
             with tarfile.open(path,'w') as tar:
@@ -387,7 +413,12 @@ class MoveSafetyTests(unittest.TestCase):
             self.assertEqual(host.calls,[['load','-i',str(byid)]])
             for bad in [archive(base/'tag.tar',[{'Config':'x.json','RepoTags':['nginx:latest'],'Layers':[]}]),
                         archive(base/'oci.tar',None,{'manifests':[{'annotations':{'io.containerd.image.name':'docker.io/library/nginx:latest'}}]}),
-                        archive(base/'ref.tar',None,{'manifests':[{'annotations':{'org.opencontainers.image.ref.name':'latest'}}]})]:
+                        archive(base/'ref.tar',None,{'manifests':[{'annotations':{'org.opencontainers.image.ref.name':'latest'}}]}),
+                        archive(base/'raw.tar',[{'Config':'x.json','RepoTags':['not a valid tag'],'Layers':[]}]),
+                        archive(base/'repos.tar',[{'Config':'x.json','RepoTags':None,'Layers':[]}])]:
+                if bad.name=='repos.tar':
+                    with tarfile.open(bad,'a') as tar:
+                        data=json.dumps({'nginx':{'latest':'abc'}}).encode();info=tarfile.TarInfo('repositories');info.size=len(data);tar.addfile(info,io.BytesIO(data))
                 host=FakeHost(temporary,{})
                 with patch('helper.docker',side_effect=host.docker),self.assertRaisesRegex(ValueError,'save images by ID only',msg=bad.name):helper.load_images_keeping_tags(bad)
                 self.assertEqual(host.calls,[],bad.name)
