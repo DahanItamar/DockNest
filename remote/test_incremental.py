@@ -231,6 +231,32 @@ class CommitTests(CaptureHarness):
             helper.main({'operation':'incremental-commit','job':JOB%1,'siteKey':SITE});helper.main({'operation':'incremental-discard','siteKey':SITE})
         commit.assert_called_once();discard.assert_called_once()
 
+class ChainFingerprintTests(unittest.TestCase):
+    def inspect(self,endpoint='e1',mac='02:42:ac:11:00:02',ip='172.17.0.2'):
+        return [{'Id':'c0','Name':'/web','Image':'sha256:'+'1'*64,'State':{'Running':True,'StartedAt':endpoint},
+                 'Mounts':[{'Type':'bind','Source':'/srv/data','Destination':'/data','RW':True,'Propagation':'rprivate'}],
+                 'NetworkSettings':{'SandboxKey':'/var/run/docker/netns/'+endpoint,'IPAddress':ip,'Networks':{'site':{'Aliases':['web','c0'],'EndpointID':endpoint,'MacAddress':mac,'IPAddress':ip,'Gateway':'172.17.0.1','IPv6Gateway':'','GlobalIPv6Address':'','NetworkID':'n1'}}}}]
+    def fingerprint(self,containers,cfg=None,exclusions=None):
+        return helper.chain_fingerprint(cfg or {'composeFiles':['/srv/compose.yml']},containers,exclusions or {})
+    def test_restart_fields_do_not_change_it(self):
+        self.assertEqual(self.fingerprint(self.inspect()),self.fingerprint(self.inspect('e2','02:42:ac:11:00:09','172.17.0.9')))
+    def test_structural_changes_do(self):
+        base=self.fingerprint(self.inspect())
+        changes=[]
+        c=self.inspect();c[0]['Mounts'].append({'Type':'volume','Name':'v','Source':'/var/lib/docker/volumes/v/_data','Destination':'/v','RW':True});changes.append(c)
+        c=self.inspect();c[0]['Mounts'][0]['RW']=False;changes.append(c)
+        c=self.inspect();c[0]['Image']='sha256:'+'2'*64;changes.append(c)
+        c=self.inspect();c.append({**self.inspect()[0],'Id':'c1','Name':'/worker'});changes.append(c)
+        c=self.inspect();c[0]['NetworkSettings']['Networks']['other']={'Aliases':[]};changes.append(c)
+        c=self.inspect();c[0]['NetworkSettings']['Networks']['site']['Aliases']=['web'];changes.append(c)
+        for changed in changes:
+            with self.subTest(changed=changed):self.assertNotEqual(self.fingerprint(changed),base)
+        self.assertNotEqual(self.fingerprint(self.inspect(),{'composeFiles':['/srv/other.yml']}),base)
+        self.assertNotEqual(self.fingerprint(self.inspect(),exclusions={'/srv/data':['/srv/data/cache']}),base)
+    def test_v1_manifest_plan_stays_without_it(self):
+        self.assertEqual(helper.v1_plan({'fingerprint':'f','chainFingerprint':'c'}),{'fingerprint':'f'})
+        self.assertIn('chainFingerprint',helper.public_plan({'fingerprint':'f','chainFingerprint':'c','sources':[],'services':[]}))
+
 class StreamRepeatTests(unittest.TestCase):
     def test_both_stream_passes_start_from_the_same_snapshot(self):
         """A direct capture runs each tar twice (inventory, then transfer); tar rewrites its snapshot each time."""
@@ -420,7 +446,13 @@ class DumpdirTests(unittest.TestCase):
             root=pathlib.Path(d)/'out';(root/'data'/'real').mkdir(parents=True);os.symlink('real',root/'data'/'l')
             archive=pathlib.Path(d)/'m.tar';archive.write_bytes(mount_tar([('data','dir',None,None),('data/l/x','file','a',None)]))
             with self.assertRaisesRegex(ValueError,'write through'):incremental_archive_check(archive,root.resolve())
+            # The kernel resolves l/.. through the link: data/l -> real, so l/../.. is the destination itself (allowed)
+            # and l/../../.. is its parent (refused), although both look contained when read lexically.
             archive.write_bytes(mount_tar([('data','dir',None,None),('data/up','sym','l/../..',None)]))
+            self.assertEqual(incremental_archive_check(archive,root.resolve()),'data')
+            archive.write_bytes(mount_tar([('data','dir',None,None),('data/up','sym','l/../../..',None)]))
+            with self.assertRaisesRegex(ValueError,'escapes'):incremental_archive_check(archive,root.resolve())
+            archive.write_bytes(mount_tar([('data','dir',None,None),('data/up','sym','l/../../../etc',None)]))
             with self.assertRaisesRegex(ValueError,'escapes'):incremental_archive_check(archive,root.resolve())
             (root/'data'/'real'/'f').write_text('x')
             archive.write_bytes(mount_tar([('data','dir',None,None),('data/h','lnk','data/real/f',None)]))
