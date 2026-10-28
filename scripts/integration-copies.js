@@ -34,12 +34,14 @@ export async function runCopiesScenario({run,until,hosts,servers,db,record,siteI
   assert.ok(copyRow(backup.id),'A copy row was queued when the main package was published');
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-a'),'true');
   // Condition-based: run copy steps like the worker loop until the copy is verified (or the deadline passes).
-  await until(async()=>{
-   const row=copyRow(backup.id);
-   if(row.status==='verified')return true;
-   const copy=claimCopy();if(copy)await executeCopy(copy,verifyEncrypted);
-   return copyRow(backup.id).status==='verified';
-  },'The S3 copy did not reach verified',120);
+  const deadline=Date.now()+120000;
+  for(;;){
+   const status=copyRow(backup.id).status;
+   if(status==='verified')break;
+   if(status==='failed'||status==='gave_up')assert.fail('The S3 copy ended with status '+status+' (see the stored copy error code in the test database)');
+   assert.ok(Date.now()<deadline,'The S3 copy did not reach verified before the deadline (status '+status+')');
+   const next=claimCopy();if(next)await executeCopy(next,verifyEncrypted);else await new Promise(resolve=>setTimeout(resolve,1000));
+  }
   const copy=copyRow(backup.id);
   assert.ok(copy.path.startsWith('s3:'+copyTargetId+':'));
   assert.equal(await verifyEncrypted(copy.path),backup.checksum,'The copy is the same encrypted package (same SHA-256)');
@@ -71,15 +73,17 @@ export async function runCopiesScenario({run,until,hosts,servers,db,record,siteI
   try{
    const attempt=await restoreAndRead(backup.id,{sourceTargetId:copyTargetId});
    refused=attempt.row.status!=='completed';
-  }catch{refused=true;}
+  }catch(error){refused=/did not authenticate|authenticat/i.test(String(error?.message));if(!refused)throw error;}
   assert.ok(refused,'A tampered copy is never restored');
   await put(original);
   record('A tampered S3 copy fails authentication and is refused for restore');
  }finally{
   // Leave later scenarios unchanged: no copies configured for the site, no leftover fixture.
-  try{updateSiteStorage(siteId,{mainTargetId:null,copies:[]},'qa');}catch{}
+  const cleanupFailures=[];
+  try{updateSiteStorage(siteId,{mainTargetId:null,copies:[]},'qa');}catch{cleanupFailures.push('site storage reset');}
   // The test backup has no main package any more; drop it so later scenarios do not see a half-removed backup.
-  try{if(testBackupId){db.prepare('DELETE FROM backup_copies WHERE backup_id=?').run(testBackupId);db.prepare('DELETE FROM backups WHERE id=?').run(testBackupId);}}catch{}
+  try{if(testBackupId){db.prepare('DELETE FROM backup_copies WHERE backup_id=?').run(testBackupId);db.prepare('DELETE FROM backups WHERE id=?').run(testBackupId);}}catch{cleanupFailures.push('test backup removal');}
   await stop();
+  if(cleanupFailures.length)console.warn('Copies scenario cleanup incomplete: '+cleanupFailures.join(', '));
  }
 }

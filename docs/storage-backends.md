@@ -135,8 +135,8 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   "Copy missing" until every configured copy is verified.
 - **Failures.** A failed copy is retried automatically (5 minutes, 30 minutes, 2 hours, then every 6 hours, for up to
   7 days), then marked "gave up". The next backup tries again, and **Retry** (`POST /api/backups/:id/copies/:targetId/retry`)
-  starts a fresh window. Alerts: `backup.copy_failed` on the first failure, `backup.copy_recovered` and `backup.copy_gave_up`; they name the
-  destination, never credentials.
+  starts a fresh window. Alerts: `backup.copy_failed` on the first failure, `backup.copy_recovered` and
+  `backup.copy_gave_up`; they name the destination, never credentials.
 - **Retention.** Each destination keeps its own number of backups; a pin keeps a backup on every destination. If a
   destination uses Object Lock, only its copy waits for the lock to end.
 - **Restore from a copy.** Restore uses the main copy. If it is missing or fails authentication, DockNest uses the first
@@ -144,7 +144,7 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   can also choose a copy directly. A copy that fails authentication is never restored from.
 - **Removing a destination.** A destination that still holds copies, main packages or recovery kits, is the default, or
   is used by a site cannot be removed. The Storage page shows how many copies and offers "Delete these copies". If some
-  backups exist only on that destination, deleting asks for an extra confirmation (`last_packages`) because it deletes
+  backups exist only on that destination, deleting asks for an extra confirmation (request flag `includeLastPackages`) because it deletes
   those backups.
 
 ## Verification status
