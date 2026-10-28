@@ -166,9 +166,11 @@ export function createUpdateService({ release, transport = createTransport(), no
     if (answer.accepted) db.prepare('UPDATE update_requests SET accepted_at=COALESCE(accepted_at,?) WHERE id=?').run(iso(now()), requestId);
     return answer;
   }
-  function refuse(requestId, refusal) {
-    db.prepare("UPDATE update_requests SET state='refused',refusal=?,finished_at=? WHERE id=? AND state='submitted'").run(refusal, iso(now()), requestId);
-    audit('system', 'updater.refused', requestId, { refusal }); rebuild();
+  // detail: only the transport-validated marker 'pin-missing' (2.11.1), kept in reason; eligibility reads it.
+  function refuse(requestId, refusal, detail = null) {
+    const reason = refusal === 'state-mismatch' && detail === 'pin-missing' ? detail : null;
+    db.prepare("UPDATE update_requests SET state='refused',refusal=?,reason=?,finished_at=? WHERE id=? AND state='submitted'").run(refusal, reason, iso(now()), requestId);
+    audit('system', 'updater.refused', requestId, reason ? { refusal, reason } : { refusal }); rebuild();
   }
   // "I checked the host, close this record": only the active request, only a running one the server snapshot calls stale.
   async function acknowledge(requestId, user) {

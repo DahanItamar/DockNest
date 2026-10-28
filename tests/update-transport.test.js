@@ -68,6 +68,11 @@ test('submitRequest sends exactly the upgrade fields and trusts only a well-form
     assert.deepEqual(await transport.submitRequest(request), { accepted: true, code: null });
     assert.deepEqual(seen[0], { schema: 1, id: rid, action: 'upgrade', version: 'v2.3.0', requestedBy: 'user-1', requestedAt: at });
     reply = () => JSON.stringify({ accepted: false, code: 'low-disk' }); assert.deepEqual(await transport.submitRequest(request), { accepted: false, code: 'low-disk' });
+    // 2.11.1: only the fixed pin-missing marker on a state-mismatch passes; older brokers send none.
+    reply = () => JSON.stringify({ accepted: false, code: 'state-mismatch', detail: 'pin-missing' }); assert.deepEqual(await transport.submitRequest(request), { accepted: false, code: 'state-mismatch', detail: 'pin-missing' });
+    for (const answer of [{ code: 'state-mismatch', detail: 'HEAD is not the verified commit' }, { code: 'state-mismatch', detail: ['pin-missing'] }, { code: 'state-mismatch' }, { code: 'low-disk', detail: 'pin-missing' }]) {
+      reply = () => JSON.stringify({ accepted: false, ...answer }); assert.deepEqual(await transport.submitRequest(request), { accepted: false, code: answer.code }, JSON.stringify(answer));
+    }
     for (const bad of [() => JSON.stringify({ accepted: false, code: 'rm -rf' }), () => JSON.stringify({ accepted: true, id: 'other' }), () => 'x'.repeat(2000), () => 'not json', () => JSON.stringify({ accepted: 'yes' })]) {
       reply = bad; await assert.rejects(transport.submitRequest(request), error => error instanceof TransportError && error.delivered === true && error.code === 'invalid-answer');
     }
@@ -87,6 +92,21 @@ test('eligibility follows the table: the first matching row wins', () => {
   assert.equal(state({ updater: { ...updater, consecutiveExit4: { 'v2.3.0': 1 } } }).state, 'update-available');
   assert.equal(state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', from_version: '2.2.0' } }).state, 'updater-state-mismatch');
   assert.equal(state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', from_version: '2.1.0' } }).state, 'update-available', 'a changed installed version clears it');
+  // 2.11.1: a missing pin is fixed on the host with --repair: the offer stays startable with a notice naming the command.
+  const pin = state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'pin-missing', from_version: '2.2.0' } });
+  assert.deepEqual([pin.state, pin.canStart, pin.offer.update.version, pin.offer.blocked, pin.offer.notice.code], ['update-available', true, 'v2.3.0', null, 'UPDATER_PIN_MISSING']);
+  assert.match(pin.offer.notice.message, /sudo scripts\/install-updater\.sh --repair/);
+  assert.equal(state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'pin-missing', from_version: '2.1.0' } }).offer.notice, undefined, 'a changed installed version clears it');
+  assert.equal(state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'pin-missing', from_version: '2.2.0' }, hold: true }).offer.blocked.code, 'UPDATE_ON_HOLD');
+  assert.equal(state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'pin-missing', from_version: '2.2.0' }, updater: { ...updater, blocked: true } }).state, 'updater-blocked');
+  for (const other of [null, 'unknown', 'tag-moved']) {
+    const generic = state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: other, from_version: '2.2.0' } });
+    assert.equal(generic.state, 'updater-state-mismatch', String(other)); assert.doesNotMatch(generic.offer.blocked.message, /--repair/);
+  }
+  assert.equal(state({}).offer.notice, undefined);
+  // After install-updater.sh --repair recorded the version, its earlier refusals (marked repaired) no longer apply.
+  const repaired = state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'repaired', from_version: '2.2.0' } });
+  assert.deepEqual([repaired.state, repaired.canStart, repaired.offer.blocked, repaired.offer.notice], ['update-available', true, null, undefined]);
   assert.equal(state({ hold: true }).canStart, false); assert.equal(state({ hold: true }).offer.blocked.code, 'UPDATE_ON_HOLD'); assert.equal(state({ hold: true }).offer.update.version, 'v2.3.0');
   assert.equal(state({ hold: true, recoveryPending: true }).offer.blocked.code, 'RECOVERY_REVIEW_REQUIRED');
   for (const base of ['consent-pending', 'checks-off']) assert.deepEqual([state({ base }).state, state({ base }).offer.update], [base, null]);

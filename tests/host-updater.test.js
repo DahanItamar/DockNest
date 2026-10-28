@@ -64,3 +64,30 @@ test('installer pins cosign to the release workflow version and refuses unsuppor
  const syntax = spawnSync('sh', ['-n', 'scripts/install-updater.sh'], { encoding: 'utf8' });
  if (syntax.error?.code !== 'ENOENT') assert.equal(syntax.status, 0, syntax.stderr);
 });
+
+// 2.11.1: --repair, once the installed release is pinned, stops earlier state-mismatch refusals on that version from
+// blocking the Update Center. Runs the installer's own script (as the api container would) against a scratch database.
+test('installer repair marks earlier state-mismatch refusals on the installed version as repaired, nothing else', async () => {
+ const { DatabaseSync } = await import('node:sqlite'), { mkdtempSync, rmSync } = await import('node:fs'), { tmpdir } = await import('node:os'), { join } = await import('node:path');
+ const installer = read('scripts/install-updater.sh'), start = installer.indexOf('clear_mismatch() {'), body = installer.slice(start, installer.indexOf('\n}\n', start));
+ const parts = body.match(/in_api '([^']*)'"\$1"'([^']*)'/); assert.ok(parts, 'the version is spliced in once');
+ assert.ok(body.includes(`case "$1" in ''|*[!0-9.]*) return 0 ;; esac`), 'only digits and dots reach the script');
+ assert.ok(installer.includes('\nif grep -q "\\"v$CURRENT\\"" "$STATE/pins.json" 2>/dev/null; then clear_mismatch "$CURRENT"; fi\n'), 'only when the installed release is pinned');
+ const dir = mkdtempSync(join(tmpdir(), 'docknest-repair-')), file = join(dir, 'state.sqlite').replace(/\\/g, '/');
+ try {
+  const db = new DatabaseSync(file);
+  db.exec('CREATE TABLE update_requests (id TEXT PRIMARY KEY, from_version TEXT, state TEXT, refusal TEXT, reason TEXT)');
+  const rows = [['a', '2.10.1', 'refused', 'state-mismatch', null], ['b', '2.10.1', 'refused', 'state-mismatch', 'pin-missing'], ['c', '2.10.0', 'refused', 'state-mismatch', null],
+   ['d', '2.10.1', 'refused', 'low-disk', null], ['e', '2.10.1', 'rolled_back', null, 'health-timeout-api']];
+  for (const row of rows) db.prepare('INSERT INTO update_requests VALUES (?,?,?,?,?)').run(...row);
+  db.close();
+  const script = (parts[1] + '2.10.1' + parts[2]).replace('/data/state.sqlite', file);
+  const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), '2');
+  const after = new DatabaseSync(file);
+  assert.deepEqual(after.prepare('SELECT id,state,reason FROM update_requests ORDER BY id').all().map(r => [r.id, r.state, r.reason]),
+   [['a', 'refused', 'repaired'], ['b', 'refused', 'repaired'], ['c', 'refused', null], ['d', 'refused', null], ['e', 'rolled_back', 'health-timeout-api']]);
+  after.close();
+  assert.equal(spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' }).stdout.trim(), '0', 'a second repair changes nothing');
+ } finally { rmSync(dir, { recursive: true, force: true }); }
+});

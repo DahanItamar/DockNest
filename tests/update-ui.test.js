@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {buildBugReport,ISSUE_BASE,URL_LIMIT} from '../web/updates/report.js';
 import {parseNotes,stripFrontMatter,safeHref,NOTES_LIMIT} from '../web/updates/notes-parse.js';
-import {isLocking,trackFor,phaseStatuses,formatElapsed,retryDelay,highlightChips,submitMessage,STAGES,PHASES} from '../web/updates/model.js';
+import {isLocking,trackFor,phaseStatuses,formatElapsed,retryDelay,highlightChips,submitMessage,REPAIR_COMMAND,STAGES,PHASES} from '../web/updates/model.js';
 
 test('report URL has only the allow-listed fields on the constant base',()=>{
  const r=buildBugReport({version:'2.2.0',installMode:'source'}),u=new URL(r.href);
@@ -69,6 +69,19 @@ test('the update UI never uses dangerouslySetInnerHTML or text-glyph icons',asyn
   assert.ok(!text.includes('dangerouslySetInnerHTML'),file);
   assert.ok(!/[✓✔✕✖⚠ℹ]|\p{Extended_Pictographic}/u.test(text),file+' has an emoji or glyph icon');
  }
+});
+test('a state-mismatch the broker marked pin-missing names --repair; other state-mismatch reasons stay generic',()=>{
+ const pin=submitMessage({code:'UPDATER_STATE_MISMATCH',status:409,data:{code:'UPDATER_STATE_MISMATCH',refusal:'state-mismatch',detail:'pin-missing'}});
+ assert.match(pin,/sudo scripts\/install-updater\.sh --repair/);assert.match(pin,/Nothing was changed/);
+ assert.equal(submitMessage({code:'UPDATER_STATE_MISMATCH',detail:'pin-missing'}),pin);
+ for(const err of [{code:'UPDATER_STATE_MISMATCH'},{code:'UPDATER_STATE_MISMATCH',data:{detail:'other'}},{code:'UPDATER_STATE_MISMATCH',data:{}}])
+  assert.equal(submitMessage(err),'DockNest cannot confirm which version is installed. Nothing was changed. Check the server and try again.');
+ assert.doesNotMatch(submitMessage({code:'UPDATER_LOW_DISK',data:{detail:'pin-missing'}}),/--repair/);
+});
+test('the update center shows the repair command when the last refusal was a missing pin',async()=>{
+ const text=await readFile('web/updates/update-center.jsx','utf8');
+ assert.match(text,/notice\?\.code==='UPDATER_PIN_MISSING'/);assert.match(text,/<CodeBlock command=\{REPAIR_COMMAND\}\/>/);
+ assert.equal(REPAIR_COMMAND,'sudo scripts/install-updater.sh --repair');
 });
 test('the updater rate-limit message names the limit and the earliest time, and the API limit message uses Retry-After',()=>{
  const now=new Date(2026,9,23,12,0,0),later=new Date(2026,9,23,14,5,0),tomorrow=new Date(2026,9,24,9,30,0);

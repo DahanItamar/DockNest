@@ -9,6 +9,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Sign-in asks for the password first, then the authenticator code in six boxes. Paste or autofill fills all six; a recovery code can be typed instead.
 - Number fields no longer show up/down arrows.
 
+### Fixed
+
+- Update Center: after an update from the command line, in-app updates no longer fail with "cannot confirm which version is installed". When `scripts/upgrade.sh` already runs as root (a root-owned checkout), it registers the new version with the host updater itself. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade; the script and the Update Center both show that command, and `--repair` also clears an earlier refusal.
+
 ### Security
 
 - **This changes what new backups contain.** A container's bind mount of password files, sudo rules or SSH keys is no longer copied. Examples are a `.ssh` folder, `/etc/ssh`, `/etc/sudoers.d`, or a system folder such as `/etc` that contains them. The backup keeps running and an empty placeholder takes the mount's place. The job result and the readiness check name each such mount. Recover these files separately. A move refuses such a site, so move it by hand.

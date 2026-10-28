@@ -103,7 +103,9 @@ export function createTransport({ dir = updaterDirectory, socket = process.env.D
         if (isObject(answer) && answer.accepted === true && answer.id === id) return finish(null, { accepted: true, code: null });
         if (isObject(answer) && answer.accepted === false && REFUSALS.includes(answer.code)) {
           // 2.4.1: a rate-limited refusal may name which limit applied and when a new run is allowed (additive, validated).
-          const detail = answer.code === 'rate-limited' && ['cooldown', 'daily'].includes(answer.limit) && isTime(answer.retryAt) ? { limit: answer.limit, retryAt: answer.retryAt } : {};
+          // 2.11.1: a state-mismatch may carry the fixed marker detail "pin-missing" (fixed with --repair); anything else is dropped.
+          const detail = answer.code === 'rate-limited' && ['cooldown', 'daily'].includes(answer.limit) && isTime(answer.retryAt) ? { limit: answer.limit, retryAt: answer.retryAt }
+            : answer.code === 'state-mismatch' && answer.detail === 'pin-missing' ? { detail: 'pin-missing' } : {};
           return finish(null, { accepted: false, code: answer.code, ...detail });
         }
         finish(new TransportError('invalid-answer', true));
