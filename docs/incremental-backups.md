@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: proposed design, waiting for the owner's approval. Not implemented. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Not implemented. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 
@@ -138,9 +138,18 @@ The kit's decrypt tool verifies the chain links the same way the server does.
   time; restore test passes on the newest point; storage migration of a chain; downgrade refusal.
 - Measured result in the release notes: the real saving on the test fixture next to the storage report's estimate.
 
-## Open questions for the owner
+## Owner answers (2026-10-28)
 
-1. Approve option A (hybrid GNU tar chains) over B (restic or Kopia)?
-2. Default interval: one full every 7 backups (N = 6)?
-3. Is "Download chain" enough for increments in phase 1, with ZIP export for full backups only?
-4. Release slot: 2.11.0 together with the radar, or its own 2.12.0?
+1. Option A (hybrid GNU tar chains) is approved.
+2. Default interval: one full backup every 7 backups (N = 6).
+3. Phase 1: "Download chain" for increments; ZIP export for full backups only.
+4. Release: its own minor version after the radar (2.12.0), so each risky change ships and settles alone.
+
+## Leaving beta
+
+Incremental backups stay beta until all of these are true:
+
+- The Linux integration tests above pass on the release commit and are part of the required checks.
+- The owner's server has run chains for at least 4 weeks with no failed restore test on an increment.
+- Restoring from a chain without DockNest, using only the recovery kit, has been done once and recorded in
+  [acceptance.md](acceptance.md).
