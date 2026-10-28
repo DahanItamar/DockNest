@@ -27,6 +27,9 @@ const catalogue = Object.freeze({
   'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
   'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
+  // Vulnerability radar (docs/security.md). {product} is PHP, Node.js or "software"; never a version or advisory text.
+  'radar.finding_critical': 'A container runs a {product} version with a known serious flaw. Open DockNest to see what to do.',
+  'radar.finding_resolved': 'The {product} flaw is no longer found.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));
