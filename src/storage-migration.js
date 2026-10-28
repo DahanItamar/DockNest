@@ -37,6 +37,8 @@ export async function migrateStorage(){
   ||db.prepare("SELECT 1 FROM manager_backups WHERE status IN ('queued','running')").get()
   ||db.prepare("SELECT 1 FROM artifact_operations WHERE state IN ('prepared','authenticated')").get()
   ||db.prepare('SELECT 1 FROM retention_operations').get()
+  // A copy step or a copy deletion still running (docs/backup-copies.md): copies stay where they are and are not migrated.
+  ||db.prepare("SELECT 1 FROM backup_copies WHERE status='copying' OR delete_state='pending'").get()
   ||db.prepare('SELECT 1 FROM downloads WHERE expires_at>?').get(Date.now())
   ||db.prepare('SELECT 1 FROM manager_backup_downloads WHERE expires_at>?').get(Date.now()))throw new Error('Active operations block migration');
  const reconciliation=JSON.parse(db.prepare("SELECT value FROM settings WHERE key='artifact_reconciliation'").get()?.value||'{}');
