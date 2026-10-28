@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Sign-in asks for the password first, then the authenticator code in six boxes. Paste or autofill fills all six; a recovery code can be typed instead.
+- Number fields no longer show up/down arrows.
+
 ## [2.11.0] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.0.md](docs/releases/2026-10-28-v2.11.0.md).
