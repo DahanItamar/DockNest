@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Security
+
+- Backups refuse a container that mounts password files, sudoers, SSH keys or a folder holding them, the same rule that already applied to configuration files.
+- Moves create folders only in application locations (such as /opt, /srv, /var/www, a home folder or another top-level data folder), never in system state or hidden start-up files in a home folder. A site whose data sits elsewhere, such as /var/lib/app, is moved by hand.
+- Moves refuse a backup that names the host network or another container's network, and refuse configuration paths with `..`; settings are only rewritten in files the move itself placed.
+- Restores and moves can no longer change which image an existing tag on the target server points to.
+- Updater: the caller check accepts the api container's cgroup only at its real host location.
+
 ## [2.11.0] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.0.md](docs/releases/2026-10-28-v2.11.0.md).

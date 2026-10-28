@@ -190,6 +190,13 @@ Collapsed by default and pre-filled; most moves need no changes here.
 - Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.
+  Since 2.11.1, a path the backup names (data folders, configuration files, a static site) must also lie below an
+  application location: any non-standard top-level folder (`/opt`, `/srv`, `/mnt`, `/media`, `/data` ...),
+  `/var/www`, `/var/opt`, or a non-hidden folder inside a home folder (`/home/<user>/<folder>`; also `/var/home`,
+  `/var/srv` and friends on image-based systems). Anything else, such as `/var/lib/<app>`, `/tmp` or `~/.config`, is
+  refused and the site is moved by hand. A backup that names the host network or another container's network, or a
+  configuration path with `..`, is refused; settings are rewritten only in files the move placed, and `docker load`
+  never leaves an existing tag on the new server pointing at a different image.
   The maintenance folder on the new server is always DockNest's own `/var/lib/docknest/maintenance/<site>`, never an
   existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
   finish and goes back on Switch back.
