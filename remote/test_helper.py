@@ -334,6 +334,14 @@ class RestoreNetworkTests(unittest.TestCase):
         for c in [self.container('app',{},Privileged=True),self.container('app',{},NetworkMode='container:production'),self.container('app',{},NetworkMode='host'),self.container('app',{'net':{'Aliases':['--unsafe']}}),self.container('app',{'net':{'IPAMConfig':{'IPv4Address':'172.20.0.2'}}})]:
             with self.assertRaises(ValueError):restore_network_plan([c,self.container('db',{})])
         with self.assertRaises(ValueError):restore_network_plan([])
+    def test_a_network_named_host_or_another_container_is_refused_whatever_the_network_mode(self):
+        # A forged manifest can keep NetworkMode bridge and still name host or container:<id> as a network key.
+        for networks in [{'host':{}},{'container:0123456789ab':{}},{'bridge':{},'host':{}},{'-net':{}}]:
+            for c in [self.container('app',networks,NetworkMode='bridge'),self.container('app',networks)]:
+                with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=networks):restore_network_plan([c])
+                with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=networks):restore_network_plan([c,self.container('db',{})])
+        self.assertEqual(restore_network_plan([self.container('app',{'bridge':{},'none':{}},NetworkMode='bridge')]),[{}])
+        restore_network_plan([self.container('app',{'shop_default':{}},NetworkMode='shop_default'),self.container('db',{'shop.back-1':{}})])
 
 class ConfigurationFileTests(unittest.TestCase):
     def test_detection_and_browsing_return_paths_and_names_without_file_contents(self):
@@ -878,6 +886,21 @@ class ProtectedPathTests(unittest.TestCase):
         for cfg in [{'configFiles':['/etc/shadow']},{'composeFiles':['/root/.ssh/config']},{'kind':'static','documentRoot':'/proc'}]:
             with self.assertRaisesRegex(ValueError,'Protected system path refused'):refuse_protected_sources(cfg)
         refuse_protected_sources({'configFiles':['/opt/app/.env'],'composeFiles':['/opt/app/compose.yaml']})
+
+    def test_container_mount_sources_get_the_same_protected_path_refusal(self):
+        from helper import refuse_protected_mounts
+        def selected(*sources):return [{'Name':'/sshd','Mounts':[{'Type':'bind','Source':source,'Destination':'/x'} for source in sources]}]
+        for source in ['/etc/shadow','/etc/ssh/ssh_host_ed25519_key','/root/.ssh','/home/deploy/.ssh','/etc/sudoers.d','//etc/shadow']:
+            with self.assertRaisesRegex(ValueError,'Protected system path refused: .* is mounted into sshd'):refuse_protected_mounts(selected('/srv/app/data',source))
+            # backup_plan refuses before it classifies or archives anything, also when the caller passes the containers.
+            with self.assertRaisesRegex(ValueError,'Protected system path refused'):backup_plan({},selected(source))
+        refuse_protected_mounts(selected('/srv/app/data','/var/lib/docker/volumes/app_data/_data','/etc/nginx/conf.d','/home/deploy/app'))
+
+    @unittest.skipUnless(__import__('os').name=='posix','Folders that contain SSH host keys need a POSIX host')
+    def test_a_mount_of_a_folder_holding_protected_files_is_refused(self):
+        from helper import refuse_protected_mounts
+        for source in ['/etc','/etc/ssh','/']:
+            with self.assertRaisesRegex(ValueError,'Protected system path refused',msg=source):refuse_protected_mounts([{'Name':'/x','Mounts':[{'Type':'bind','Source':source}]}])
 
     def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
         from helper import protected_path, maintenance_directory_problem
