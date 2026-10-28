@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-10-28
+
+See [docs/releases/2026-10-28-v2.11.0.md](docs/releases/2026-10-28-v2.11.0.md).
+
 ### Added
 
 - Storage per site: a site can use its own main backup destination instead of the default one.
@@ -13,6 +17,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - S3-compatible storage is no longer beta.
 - Storage report: the **Incremental saving** card is now **Possible saving**, so it is clear DockNest does not make incremental backups yet; the number is a best-case estimate of what they could save.
+
+### Fixed
+
+- Storage: two fast Enter presses in Connect storage no longer post the form twice.
+- ZIP downloads always contain regular files, whatever file type a backup package claims.
 
 ## [2.10.1] - 2026-10-28
 
