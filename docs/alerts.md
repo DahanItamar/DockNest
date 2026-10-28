@@ -68,6 +68,8 @@ saved token can never be pointed at a new server by editing the server alone.
 | `server.disk_low` | A server has less than 5 GB free, or more than 90 percent used when its size is known | Same server: at most once per 24 hours |
 | `update.available` | The update check found a newer release (only if update checks are on) | Once per release |
 | `restore_test.failed`, `restore_test.couldnt_run`, `restore_test.recovered`, `restore_test.needs_you` | Restore tests, see [restore-tests.md](restore-tests.md) | Once per test |
+| `backup.copy_failed` | The first failed attempt of a backup copy (DockNest keeps retrying for 7 days) | Once per copy |
+| `backup.copy_recovered` | A copy that failed earlier was saved | Once per copy |
 
 New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.

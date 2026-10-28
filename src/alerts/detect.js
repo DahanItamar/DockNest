@@ -18,11 +18,14 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
   // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
   const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
   count += tests.count;
+  // Backup copies: a cursor from before 2.11.0 has no `copies` field, which means "start now" (no history replayed).
+  const copies = cursor.copies ? detectCopies(cursor.copies) : { count: 0, at };
+  count += copies.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE j.type='backup' AND j.status IN ('completed','failed','recovery_required') AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -39,7 +42,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at });
   return count;
 }
 
@@ -68,6 +71,23 @@ function detectRestoreTests(since, cleanupsSince) {
     count += emit({ type: 'restore_test.needs_you', key: `occ:restore-test-cleanup:${row.id}`, at: row.created_at, siteId: row.site_id, serverId: info.live_id, targetServerId: info.server_id, timeZone: zoneFor(row.site_id), siteName: info.site, serverName: info.server });
   }
   return { count, tests: last, cleanups: lastCleanup };
+}
+
+// Backup copies (docs/backup-copies.md): read from the audit rows the copy step writes. backup.copy_failed is written once
+// per copy (its first failure), backup.copy_recovered when that copy is verified later. Names only: the destination
+// name the owner typed, never a host, bucket or error text.
+function detectCopies(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('backup.copy_failed','backup.copy_recovered') AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
+    const info = db.prepare('SELECT s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(detail.siteId ?? '');
+    if (!info) continue;
+    const jobId = db.prepare('SELECT job_id FROM backups WHERE id=?').get(row.target)?.job_id;
+    count += emit({ type: row.action, key: `occ:copy:${row.id}`, at: row.created_at, jobId, code: detail.reason, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server, destinationName: detail.targetName });
+  }
+  return { count, at: last };
 }
 
 export function detectUpdate() {
