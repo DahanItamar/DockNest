@@ -72,6 +72,7 @@ These decisions belong to the owner. Each has a PM recommendation, the date by w
 - **Options:** (a) accept full packages; (b) build our own dedup; (c) optional restic or Kopia storage layer under site-level capture.
 - **Recommendation: (a) now, publish the PM-19 benchmark, and consider (c) only if storage cost becomes the top objection.** Never (b): building our own dedup duplicates mature engines and adds dependencies between retained packages that complicate retention (original spec §9).
 - **Would change if:** the benchmark shows more than 5× the storage cost on typical fixtures *and* users cite it.
+- **Owner (2026-10-28):** after the storage report showed about 71% possible saving on the owner's server, design incremental backups first. Proposal: [incremental-backups.md](../incremental-backups.md).
 
 ### Q7 — Unattended automatic updates?
 - **Recommendation: never by default.** A backup tool must not change under the operator without consent. Possibly later: opt-in "patch releases only" with the same snapshot and rollback gates.
