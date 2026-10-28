@@ -197,8 +197,9 @@ Storage per site and backup copies are new in 2.11. Nothing needs doing and noth
 - Recovery kits are also written to every other destination that holds copies.
 
 **Going back to 2.10.** Schema 11 is compatible, so 2.10 starts on the same database. It ignores copy settings and
-backs up and restores from the main copy only. Copies already made stay where they are. 2.10 does not know about them: when its retention removes a backup, that
-backup's copies are left behind, and 2.11 deletes them on its next maintenance run after you upgrade again.
+backs up and restores from the main copy only. Copies already made stay where they are. 2.10 never touches copy files, but it can delete a backup row (for example when
+retention removes it or its main package is missing); the copies of such a backup are left behind, and 2.11 deletes
+them on its next maintenance run after you upgrade again.
 
 ## Use the published image
 

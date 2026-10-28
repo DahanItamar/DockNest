@@ -51,6 +51,8 @@ export async function runCopiesScenario({run,until,hosts,servers,db,record,siteI
   await run('exec',hosts[0],'docker','exec','site-a','python','-c',"import sqlite3;db=sqlite3.connect('/site/database.sqlite');db.execute(\"UPDATE records SET value='after-copy-backup'\");db.commit()");
   const {plan,row}=await restoreAndRead(backup.id);
   assert.equal(row.status,'completed',row.error);
+  assert.equal(plan.source.role,'copy','Restore falls back to the copy once the main package is gone');
+  assert.equal(plan.source.targetId,copyTargetId);
   assert.ok(plan.sources.some(source=>source.role==='copy'&&source.status==='verified'),'The copy is offered as a source');
   const {containerId}=JSON.parse(row.details).result;
   const values=JSON.parse(await run('exec',hosts[1],'docker','exec',containerId,'python','-c',"import sqlite3,json;from pathlib import Path;print(json.dumps({'record':sqlite3.connect('/site/database.sqlite').execute('SELECT value FROM records').fetchone()[0],'asset':Path('/site/asset.txt').read_text(),'layer':Path('/app/writable.txt').read_text()}))"));
