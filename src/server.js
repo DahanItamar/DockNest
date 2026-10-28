@@ -35,6 +35,9 @@ import { installBootRecovery, bootRecoveryStatus, requireNotMoving } from './eng
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
+import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
+import { backupCopyViews } from './backup-copies.js';
+import { retryCopy, packagePath } from './artifact-journal.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -146,7 +149,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: (tested => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested })))(backupTestStates(backups.map(backup => backup.id))), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: ((tested, copies) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
@@ -157,8 +160,8 @@ for (const [name, { table, time }] of Object.entries(histories)) app.get('/api/'
   const rows = db.prepare(`SELECT * FROM ${table} ${cursor ? `WHERE (${time},id)<(?,?)` : ''} ORDER BY ${time} DESC,id DESC LIMIT ?`).all(...(cursor || []), limit + 1), page = rows.slice(0, limit), last = page.at(-1);
   // Backup listings never expose storage paths, matching /api/state.
   const backups = name === 'backups', verifications = backups ? backupVerifications(page.map(row => row.id)) : null;
-  const tested = backups ? backupTestStates(page.map(row => row.id)) : null;
-  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
+  const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null;
+  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -296,6 +299,14 @@ app.post('/api/sites/:id/policy', (req, res) => {
   db.prepare('UPDATE policies SET enabled=?,schedule=?,timezone=?,retention=?,next_run=? WHERE site_id=?').run(Number(data.enabled), data.schedule, data.timezone, data.retention, next, site.id);
   audit(req.user.id, 'policy.update', site.id, data); res.json({ ...data, next_run: next });
 });
+// Storage per site and backup copies (docs/backup-copies.md). Names only: never a credential or connection detail.
+app.get('/api/sites/:id/storage', (req, res) => res.json(siteStorageView(getSite(req.params.id).id)));
+app.put('/api/sites/:id/storage', requireAdmin, requireRecentAuth, (req, res) => {
+  const site = getSite(req.params.id);
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
+  try { res.json(updateSiteStorage(site.id, req.body, req.user.id)); }
+  catch (error) { if (error.code && error.status) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
+});
 app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
   const site=getSite(req.params.id);
   requireNotMoving(site.id);
@@ -329,7 +340,9 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
 });
 const verifiedBackup=backupId=>{
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
-  return db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(backupId)||notFound('Verified backup not found.');
+  const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(backupId)||notFound('Verified backup not found.');
+  // Reads the main package, or its newest verified copy once the main one aged out (docs/backup-copies.md).
+  return {...row,path:packagePath(row)};
 };
 const zipExportOf=req=>{const backup=verifiedBackup(req.params.id),item=findZipExport(backup.id,req.params.exportId)||notFound('ZIP preparation not found.');return {backup,item};};
 app.post('/api/backups/:id/zip-exports', (req, res) => {
@@ -359,7 +372,7 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
     if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(req.params.id))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
     const row=db.prepare('SELECT * FROM backups WHERE id=? AND verified=1').get(req.params.id)||notFound('Verified backup not found.');
     db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(leaseId,row.id,Date.now()+120000);
-    return row;
+    return {...row,path:packagePath(row)};
   });
   let cleared=false;
   const interval=setInterval(()=>db.prepare('UPDATE downloads SET expires_at=? WHERE id=?').run(Date.now()+120000,leaseId),30000);
@@ -391,21 +404,32 @@ app.post('/api/backups/:id/pin', (req, res) => {
   const result = db.prepare('UPDATE backups SET pinned=? WHERE id=?').run(Number(data.pinned), req.params.id);
   if (!result.changes) notFound('Backup not found.');
   // A pinned backup must never be removed when its Object Lock ends.
-  if (data.pinned) db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(req.params.id);
+  if (data.pinned) { db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(req.params.id); db.prepare("UPDATE backup_copies SET delete_state=NULL,delete_after=NULL WHERE backup_id=? AND delete_state='deferred'").run(req.params.id); }
   audit(req.user.id, 'backup.pin', req.params.id, data); res.json(data);
 });
+app.post('/api/backups/:id/copies/:targetId/retry', requireAdmin, (req, res) => {
+  const result = retryCopy(req.params.id, req.params.targetId);
+  if (!result.found) notFound('Backup copy not found.');
+  if (result.refused) return res.status(409).json({ error: result.refused === 'verified' ? 'This copy is already saved.' : result.refused === 'copying' ? 'This copy is being made now.' : 'This copy is being deleted.', code: 'copy_' + result.refused });
+  audit(req.user.id, 'backup.copy_retry_requested', req.params.id, { targetId: req.params.targetId });
+  res.status(202).json({ status: 'pending', nextAttemptAt: new Date(result.nextAttemptAt).toISOString() });
+});
 app.post('/api/backups/:id/scrub', (req,res)=>res.status(202).json(enqueueScrub(req.params.id,req.user.id)));
+// A chosen restore source that is not a verified copy: 409 with its code, so the dialog can say which copy is unusable.
+const sourceRefusal = error => { if (error.code === 'source_unavailable') throw Object.assign(new Error(error.message), { status: 409, expose: true, publicCode: error.code }); throw error; };
 app.post('/api/backups/:id/restore-plan', async (req, res) => {
-  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
-  const plan = await planRestore(req.params.id, { ...data, mode: data.mode === 'copy' ? 'new-copy' : data.mode });
-  res.json({ plan });
+  const data = z.object({ serverId: z.uuid(), mode: z.enum(['copy', 'new-copy', 'replace']).default('copy'), mappings: z.record(z.string(), z.unknown()).default({}), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
+  const plan = await planRestore(req.params.id, { ...data, sourceTargetId: data.sourceTargetId || null, mode: data.mode === 'copy' ? 'new-copy' : data.mode }).catch(sourceRefusal);
+  // Where it restores from (docs/backup-copies.md): the main copy first, then copies newest-verified first.
+  res.json({ plan, sources: plan.sources, source: plan.source });
 });
 app.post('/api/backups/:id/restore', async (req, res) => {
-  const data = z.object({ plan: z.object({ serverId: z.uuid(), mode: z.string(), mappings: z.record(z.string(), z.unknown()).default({}) }).passthrough(), confirmation: z.string() }).parse(req.body);
+  const data = z.object({ plan: z.object({ serverId: z.uuid(), mode: z.string(), mappings: z.record(z.string(), z.unknown()).default({}) }).passthrough(), confirmation: z.string(), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
   const backup = db.prepare('SELECT * FROM backups WHERE id=?').get(req.params.id) || notFound('Backup not found.');
   if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the site name to confirm the restore.' });
   // Never trust the executable flag, capabilities or blockers submitted by a client.
-  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings });
+  const sourceTargetId = data.sourceTargetId || (typeof data.plan.sourceTargetId === 'string' ? data.plan.sourceTargetId : null);
+  const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId }).catch(sourceRefusal);
   res.status(202).json(await enqueueRestore(backup.id, plan, req.user.id));
 });
 app.patch('/api/maintenance', (req, res) => {
@@ -426,7 +450,7 @@ app.use((error, req, res, _next) => {
   const message = error.expose === false ? 'Operation failed. Inspect the job status and source health.' : error.message;
   // Object-storage failures map only to 400/502/504 so a provider 401 never ends the admin session.
   const status = error.s3Code !== undefined || error.s3Status !== undefined ? ([400, 502, 504].includes(error.status) ? error.status : 502) : error.status || (error instanceof SyntaxError ? 400 : 422);
-  res.status(status).json({ error: message || 'Operation failed.', ...reportErrorFields(error) });
+  res.status(status).json({ error: message || 'Operation failed.', ...reportErrorFields(error), ...(error.publicCode ? { code: error.publicCode } : {}) });
 });
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   app.listen(config.port, config.host, () => console.log(`DockNest listening on port ${config.port}`));

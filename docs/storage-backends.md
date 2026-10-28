@@ -94,6 +94,39 @@ These notes are not verified against each live provider. Confirm them with the c
 | Wasabi | `https://s3.<region>.wasabisys.com` | Region: filled from the endpoint. Object Lock must be chosen when the bucket is created. |
 | MinIO | `https://minio.example.internal:9000` | Use path-style addressing. Plain HTTP works only on loopback. |
 
+## Storage per site and backup copies
+
+Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
+
+- A site's main destination is `site_storage.main_target_id`; no row or NULL is the default destination
+  (`backup_storage_target`), exactly as before. A chosen destination that was removed fails the backup closed; DockNest
+  never writes to a destination the owner did not pick.
+- Copies are queued (`backup_copies`, status `pending`) in the same transaction that publishes the main copy. The worker
+  runs one due copy step when no site job waits, oldest backup first. The step checks free space on the copy
+  destination, streams the encrypted package as it is to `<path>.partial`, syncs it, authenticates it in full (GCM tag
+  and SHA-256 equal to the main copy's), renames it and only then records it. A file already at the copy path is adopted
+  only when it authenticates; a different file is never overwritten. A worker restart resumes from the row (not under
+  the deployment hold; the 5-minute maintenance step resumes it afterwards).
+- Status `copying` is the step's lease: nothing of that backup is deleted while it is read. Every 64 MiB a copy checks
+  for a queued site job and, if there is one, steps aside (its `.partial` is removed, it is due again at once and no
+  attempt is counted), so a long copy does not hold up a scheduled backup. Retries: 5 min, 30 min, 2 h, then every 6 h;
+  after 7 days the copy is `gave_up`. Stored errors are fixed sentences, never storage output.
+- Retention: the site's count applies to main packages, each copy destination keeps its own count; a destination the
+  site no longer copies to keeps the site's count, and copies not made yet to it are cancelled. When a main package
+  ages out, the main file is removed first (Object Lock on it defers everything), then the copies no destination keeps.
+  If a copy is still kept, `backup_main_removed` records that and `backups.path` keeps naming the main package;
+  `packagePath()` (src/artifact-journal.js) gives download, ZIP export, scrub, restore, restore tests and startup checks
+  the newest verified copy instead. Pins apply to every copy; an Object-Locked copy is deferred on its own.
+- Downgrade to 2.10 with such a backup: 2.10 sees its main package missing (startup marks it unverified) and its
+  retention may remove the row; it never touches copy files. 2.11 cleans up those orphaned copies when it starts again.
+- Restore uses the main copy, then verified copies newest first; the owner may choose a copy (`sourceTargetId`).
+- A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or a site uses
+  it. Its copies are deleted first (`POST /api/storage-targets/:id/copies/delete`). Deleting copies of backups that exist
+  only there needs `includeLastPackages: true`; pinned ones need `includePinned: true`.
+- Every other destination that holds packages (copies, or a site's main destination) also receives the newest recovery
+  kit. A kit there is removed only after a newer one was written to that same destination.
+- Real copies and restores count as validated only after the Linux integration suite passes.
+
 ## Verification status
 
 - **Unit tests:** `tests/s3-storage.test.js` runs against `tests/s3-fixture.js`, an in-process fake S3 endpoint on loopback. The fake checks SigV4 signatures and payload hashes independently. The tests cover multipart streaming and abort, ranged reads, part copies, journal publication and reconciliation, the connect and test API without credential disclosure, and Object Lock application, deletion refusal and expiry.

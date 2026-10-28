@@ -8,8 +8,11 @@ import { key } from './crypto.js';
 import { remote, remoteCaptureStream, download, uploadStream } from './ssh.js';
 import { backupDirectory, storageJoin, makeDirectory, statFile, openRead, openWrite, renameFile, removeFile, storageCapacity, checkStorageReadiness, syncFile } from './storage.js';
 import { backupFilename } from './backup-layout.js';
+import { siteMainStorage, targetSummary, targetIdOfPath } from './site-storage.js';
+import { retainCopies } from './backup-copies.js';
+import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
-import { HELD as TEST_HELD } from './restore-tests/hold.js';
+import { CLAIMABLE_JOB_SQL } from './job-claim.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -39,7 +42,7 @@ export async function checkReadiness(siteId){
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
  const result=await remote(server,{operation:'readiness',config:site.config});
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
- try{await checkStorageReadiness();result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
+ try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
  return result;
 }
@@ -78,12 +81,41 @@ export function enqueueScrub(backupId,actor='administrator'){
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
- try{stage(job.id,'verifying');if(await verifyEncrypted(backup.path)!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
+ try{stage(job.id,'verifying');if(await verifyEncrypted(packagePath(backup))!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
  catch{transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}audit('worker','backup.scrub.failed',backupId,{job:job.id});});}
 }
-export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}}={}){
+// Where a backup can be restored from (docs/backup-copies.md, "Restore"): the main copy first, then its copies, verified
+// ones newest-verified first. A main package that aged out (its copies keep the backup) is listed as missing.
+export function restoreSources(backup){
+ const removed=db.prepare('SELECT original_path FROM backup_main_removed WHERE backup_id=?').get(backup.id);
+ const mainPath=backup.path,mainId=targetIdOfPath(mainPath); // backups.path always names the main package
+ const sources=[{targetId:mainId,name:targetSummary(mainId)?.name??'Removed destination',role:'main',status:removed?'missing':backup.verified?'verified':'failed',verifiedAt:removed?null:backup.created_at,path:removed?null:mainPath}];
+ const copies=db.prepare("SELECT target_id,path,status,verified_at FROM backup_copies WHERE backup_id=? AND status<>'deleted' ORDER BY status<>'verified',verified_at DESC,target_id").all(backup.id);
+ for(const copy of copies)sources.push({targetId:copy.target_id,name:targetSummary(copy.target_id)?.name??'Removed destination',role:'copy',status:copy.status,verifiedAt:copy.verified_at,path:copy.status==='verified'?copy.path:null});
+ return sources;
+}
+const publicSource=({path:_path,...source})=>source;
+// The first source that authenticates in full against the stored checksum. Without a choice: the main copy, then each
+// verified copy. With `sourceTargetId`: only that one.
+async function authenticatedSource(backup,sourceTargetId=null){
+ const candidates=restoreSources(backup).filter(source=>source.path&&(sourceTargetId?source.targetId===sourceTargetId:source.role==='main'||source.status==='verified'));
+ for(const source of candidates){
+  try{const inspected=await inspectEncrypted(source.path);if(inspected.checksum===backup.checksum)return {...inspected,source};}catch{/* Try the next source. */}
+ }
+ throw new Error(sourceTargetId?'The chosen copy could not be read or did not authenticate':'Encrypted backup checksum differs from stored checksum');
+}
+export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
- const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));if(!backup?.verified)throw new Error('Verified backup not found');
+ const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));
+ if(!backup)throw new Error('Verified backup not found');
+ // A main copy that is missing or failed authentication can still be restored from a verified copy.
+ const sources=restoreSources(backup);
+ // Only copies make the stat worth a round trip; without one the restore reports a missing main copy as before.
+ const mainVerified=sources[0].status==='verified';
+ if(mainVerified&&!sourceTargetId&&sources.some(source=>source.role==='copy'&&source.status==='verified')){try{await statFile(sources[0].path);}catch{sources[0].status='missing';}}
+ const chosen=sourceTargetId?sources.find(source=>source.targetId===sourceTargetId):sources.find(source=>source.status==='verified');
+ if(sourceTargetId&&chosen?.status!=='verified')throw Object.assign(new Error('Choose a verified copy of this backup to restore from.'),{status:409,code:'source_unavailable'});
+ if(!chosen)throw new Error('Verified backup not found');
  const configuredReferences=(backup.manifest.restoreReferences||[]).filter(reference=>reference.serverId===serverId).map(({capturedPath,source})=>({capturedPath,source}));
  if(!Object.keys(mappings||{}).length&&configuredReferences.length)mappings={externalReadOnly:configuredReferences};
  const target=db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);if(!target)throw new Error('Target server not found');
@@ -105,11 +137,11 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
   catch{blockers.push('Required external storage is unavailable or not a reviewed read-only mount on the restore target.');}
  }
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
- return {backupId,serverId,mode,mappings,capabilities,externalReferences,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id);}
- const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings});
+ const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null});
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  const restoreId=id(),jobId=id();
@@ -119,8 +151,8 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
   requireNoDeploymentHold();
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
   db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,?,?,'queued',?)").run(restoreId,backupId,fresh.serverId,fresh.mode,JSON.stringify(fresh),now());
-  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore','queued','queued',?,?)").run(jobId,backup.site_id,now(),JSON.stringify({restoreId,backupId,targetServerId:fresh.serverId}));
-  audit(actor,'restore.enqueue',backupId,{job:jobId,restoreId});db.exec('COMMIT');
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore','queued','queued',?,?)").run(jobId,backup.site_id,now(),JSON.stringify({restoreId,backupId,targetServerId:fresh.serverId,...(fresh.sourceTargetId?{sourceTargetId:fresh.sourceTargetId}:{})}));
+  audit(actor,'restore.enqueue',backupId,{job:jobId,restoreId,...(fresh.sourceTargetId?{sourceTargetId:fresh.sourceTargetId}:{})});db.exec('COMMIT');
  }catch(e){db.exec('ROLLBACK');throw e;}
  return {id:jobId,restoreId};
 }
@@ -183,29 +215,34 @@ function recordBackupDiagnostic(job,value){
 }
 export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
- const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 ORDER BY captured_at DESC").all(siteId).slice(count);
+ // Main packages only: a backup whose main package already aged out lives on its copies, under their own counts.
+ const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 AND id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY captured_at DESC").all(siteId).slice(count);
  for(const backup of stale){
   // Object-Locked points are deferred until their lock ends; they stay fully usable meanwhile.
   if(deletionDeferred(backup.id))continue;
   if(claimDeletion(backup.id))await finishDeletion(backup.id);
  }
+ // Each copy destination keeps its own count (docs/backup-copies.md).
+ await retainCopies(siteId);
 }
 
 export {siteInfo};
 // Streams a verified backup, decrypted only inside the authenticated stream, into `jobId`'s restore staging root on `server`.
 // Restore tests pass `prepare` (their own journalled staging) and `signal` (cancel and time limit stop the transfer).
 export async function uploadBackupTo(server,backupId,jobId,{prepare,signal}={}){
- const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup?.verified)throw new Error('Verified backup not found');
- const {checksum,size,header,tag,plaintextChecksum}=await inspectEncrypted(backup.path);if(checksum!==backup.checksum)throw new Error('Encrypted backup checksum differs from stored checksum');
+ const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
+ if(!backup||!(backup.verified||db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(backupId)))throw new Error('Verified backup not found');
+ // The main copy, or a verified copy when the main one is missing or fails authentication.
+ const {size,header,tag,plaintextChecksum,source}=await authenticatedSource(backup);
  const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
  const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
  const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
  const stop=()=>pass.destroy(Object.assign(new Error('DockNest stopped this step.'),{aborted:true}));
  if(signal?.aborted)stop();else signal?.addEventListener('abort',stop,{once:true});
- const decrypting=pipeline(await openRead(backup.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
+ const decrypting=pipeline(await openRead(source.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
  try{await transport.uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
  finally{signal?.removeEventListener('abort',stop);}
- return {plaintextChecksum};
+ return {plaintextChecksum,source:publicSource(source)};
 }
 async function executeRestoreJob(job){
  const details=typeof job.details==='string'?JSON.parse(job.details):job.details;
@@ -215,12 +252,18 @@ async function executeRestoreJob(job){
  try{
   db.prepare("UPDATE restores SET status='running' WHERE id=?").run(restore.id);
   stage(job.id,'verifying');
-  const {checksum,size,header,tag,plaintextChecksum}=await inspectEncrypted(backup.path);if(checksum!==backup.checksum)throw new Error('Encrypted backup checksum differs from stored checksum');
+  // Main copy first; if it is missing or fails authentication, the newest verified copy, unless the owner chose one.
+  const {size,header,tag,plaintextChecksum,source}=await authenticatedSource(backup,details.sourceTargetId||null);
+  if(source.role==='copy'){
+   const used={targetId:source.targetId,name:source.name,role:'copy',chosen:Boolean(details.sourceTargetId)};
+   db.prepare("UPDATE jobs SET details=? WHERE id=? AND status='running'").run(JSON.stringify({...details,source:used}),job.id);details.source=used;
+   audit('worker',details.sourceTargetId?'restore.source_chosen':'restore.source_fallback',backup.id,{job:job.id,targetId:source.targetId,targetName:source.name});
+  }
   const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
   const staging=await remote(server,{operation:'prepare-restore',job:job.id});
   stage(job.id,'transferring');
   const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
-  const decrypting=pipeline(await openRead(backup.path,{start:16,end:size-17}),decipher,pass);
+  const decrypting=pipeline(await openRead(source.path,{start:16,end:size-17}),decipher,pass);
   decrypting.catch(error=>pass.destroy(error));
   try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
   // Only invoke extraction after the complete GCM-authenticated stream finishes.
@@ -288,11 +331,13 @@ export async function executeJob(job){
  try{
   stage(job.id,'preflight');
   const plan=await planBackup(site.id);
-  const capacity=await storageCapacity();
+  // The site's own main destination, or the default one (docs/backup-copies.md); a removed choice fails closed.
+  const mainStorage=siteMainStorage(site.id);
+  const capacity=await storageCapacity({options:mainStorage});
   // Object storage reports no fixed size (unbounded); other backends must prove free space.
   if(capacity.available===null&&!capacity.unbounded)throw new Error('Backup storage available space could not be verified');
   if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Backup storage has less than 1 GiB free');
-  const backupId=id(),directory=backupDirectory(server,site);
+  const backupId=id(),directory=backupDirectory(server,site,mainStorage);
   await makeDirectory(directory);
   const direct=site.config.deliveryMode==='direct';
   let result,published,temporary,captured;
@@ -381,7 +426,7 @@ export function claimJob(){
   // A job occupies its target (or its site's) server and, for a site move, also its source server. A started restore
   // test holds its test server (src/restore-tests/hold.js) for every job but its own steps. Restore test steps go
   // after every other queued job, so backups go first.
-  const job=db.prepare(`SELECT j.* FROM jobs j WHERE j.status IN ('queued','move_queued','test_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE ${TEST_HELD} AND t.server_id IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) AND NOT (j.type='restore-test' AND json_extract(j.details,'$.testId')=t.id)) ORDER BY j.type='restore-test',j.created_at LIMIT 1`).get();
+  const job=db.prepare(CLAIMABLE_JOB_SQL).get();
   // Site-move and restore-test jobs use their own statuses so a release without them (for example after a rollback)
   // never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.

@@ -8,7 +8,8 @@ import { fileExists } from './artifact-journal.js';
 
 export function migrationPlan(){
  const entries=[];
- for(const row of db.prepare('SELECT b.*,s.name AS site_name,s.server_id,v.name AS server_name FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id').all()){
+ // A main package that aged out (backup_main_removed) is gone; its copies keep their own paths.
+ for(const row of db.prepare('SELECT b.*,s.name AS site_name,s.server_id,v.name AS server_name FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id WHERE b.id NOT IN (SELECT backup_id FROM backup_main_removed)').all()){
   if(!isRemoteFile(row.path))throw new Error('Local archives need a separate import');
   const {options}=parseRemote(row.path);
   const folders=backupLayout({id:row.server_id,name:row.server_name},{id:row.site_id,name:row.site_name});
@@ -37,6 +38,8 @@ export async function migrateStorage(){
   ||db.prepare("SELECT 1 FROM manager_backups WHERE status IN ('queued','running')").get()
   ||db.prepare("SELECT 1 FROM artifact_operations WHERE state IN ('prepared','authenticated')").get()
   ||db.prepare('SELECT 1 FROM retention_operations').get()
+  // A copy step or a copy deletion still running (docs/backup-copies.md): copies stay where they are and are not migrated.
+  ||db.prepare("SELECT 1 FROM backup_copies WHERE status='copying' OR delete_state='pending'").get()
   ||db.prepare('SELECT 1 FROM downloads WHERE expires_at>?').get(Date.now())
   ||db.prepare('SELECT 1 FROM manager_backup_downloads WHERE expires_at>?').get(Date.now()))throw new Error('Active operations block migration');
  const reconciliation=JSON.parse(db.prepare("SELECT value FROM settings WHERE key='artifact_reconciliation'").get()?.value||'{}');
@@ -66,6 +69,8 @@ export async function migrateStorage(){
    const table=entry.kind==='site'?'backups':'manager_backups';
    if(db.prepare('UPDATE '+table+' SET path=? WHERE id=? AND path=?').run(entry.destination,entry.id,entry.source).changes!==1)throw new Error('Migration metadata changed');
    if(entry.kind==='site')db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(entry.destination,entry.id);
+   // A copy row naming the moved file (same backup, same destination) follows it in the same transaction.
+   if(entry.kind==='site')db.prepare('UPDATE backup_copies SET path=? WHERE backup_id=? AND path=?').run(entry.destination,entry.id,entry.source);
    db.prepare("UPDATE storage_migrations SET state='completed' WHERE kind=? AND id=?").run(entry.kind,entry.id);
    if(entry.kind==='site'&&db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(entry.id).changes)lockedOriginals++;
   });
