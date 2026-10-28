@@ -86,5 +86,5 @@ commit.
 
 ## Release plan
 
-2.12.0: S3 out of beta, storage per site, backup copies. Incremental backups move to 2.13.0, because they build on
+2.11.0: S3 out of beta, storage per site, backup copies. Incremental backups follow in 2.12.0, because they build on
 copies (chains on every destination).
