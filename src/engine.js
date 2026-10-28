@@ -493,7 +493,7 @@ export async function executeJob(job){
    clearForceFull(site.id,decision.force);
    // Only now, with the package stored, authenticated and published, may the source move its snapshot files forward.
    // If that is not confirmed the next backup is full (the helper would also refuse a mismatched snapshot).
-   try{await transport.remote(server,{operation:'incremental-commit',job:job.id,siteKey:site.id});}
+   try{await transport.remote(server,{operation:'incremental-commit',job:job.id,siteKey:site.id,config:site.config});}
    catch{setForceFull(site.id,FORCE.uncommitted);audit('worker','backup.incremental_commit_failed',site.id,{job:job.id,backupId});}
   }
   await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});

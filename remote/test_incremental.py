@@ -64,16 +64,17 @@ class CaptureHarness(unittest.TestCase):
         if args[0]=='info':return b'x86_64'
         if args[0]=='save':pathlib.Path(args[2]).write_bytes(b'images');self.saved.append(list(args[3:]))
         return b''
-    def capture(self,containers,incremental=None,job=1,output=None):
+    def capture(self,containers,incremental=None,job=1,output=None,exclusions=None):
         cfg={'containers':[c['Id'] for c in containers],'stagingRoot':str(self.staging),'cleanShutdownConfirmed':True}
+        if exclusions:cfg['mountExclusions']=[{'source':source,'path':path,'reason':'cache'} for source,paths in exclusions.items() for path in paths]
         plan={'fingerprint':'plan','services':[{'container':c['Id'],'engine':'generic'} for c in containers],'restartOrder':[c['Id'] for c in containers]}
         emitted=Mock();request={'config':cfg,'job':JOB%job,'planFingerprint':'plan'}
         if incremental is not None:request['incremental']=incremental
         def staging(path):pathlib.Path(path).mkdir(parents=True)
         usage=collections.namedtuple('Usage','total used free')(1,0,1<<50)
-        with patch.multiple('helper',preflight=Mock(return_value=containers),backup_plan=Mock(return_value=plan),online_sqlite_checks=Mock(),create_staging_root=Mock(side_effect=staging),docker=Mock(side_effect=self.fake_docker),mount_exclusions=Mock(return_value={}),atomic_json=Mock(side_effect=write_json),prepare_database_shutdown=Mock(),shutdown_evidence=Mock(return_value=[]),revalidate_sources=Mock(),restart_services=Mock(),inspect=Mock(return_value=[]),complete_recovery=Mock(),run=Mock(side_effect=self.fake_run),emit=emitted,warn=Mock()),\
+        with patch.multiple('helper',preflight=Mock(return_value=containers),backup_plan=Mock(return_value=plan),online_sqlite_checks=Mock(),create_staging_root=Mock(side_effect=staging),docker=Mock(side_effect=self.fake_docker),mount_exclusions=Mock(return_value=exclusions or {}),atomic_json=Mock(side_effect=write_json),prepare_database_shutdown=Mock(),shutdown_evidence=Mock(return_value=[]),revalidate_sources=Mock(),restart_services=Mock(),inspect=Mock(return_value=[]),complete_recovery=Mock(),run=Mock(side_effect=self.fake_run),emit=emitted,warn=Mock()),\
              patch('helper.shutil.disk_usage',return_value=usage),patch('helper.os.getpgrp',return_value=os.getpid(),create=True),patch('helper.os.fork',return_value=4242,create=True),\
-             patch('helper.pathlib.Path.read_text',side_effect=lambda self,*a,**k:'boot' if 'boot_id' in str(self) else open(self,encoding='utf-8').read(),autospec=True):
+             patch('helper.pathlib.Path.read_text',side_effect=lambda self,*a,**k:'boot' if 'boot_id' in str(self) else self.read_bytes().decode('utf-8'),autospec=True):
             helper.capture(request,output)
         self.root=self.staging/(JOB%job)
         return emitted.call_args.kwargs['result']['manifest']
@@ -148,6 +149,15 @@ class CaptureTests(CaptureHarness):
         self.assertEqual(manifest['fallback'],{'reason':'snapshot-missing'})
         self.assertEqual(self.saved[-1][0],'sha256:'+'0'*64,'A fallback full saves every original image')
 
+    def test_changed_exclusions_make_a_full_backup(self):
+        source,=self.sources('data');containers=self.containers([[source]])
+        full=self.capture(containers,self.full_request(),job=1);self.commit(1)
+        self.assertEqual(json.loads((self.state/SITE/'state.json').read_text())['exclusions'],{snapshot_key(source):[]})
+        manifest=self.capture(containers,self.increment_request(full['snapshots']),job=2,exclusions={source:[source+'/cache']})
+        self.assertEqual(manifest['fallback'],{'reason':'mount-set-changed'})
+        (self.state/SITE/'state.json').unlink()
+        manifest=self.capture(containers,self.increment_request(full['snapshots']),job=3)
+        self.assertEqual(manifest['fallback'],{'reason':'snapshot-missing'},'Snapshot files without a committed record are not trusted')
     def test_shared_source_is_archived_once_with_one_snapshot(self):
         source,=self.sources('shared');manifest=self.capture(self.containers([[source],[source]]),self.full_request())
         tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call]
@@ -210,7 +220,9 @@ class CommitTests(CaptureHarness):
     def test_discard_forgets_the_site_and_is_idempotent(self):
         source,=self.sources('data');self.capture(self.containers([[source]]),self.full_request(),job=1);self.commit(1)
         with patch('helper.emit') as emitted,patch('helper.sync_directory'):
+            self.state.mkdir(exist_ok=True);(self.state/('.lock-'+SITE)).write_text('')
             helper.incremental_discard({'siteKey':SITE});self.assertTrue(emitted.call_args.kwargs['result']['existed'])
+            self.assertFalse((self.state/('.lock-'+SITE)).exists())
             helper.incremental_discard({'siteKey':SITE});self.assertFalse(emitted.call_args.kwargs['result']['existed'])
             with self.assertRaises(ValueError):helper.incremental_discard({'siteKey':'../etc'})
         self.assertFalse((self.state/SITE).exists())
@@ -364,7 +376,9 @@ class DumpdirTests(unittest.TestCase):
     def test_dumpdir_names_stay_inside_the_archive(self):
         self.assertFalse(dumpdir_problem('Ya\0Nb\0Dsub\0\0','data'))
         self.assertFalse(dumpdir_problem('Dmoved\0Nx\0Rdata/sub\0Tdata/moved\0\0','data'))
-        for value in ['Y../x\0\0','Ya/b\0\0','Y..\0\0','Q\0\0','Rdata/../..\0Tdata/x\0\0','R/etc\0Tdata/x\0\0','Rdata/a\0T../b\0\0','Rother/a\0Tdata/a\0\0','Xdata//a\0\0','Y\0\0',None]:
+        # A swap of a and b, as GNU tar 1.35 writes it: X names the temporary folder, empty R/T stand for it.
+        self.assertFalse(dumpdir_problem('Da\0Db\0Xdata\0Rdata/b\0T\0Rdata/a\0Tdata/b\0R\0Tdata/a\0\0','data'))
+        for value in ['Y../x\0\0','Ya/b\0\0','Y..\0\0','Q\0\0','Rdata/../..\0Tdata/x\0\0','R/etc\0Tdata/x\0\0','Rdata/a\0T../b\0\0','Rother/a\0Tdata/a\0\0','Xdata//a\0\0','Y\0\0','X\0\0','N\0\0','D\0\0','X../t\0\0',None]:
             with self.subTest(value=value):self.assertTrue(dumpdir_problem(value,'data'))
     def check(self,entries,destination=None):
         with tempfile.TemporaryDirectory() as d:
@@ -389,6 +403,13 @@ class DumpdirTests(unittest.TestCase):
                 info=tarfile.TarInfo('data');info.type=tarfile.DIRTYPE;tar.addfile(info)
             archive=pathlib.Path(d)/'m.tar';archive.write_bytes(buffer.getvalue());(pathlib.Path(d)/'out').mkdir()
             with self.assertRaisesRegex(ValueError,'POSIX tar format'):incremental_archive_check(archive,(pathlib.Path(d)/'out').resolve())
+    def test_global_pax_headers_are_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            buffer=io.BytesIO()
+            with tarfile.open(fileobj=buffer,mode='w',format=tarfile.PAX_FORMAT,pax_headers={'path':'../escape'}) as tar:
+                info=tarfile.TarInfo('data');info.type=tarfile.DIRTYPE;tar.addfile(info)
+            archive=pathlib.Path(d)/'m.tar';archive.write_bytes(buffer.getvalue());(pathlib.Path(d)/'out').mkdir()
+            with self.assertRaisesRegex(ValueError,'global tar headers'):incremental_archive_check(archive,(pathlib.Path(d)/'out').resolve())
     def test_increment_must_continue_the_same_top_folder(self):
         with tempfile.TemporaryDirectory() as d:
             archive=pathlib.Path(d)/'m.tar';archive.write_bytes(mount_tar([('other','dir',None,None)]));(pathlib.Path(d)/'out').mkdir()
@@ -486,6 +507,20 @@ class GnuTarChainTests(unittest.TestCase):
         self.dump()
         for count in range(1,5):
             with self.subTest(point=count):self.assertEqual(tree(self.restore(count)),self.trees[count-1])
+    def test_swapped_folders_restore(self):
+        s=self.source;(s/'a').mkdir();(s/'b').mkdir();(s/'a'/'fa').write_text('a');(s/'b'/'fb').write_text('b')
+        self.dump()
+        os.rename(s/'a',s/'tmp');os.rename(s/'b',s/'a');os.rename(s/'tmp',s/'b')
+        self.dump()
+        self.assertEqual(tree(self.restore(2)),self.trees[1])
+    def test_symlink_to_a_folder_replaced_by_a_real_folder(self):
+        s=self.source;(s/'real').mkdir();(s/'real'/'kept').write_text('k');os.symlink('real',s/'a')
+        self.dump()
+        os.unlink(s/'a');(s/'a').mkdir();(s/'a'/'x').write_text('x')
+        self.dump()
+        restored=self.restore(2)
+        self.assertEqual(tree(restored),self.trees[1])
+        self.assertFalse((restored/'real'/'x').exists(),'Nothing was written through the old link')
     def test_increment_holds_only_changed_files(self):
         for i in range(20):(self.source/('f%d'%i)).write_text(str(i))
         self.dump();(self.source/'f3').write_text('changed');increment=self.dump()

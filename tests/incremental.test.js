@@ -27,7 +27,7 @@ const site = (id, serverId, config = {}) => { db.prepare('INSERT INTO sites(id,s
 server('srv'); server('srv-2');
 
 // ---- mock helper --------------------------------------------------------------------------------------------------
-const helper = { state: new Map(), pending: new Map(), requests: [], calls: [], fingerprint: 'plan-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [] };
+const helper = { commits: [], state: new Map(), pending: new Map(), requests: [], calls: [], fingerprint: 'plan-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [] };
 const mountKey = sha('/srv/data');
 transport.remote = async (_server, request) => {
   helper.calls.push(request.operation);
@@ -49,6 +49,7 @@ transport.remote = async (_server, request) => {
       return { remotePath: '/x/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest };
     }
     case 'incremental-commit': {
+      helper.commits.push(request);
       if (helper.failCommit) throw new Error('connection lost');
       const pending = helper.pending.get(request.job); if (!pending) throw new Error('nothing to commit');
       helper.state.set(pending.siteKey, { ...pending.snapshots }); return { committed: true };
@@ -166,6 +167,12 @@ test('full reasons: turned off makes a standard package and discards nothing it 
 });
 test('full reasons: a failed commit makes the next backup full', async () => {
   await becomesFull('r-commit', async () => { helper.failCommit = true; await run('r-commit'); helper.failCommit = false; }, 'snapshot-not-committed');
+});
+test('the commit sends the site config, so a custom staging root is committed', async () => {
+  site('custom-root', 'srv', { stagingRoot: '/srv/docknest-staging' }); enable('custom-root');
+  const { job } = await run('custom-root');
+  assert.deepEqual([helper.commits.at(-1).job, helper.commits.at(-1).siteKey, helper.commits.at(-1).config.stagingRoot], [job.id, 'custom-root', '/srv/docknest-staging']);
+  assert.ok(helper.calls.indexOf('incremental-commit') < helper.calls.indexOf('cleanup'), 'commit before cleanup');
 });
 test('a returned chain that does not match the request is refused and nothing is published', async () => {
   site('forged', 'srv'); enable('forged'); await run('forged');

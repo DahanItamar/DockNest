@@ -11,8 +11,8 @@ import { db, id, audit, parse, transaction } from './db.js';
 import { requireAdmin, requireRecentAuth } from './auth.js';
 import { statFile, openRead } from './storage.js';
 import { packagePath } from './artifact-journal.js';
-import { discardIncrementalState, busySite } from './engine.js';
-import { incrementalSettings, updateIncrementalSettings, loadChain, verifyChainLinks, inChain, ChainError, FULL_REASONS } from './incremental.js';
+import { discardIncrementalState, busySite, enqueueBackup } from './engine.js';
+import { incrementalSettings, updateIncrementalSettings, setForceFull, loadChain, verifyChainLinks, inChain, ChainError, FULL_REASONS } from './incremental.js';
 
 const notFound = message => { throw Object.assign(new Error(message), { status: 404 }); };
 const site = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
@@ -59,7 +59,11 @@ export function orderText(members) {
 
 export const incrementalRoutes = express.Router();
 incrementalRoutes.get('/sites/:id/incremental', (req, res) => { const row = site(req.params.id); res.json(view(row, incrementalSettings(row.id))); });
-incrementalRoutes.put('/sites/:id/incremental', requireAdmin, requireRecentAuth, async (req, res) => {
+// "Full backup now" ({ fullNow: true } alone) is a backup request: the same role as Back up now (operators too). Changing
+// the option or its interval stays an administrator change with recent authentication.
+const fullNowOnly = body => Boolean(body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 && body.fullNow === true);
+const settingsChange = (req, res, next) => fullNowOnly(req.body) ? next() : requireAdmin(req, res, () => requireRecentAuth(req, res, next));
+incrementalRoutes.put('/sites/:id/incremental', settingsChange, async (req, res) => {
   const row = site(req.params.id);
   if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(row.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
   let outcome;
@@ -68,6 +72,15 @@ incrementalRoutes.put('/sites/:id/incremental', requireAdmin, requireRecentAuth,
   // Turning the option off removes the source's snapshot files. A running backup may still write them; that only ever
   // makes a later backup full, so the discard is skipped while the site is busy and never blocks the change.
   if (outcome.discard && !busySite(row.id)) await discardIncrementalState(row.id);
+  // fullNow marks the next backup full and starts it now through the same enqueue as Back up now (deployment hold, site
+  // moving, busy and archived guards, audit). If it cannot start, the mark is undone and the reason returned.
+  if (req.body?.fullNow === true) {
+    let job;
+    try { job = enqueueBackup(row.id, req.user.id); }
+    catch (error) { setForceFull(row.id, outcome.previousForce); throw error; }
+    audit(req.user.id, 'backup.full_now', row.id, { job: job.id });
+    return res.status(202).json({ ...view(row, incrementalSettings(row.id)), job: { id: job.id } });
+  }
   res.json(view(row, outcome.settings));
 });
 

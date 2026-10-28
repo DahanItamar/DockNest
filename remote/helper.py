@@ -80,12 +80,12 @@ def complete_recovery(root,boot_id=None):
             finally:os.close(directory)
         except OSError:pass
         raise
-def run(args,timeout=3600,input=None):
+def run(args,timeout=3600,input=None,cwd=None):
     if STOPPING:raise ValueError('DockNest stopped this step.')
     started=time.monotonic();label=pathlib.Path(args[0]).name+(' '+str(args[1]) if len(args)>1 and args[0]=='docker' else '')
     diagnostic(command=label,phase='start')
     try:
-        result=subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input)
+        result=subprocess.check_output(args,stderr=subprocess.DEVNULL,timeout=timeout,input=input,cwd=cwd)
         diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='ok')
         return result
     except subprocess.TimeoutExpired:
@@ -913,7 +913,7 @@ def incremental_root():
 def site_state(site,create=False):
     if not isinstance(site,str) or not SITE_KEY.fullmatch(site):raise ValueError('Invalid incremental site key')
     if create:incremental_root();return private_directory(INCREMENTAL_ROOT/site)
-    if INCREMENTAL_ROOT.is_symlink() or (INCREMENTAL_ROOT/site).is_symlink():raise ValueError('Incremental state folder cannot be a symbolic link')
+    if any(parent.is_symlink() for parent in INCREMENTAL_ROOT.parents) or INCREMENTAL_ROOT.is_symlink() or (INCREMENTAL_ROOT/site).is_symlink():raise ValueError('Incremental state folder cannot be a symbolic link')
     return INCREMENTAL_ROOT/site
 def copy_private(source,target):
     """Copy a regular file (never through a link) to a new 0600 file and fsync it."""
@@ -936,14 +936,20 @@ def incremental_sources(containers):
             if m['Type']=='bind' and protected_mount(m['Source']):continue
             result.setdefault(m['Source'],snapshot_key(m['Source']))
     return result
-def plan_incremental(inc,sources,root):
+def plan_incremental(inc,sources,root,exclusions=None):
     """Decide full or increment before any service stops, and copy each parent snapshot into the job root.
     Any missing or mismatched snapshot, or a changed set of mounts, turns the whole package into a full one."""
     work=root/'incremental';work.mkdir(mode=0o700)
     keys=sorted(set(sources.values()));reason=None
+    # Excluded paths change what tar sees: a different exclusion list is a different mount set.
+    excluded={key:sorted((exclusions or {}).get(source,[])) for source,key in sources.items()}
     if inc['mode']=='incremental':
         state=site_state(inc['siteKey'])
+        marker=state/'state.json'
+        committed=json.loads(marker.read_text()) if is_regular(marker) else None
         if set(keys)!=set(inc['parentSnapshots']):reason='mount-set-changed'
+        elif committed is None:reason='snapshot-missing'
+        elif (committed.get('exclusions') or {})!=excluded:reason='mount-set-changed'
         else:
             for key in keys:
                 path=state/(key+'.snar')
@@ -957,7 +963,7 @@ def plan_incremental(inc,sources,root):
     level=0 if inc['mode']=='full' or reason else 1
     if level:chain={'id':inc['chainId'],'position':inc['position'],'parentBackupId':inc['parentBackupId'],'parentSha256':inc['parentSha256']}
     else:chain={'id':inc['fallbackChainId'] if reason else inc['chainId'],'position':0,'parentBackupId':None,'parentSha256':None}
-    return {'level':level,'chain':chain,'reason':reason,'work':work,'keys':keys,'siteKey':inc['siteKey'],'parentImageIds':set(inc['parentImageIds']) if level else set()}
+    return {'level':level,'chain':chain,'reason':reason,'work':work,'keys':keys,'siteKey':inc['siteKey'],'exclusions':excluded,'parentImageIds':set(inc['parentImageIds']) if level else set()}
 def reset_snapshot(state,key):
     """Before every tar run (a direct capture runs each tar twice): the working copy starts from the parent snapshot,
     or does not exist for a level-0 archive, so both runs make the same archive."""
@@ -1032,7 +1038,7 @@ def incremental_commit(req):
         # The state holds exactly this job's sources: snapshots of removed mounts go.
         for path in state.glob('*.snar'):
             if path.name[:-5] not in snapshots:path.unlink()
-        atomic_json(marker,{'job':str(job),'chainId':record.get('chainId'),'position':record.get('position'),'capturedAt':record.get('capturedAt'),'snapshots':snapshots})
+        atomic_json(marker,{'job':str(job),'chainId':record.get('chainId'),'position':record.get('position'),'capturedAt':record.get('capturedAt'),'snapshots':snapshots,'exclusions':record.get('exclusions') or {}})
         sync_directory(state)
     finally:
         if lock:lock.close()
@@ -1050,6 +1056,7 @@ def incremental_discard(req):
             if os.name=='posix':sync_directory(INCREMENTAL_ROOT)
     finally:
         if lock:lock.close()
+        (INCREMENTAL_ROOT/('.lock-'+site)).unlink(missing_ok=True)
     emit(result={'discarded':True,'existed':existed})
 def pinned_socket(addresses,port,timeout):
     """Connects only to addresses validated earlier, so a second DNS answer cannot redirect the probe."""
@@ -1646,7 +1653,7 @@ def capture(req,output=None):
     if inc is not None:
         snapshot_sources=incremental_sources(cs)
         lock=site_lock(inc['siteKey'])
-        try:increment=plan_incremental(inc,snapshot_sources,root)
+        try:increment=plan_incremental(inc,snapshot_sources,root,exclusions)
         finally:
             if lock:lock.close()
     # A source mounted twice is archived once; with snapshot files this keeps one snapshot per source.
@@ -1810,7 +1817,7 @@ def capture(req,output=None):
         try:docker('image','rm',image)
         except Exception:pass
     # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
-    if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots})
+    if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots,'exclusions':increment['exclusions']})
     emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest})
 
 def owned_job_root(req):
@@ -2062,13 +2069,17 @@ def extract_archives(archive,destination):
 DUMPDIR_CODES='YNDRTX'
 def dumpdir_problem(value,top):
     """GNU.dumpdir lists a directory's entries (Y, N, D: one name each) and directory renames (R, T, X: paths from the
-    archive root). Every name must stay inside the archive's one top-level entry."""
+    archive root). In a rename cycle GNU tar writes R or T with an empty name (the temporary X folder stands in).
+    Every non-empty name must stay inside the archive's one top-level entry."""
     if not isinstance(value,str):return True
     entries=value.split('\0')
     while entries and entries[-1]=='':entries.pop()
     for entry in entries:
-        if len(entry)<2 or entry[0] not in DUMPDIR_CODES:return True
+        if not entry or entry[0] not in DUMPDIR_CODES:return True
         name=entry[1:]
+        if not name:
+            if entry[0] in 'RT':continue
+            return True
         if entry[0] in 'YND':
             if '/' in name or name in ('.','..'):return True
         else:
@@ -2088,6 +2099,8 @@ def incremental_archive_check(archive,root,top=None):
     with tarfile.open(archive,'r:') as tar,open(archive,'rb') as raw:
         members=tar.getmembers()
         if not members:raise ValueError('Empty mount archive in the backup chain')
+        # A pax global header would change how every later member is read; DockNest never writes one.
+        if tar.pax_headers:raise ValueError('Incremental archive must not carry global tar headers')
         for member in members:
             # Only POSIX headers: GNU-format incremental headers reuse the ustar name prefix for atime/ctime.
             raw.seek(member.offset);header=raw.read(512)
@@ -2128,6 +2141,15 @@ def incremental_archive_check(archive,root,top=None):
                     on_disk=link not in names and is_regular(root/str(link)) and not any(parent.parts and (root/str(parent)).is_symlink() for parent in link.parents)
                     if '..' in link.parts or not (link in regular or on_disk) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
         return top
+def replace_directory_links(archive,root):
+    """A symlink an earlier link restored where this archive has a real folder: GNU tar would follow it (and purge the
+    folder it points at), so the link itself is removed first. Checked archives only; links are never followed."""
+    with tarfile.open(archive,'r:') as tar:
+        folders=sorted((pathlib.PurePosixPath(m.name) for m in tar.getmembers() if m.isdir()),key=lambda p:len(p.parts))
+    for folder in folders:
+        path=root/str(folder)
+        # Parents were checked: none is a symlink unless this archive replaces it, and shallower ones went first.
+        if path.is_symlink():path.unlink()
 def chain_extract(archives,destination):
     """Rebuild one mount from a chain: the full archive, then each increment in order."""
     if os.name!='posix':raise ValueError('Restoring an incremental backup needs GNU tar on Linux')
@@ -2137,7 +2159,10 @@ def chain_extract(archives,destination):
     root=destination.resolve();top=None
     for archive in archives:
         top=incremental_archive_check(archive,root,top)
-        run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
+        replace_directory_links(archive,root)
+        # Run inside the destination, not with -C: GNU tar creates the temporary folder of a directory-rename cycle
+        # from a relative template, which -C (openat-based) does not move.
+        run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
 def restore(req):
     root=owned_job_root(req)
     unpacked,manifest,artifacts_verified=unpack_verified(req,root)
