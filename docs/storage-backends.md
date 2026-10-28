@@ -11,6 +11,8 @@ DockNest writes encrypted backup packages (`DBM1`, see [backup format](backup-fo
 > [!WARNING]
 > S3 support is beta until the S3 integration job and the Linux backup/restore job pass. The S3 adapter has not been validated with real backup and restore. That needs the Linux Docker integration suite run against a real provider. Before you rely on it, run an isolated restore from an S3 destination and check the restored site.
 
+Providers: the S3 suite (`npm run test:s3`) has a provider mode for a real, existing bucket (`S3_BUCKET`, plus `S3_PROVIDER` for the report). It passed once, by hand, against **Cloudflare R2** on 2026-10-28: multipart upload, ranged reads, conditional copy publish, the readiness probe and cleanup. R2 is not tested on every release, and its Object Lock support is not tested.
+
 ## Adapter boundary
 
 `src/storage.js` re-exports the facade in `src/storage/index.js`. Callers use storage references: a plain path for local storage, or `scheme:<targetId>:/path` for remote storage (`sftp:` or `s3:`). The facade finds the adapter for the reference, loads the destination (and decrypts its credential) and confines the path to the destination root. Every remote adapter (`src/storage/sftp.js`, `src/storage/s3.js`) implements the same operations:
