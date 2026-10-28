@@ -4,13 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Storage per site: a site can use its own main backup destination instead of the default one.
+- Backup copies: keep up to three extra copies of each backup on other destinations (for example SFTP plus S3). Copies follow in the background, retry on failure, send alerts, keep their own retention and can be used to restore if the main copy is gone.
+
 ### Changed
 
+- S3-compatible storage is no longer beta.
 - Storage report: the **Incremental saving** card is now **Possible saving**, so it is clear DockNest does not make incremental backups yet; the number is a best-case estimate of what they could save.
-
-### Fixed
-
-- The S3 beta note now says what has really been tested: a real MinIO S3 server, not yet full backups and restores or cloud providers.
 
 ## [2.10.1] - 2026-10-28
 

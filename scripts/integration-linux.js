@@ -247,6 +247,8 @@ try {
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
+  const {runCopiesScenario}=await import('./integration-copies.js');
+  await runCopiesScenario({run,until,hosts,servers,db,record,siteId});
   const {runLegacyCompatibility}=await import('./integration-legacy.js');
   await runLegacyCompatibility({run,until,hosts,servers,db,remote,evidence,record});
   const {runRedisCompatibility}=await import('./integration-redis.js');
@@ -284,6 +286,8 @@ try {
   // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.
   evidence.failure = error.message.startsWith('Command failed:') ? 'Docker fixture command failed; inspect the isolated test environment' : error.message;
   console.error(evidence.failure); process.exitCode = 1;
+  // Code locations only (file:line from src/ and scripts/), never messages or arguments.
+  for (const frame of String(error.stack || '').split('\n').filter(line => /^\s+at .*[\\/](src|scripts)[\\/][\w./-]+:\d+:\d+\)?$/.test(line)).slice(0, 8)) console.error(frame.replace(/^.*?[\\/]((?:src|scripts)[\\/][\w./-]+:\d+:\d+)\)?$/, '  at $1'));
 } finally {
   for (const host of hosts) await run('rm', '-f', '-v', host).catch(() => {});
   db?.close();

@@ -150,8 +150,8 @@ jobs:
           path: data/qa/controlled-beta.json
 
   # Real S3 semantics (multipart, ranges, conditional copy, Object Lock) against a
-  # MinIO-compatible server. Informational while S3 is beta: not a required check
-  # and not part of controlled-beta-gate. Upstream MinIO images and binaries are
+  # MinIO-compatible server. A required check now that S3 is no longer beta,
+  # separate from controlled-beta-gate. Upstream MinIO images and binaries are
   # archived, so this pins the maintained Pigsty fork by digest.
   s3-integration:
     runs-on: ubuntu-latest

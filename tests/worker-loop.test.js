@@ -29,3 +29,13 @@ test('an active loop maintains, ticks and claims before idling',async()=>{
  let rounds=0;const {calls,steps}=loopSteps(()=>rounds<2,async()=>{});steps.idle=async()=>{rounds++;calls.push('idle');};
  await runWorkerLoop(steps);assert.deepEqual(calls,['maintain','tick','claimSelf','claim','idle','maintain','tick','claimSelf','claim','idle']);
 });
+test('backup copies run only when no site job waits, and never after a drain signal',async()=>{
+ let rounds=0,stopping=false;const {calls,steps}=loopSteps(()=>!stopping&&rounds<3,async()=>{});
+ const jobs=[{id:'backup'}],due=[{id:'copy-1'},{id:'copy-2'}];
+ steps.claimJob=()=>{calls.push('claim');return jobs.shift()??null;};steps.executeJob=async()=>calls.push('run');
+ steps.claimCopy=()=>{calls.push('claimCopy');return due.shift()??null;};steps.executeCopy=async copy=>{calls.push('copy:'+copy.id);if(copy.id==='copy-2')stopping=true;};
+ steps.idle=async()=>{rounds++;calls.push('idle');};
+ await runWorkerLoop(steps);
+ assert.deepEqual(calls,['maintain','tick','claimSelf','claim','run','maintain','tick','claimSelf','claim','claimCopy','copy:copy-1','maintain','tick','claimSelf','claim','claimCopy','copy:copy-2']);
+ assert.equal(due.length,0);
+});

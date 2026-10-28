@@ -3,6 +3,8 @@ import {Sparkline} from './charts.jsx';
 import {BrandIcon} from './brand.jsx';
 import {REPO} from './updates/parts.jsx';
 import './dashboard.css';
+import {DataTable} from './data-table.jsx';
+import {Paginated} from './pagination.jsx';
 import './storage-report.css';
 
 export const GUIDE=REPO+'/blob/main/docs/restore-tests-guide.md#storage-report';
@@ -30,6 +32,15 @@ function Metric({icon,label,value,hint,children,action}) {
  return <section className="dash-metric berry-metric-compact"><span className="metric-tile"><BrandIcon name={icon} size={24}/></span><div className="sr-metric-body"><strong>{value}</strong><span className="metric-label">{label}{action}</span>{children}<small title={typeof hint==='string'?hint:undefined}>{hint}</small></div></section>;
 }
 
+// Main copies, extra copies and the parts kept for an incremental chain, one row per destination (2.11.0).
+// Shown once there is more than one destination or any copy; older servers do not send the split fields.
+export const hasDestinationSplit=storages=>storages.length>0&&storages.every(storage=>storage.mainBytes!=null)&&(storages.length>1||storages.some(storage=>storage.copyBytes>0));
+export function DestinationsCard({storages}){
+ return <section className="card sr-destinations"><div className="card-body"><h2 className="card-title">By destination</h2>
+  <Paginated rows={storages} label="Destinations" pageSize={5}>{visible=><DataTable caption="Space by destination" headers={['Destination','Main','Copies','Kept for chain','Total']} columns={[null,'16%','16%','18%','16%']} numeric={[1,2,3,4]}>{visible.map(storage=><tr key={storage.targetId||storage.id}><td title={storage.name}>{storage.name}</td><td>{size(storage.mainBytes)}</td><td title={storage.copyCount?`${storage.copyCount} ${storage.copyCount===1?'copy':'copies'}`:undefined}>{size(storage.copyBytes)}</td><td>{size(storage.chainBytes||0)}</td><td>{size(storage.bytes)}</td></tr>)}</DataTable>}</Paginated>
+ </div></section>;
+}
+
 // Space per site, 30-day growth and the labelled best-case estimate (docs/restore-tests.md).
 export function StorageReport({report,error,onOpenSites}) {
  if(error)return <p className="t-caption sr-status" role="status">{error}</p>;
@@ -49,5 +60,6 @@ export function StorageReport({report,error,onOpenSites}) {
    <section className="card"><div className="card-body"><h2 className="card-title">By site</h2><div className="sr-scroll" tabIndex={report.sites.length>8?0:undefined} aria-label={report.sites.length>8?'Sites by size, scrollable':undefined}><table className="sr-table"><thead className="sr-sr"><tr><th>Site</th><th>Share</th><th>Size</th></tr></thead><tbody>{report.sites.map(site=><tr key={site.siteId}><th scope="row" title={site.name}><span>{site.name}</span></th><td><span className="sr-bar" aria-hidden="true"><i style={{width:Math.max(2,Math.round(site.bytes/top*100))+'%'}}/></span></td><td className="num">{size(site.bytes)}</td></tr>)}</tbody></table></div></div>{onOpenSites&&<footer className="card-footer"><button type="button" onClick={onOpenSites}>Open sites</button></footer>}</section>
    <section className="card"><div className="card-body sr-growth"><h2 className="card-title">Growth</h2>{history.values.length>1?<><p className="t-caption sr-growth-range">{size(history.values[0])} to {size(growth.toBytes)}, {history.full?'last 30 days':'since '+sinceLabel(history.since)}</p><div className="sr-chart-wrap"><div className="sr-chart"><span className="sr-zero" aria-hidden="true">0 B</span><Sparkline values={history.values} area label={history.full?'Stored backup size over the last 30 days':'Stored backup size since '+sinceLabel(history.since)}/></div><div className="sr-axis t-caption" aria-hidden="true"><span>{history.full?'30 days ago':sinceLabel(history.since)} · {size(history.values[0])}</span><span>Today · {size(growth.toBytes)}</span></div></div></>:<p className="t-caption sr-chart-empty">{history.values.length?'History starts today. The chart appears after a second day of backups.':'No history yet. The chart appears once backups have been stored for a couple of days.'}</p>}</div></section>
   </div>
+  {hasDestinationSplit(report.storages)&&<DestinationsCard storages={report.storages}/>}
  </div>;
 }

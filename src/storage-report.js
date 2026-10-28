@@ -40,16 +40,23 @@ export function growthSeries(rows, nowMs, days = 30) {
   return { points, fromBytes: points[0], toBytes: points.at(-1), changeBytes: points.at(-1) - points[0] };
 }
 
-export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now() }) {
+// copies: verified backup copies [{ targetId, size }] (docs/backup-copies.md). mainRemoved: ids of backups whose main package
+// aged out while a copy keeps them; they count once, as a copy. Destination bytes include the copies held there.
+export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now(), copies = [], mainRemoved = new Set() }) {
   const names = new Map(sites.map(site => [site.id, site.name]));
   const storageNames = new Map([['local', 'Local disk'], ['env', 'Configured storage'], ...targets.map(target => [target.id, target.name])]);
+  const storageModes = new Map([['local', 'local'], ['env', 'sftp'], ...targets.map(target => [target.id, target.mode ?? null])]);
+  const storageOf = id => byStorage.get(id) ?? byStorage.set(id, { id, targetId: id, name: storageNames.get(id) ?? 'Removed destination', mode: storageModes.get(id) ?? null, packages: 0, bytes: 0, mainBytes: 0, copyBytes: 0, copyCount: 0, chainBytes: 0 }).get(id);
   const bySite = new Map(), byStorage = new Map();
   for (const row of backups) {
     const size = number(row.size);
     (bySite.get(row.siteId) ?? bySite.set(row.siteId, []).get(row.siteId)).push({ ...row, size });
-    const id = storageIdOf(row.path), entry = byStorage.get(id) ?? byStorage.set(id, { id, name: storageNames.get(id) ?? 'Removed destination', packages: 0, bytes: 0 }).get(id);
-    entry.packages++; entry.bytes += size;
+    if (mainRemoved.has(row.id)) continue;
+    const entry = storageOf(storageIdOf(row.path));
+    entry.packages++; entry.bytes += size; entry.mainBytes += size;
   }
+  // Copies are listed apart from main packages; "kept for a chain" (chainBytes) stays separate and is 0 until 2.12.
+  for (const copy of copies) { const size = number(copy.size), entry = storageOf(copy.targetId); entry.packages++; entry.bytes += size; entry.copyBytes += size; entry.copyCount++; }
   const siteRows = [...bySite].map(([siteId, rows]) => {
     rows.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt) || String(a.id).localeCompare(String(b.id)));
     const estimate = siteEstimate(rows.map(row => row.size));
@@ -82,10 +89,12 @@ async function capacityOf(id) {
 
 export async function storageReport() {
   const backups = db.prepare('SELECT id,site_id AS siteId,captured_at AS capturedAt,path,size FROM backups WHERE id NOT IN (SELECT backup_id FROM retention_operations)').all();
-  const sites = db.prepare('SELECT id,name FROM sites').all(), targets = db.prepare('SELECT id,name FROM storage_targets').all();
-  const ids = [...new Set(backups.map(row => storageIdOf(row.path)))];
+  const sites = db.prepare('SELECT id,name FROM sites').all(), targets = db.prepare("SELECT id,name,CASE auth_type WHEN 's3-access-key' THEN 's3' ELSE 'sftp' END AS mode FROM storage_targets").all();
+  const copies = db.prepare("SELECT c.target_id AS targetId,b.size FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE c.status='verified' AND b.id NOT IN (SELECT backup_id FROM retention_operations)").all();
+  const mainRemoved = new Set(db.prepare('SELECT backup_id FROM backup_main_removed').all().map(row => row.backup_id));
+  const ids = [...new Set([...backups.filter(row => !mainRemoved.has(row.id)).map(row => storageIdOf(row.path)), ...copies.map(row => row.targetId)])];
   const capacities = Object.fromEntries(await Promise.all(ids.map(async id => [id, await capacityOf(id)])));
-  return buildReport({ backups, sites, targets, capacities });
+  return buildReport({ backups, sites, targets, capacities, copies, mainRemoved });
 }
 
 export const storageReportRoutes = express.Router();

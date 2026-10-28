@@ -5,11 +5,8 @@ DockNest writes encrypted backup packages (`DBM1`, see [backup format](backup-fo
 | Backend | Status | Requirements |
 | :-- | :-- | :-- |
 | SFTP | Supported. Real backup and restore validated by the Linux integration suite. | `fsync@openssh.com` file sync, atomic rename, a pinned SHA256 host key and a dedicated directory. |
-| S3-compatible | Beta. Uploads, byte ranges, multipart, conditional copy and Object Lock are tested in CI against a real MinIO server (job `s3-integration`). Not yet validated with a full backup and restore in the Linux integration suite, or against a cloud provider. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
+| S3-compatible | Supported. Real backup and restore validated by the Linux integration suite (MinIO-compatible server); `s3-integration` is a required check. Cloudflare R2 passed one manual run (2026-10-28); other providers are not tested on every release. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
 | Local directory | Tests and explicitly allowed deployments only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). | A directory on the DockNest server. It is lost with that server. |
-
-> [!WARNING]
-> S3 support is beta until the S3 integration job and the Linux backup/restore job pass. The S3 adapter has not been validated with real backup and restore. That needs the Linux Docker integration suite run against a real provider. Before you rely on it, run an isolated restore from an S3 destination and check the restored site.
 
 Providers: the S3 suite (`npm run test:s3`) has a provider mode for a real, existing bucket (`S3_BUCKET`, plus `S3_PROVIDER` for the report). It passed once, by hand, against **Cloudflare R2** on 2026-10-28: multipart upload, ranged reads, conditional copy publish, the readiness probe and cleanup. R2 is not tested on every release, and its Object Lock support is not tested.
 
@@ -93,6 +90,62 @@ These notes are not verified against each live provider. Confirm them with the c
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` | Region: filled from the endpoint (for example `us-west-004`). Use an application key limited to the bucket. Object Lock must be enabled on the bucket. |
 | Wasabi | `https://s3.<region>.wasabisys.com` | Region: filled from the endpoint. Object Lock must be chosen when the bucket is created. |
 | MinIO | `https://minio.example.internal:9000` | Use path-style addressing. Plain HTTP works only on loopback. |
+
+## Storage per site and backup copies
+
+Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
+
+- A site's main destination is `site_storage.main_target_id`; no row or NULL is the default destination
+  (`backup_storage_target`), exactly as before. A chosen destination that was removed fails the backup closed; DockNest
+  never writes to a destination the owner did not pick.
+- Copies are queued (`backup_copies`, status `pending`) in the same transaction that publishes the main copy. The worker
+  runs one due copy step when no site job waits, oldest backup first. The step checks free space on the copy
+  destination, streams the encrypted package as it is to `<path>.partial`, syncs it, authenticates it in full (GCM tag
+  and SHA-256 equal to the main copy's), renames it and only then records it. A file already at the copy path is adopted
+  only when it authenticates; a different file is never overwritten. A worker restart resumes from the row (not under
+  the deployment hold; the 5-minute maintenance step resumes it afterwards).
+- Status `copying` is the step's lease: nothing of that backup is deleted while it is read. Every 64 MiB a copy checks
+  for a queued site job and, if there is one, steps aside (its `.partial` is removed, it is due again at once and no
+  attempt is counted), so a long copy does not hold up a scheduled backup. Retries: 5 min, 30 min, 2 h, then every 6 h;
+  after 7 days the copy is `gave_up`. Stored errors are fixed sentences, never storage output.
+- Retention: the site's count applies to main packages, each copy destination keeps its own count; a destination the
+  site no longer copies to keeps the site's count, and copies not made yet to it are cancelled. When a main package
+  ages out, the main file is removed first (Object Lock on it defers everything), then the copies no destination keeps.
+  If a copy is still kept, `backup_main_removed` records that and `backups.path` keeps naming the main package;
+  `packagePath()` (src/artifact-journal.js) gives download, ZIP export, scrub, restore, restore tests and startup checks
+  the newest verified copy instead. Pins apply to every copy; an Object-Locked copy is deferred on its own.
+- Downgrade to 2.10 with such a backup: 2.10 sees its main package missing (startup marks it unverified) and its
+  retention may remove the row; it never touches copy files. 2.11 cleans up those orphaned copies when it starts again.
+- Restore uses the main copy, then verified copies newest first; the owner may choose a copy (`sourceTargetId`).
+- A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or a site uses
+  it. Its copies are deleted first (`POST /api/storage-targets/:id/copies/delete`). Deleting copies of backups that exist
+  only there needs `includeLastPackages: true`; pinned ones need `includePinned: true`.
+- Every other destination that holds packages (copies, or a site's main destination) also receives the newest recovery
+  kit. A kit there is removed only after a newer one was written to that same destination.
+- Real copies and restores count as validated only after the Linux integration suite passes.
+
+### Using copies
+
+- **Set up.** In the site's storage settings keep "Default" or pick another main destination, then add up to three copy
+  destinations, each with its own retention (empty means the site's count). A copy destination cannot be the main one,
+  the same bucket or folder twice, or a folder inside another destination. API: `GET` and `PUT /api/sites/:id/storage`
+  (administrator, recent sign-in). Nothing is copied retroactively; existing backups stay where they are.
+- **While it runs.** The backup is complete when the main copy is verified; copies follow in the background and never
+  extend the site's downtime. Each backup shows one chip per copy (verified, copying, missing). A site shows
+  "Copy missing" until every configured copy is verified.
+- **Failures.** A failed copy is retried automatically (5 minutes, 30 minutes, 2 hours, then every 6 hours, for up to
+  7 days), then marked "gave up". The next backup tries again, and **Retry** (`POST /api/backups/:id/copies/:targetId/retry`)
+  starts a fresh window. Alerts: `backup.copy_failed` on the first failure, `backup.copy_recovered` and
+  `backup.copy_gave_up`; they name the destination, never credentials.
+- **Retention.** Each destination keeps its own number of backups; a pin keeps a backup on every destination. If a
+  destination uses Object Lock, only its copy waits for the lock to end.
+- **Restore from a copy.** Restore uses the main copy. If it is missing or fails authentication, DockNest uses the first
+  verified copy that authenticates (newest first) and says which destination it used in the job and the audit log. You
+  can also choose a copy directly. A copy that fails authentication is never restored from.
+- **Removing a destination.** A destination that still holds copies, main packages or recovery kits, is the default, or
+  is used by a site cannot be removed. The Storage page shows how many copies and offers "Delete these copies". If some
+  backups exist only on that destination, deleting asks for an extra confirmation (request flag `includeLastPackages`) because it deletes
+  those backups.
 
 ## Verification status
 

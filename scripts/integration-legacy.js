@@ -91,7 +91,7 @@ export async function runLegacyCompatibility({ run, until, hosts, servers, db, r
   assert.equal(captured.manifest.formatVersion, 1);
   assert.equal(captured.manifest.complete, true);
   for (const field of ['backupPlan', 'artifacts', 'consistency']) assert.equal(Object.hasOwn(captured.manifest, field), false, 'Historical capture unexpectedly contains ' + field);
-  const directory = backupDirectory(servers[0], { id: siteId, name: 'Pre-M1 historical fixture' }, backupId);
+  const directory = backupDirectory(servers[0], { id: siteId, name: 'Pre-M1 historical fixture' });
   await makeDirectory(directory);
   const path = storageJoin(directory, 'payload.enc');
   const pass = new Transform({ transform(chunk, _encoding, callback) { callback(null, chunk); } });
