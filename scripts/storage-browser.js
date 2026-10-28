@@ -116,8 +116,12 @@ try{
  await sftp.locator('input[name="username"]').fill('fixture');await sftp.locator('input[name="password"]').fill('fixture-not-a-real-credential');
  await sftp.locator('input[name="hostKey"]').fill('SHA256:'+'A+/b'.repeat(10)+'abc');
  const before=posts.filter(path=>path.endsWith('/storage-targets/connect')).length;
+ // Hold the request so both presses land while it is in flight; a closed port fails fast enough to finish in between.
+ const hold=async route=>{await new Promise(resolve=>setTimeout(resolve,750));await route.continue();};
+ await page.route('**/api/storage-targets/connect',hold);
  await sftp.getByRole('button',{name:'Test & connect storage'}).focus();await page.keyboard.press('Enter');await page.keyboard.press('Enter');
  await sftp.locator('#storage-form-error').waitFor({timeout:30000});
+ await page.unroute('**/api/storage-targets/connect',hold);
  assert.equal(posts.filter(path=>path.endsWith('/storage-targets/connect')).length-before,1);
  await page.getByRole('heading',{name:'Remote backup destinations'}).waitFor();
  assert.deepEqual(errors,[]);

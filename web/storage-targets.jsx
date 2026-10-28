@@ -92,16 +92,18 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
  useEffect(()=>{load();},[]);
  useEffect(()=>{if(formError&&errorRef.current){errorRef.current.scrollIntoView?.({block:'center'});errorRef.current.focus();}},[formError]);
  // Busy buttons use aria-disabled so keyboard focus stays on them; this guard ignores repeat activation.
+ // `busy` is state and only changes on the next render; the ref closes the gap between two fast submits.
+ const inFlight=useRef(false);
  async function run(path,body,message,scope,busyText='Working…'){
-  if(busy)return null;
-  setBusy(true);setError('');setNotice(null);setFormError(null);setCardError(null);setStatus(busyText);
+  if(busy||inFlight.current)return null;
+  inFlight.current=true;setBusy(true);setError('');setNotice(null);setFormError(null);setCardError(null);setStatus(busyText);
   try{const result=await api(path,body);setNotice({message,card:scope?.card});setStatus(message);await load();await onChanged();setRefreshKey(value=>value+1);return result;}
   catch(error){
    setStatus('');
    if(error.status===401){onSessionExpired();return null;}
    if(scope==='form')setFormError({...splitFieldErrors(error.message),errorClass:error.errorClass});else if(scope?.card)setCardError({id:scope.card,message:error.message,errorClass:error.errorClass});else setError(error.message);
    return null;
-  }finally{setBusy(false);}
+  }finally{inFlight.current=false;setBusy(false);}
  }
  async function connect(event){
   event.preventDefault();if(busy)return;
