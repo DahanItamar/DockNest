@@ -89,6 +89,14 @@ class InventoryTests(unittest.TestCase):
         result=scan(FakeDocker([container(1,image=digest),container(2,image='registry.example.invalid:5000/team/php:8.3')]))
         self.assertEqual([c['image'] for c in result['containers']],[digest,'registry.example.invalid:5000/team/php:8.3'])
 
+    def test_probe_budget_stops_probing_and_marks_truncated(self):
+        fake=FakeDocker([container(1),container(2),container(3)])
+        with patch('helper.INVENTORY_PROBE_BUDGET',0):result=scan(fake)
+        self.assertFalse(any(call[1]=='exec' for call in fake.calls),'no probe after the budget')
+        self.assertTrue(result['truncated']);self.assertTrue(result['probeBudgetExceeded'])
+        self.assertTrue(all(c['runtime'] is None for c in result['containers']))
+        result=scan(FakeDocker([container(1)]));self.assertFalse(result['truncated']);self.assertFalse(result['probeBudgetExceeded'])
+
     def test_os_release_whitelist(self):
         self.assertEqual(parse_os_release('NAME=x\nID=ubuntu\nVERSION_ID="24.04"\nPASSWORD=y\n'),{'id':'ubuntu','versionId':'24.04'})
         self.assertIsNone(parse_os_release('NAME=only'))

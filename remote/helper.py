@@ -3617,6 +3617,9 @@ def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 INVENTORY_MAX_CONTAINERS=500
 PROBE_TIMEOUT=5
 PROBE_CAP=512
+# Total time all probes of one inventory may take. Past it, the remaining containers are not probed and the answer says
+# truncated, so DockNest resolves nothing from it. 500 containers x 3 probes x 5 s would otherwise take over two hours.
+INVENTORY_PROBE_BUDGET=120
 INVENTORY_LABELS={'com.docker.compose.project':'composeProject','com.docker.compose.service':'composeService','org.opencontainers.image.version':'ociVersion','org.opencontainers.image.revision':'ociRevision','org.opencontainers.image.source':'ociSource','org.opencontainers.image.base.name':'ociBaseName'}
 VERSION_PATTERN=r'\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+~.][A-Za-z0-9.+~-]{1,32})?'
 INVENTORY_PROBES=(('php',['php','-r','echo PHP_VERSION;'],re.compile(r'('+VERSION_PATTERN+r')')),('node',['node','-v'],re.compile(r'v('+VERSION_PATTERN+r')')))
@@ -3628,6 +3631,9 @@ def inventory_text(value,limit=200):
     return value or None
 def exec_capped(argv,timeout=PROBE_TIMEOUT,cap=PROBE_CAP):
     # At most cap bytes, or None on timeout, overflow, failure or a missing binary (all normal). No shell.
+    # The timeout kills the local `docker exec` client only. Docker does not stop the process inside the container when
+    # its client goes away, so a hung `php` or `node` may keep running in the container until it exits on its own. The
+    # probes are read-only version queries, and INVENTORY_PROBE_BUDGET bounds how long one inventory waits overall.
     try:process=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
     except OSError:return None
     timer=threading.Timer(timeout,process.kill);timer.start()
@@ -3685,6 +3691,7 @@ def inventory(req):
         try:images={item.get('Id'):item for item in json.loads(docker('image','inspect',*image_ids))}
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):images={}
     probes=req.get('probes',True) is not False
+    probe_deadline=time.monotonic()+INVENTORY_PROBE_BUDGET;budget_exceeded=False
     out=[]
     for c in containers:
         config=c.get('Config') or {};state=c.get('State') or {};labels=config.get('Labels') or {};image_id=c.get('Image') if c.get('Image') in image_ids else None;image=images.get(image_id) or {}
@@ -3694,14 +3701,16 @@ def inventory(req):
               'architecture':inventory_text(image.get('Architecture'),32),'imageCreated':inventory_text(image.get('Created'),40),
               'state':inventory_text(state.get('Status'),32),'running':running,'own':own,
               'labels':{name:inventory_text(labels.get(key),300) for key,name in INVENTORY_LABELS.items() if isinstance(labels.get(key),str)},'runtime':None}
-        if probes and running and not own and CONTAINER_ID.fullmatch(c.get('Id') or ''):item['runtime']=probe_container(c['Id'])
+        if probes and running and not own and CONTAINER_ID.fullmatch(c.get('Id') or ''):
+            if time.monotonic()>=probe_deadline:budget_exceeded=True
+            else:item['runtime']=probe_container(c['Id'])
         out.append(item)
     try:
         with open('/etc/os-release','rb') as handle:host_os=parse_os_release(handle.read(4096).decode('utf-8','replace'))
     except OSError:host_os=None
     try:docker_version=inventory_text(docker('version','--format','{{.Server.Version}}').decode().strip(),40)
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired):docker_version=None
-    return {'helperVersion':VERSION,'host':{'os':host_os,'docker':docker_version},'probes':probes,'truncated':truncated,'containers':out}
+    return {'helperVersion':VERSION,'host':{'os':host_os,'docker':docker_version},'probes':probes,'truncated':truncated or budget_exceeded,'probeBudgetExceeded':budget_exceeded,'containers':out}
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER
     if req.get('operation')=='move-lock-status':
