@@ -13,7 +13,7 @@ import './storage-targets.css';
 import {Paginated} from './pagination.jsx';
 import {formatDate} from './date-format.js';
 import {Combo} from './connections/parts.jsx';
-import {PROVIDER_GROUPS,providerById} from './storage-providers.js';
+import {PROVIDER_GROUPS,DEFAULT_PROVIDER,providerById,suggestedEndpoint} from './storage-providers.js';
 import {splitFieldErrors,regionFromEndpoint,lockWarnings} from './storage-form.js';
 
 function StorageTree({api,target,refreshKey,onSessionExpired}) {
@@ -60,15 +60,18 @@ function Usage({used,capacity}) {
  return <div className="storage-usage"><div className="storage-usage-text"><span>{percent==null?'Used by DockNest backups':'Capacity used'}</span><b>{percent==null?fmt(used):percent+'% · '+fmt(used)+' of '+fmt(capacity)}</b></div>{percent!=null&&<progress value={percent} max="100" aria-label="Capacity used"/>}</div>;
 }
 
-const initialS3={region:'us-east-1',regionTouched:false,lock:false,lockMode:'GOVERNANCE',lockDays:30,confirmed:false};
+const initialS3={region:'us-east-1',regionTouched:false,endpoint:'',endpointTouched:false,accountId:'',lock:false,lockMode:'GOVERNANCE',lockDays:30,confirmed:false};
 const lockModeHelp={GOVERNANCE:'Administrators with a special permission can remove locked backups early.',COMPLIANCE:'Nobody can remove locked backups early, not even the account owner. You pay for storage until the date passes.'};
 
 function S3Fields({Field,provider,s3,update,invalid,sites,policies}) {
  const warnings=s3.lock?lockWarnings(s3.lockDays,sites,policies):[];
- function endpointChanged(event){if(s3.regionTouched)return;const region=regionFromEndpoint(event.target.value);if(region)update({region});}
+ function endpointChanged(event){const endpoint=event.target.value,changes={endpoint,endpointTouched:true};if(!s3.regionTouched){const region=regionFromEndpoint(endpoint);if(region)changes.region=region;}update(changes);}
+ function regionChanged(event){const region=event.target.value,changes={region,regionTouched:true};if(!s3.endpointTouched&&provider.template)changes.endpoint=suggestedEndpoint(provider,{region});update(changes);}
+ function accountChanged(event){const accountId=event.target.value,changes={accountId};if(!s3.endpointTouched)changes.endpoint=suggestedEndpoint(provider,{accountId});update(changes);}
  return <>
-  <Field label="Endpoint URL" name="endpoint" type="url" required defaultValue={provider.endpoint} placeholder={provider.endpointPlaceholder} onChange={endpointChanged} {...invalid('endpoint')} help={provider.endpointHelp}/>
-  <div className="form-grid"><Field label="Region" name="region" value={s3.region} onChange={event=>update({region:event.target.value,regionTouched:true})} required pattern="[a-z0-9\-]{1,40}" title="Lowercase letters, numbers and hyphens, for example us-east-1. Use auto for Cloudflare R2." {...invalid('region')} help={provider.regionHelp}/><Field label="Bucket" name="bucket" required pattern="[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]" title="3 to 63 lowercase letters, numbers, dots or hyphens. Must start and end with a letter or number." {...invalid('bucket')} help="3 to 63 lowercase letters, numbers, dots or hyphens. Must start and end with a letter or number."/></div>
+  {provider.accountId&&<Field label="Account ID" name="accountId" value={s3.accountId} onChange={accountChanged} autoComplete="off" spellCheck={false} maxLength={64} help="Cloudflare dashboard, under R2. It builds the endpoint below."/>}
+  <Field label="Endpoint URL" name="endpoint" type="url" required value={s3.endpoint} placeholder={provider.endpointPlaceholder} onChange={endpointChanged} {...invalid('endpoint')} help={provider.endpointHelp}/>
+  <div className="form-grid"><Field label="Region" name="region" value={s3.region} onChange={regionChanged} required pattern="[a-z0-9\-]{1,40}" title="Lowercase letters, numbers and hyphens, for example us-east-1. Use auto for Cloudflare R2." {...invalid('region')} help={provider.regionHelp}/><Field label="Bucket" name="bucket" required pattern="[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]" title="3 to 63 lowercase letters, numbers, dots or hyphens. Must start and end with a letter or number." {...invalid('bucket')} help="3 to 63 lowercase letters, numbers, dots or hyphens. Must start and end with a letter or number."/></div>
   <div className="form-grid"><Field label="Folder prefix in bucket" name="prefix" defaultValue="docknest" maxLength={200} {...invalid('prefix')}/><Field label="Addressing style" name="addressing" defaultValue={provider.path?'path':'virtual'} options={[['virtual','Virtual-hosted'],['path','Path-style']]} help="Path-style suits MinIO and bucket names with dots."/></div>
   <Field label="Access key ID" name="accessKeyId" autoComplete="off" spellCheck={false} required maxLength={128} {...invalid('accessKeyId')}/>
   <Field label="Secret access key" name="secretAccessKey" type="password" autoComplete="new-password" required maxLength={256} {...invalid('secretAccessKey')} help="Use a key limited to this bucket. DockNest encrypts it and never shows it again."/>
@@ -84,14 +87,14 @@ function S3Fields({Field,provider,s3,update,invalid,sites,policies}) {
 }
 
 export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],policies=[],usage={}}) {
- const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState('hetzner'),[showSteps,setShowSteps]=useState(false),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
+ const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState(DEFAULT_PROVIDER),[showSteps,setShowSteps]=useState(false),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
  const removal=useDestinationRemoval(useMemo(()=>createCopiesClient(api),[api]),{onSessionExpired,onDone:async message=>{setNotice({message});await load();await onChanged();setRefreshKey(value=>value+1);}});
  const errorRef=useRef(null),update=changes=>setS3(previous=>({...previous,...changes}));
  const provider=providerById(providerId),kind=provider.kind;
- const pickProvider=id=>{const next=providerById(id);setProviderId(id);setFormError(null);setS3(previous=>({...previous,region:next.region||previous.region,regionTouched:false}));};
+ const pickProvider=id=>{const next=providerById(id);setProviderId(id);setFormError(null);setS3(previous=>({...previous,region:next.region||previous.region,regionTouched:false,endpointTouched:false,accountId:'',endpoint:suggestedEndpoint(next,{region:next.region})}));};
  const complianceBlocked=kind==='s3'&&s3.lock&&s3.lockMode==='COMPLIANCE'&&!s3.confirmed;
  const invalid=name=>formError?.fields[name]?{'aria-invalid':'true','aria-describedby':'storage-form-error'}:{};
- function resetForm(){setProviderId('hetzner');setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
+ function resetForm(){setProviderId(DEFAULT_PROVIDER);setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
  async function load(){try{setData(await api('/storage-targets'));}catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}}
  useEffect(()=>{load();},[]);
  useEffect(()=>{if(formError&&errorRef.current){errorRef.current.scrollIntoView?.({block:'center'});errorRef.current.focus();}},[formError]);
