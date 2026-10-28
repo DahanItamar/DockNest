@@ -55,7 +55,7 @@ function realistic(db) {
 test('migration 10 is one compatible line named alert-connections; 9 stays as released; the floor stays 1', async () => {
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/);
   assert.match(source.find(line => /^\s*\{\s*version:\s*10\b/.test(line)), /^ {2}\{ version: 10, name: 'alert-connections', compatible: true, up: /);
-  assert.equal(schemaVersion, 10); assert.equal(compatFloor(migrations), 1);
+  assert.ok(schemaVersion >= 10); assert.equal(compatFloor(migrations), 1);
   assert.deepEqual(migrations.map(item => item.version), migrations.map((_, index) => index + 1));
 });
 
@@ -68,14 +68,15 @@ test('a fresh install gets the new tables, empty, and the import marker', () => 
 test('a 2.9.0 install with no alerts gains only the new objects and keeps every row and setting', () => withDatabase(9, async (db, file) => {
   db.prepare("INSERT INTO settings VALUES('probe','kept')").run();
   const before = schema(db), settings = rows(db, 'settings', 'key').filter(row => row.key !== 'schema_compat_floor');
-  const result = migrate(db, { file, now: () => new Date('2026-10-27T08:00:00.000Z'), log: quiet });
+  // Migration 10 alone (2.10.0); later migrations add their own objects and have their own tests.
+  const upTo10 = migrations.slice(0, 10), result = migrate(db, { file, list: upTo10, now: () => new Date('2026-10-27T08:00:00.000Z'), log: quiet });
   assert.equal(result.from, 9); assert.equal(result.to, 10); assert.match(result.snapshot, /state-v9-to-v10-/);
   for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'existing objects keep their definition');
   assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), newObjects);
   assert.deepEqual(rows(db, 'settings', 'key').filter(row => row.key !== 'schema_compat_floor'), settings);
   assert.equal(rows(db, 'connections').length, 0);
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
-  assert.deepEqual(migrate(db, { file, log: quiet }), { from: 10, to: 10, snapshot: null }, 'restarting is a no-op');
+  assert.deepEqual(migrate(db, { file, list: upTo10, log: quiet }), { from: 10, to: 10, snapshot: null }, 'restarting is a no-op');
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
 }));
 
@@ -154,13 +155,13 @@ test('a large install (hundreds of nodes, lines and queue rows) is copied in one
 test('an upgrade interrupted halfway changes nothing, and the next start completes it', () => withDatabase(9, async (db, file) => {
   realistic(db);
   const before = schema(db), frozen = legacyTables.map(table => rows(db, table));
-  const broken = [...migrations, { version: 11, name: 'crash', compatible: true, up: () => { throw new Error('power cut'); } }];
+  const broken = [...migrations, { version: schemaVersion + 1, name: 'crash', compatible: true, up: () => { throw new Error('power cut'); } }];
   assert.throws(() => migrate(db, { file, list: broken, log: quiet }), /power cut/);
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 9, 'still a 2.9.0 database');
   assert.deepEqual(schema(db), before, 'no half-made tables');
   assert.deepEqual(legacyTables.map(table => rows(db, table)), frozen);
   migrate(db, { file, log: quiet });
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 10);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, schemaVersion);
   assert.equal(rows(db, 'alert_nodes').length, 8);
 }));
 
@@ -170,7 +171,7 @@ test('2.9.0 code keeps running on a migrated database: its schema check passes a
   db.prepare("INSERT INTO connections(id,provider,name,secret,settings,origin,created_at,updated_at) VALUES('new','telegram','Made after the upgrade','c2VhbGVk','{\"chatId\":\"-1009\"}',NULL,'2026-10-28','2026-10-28')").run();
   // The 2.9.0 list ends at migration 9: an additive newer schema is accepted without changes.
   const messages = [];
-  assert.deepEqual(migrate(db, { file, list: migrations.slice(0, 9), log: message => messages.push(message) }), { from: 10, to: 10, snapshot: null });
+  assert.deepEqual(migrate(db, { file, list: migrations.slice(0, 9), log: message => messages.push(message) }), { from: schemaVersion, to: schemaVersion, snapshot: null });
   assert.match(messages[0], /only adds compatible objects/);
   // The exact queries 2.9.0's alert store and delivery run.
   assert.equal(db.prepare("SELECT * FROM alert_rules WHERE enabled=1").all().length, 3);

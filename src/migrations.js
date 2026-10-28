@@ -194,6 +194,27 @@ export function importLegacyAlerts(db, { at = new Date().toISOString(), newId = 
   }
   db.prepare('INSERT INTO alert_legacy_import(id,imported_at) VALUES(1,?)').run(at);
 }
+// Storage per site and backup copies (docs/backup-copies.md). Additive only: new tables and indexes, no rows, nothing
+// altered. No foreign key points at backups or storage_targets: an older release deleting a backup row (its retention)
+// must never fail or cascade, and the copy files it leaves are cleaned up when this release starts again.
+// - site_storage: a site's own main destination (NULL main_target_id = the default destination, as before).
+// - site_storage_copies: up to 3 extra destinations per site, each with its own retention (NULL = the site's count).
+// - backup_copies: one row per backup and copy destination. status pending|copying|verified|failed|gave_up|deleted;
+//   next_attempt_at (epoch ms) is read by the existing worker loop. delete_state/delete_after hold a copy's own
+//   retention (and its Object Lock deferral) apart from the backup's.
+// - backup_main_removed: the main package aged out while a copy is still kept; backups.path then names that copy.
+// - manager_backup_copies: the recovery kit written to each other destination that holds copies.
+export const backupCopiesSchema = `
+CREATE TABLE IF NOT EXISTS site_storage (site_id TEXT PRIMARY KEY,main_target_id TEXT CHECK (main_target_id IS NULL OR length(main_target_id) <= 64),updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS site_storage_main ON site_storage(main_target_id);
+CREATE TABLE IF NOT EXISTS site_storage_copies (site_id TEXT NOT NULL,target_id TEXT NOT NULL CHECK (length(target_id) <= 64),retention INTEGER CHECK (retention IS NULL OR (typeof(retention) = 'integer' AND retention BETWEEN 1 AND 365)),created_at TEXT NOT NULL,PRIMARY KEY(site_id,target_id));
+CREATE INDEX IF NOT EXISTS site_storage_copies_target ON site_storage_copies(target_id);
+CREATE TABLE IF NOT EXISTS backup_copies (backup_id TEXT NOT NULL,target_id TEXT NOT NULL CHECK (length(target_id) <= 64),path TEXT NOT NULL,status TEXT NOT NULL CHECK (status IN ('pending','copying','verified','failed','gave_up','deleted')),attempts INTEGER NOT NULL DEFAULT 0 CHECK (typeof(attempts) = 'integer' AND attempts >= 0),next_attempt_at INTEGER,last_error TEXT CHECK (last_error IS NULL OR length(last_error) <= 300),verified_at TEXT,first_failed_at INTEGER,alerted INTEGER NOT NULL DEFAULT 0 CHECK (alerted IN (0,1)),delete_state TEXT CHECK (delete_state IS NULL OR delete_state IN ('pending','deferred')),delete_after INTEGER,retain_until TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(backup_id,target_id));
+CREATE INDEX IF NOT EXISTS backup_copies_due ON backup_copies(status,next_attempt_at);
+CREATE INDEX IF NOT EXISTS backup_copies_target ON backup_copies(target_id,status);
+CREATE TABLE IF NOT EXISTS backup_main_removed (backup_id TEXT PRIMARY KEY,original_path TEXT NOT NULL,removed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS manager_backup_copies (backup_id TEXT NOT NULL,target_id TEXT NOT NULL,path TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(backup_id,target_id));
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -225,6 +246,8 @@ export const migrations = [
   // Alert Connections (docs/alert-channels.md): new tables plus a copy of the 2.8 alerts into them. The 2.8 tables are left
   // as they are, so older code can ignore the new ones and a downgrade keeps the alerts as they were at upgrade time.
   { version: 10, name: 'alert-connections', compatible: true, up: db => { db.exec(alertConnectionsSchema); importLegacyAlerts(db); } },
+  // Storage per site and backup copies (docs/backup-copies.md): new tables and indexes only, so 2.10 code ignores them.
+  { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
