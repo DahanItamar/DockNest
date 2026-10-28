@@ -4,9 +4,7 @@ export function createIncrementalClient(api){
  const id=encodeURIComponent;
  return {
   get:siteId=>api('/sites/'+id(siteId)+'/incremental'),
-  save:(siteId,body)=>api('/sites/'+id(siteId)+'/incremental',body,'PUT'),
-  backup:siteId=>api('/sites/'+id(siteId)+'/backup',{}),
-  remove:backupId=>api('/backups/'+id(backupId),null,'DELETE')
+  save:(siteId,body)=>api('/sites/'+id(siteId)+'/incremental',body,'PUT')
  };
 }
 // The chain download is a plain file download of the encrypted packages plus ORDER.txt.

@@ -4,7 +4,7 @@ import {inChain,isIncremental,kindLabel,dependentsLine} from './model.js';
 import './incremental.css';
 
 // One quiet line under a recovery point that belongs to a chain: Full / Increment 3 of 6, what it depends on, chain actions.
-export function ChainLine({backup,backups,date,busy,isAdmin,onChain,onDelete}){
+export function ChainLine({backup,backups,date,onChain}){
  if(!inChain(backup))return null;
  const parent=backup.parentId?backups.find(item=>item.id===backup.parentId):null,incremental=isIncremental(backup);
  const text=incremental?(parent?'Depends on '+date(parent.capturedAt||parent.createdAt):'Depends on a missing backup'):dependentsLine(backup);
@@ -12,8 +12,8 @@ export function ChainLine({backup,backups,date,busy,isAdmin,onChain,onDelete}){
   <span className={'status inc-kind '+(incremental?'status-running':'status-success')}>{incremental?<Link className="status-icon" size={16} stroke={2} aria-hidden="true"/>:<Layers className="status-icon" size={16} stroke={2} aria-hidden="true"/>}{kindLabel(backup)}</span>
   {text&&<span className="inc-text" title={text}>{text}</span>}
   {incremental&&backup.dependents>0&&<span className="inc-text">{dependentsLine(backup)}</span>}
+  {backup.pinnedByChain&&<span className="inc-text">Kept for a chain</span>}
   <span className="inc-spacer"/>
   <button type="button" className="inc-link" aria-label={'Show chain of backup '+backup.id} onClick={()=>onChain(backup)}>Chain</button>
-  {isAdmin&&<button type="button" className="inc-link inc-delete-link" aria-label={'Delete backup '+backup.id} disabled={busy} onClick={()=>onDelete(backup)}>Delete</button>}
  </div>;
 }

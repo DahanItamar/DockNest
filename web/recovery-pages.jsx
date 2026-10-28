@@ -35,7 +35,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
      <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
      {(summary=>summary&&<div className="def-row"><dt>Storage</dt><dd>{summary.main}<span className="t-caption">{summary.copies}</span>{summary.missing&&<StatusLabel state="needs-review">Copy missing</StatusLabel>}{user?.role==='admin'&&onStorage&&<button type="button" className="cp-link" aria-label={`Change storage for ${site.name}`} onClick={()=>onStorage(site)}>Change</button>}</dd></div>)(siteStorageSummary(site))}
-     {site.config?.kind!=='static'&&site.incremental&&<div className="def-row"><dt>Incremental</dt><dd>{site.incremental.enabled?'Full every '+toBackups(site.incremental.interval)+' backups':'Off'}<span className="t-caption">{site.incremental.enabled?'Beta':'Every backup is complete'}</span>{user?.role==='admin'&&onIncremental&&<button type="button" className="cp-link" aria-label={`Change incremental backups for ${site.name}`} onClick={()=>onIncremental(site)}>Change</button>}</dd></div>}
+     {site.config?.kind!=='static'&&site.incremental&&<div className="def-row"><dt>Incremental</dt><dd>{site.incremental.enabled?'Full every '+toBackups(site.incremental.interval)+' backups':'Off'}<span className="t-caption">{site.incremental.enabled?'Beta':'Every backup is complete'}</span>{onIncremental&&<button type="button" className="cp-link" aria-label={`Change incremental backups for ${site.name}`} onClick={()=>onIncremental(site)}>Change</button>}</dd></div>}
     </dl>
    </div>
    <footer className="card-footer site-card-actions">
@@ -52,7 +52,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
  })}</div>}</Paginated>;
 }
 
-export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onClearFilter,onPin,onRestore,onDetails,onRetryCopy,retrying,onChain,onDeleteBackup,user,query}){
+export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onClearFilter,onPin,onRestore,onDetails,onRetryCopy,retrying,onChain,query}){
  if(!allBackups.length)return <section className="panel"><Empty icon={BackupIcon} title="No recovery points yet">Run a backup from Sites &amp; schedules. A recovery point appears only after the job is verified.</Empty></section>;
  if(!backups.length)return <section className="panel"><Empty icon={BackupIcon} title="No matching recovery points" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another recovery point, timestamp or site identifier.</Empty></section>;
  const groups=new Map();
@@ -72,7 +72,7 @@ export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onC
      <Control label={`Restore backup ${backup.id}`} icon="restore" onClick={()=>onRestore(backup)}/>
      <Control label={`Backup details ${backup.id}`} icon="details" onClick={()=>onDetails(backup)}/>
     </div>
-    <ChainLine backup={backup} backups={allBackups} date={date} busy={busy} isAdmin={user?.role==='admin'} onChain={onChain} onDelete={onDeleteBackup}/>
+    <ChainLine backup={backup} backups={allBackups} date={date} onChain={onChain}/>
     <CopyLines backup={backup} busy={busy} retrying={retrying} onRetry={onRetryCopy}/>
    </div>)}</Paginated></div>
   </details>;

@@ -40,15 +40,16 @@ const server = app.listen(port, '127.0.0.1'); await new Promise(resolve => serve
 const base = `http://127.0.0.1:${port}`, shots = process.env.SHOTS_DIR;
 if (shots) await mkdir(shots, { recursive: true });
 let browser;
-const refuse = [], deleteRefuse = [];
-const SETTINGS = { 'site-1': { enabled: true, interval: 6, forceFull: false, next: { kind: 'incremental' }, chains: 2 }, 'site-2': { enabled: false, interval: 6, forceFull: false, chains: 0 } };
+const refuse = [];
+const settingsOf = (siteId, extra = {}) => ({ siteId, enabled: siteId === 'site-1', interval: 6, fullNext: false, fullNextReason: null, fullNextMessage: null, available: true, beta: true, ...extra });
+const SETTINGS = { 'site-1': settingsOf('site-1'), 'site-2': settingsOf('site-2') };
 
 function report(saving = true) {
   const storages = [{ id: 't1', targetId: 't1', name: 'Offsite SFTP', mode: 'sftp', packages: 11, bytes: 17.6 * GB, capacityBytes: 2e12, mainBytes: 17.6 * GB, copyBytes: 0, copyCount: 0, chainBytes: 3.2 * GB }];
   const points = Array.from({ length: 30 }, (_, i) => (i < 20 ? 0 : 9e9 + i * 3e8));
   return { generatedAt: new Date().toISOString(), storages, sites: [{ siteId: 'site-1', name: SITE, packages: 9, bytes: 12.4e9 }, { siteId: 'site-2', name: 'pawmeadow.com', packages: 2, bytes: 5.2e9 }],
     totals: { packages: 11, bytes: 17.6e9, estimateUpToBytes: 0, estimateUpToPercent: 71 }, growth: { days: 30, points, fromBytes: points[20], toBytes: points.at(-1), changeBytes: 0 },
-    ...(saving ? { incrementalSaving: { bytesSaved: 8.9e9, fullEquivalentBytes: 21.5e9, storedBytes: 12.6e9, chains: 2, keptForChain: 3 } } : {}) };
+    ...(saving ? { incrementalSaving: { bytesSaved: 8.9e9, fullEquivalentBytes: 21.5e9, storedBytes: 12.6e9, increments: 7, chains: 2, keptForChain: 3, keptForChainBytes: 3.2e9, method: 'measured' } } : {}) };
 }
 
 async function open(viewport, colorScheme, { settings = SETTINGS, withSaving = true, onApi } = {}) {
@@ -72,9 +73,7 @@ async function open(viewport, colorScheme, { settings = SETTINGS, withSaving = t
     if (handled) return handled;
     const match = path.match(/^\/sites\/([^/]+)\/incremental$/);
     if (match && method === 'GET') return route.fulfill({ json: settings[match[1]] });
-    if (match && method === 'PUT') return route.fulfill({ json: { ...settings[match[1]], ...body } });
-    if (/^\/sites\/[^/]+\/backup$/.test(path) && method === 'POST') return route.fulfill({ status: 202, json: { id: 'job-1' } });
-    if (/^\/backups\/[^/]+$/.test(path) && method === 'DELETE') return route.fulfill({ json: { deleted: 1 } });
+    if (match && method === 'PUT') return route.fulfill({ json: { ...settings[match[1]], ...body, ...(body.fullNow ? { jobId: 'job-1', fullNext: true } : {}) } });
     if (path === '/storage-report') return route.fulfill({ json: report(withSaving) });
     if (path === '/storage-targets' && method === 'GET') return route.fulfill({ json: { targets: [], activeTargetId: null } });
     return route.continue();
@@ -118,7 +117,7 @@ try {
   for (const [viewport, scheme] of [[wide, 'light'], [wide, 'dark'], [phone, 'light'], [phone, 'dark']]) {
     const tag = (viewport.width === 1280 ? '1280' : '390') + '-' + scheme, label = tag;
     { // Sites page and the settings dialog: on, off, full fallback.
-      const fallback = { ...SETTINGS, 'site-1': { ...SETTINGS['site-1'], lastFallback: { reason: 'snapshot-mismatch' }, forceFull: true } };
+      const fallback = { ...SETTINGS, 'site-1': settingsOf('site-1', { fullNext: true, fullNextReason: 'snapshot-mismatch', fullNextMessage: 'The saved file list on the server no longer matched the last backup, so the next backup is full and starts a new chain.' }) };
       const { context, page, errors } = await open(viewport, scheme);
       await go(page, viewport, 'Sites & schedules');
       const card = page.locator('.site-card', { hasText: SITE });
@@ -142,7 +141,7 @@ try {
       const second = await open(viewport, scheme, { settings: fallback });
       await go(second.page, viewport, 'Sites & schedules');
       dialog = await openSiteDialog(second.page, SITE, 'Incremental backups');
-      await dialog.getByText('Last backup was full').waitFor();
+      await dialog.getByText('Full backup planned').waitFor();
       await shot(second.page, 'setting-fallback-' + tag);
       await second.context.close();
     }
@@ -154,7 +153,7 @@ try {
       await input.fill('1'); await dialog.getByRole('button', { name: 'Save' }).click();
       assert.equal(await input.getAttribute('aria-invalid'), 'true', label + ': interval below 2 refused in the page');
       assert.equal(calls.filter(call => call.method === 'PUT').length, 0, label + ': nothing sent');
-      await input.fill('7'); refuse.push('chain_busy');
+      await input.fill('7'); refuse.push('static_site');
       await dialog.getByRole('button', { name: 'Save' }).click();
       const alert = dialog.getByRole('alert'); await alert.waitFor();
       assert.match(await alert.evaluate(el => el.className), /alert-error/, label + ': red alert panel');
@@ -162,12 +161,12 @@ try {
       // Full backup now: marks the chain and queues a backup.
       await dialog.getByRole('button', { name: 'Full backup now' }).click();
       await dialog.waitFor({ state: 'detached' });
-      assert.deepEqual(calls.filter(call => call.method === 'PUT').at(-1).body, { enabled: true, interval: 6, fullNow: true });
-      assert.ok(calls.some(call => call.path === '/sites/site-1/backup'), label + ': full backup queued');
+      assert.deepEqual(calls.filter(call => call.method === 'PUT').at(-1).body, { fullNow: true });
+      assert.equal(calls.some(call => call.path === '/sites/site-1/backup'), false, label + ': the engine queues the backup, the page does not');
       await context.close();
     }
-    { // Backup list, chain dialog, delete dialogs.
-      const { context, page, errors, calls } = await open(viewport, scheme, { onApi: ({ path, method, route }) => { if (method === 'DELETE' && deleteRefuse.length) return route.fulfill({ status: 409, json: { error: 'x', code: deleteRefuse.shift() } }); } });
+    { // Backup list and chain dialog.
+      const { context, page, errors } = await open(viewport, scheme);
       await go(page, viewport, 'Backups');
       await openGroup(page);
       const rows = page.locator('.recovery-row');
@@ -187,41 +186,25 @@ try {
       assert.equal((await dialog.locator('tbody tr').first().innerText()).includes('Full'), true);
       assert.ok(await dialog.getByRole('link', { name: 'Download chain' }).getAttribute('href').then(href => href.endsWith('/chain-download')), label);
       await noScrollbar(dialog, label); await oneLine(dialog.locator('.modal-foot').getByRole('button'), label);
+      const rowHeight = (await dialog.locator('tbody tr').first().boundingBox()).height; assert.ok(rowHeight <= 58, rowHeight + ' ' + label + ': compact 56px rows');
       await shot(page, 'chain-' + tag);
       await dialog.getByRole('button', { name: 'Close', exact: true }).last().click(); await dialog.waitFor({ state: 'detached' });
-      // Delete the full backup of chain A: all 6 increments go with it.
-      await reveal(page, `Delete backup ${ids[0]}`);
-      dialog = page.getByRole('dialog', { name: 'Delete backup' });
-      await dialog.waitFor();
-      assert.match(await dialog.innerText(), /Delete this backup and the 6 backups that depend on it/, label);
-      assert.equal(await dialog.locator('tbody tr').count(), 7, label + ': all affected listed');
-      assert.match(await dialog.getByRole('button', { name: /^Delete 7$/ }).innerText(), /Delete 7/);
-      await noScrollbar(dialog, label); await oneLine(dialog.getByRole('button'), label);
-      await shot(page, 'delete-dependents-' + tag);
-      deleteRefuse.push('chain_in_use');
-      await dialog.getByRole('button', { name: 'Delete 7' }).click();
-      const alert = dialog.getByRole('alert').last(); await alert.waitFor();
-      assert.ok((await dialog.locator('.alert-error').count()) === 1, label + ': red error panel');
-      await shot(page, 'delete-error-' + tag);
-      await dialog.getByRole('button', { name: 'Delete 7' }).click();
-      await dialog.waitFor({ state: 'detached' });
-      assert.equal(calls.filter(call => call.method === 'DELETE').length, 2);
       assert.deepEqual(errors, [], label);
       await context.close();
     }
     { // Storage report: real measured saving; and an older server without the field.
       const { context, page, errors } = await open(viewport, scheme);
       await go(page, viewport, 'Storage');
-      const tile = page.locator('.dash-metric', { hasText: 'Saved by incremental backups' });
+      const tile = page.locator('.dash-metric', { hasText: 'Space saved' });
       await tile.waitFor();
-      assert.match(await tile.innerText(), /8\.9 GB[\s\S]*3 kept for a chain[\s\S]*41% less than full/, label);
+      assert.match(await tile.innerText(), /8\.9 GB[\s\S]*Space saved[\s\S]*3 kept for a chain[\s\S]*By incremental backups/, label);
       await shot(page, 'storage-saving-' + tag);
       assert.deepEqual(errors, [], label);
       await context.close();
       const older = await open(viewport, scheme, { withSaving: false });
       await go(older.page, viewport, 'Storage');
       await older.page.getByText('Possible saving').waitFor();
-      assert.equal(await older.page.getByText('Saved by incremental backups').count(), 0, label + ': no saving tile before chains exist');
+      assert.equal(await older.page.getByText('Space saved').count(), 0, label + ': no saving tile before chains exist');
       await older.context.close();
     }
   }

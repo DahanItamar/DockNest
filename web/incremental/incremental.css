@@ -5,7 +5,6 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 /* Setting rows: label and a short description left, the control right. */
 .inc-form{display:flex;flex-direction:column;gap:0}
 .inc-form .sb-switch-row{border-top:0}
-.inc-beta{display:inline-block;margin-left:8px;padding:0 8px;border:1px solid var(--alert-info-border);border-radius:var(--radius);background:var(--info-surface);color:var(--alert-info-text);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;vertical-align:middle}
 .inc-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}
 .inc-row-text{display:flex;flex-direction:column;min-width:0}
 .inc-row-label{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;color:var(--heading)}
@@ -17,6 +16,8 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 .inc-row-add button{white-space:nowrap}
 .inc-next{margin:12px 0 0}
 .inc-form>.alert-panel{margin-top:16px}
+
+.inc-chain .inc-table .inc-when{white-space:normal}.inc-when b,.inc-when small{display:block}.inc-when small{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
 @media(max-width:599px){
  .inc-row{flex-direction:column;align-items:stretch;gap:8px}
  .inc-row-control{flex:none}
@@ -30,21 +31,25 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 .inc-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
 .inc-link{width:auto;min-height:0;height:auto;padding:0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;white-space:nowrap}
 .inc-link:hover{background:var(--transparent);text-decoration:underline}
-.inc-link.inc-delete-link{color:var(--error)}
 .inc-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .inc-spacer{flex:1}
 
-/* Chain dialog and delete dialog. */
+/* Chain dialog: a compact table at every width. 40px header on the muted surface, 56px rows, numbers right-aligned. */
 .inc-chain-sum{margin:0 0 16px}
-.inc-chain .alert-panel,.inc-delete .alert-panel{margin-bottom:16px}
-.inc-chain .data-table-wrap,.inc-delete .data-table-wrap{overflow-x:hidden;scrollbar-width:none}
-.inc-chain .data-table td b,.inc-delete .data-table td b{font-weight:500;color:var(--heading)}
-.inc-chain .table-wrap,.inc-delete .table-wrap{position:relative}
-.inc-chain caption,.inc-delete caption{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.inc-chain .alert-panel{margin-bottom:16px}
+.inc-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.inc-table{width:100%;border-collapse:collapse;table-layout:fixed;border:1px solid var(--border-subtle)}
+.inc-chain .inc-table th{height:var(--header-row-height);padding:0 12px;background:var(--surface-muted);text-align:left;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;color:var(--text-muted)}
+.inc-chain .inc-table td{height:var(--row-height);padding:0 12px;border-top:1px solid var(--border-subtle);font-size:var(--fs-body);line-height:var(--lh-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inc-table .num{text-align:right;font-variant-numeric:tabular-nums;width:88px}
+.inc-table th:nth-child(2),.inc-table td:nth-child(2){width:128px}
+.inc-table .inc-status{width:48px;text-align:center}
+.inc-table .inc-status svg{vertical-align:middle}
+.inc-table td b{font-weight:500;color:var(--heading)}
 .inc-current td{background:var(--accent-soft)}
-.inc-parent{color:var(--text-secondary)}
 .inc-download{white-space:nowrap}
-.inc-chain .modal-foot,.inc-delete .modal-foot{display:flex;justify-content:flex-end}
+.inc-chain .modal-foot{display:flex;justify-content:flex-end}
+@media(max-width:599px){.inc-chain .inc-table th,.inc-chain .inc-table td{padding:0 6px}.inc-chain .inc-table td b{font-size:var(--fs-caption);line-height:var(--lh-caption)}.inc-table th:nth-child(2),.inc-table td:nth-child(2){width:104px}.inc-table .num{width:68px}.inc-table .inc-status{width:36px}.inc-table td,.inc-chain .inc-table td b{font-size:var(--fs-caption)}}
 
 /* Storage report: kept-for-chain note in the saving tile. */
 .sr-metrics .inc-saving .metric-tile{background:none;color:var(--link)}
