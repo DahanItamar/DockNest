@@ -28,7 +28,7 @@ fi
 cd "$DOCKNEST_DIR"
 ROOT=$(pwd)
 TARGET='' INTERACTIVE=1 FORCE=0 DATA_ROLLBACK=0 STATUS_FILE='' TIMEOUT=300 WAIT=600 DRY_RUN=0 PRINT_SCHEMA=0 NO_PRUNE=0 CLEANUP_TIMEOUT=120
-NO_FETCH=0 NO_VERIFY=0 UPGRADE_ONLY=0 CAPABILITIES=0 EXPECT_COMMIT='' EXPECT_DIGEST='' REQUEST_ID=''
+NO_FETCH=0 NO_VERIFY=0 UPGRADE_ONLY=0 CAPABILITIES=0 EXPECT_COMMIT='' EXPECT_DIGEST='' REQUEST_ID='' UPDATER_ROOT=''
 # Format of the result marker in every upgrade backup; bumped only when the meaning of that file changes.
 MARKER_FORMAT=1
 # Version of the status file and flag contract the host updater checks with --capabilities.
@@ -56,6 +56,9 @@ while [ $# -gt 0 ]; do
     --no-prune) NO_PRUNE=1 ;;
     --cleanup-timeout) [ $# -ge 2 ] || { echo 'Missing value for --cleanup-timeout' >&2; exit 1; }; CLEANUP_TIMEOUT=$2; shift ;; # tests: retention time limit
     --print-schema) PRINT_SCHEMA=1 ;; # tests: schema and compatibility floor parsed from src/migrations.js
+    --updater-root) # tests only (DOCKNEST_UPGRADE_TEST=1): prefix of the host updater paths
+      [ "${DOCKNEST_UPGRADE_TEST:-}" = 1 ] || { echo 'Unknown option: --updater-root (see --help)' >&2; exit 1; }
+      [ $# -ge 2 ] || { echo 'Missing value for --updater-root' >&2; exit 1; }; UPDATER_ROOT=$2; shift ;;
     -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (see --help)" >&2; exit 1 ;;
   esac
@@ -78,7 +81,7 @@ GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
 git_() { git -c "safe.directory=$ROOT" "$@"; }
 PHASE=init LAST_PHASE=init FROM='' TO='' STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ) HINT=''
 FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA='' IMAGE_MODE=0 PREV_IMAGE='' PREV_ID='' NEW_IMAGE=''
-SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
+SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 PINNING=0 CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
 REASON='' SCHEMA_TO='' START_FAILED=0 HEALTH_FAIL='' FETCH_FAILED=0 PREV_DIGESTS='' VERIFY_DIR='' LOCKED=0 LOCK="$ROOT/data/.upgrade.lock"
 # REPO: this install's image repository; PREV_REF: the stable tag that pins the previous release's image (pin_previous).
 REPO='' PREV_REF='' OLD_PREV='' CLEAN_FILE='' CLEANED=''
@@ -151,9 +154,11 @@ fail() { # fail CODE MESSAGE [REASON]
 # Once success is recorded (cleanup), any end is still a success: exit 0, status done, never a revert.
 on_exit() {
   code=$?; trap - EXIT; set +e
+  # Interrupted while recording the release for the host updater (after success): say so, never as a cleanup problem.
+  [ "$PINNING" != 1 ] || echo "WARNING: recording DockNest $TO for the host updater was interrupted. DockNest $TO is running; nothing was rolled back. Run on this host: sudo scripts/install-updater.sh --repair" >&2
   if [ "$CLEANUP" = 1 ]; then
     grep -q '^exit=' "$SAVE/result" 2>/dev/null || record_result 0
-    if [ "$code" != 0 ]; then
+    if [ "$code" != 0 ] && [ "$PINNING" != 1 ]; then
       for pid in $CLEANUP_PID $WATCHDOG_PID; do kill "$pid" 2>/dev/null; done
       echo "WARNING: removing old upgrade files was interrupted (exit $code). DockNest $TO is running; nothing needs to be done." >&2
       WARNING='Removing old upgrade files was interrupted; some may remain until the next successful upgrade.'
@@ -208,6 +213,43 @@ healthy() {
 }
 expect() { if [ "$(schema_at "$1")" = 0 ]; then echo legacy; else package_field "$1" version; fi; }
 release_hold() { docker compose exec -T api node scripts/deployment-preflight.js release >/dev/null 2>&1; }
+# pin_for_updater VERSION: after a healthy manual run on a host with the in-app updater, record the running release with
+# the installed broker's own record-current, which verifies it exactly as the installer does (signed manifest, tag on
+# main, image digest in image mode). Only when this run is root because the checkout belongs to root: root never works
+# on a non-root owner's checkout (F15). Updater runs (--request-id) are pinned by the broker before they start. Never
+# changes this run's result: a refusal only prints the --repair command. Without the updater nothing happens.
+pin_for_updater() {
+  _version=$1 _etc="$UPDATER_ROOT/etc/docknest-updater" _state="$UPDATER_ROOT/var/lib/docknest-updater"
+  _broker="$UPDATER_ROOT/usr/local/lib/docknest-updater/current/broker.py" _repair='sudo scripts/install-updater.sh --repair'
+  [ -z "$REQUEST_ID" ] && [ "$DRY_RUN" != 1 ] && [ -f "$_etc/config.json" ] || return 0
+  matches "$_version" '[0-9]+[.][0-9]+[.][0-9]+' || return 0
+  # The checkout and its owner from the installer's config, parsed as JSON; anything unexpected skips with a note.
+  _config=$(python3 -I -c 'import json,sys;c=json.load(open(sys.argv[1]));u=c["ownerUid"];assert isinstance(c["checkout"],str) and type(u) is int;print(u);print(c["checkout"])' "$_etc/config.json" 2>/dev/null) || _config=''
+  _owner=$(printf '%s\n' "$_config" | sed -n 1p) _checkout=$(printf '%s\n' "$_config" | sed -n 2p)
+  if ! matches "$_owner" '[0-9]+' || [ -z "$_checkout" ]; then
+    echo "NOTE: could not read the host updater configuration. If in-app updates are refused, run on this host: $_repair"; return 0
+  fi
+  if [ "$_checkout" != "$(pwd -P)" ]; then echo "NOTE: the host updater is installed for $_checkout, not this checkout; nothing was recorded for it."; return 0; fi
+  if [ "$(id -u)" != 0 ]; then echo "NOTE: if in-app updates are refused after this upgrade, run on this host: $_repair"; return 0; fi
+  if [ "$_owner" != 0 ]; then
+    echo "WARNING: this upgrade ran as root, but the checkout belongs to uid $_owner. Run scripts/upgrade.sh as that user (without sudo), and run $_repair before the next in-app update." >&2
+    return 0
+  fi
+  if grep -Fq "\"v$_version\"" "$_state/pins.json" 2>/dev/null; then return 0; fi
+  echo "==> Recording DockNest $_version for the host updater: verifying it (signed manifest, tag on main, image digest in image mode); this can take a few minutes"
+  set -- python3 -I -B "$_broker" record-current
+  if command -v timeout >/dev/null 2>&1; then set -- timeout 300 "$@"; fi
+  if command -v flock >/dev/null 2>&1; then set -- flock -n -E 75 "$_state/lock" "$@"; fi
+  _rc=1
+  if [ -f "$_broker" ]; then PINNING=1; if "$@"; then _rc=0; else _rc=$?; fi; PINNING=0; fi
+  case "$_rc" in
+    0) return 0 ;;
+    75) echo "WARNING: DockNest $_version is running, but an updater run is active, so it was not recorded. Nothing was rolled back. Run later on this host: $_repair" >&2 ;;
+    124) echo "WARNING: DockNest $_version is running, but verifying it for the host updater took longer than 5 minutes, so it was not recorded. Nothing was rolled back. Run on this host: $_repair" >&2 ;;
+    *) echo "WARNING: DockNest $_version is running, but the host updater could not verify and record it, so in-app updates are refused until it does. Nothing was rolled back. Run on this host: $_repair" >&2 ;;
+  esac
+  return 0
+}
 [ "$PRINT_SCHEMA" = 1 ] && { echo "$(schema_of < src/migrations.js) $(floor_of < src/migrations.js)"; FINISHED=1; exit 0; }
 # Put the previous release back after a failure; only when the metadata is provably untouched. Then lift the hold.
 # COMPAT_AFTER is set only by the health check (A10) once the migrated schema was proven compatible with $FROM.
@@ -608,7 +650,7 @@ TO=$(package_field "$TARGET_REF" version)
 echo "Current: $FROM ($(git_ describe --tags --always HEAD))   Target: $TO ($TARGET)   Mode: $([ "$IMAGE_MODE" = 1 ] && echo published image || echo build from source)"
 if [ -n "$EXPECT_COMMIT" ] && [ "$TARGET_REF" != "$EXPECT_COMMIT" ]; then fail 2 "$TARGET points to $TARGET_REF, not the verified commit $EXPECT_COMMIT. Nothing was changed." verify-manifest-mismatch; fi
 if [ "$UPGRADE_ONLY" = 1 ] && ! { matches "$TO" "$SEMVER" && semver_gt "$TO" "$FROM"; }; then fail 2 "--upgrade-only: $TO is not newer than the installed $FROM. Nothing was changed."; fi
-if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; exit 0; fi
+if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; pin_for_updater "$TO"; exit 0; fi
 # The updater verified the commit itself (--expect-commit) and never passes --no-verify.
 if [ "$NO_VERIFY" = 1 ]; then echo "WARNING: --no-verify: $TARGET was not checked against origin/main or a release signature." >&2
 elif [ -z "$EXPECT_COMMIT" ]; then verify_target; fi
@@ -776,4 +818,5 @@ status true
 run_cleanup
 PHASE=done; status true
 echo "DockNest $TO is running. Configuration backup: $SAVE"
+pin_for_updater "$TO"
 echo 'If boot recovery is installed on any site, reinstall it from that site so hosts get the new helper (sites report bootRecoveryOutdated).'

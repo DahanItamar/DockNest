@@ -6,6 +6,7 @@ export const messages = Object.freeze({
   blocked: 'The last update needs manual action on the DockNest host. Updates stay blocked until the server operator resolves it: first the release command from the rollback hint, then `sudo scripts/install-updater.sh --ack`. The acknowledgement alone does not release the hold.',
   repeated: 'The update failed twice and DockNest returned to the previous version both times. A server administrator should look at the DockNest host; updates to this version stay blocked until they run `sudo scripts/install-updater.sh --ack`.',
   mismatch: 'DockNest cannot confirm which version is installed: package.json, the release tag and the running image disagree. Nothing was changed. Check the server (git status, git describe --tags --exact-match, docker compose images).',
+  pinMissing: 'The host updater has not verified the installed version yet, so it refused the update. Nothing was changed. This usually happens after an update from the command line. On the DockNest host, run `sudo scripts/install-updater.sh --repair`, then try the update again.',
   hold: 'New work is on hold on the DockNest host. Updates start again once the hold is released.',
   recovery: 'Resolve recovery review first. The update cannot start until then.',
 });
@@ -20,7 +21,12 @@ export function eligibility({ base, current, latest = null, minUpgradeFrom = nul
     const again = repeated || updater.blockedReason === 'repeated-rollback';
     return { state: 'updater-blocked', offer: { ...none, blocked: { code: 'UPDATER_BLOCKED', message: again ? messages.repeated : messages.blocked } }, canStart: false };
   }
-  if (lastRequest?.state === 'refused' && lastRequest.refusal === 'state-mismatch' && lastRequest.from_version === current) {
+  // reason 'repaired': install-updater.sh recorded this version afterwards (2.11.1), so the refusal no longer applies.
+  const mismatch = lastRequest?.state === 'refused' && lastRequest.refusal === 'state-mismatch' && lastRequest.from_version === current && lastRequest.reason !== 'repaired';
+  // 2.11.1: a refusal the broker marked pin-missing is fixed on the host with --repair, which this API cannot see. It
+  // does not block: the offer stays with a notice, and the next request is checked by the broker again.
+  const pinMissing = mismatch && lastRequest.reason === 'pin-missing';
+  if (mismatch && !pinMissing) {
     return { state: 'updater-state-mismatch', offer: { ...none, blocked: { code: 'UPDATER_STATE_MISMATCH', message: messages.mismatch } }, canStart: false };
   }
   if (['consent-pending', 'checks-off'].includes(base)) return { state: base, offer: none, canStart: false };
@@ -31,5 +37,6 @@ export function eligibility({ base, current, latest = null, minUpgradeFrom = nul
   if (!updater.present) return { state: shown('updater-not-installed'), offer: { ...none, cli: { reason: 'updater-not-installed', command: 'scripts/upgrade.sh' } }, canStart: false };
   if (!updater.supported) return { state: shown('updater-not-installed'), offer: { ...none, cli: { reason: 'updater-outdated', command: 'sudo scripts/install-updater.sh' } }, canStart: false };
   const blocked = recoveryPending ? { code: 'RECOVERY_REVIEW_REQUIRED', message: messages.recovery } : hold ? { code: 'UPDATE_ON_HOLD', message: messages.hold } : null;
-  return { state: shown('update-available'), offer: { update: { version: offered.version, releaseUrl: offered.releaseUrl }, cli: null, blocked }, canStart: !blocked };
+  const notice = pinMissing ? { notice: { code: 'UPDATER_PIN_MISSING', message: messages.pinMissing } } : {};
+  return { state: shown('update-available'), offer: { update: { version: offered.version, releaseUrl: offered.releaseUrl }, cli: null, blocked, ...notice }, canStart: !blocked };
 }

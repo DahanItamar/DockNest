@@ -85,6 +85,15 @@ class Refused(Exception):
         super().__init__(code); self.code, self.detail, self.extra = code, detail, extra or {}
 
 
+class PinMissing(str):
+    """A host-state reason whose fix is recording the installed release's pin (install-updater.sh --repair, 2.11.1).
+    The answer then carries the fixed marker {'detail': 'pin-missing'}; the reason text itself never leaves the host."""
+
+
+def mismatch_extra(reason):
+    return {'detail': 'pin-missing'} if isinstance(reason, PinMissing) else None
+
+
 def iso(epoch):
     return datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -165,11 +174,18 @@ def read_request(conn, now=time.monotonic):
 
 
 def response(accepted, value, extra=None):
-    # extra (2.4.1) is additive and only carries the rate-limit detail: {'limit': 'cooldown'|'daily', 'retryAt': ISO time}.
+    # extra is additive and fixed: the rate-limit detail {'limit': 'cooldown'|'daily', 'retryAt': ISO time} (2.4.1), or
+    # {'detail': 'pin-missing'} on a state-mismatch fixed by --repair (2.11.1). Older APIs ignore both.
     return json.dumps({'accepted': True, 'id': value} if accepted else {'accepted': False, 'code': value, **(extra or {})}, separators=(',', ':')).encode()
 
 
-CGROUP_FORMS = (re.compile(r'(?:^|/)system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
+CGROUP_FORMS = (re.compile(r'\A/system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
+
+
+def cgroup_paths(text):
+    """The cgroup paths of a peer, printable and bounded, for the refusal log line."""
+    paths = ','.join(dict.fromkeys(line.split(':', 2)[2] for line in text.splitlines() if line.count(':') >= 2))
+    return ''.join(ch if ch.isprintable() else '?' for ch in paths)[:300] or 'unknown'
 
 
 def cgroup_container(text, parent=None):
@@ -464,7 +480,10 @@ def host_state_refusal(mode, current, exact_tag, head, pinned, label=None, repo_
     """F2, F18, N12: package.json at HEAD, the exact tag at HEAD and the pinned commit of the current release agree; image
     mode also needs the running api image's version label and RepoDigest. Returns a reason or None."""
     if not current or exact_tag != 'v' + current: return 'package.json and the tag at HEAD disagree'
-    if not pinned or pinned.get('commit') != head: return 'HEAD is not the verified commit of v%s' % current
+    # No pin at all is the state a manual CLI upgrade left before 2.11.1 (--repair records it); a pin for another commit
+    # is not something --repair changes, so it stays a plain reason.
+    if not pinned: return PinMissing('HEAD is not the verified commit of v%s (no pin recorded)' % current)
+    if pinned.get('commit') != head: return 'HEAD is not the verified commit of v%s' % current
     if mode == 'image':
         if label != current: return 'the running api image is not %s' % current
         if not pinned.get('digest') or '%s@%s' % (IMAGE, pinned['digest']) not in repo_digests: return 'the running api image digest is not the verified one'
@@ -796,13 +815,15 @@ class Broker:
         try: pidfd = conn.getsockopt(socket.SOL_SOCKET, 77)  # SO_PEERPIDFD, Linux 6.5+
         except OSError: pass
         try:
-            with open('/proc/%d/cgroup' % pid, encoding='utf-8') as handle: container = cgroup_container(handle.read(65536), self.cfg.get('cgroupParent'))
+            with open('/proc/%d/cgroup' % pid, encoding='utf-8') as handle: cgroups = handle.read(65536)
+            container = cgroup_container(cgroups, self.cfg.get('cgroupParent'))
             if pidfd is not None: signal.pidfd_send_signal(pidfd, 0)
         except OSError: raise Refused('invalid', 'peer process gone')
         finally:
             if pidfd is not None: os.close(pidfd)
         api = self.host.api_container()
-        if container != api['Id']: raise Refused('invalid', 'peer is not the api container')
+        # The cgroup path is not secret and shows why a caller was refused (for example a cgroup_parent or nested LXC).
+        if container != api['Id']: raise Refused('invalid', 'peer is not the api container (cgroup %s)' % cgroup_paths(cgroups))
         return {'pid': pid, 'uid': uid, 'container': container}, api
 
     def handle(self, conn):
@@ -832,7 +853,7 @@ class Broker:
             self.refresh()
             try: reason = self.preconditions(state, current, api)
             except (RuntimeError, OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as error: reason = 'host check failed: %s' % type(error).__name__
-            if reason: raise Refused('low-disk' if reason.startswith('free space') else 'state-mismatch', reason)
+            if reason: raise Refused('low-disk' if reason.startswith('free space') else 'state-mismatch', reason, mismatch_extra(reason))
             accept(state, request, now, peer)
             self.history(request['id'], {'requestId': request['id'], 'target': request['version'], 'from': current, 'peer': peer,
                                          'requestedBy': {'claimed': request['requestedBy']}, 'requestedAt': iso(request['at']), 'acceptedAt': iso(now)})
@@ -1160,7 +1181,7 @@ def main(argv):
         result = broker.host.verifier({'target': 'v' + current, 'mode': broker.mode})
         pins_path = os.path.join(STATE_DIR, 'pins.json'); pins = load_json(pins_path, {})
         reason, pin = verification_refusal(result, 'v' + current, broker.mode, pins)
-        if reason: print('The installed release v%s did not verify (%s); the updater is not installed.' % (current, reason), file=sys.stderr); return 2
+        if reason: print('The installed release v%s did not verify (%s); nothing was recorded.' % (current, reason), file=sys.stderr); return 2
         head = broker.host.owner_git('rev-parse', 'HEAD')[1].decode().strip()
         if pin['commit'] != head: print('HEAD is not the verified commit of v%s.' % current, file=sys.stderr); return 2
         if broker.mode == 'image':

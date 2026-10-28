@@ -201,6 +201,21 @@ backs up and restores from the main copy only. Copies already made stay where th
 retention removes it or its main package is missing); the copies of such a backup are left behind, and 2.11 deletes
 them on its next maintenance run after you upgrade again.
 
+## Protected mounts are no longer copied (2.11.1)
+
+**This changes what new backups contain.** From 2.11.1, a selected container's bind mount of password files, sudo
+rules or SSH keys is not copied into new backups. Examples are a `.ssh` folder (a Gitea or Forgejo `git` user's keys,
+`/root/.ssh` in a CI runner), `/etc/ssh`, `/etc/sudoers.d`, `/etc/shadow`, or a system folder such as `/etc` or
+`/root` that contains them. Nothing needs doing to keep backups running:
+
+- Scheduled backups of such sites keep working. The mount's place in the package holds an empty placeholder, and the
+  backup is recorded with a warning that names each mount that was not copied. The site's readiness check shows the
+  same list as a non-blocking item.
+- Recover these files separately, for example from your own secrets or key management. A restored copy gets the empty
+  placeholder, never the real keys.
+- A move refuses such a site and asks you to move it by hand, because DockNest never writes these locations.
+- Backups made before 2.11.1 are unchanged and still hold what they captured.
+
 ## Use the published image
 
 Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Only final releases are published; release candidates are validated privately and get no image or GitHub Release. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.
@@ -305,6 +320,8 @@ The installer refuses:
 - **A second install.** One updater per host. Use `--repair` or `--uninstall` from the checkout it was installed for.
 - A host where exactly one running `api` container of the `docknest` project is not found, where the `docknest_updater` volume is missing (start DockNest 2.2.0 or later with `docker compose up -d` first) or is not a plain local volume, or where a required tool is missing.
 - `--repair`, `--ack` and `--uninstall` while an in-app upgrade is running.
+
+**Command-line upgrades on a host with the updater.** The updater only accepts a request when it has verified the installed release itself and recorded its commit (`/var/lib/docknest-updater/pins.json`). Run `scripts/upgrade.sh` as the checkout's owner, never with `sudo` on a checkout that belongs to another user. When `upgrade.sh` already runs as root (a root-owned checkout), from 2.11.1 it records the release itself after a healthy run, through the installed broker and with the same checks as the installer (signed manifest, tag on `main`, image digest in image mode). This can take a few minutes. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade. Do the same if the script warns that it could not record the release; the upgrade itself is kept either way. `--repair` also clears an earlier "cannot confirm which version is installed" refusal for that version. Until the release is recorded, the Update Center refuses with "The host updater has not verified the installed version yet" and shows the `--repair` command. A host without the updater is not affected.
 
 In image mode, in-app updates need `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:<version>`. An install whose `DOCKNEST_IMAGE` names a mirror or has no tag is refused in-app (`state-mismatch`, nothing changed), because its image could not be verified; upgrade it with `scripts/upgrade.sh`.
 

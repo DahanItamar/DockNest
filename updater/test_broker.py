@@ -91,6 +91,16 @@ class RequestTests(unittest.TestCase):
         self.assertIsNone(b.cgroup_container('0::/user.slice/user-1000.slice/session-2.scope'))
         self.assertIsNone(b.cgroup_container('0::/docker/%s\n1::/docker/%s' % (cid, 'd' * 64)))  # two containers: refuse
         self.assertIsNone(b.cgroup_container('0::/docker/%s/nested' % cid))
+        # The systemd form is anchored at the host's top-level system.slice: a same-uid host user cannot pass by
+        # nesting a cgroup with the api container's name inside its own delegated subtree.
+        nested = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/system.slice/docker-%s.scope' % cid
+        self.assertIsNone(b.cgroup_container(nested))
+        self.assertIsNone(b.cgroup_container('1:name=systemd:/x/system.slice/docker-%s.scope' % cid))
+        self.assertEqual(b.cgroup_container('1:name=systemd:/system.slice/docker-%s.scope\n0::/system.slice/docker-%s.scope' % (cid, cid)), cid)
+        # A refusal logs the peer's cgroup paths (not secret), bounded and printable, to diagnose cgroup_parent or LXC.
+        self.assertEqual(b.cgroup_paths(nested + '\n1:name=systemd:/x\x1b\n'), nested[3:] + ',/x?')
+        self.assertEqual(len(b.cgroup_paths('0::/' + 'a' * 1000)), 300)
+        self.assertEqual(b.cgroup_paths(''), 'unknown')
 
 
 class PolicyTests(unittest.TestCase):
@@ -354,6 +364,24 @@ class HostCheckTests(unittest.TestCase):
         self.assertIn('image', b.host_state_refusal('image', '2.2.0', 'v2.2.0', SHA, pin, '2.3.0', digests))
         self.assertIn('digest', b.host_state_refusal('image', '2.2.0', 'v2.2.0', SHA, pin, '2.2.0', ['other/image@' + DIGEST]))
         self.assertIn('digest', b.host_state_refusal('image', '2.2.0', 'v2.2.0', SHA, {'commit': SHA}, '2.2.0', digests))
+
+    def test_missing_pin_carries_the_fixed_repair_marker_and_nothing_else_does(self):
+        # 2.11.1: a CLI upgrade before 2.11.1 left no pin; only that case tells the API to show --repair.
+        pin = {'commit': SHA, 'digest': DIGEST}
+        missing = b.host_state_refusal('source', '2.10.1', 'v2.10.1', SHA, None)
+        self.assertIsInstance(missing, b.PinMissing); self.assertIn('HEAD', missing)
+        self.assertEqual(b.mismatch_extra(missing), {'detail': 'pin-missing'})
+        self.assertIsInstance(b.host_state_refusal('image', '2.10.1', 'v2.10.1', SHA, None, '2.10.1', [b.IMAGE + '@' + DIGEST]), b.PinMissing)
+        self.assertEqual(b.response(False, 'state-mismatch', b.mismatch_extra(missing)), b'{"accepted":false,"code":"state-mismatch","detail":"pin-missing"}')
+        others = [b.host_state_refusal('source', '2.10.1', 'v2.10.1', 'c' * 40, pin),            # pinned to another commit
+                  b.host_state_refusal('source', '2.10.1', 'v2.10.0', SHA, None),                # tag disagrees (checked first)
+                  b.host_state_refusal('image', '2.2.0', 'v2.2.0', SHA, pin, '2.3.0', [b.IMAGE + '@' + DIGEST]),
+                  b.host_state_refusal('image', '2.2.0', 'v2.2.0', SHA, {'commit': SHA}, '2.2.0', [b.IMAGE + '@' + DIGEST]),
+                  'host check failed: OSError', '.git/shallow exists', 'free space 1 GiB is below 3 GiB']
+        for reason in others:
+            self.assertNotIsInstance(reason, b.PinMissing, reason); self.assertIsNone(b.mismatch_extra(reason), reason)
+        self.assertEqual(b.response(False, 'state-mismatch', b.mismatch_extra(others[0])), b'{"accepted":false,"code":"state-mismatch"}')
+        self.assertIsNone(b.mismatch_extra(None))
 
     def test_mounts_and_install_mode(self):
         api = 'a' * 64

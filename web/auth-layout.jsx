@@ -17,7 +17,7 @@ function FloatingPaths(){
  return <svg className="lg-paths" viewBox="-380 -190 1076 1060" preserveAspectRatio="xMidYMid slice" fill="none" aria-hidden="true">{sets.map((set,s)=><g key={s} className={`lg-pg lg-pg${s+1}`}>{set.map((p,i)=><path key={i} className="lg-path" d={p.d} pathLength="100" style={{strokeWidth:p.width,strokeOpacity:p.opacity}}/>)}</g>)}</svg>;
 }
 
-export function AuthLayout({children}){
+export function AuthLayout({children,back}){
  useEffect(()=>{
   const root=document.documentElement,sync=()=>root.classList.toggle('lg-paused',document.hidden);
   sync();document.addEventListener('visibilitychange',sync);
@@ -28,8 +28,8 @@ export function AuthLayout({children}){
    <div className="lg-bp-top"><span className="lg-logo" role="img" aria-label="DockNest" style={{width:176}}/></div>
    <div className="lg-bp-bottom"><p className="lg-bp-line"><span className="lg-s lg-rise">Backups you can prove.</span><span className="lg-s lg-rise lg-rise2">Servers you can move.</span></p><p className="lg-bp-cap">Self-hosted Docker backup and restore</p></div>
   </aside>
-  <div className="lg-left"><header className="auth-header lg-head"><div/><ThemeToggle/></header>
-   <main className="auth-main lg-formside"><div className="lg-col auth-card"><div className="lg-m-logo"><span className="lg-logo" role="img" aria-label="DockNest" style={{width:132}}/></div>{children}</div></main>
+  <div className="lg-left"><header className="auth-header lg-head"><span className="lg-logo lg-head-logo" role="img" aria-label="DockNest"/><ThemeToggle/></header>
+   <main className="auth-main lg-formside"><div className="lg-col auth-card">{back}{children}</div></main>
   </div>
  </div></div>;
 }

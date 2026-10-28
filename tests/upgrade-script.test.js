@@ -630,3 +630,77 @@ test('manual image mode pulls the digest from the verified manifest, pins it in 
   result = f.run('--version', 'v2.2.0-rc.1', '--no-verify');
   assert.equal(result.status, 0, result.stderr + result.stdout); assert.match(result.stderr, /pulled by its tag, unverified/);
 });
+
+// 2.11.1: a healthy manual run on a root-owned checkout records the new release for an installed host updater through
+// the broker's own record-current (which still verifies it). The updater's paths sit under --updater-root (only with
+// DOCKNEST_UPGRADE_TEST=1); `id` and `python3` are doubles: uid, record-current's exit code and the config come from files.
+async function updaterHost(f) {
+  const prefix = join(f.root, 'host'), etc = join(prefix, 'etc/docknest-updater'), state = join(prefix, 'var/lib/docknest-updater');
+  const lib = join(prefix, 'usr/local/lib/docknest-updater/current');
+  await Promise.all([etc, state, lib].map(path => mkdir(path, { recursive: true })));
+  const real = spawnSync('sh', ['-c', 'cd "$1" && pwd -P', 'sh', f.work], { encoding: 'utf8' }).stdout.trim();
+  const config = (over = {}) => writeFile(join(etc, 'config.json'), JSON.stringify({ checkout: real, ownerUid: 0, ownerGid: 0, ...over }, null, 2) + '\n');
+  await config(); await writeFile(join(lib, 'broker.py'), '# test double\n');
+  await writeFile(join(f.bin, 'id'), '#!/bin/sh\nif [ "$1" = -u ]; then cat "$FAKE_STATE/uid" 2>/dev/null || echo 0; else exec /usr/bin/id "$@"; fi\n', { mode: 0o755 });
+  // -I -c CODE FILE: the config read (ownerUid, then checkout); otherwise record-current.
+  await writeFile(join(f.bin, 'python3'), `#!/bin/sh
+if [ "$2" = -c ]; then
+  [ ! -e "$FAKE_STATE/config-unreadable" ] || exit 1
+  sed -n 's/^  "ownerUid": \\([0-9]*\\).*/\\1/p' "$4"; sed -n 's/^  "checkout": "\\(.*\\)",\\{0,1\\}$/\\1/p' "$4"; exit 0
+fi
+echo "$*" >> "$FAKE_STATE/record-current"
+exit "$(cat "$FAKE_STATE/pin-exit" 2>/dev/null || echo 0)"
+`, { mode: 0o755 });
+  const run = (...args) => f.exec([...args, '--updater-root', prefix], { DOCKNEST_UPGRADE_TEST: '1' });
+  const calls = async () => { const text = await f.read('record-current'); await rm(join(f.state, 'record-current'), { force: true }); return text; };
+  const set = (name, value) => value === null ? rm(join(f.state, name), { force: true }) : writeFile(join(f.state, name), String(value));
+  return { run, calls, set, config, pins: value => writeFile(join(state, 'pins.json'), JSON.stringify(value)) };
+}
+
+test('updater pin: a healthy root run on a root-owned checkout records the new release through record-current', { skip: !shell }, async t => {
+  const f = await fixture(t), host = await updaterHost(f), result = host.run();
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.1.0');
+  assert.match(result.stdout, /Recording DockNest 2\.1\.0 for the host updater: verifying it .*this can take a few minutes/);
+  assert.match(await host.calls(), /^-I -B \S*usr\/local\/lib\/docknest-updater\/current\/broker\.py record-current$/);
+  assert.equal((await f.status()).phase, 'done');
+  // Repeat run: already current and still unpinned (the owner's 2.10.1 case) pins it; once pinned, nothing is called.
+  assert.equal(host.run('--version', 'v2.1.0').status, 0); assert.match(await host.calls(), /record-current/);
+  await host.pins({ 'v2.1.0': { commit: 'x', digest: null } });
+  const again = host.run('--version', 'v2.1.0');
+  assert.equal(again.status, 0); assert.equal(await host.calls(), ''); assert.doesNotMatch(again.stdout, /Recording/);
+});
+
+test('updater pin: a failed, busy or slow verification keeps the healthy upgrade and points to --repair', { skip: !shell }, async t => {
+  const f = await fixture(t), host = await updaterHost(f); await host.set('pin-exit', 2);
+  let result = host.run();
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.1.0'); assert.equal(await f.read('version'), '2.1.0');
+  assert.match(result.stderr, /could not verify and record it.*Nothing was rolled back.*sudo scripts\/install-updater\.sh --repair/);
+  assert.doesNotMatch(result.stderr, /removing old upgrade files was interrupted/);
+  const status = await f.status(); assert.deepEqual([status.phase, status.ok, status.error, status.warning], ['done', true, null, null]);
+  await host.set('pin-exit', 75); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stderr, /an updater run is active.*Run later on this host: sudo scripts\/install-updater\.sh --repair/);
+  await host.set('pin-exit', 124); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stderr, /took longer than 5 minutes.*--repair/);
+});
+
+test('updater pin: no updater, non-root, root on a non-root checkout, another checkout, bad config, pre-releases and updater runs never call the broker', { skip: !shell }, async t => {
+  let f = await fixture(t), result = f.exec(['--updater-root', join(f.root, 'nothing-here')], { DOCKNEST_UPGRADE_TEST: '1' });
+  assert.equal(result.status, 0, result.stderr); assert.doesNotMatch(result.stdout + result.stderr, /host updater|--repair/); assert.equal(await f.read('record-current'), '');
+  assert.equal(f.run('--version', 'v2.1.0', '--updater-root', f.root).status, 1, '--updater-root is refused outside the tests');
+  f = await fixture(t); const host = await updaterHost(f);
+  await host.set('uid', 1000); result = host.run();
+  assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /NOTE: if in-app updates are refused after this upgrade, run on this host: sudo scripts\/install-updater\.sh --repair/); assert.equal(await host.calls(), '');
+  // The rest use the already-current path of the same checkout.
+  await host.set('uid', null); await host.config({ ownerUid: 1000 }); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stderr, /ran as root, but the checkout belongs to uid 1000\. Run scripts\/upgrade\.sh as that user \(without sudo\)/); assert.equal(await host.calls(), '');
+  await host.config({ checkout: '/srv/other-docknest' }); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stdout, /installed for \/srv\/other-docknest, not this checkout; nothing was recorded/); assert.equal(await host.calls(), '');
+  await host.config(); await host.set('config-unreadable', ''); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stdout, /could not read the host updater configuration/); assert.equal(await host.calls(), '');
+  await host.set('config-unreadable', null); await host.pins({ 'v2.1.0': { commit: 'x', digest: null } });
+  result = host.run('--version', 'v2.2.0-rc.1');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await host.calls(), '', 'pre-releases are never pinned');
+  f = await fixture(t); const other = await updaterHost(f);
+  result = other.run('--version', 'v2.1.0', '--expect-commit', git(f.work, 'rev-parse', 'v2.1.0^{commit}'), '--no-fetch', '--upgrade-only', '--request-id', 'req-pin');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await other.calls(), '', 'the broker pins its own runs before they start');
+});

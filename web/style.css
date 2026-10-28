@@ -71,3 +71,7 @@ button[role=switch][role=switch][aria-checked=true]::after{transform:translateX(
 button[role=switch][role=switch]:disabled{opacity:.45;cursor:not-allowed}
 @media(prefers-reduced-motion:reduce){button[role=switch][role=switch]::before,button[role=switch][role=switch]::after{transition:none}}
 @media(forced-colors:active){button[role=switch][role=switch]::before{border-color:ButtonText}button[role=switch][role=switch]::after{background:ButtonText}button[role=switch][role=switch][aria-checked=true]::before{background:Highlight}}
+
+/* No spin buttons on number fields; type, min/max, arrow keys and validation are unchanged. */
+input[type=number]{-moz-appearance:textfield;appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
