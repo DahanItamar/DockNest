@@ -143,7 +143,7 @@ The kit's decrypt tool verifies the chain links the same way the server does.
 1. Option A (hybrid GNU tar chains) is approved.
 2. Default interval: one full backup every 7 backups (N = 6).
 3. Phase 1: "Download chain" for increments; ZIP export for full backups only.
-4. Release: its own minor version after the radar (2.12.0), so each risky change ships and settles alone.
+4. Release: 2.13.0, after storage per site and backup copies (2.12.0), so each destination can hold whole chains.
 
 ## Leaving beta
 
