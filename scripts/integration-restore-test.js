@@ -294,13 +294,17 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   const collided = JSON.parse(collision.split('\n').at(-1));
   assert.deepEqual(collided.tags, ['rt-collide:1'], 'the archive names its tag'); assert.notEqual(collided.moved, kept, 'docker load moved the tag');
   assert.deepEqual(collided.changed, ['rt-collide:1']); assert.equal(collided.now, kept, 'the tag points back at the image it named before');
-  // Restore and the move deploy load through the same guard (2.11.1), and a package saved by image ID names no tag on
-  // this image store, so the guard never touches a real backup's images.
-  const guarded = await step('helper load guard', 'exec', target, 'python3', '-c', `import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;helper.docker('save','-o','/tmp/rt-byid.tar','${kept}');helper.load_images_keeping_tags('/tmp/rt-collide.tar');print(json.dumps({'now':helper.image_id_of('rt-collide:1'),'byId':helper.image_archive_tags('/tmp/rt-byid.tar')}))`);
-  const guard = JSON.parse(guarded.split('\n').at(-1));
-  assert.equal(guard.now, kept, 'restore and move loads leave an existing tag on its image'); assert.deepEqual(guard.byId, [], 'an archive saved by image ID names no tag');
+  // Restore and the move deploy (2.11.1) refuse an archive that names any image, before loading it; a package saved by
+  // image ID names none on this image store (docker save's manifest.json, repositories and OCI index.json annotations).
+  const guarded = await step('helper load guard', 'exec', target, 'python3', '-c', `import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;helper.docker('save','-o','/tmp/rt-byid.tar','${kept}')
+try:helper.load_images_keeping_tags('/tmp/rt-collide.tar');refused=None
+except ValueError as error:refused=str(error)
+print(json.dumps({'refused':refused,'now':helper.image_id_of('rt-collide:1'),'byId':helper.image_archive_names('/tmp/rt-byid.tar')}))`);
+  const guard = JSON.parse(guarded.trim().split('\n').at(-1));
+  assert.match(guard.refused ?? '', /save images by ID only/, 'a tagged archive is refused before loading'); assert.equal(guard.now, kept, 'the existing tag stays on its image');
+  assert.deepEqual(guard.byId, [], 'an archive saved by image ID names no image');
   await run('exec', target, 'sh', '-c', `docker image rm -f rt-collide:1 ${loaded} ${kept} >/dev/null 2>&1; rm -rf /tmp/rt-collide.tar /tmp/rt-byid.tar /rt-qa-helper /rt-collide-site; true`);
-  record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load, for restore and move loads too; an archive saved by ID names no tag (${store} image store)`);
+  record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load, restore and move refuse a tagged archive before loading it; an archive saved by ID names no image (${store} image store)`);
 
   // 11. A worker killed during Restore copy: the next worker ends the test couldnt_run and cleans up first.
   const worker = () => spawn(process.execPath, ['--no-addons', 'src/worker.js'], { env: process.env, stdio: 'ignore' });
