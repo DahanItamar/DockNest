@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Sign-in asks for the password first, then the authenticator code in six boxes. Paste or autofill fills all six; a recovery code can be typed instead.
+- Number fields no longer show up/down arrows.
+
 ### Fixed
 
 - Update Center: after an update from the command line, in-app updates no longer fail with "cannot confirm which version is installed". When `scripts/upgrade.sh` already runs as root (a root-owned checkout), it registers the new version with the host updater itself. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade; the script and the Update Center both show that command, and `--repair` also clears an earlier refusal.
