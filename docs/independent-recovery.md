@@ -28,6 +28,25 @@ Wrong passphrases/tampered kits fail authentication before creating output. Impo
 
 Validate recovery on a clean host with the original manager unavailable. Reconnect retained storage using independently verified host keys, authenticate a package using the recovered master key, and run an isolated restore/data check before resuming schedules. Kit encryption does not prove that the application or its external dependencies recover.
 
+## Restoring an incremental chain
+
+An incremental backup depends on the packages before it. Use **Download chain** on the backup you want (or copy the
+packages from storage yourself). You get the encrypted packages, full backup first, and an `ORDER.txt` that lists them
+in restore order with the SHA-256 of each file and the parent each one expects.
+
+1. Check and decrypt the whole chain with the recovery kit tool. It verifies every file's size and checksum, every
+   authentication tag and every parent link before it writes anything:
+   `node decrypt-backup.js --chain <chain folder> <master.key> <new empty folder>`. Without the tool, decrypt each
+   package the same way as a single backup (authenticate the whole file to a private temporary file first).
+2. Unpack the full backup first and follow the single-backup steps for it.
+3. Then unpack each increment in `ORDER.txt` order, and extract each of its `mount-I-J.tar` archives over the same
+   directory as the full backup's matching mount, with `tar --listed-incremental=/dev/null -x`. That option also removes
+   the files that were deleted after the previous backup. Never skip a package or change the order: a missing or
+   swapped increment gives a wrong tree, and a link that does not match is a reason to stop.
+4. Load the images each package lists, in the same order, then continue as for a single backup.
+
+Check paths in every archive as for a full backup, including directory-listing entries.
+
 ## Independent protected copies
 
 Keep an offline or independently administered archive. The manager must not possess its root/deletion credential. On that separate Linux archive host, create a root-owned 0700 archive under root-owned ancestors without group/other write permission. Fetch a package/kit with a read-only primary-storage credential, then run:

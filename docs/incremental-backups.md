@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: accepted by the owner on 2026-10-28 (option A). Not implemented. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0 as a beta; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 

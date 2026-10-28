@@ -1,4 +1,4 @@
-# Backup format v1
+# Backup format v1 and v2
 
 The payload file is DBM1 (4 ASCII bytes), a 12-byte random nonce, AES-256-GCM ciphertext, and the 16-byte authentication tag. The 16-byte header is authenticated as AAD. The encryption key is the 32-byte master key. SHA256 covers the entire encrypted file. Preserve the master key separately from the metadata database and payloads.
 
@@ -25,3 +25,29 @@ The directory layout is validated as it streams (allowed names, safe paths, a co
 Maintenance HTML distribution over SSH is implemented; proxy maintenance uses an administrator-reviewed Nginx integration template. Distribution does not report readiness automatically. A readiness marker alone does not prove routing: public 503 and internal health probes are required. Configure TLS and JSON API responses independently. The public probe requires HTTP 503 with the deployed dbm-maintenance-v1 marker. After internal health succeeds, disabling maintenance also requires a public HTTP 200 response without that marker; failure reinstates maintenance.
 
 Retention removes only ordinary verified backups beyond the configured count after a new successful capture, and respects active download and restore records. Pinned backups are additional to the count. Interrupted jobs enter recovery_required and prevent further work on their server. Resolve source health and watchdog state before changing job status. A single expiring SQLite worker lease (not a lock file) prevents concurrent workers; after an unclean death the next worker takes it over once it is 60 seconds stale and marks interrupted jobs recovery_required. Central restart does not silently assume remote recovery succeeded.
+
+## Backup format v2 (incremental backups, 2.12)
+
+A site with incremental backups turned on makes format 2 packages. The envelope is unchanged: the same DBM1 header,
+AES-256-GCM, tag and master key. The plaintext is the same gzip tar with `manifest.json`, `images.tar`, `config-*.tar`
+and `mount-I-J.tar`, plus one `snapshot-<key>.snar` file per incremental mount (GNU tar's change record, kept so a chain
+does not depend on the source server's disk). A package without incremental backups stays format 1.
+
+The manifest gains `formatVersion: 2`, `backupKind` (`full` or `incremental`), `chain` (`id`, `position`,
+`parentBackupId`, `parentSha256`) and, per mount, `incremental` (`snapshotKey`, `level`, `snapshotSha256`).
+`chainImages` lists original images that are not saved again because an earlier package of the chain holds them.
+Committed snapshot images are saved in every package. A full backup that starts a chain has position 0 and no parent.
+
+- Mount archives of a full backup are level 0. Those of an increment are made with `tar --listed-incremental` and hold
+  only changed files and directory-listing entries (GNU dumpdirs), which let a restore remove deleted files and apply
+  renames. Archives use the POSIX (pax) header format.
+- Manifest, config files and the restore guide are always complete. Protected mounts are never incremental.
+- A chain is valid only when positions run 0 to n-1 in one chain id, the first package is full, and each package names
+  its parent's backup id and the SHA-256 of the parent's encrypted file.
+- Restore authenticates every package and checks every link before extracting anything, then extracts the full backup
+  and each increment in order with `tar --listed-incremental=/dev/null -x` into one fresh folder per mount. Path
+  checks apply to every archive and to every dumpdir entry.
+- 2.11 and older refuse format 2 with "Unsupported or incomplete backup". ZIP export works for full backups only.
+
+See [incremental backups](incremental-backups.md) for the design and [independent recovery](independent-recovery.md)
+for restoring a chain by hand.

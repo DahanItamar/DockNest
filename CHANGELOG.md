@@ -4,8 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Incremental backups (beta, off by default, per site). A full backup is followed by up to 6 increments that hold only the files that changed in your mounts, so backups of large uploads or database folders take less storage. Every restore point restores to a complete copy, from the main storage or from a backup copy. Images are saved as before, so the saving comes from mount data. The storage report shows what was saved.
+- Download chain: an increment downloads as its encrypted packages plus an order file. The recovery kit tool checks the chain before decrypting it.
+
 ### Changed
 
+- Nothing changes until you turn incremental backups on for a site. Existing backups stay complete packages.
+- Before going back to 2.11, make a full backup and turn incremental backups off for every site. 2.11 does not read increments.
 - Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.
 
 ## [2.11.1] - 2026-10-28

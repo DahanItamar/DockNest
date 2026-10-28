@@ -201,6 +201,26 @@ backs up and restores from the main copy only. Copies already made stay where th
 retention removes it or its main package is missing); the copies of such a backup are left behind, and 2.11 deletes
 them on its next maintenance run after you upgrade again.
 
+## Incremental backups in 2.12
+
+Incremental backups are new in 2.12 and are off for every site. Nothing needs doing and nothing changes until you turn
+them on for a site under its backup settings ("Incremental backups (beta)"):
+
+- Migration 13 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
+- After you turn the option on, the next backup is a full one. Then up to 6 increments follow (you can choose 1 to 30),
+  each holding only the files that changed in your mounts, and a new full backup starts the next chain. Increments are
+  backup format 2 packages in the same encrypted format, so the same master key opens them.
+- A full backup is kept as long as an increment that needs it is kept, so a few more packages than your retention count
+  can stay. Pinning an increment pins its chain.
+- Turning the option off makes the next backup full. Existing chains stay restorable.
+
+**Going back to 2.11.** Make a full backup and turn incremental backups off for every site first. 2.11 starts on the
+same database (the migration is compatible), but it does not read format 2 packages: it refuses to restore an increment
+or a format 2 full package with the plain message "Unsupported or incomplete backup", and its retention can delete the
+full backup an increment needs. If the database still holds increments, the Update Center warns before a downgrade.
+Backups made while incremental backups were off are plain packages and restore on 2.11 as before. To recover an
+increment without DockNest or on 2.12 again, see [independent recovery](independent-recovery.md).
+
 ## Protected mounts are no longer copied (2.11.1)
 
 **This changes what new backups contain.** From 2.11.1, a selected container's bind mount of password files, sudo
