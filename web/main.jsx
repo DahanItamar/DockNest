@@ -1,7 +1,7 @@
 import React, {useEffect,useState,useRef} from 'react';
 import {count,plural} from './plural.js';
 import {createRoot} from 'react-dom/client';
-import {Archive,LayoutDashboard,Server,Layers,Clock,ShieldCheck,Activity,Wrench,LogOut,Plus,ArrowRight,RefreshCw,Download,Pin,RotateCcw,X,CheckCircle2,HardDrive,Filter,AlertTriangle,Home,LogIn} from './icons.jsx';
+import {Archive,LayoutDashboard,Server,Layers,Clock,ShieldCheck,Activity,Wrench,LogOut,Plus,ArrowRight,RefreshCw,Download,Pin,RotateCcw,X,CheckCircle2,HardDrive,Filter,AlertTriangle,Home,LogIn,ChevronLeft} from './icons.jsx';
 import '@fontsource-variable/roboto';
 import './tokens.css';
 import {BerryShell} from './shell.jsx';
@@ -19,6 +19,7 @@ import {StoragePage} from './storage-page.jsx';
 import {formatBytes} from '../shared/format-bytes.js';
 import {SelfBackup} from './self-backup.jsx';
 import {AdminSetup} from './admin-setup.jsx';
+import {OtpInput} from './otp-input.jsx';
 import {AuthLayout,AuthField,AuthError,PasswordField,authErrorMessage} from './auth-layout.jsx';
 import {Sites,Backups} from './recovery-pages.jsx';
 import {ReportProvider} from './report/ReportProblem.jsx';
@@ -75,18 +76,36 @@ function Field({label,help,options,multiline,...props}){return <label className=
 function Empty({icon:Icon=Archive,title,children,action}){return <div className="empty"><span className="empty-icon"><Icon size={28}/></span><h3>{title}</h3><p>{children}</p>{action}</div>;}
 function Modal({title,onClose,children,className}){const ref=useRef();useEffect(()=>{ref.current.showModal();return()=>ref.current?.close();},[]);return <dialog ref={ref} className={className} aria-labelledby="dialog-title" onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}}><div className="modal-head"><h2 id="dialog-title">{title}</h2><button className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>{children}</dialog>;}
 function Auth({status,onAuth}) {
- const [error,setError]=useState(''),[bad,setBad]=useState(false),[busy,setBusy]=useState(false);
- async function submit(e){
+ const [error,setError]=useState(''),[bad,setBad]=useState(false),[busy,setBusy]=useState(false),[challenge,setChallenge]=useState(null),[code,setCode]=useState(''),[recovery,setRecovery]=useState(false),[fails,setFails]=useState(0),[pw,setPw]=useState('');
+ const refocus=useRef(false);
+ useEffect(()=>{if(!challenge&&refocus.current){refocus.current=false;document.querySelector('input[name=password]')?.focus()}},[challenge]);
+ const reset=()=>{refocus.current=true;setChallenge(null);setCode('');setRecovery(false);setFails(0);setError('');setBad(false)};
+ async function login(e){
   e.preventDefault();setBusy(true);setError('');setBad(false);
   const f=Object.fromEntries(new FormData(e.target));
-  try{
-   const login=await api('/auth/login',{password:f.password});
-   const r=await api('/auth/verify',{challenge:login.challenge,code:f.code.trim()});
-   csrf=r.csrfToken;onAuth({authenticated:true,...r});
-  }catch(e){if(e.code==='SETUP_RESUME_REQUIRED')location.hash='#/setup';else{setError(authErrorMessage(e));setBad(e.status===401);}}
+  try{const r=await api('/auth/login',{password:f.password});setChallenge(r.challenge);setCode('')}
+  catch(e){if(e.code==='SETUP_RESUME_REQUIRED')location.hash='#/setup';else{setError(authErrorMessage(e));setBad(e.status===401);}}
   finally{setBusy(false);}
  }
- return <AuthLayout><h2 className="lg-title">Sign in</h2><p className="lg-sub">Enter your system password and authenticator code.</p>{status.message&&<div className="notice" role="status">{status.message}</div>}<form className="lg-form" onSubmit={submit}><PasswordField label="Password" name="password" autoComplete="current-password" required error={bad}/><AuthField label="2FA code" name="code" inputMode="numeric" autoComplete="one-time-code" required minLength={6} maxLength={32} error={bad} help="Enter six digits from your authenticator app. A saved recovery code also works."/><AuthError>{error}</AuthError><button className="primary wide" disabled={busy} type={status.setupRequired?'button':'submit'} onClick={status.setupRequired?()=>{location.hash='#/setup';}:undefined}>{busy?'Signing in…':'Sign in'} <ArrowRight size={16}/></button></form><p className="security-note lg-note"><ShieldCheck size={16}/> Two-factor authentication is required for every login.</p></AuthLayout>;
+ async function verify(value){
+  if(busy)return;
+  setBusy(true);setError('');setBad(false);
+  try{const r=await api('/auth/verify',{challenge,code:value.trim()});csrf=r.csrfToken;onAuth({authenticated:true,...r});}
+  catch(e){setError(authErrorMessage(e));setBad(e.status===401);setCode('');if(e.status===401)setFails(n=>n+1);}
+  finally{setBusy(false);}
+ }
+ const quiet=(off)=>({'aria-disabled':off?'true':undefined,className:'primary wide'+(off?' is-quiet':'')});
+ const note=<p className="security-note lg-note"><ShieldCheck size={16}/> Two-factor authentication is required for every login.</p>;
+ if(challenge){
+  const incomplete=recovery?code.trim().length<6:code.length<6;
+  return <AuthLayout back={<button type="button" className="lg-back" onClick={reset}><ChevronLeft size={16} aria-hidden="true"/>{fails>=3?'Start again':'Back'}</button>}><h2 className="lg-title">Two-factor code</h2><p className="lg-sub">{recovery?'Enter one of your saved recovery codes.':'Enter the code from your authenticator app.'}</p><form className="lg-form" onSubmit={e=>{e.preventDefault();if(!incomplete)verify(code)}}>
+  {recovery?<AuthField label="Recovery code" name="code" value={code} onChange={e=>setCode(e.target.value)} autoComplete="off" autoFocus required minLength={6} maxLength={32} error={bad}/>:<OtpInput value={code} onChange={setCode} onComplete={verify} invalid={bad} disabled={busy} describedBy={error?'lg-err':undefined}/>}
+  <AuthError>{error}</AuthError>
+  <button {...quiet(incomplete&&!busy)} disabled={busy} type="submit">{busy?'Signing in…':'Sign in'} <ArrowRight size={16}/></button>
+  <p className="lg-alt">{recovery?'Have your app? ':'Lost your device? '}<button type="button" onClick={()=>{setRecovery(v=>!v);setCode('');setError('');setBad(false)}}>{recovery?'Use the 6-digit code':'Use a recovery code'}</button></p>
+ </form>{note}</AuthLayout>;
+ }
+ return <AuthLayout><h2 className="lg-title">Sign in</h2><p className="lg-sub">Enter your system password to continue.</p>{status.message&&<div className="notice" role="status">{status.message}</div>}<form className="lg-form" onSubmit={e=>{if(!pw&&!status.setupRequired){e.preventDefault();return}login(e)}}><PasswordField label="Password" name="password" autoComplete="current-password" required error={bad} onChange={e=>setPw(e.target.value)}/><AuthError>{error}</AuthError><button {...quiet(!pw&&!status.setupRequired)} disabled={busy} type={status.setupRequired?'button':'submit'} onClick={status.setupRequired?()=>{location.hash='#/setup';}:undefined}>{busy?'Checking…':'Continue'} <ArrowRight size={16}/></button></form>{note}</AuthLayout>;
 }
 function Enrollment({token,onExit}) {
  const [info,setInfo]=useState(null),[start,setStart]=useState(null),[complete,setComplete]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[saved,setSaved]=useState(false),[now,setNow]=useState(Date.now()),[clockOffset,setClockOffset]=useState(0);
