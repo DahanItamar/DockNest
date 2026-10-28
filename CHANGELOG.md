@@ -6,7 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Fixed
 
-- Update Center: after an update from the command line, in-app updates no longer fail with "cannot confirm which version is installed". `scripts/upgrade.sh` run with `sudo` now registers the new version with the host updater; if it cannot, it tells you to run `sudo scripts/install-updater.sh --repair`, and the Update Center shows the same command.
+- Update Center: after an update from the command line, in-app updates no longer fail with "cannot confirm which version is installed". When `scripts/upgrade.sh` already runs as root (a root-owned checkout), it registers the new version with the host updater itself. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade; the script and the Update Center both show that command, and `--repair` also clears an earlier refusal.
 
 ## [2.11.0] - 2026-10-28
 
