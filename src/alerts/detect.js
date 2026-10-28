@@ -27,7 +27,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   const copies = cursor.copies ? detectCopies(cursor.copies) : { count: 0, at };
   count += copies.count;
   // Vulnerability radar: a cursor from before 2.12.0 has no `radar` field, which means "start now" (no history replayed).
-  const radar = cursor.radar ? detectRadar(cursor.radar) : { count: 0, at };
+  const radar = cursor.radar ? detectRadar(cursor.radar, cursor.radarId ?? '') : { count: 0, at, id: '' };
   count += radar.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE j.type='backup' AND j.status IN ('completed','failed','recovery_required') AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
@@ -45,7 +45,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || radar.at !== cursor.radar) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, radar: radar.at });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || radar.at !== cursor.radar || radar.id !== (cursor.radarId ?? '')) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, radar: radar.at, radarId: radar.id });
   return count;
 }
 
@@ -96,17 +96,18 @@ function detectCopies(since) {
 // Vulnerability radar (docs/security.md): read from the audit rows a scan writes. A finding writes radar.finding_critical
 // once (radar_findings.alerted_at) and radar.finding_resolved once when it goes away, so each audit row is one occurrence.
 // Names only: the site (or, for a container no site lists, its container name), the server and the product.
-function detectRadar(since) {
-  let count = 0, last = since;
-  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('radar.finding_critical','radar.finding_resolved') AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+// The cursor is (created_at, id): one scan writes many rows in the same millisecond, and a page of 100 may end inside them.
+function detectRadar(since, sinceId) {
+  let count = 0, last = since, lastId = sinceId;
+  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('radar.finding_critical','radar.finding_resolved') AND (created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT 100").all(since, since, sinceId);
   for (const row of rows) {
-    last = row.created_at;
+    last = row.created_at; lastId = row.id;
     let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
     const info = db.prepare('SELECT f.site_id,f.server_id,f.container_name,s.name AS site,v.name AS server FROM radar_findings f JOIN servers v ON v.id=f.server_id LEFT JOIN sites s ON s.id=f.site_id WHERE f.id=?').get(row.target ?? '');
     if (!info) continue;
     count += emit({ type: row.action, key: `occ:radar:${row.id}`, at: row.created_at, siteId: info.site_id, serverId: info.server_id, timeZone: info.site_id ? zoneFor(info.site_id) : selfBackupZone() || 'UTC', siteName: info.site ?? info.container_name, serverName: info.server, product: detail.product });
   }
-  return { count, at: last };
+  return { count, at: last, id: lastId };
 }
 
 export function detectUpdate() {
