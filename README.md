@@ -28,7 +28,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
-> DockNest is in beta. The [support matrix](docs/support-matrix.md) states what has been tested and what has not. S3-compatible storage is in beta: it is tested against a real MinIO S3 server, not yet with full backups and restores or with cloud providers such as Cloudflare R2. Automatic recovery after a server reboot is not ready for production use.
+> DockNest is in beta. The [support matrix](docs/support-matrix.md) states what has been tested and what has not. Automatic recovery after a server reboot is not ready for production use.
 
 ## Features
 
@@ -82,7 +82,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 | :-- | :-- |
 | DockNest host (runs the dashboard) | Linux with Docker and Docker Compose, and Node.js 24 for the one-time setup. |
 | Each server you back up | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
-| Backup storage | SFTP server that supports `fsync@openssh.com`, or an S3-compatible bucket. S3-compatible storage is in beta: it is tested against a real MinIO S3 server, not yet with full backups and restores or with cloud providers such as Cloudflare R2. See [storage backends](docs/storage-backends.md). |
+| Backup storage | SFTP server that supports `fsync@openssh.com`, or an S3-compatible bucket. S3-compatible storage is supported: backup and restore are validated against a MinIO-compatible server, and Cloudflare R2 passed a manual run; other providers are not tested on every release. See [storage backends](docs/storage-backends.md). |
 | You | A browser and an authenticator app. |
 
 ## Install

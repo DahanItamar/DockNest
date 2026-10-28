@@ -152,7 +152,7 @@ try {
     await page.locator('.storage-card').waitFor();
     assert.equal(await page.locator('.storage-card progress').count(), 0, 'no capacity bar for S3');
     assert.match(await page.locator('.storage-card .storage-usage').innerText(), /Used by DockNest backups/);
-    assert.match(await page.locator('.storage-card').innerText(), /Beta/);
+    assert.match(await page.locator('.storage-card').innerText(), /S3 object storage/);
     await context.close();
   }
   { // 12 sites: the list scrolls inside its card instead of stretching the page.

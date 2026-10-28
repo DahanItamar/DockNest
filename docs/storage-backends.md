@@ -5,11 +5,8 @@ DockNest writes encrypted backup packages (`DBM1`, see [backup format](backup-fo
 | Backend | Status | Requirements |
 | :-- | :-- | :-- |
 | SFTP | Supported. Real backup and restore validated by the Linux integration suite. | `fsync@openssh.com` file sync, atomic rename, a pinned SHA256 host key and a dedicated directory. |
-| S3-compatible | Beta. Uploads, byte ranges, multipart, conditional copy and Object Lock are tested in CI against a real MinIO server (job `s3-integration`). Not yet validated with a full backup and restore in the Linux integration suite, or against a cloud provider. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
+| S3-compatible | Supported. Real backup and restore validated by the Linux integration suite (MinIO-compatible server); `s3-integration` is a required check. Cloudflare R2 passed one manual run (2026-10-28); other providers are not tested on every release. | Bucket, region and endpoint for AWS S3, Cloudflare R2, Backblaze B2 (S3 API), Wasabi, MinIO or similar. Optional Object Lock. |
 | Local directory | Tests and explicitly allowed deployments only (`ALLOW_LOCAL_BACKUP_STORAGE=true`). | A directory on the DockNest server. It is lost with that server. |
-
-> [!WARNING]
-> S3 support is beta until the S3 integration job and the Linux backup/restore job pass. The S3 adapter has not been validated with real backup and restore. That needs the Linux Docker integration suite run against a real provider. Before you rely on it, run an isolated restore from an S3 destination and check the restored site.
 
 Providers: the S3 suite (`npm run test:s3`) has a provider mode for a real, existing bucket (`S3_BUCKET`, plus `S3_PROVIDER` for the report). It passed once, by hand, against **Cloudflare R2** on 2026-10-28: multipart upload, ranged reads, conditional copy publish, the readiness probe and cleanup. R2 is not tested on every release, and its Object Lock support is not tested.
 
