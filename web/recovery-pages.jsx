@@ -10,13 +10,17 @@ import {describeSchedule} from './schedule.js';
 import {recoveryStatus} from './verification.jsx';
 import {CopyLines} from './copies/CopyLines.jsx';
 import {siteStorageSummary} from './copies/model.js';
+import {ChainLine} from './incremental/ChainLine.jsx';
+import {isIncremental,toBackups} from './incremental/model.js';
+import {chainDownloadUrl} from './incremental/incremental-client.js';
+import {Download} from './icons.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
 const SiteIcons=Object.fromEntries(['edit','readiness','schedule','restore','remove'].map(n=>[n,({size})=><BrandIcon name={n} size={size}/>]));
 function Control({label,icon,className='',...props}){return <button type="button" className={`icon-button recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={20}/></button>;}
 
-export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onTests,onReady,onSchedule,onStorage,onRemove,onBackup,query}){
+export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onTests,onReady,onSchedule,onStorage,onIncremental,onRemove,onBackup,query}){
  if(!allSites.length)return <section className="panel"><Empty icon={SiteIcon} title="Choose the sites to protect">Connect a server, discover Docker containers, and group the containers that make up each site.</Empty></section>;
  if(!sites.length)return <section className="panel"><Empty icon={SiteIcon} title="No matching sites" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another site name, server or container.</Empty></section>;
  return <Paginated rows={sites} label="Sites" pageSize={4} stableHeight resetKey={query}>{visible=><div className="card-grid site-grid" aria-label="Sites and schedules">{visible.map(site=>{
@@ -31,6 +35,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
      <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
      {(summary=>summary&&<div className="def-row"><dt>Storage</dt><dd>{summary.main}<span className="t-caption">{summary.copies}</span>{summary.missing&&<StatusLabel state="needs-review">Copy missing</StatusLabel>}{user?.role==='admin'&&onStorage&&<button type="button" className="cp-link" aria-label={`Change storage for ${site.name}`} onClick={()=>onStorage(site)}>Change</button>}</dd></div>)(siteStorageSummary(site))}
+     {site.config?.kind!=='static'&&site.incremental&&<div className="def-row"><dt>Incremental</dt><dd>{site.incremental.enabled?'Full every '+toBackups(site.incremental.interval)+' backups':'Off'}<span className="t-caption">{site.incremental.enabled?'Beta':'Every backup is complete'}</span>{user?.role==='admin'&&onIncremental&&<button type="button" className="cp-link" aria-label={`Change incremental backups for ${site.name}`} onClick={()=>onIncremental(site)}>Change</button>}</dd></div>}
     </dl>
    </div>
    <footer className="card-footer site-card-actions">
@@ -47,7 +52,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
  })}</div>}</Paginated>;
 }
 
-export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onClearFilter,onPin,onRestore,onDetails,onRetryCopy,retrying,query}){
+export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onClearFilter,onPin,onRestore,onDetails,onRetryCopy,retrying,onChain,onDeleteBackup,user,query}){
  if(!allBackups.length)return <section className="panel"><Empty icon={BackupIcon} title="No recovery points yet">Run a backup from Sites &amp; schedules. A recovery point appears only after the job is verified.</Empty></section>;
  if(!backups.length)return <section className="panel"><Empty icon={BackupIcon} title="No matching recovery points" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another recovery point, timestamp or site identifier.</Empty></section>;
  const groups=new Map();
@@ -61,12 +66,13 @@ export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onC
     <div className="recovery-status">{(s=>[<Badge key="badge" value={s.badge}/>,<small key="level" title={s.title}>{s.line}{backup.pinned?', pinned':''}</small>])(recoveryStatus(backup))}</div>
     <div className="recovery-size"><b>{bytes(backup.size||backup.sizeBytes)}</b><small>{backup.downtimeMs!=null?(backup.downtimeMs/1000).toFixed(1)+' s offline':'Downtime not reported'}</small></div>
     <div className="recovery-actions">
-     <ZipButton backupId={backup.id} className="icon-button recovery-action" label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={20}/></ZipButton>
-     <a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted original"><BrandIcon name="encrypted-download" size={20}/></a>
+     {isIncremental(backup)?<a className="icon-button recovery-action" href={chainDownloadUrl(backup.id)} aria-label={`Download chain ${backup.id}`} title="Download chain - encrypted packages and the order to restore them"><Download size={20} stroke={1.75} aria-hidden="true"/></a>:<ZipButton backupId={backup.id} className="icon-button recovery-action" label={`Download full ZIP ${backup.id}`} title="Full ZIP - site files, database data, configuration and Docker images"><BrandIcon name="download" size={20}/></ZipButton>}
+     {!isIncremental(backup)&&<a className="icon-button recovery-action" href={`/api/backups/${backup.id}/download`} aria-label={`Download encrypted backup ${backup.id}`} title="Download encrypted original"><BrandIcon name="encrypted-download" size={20}/></a>}
      <Control label={`${backup.pinned?'Unpin':'Pin'} backup ${backup.id}`} icon="pin" aria-pressed={!!backup.pinned} disabled={busy} onClick={()=>onPin(backup)}/>
      <Control label={`Restore backup ${backup.id}`} icon="restore" onClick={()=>onRestore(backup)}/>
      <Control label={`Backup details ${backup.id}`} icon="details" onClick={()=>onDetails(backup)}/>
     </div>
+    <ChainLine backup={backup} backups={allBackups} date={date} busy={busy} isAdmin={user?.role==='admin'} onChain={onChain} onDelete={onDeleteBackup}/>
     <CopyLines backup={backup} busy={busy} retrying={retrying} onRetry={onRetryCopy}/>
    </div>)}</Paginated></div>
   </details>;

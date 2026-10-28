@@ -48,3 +48,4 @@
 .sr-page .sr-table tr,.sr-page .sr-table tr:hover{background:none}
 /* Bare accent icons on the Storage tiles; the Overview tiles keep their filled square. */
 .sr-metrics .berry-metric-compact:not(.blue) .metric-tile{background:none;color:var(--link)}
+.sr-metric-body .sr-kept{display:block}
