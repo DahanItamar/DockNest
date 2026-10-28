@@ -3,6 +3,7 @@ import { statFile,renameFile,removeFile,syncFile } from './storage.js';
 import { recordVerification } from './recovery-evidence.js';
 import { deploymentHeld } from './deployment-hold.js';
 import { siteCopyTargets,effectiveRetention,sameLocation,copyPathFor,targetIdOfPath,targetSummary } from './site-storage.js';
+import { recordChainLink,hasDependents } from './incremental.js';
 const now=()=>new Date().toISOString();
 const missing=error=>error.code==='ENOENT'||error.code===2;
 export async function fileExists(file){try{await statFile(file);return true;}catch(error){if(missing(error))return false;throw error;}}
@@ -32,6 +33,8 @@ export function finalizePublication(backupId,{ownedDetails}={}){
   const metadata=JSON.parse(operation.metadata);
   if(metadata.manifest?.deliveryMode==='direct'&&!metadata.manifest.complete)throw new Error('Incomplete direct capture cannot be published');
   db.prepare('INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,1,?)').run(backupId,operation.site_id,operation.job_id,metadata.capturedAt,operation.published,operation.size,operation.checksum,JSON.stringify(metadata.manifest),now());
+  // The chain a package belongs to (incremental backups, 2.12) is recorded with it, from its own manifest.
+  recordChainLink(backupId,metadata.manifest);
   recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},operation.job_id);
   recordVerification(backupId,'consistency',metadata.manifest.consistency||{status:'not-tested'},operation.job_id);
   db.prepare("UPDATE artifact_operations SET state='completed',updated_at=? WHERE backup_id=?").run(now(),backupId);
@@ -42,6 +45,9 @@ export function finalizePublication(backupId,{ownedDetails}={}){
 }
 export function deletionBlocked(backupId){
  return Boolean(db.prepare('SELECT id FROM backups WHERE id=? AND pinned=1').get(backupId)
+  // An incremental chain (2.12): a package stays while any backup that builds on it is still kept (its main package or a
+  // copy). Dependents go first, so a pinned or Object-Locked increment keeps its whole chain.
+  ||hasDependents(backupId)
   ||db.prepare("SELECT id FROM restores WHERE backup_id=? AND status IN ('queued','running','recovery_required')").get(backupId)
   ||db.prepare('SELECT id FROM downloads WHERE backup_id=? AND expires_at>?').get(backupId,Date.now())
   ||db.prepare("SELECT id FROM jobs WHERE type='scrub' AND status IN ('queued','running','recovery_required') AND json_extract(details,'$.backupId')=?").get(backupId)
@@ -156,10 +162,26 @@ export function scheduleCopies(backupId,siteId,mainPath){
   else try{copyPath=copyPathFor(targetId,server,site,mainPath);}catch{reason='destination_missing';}
   if(reason){audit('worker','backup.copy_skipped',backupId,{targetId,reason});continue;}
   count+=db.prepare("INSERT OR IGNORE INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES(?,?,?,'pending',0,?,?)").run(backupId,targetId,copyPath,now(),now()).changes;
+  count+=scheduleAncestorCopies(backupId,targetId,server,site);
  }
  return count;
 }
-// Oldest backup first, so a parent is always copied before what builds on it (incremental chains, 2.12).
+// An increment is only useful on a destination that also holds every package it builds on (docs/incremental-backups.md):
+// its ancestors get a copy there too (a destination added after the chain began), and a copy the owner deleted or that
+// gave up is tried again.
+function scheduleAncestorCopies(backupId,targetId,server,site){
+ let count=0;
+ for(let link=db.prepare('SELECT parent_id FROM backup_chain_links WHERE backup_id=?').get(backupId),steps=0;link?.parent_id&&steps<31;steps++){
+  const parent=db.prepare('SELECT id,path FROM backups WHERE id=?').get(link.parent_id);if(!parent)break;
+  let copyPath;try{copyPath=copyPathFor(targetId,server,site,parent.path);}catch{break;}
+  count+=db.prepare("INSERT OR IGNORE INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES(?,?,?,'pending',0,?,?)").run(parent.id,targetId,copyPath,now(),now()).changes;
+  count+=db.prepare("UPDATE backup_copies SET status='pending',attempts=0,first_failed_at=NULL,next_attempt_at=NULL,delete_state=NULL,delete_after=NULL,updated_at=? WHERE backup_id=? AND target_id=? AND status IN ('deleted','gave_up')").run(now(),parent.id,targetId).changes;
+  link=db.prepare('SELECT parent_id FROM backup_chain_links WHERE backup_id=?').get(parent.id);
+ }
+ return count;
+}
+// Oldest backup first, so a parent is always copied before what builds on it (incremental chains, 2.12). An increment is
+// copied to a destination only once its parent's copy there is verified.
 export function claimCopy(at=Date.now()){
  return transaction(()=>{
   if(deploymentHeld(db))return null;
@@ -167,6 +189,7 @@ export function claimCopy(at=Date.now()){
    WHERE c.status IN ('pending','failed') AND c.delete_state IS NULL AND (c.next_attempt_at IS NULL OR c.next_attempt_at<=?)
    AND NOT EXISTS(SELECT 1 FROM retention_operations r WHERE r.backup_id=c.backup_id)
    AND EXISTS(SELECT 1 FROM site_storage_copies l WHERE l.site_id=b.site_id AND l.target_id=c.target_id)
+   AND NOT EXISTS(SELECT 1 FROM backup_chain_links k WHERE k.backup_id=c.backup_id AND k.parent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM backup_copies p WHERE p.backup_id=k.parent_id AND p.target_id=c.target_id AND p.status='verified'))
    ORDER BY b.captured_at,b.id,c.created_at,c.target_id LIMIT 1`).get(at);
   if(!copy)return null;
   if(db.prepare("UPDATE backup_copies SET status='copying',updated_at=? WHERE backup_id=? AND target_id=? AND status=?").run(now(),copy.backup_id,copy.target_id,copy.status).changes!==1)return null;
