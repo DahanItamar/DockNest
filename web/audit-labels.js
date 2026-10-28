@@ -4,6 +4,7 @@ const ACTIONS={
  'auth.login':'Signed in','auth.login_failed':'Sign-in failed','auth.logout':'Signed out','auth.reauth':'Re-authenticated','auth.setup':'Administrator set up','auth.enrolled':'Account enrolled',
  'updater.requested':'Update requested','updater.refused':'Update refused','updater.finished':'Update finished','updater.acknowledged':'Updater acknowledged','updater.resolved':'Update resolved',
  'update.consent':'Update check choice saved','update.settings':'Update settings changed',
+ 'radar.scan_requested':'Security scan requested','radar.finding_dismissed':'Security finding dismissed','radar.finding_restored':'Security finding restored','radar.preferences_changed':'Security scan settings changed','radar.finding_critical':'Serious security finding','radar.finding_resolved':'Security finding resolved',
  'job.superseded':'Job superseded','job.recovery_acknowledged':'Recovery acknowledged',
  'backup.enqueue':'Backup queued','backup.completed':'Backup completed','backup.failed':'Backup failed','site.storage_update':'Site storage changed','backup.pin':'Backup pin changed','backup.download':'Backup downloaded','backup.download_zip':'Backup downloaded as zip',
  'backup.scrub.enqueue':'Integrity check queued','backup.scrub.completed':'Integrity check completed','backup.scrub.failed':'Integrity check failed',

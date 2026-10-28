@@ -72,7 +72,7 @@ saved token can never be pointed at a new server by editing the server alone.
 | `backup.copy_recovered` | A copy that failed earlier was saved | Once per copy |
 | `backup.copy_gave_up` | A copy still failed after 7 days of retries (it can be retried in DockNest) | Once per copy |
 | `radar.finding_critical` | The vulnerability radar found a confirmed critical or high flaw in a container ([security.md](security.md#vulnerability-radar)) | Once per finding while it stays open |
-| `radar.finding_resolved` | Such a finding is no longer found | Once per finding |
+| `radar.finding_resolved` | Such a finding is no longer found (not when a probe merely gave no answer) | Once per finding |
 
 New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.
