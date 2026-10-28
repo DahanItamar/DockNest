@@ -281,7 +281,7 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   // tagged archive on the test server's real image store.
   // Fresh paths: docker cp into an existing folder would nest the copy.
   // Each step names itself on failure (docker arguments here hold no secrets); the helper step keeps its traceback.
-  const step = async (name, ...args) => { try { return await run(...args); } catch (error) { throw new Error(`Tag collision case: ${name} failed${name === 'helper tag restore' ? ': ' + String(error.stderr || error.message).slice(-800) : ''}`); } };
+  const step = async (name, ...args) => { try { return await run(...args); } catch (error) { throw new Error(`Tag collision case: ${name} failed${name.startsWith('helper ') ?': ' + String(error.stderr || error.message).slice(-800) : ''}`); } };
   await step('clear paths', 'exec', target, 'rm', '-rf', '/rt-qa-helper', '/rt-collide-site');
   await step('copy helper', 'cp', 'remote', target + ':/rt-qa-helper');
   await step('copy fixture', 'cp', 'tests/integration/site', target + ':/rt-collide-site');
@@ -294,8 +294,13 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   const collided = JSON.parse(collision.split('\n').at(-1));
   assert.deepEqual(collided.tags, ['rt-collide:1'], 'the archive names its tag'); assert.notEqual(collided.moved, kept, 'docker load moved the tag');
   assert.deepEqual(collided.changed, ['rt-collide:1']); assert.equal(collided.now, kept, 'the tag points back at the image it named before');
-  await run('exec', target, 'sh', '-c', `docker image rm -f rt-collide:1 ${loaded} ${kept} >/dev/null 2>&1; rm -rf /tmp/rt-collide.tar /rt-qa-helper /rt-collide-site; true`);
-  record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load (${store} image store)`);
+  // Restore and the move deploy load through the same guard (2.11.1), and a package saved by image ID names no tag on
+  // this image store, so the guard never touches a real backup's images.
+  const guarded = await step('helper load guard', 'exec', target, 'python3', '-c', `import sys,json;sys.path.insert(0,'/rt-qa-helper');import helper;helper.docker('save','-o','/tmp/rt-byid.tar','${kept}');helper.load_images_keeping_tags('/tmp/rt-collide.tar');print(json.dumps({'now':helper.image_id_of('rt-collide:1'),'byId':helper.image_archive_tags('/tmp/rt-byid.tar')}))`);
+  const guard = JSON.parse(guarded.split('\n').at(-1));
+  assert.equal(guard.now, kept, 'restore and move loads leave an existing tag on its image'); assert.deepEqual(guard.byId, [], 'an archive saved by image ID names no tag');
+  await run('exec', target, 'sh', '-c', `docker image rm -f rt-collide:1 ${loaded} ${kept} >/dev/null 2>&1; rm -rf /tmp/rt-collide.tar /tmp/rt-byid.tar /rt-qa-helper /rt-collide-site; true`);
+  record(`Restore test tag restore: a tag that docker load moved points back at its earlier image right after the load, for restore and move loads too; an archive saved by ID names no tag (${store} image store)`);
 
   // 11. A worker killed during Restore copy: the next worker ends the test couldnt_run and cleans up first.
   const worker = () => spawn(process.execPath, ['--no-addons', 'src/worker.js'], { env: process.env, stdio: 'ignore' });
