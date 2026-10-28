@@ -91,6 +91,12 @@ class RequestTests(unittest.TestCase):
         self.assertIsNone(b.cgroup_container('0::/user.slice/user-1000.slice/session-2.scope'))
         self.assertIsNone(b.cgroup_container('0::/docker/%s\n1::/docker/%s' % (cid, 'd' * 64)))  # two containers: refuse
         self.assertIsNone(b.cgroup_container('0::/docker/%s/nested' % cid))
+        # The systemd form is anchored at the host's top-level system.slice: a same-uid host user cannot pass by
+        # nesting a cgroup with the api container's name inside its own delegated subtree.
+        nested = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/system.slice/docker-%s.scope' % cid
+        self.assertIsNone(b.cgroup_container(nested))
+        self.assertIsNone(b.cgroup_container('1:name=systemd:/x/system.slice/docker-%s.scope' % cid))
+        self.assertEqual(b.cgroup_container('1:name=systemd:/system.slice/docker-%s.scope\n0::/system.slice/docker-%s.scope' % (cid, cid)), cid)
 
 
 class PolicyTests(unittest.TestCase):

@@ -169,7 +169,7 @@ def response(accepted, value, extra=None):
     return json.dumps({'accepted': True, 'id': value} if accepted else {'accepted': False, 'code': value, **(extra or {})}, separators=(',', ':')).encode()
 
 
-CGROUP_FORMS = (re.compile(r'(?:^|/)system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
+CGROUP_FORMS = (re.compile(r'\A/system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
 
 
 def cgroup_container(text, parent=None):
