@@ -5,6 +5,46 @@ North-star metric: **share of protected sites with an isolated restore that pass
 
 This is a plan, not a commitment. Items labelled *validated* in a release need real Linux Docker integration evidence ([AGENTS.md](../../AGENTS.md)). Nothing here claims they have it today.
 
+## Current plan (owner, 2026-10-28)
+
+The overview below is the original 2.1-era plan; 2.1.0 to 2.10.1 have shipped. The next three releases, in the
+owner's order (the radar moved last because it is the least critical):
+
+| Release | Theme | Design |
+| --- | --- | --- |
+| 2.11.0 | Storage: S3 out of beta, storage per site, backup copies | [backup-copies.md](../backup-copies.md) |
+| 2.12.0 | Incremental backups (GNU tar chains, opt-in, beta) | [incremental-backups.md](../incremental-backups.md) |
+| 2.13.0 | Radar (draft PRs #59, #62; migration renumbered on rebase) | Existing radar drafts |
+
+### 2.11.0 tasks
+
+1. **S3 out of beta.** Linux backup and restore through S3 (PR #102) passes; `s3-integration` becomes a required
+   check; the beta labels come off in the app, README and storage docs. Cloudflare R2 passed one manual run
+   (2026-10-28); it is not tested on every release.
+2. **Storage per site.** Additive migration (`site_storage`); the backup job, readiness and capacity checks use the
+   site's main destination; site settings show "Default (name)" with a change link. DockNest's own backup keeps the
+   default destination.
+3. **Backup copies.** Migration (`site_storage_copies`, `backup_copies`); a worker copy step after the main copy is
+   verified, through the publication journal; retries and `backup.copy_failed` / `backup.copy_recovered` alerts;
+   retention per copy; restore falls back to a verified copy; a destination with copies cannot be removed; recovery
+   kit on every destination; destination chips in the backup list; storage report per destination.
+4. **Proof.** Linux integration: SFTP main + S3 copy, delete the main package, restore from the copy. README,
+   upgrade notes, release notes.
+
+### 2.12.0 tasks
+
+1. Helper: GNU tar `--listed-incremental` mount archives, snapshot files committed only after a verified upload,
+   full-backup fallback rules.
+2. Engine: backup format v2 manifest with chain links, chain-aware restore, retention, pins, scrub, storage
+   migration and copies.
+3. UI and recovery: "Incremental backups (beta)" site setting, "Download chain", recovery kit chain steps, storage
+   report shows the real saving.
+4. Proof: Linux chain test (1 full + 6 increments with changes, deletes and renames; restore from every point).
+
+### 2.13.0 tasks
+
+Rebase the radar drafts on 2.12.0, renumber their migration, review and ship.
+
 ## Overview
 
 | Horizon | Stack | Theme | Status |
