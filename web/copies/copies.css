@@ -1,0 +1,54 @@
+/* 2.11 storage per site and backup copies. Tokens only; cards, alert panels, status colours and buttons come from the system. */
+
+/* Setting rows: label and a short description left, the control right. */
+.cp-form{display:flex;flex-direction:column;gap:0}
+.cp-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}
+.cp-source>.cp-row:first-child{border-top:1px solid var(--border-subtle)}
+.cp-row-text{display:flex;flex-direction:column;min-width:0}
+.cp-row-label{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;color:var(--heading)}
+.cp-row-control{flex:0 1 50%;min-width:0}
+.cp-row-control select,.cp-copy-edit select{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cp-row-add{display:flex;justify-content:flex-end;flex:none}
+.cp-row-add button{display:inline-flex;align-items:center;gap:8px}
+.cp-note{margin:8px 0 0}
+.cp-copy-list{display:flex;flex-direction:column;gap:8px;padding:12px 0 0}
+.cp-copy-head,.cp-copy-edit{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) var(--control-height);gap:8px;align-items:center}
+.cp-copy-head{padding:0}
+.cp-form>.alert-panel,.cp-form>.map-root{margin-top:16px}
+.cp-source{margin-top:16px}
+.cp-source>.alert-panel{margin-top:12px}
+@media(max-width:599px){
+ .cp-row{flex-direction:column;align-items:stretch;gap:8px}
+ .cp-row-control{flex:none}
+ .cp-row-add{justify-content:stretch}
+ .cp-row-add button{width:100%;justify-content:center}
+}
+
+/* Copy labels under a backup: plain text plus a small semantic icon. */
+.cp-copies{grid-column:1/-1;grid-row:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px 24px;min-width:0}
+.cp-copy{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%}
+.cp-label{min-width:0;max-width:100%;gap:8px;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400}
+.cp-label-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
+.cp-label-word{flex:none;font-weight:500}
+.cp-retry{flex:none;padding:0 16px}
+
+/* Site card: the Storage row. */
+.site-metadata .cp-link{width:auto;min-height:0;height:auto;padding:0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500}
+.site-metadata .cp-link:hover{text-decoration:underline}
+.site-metadata .cp-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.site-metadata .cp-missing{margin-top:4px;font-size:var(--fs-caption);line-height:var(--lh-caption)}
+
+/* Destination removal panel and the card's remove button. */
+.cp-removal{display:flex;flex-direction:column;gap:8px}
+.cp-actions{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:8px;margin-top:8px}
+.cp-actions button{flex:0 0 auto}
+.cp-usage{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.storage-card-head .cp-remove{margin-left:auto}
+
+/* Storage report: per-destination bytes. */
+.sr-destinations .card-title{margin:0 0 8px}
+.storage-card-top{display:flex;align-items:center;gap:12px;min-width:0}
+.storage-card-top .storage-card-head{flex:1;min-width:0}
+.storage-card-top .cp-remove{margin-block:calc((var(--lh-card) - var(--control-height)) / 2);margin-right:-8px}
+/* The heading above names the table; the caption stays for screen readers only. */
+.rebrand-page .sr-destinations .data-table caption{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
