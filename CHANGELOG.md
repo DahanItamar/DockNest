@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Storage report: the **Incremental saving** card is now **Possible saving**, so it is clear DockNest does not make incremental backups yet; the number is a best-case estimate of what they could save.
+
 ## [2.10.1] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.10.1.md](docs/releases/2026-10-28-v2.10.1.md).
