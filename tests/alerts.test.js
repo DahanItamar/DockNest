@@ -450,7 +450,9 @@ test('migration versions are contiguous from 1 once version 7 exists', async () 
   const { migrations } = await import('../src/migrations.js'), versions = migrations.map(item => item.version);
   // TODO(merge of #67 + #69): this branch has no migration 7 yet, so the gap at 7 is expected here. Delete the skip then.
   if (!versions.includes(7)) return void console.log('skipped: migration 7 (server_installs, PR #67) is not on this branch yet');
-  assert.deepEqual(versions, versions.map((_, index) => index + 1));
+  // Version 12 is reserved for the radar (src/migrations.js reservedMigrationVersions); only that gap is allowed.
+  const reserved = new Set((await import('../src/migrations.js')).reservedMigrationVersions ?? []);
+  assert.deepEqual(versions, Array.from({ length: versions.at(-1) }, (_, index) => index + 1).filter(version => !reserved.has(version)));
 });
 
 test('a server line also carries the backups of the sites on that server, never those of other servers, and sends once', async () => {

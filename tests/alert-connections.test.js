@@ -61,7 +61,7 @@ const group = credentialId => db.prepare('SELECT * FROM connections WHERE origin
 const tgNode = (name, chatId, credentialId = LEGACY.bot) => ({ kind: 'telegram', name, credentialId, config: { chatId } });
 
 test('the upgrade copied the 2.8 alerts and the 2.8 routes show them exactly as before', async () => {
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 11);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, migrations.at(-1).version);
   const { body } = await call('GET', '/alerts');
   assert.deepEqual(body.credentials.map(item => [item.id, item.kind, item.name]), [[LEGACY.bot, 'telegram', 'Bot'], [LEGACY.mail, 'smtp', 'Mail']].sort((a, b) => a[0].localeCompare(b[0])), 'credential ids kept, in the 2.8 order (created_at, id)');
   const bot = body.credentials.find(item => item.id === LEGACY.bot);

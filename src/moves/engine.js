@@ -11,7 +11,8 @@ import { readFile } from 'node:fs/promises';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { storageCapacity } from '../storage.js';
-import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners } from '../engine.js';
+import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners, discardIncrementalState } from '../engine.js';
+import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
@@ -121,7 +122,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const composeOverride = sf.kind === 'compose' && !!sf.compose && composeAtLeast(targetFacts?.composeVersion, [2, 24]);
   const mailBlocking = sf.kind !== 'static' && !!targetFacts?.firewall?.mailBlocking;
   const facts = {
-    site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup?.size ?? 0,
+    site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
       ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env,
       timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
@@ -608,8 +609,9 @@ async function deploy(context, mode, backupId) {
   const status = await remote(target, { operation: 'deploy-status', moveId: move.id });
   if (status.deployed.includes(mode)) return remote(target, request);
   if (mode === 'live' && status.present) await remote(target, { operation: 'deploy-teardown', moveId: move.id });
-  const { plaintextChecksum } = await moveTransport.upload(target, backupId, job.id);
-  return remote(target, { ...request, plaintextChecksum });
+  // Moves restore through the shared path, so a chain (an increment) is sent and checked whole.
+  const { plaintextChecksum, chain } = await moveTransport.upload(target, backupId, job.id);
+  return remote(target, { ...request, plaintextChecksum, ...(chain ? { chain } : {}) });
 }
 const deployOutcome = result => ({ resources: { mode: result.mode, containers: result.containers, running: result.running ?? [], paths: result.paths ?? [], nginx: result.nginx ?? null }, result: { ports: result.ports, mailBlocked: result.mailBlocked, method: result.method ?? null, status: 'deployed' } });
 
@@ -662,6 +664,9 @@ const STEPS = {
       saveMove(applyTransition(current, 'completed', now(), { retain_until: retainUntil, error: null }));
       audit('worker', 'move.complete', site.id, { move: move.id, from: source.id, to: target.id });
     });
+    // Incremental backups: the old server's snapshot files are of no use any more; the next backup is full anyway
+    // (the site's server changed). Best effort, never fails the move.
+    if (incrementalSettings(site.id).enabled) await discardIncrementalState(site.id, { server: source });
   },
 };
 

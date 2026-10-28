@@ -215,6 +215,23 @@ CREATE INDEX IF NOT EXISTS backup_copies_target ON backup_copies(target_id,statu
 CREATE TABLE IF NOT EXISTS backup_main_removed (backup_id TEXT PRIMARY KEY,original_path TEXT NOT NULL,removed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manager_backup_copies (backup_id TEXT NOT NULL,target_id TEXT NOT NULL,path TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(backup_id,target_id));
 `;
+// Incremental backups (docs/incremental-backups.md). Additive only: two new tables and their indexes, no rows, nothing
+// altered. `backups` keeps its columns because tests, scripts and older code insert into it positionally
+// (`INSERT INTO backups VALUES (...)`), so the chain of a backup lives beside it:
+// - site_incremental: the per-site opt-in (off by default), the chain length N and a "next backup is full" flag
+//   (force_full: 0 none, 1 the owner asked, 2 the last package's snapshot commit is unconfirmed, 3 just turned on).
+// - backup_chain_links: one row per backup made as part of a chain (format v2). No row = a self-contained full package,
+//   exactly as before. The row follows its backup when an older release deletes it (ON DELETE CASCADE, never a failure);
+//   parent_id has no foreign key so deleting a parent never fails either: a broken chain is reported at restore.
+export const incrementalSchema = `
+CREATE TABLE IF NOT EXISTS site_incremental (site_id TEXT PRIMARY KEY REFERENCES sites(id),enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),interval INTEGER NOT NULL DEFAULT 6 CHECK (interval BETWEEN 1 AND 30),force_full INTEGER NOT NULL DEFAULT 0 CHECK (force_full BETWEEN 0 AND 9),updated_at TEXT);
+CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERENCES backups(id) ON DELETE CASCADE,backup_kind TEXT NOT NULL CHECK (backup_kind IN ('full','incremental')),chain_id TEXT NOT NULL CHECK (length(chain_id) BETWEEN 1 AND 64),parent_id TEXT,chain_position INTEGER NOT NULL CHECK (typeof(chain_position) = 'integer' AND chain_position BETWEEN 0 AND 30),CHECK ((backup_kind = 'full' AND parent_id IS NULL AND chain_position = 0) OR (backup_kind = 'incremental' AND parent_id IS NOT NULL AND chain_position >= 1)));
+CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
+CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
+`;
+// Version 12 is reserved for the radar (docs/product, 2.13.0) and is landing in parallel. Until it does, the list has
+// this one gap; tests/incremental-migration.test.js allows exactly that gap and nothing else.
+export const reservedMigrationVersions = Object.freeze([12]);
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -248,6 +265,8 @@ export const migrations = [
   { version: 10, name: 'alert-connections', compatible: true, up: db => { db.exec(alertConnectionsSchema); importLegacyAlerts(db); } },
   // Storage per site and backup copies (docs/backup-copies.md): new tables and indexes only, so 2.10 code ignores them.
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
+  // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
+  { version: 13, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

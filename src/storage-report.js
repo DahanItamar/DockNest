@@ -8,6 +8,9 @@ import { adapters, targetOptions } from './storage/index.js';
 import * as local from './storage/local.js';
 
 export const reportMethod = 'A rough best-case estimate from package sizes. DockNest cannot see inside encrypted backups.';
+// Incremental backups (docs/incremental-backups.md): measured, not estimated. Each increment stored now is compared with
+// the full package of its own chain (what a full backup at that point would have cost, at the chain's start).
+export const incrementalMethod = 'Measured from stored package sizes: each increment is compared with the full backup that starts its chain.';
 const DAY = 86400000, CAPACITY_CACHE_MS = 10 * 60 * 1000;
 const number = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
 
@@ -42,7 +45,24 @@ export function growthSeries(rows, nowMs, days = 30) {
 
 // copies: verified backup copies [{ targetId, size }] (docs/backup-copies.md). mainRemoved: ids of backups whose main package
 // aged out while a copy keeps them; they count once, as a copy. Destination bytes include the copies held there.
-export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now(), copies = [], mainRemoved = new Set() }) {
+// chains: [{ backupId, kind, chainId, position }] of backups in incremental chains. keptForChain: ids of backups past
+// their site's retention count that stay only because a kept increment builds on them.
+export function incrementalSaving(backups, chains = [], keptForChain = new Set()) {
+  const sizes = new Map(backups.map(row => [row.id, number(row.size)]));
+  const fulls = new Map(chains.filter(link => link.kind === 'full').map(link => [link.chainId, link.backupId]));
+  let fullEquivalentBytes = 0, storedBytes = 0, increments = 0;
+  const withIncrements = new Set();
+  for (const link of chains) {
+    if (link.kind !== 'incremental' || !sizes.has(link.backupId)) continue;
+    const full = fulls.get(link.chainId);
+    if (!full || !sizes.has(full)) continue;
+    fullEquivalentBytes += sizes.get(full); storedBytes += sizes.get(link.backupId); increments++; withIncrements.add(link.chainId);
+  }
+  const kept = [...keptForChain].filter(id => sizes.has(id));
+  return { bytesSaved: Math.max(0, fullEquivalentBytes - storedBytes), fullEquivalentBytes, storedBytes, increments, chains: withIncrements.size, keptForChain: kept.length, keptForChainBytes: kept.reduce((sum, id) => sum + sizes.get(id), 0), method: incrementalMethod };
+}
+
+export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now(), copies = [], mainRemoved = new Set(), chains = [], keptForChain = new Set() }) {
   const names = new Map(sites.map(site => [site.id, site.name]));
   const storageNames = new Map([['local', 'Local disk'], ['env', 'Configured storage'], ...targets.map(target => [target.id, target.name])]);
   const storageModes = new Map([['local', 'local'], ['env', 'sftp'], ...targets.map(target => [target.id, target.mode ?? null])]);
@@ -54,8 +74,10 @@ export function buildReport({ backups, sites, targets, capacities = {}, nowMs = 
     if (mainRemoved.has(row.id)) continue;
     const entry = storageOf(storageIdOf(row.path));
     entry.packages++; entry.bytes += size; entry.mainBytes += size;
+    if (keptForChain.has(row.id)) entry.chainBytes += size;
   }
-  // Copies are listed apart from main packages; "kept for a chain" (chainBytes) stays separate and is 0 until 2.12.
+  // Copies are listed apart from main packages; "kept for a chain" (chainBytes) is the part of mainBytes held past the
+  // retention count because a kept increment builds on it.
   for (const copy of copies) { const size = number(copy.size), entry = storageOf(copy.targetId); entry.packages++; entry.bytes += size; entry.copyBytes += size; entry.copyCount++; }
   const siteRows = [...bySite].map(([siteId, rows]) => {
     rows.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt) || String(a.id).localeCompare(String(b.id)));
@@ -68,6 +90,7 @@ export function buildReport({ backups, sites, targets, capacities = {}, nowMs = 
   return { generatedAt: new Date(nowMs).toISOString(), storages, sites: siteRows,
     totals: { packages: backups.length, bytes, estimateUpToBytes, estimateUpToPercent: bytes ? Math.round(estimateUpToBytes / bytes * 100) : 0 },
     growth: { days: 30, points: growth.points, fromBytes: growth.fromBytes, toBytes: growth.toBytes, changeBytes: growth.changeBytes },
+    incrementalSaving: incrementalSaving(backups, chains, keptForChain),
     method: reportMethod };
 }
 
@@ -94,7 +117,17 @@ export async function storageReport() {
   const mainRemoved = new Set(db.prepare('SELECT backup_id FROM backup_main_removed').all().map(row => row.backup_id));
   const ids = [...new Set([...backups.filter(row => !mainRemoved.has(row.id)).map(row => storageIdOf(row.path)), ...copies.map(row => row.targetId)])];
   const capacities = Object.fromEntries(await Promise.all(ids.map(async id => [id, await capacityOf(id)])));
-  return buildReport({ backups, sites, targets, capacities, copies, mainRemoved });
+  const chains = db.prepare('SELECT backup_id AS backupId,backup_kind AS kind,chain_id AS chainId,chain_position AS position FROM backup_chain_links WHERE backup_id NOT IN (SELECT backup_id FROM retention_operations)').all();
+  return buildReport({ backups, sites, targets, capacities, copies, mainRemoved, chains, keptForChain: keptForChainIds() });
+}
+// The same rule as retention (src/engine.js retain): past the count, unpinned, still kept because something builds on it.
+export function keptForChainIds() {
+  const kept = new Set();
+  for (const site of db.prepare('SELECT DISTINCT b.site_id AS siteId,COALESCE(p.retention,7) AS retention FROM backup_chain_links l JOIN backups b ON b.id=l.backup_id LEFT JOIN policies p ON p.site_id=b.site_id').all()) {
+    const stale = db.prepare('SELECT id FROM backups WHERE site_id=? AND verified=1 AND pinned=0 AND id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY captured_at DESC').all(site.siteId).slice(site.retention || 7);
+    for (const row of stale) if (db.prepare('SELECT 1 FROM backup_chain_links WHERE parent_id=? LIMIT 1').get(row.id)) kept.add(row.id);
+  }
+  return kept;
 }
 
 export const storageReportRoutes = express.Router();

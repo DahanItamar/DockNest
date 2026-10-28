@@ -5,6 +5,15 @@ import io,sys,tarfile,zipfile,json,pathlib,shutil,re,stat,os
 START_STATIC='DockNest static website backup\n\nsite-files/ contains the captured HTML, assets and other website files. configuration/ contains the selected nginx and deployment files. recovery-originals/static-files.tar preserves Linux owners, permissions, ACLs and xattrs; use it for a faithful Linux restore. Verify the manifest file digest before a separate nginx cutover. The existing website, TLS keys and external services are not changed or automatically restored. This ZIP is decrypted and may contain private configuration. Keep it private.\n'
 START_DOCKER='DockNest site backup\n\nsite-files/ contains browsable copies of captured persistent data, including selected database files and uploads. Read manifest.excludedPaths for any data outside the selected backup scope. Excluded external storage must be recovered separately.\nconfiguration/ contains your deployment configuration.\nrecovery-originals/ contains the complete original backup bundle: exact Docker images (including writable application layers), mount archives preserving Linux UID/GID, permissions, links, ACLs and xattrs, the private manifest and restore guide. Use these original archives for a faithful Linux restore; ZIP browsing copies do not preserve every Linux attribute.\n\nDatabase data files require the matching database image; this is not a SQL dump. Temporary RAM folders are recreated empty.\nThis ZIP contains credentials and is decrypted. Keep it private.\n'
 
+class IncrementalBackup(ValueError):
+    """A format v2 increment holds only changed files, so it cannot become a complete ZIP on its own."""
+    def __init__(self):super().__init__('This backup is incremental. Use Download chain.')
+
+def checked_manifest(manifest):
+    if not isinstance(manifest,dict) or manifest.get('formatVersion') not in (1,2) or not manifest.get('complete'):raise ValueError('Incomplete backup')
+    if manifest['formatVersion']==2 and manifest.get('backupKind')!='full':raise IncrementalBackup()
+    return manifest
+
 def safe_name(name):
     p=pathlib.PurePosixPath(name)
     if p.is_absolute() or '..' in p.parts or '\\' in name or not p.parts:raise ValueError('Unsafe archive path')
@@ -26,9 +35,9 @@ def export_zip(payload,output):
                 if not re.fullmatch(r'mount-\d+-\d+\.tar',member.name) or not re.fullmatch(r'mount-\d+-\d+\.tar',member.linkname) or member.linkname not in regular:raise ValueError('Invalid shared mount archive link')
             elif not member.isfile():raise ValueError('Invalid backup package')
         if len(names)!=len(set(names)):raise ValueError('Invalid backup package')
-        if any(not re.fullmatch(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar)',n) for n in names):raise ValueError('Unexpected backup entry')
-        manifest=json.load(package.extractfile('manifest.json'))
-        if manifest.get('formatVersion')!=1 or not manifest.get('complete'):raise ValueError('Incomplete backup')
+        if any(not OUTER.fullmatch(n) for n in names):raise ValueError('Unexpected backup entry')
+        manifest=checked_manifest(json.load(package.extractfile('manifest.json')))
+        if any(SNAPSHOT.fullmatch(n) for n in names) and manifest['formatVersion']!=2:raise ValueError('Unexpected backup entry')
         with zipfile.ZipFile(output,'w',allowZip64=True,compression=zipfile.ZIP_DEFLATED,compresslevel=1) as z:
             z.writestr('START-HERE.txt',START_STATIC if manifest.get('kind')=='static' else START_DOCKER);output.flush()
             for member in members:
@@ -73,7 +82,9 @@ def export_zip(payload,output):
 #          The first pass writes recovery-originals/, the second the browsable site-files/ and configuration/ copies
 #          (a ZIP can only write one entry at a time). Hard links cannot be re-read from a stream: they are written as
 #          small .docknest-link.txt notes; the exact bytes remain in recovery-originals/.
-OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar)')
+# snapshot-*.snar: GNU tar snapshot files of a format v2 package; kept in recovery-originals, never browsed.
+OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar|snapshot-[0-9a-f]{64}\.snar)')
+SNAPSHOT=re.compile(r'snapshot-[0-9a-f]{64}\.snar')
 MOUNT=re.compile(r'mount-\d+-\d+\.tar')
 MAX_MANIFEST=16*1024*1024
 
@@ -111,9 +122,7 @@ def read_manifest(member,package):
     return package.extractfile(member).read()
 
 def check_manifest(raw):
-    manifest=json.loads(raw)
-    if manifest.get('formatVersion')!=1 or not manifest.get('complete'):raise ValueError('Incomplete backup')
-    return manifest
+    return checked_manifest(json.loads(raw))
 
 def prefix_for(name,manifest):
     if MOUNT.fullmatch(name):
@@ -133,6 +142,7 @@ def scan_stream(stream,output):
         if member.name=='manifest.json':raw=read_manifest(member,package)
     if raw is None:raise ValueError('Backup has no manifest')
     manifest=check_manifest(raw)
+    if any(SNAPSHOT.fullmatch(n) for n in names) and manifest['formatVersion']!=2:raise ValueError('Unexpected backup entry')
     for name in names:prefix_for(name,manifest)
     output.write(raw)
 
@@ -197,5 +207,7 @@ if __name__=='__main__':
                 if completed.testzip() is not None:raise ValueError('ZIP integrity verification failed')
         else:export_zip(sys.argv[1],Sink(sys.stdout.buffer))
     except (BrokenPipeError,ConnectionResetError):sys.exit(1)
+    except IncrementalBackup as error:
+        print(str(error),file=sys.stderr);sys.exit(1)
     except Exception:
         print('Could not export the complete backup ZIP.',file=sys.stderr);sys.exit(1)
