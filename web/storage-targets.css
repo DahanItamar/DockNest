@@ -12,7 +12,6 @@
 .rebrand-page .storage-card-head .brand-icon{flex:none}
 .storage-card-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rebrand-page .storage-card-content>p.storage-card-kind{margin:0;font-family:inherit;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
-.badge.beta-note{display:inline;padding:0;border:0;border-radius:0;background:none;font-size:inherit;line-height:inherit;font-weight:400;color:inherit}
 .rebrand-page .storage-card .def-list{margin:8px 0 0}
 .storage-card .def-row dd code{font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-wrap:anywhere}
 /* The buttons share the full row whether a card has two or three of them. */

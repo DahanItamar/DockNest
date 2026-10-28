@@ -7,7 +7,7 @@
 .cp-row-text{display:flex;flex-direction:column;min-width:0}
 .cp-row-label{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;color:var(--heading)}
 .cp-row-control{flex:0 1 50%;min-width:0}
-.cp-row-control select,.cp-copy-edit select{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cp-row-control select,.cp-copy-edit select{min-width:0;max-width:100%}
 .cp-row-add{display:flex;justify-content:flex-end;flex:none}
 .cp-row-add button{display:inline-flex;align-items:center;gap:8px}
 .cp-note{margin:8px 0 0}
@@ -25,12 +25,12 @@
 }
 
 /* Copy labels under a backup: plain text plus a small semantic icon. */
-.cp-copies{grid-column:1/-1;grid-row:auto;display:flex;flex-wrap:wrap;align-items:center;gap:4px 24px;min-width:0}
-.cp-copy{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%}
+.cp-copies{grid-column:1/-1;grid-row:auto;display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.cp-copy{display:flex;align-items:center;flex-wrap:nowrap;gap:16px;min-width:0;max-width:100%;min-height:var(--lh-caption)}
 .cp-label{min-width:0;max-width:100%;gap:8px;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:400}
 .cp-label-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
 .cp-label-word{flex:none;font-weight:500}
-.cp-retry{flex:none;padding:0 16px}
+.cp-retry{flex:none;white-space:nowrap;padding:0 16px}
 
 /* Site card: the Storage row. */
 .site-metadata .cp-link{width:auto;min-height:0;height:auto;padding:0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500}
