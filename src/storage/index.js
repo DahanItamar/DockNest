@@ -59,6 +59,7 @@ export async function checkStorageReadiness(options=activeStorage()){
 export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
 // `options`: the site's main destination (src/site-storage.js); the default destination when omitted.
 export function backupDirectory(server,site,options=activeStorage()){
+ if(!options||typeof options!=='object')throw new TypeError('backupDirectory needs storage destination options');
  if(options.mode==='unconfigured')throw new Error('Connect a remote storage destination before backing up');
  const folders=backupLayout(server,site);
  return options.mode==='local'?local.backupDirectory(folders):targetPrefix(options)+path.posix.join(backupRoot(options.root),...folders);
