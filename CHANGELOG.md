@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Update Center: after an update from the command line, in-app updates no longer fail with "cannot confirm which version is installed". `scripts/upgrade.sh` run with `sudo` now registers the new version with the host updater; if it cannot, it tells you to run `sudo scripts/install-updater.sh --repair`, and the Update Center shows the same command.
+
 ## [2.11.0] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.0.md](docs/releases/2026-10-28-v2.11.0.md).
