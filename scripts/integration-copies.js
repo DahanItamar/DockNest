@@ -66,7 +66,8 @@ export async function runCopiesScenario({run,until,hosts,servers,db,record,siteI
   // A tampered copy (one byte flipped in the stored object) is refused; with the main gone there is nothing to restore from.
   const chunks=[];for await(const chunk of await openRead(copy.path))chunks.push(chunk);
   const original=Buffer.concat(chunks),bytes=Buffer.from(original);bytes[bytes.length>>1]^=1;
-  const put=async data=>{const output=await openWrite(copy.path);await new Promise((resolve,reject)=>{output.once('error',reject);output.end(data,resolve);});};
+  // The S3 adapter never overwrites an object, so remove it first; end()'s callback also receives write errors.
+  const put=async data=>{await removeFile(copy.path);const output=await openWrite(copy.path);await new Promise((resolve,reject)=>{output.once('error',reject);output.end(data,error=>error?reject(error):resolve());});};
   await put(bytes);
   await assert.rejects(verifyEncrypted(copy.path),'The tampered copy fails authentication');
   let refused=false;
