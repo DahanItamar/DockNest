@@ -198,6 +198,11 @@ function recordTransferProgress(job,value){
  details.transfer={done,total:Number.isFinite(total)?total:null,startedAt:previous.startedAt||now(),updatedAt:now()};
  db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
 }
+// Bind mounts of passwords, sudo rules or SSH keys are never copied (2.11.1); the helper lists them in the manifest.
+export function protectedMountWarning(items){
+ const list=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item.source==='string').slice(0,20).map(item=>`${item.source.slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
+ return list.length?`Not copied: ${list.join('; ')}. These mounts hold passwords, sudo rules or SSH keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
+}
 // Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
 function probeWarnings(job,skipped=[]){
  let details={};try{details=JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job)?.details||'{}');}catch{}
@@ -382,6 +387,7 @@ export async function executeJob(job){
   stage(job.id,'verifying');await syncFile(temporary);const checksum=await verifyEncrypted(temporary);
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
+  const notCopied=protectedMountWarning(manifest.protectedMounts);if(notCopied)warnings.push(notCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
