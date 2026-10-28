@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.
+
 ## [2.11.1] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.1.md](docs/releases/2026-10-28-v2.11.1.md).
