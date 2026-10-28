@@ -185,6 +185,41 @@ An administrator can ask DockNest to install nginx, Docker, Docker Compose or ce
 
 By default DockNest trusts no reverse proxy: the client address used by its rate limiters, including the public update progress endpoint, is the address of the socket peer, so behind a proxy every browser appears to share the proxy's address. To use the real client address, set `TRUST_PROXY` in `.env` to the exact address or CIDR of your proxy (for example the bundled Caddy's address on the Compose network). Hostnames, presets such as `loopback`, `true` and hop counts are refused when DockNest starts, so no peer is trusted by accident. Leave it unset when anything other than your proxy can reach the API. All rate limiters, the SQLite ones for sign-in, codes, invitations and the API and the in-memory one for the public update progress endpoint, count IPv4 clients per address and IPv6 clients per /64 prefix, because one subscriber normally holds a whole /64. An IPv4-mapped IPv6 address, dotted (`::ffff:203.0.113.7`) or hex (`::ffff:cb00:7107`), counts as its IPv4 address. See [Deployment](deployment.md).
 
+## Vulnerability radar
+
+The vulnerability radar tells you when a site runs a PHP or Node.js version with a known security flaw, or one that no longer gets security fixes. It only reads. It never updates, restarts or changes a container, a site or a server, and it uses no AI and no paid service. This backend is covered by unit tests and a Linux Docker integration case; it is not marked validated until that case passes on Linux.
+
+**What it reads.** Once a day per server, at a time chosen at random for each install, and after you discover containers on a server, the worker runs the helper's read-only `inventory` operation over the same pinned SSH connection as backups. For every container (500 at most) it reads:
+
+- the container name, its state, and the image name and ID;
+- from the image: its tags, digests, architecture and build date;
+- only these labels: `com.docker.compose.project`, `com.docker.compose.service`, and `org.opencontainers.image.version`, `.revision`, `.source` and `.base.name`;
+- the server's own `/etc/os-release` and Docker version.
+
+**Container probes (on by default).** For running containers that are not DockNest's own, it also runs three fixed commands with `docker exec`: `php -r 'echo PHP_VERSION;'`, `node -v` and `cat /etc/os-release`. They run without a shell and as the container's normal user. Each one may run for 5 seconds and return 512 bytes at most. The output must look like a version number, otherwise it is thrown away. From `os-release` only `ID`, `VERSION_ID` and `PRETTY_NAME` are kept. If a container has no shell, no PHP or no Node.js, that is normal and nothing is recorded.
+
+**Turning the probes off.** An administrator can set `containerProbes` to `false` (`PUT /api/radar/preferences` with `{ "containerProbes": false }`; the change is audited). The helper is then not asked to probe and runs no `docker exec` at all. DockNest judges versions from official image tags only, which is less certain (see below).
+
+**What it never reads.** Environment variables, the container command, mounts and volumes, other labels, files in the site, and logs. A server is not scanned while a backup, restore, site move, restore test or install is queued or running on it.
+
+**The advisory list.** It ships with each release inside the image (`src/radar/advisories.json`) and is trusted because the release itself is signed. DockNest does not download advisories in 2.12.0; there is no refresh setting. The list is small on purpose: only advisories with a public NVD record and their real publication date, and end-of-life dates from php.net and the Node.js release schedule. The code that checks an Ed25519-signed list (pinned key, size cap, newer serial only, expiry) is kept and tested for a signed refresh in a later release, but nothing calls it yet.
+
+**How sure a finding is.** A version read from inside the container, or from a pinned image tag that shows the patch level (`php:8.3.11-apache`), can be reported as affected. A floating tag (`php:8.3-apache`, `node:20`) does not show the patch level, so without a probe it is never reported as affected: it shows "Possibly affected", its severity is capped at medium, and the advice is "What to do: rebuild or pull the latest image to be sure." An image built after the advisory was published is not flagged. Images from other registries or by digest only are judged by their probe, or by the official tag the image itself carries.
+
+**Findings over time.** A finding that disappears is marked resolved and kept as history. An inventory cut at 500 containers, and a scan that fails (for example an unreachable server), resolve nothing. A dismissed finding stays dismissed while its kind and version stay the same; it comes back when either changes.
+
+**Alerts.** Two events join the alert catalogue, both opt-in per alert line like the others: `radar.finding_critical` (a new open finding of critical or high severity that is confirmed, not a floating-tag guess) and `radar.finding_resolved` (such a finding went away). Each finding alerts once while it stays open. Messages carry only the site (or container) name, the server name you typed and "PHP" or "Node.js", never a version, image, address or advisory text. The in-app summary is unchanged by alerts.
+
+**Nothing leaves the install.** The matching runs inside DockNest. Inventory and findings are stored only in DockNest's own database (migration 12, new tables only, which 2.11 ignores). A failed scan stores a fixed sentence, and logs only say that a scan failed, never what the server sent back. Signed-in operators can view findings and ask for a scan, at most once a minute. Only administrators can dismiss a finding or change preferences, and every such action is written to the audit log.
+
+**Owner decisions for 2.12.0.**
+
+1. Migration 12, `compatible: true`, new tables only; incremental backups take 13. 2.11 ignores the radar tables.
+2. Bundled advisory list only, trusted through the signed release; no network refresh and no refresh setting. A signed refresh comes in a later release.
+3. Container probes are on by default for running containers; one administrator switch, `containerProbes`, turns them off. Preferences are `{ containerProbes, changedBy, changedAt }`.
+4. Alerts go through the existing alert lines (`radar.finding_critical`, `radar.finding_resolved`), opt-in, once per finding, with no secrets in any message.
+5. A floating tag without a probe is "Possibly affected" with a capped severity and the advice to rebuild or pull the latest image; never affected from the tag alone.
+
 ## Host updater
 
 The containers never get the Docker socket. The optional host updater ([upgrading](upgrading.md#host-updater-and-update-center), [threat model](updater-threat-model.md)) is a root systemd service reached over a Unix socket in the `docknest_updater` volume, which only the `api` container mounts, read-only. It treats the volume as writable by a possibly compromised API: it reads one small request, accepts upgrades to final releases only, checks the signed `docknest-release.json` with a cosign it pinned by SHA-256 (as an unprivileged account), requires the tag to be on `main`, and runs the upgrade as the checkout's owner, not as root. It never adds anyone to the `docker` group. The pre-existing exposure remains: whoever is in the `docker` group, or root, controls the host. An update request needs an administrator who has just re-entered the shared password and an authenticator code. The public progress endpoint returns only the phase, target version, state and timestamps. This design is covered by unit tests only; it has not been validated on a real Linux Docker host.

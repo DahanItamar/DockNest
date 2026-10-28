@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Vulnerability radar, backend. A read-only helper operation, `inventory`, lists each container's image, tag, digest and a few whitelisted labels. On running containers it also asks for the PHP and Node.js version and `/etc/os-release` with fixed `docker exec` commands, each limited to 5 seconds and 512 bytes; administrators can turn these probes off. It never reads environment variables, commands, mounts or files. The worker scans each server once a day and after discovery, skips servers that are busy, and checks the advisory list bundled with the release (no download). A floating image tag such as `php:8.3-apache` is shown as "Possibly affected", never as affected. New API under `/api/radar` (summary, findings, scan, dismiss, preferences) and two opt-in alert events, `radar.finding_critical` and `radar.finding_resolved`. Migration 12 only adds tables, so 2.11 keeps running on the new schema ([docs/security.md](docs/security.md#vulnerability-radar)).
+
 ### Changed
 
 - Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.

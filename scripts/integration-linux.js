@@ -233,6 +233,22 @@ try {
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','group-stopped'),'false');
   record('Grouped restore preserves service DNS, snapshot database records, shared mounts and stopped state; fresh isolated networks publish no ports and reject external/host connections');
   const discovery=await remote(servers[0],{operation:'discover'});assert.ok(discovery.staticSites.some(site=>site.documentRoot===staticRoot));
+  // Vulnerability radar: the read-only inventory reads a PHP version through a fixed docker exec probe and changes nothing.
+  // The fixture image is Python on Alpine; a tiny `php` stand-in avoids pulling a PHP image inside the isolated host.
+  await run('exec',hosts[0],'docker','run','-d','--name','radar-php','--entrypoint','sh','docknest-fixture:local','-c','printf "#!/bin/sh\necho 8.3.10\n" > /usr/local/bin/php && chmod 755 /usr/local/bin/php && exec sleep 600');
+  const radarStates=async()=>run('exec',hosts[0],'docker','ps','-a','--no-trunc','--format','{{.ID}} {{.State}}');
+  await until(async()=>(await run('exec',hosts[0],'docker','exec','radar-php','php','-r','echo PHP_VERSION;')).trim()==='8.3.10','radar php stand-in did not start',30);
+  const radarBefore=await radarStates(),radarInventory=await remote(servers[0],{operation:'inventory'});
+  assert.equal(await radarStates(),radarBefore,'inventory starts, stops and removes nothing');
+  const radarPhp=radarInventory.containers.find(item=>item.name==='radar-php'),radarSite=radarInventory.containers.find(item=>item.name==='site-a');
+  assert.equal(radarPhp.runtime.php,'8.3.10');assert.equal(radarPhp.runtime.os.id,'alpine');assert.equal(radarSite.runtime.php,null,'a missing php binary is normal');
+  assert.ok(!JSON.stringify(radarInventory).includes('PEER_HEALTH')&&!JSON.stringify(radarInventory).includes('"Env"'),'no environment in the inventory');
+  const {matchAll}=await import('../src/radar/match.js'),{componentsOf,bundledFeed}=await import('../src/radar/scan.js');
+  assert.ok(matchAll(componentsOf(radarPhp),bundledFeed()).some(finding=>finding.kind==='vulnerable'&&finding.component.product==='php'));
+  assert.ok((await remote(servers[0],{operation:'inventory',probes:false})).containers.every(item=>item.runtime===null),'probes off runs no docker exec');
+  assert.equal(await radarStates(),radarBefore,'probes off changes nothing either');
+  await run('exec',hosts[0],'docker','rm','-f','radar-php');
+  record('Vulnerability radar inventory reads image metadata and a PHP version through fixed docker exec probes on a real Linux Docker host, leaves every container state unchanged and keeps environment variables out');
   const staticId=randomUUID(),staticCfg={kind:'static',documentRoot:staticRoot,containers:[],configFiles:['/etc/nginx/conf.d/static.conf'],composeFiles:[],stagingRoot:'/var/lib/docknest',healthUrl:'http://127.0.0.1:8084/',domains:['static.example.invalid'],externalReferencesConfirmed:true,exclusiveSourcesConfirmed:true,maintenanceRequired:false};
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(staticId,servers[0].id,'Static QA website',JSON.stringify(staticCfg),new Date().toISOString());
   assert.equal((await checkReadiness(staticId)).ready,true);enqueueBackup(staticId,'qa');const staticJob=claimJob();await executeJob(staticJob);
