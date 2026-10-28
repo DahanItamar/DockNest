@@ -172,6 +172,12 @@ def response(accepted, value, extra=None):
 CGROUP_FORMS = (re.compile(r'\A/system\.slice/docker-([0-9a-f]{64})\.scope\Z'), re.compile(r'\A/docker/([0-9a-f]{64})\Z'))
 
 
+def cgroup_paths(text):
+    """The cgroup paths of a peer, printable and bounded, for the refusal log line."""
+    paths = ','.join(dict.fromkeys(line.split(':', 2)[2] for line in text.splitlines() if line.count(':') >= 2))
+    return ''.join(ch if ch.isprintable() else '?' for ch in paths)[:300] or 'unknown'
+
+
 def cgroup_container(text, parent=None):
     """The one container id named by /proc/<pid>/cgroup, or None (N2)."""
     found = set()
@@ -796,13 +802,15 @@ class Broker:
         try: pidfd = conn.getsockopt(socket.SOL_SOCKET, 77)  # SO_PEERPIDFD, Linux 6.5+
         except OSError: pass
         try:
-            with open('/proc/%d/cgroup' % pid, encoding='utf-8') as handle: container = cgroup_container(handle.read(65536), self.cfg.get('cgroupParent'))
+            with open('/proc/%d/cgroup' % pid, encoding='utf-8') as handle: cgroups = handle.read(65536)
+            container = cgroup_container(cgroups, self.cfg.get('cgroupParent'))
             if pidfd is not None: signal.pidfd_send_signal(pidfd, 0)
         except OSError: raise Refused('invalid', 'peer process gone')
         finally:
             if pidfd is not None: os.close(pidfd)
         api = self.host.api_container()
-        if container != api['Id']: raise Refused('invalid', 'peer is not the api container')
+        # The cgroup path is not secret and shows why a caller was refused (for example a cgroup_parent or nested LXC).
+        if container != api['Id']: raise Refused('invalid', 'peer is not the api container (cgroup %s)' % cgroup_paths(cgroups))
         return {'pid': pid, 'uid': uid, 'container': container}, api
 
     def handle(self, conn):

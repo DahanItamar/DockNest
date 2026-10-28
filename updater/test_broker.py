@@ -97,6 +97,10 @@ class RequestTests(unittest.TestCase):
         self.assertIsNone(b.cgroup_container(nested))
         self.assertIsNone(b.cgroup_container('1:name=systemd:/x/system.slice/docker-%s.scope' % cid))
         self.assertEqual(b.cgroup_container('1:name=systemd:/system.slice/docker-%s.scope\n0::/system.slice/docker-%s.scope' % (cid, cid)), cid)
+        # A refusal logs the peer's cgroup paths (not secret), bounded and printable, to diagnose cgroup_parent or LXC.
+        self.assertEqual(b.cgroup_paths(nested + '\n1:name=systemd:/x\x1b\n'), nested[3:] + ',/x?')
+        self.assertEqual(len(b.cgroup_paths('0::/' + 'a' * 1000)), 300)
+        self.assertEqual(b.cgroup_paths(''), 'unknown')
 
 
 class PolicyTests(unittest.TestCase):
