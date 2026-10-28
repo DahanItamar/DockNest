@@ -70,7 +70,7 @@ try {
     assert.ok(await region.getByRole('heading', { name: 'Growth' }).count(), label + ': Growth card');
     const tiles = region.locator('.sr-metrics .berry-metric-compact');
     assert.equal(await tiles.count(), 4, label + ': four metric tiles');
-    assert.deepEqual(await tiles.locator('.metric-label').allInnerTexts(), ['Stored', 'Capacity used', 'Growth', 'Incremental saving'], label);
+    assert.deepEqual(await tiles.locator('.metric-label').allInnerTexts(), ['Stored', 'Capacity used', 'Growth', 'Possible saving'], label);
     assert.match(await tiles.nth(0).locator('strong').innerText(), /^\d+(\.\d)? (GB|TB)$/, label + ': decimal size in the Stored tile');
     assert.match(await tiles.nth(2).locator('small').innerText(), /^Since [A-Z][a-z]{2} \d{1,2}$/, label + ': a short history says Since <date>, not 30 days');
     assert.match(await tiles.nth(3).locator('strong').innerText(), /^About \d+%$/, label);
