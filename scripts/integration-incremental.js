@@ -103,9 +103,17 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-6')\");db.execute(\"UPDATE notes SET body='note-6' WHERE id>1\")"); await sh('cd /site && rm -r db && echo "db is a file now" > db && chmod 600 da/f.txt && chown 2000:2000 uploads/archive-2026/a/f13.txt && echo "unicode" > "uploads/ünï cöde name.txt"'); },
     ];
     const points = [];
+    let previousInspect = null;
     for (let index = 0; index < changes.length; index++) {
       if (changes[index]) { await changes[index](); await healthy(); }
       const expected = await tree(source, app);
+      // Diagnostic for the "plan-changed" fallback: which parts of the container's inspect output differ from the
+      // previous backup. Only key paths and short values of the fixture container are printed (Env is skipped).
+      const inspected = JSON.parse(await run('exec', source, 'docker', 'inspect', app))[0];
+      const flat = (value, path = '', out = {}) => { if (value && typeof value === 'object') { for (const [key, item] of Object.entries(value)) if (path !== 'Config' || key !== 'Env') flat(item, path ? path + '.' + key : key, out); } else out[path] = String(value).slice(0, 60); return out; };
+      const now = flat({ Id: inspected.Id, Image: inspected.Image, Config: inspected.Config, HostConfig: inspected.HostConfig, Mounts: inspected.Mounts, Networks: inspected.NetworkSettings.Networks });
+      if (previousInspect) { const changed = Object.keys({ ...previousInspect, ...now }).filter(key => previousInspect[key] !== now[key]); console.log('Incremental fixture inspect differences since the previous backup: ' + (changed.length ? changed.map(key => `${key}: ${previousInspect[key]} -> ${now[key]}`).join('; ') : 'none')); }
+      previousInspect = now;
       const queued = enqueueBackup(siteId, 'qa'), job = claimJob();
       assert.equal(job.id, queued.id);
       await executeJob(job);
