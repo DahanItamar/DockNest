@@ -21,7 +21,8 @@ export function eligibility({ base, current, latest = null, minUpgradeFrom = nul
     const again = repeated || updater.blockedReason === 'repeated-rollback';
     return { state: 'updater-blocked', offer: { ...none, blocked: { code: 'UPDATER_BLOCKED', message: again ? messages.repeated : messages.blocked } }, canStart: false };
   }
-  const mismatch = lastRequest?.state === 'refused' && lastRequest.refusal === 'state-mismatch' && lastRequest.from_version === current;
+  // reason 'repaired': install-updater.sh recorded this version afterwards (2.11.1), so the refusal no longer applies.
+  const mismatch = lastRequest?.state === 'refused' && lastRequest.refusal === 'state-mismatch' && lastRequest.from_version === current && lastRequest.reason !== 'repaired';
   // 2.11.1: a refusal the broker marked pin-missing is fixed on the host with --repair, which this API cannot see. It
   // does not block: the offer stays with a notice, and the next request is checked by the broker again.
   const pinMissing = mismatch && lastRequest.reason === 'pin-missing';

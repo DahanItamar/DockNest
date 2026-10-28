@@ -104,6 +104,9 @@ test('eligibility follows the table: the first matching row wins', () => {
     assert.equal(generic.state, 'updater-state-mismatch', String(other)); assert.doesNotMatch(generic.offer.blocked.message, /--repair/);
   }
   assert.equal(state({}).offer.notice, undefined);
+  // After install-updater.sh --repair recorded the version, its earlier refusals (marked repaired) no longer apply.
+  const repaired = state({ lastRequest: { state: 'refused', refusal: 'state-mismatch', reason: 'repaired', from_version: '2.2.0' } });
+  assert.deepEqual([repaired.state, repaired.canStart, repaired.offer.blocked, repaired.offer.notice], ['update-available', true, null, undefined]);
   assert.equal(state({ hold: true }).canStart, false); assert.equal(state({ hold: true }).offer.blocked.code, 'UPDATE_ON_HOLD'); assert.equal(state({ hold: true }).offer.update.version, 'v2.3.0');
   assert.equal(state({ hold: true, recoveryPending: true }).offer.blocked.code, 'RECOVERY_REVIEW_REQUIRED');
   for (const base of ['consent-pending', 'checks-off']) assert.deepEqual([state({ base }).state, state({ base }).offer.update], [base, null]);

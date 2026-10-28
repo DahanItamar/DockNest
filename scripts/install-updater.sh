@@ -56,6 +56,14 @@ close_requests() {
   n=$(in_api 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite");d.exec("PRAGMA busy_timeout=5000");const t=d.prepare("SELECT 1 FROM sqlite_master WHERE type=? AND name=?").get("table","update_requests");console.log(t?d.prepare("UPDATE update_requests SET state=?,finished_at=COALESCE(finished_at,?) WHERE state=?").run("resolved",new Date().toISOString(),"needs_action").changes:0);d.close()' 2>/dev/null | tail -n 1) || n=''
   case "$n" in ''|*[!0-9]*) echo 'WARNING: could not update the dashboard (is DockNest running?); it shows the result once the API reads the updater state.' >&2 ;; 0) ;; *) echo "Closed $n dashboard request(s) that needed manual action." ;; esac
 }
+# 2.11.1: requests refused with state-mismatch on this version (for example after a command-line upgrade left no pin)
+# stop blocking the Update Center once the installed release is recorded. The rows stay refused in the history; the
+# reason 'repaired' tells the API the host was repaired. The version is digits and dots only before it enters the script.
+clear_mismatch() {
+  case "$1" in ''|*[!0-9.]*) return 0 ;; esac
+  n=$(in_api 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite");d.exec("PRAGMA busy_timeout=5000");const t=d.prepare("SELECT 1 FROM sqlite_master WHERE type=? AND name=?").get("table","update_requests");console.log(t?d.prepare("UPDATE update_requests SET reason=? WHERE state=? AND refusal=? AND from_version=? AND reason IS NOT ?").run("repaired","refused","state-mismatch","'"$1"'","repaired").changes:0);d.close()' 2>/dev/null | tail -n 1) || n=''
+  case "$n" in ''|*[!0-9]*) echo 'WARNING: could not update the dashboard (is DockNest running?); if the Update Center still says it cannot confirm the installed version, run --repair again.' >&2 ;; 0) ;; *) echo "The Update Center no longer blocks updates because of $n earlier refusal(s) on v$1." ;; esac
+}
 
 case "$MODE" in
   status)
@@ -190,6 +198,7 @@ if [ "$MODE" = install ] || ! grep -q "\"v$CURRENT\"" "$STATE/pins.json" 2>/dev/
     echo "WARNING: v$CURRENT could not be verified; in-app updates are refused (state-mismatch) until --repair verifies it." >&2
   fi
 fi
+if grep -q "\"v$CURRENT\"" "$STATE/pins.json" 2>/dev/null; then clear_mismatch "$CURRENT"; fi
 broker publish-service
 systemctl enable docknest-updater.socket >/dev/null 2>&1
 systemctl restart docknest-updater.socket
