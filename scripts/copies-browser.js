@@ -66,6 +66,9 @@ async function open(viewport, colorScheme, { copies = true, targets = TARGETS, o
       if (copies) {
         for (const site of json.sites) site.storage = siteStorage[site.id];
         for (const backup of json.backups) { const key = idToKey[backup.id]; if (key?.startsWith('site-1')) { backup.mainTarget = main; backup.copies = COPIES[key] || []; if (key === 'site-1#1') backup.mainRemoved = true; } else if (key) { backup.mainTarget = main; backup.copies = []; } }
+      } else { // the real 2.11 server already adds these; strip them to look like a pre-2.11 server
+        for (const site of json.sites) delete site.storage;
+        for (const backup of json.backups) { delete backup.mainTarget; delete backup.copies; delete backup.mainRemoved; }
       }
       return route.fulfill({ response, json });
     }
