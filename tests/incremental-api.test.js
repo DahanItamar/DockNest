@@ -61,7 +61,22 @@ test('GET and PUT /api/sites/:id/incremental: off by default, admin only, valida
   assert.equal((await json(await admin('PUT', '/sites/site/incremental', { enabled: true, extra: 1 }))).status, 400);
   const on = await json(await admin('PUT', '/sites/site/incremental', { enabled: true, interval: 13 }));
   assert.deepEqual(on.body, { siteId: 'site', enabled: true, interval: 13, fullNext: true, fullNextReason: 'feature-enabled', fullNextMessage: 'This is the first backup since incremental backups were turned on.', available: true, beta: true });
-  assert.equal((await json(await admin('PUT', '/sites/site/incremental', { fullNow: true }))).body.fullNextReason, 'full-now');
+  // Full backup now: an operator may ask (like Back up now); it marks the next backup full and queues it at once.
+  assert.equal((await operator('PUT', '/sites/site/incremental', { fullNow: true, interval: 6 })).status, 403, 'settings stay admin-only');
+  const now = await json(await operator('PUT', '/sites/site/incremental', { fullNow: true }));
+  assert.equal(now.status, 202); assert.equal(now.body.fullNextReason, 'full-now');
+  assert.deepEqual({ ...db.prepare('SELECT type,status,site_id FROM jobs WHERE id=?').get(now.body.job.id) }, { type: 'backup', status: 'queued', site_id: 'site' });
+  assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='backup.full_now' AND target='site'").get());
+  // The busy guard of Back up now: refused, nothing queued, and the mark goes back to what it was.
+  db.prepare("UPDATE site_incremental SET force_full=3 WHERE site_id='site'").run();
+  const busy = await operator('PUT', '/sites/site/incremental', { fullNow: true });
+  assert.ok(busy.status >= 400); assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE site_id='site' AND status='queued'").get().n, 1);
+  assert.equal(db.prepare("SELECT force_full FROM site_incremental WHERE site_id='site'").get().force_full, 3);
+  db.prepare('DELETE FROM jobs WHERE id=?').run(now.body.job.id);
+  // /api/state carries the setting for Docker sites only.
+  const state = (await json(await operator('GET', '/state'))).body;
+  assert.deepEqual(state.sites.find(item => item.id === 'site').incremental, { enabled: true, interval: 13 });
+  assert.equal('incremental' in state.sites.find(item => item.id === 'static'), false);
   remoteCalls.length = 0;
   assert.equal((await json(await admin('PUT', '/sites/site/incremental', { enabled: false }))).body.enabled, false);
   assert.deepEqual(remoteCalls.map(call => [call.operation, call.siteKey]), [['incremental-discard', 'site']]);

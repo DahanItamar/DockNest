@@ -63,7 +63,7 @@ export function updateIncrementalSettings(siteId, body, actor, { staticSite = fa
     db.prepare('INSERT INTO site_incremental(site_id,enabled,interval,force_full,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,interval=excluded.interval,force_full=excluded.force_full,updated_at=excluded.updated_at')
       .run(siteId, Number(enabled), interval, force, new Date().toISOString());
     audit(actor, 'site.incremental_update', siteId, { enabled, interval, ...(input.fullNow ? { fullNow: true } : {}) });
-    return { settings: incrementalSettings(siteId), discard: before.enabled && !enabled };
+    return { settings: incrementalSettings(siteId), discard: before.enabled && !enabled, previousForce: before.forceFull };
   });
 }
 export function setForceFull(siteId, value) {
