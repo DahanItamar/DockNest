@@ -286,6 +286,8 @@ try {
   // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.
   evidence.failure = error.message.startsWith('Command failed:') ? 'Docker fixture command failed; inspect the isolated test environment' : error.message;
   console.error(evidence.failure); process.exitCode = 1;
+  // Code locations only (file:line from src/ and scripts/), never messages or arguments.
+  for (const frame of String(error.stack || '').split('\n').filter(line => /^\s+at .*[\\/](src|scripts)[\\/][\w./-]+:\d+:\d+\)?$/.test(line)).slice(0, 8)) console.error(frame.replace(/^.*?[\\/]((?:src|scripts)[\\/][\w./-]+:\d+:\d+)\)?$/, '  at $1'));
 } finally {
   for (const host of hosts) await run('rm', '-f', '-v', host).catch(() => {});
   db?.close();
