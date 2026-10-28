@@ -186,6 +186,20 @@ that are not copied again when you upgrade once more; the Connections page then 
 Replacing a secret or deleting a migrated Connection in 2.10 also removes its 2.8 copy, so after going back those 2.8
 nodes need a credential and send nothing.
 
+## Backup copies in 2.11
+
+Storage per site and backup copies are new in 2.11. Nothing needs doing and nothing changes until you configure them:
+
+- Migration 11 (compatible) only adds tables (per-site storage, copy list and copy status). Existing sites keep using
+  the default destination with no copies, and existing backups are not copied or moved.
+- After you add a copy destination to a site, each new backup is also copied there in the background. Copies are the
+  same encrypted package, so the same master key opens them.
+- Recovery kits are also written to every other destination that holds copies.
+
+**Going back to 2.10.** Schema 11 is compatible, so 2.10 starts on the same database. It ignores copy settings and
+backs up and restores from the main copy only. Copies already made stay where they are. 2.10 does not know about them: when its retention removes a backup, that
+backup's copies are left behind, and 2.11 deletes them on its next maintenance run after you upgrade again.
+
 ## Use the published image
 
 Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Only final releases are published; release candidates are validated privately and get no image or GitHub Release. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.

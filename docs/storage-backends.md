@@ -124,6 +124,28 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   kit. A kit there is removed only after a newer one was written to that same destination.
 - Real copies and restores count as validated only after the Linux integration suite passes.
 
+### Using copies
+
+- **Set up.** In the site's storage settings keep "Default" or pick another main destination, then add up to three copy
+  destinations, each with its own retention (empty means the site's count). A copy destination cannot be the main one,
+  the same bucket or folder twice, or a folder inside another destination. API: `GET` and `PUT /api/sites/:id/storage`
+  (administrator, recent sign-in). Nothing is copied retroactively; existing backups stay where they are.
+- **While it runs.** The backup is complete when the main copy is verified; copies follow in the background and never
+  extend the site's downtime. Each backup shows one chip per copy (verified, copying, missing). A site shows
+  "Copy missing" until every configured copy is verified.
+- **Failures.** A failed copy is retried automatically (5 minutes, 30 minutes, 2 hours, then every 6 hours, for up to
+  7 days), then marked "gave up". The next backup tries again, and **Retry** (`POST /api/backups/:id/copies/:targetId/retry`)
+  starts a fresh window. Alerts: `backup.copy_failed` on the first failure and `backup.copy_recovered`; they name the
+  destination, never credentials.
+- **Retention.** Each destination keeps its own number of backups; a pin keeps a backup on every destination. If a
+  destination uses Object Lock, only its copy waits for the lock to end.
+- **Restore from a copy.** Restore uses the main copy. If it is missing or fails authentication, DockNest uses the first
+  verified copy that authenticates (newest first) and says which destination it used in the job and the audit log. You
+  can also choose a copy directly. A copy that fails authentication is never restored from.
+- **Removing a destination.** A destination that still holds copies, main packages or recovery kits, is the default, or
+  is used by a site cannot be removed. The Storage page shows how many copies and offers "Delete these copies"; copies
+  cannot be moved to another destination.
+
 ## Verification status
 
 - **Unit tests:** `tests/s3-storage.test.js` runs against `tests/s3-fixture.js`, an in-process fake S3 endpoint on loopback. The fake checks SigV4 signatures and payload hashes independently. The tests cover multipart streaming and abort, ranged reads, part copies, journal publication and reconciliation, the connect and test API without credential disclosure, and Object Lock application, deletion refusal and expiry.

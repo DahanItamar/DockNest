@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Storage per site: a site can use its own main backup destination instead of the default one.
+- Backup copies: keep up to three extra copies of each backup on other destinations (for example SFTP plus S3). Copies follow in the background, retry on failure, send alerts, keep their own retention and can be used to restore if the main copy is gone.
+
 ### Changed
 
 - S3-compatible storage is no longer beta.
