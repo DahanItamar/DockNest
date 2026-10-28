@@ -241,7 +241,10 @@ try {
   const radarBefore=await radarStates(),radarInventory=await remote(servers[0],{operation:'inventory'});
   assert.equal(await radarStates(),radarBefore,'inventory starts, stops and removes nothing');
   const radarPhp=radarInventory.containers.find(item=>item.name==='radar-php'),radarSite=radarInventory.containers.find(item=>item.name==='site-a');
-  assert.equal(radarPhp.runtime.php,'8.3.10');assert.equal(radarPhp.runtime.os.id,'alpine');assert.equal(radarSite.runtime.php,null,'a missing php binary is normal');
+  // On failure, print the two inventory entries (image metadata, whitelisted labels and probe results only; no env or mounts).
+  const radarEntries=()=>JSON.stringify({probes:radarInventory.probes,truncated:radarInventory.truncated,probeBudgetExceeded:radarInventory.probeBudgetExceeded,radarPhp,radarSite});
+  assert.ok(radarPhp?.runtime,'radar probe did not run: '+radarEntries());
+  assert.equal(radarPhp.runtime.php,'8.3.10',radarEntries());assert.equal(radarPhp.runtime.os.id,'alpine');if(radarSite?.running)assert.equal(radarSite.runtime?.php,null,'a missing php binary is normal: '+radarEntries());
   assert.ok(!JSON.stringify(radarInventory).includes('PEER_HEALTH')&&!JSON.stringify(radarInventory).includes('"Env"'),'no environment in the inventory');
   const {matchAll}=await import('../src/radar/match.js'),{componentsOf,bundledFeed}=await import('../src/radar/scan.js');
   assert.ok(matchAll(componentsOf(radarPhp),bundledFeed()).some(finding=>finding.kind==='vulnerable'&&finding.component.product==='php'));

@@ -97,6 +97,12 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(all(c['runtime'] is None for c in result['containers']))
         result=scan(FakeDocker([container(1)]));self.assertFalse(result['truncated']);self.assertFalse(result['probeBudgetExceeded'])
 
+    def test_own_container_matches_docknest_images_only(self):
+        own=lambda image,project='':helper.own_container({'Config':{'Image':image}},{'com.docker.compose.project':project} if project else {})
+        for image in ['docknest:local','ghcr.io/dahanitamar/docknest:2.12.0','docknest@sha256:'+'a'*64,'docknest','docknest-api','docknest_worker:latest']:self.assertTrue(own(image),image)
+        for image in ['docknest-fixture:local','acme/docknest-theme:1','mydocknest:1','php:8.3-apache']:self.assertFalse(own(image),image)
+        self.assertTrue(own('php:8.3','docknest'));self.assertTrue(own('php:8.3','docknest-restore-abc'));self.assertFalse(own('php:8.3','shop'))
+
     def test_os_release_whitelist(self):
         self.assertEqual(parse_os_release('NAME=x\nID=ubuntu\nVERSION_ID="24.04"\nPASSWORD=y\n'),{'id':'ubuntu','versionId':'24.04'})
         self.assertIsNone(parse_os_release('NAME=only'))

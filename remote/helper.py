@@ -3665,10 +3665,13 @@ def probe_container(cid):
     except UnicodeError:runtime['os']=None
     return runtime
 def own_container(c,labels):
-    # DockNest's own api/worker and its restore copies are never probed.
+    # DockNest's own api/worker (Compose project `docknest`, image `docknest:local` or `<registry>/docknest:<version>`) and its
+    # restore copies (project `docknest-restore-*`) are never probed. Only the exact repository name `docknest` (or the
+    # Compose default names `docknest-api`/`docknest_worker`) counts: an owner's image such as `docknest-fixture` or
+    # `acme/docknest-theme` is an ordinary container and is probed like any other.
     project=labels.get('com.docker.compose.project') or ''
     image=(c.get('Config') or {}).get('Image') or ''
-    return bool(re.match(r'docknest(?:-|$)',project)) or bool(re.match(r'(?:[^/]+/)*docknest(?:[-_][^/:@]*)?(?:[:@]|$)',image))
+    return bool(re.match(r'docknest(?:-|$)',project)) or bool(re.fullmatch(r'(?:[^/]+/)*docknest(?:[-_](?:api|worker))?(?:[:@].*)?',image))
 def inventory_strings(values,limit=20):
     return [text for text in (inventory_text(value,300) for value in (values if isinstance(values,list) else [])[:limit]) if text]
 def inventory_inspect(ids):
