@@ -2,8 +2,9 @@
 // Read-only towards servers: the only remote call is the helper's `inventory` operation. Nothing leaves the install.
 import { randomUUID, randomInt } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { loadBundledFeed } from './feed.js';
-import { matchAll } from './match.js';
+import { loadBundledFeed, cleanText } from './feed.js';
+import { matchComponent } from './match.js';
+import { isFullVersion } from './version.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const MANUAL_INTERVAL_MS = 60 * 1000;
@@ -29,11 +30,13 @@ export function imageTagVersion(image, product) {
   return /^(\d{1,4}(?:\.\d{1,4}){0,2})(?:$|[-_])/.exec(m[2])?.[1] ?? null;
 }
 
+// The helper already validates probe output; it is checked again here because it crossed the network from a server.
+export const RUNTIME_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:[-+~.][A-Za-z0-9.+~-]{1,32})?$/;
 export function componentsOf(item) {
   const out = [], runtime = item.runtime && typeof item.runtime === 'object' ? item.runtime : {};
   const refs = [item.image, ...(Array.isArray(item.repoTags) ? item.repoTags : [])];
   for (const product of PRODUCTS) {
-    if (typeof runtime[product] === 'string') { out.push({ product, version: runtime[product], source: 'runtime' }); continue; }
+    if (typeof runtime[product] === 'string' && RUNTIME_VERSION.test(runtime[product])) { out.push({ product, version: runtime[product], source: 'runtime' }); continue; }
     const version = refs.map(ref => imageTagVersion(ref, product)).find(Boolean);
     if (version) out.push({ product, version, source: 'image-tag', imageCreated: typeof item.imageCreated === 'string' ? item.imageCreated : null });
   }
@@ -128,12 +131,20 @@ const ALERT_SEVERITIES = "('critical','high')";
 const auditRow = (db, action, target, detail) => db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?)').run(randomUUID(), 'worker', action, target, JSON.stringify(detail), new Date().toISOString());
 const KEEP = ['id', 'name', 'image', 'imageId', 'repoTags', 'repoDigests', 'architecture', 'imageCreated', 'state', 'running', 'own', 'labels', 'runtime'];
 // Stores the inventory, upserts findings seen in this scan and resolves the ones that vanished. Pure database work.
+// How sure a component is: read from inside the container (3), a pinned image tag with the patch level (2), a floating
+// tag (1), nothing (0). A scan never replaces or resolves findings it saw with less confidence than before.
+export const confidence = (source, version) => source === 'runtime' ? 3 : source === 'image-tag' ? (isFullVersion(version) ? 2 : 1) : 0;
 export function recordScan(db, scan, result, { feed = bundledFeed(), now = Date.now(), probes = true } = {}) {
-  const at = iso(now), containers = Array.isArray(result?.containers) ? result.containers : [];
+  // A malformed answer is a failed scan (tickRadar's catch), never "no containers", which would resolve every finding.
+  if (!result || typeof result !== 'object' || !Array.isArray(result.containers)) throw new Error('The inventory answer has no container list.');
+  const at = iso(now), containers = result.containers;
   const sites = db.prepare('SELECT id,name,config FROM sites WHERE server_id=?').all(scan.server_id).map(site => { try { return { ...site, config: JSON.parse(site.config) }; } catch { return { ...site, config: {} }; } });
   return tx(db, () => {
     syncAdvisories(db, feed, at);
+    const previousImage = new Map(db.prepare('SELECT container_key,data FROM radar_inventory WHERE server_id=?').all(scan.server_id).map(row => { try { return [row.container_key, JSON.parse(row.data).imageId ?? null]; } catch { return [row.container_key, null]; } }));
     db.prepare('DELETE FROM radar_inventory WHERE server_id=?').run(scan.server_id);
+    const openFor = db.prepare('SELECT id,source,version FROM radar_findings WHERE container_key=? AND product=? AND resolved_at IS NULL');
+    const touch = db.prepare('UPDATE radar_findings SET last_seen_at=?,server_id=?,site_id=?,container_name=? WHERE id=?');
     const inventory = db.prepare('INSERT OR REPLACE INTO radar_inventory(server_id,container_key,container_id,name,site_id,scan_id,data,seen_at) VALUES(?,?,?,?,?,?,?,?)');
     const upsert = db.prepare(`INSERT INTO radar_findings(id,container_key,server_id,site_id,container_name,advisory_id,kind,severity,product,version,source,fixed_in,evidence,first_seen_at,last_seen_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(container_key,advisory_id) DO UPDATE SET server_id=excluded.server_id,site_id=excluded.site_id,container_name=excluded.container_name,
@@ -141,17 +152,31 @@ export function recordScan(db, scan, result, { feed = bundledFeed(), now = Date.
       dismissed_by=CASE WHEN radar_findings.kind=excluded.kind AND radar_findings.version IS excluded.version THEN radar_findings.dismissed_by END,
       dismiss_reason=CASE WHEN radar_findings.kind=excluded.kind AND radar_findings.version IS excluded.version THEN radar_findings.dismiss_reason END,
       kind=excluded.kind,severity=excluded.severity,product=excluded.product,version=excluded.version,source=excluded.source,fixed_in=excluded.fixed_in,evidence=excluded.evidence,last_seen_at=excluded.last_seen_at,resolved_at=NULL`);
-    let findings = 0;
-    for (const item of containers) {
-      if (!item || typeof item !== 'object' || item.own) continue;
+    let findings = 0, carried = 0;
+    for (const raw of containers) {
+      if (!raw || typeof raw !== 'object' || raw.own) continue;
+      const item = { ...raw, name: cleanText(raw.name, 200) || null, image: cleanText(raw.image, 300) || null };
       const key = containerKey(scan.server_id, item), site = siteFor(sites, item);
       let data = JSON.stringify(Object.fromEntries(KEEP.filter(name => name in item).map(name => [name, item[name]])));
       if (data.length > 16384) data = JSON.stringify({ id: item.id, name: item.name, image: item.image, truncated: true });
       inventory.run(scan.server_id, key, str(item.id, 64), str(item.name, 200), site?.id ?? null, scan.id, data, at);
-      for (const finding of matchAll(componentsOf(item), feed, { today: new Date(now) })) {
-        const c = finding.component;
-        upsert.run(randomUUID(), key, scan.server_id, site?.id ?? null, str(item.name, 200), finding.advisoryId, finding.kind, finding.severity, c.product, str(c.version, 64), c.source, finding.fixedIn, str(finding.evidence, 512), at, at);
-        findings += 1;
+      const components = componentsOf(item), before = previousImage.get(key);
+      // Same image as last time (or unknown): a stopped container, a probe that timed out or probes switched off keep what
+      // a better look found before. A new image is judged afresh, so a rebuilt container can resolve its old findings.
+      const sameImage = !before || !item.imageId || before === item.imageId;
+      for (const product of PRODUCTS) {
+        const component = components.find(c => c.product === product), seen = component ? confidence(component.source, component.version) : 0;
+        const open = openFor.all(key, product);
+        if (sameImage && open.some(row => confidence(row.source, row.version) > seen)) {
+          for (const row of open) touch.run(at, scan.server_id, site?.id ?? null, str(item.name, 200), row.id);
+          carried += open.length; continue;
+        }
+        if (!component) continue;
+        for (const finding of matchComponent(component, feed, { today: new Date(now) })) {
+          const c = finding.component;
+          upsert.run(randomUUID(), key, scan.server_id, site?.id ?? null, str(item.name, 200), finding.advisoryId, finding.kind, finding.severity, c.product, str(c.version, 64), c.source, finding.fixedIn, str(finding.evidence, 512), at, at);
+          findings += 1;
+        }
       }
     }
     // Alerts (docs/alerts.md): one audit row per transition, read by src/alerts/detect.js. alerted_at makes it fire once per
@@ -168,7 +193,7 @@ export function recordScan(db, scan, result, { feed = bundledFeed(), now = Date.
       db.prepare('UPDATE radar_findings SET alerted_at=? WHERE id=?').run(at, row.id);
     }
     db.prepare("UPDATE radar_scans SET status='completed',finished_at=?,containers=?,findings=?,feed_serial=?,probes=?,error=NULL WHERE id=?").run(at, containers.length, findings, feed.serial, probes ? 1 : 0, scan.id);
-    return { containers: containers.length, findings, truncated: result?.truncated === true };
+    return { containers: containers.length, findings, carried, truncated: result?.truncated === true };
   });
 }
 

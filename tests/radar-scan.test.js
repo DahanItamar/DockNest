@@ -80,24 +80,69 @@ test('a scan maps containers to sites, upserts findings, keeps dismissals and re
   recordScan(db, scanRow(serverA), inventory('20.10.0'), { now: now + 5000 });
   const reopened = db.prepare('SELECT * FROM radar_findings WHERE id=?').get(finding.id);
   assert.equal(reopened.resolved_at, null); assert.equal(reopened.dismissed_at, null, 'a different version clears the dismissal'); assert.equal(reopened.first_seen_at, finding.first_seen_at);
-  db.prepare("UPDATE radar_findings SET dismissed_at='y' WHERE id=?").run(finding.id);
-  recordScan(db, scanRow(serverA), { ...inventory(null), probes: false }, { now: now + 6000, probes: false });
-  const tagOnly = db.prepare('SELECT * FROM radar_findings WHERE id=?').get(finding.id);
-  assert.deepEqual([tagOnly.kind, tagOnly.severity, tagOnly.dismissed_at], ['likely', 'medium', null], 'probes off: floating tag only, never vulnerable; a new kind clears the dismissal');
+  db.prepare('DELETE FROM radar_findings').run();
 });
 
-test('more than 500 containers: the capped inventory resolves nothing; garbage runtime output is unknown, not a crash', () => {
+test('a scan never downgrades what a better look found: stop/start, probes off and on, probe timeout, new image', () => {
+  db.prepare('DELETE FROM radar_findings').run(); db.prepare("DELETE FROM audit_events WHERE action LIKE 'radar.%'").run();
+  const now = Date.parse('2026-10-23T18:00:00Z'), image = 'sha256:' + '1'.repeat(64), withImage = (node, extra = {}) => ({ helperVersion: 1, probes: true, truncated: false, containers: [shop(node, { imageId: image, ...extra })] });
+  const row = () => db.prepare("SELECT * FROM radar_findings WHERE server_id=? AND advisory_id='DN-2024-0001'").get(serverA);
+  const alerts = action => db.prepare('SELECT COUNT(*) AS n FROM audit_events WHERE action=?').get(action).n;
+  recordScan(db, scanRow(serverA), withImage('20.11.0'), { now });
+  const first = row(); assert.equal(first.kind, 'vulnerable'); assert.equal(alerts('radar.finding_critical'), 1);
+  db.prepare("UPDATE radar_findings SET dismissed_at='kept',dismissed_by=? WHERE id=?").run(users[0], first.id);
+  const steps = [
+    ['container stopped (not probed)', withImage(null, { running: false, state: 'exited' }), {}],
+    ['probes switched off', { ...withImage(null), probes: false }, { probes: false }],
+    ['probe timed out (no value)', withImage(null), {}],
+    ['probe answered garbage', withImage('Segmentation fault <script>'), {}],
+    ['container started again, probes on', withImage('20.11.0'), {}],
+  ];
+  for (const [index, [label, result, options]] of steps.entries()) {
+    recordScan(db, scanRow(serverA), result, { now: now + (index + 1) * 1000, ...options });
+    const current = row();
+    assert.deepEqual([current.id, current.kind, current.version, current.source, current.resolved_at, current.dismissed_at], [first.id, 'vulnerable', '20.11.0', 'runtime', null, 'kept'], label);
+    assert.equal(current.last_seen_at, new Date(now + (index + 1) * 1000).toISOString(), `${label}: seen`);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM radar_findings WHERE server_id=? AND kind='likely'").get(serverA).n, 0, `${label}: no floating-tag guess beside it`);
+  }
+  assert.equal(alerts('radar.finding_critical'), 1, 'no flapping alerts'); assert.equal(alerts('radar.finding_resolved'), 0);
+  // A rebuilt container (new image) is judged afresh: its tag alone may not keep the old runtime finding open.
+  recordScan(db, scanRow(serverA), { helperVersion: 1, probes: false, truncated: false, containers: [shop(null, { imageId: 'sha256:' + '2'.repeat(64), imageCreated: '2026-10-01T00:00:00Z' })] }, { now: now + 10000, probes: false });
+  assert.ok(row().resolved_at, 'new image built after the advisory: the old finding resolves'); assert.equal(alerts('radar.finding_resolved'), 1);
+  db.prepare('DELETE FROM radar_findings').run();
+});
+
+test('distribution builds, malformed answers and hostile names', () => {
+  const now = Date.parse('2026-10-23T20:00:00Z');
+  const php = (version, name = 'shop-web') => ({ helperVersion: 1, probes: true, truncated: false, containers: [{ ...shop(null), name, image: 'ubuntu:22.04', runtime: { php: version, node: null, os: null } }] });
+  recordScan(db, scanRow(serverA), php('8.1.2-1ubuntu2.18'), { now });
+  const distro = db.prepare("SELECT kind,severity,evidence FROM radar_findings WHERE server_id=? AND advisory_id='DN-2024-0002'").get(serverA);
+  assert.deepEqual([distro.kind, distro.severity], ['likely', 'medium']); assert.match(distro.evidence, /distribution build; fixes may be backported/);
+  assert.match(db.prepare("SELECT evidence FROM radar_findings WHERE server_id=? AND kind='eol'").get(serverA).evidence, /distribution build may still get fixes/);
+  db.prepare('DELETE FROM radar_findings').run();
+  const open = db.prepare('SELECT COUNT(*) AS n FROM radar_findings').get().n;
+  const pending = scanRow(serverA);
+  for (const bad of [null, {}, { containers: 'x' }, { containers: null }]) assert.throws(() => recordScan(db, pending, bad, { now: now + 1000 }), /no container list/);
+  db.prepare("UPDATE radar_scans SET status='failed' WHERE id=?").run(pending.id);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM radar_findings').get().n, open, 'nothing resolved by a malformed answer');
+  recordScan(db, scanRow(serverA), php('8.3.11', 'evil\u0000\u001b[31m\nname'), { now: now + 2000 });
+  const stored = db.prepare('SELECT container_name FROM radar_findings WHERE server_id=? LIMIT 1').get(serverA).container_name;
+  assert.doesNotMatch(stored, /[\u0000-\u001f]/);
+  db.prepare('DELETE FROM radar_findings').run();
+});
+
+test('more than 500 containers: the capped inventory resolves nothing; garbage runtime output is ignored, not a crash', () => {
   const now = Date.parse('2026-10-24T12:00:00Z');
   recordScan(db, scanRow(serverA), inventory('20.11.0'), { now });
   const open = () => db.prepare('SELECT COUNT(*) AS n FROM radar_findings WHERE server_id=? AND resolved_at IS NULL').get(serverA).n;
   const before = open();
   const many = Array.from({ length: 500 }, (_, n) => ({ id: n.toString(16).padStart(64, '0'), name: `c${n}`, image: 'busybox', running: false, own: false, labels: {}, runtime: null }));
   const result = recordScan(db, scanRow(serverA), { helperVersion: 1, probes: true, truncated: true, containers: many }, { now: now + 1000 });
-  assert.deepEqual(result, { containers: 500, findings: 0, truncated: true });
+  assert.deepEqual(result, { containers: 500, findings: 0, carried: 0, truncated: true });
   assert.equal(open(), before, 'the shop finding is not resolved by an inventory that did not see every container');
   const weird = recordScan(db, scanRow(serverA), inventory('Segmentation fault <script>'), { now: now + 2000 });
-  assert.ok(weird.findings >= 1);
-  assert.ok(db.prepare("SELECT kind FROM radar_findings WHERE server_id=? AND resolved_at IS NULL AND product='node'").all(serverA).every(row => row.kind === 'unknown'));
+  assert.ok(weird.carried >= 1, 'an unreadable probe keeps the earlier runtime findings');
+  assert.ok(db.prepare("SELECT version FROM radar_findings WHERE server_id=? AND resolved_at IS NULL AND product='node'").all(serverA).every(row => row.version === '20.11.0'));
 });
 
 test('a site moved to another server between scans: findings follow the container and the old ones resolve', () => {
@@ -140,10 +185,18 @@ test('alerts: radar.finding_critical once per finding, radar.finding_resolved on
   assert.equal(critical.message, 'Security finding: Shop on alpha runs Node.js with a known serious flaw. Open DockNest to see what to do.');
   assert.deepEqual((({ title, site: s, server, reason }) => ({ title, site: s, server, reason }))(JSON.parse(critical.payload)), { title: 'Security finding', site: 'Shop', server: 'alpha', reason: 'A container runs a Node.js version with a known serious flaw. Open DockNest to see what to do.' });
   assert.doesNotMatch(JSON.stringify(rows), /20\.1[01]\.0|node:20|aaaaaaaa|host\.example|CVE-|DN-20/, 'no version, image, container id, host or advisory text');
-  // Medium, tag-only and dismissed findings never alert.
-  db.prepare('DELETE FROM audit_events').run();
+  // Floating-tag and distribution-build guesses never alert.
+  db.prepare('DELETE FROM audit_events').run(); db.prepare('DELETE FROM radar_findings').run();
   recordScan(db, scanRow(serverA), { ...inventory(null), probes: false }, { now: now + 5000, probes: false });
+  assert.ok(db.prepare("SELECT COUNT(*) AS n FROM radar_findings WHERE kind='likely'").get().n >= 1);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='radar.finding_critical'").get().n, 0, 'likely (floating tag) never alerts');
+  // The (created_at, id) cursor: 150 alert rows written in one millisecond are all delivered, across pages of 100.
+  db.prepare('DELETE FROM audit_events').run(); db.exec('DELETE FROM alert_outbox');
+  const at = new Date(Date.now() + 5000).toISOString(), finding = db.prepare('SELECT id FROM radar_findings LIMIT 1').get().id;
+  const insert = db.prepare("INSERT INTO audit_events VALUES (?,'worker','radar.finding_critical',?,?,?)");
+  for (let n = 0; n < 150; n += 1) insert.run(`burst-${String(n).padStart(3, '0')}`, finding, JSON.stringify({ product: 'node' }), at);
+  assert.equal(detect.detectJobsAndMoves() + detect.detectJobsAndMoves() + detect.detectJobsAndMoves(), 150, 'no same-millisecond row is skipped');
+  assert.equal(detect.detectJobsAndMoves(), 0);
   db.prepare('DELETE FROM radar_findings').run();
 });
 

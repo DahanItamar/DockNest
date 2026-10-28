@@ -1,7 +1,7 @@
 // Pure matcher: components + feed -> findings. Never touches I/O.
 // Owner decision (2.12.0): a floating image tag (php:8.3-apache) without a runtime probe never yields `vulnerable`.
 // It yields `likely` ("Possibly affected") with the severity capped at TAG_ONLY_MAX, and `unknown` is capped the same way.
-import { compareDotted, branchOf, isFullVersion } from './version.js';
+import { compareDotted, branchOf, isFullVersion, isDistroBuild } from './version.js';
 
 export const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 export const TAG_ONLY_MAX = 'medium';
@@ -38,6 +38,8 @@ export function matchComponent(component, feed, { today = new Date() } = {}) {
     }
     const cmp = compareDotted(version, fixedIn);
     if (cmp === null) make(adv, 'unknown', fixedIn, 'version could not be compared');
+    // A distribution build may carry the fix under the older upstream number: possibly affected, never stated as fact.
+    else if (cmp < 0 && isDistroBuild(version)) make(adv, 'likely', fixedIn, `${version} is a distribution build; fixes may be backported`);
     else if (cmp < 0) make(adv, 'vulnerable', fixedIn, `${version} is older than ${fixedIn}`);
   }
 
@@ -46,7 +48,7 @@ export function matchComponent(component, feed, { today = new Date() } = {}) {
     if (e && day(e.eol) <= today.getTime()) {
       out.push({
         advisoryId: `eol-${product}-${branch}`, severity: 'medium', kind: 'eol', component, fixedIn: null,
-        evidence: `${product} ${branch} reached end of life on ${e.eol.slice(0, 10)}`,
+        evidence: `${product} ${branch} reached end of life on ${e.eol.slice(0, 10)}${isDistroBuild(version) ? '; a distribution build may still get fixes from the distribution' : ''}`,
       });
     }
   }

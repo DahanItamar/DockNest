@@ -35,3 +35,12 @@ export function isFullVersion(version) {
   const p = parseVersion(version);
   return Boolean(p) && p.nums.length >= 3;
 }
+
+// A version with a packaging suffix (8.1.2-1ubuntu2.18, 8.2.7-1~deb12u1, 18.19.1+dfsg-6) comes from a distribution
+// package. Distributions backport security fixes without changing the upstream number, so the number alone is not proof.
+// Upstream pre-release suffixes (-dev, RC1, alpha, beta) are not distribution builds.
+export function isDistroBuild(version) {
+  const p = parseVersion(version);
+  if (!p || !p.suffix) return false;
+  return !/^[-.]?(?:dev|alpha\d*|beta\d*|rc\d*)$/i.test(p.suffix);
+}

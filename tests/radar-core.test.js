@@ -112,3 +112,23 @@ test('describe', () => {
   assert.match(l.headline, /^Possibly affected: blog may run a Node.js version/);
   assert.equal(l.advice, 'What to do: rebuild or pull the latest image to be sure. DockNest will not change anything for you.');
 });
+
+test('distribution builds are possibly affected, never stated as fact; pre-releases are not distribution builds', async () => {
+  const { isDistroBuild } = await import('../src/radar/version.js');
+  assert.equal(isDistroBuild('8.1.2-1ubuntu2.18'), true);
+  assert.equal(isDistroBuild('8.2.7-1~deb12u1'), true);
+  assert.equal(isDistroBuild('18.19.1+dfsg-6'), true);
+  assert.equal(isDistroBuild('8.3.11'), false);
+  assert.equal(isDistroBuild('8.4.0-dev'), false);
+  assert.equal(isDistroBuild('8.4.0RC1'), false);
+  const f = m({ product: 'php', version: '8.1.2-1ubuntu2.18', source: 'runtime' });
+  assert.ok(f.filter((x) => x.kind !== 'eol').every((x) => x.kind === 'likely' && x.severity !== 'critical' && x.severity !== 'high' && /fixes may be backported/.test(x.evidence)));
+  assert.ok(f.some((x) => x.kind === 'eol'));
+});
+
+test('end-of-life dates cover old and odd-numbered lines', () => {
+  for (const [product, version] of [['php', '5.6.40'], ['php', '7.0.33'], ['php', '7.2.34'], ['node', '12.22.12'], ['node', '8.17.0'], ['node', '17.9.1'], ['node', '23.11.0']]) {
+    assert.ok(m({ product, version, source: 'runtime' }).some((x) => x.kind === 'eol'), `${product} ${version}`);
+  }
+  assert.ok(m({ product: 'node', version: '25.0.0', source: 'runtime' }).some((x) => x.kind === 'eol'), 'node 25 ended on 2026-06-01');
+});

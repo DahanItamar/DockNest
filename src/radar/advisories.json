@@ -53,6 +53,11 @@
     }
   ],
   "eol": [
+    { "product": "php", "cycle": "5.5", "eol": "2016-07-21" },
+    { "product": "php", "cycle": "5.6", "eol": "2018-12-31" },
+    { "product": "php", "cycle": "7.0", "eol": "2019-01-10" },
+    { "product": "php", "cycle": "7.1", "eol": "2019-12-01" },
+    { "product": "php", "cycle": "7.2", "eol": "2020-11-30" },
     { "product": "php", "cycle": "7.3", "eol": "2021-12-06" },
     { "product": "php", "cycle": "7.4", "eol": "2022-11-28" },
     { "product": "php", "cycle": "8.0", "eol": "2023-11-26" },
@@ -61,11 +66,27 @@
     { "product": "php", "cycle": "8.3", "eol": "2027-12-31" },
     { "product": "php", "cycle": "8.4", "eol": "2028-12-31" },
     { "product": "php", "cycle": "8.5", "eol": "2029-12-31" },
+    { "product": "node", "cycle": "4", "eol": "2018-04-30" },
+    { "product": "node", "cycle": "5", "eol": "2016-06-30" },
+    { "product": "node", "cycle": "6", "eol": "2019-04-30" },
+    { "product": "node", "cycle": "7", "eol": "2017-06-30" },
+    { "product": "node", "cycle": "8", "eol": "2019-12-31" },
+    { "product": "node", "cycle": "9", "eol": "2018-06-30" },
+    { "product": "node", "cycle": "10", "eol": "2021-04-30" },
+    { "product": "node", "cycle": "11", "eol": "2019-06-01" },
+    { "product": "node", "cycle": "12", "eol": "2022-04-30" },
+    { "product": "node", "cycle": "13", "eol": "2020-06-01" },
     { "product": "node", "cycle": "14", "eol": "2023-04-30" },
+    { "product": "node", "cycle": "15", "eol": "2021-06-01" },
     { "product": "node", "cycle": "16", "eol": "2023-09-11" },
+    { "product": "node", "cycle": "17", "eol": "2022-06-01" },
     { "product": "node", "cycle": "18", "eol": "2025-04-30" },
+    { "product": "node", "cycle": "19", "eol": "2023-06-01" },
     { "product": "node", "cycle": "20", "eol": "2026-04-30" },
+    { "product": "node", "cycle": "21", "eol": "2024-06-01" },
     { "product": "node", "cycle": "22", "eol": "2027-04-30" },
-    { "product": "node", "cycle": "24", "eol": "2028-04-30" }
+    { "product": "node", "cycle": "23", "eol": "2025-06-01" },
+    { "product": "node", "cycle": "24", "eol": "2028-04-30" },
+    { "product": "node", "cycle": "25", "eol": "2026-06-01" }
   ]
 }
