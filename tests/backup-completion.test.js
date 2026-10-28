@@ -99,3 +99,10 @@ test('reconciliation never downgrades recovery_required and finishes cleanup for
  assert.deepEqual(completed,[uuid(9)]);
  assert.deepEqual(calls,['cleanup /srv/docknest-staging/'+uuid(9),'list-staging']);
 });
+test('a backup that did not copy protected mounts says so in plain words on the job result',async()=>{
+ const {protectedMountWarning}=await import('../src/engine.js');
+ assert.equal(protectedMountWarning(undefined),null);assert.equal(protectedMountWarning([]),null);assert.equal(protectedMountWarning([{source:7}]),null);
+ const text=protectedMountWarning([{container:'gitea',source:'/home/git/.ssh',destination:'/data/git/.ssh'},{source:'/etc/ssh'}]);
+ assert.match(text,/^Not copied: \/home\/git\/\.ssh \(mounted into gitea\); \/etc\/ssh\. /);assert.match(text,/recover them separately/);
+ assert.ok(protectedMountWarning([{source:'/x'.repeat(2000),container:'c'.repeat(500)}]).length<1000,'source-supplied names are bounded');
+});

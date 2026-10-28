@@ -1,6 +1,6 @@
 """Move helper operations (docs/moving-sites.md) and the golden restore test that proves the shared
 restore code paths did not change isolated restore. Run: python3 remote/test_moves.py"""
-import unittest, tempfile, pathlib, json, io, hashlib, os, sys
+import unittest, tempfile, pathlib, json, io, hashlib, os, sys, tarfile, subprocess
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
 import helper
@@ -19,8 +19,9 @@ def fixture_manifest():
 
 class FakeHost:
     """Records docker invocations and fakes their output; safe_extract creates the one entry a mount archive holds."""
-    def __init__(self,root,manifest):
+    def __init__(self,root,manifest,archive_tags=()):
         self.root=pathlib.Path(root);self.manifest=manifest;self.calls=[];self.events=io.StringIO();self.existing=set()
+        self.archive_tags=list(archive_tags);self.tags={}
     def docker(self,*args):
         self.calls.append(list(args))
         if args[:2]==('info','--format'):return b'x86_64\n'
@@ -32,11 +33,23 @@ class FakeHost:
         if args[0]=='create':return (args[args.index('--name')+1]+'-id\n').encode()
         if args[0]=='inspect':return json.dumps([{'Id':a,'State':{'Running':True},'NetworkSettings':{'Networks':{'shop_default':{'IPAddress':'172.18.0.2'}}}} for a in args[1:]]).encode()
         if args[0]=='ps':return b''
+        if args[:2]==('image','inspect'):
+            if args[-1] in self.tags:return self.tags[args[-1]].encode()
+            raise subprocess.CalledProcessError(1,['docker'])
+        if args[0]=='load':
+            for tag in self.archive_tags:self.tags[tag]='sha256:loaded'
+        if args[0]=='tag':self.tags[args[2]]=args[1]
         return b''
     def safe_extract(self,archive,destination):
         destination=pathlib.Path(destination);destination.mkdir(parents=True,exist_ok=True)
         name=pathlib.Path(archive).name
-        if name=='payload.tar.gz':(destination/'manifest.json').write_text(json.dumps(self.manifest));return
+        if name=='payload.tar.gz':
+            (destination/'manifest.json').write_text(json.dumps(self.manifest))
+            # A DockNest backup saves images by ID, so its archive names no tags; a forged one may.
+            data=json.dumps([{'Config':'x.json','RepoTags':self.archive_tags or None,'Layers':[]}]).encode()
+            with tarfile.open(destination/'images.tar','w') as tar:
+                info=tarfile.TarInfo('manifest.json');info.size=len(data);tar.addfile(info,io.BytesIO(data))
+            return
         if name.startswith('mount-') and name.endswith('-1.tar'):(destination/'config.txt').write_text('DATABASE_URL=postgres://u:p@10.0.0.5/app\n');return
         (destination/'entry').mkdir()
     def patches(self):
@@ -121,15 +134,16 @@ class MoveFactTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name=='posix','Deploy places files at absolute POSIX paths')
 class DeployRestoreTests(unittest.TestCase):
-    def deploy(self,temporary,mode='test',manifest=None):
+    def deploy(self,temporary,mode='test',manifest=None,archive_tags=(),tags=None):
         base=pathlib.Path(temporary)
         manifest=manifest or fixture_manifest()
         for c in manifest['containers']:
             for m in c['Mounts']:
                 if m['Type']=='bind':m['Source']=str(base/'srv'/'shop'/'config.txt')
         root=base/'staging'/JOB;root.mkdir(parents=True);(root/'payload.tar.gz').write_bytes(b'payload')
-        host=FakeHost(temporary,manifest)
-        with patch('helper.owned_job_root',return_value=root),patch('helper.MOVES_ROOT',base/'moves'),patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':10**15})()),patch('helper.shutil.which',return_value=None):
+        host=FakeHost(temporary,manifest,archive_tags);host.tags.update(tags or {});self.host=host
+        # The test folders live below /tmp, which is not an application root (MoveSafetyTests covers the roots).
+        with patch('helper.owned_job_root',return_value=root),patch('helper.MOVES_ROOT',base/'moves'),patch('helper.shutil.disk_usage',return_value=type('U',(),{'free':10**15})()),patch('helper.shutil.which',return_value=None),patch('helper.move_root_allowed',return_value=True):
             patches=host.patches()
             for item in patches:item.start()
             try:helper.deploy_restore({'moveId':MOVE,'job':JOB,'mode':mode,'plaintextChecksum':hashlib.sha256(b'payload').hexdigest(),'portMap':[{'from':8080,'to':8081,'containerPort':8080,'protocol':'tcp'}],
@@ -178,6 +192,57 @@ class DeployRestoreTests(unittest.TestCase):
             self.assertTrue(all(c[c.index('--network')+1]=='dn-test-'+MOVE[:12] for c in creates))
             self.assertFalse(any(c[:2]==['network','connect'] for c in host.calls))
             self.assertIn(['network','create','--driver','bridge','--label','docknest.move='+MOVE,'dn-test-'+MOVE[:12]],host.calls)
+    def test_a_forged_network_key_never_reaches_docker_create(self):
+        for network in ['host','container:0123456789ab']:
+            manifest=fixture_manifest()
+            for c in manifest['containers']:c['HostConfig']['NetworkMode']='bridge';c['NetworkSettings']['Networks']={network:{}}
+            with tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaisesRegex(ValueError,'shared namespace'):self.deploy(temporary,mode='live',manifest=manifest)
+                self.assertFalse(any(c[0] in ['create','load'] for c in self.host.calls),network)
+    def test_a_dot_dot_configuration_file_never_reaches_the_settings_rewrite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);other=base/'other'/'.env';other.parent.mkdir();other.write_text('DATABASE_URL=postgres://u:p@10.0.0.5/app')
+            manifest=fixture_manifest();manifest['configurationFiles']=[str(base/'srv'/'shop'/'config.txt')+'/../../../other/.env']
+            with self.assertRaisesRegex(ValueError,'Unsupported path for a move'):self.deploy(temporary,manifest=manifest)
+            self.assertEqual(other.read_text(),'DATABASE_URL=postgres://u:p@10.0.0.5/app')
+            self.assertFalse(any(c[0]=='load' for c in self.host.calls))
+    def test_settings_are_rewritten_only_in_files_the_move_placed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);link=base/'srv'/'shop'/'config.txt'
+            other=base/'other.env';other.write_text('DATABASE_URL=postgres://u:p@10.0.0.5/app')
+            self.assertFalse(helper.placed_by_move(str(other),[str(base/'srv'/'shop')]))
+            self.assertTrue(helper.placed_by_move(str(base/'srv'/'shop'/'.env'),[str(base/'srv'/'shop')]))
+            link.parent.mkdir(parents=True);link.symlink_to(other)
+            self.assertFalse(helper.placed_by_move(str(link),[str(base/'srv'/'shop')]),'a link out of the placed folder is not followed')
+    def test_a_tagged_image_archive_is_never_loaded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(ValueError,'save images by ID only'):self.deploy(temporary,archive_tags=['nginx:latest'],tags={'nginx:latest':'sha256:owner'})
+            self.assertFalse(any(c[0] in ['load','create'] for c in self.host.calls));self.assertEqual(self.host.tags['nginx:latest'],'sha256:owner')
+    def test_a_protected_mount_is_never_written_by_a_move(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest=fixture_manifest();manifest['protectedMounts']=[{'container':'web','source':str(pathlib.Path(temporary)/'srv'/'shop'/'config.txt'),'destination':'/config.txt'}]
+            with self.assertRaisesRegex(ValueError,'does not copy; move this site by hand'):self.deploy(temporary,manifest=manifest)
+            self.assertFalse((pathlib.Path(temporary)/'srv'/'shop').exists())
+            self.assertFalse(any(c[0] in ['load','create'] for c in self.host.calls))
+    def test_configuration_file_spellings_are_normalised_before_the_containment_test(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);manifest=fixture_manifest()
+            # Already inside a placed mount (trailing slash, '//', './'), and a new file spelt with '//' and './'.
+            manifest['configurationFiles']=[str(base/'srv'/'shop'/'config.txt')+'/',str(base/'srv')+'//shop/./config.txt',str(base/'srv')+'//site/./app.env']
+            host,_,_=self.deploy(temporary,manifest=manifest)
+            self.assertTrue((base/'srv'/'site'/'app.env').exists());self.assertTrue((base/'srv'/'shop'/'config.txt').exists())
+            state=json.loads((base/'moves'/MOVE/'resources.json').read_text())
+            self.assertIn(str(base/'srv'/'site'/'app.env'),state['deployed']['test']['paths'])
+            for bad in ['srv/shop/.env','./srv/x.env',str(base/'srv')+'/a/../b.env']:
+                manifest['configurationFiles']=[bad]
+                with tempfile.TemporaryDirectory() as again:
+                    with self.assertRaisesRegex(ValueError,'Unsupported path for a move',msg=bad):self.deploy(again,manifest=manifest)
+    def test_a_destination_through_a_symbolic_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary);(base/'real').mkdir();(base/'link').symlink_to(base/'real')
+            d,state=base/'moves',{'created':{'paths':[]}}
+            with patch('helper.move_root_allowed',return_value=True),self.assertRaisesRegex(ValueError,'symbolic link'):helper.place_tree(base/'unused.tar',str(base/'link'/'app'),d,state,MOVE)
+            self.assertEqual(list((base/'real').iterdir()),[])
     def test_a_finished_deploy_is_not_repeated(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.deploy(temporary)
@@ -284,6 +349,83 @@ class MoveSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):helper.move_path('/var/lib/docknest/moves',own=True)
         with self.assertRaises(ValueError):helper.move_path('/etc/x',own=True)
         for good in ['/srv/shop/data','/data','/opt/app/config.yaml','/var/www/site']:helper.move_path(good)
+    def test_a_backup_names_new_paths_only_below_application_roots(self):
+        for good in ['/srv/shop/data','/data','/opt/app/config.yaml','/var/www/site','/mnt/disk1/app','/media/usb/app','/home/alice/stacks/app','/home/alice/stacks/app/.env','/home/alice/bin2/x','/var/home/alice/app','/var/srv/app','/var/opt/app','/docker/app/data','/var/lib/myapp','/var/lib/gitea/data','/var/lib/grafana/grafana.db']:
+            self.assertTrue(helper.move_root_allowed(good),good)
+        for bad in ['/var/lib/cloud/scripts/per-boot/x.sh','/var/lib/sudo/ts/alice','/var/lib/dpkg/info/x.postinst','/var/lib/systemd/x','/var/lib/polkit-1/x','/var/lib/NetworkManager/x','/var/lib/private/x','/var/lib/.hidden/x','/home/alice/.bash_profile','/home/alice/.config/autostart/x.desktop','/home/alice/.local/bin/x','/home/alice/bin/x','/home/alice','/var/home/alice/.profile','/var/tmp/x','/tmp/x','/var/backups/x','/snap/bin/x','/efi/EFI/x','/nix/store/x','/gnu/store/x','/cdrom/x','/.hidden/x','/usr/local/lib/x','/etc/x','/']:
+            self.assertFalse(helper.move_root_allowed(bad),bad)
+            if bad!='/':
+                with self.assertRaises(ValueError,msg=bad):helper.place_tree(pathlib.Path('unused.tar'),bad,None,None,MOVE)
+        for name in ['cloud','docker','containerd','dpkg','apt','systemd','polkit-1','sudo','snapd','ucf','pam','NetworkManager','dhcp','lxcfs','private']:
+            self.assertFalse(helper.move_root_allowed('/var/lib/%s/x'%name),name)
+        with self.assertRaisesRegex(ValueError,'outside the folders a move may create'):helper.place_tree(pathlib.Path('unused.tar'),'/var/lib/cloud/scripts/per-boot/x.sh',None,None,MOVE)
+        with self.assertRaises(ValueError):helper.place_tree(pathlib.Path('unused.tar'),'/var/lib/docker/volumes/x/_data',None,None,MOVE)
+    def test_an_existing_var_lib_folder_of_another_program_is_never_written(self):
+        real_is_dir,real_iterdir=pathlib.Path.is_dir,pathlib.Path.iterdir
+        held={'/var/lib/gitea'}
+        def is_dir(self):return self.as_posix() in held or real_is_dir(self)
+        def iterdir(self):return iter([self/'data']) if self.as_posix() in held else real_iterdir(self)
+        with patch.object(pathlib.Path,'is_dir',is_dir),patch.object(pathlib.Path,'iterdir',iterdir):
+            self.assertEqual(helper.foreign_app_folder('/var/lib/gitea/repositories',{'created':{'paths':[]}}),'/var/lib/gitea')
+            with self.assertRaisesRegex(ValueError,'belongs to another program'):helper.place_tree(pathlib.Path('unused.tar'),'/var/lib/gitea/repositories',None,{'created':{'paths':[]}},MOVE)
+            # Made by this move (journalled), a second folder in it is fine; a new or empty folder is fine too.
+            self.assertIsNone(helper.foreign_app_folder('/var/lib/gitea/repositories',{'created':{'paths':[{'path':'/var/lib/gitea','restoreEmpty':False}]}}))
+            self.assertIsNone(helper.foreign_app_folder('/var/lib/myapp/data',{'created':{'paths':[]}}))
+            # An empty pre-existing folder: after the first mount placed data/ (journalled), a second mount is fine,
+            # but an entry the move did not journal still makes the folder foreign.
+            self.assertIsNone(helper.foreign_app_folder('/var/lib/gitea/conf',{'created':{'paths':[{'path':'/var/lib/gitea/data','restoreEmpty':False}]}}))
+            self.assertEqual(helper.foreign_app_folder('/var/lib/gitea/conf',{'created':{'paths':[{'path':'/var/lib/gitea/other','restoreEmpty':False}]}}),'/var/lib/gitea')
+            self.assertIsNone(helper.foreign_app_folder('/srv/shop/data',{'created':{'paths':[]}}))
+    def test_image_based_systems_keep_their_root_level_var_links_and_nothing_else(self):
+        import types
+        links={'/home':'var/home','/srv':'var/srv'};owners={'/home':0,'/srv':1000}
+        def patched(var_links=()):
+            return [patch('helper.os.path.islink',side_effect=lambda p:p in links or p in var_links),patch('helper.os.lstat',side_effect=lambda p:types.SimpleNamespace(st_uid=owners.get(p,0))),patch('helper.os.readlink',side_effect=lambda p:links[p])]
+        def run(var_links=(),call=None):
+            items=patched(var_links)
+            for item in items:item.start()
+            try:return call()
+            finally:
+                for item in items:item.stop()
+        self.assertEqual(run(call=lambda:helper.image_based_form('/home/alice/app')),'/var/home/alice/app')
+        self.assertEqual(run(call=lambda:helper.image_based_form('/srv/app')),'/srv/app','a link not owned by root is not rewritten')
+        self.assertEqual(run(('/var',),lambda:helper.image_based_form('/home/alice/app')),'/home/alice/app','/var itself is a link')
+        self.assertEqual(run(('/var/home',),lambda:helper.image_based_form('/home/alice/app')),'/home/alice/app','/var/home is a link')
+        self.assertEqual(run(call=lambda:helper.image_based_form('/data/app')),'/data/app')
+        links['/opt']='/var/opt'
+        self.assertEqual(run(call=lambda:helper.image_based_form('/opt/app')),'/opt/app','only the relative var/<x> target is accepted')
+        real={'/home/alice/app':'/var/home/alice/app','/home/alice/link/app':'/var/home/alice/real/app'}
+        def place(target):
+            with patch('helper.os.path.realpath',side_effect=lambda p:real.get(p.replace(chr(92),'/'),p)):return run(call=lambda:helper.place_tree(pathlib.Path('unused.tar'),target,None,{'created':{'paths':[]}},MOVE))
+        with self.assertRaisesRegex(ValueError,'symbolic link'):place('/home/alice/link/app')
+    def test_only_an_image_archive_saved_by_id_is_loaded(self):
+        def archive(path,manifest=None,index=None):
+            with tarfile.open(path,'w') as tar:
+                for name,value in [('manifest.json',manifest),('index.json',index)]:
+                    if value is None:continue
+                    data=json.dumps(value).encode();info=tarfile.TarInfo(name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
+            return path
+        with tempfile.TemporaryDirectory() as temporary:
+            base=pathlib.Path(temporary)
+            byid=archive(base/'id.tar',[{'Config':'x.json','RepoTags':None,'Layers':[]}],{'schemaVersion':2,'manifests':[{'digest':'sha256:a','annotations':{}}]})
+            host=FakeHost(temporary,{})
+            with patch('helper.docker',side_effect=host.docker):helper.load_images_keeping_tags(byid)
+            self.assertEqual(host.calls,[['load','-i',str(byid)]])
+            for bad in [archive(base/'tag.tar',[{'Config':'x.json','RepoTags':['nginx:latest'],'Layers':[]}]),
+                        archive(base/'oci.tar',None,{'manifests':[{'annotations':{'io.containerd.image.name':'docker.io/library/nginx:latest'}}]}),
+                        archive(base/'ref.tar',None,{'manifests':[{'annotations':{'org.opencontainers.image.ref.name':'latest'}}]}),
+                        archive(base/'raw.tar',[{'Config':'x.json','RepoTags':['not a valid tag'],'Layers':[]}]),
+                        archive(base/'repos.tar',[{'Config':'x.json','RepoTags':None,'Layers':[]}])]:
+                if bad.name=='repos.tar':
+                    with tarfile.open(bad,'a') as tar:
+                        data=json.dumps({'nginx':{'latest':'abc'}}).encode();info=tarfile.TarInfo('repositories');info.size=len(data);tar.addfile(info,io.BytesIO(data))
+                host=FakeHost(temporary,{})
+                with patch('helper.docker',side_effect=host.docker),self.assertRaisesRegex(ValueError,'save images by ID only',msg=bad.name):helper.load_images_keeping_tags(bad)
+                self.assertEqual(host.calls,[],bad.name)
+            broken=base/'broken.tar';broken.write_bytes(b'not a tar')
+            host=FakeHost(temporary,{})
+            with patch('helper.docker',side_effect=host.docker),self.assertRaisesRegex(ValueError,'cannot be read'):helper.load_images_keeping_tags(broken)
+            self.assertEqual(host.calls,[])
     def test_compose_files_may_only_describe_what_the_backup_holds(self):
         manifest=fixture_manifest()
         ok={'services':{'web':{'volumes':[{'type':'volume','source':'data0'},{'type':'bind','source':'/srv/shop/config.txt'},{'type':'tmpfs','target':'/tmp'}]}},'volumes':{'data0':{'name':'shop_data0'}}}
