@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
-import { requireAdmin, rateLimit } from './auth.js';
-import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix } from './storage.js';
+import { requireAdmin, requireRecentAuth, rateLimit } from './auth.js';
+import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn } from './storage.js';
+import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
 
@@ -32,7 +33,8 @@ const s3Schema=z.object({
 });
 function safe(row){
  const {credential,...rest}=row,mode=targetMode(row);
- const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(targetPrefix({mode,id:row.id})+'%').bytes+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
+ // Main packages (a backup living only on its copies counts once, as a copy), copies held here, and recovery kits.
+ const used=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ? AND id NOT IN (SELECT backup_id FROM backup_main_removed)').get(targetPrefix({mode,id:row.id})+'%').bytes+copyBytesOn(row.id)+db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(row.id).bytes;
  if(mode==='s3'){
   // Never return the sealed access key pair; only public connection settings.
   const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');
@@ -90,6 +92,31 @@ storageTargets.post('/s3/connect',rateLimit('storage-connect',10),async(req,res)
   audit(req.user.id,'storage.connected',targetId,{authType:'s3-access-key',objectLock:data.objectLock?.mode||null});
  });
  res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
+});
+// Removing a destination (docs/backup-copies.md, "Safety rules"). Refused while it holds copies, is a site's main or copy
+// destination, holds main packages or recovery kits, or is the default. "Move them" is not offered: storage migration
+// only re-lays files out within one destination, so copies held here have to be deleted first (POST /:id/copies/delete).
+function knownTarget(req){const target=db.prepare('SELECT id,name FROM storage_targets WHERE id=?').get(req.params.id);if(!target)throw Object.assign(new Error('Storage destination not found.'),{status:404});return target;}
+storageTargets.get('/:id/usage',(req,res)=>{const target=knownTarget(req);res.json(destinationUsage(target.id));});
+storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
+ const target=knownTarget(req);
+ const removed=transaction(()=>{
+  const usage=destinationUsage(target.id);
+  if(destinationInUse(usage)){
+   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first; moving copies to another destination is not supported)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'site':'sites'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'site copies':'sites copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
+   return {usage,refused:`${target.name} cannot be removed: ${reasons.join('; ')}.`};
+  }
+  db.prepare('DELETE FROM storage_targets WHERE id=?').run(target.id);
+  audit(req.user.id,'storage.removed',target.id,{name:target.name});
+  return {removed:true};
+ });
+ if(removed.refused)return res.status(409).json({error:removed.refused,code:'destination_in_use',...removed.usage});
+ res.json({id:target.id,removed:true});
+});
+storageTargets.post('/:id/copies/delete',requireRecentAuth,(req,res)=>{
+ const target=knownTarget(req),data=z.object({includePinned:z.boolean().default(false)}).parse(req.body??{});
+ try{res.status(202).json(requestDestinationCopyDeletion(target.id,data,req.user.id));}
+ catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});throw error;}
 });
 storageTargets.post('/:id/test',rateLimit('storage-test',10),async(req,res)=>{
  const result=await testStorageTarget(targetOptions(req.params.id));

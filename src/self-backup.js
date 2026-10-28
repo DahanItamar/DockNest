@@ -82,6 +82,7 @@ export async function pruneSelfBackups(){
    if(row.id!==lastAttempt?.id)db.prepare('DELETE FROM manager_backups WHERE id=?').run(row.id);
   }catch{/* Keep the previous copy and retry cleanup later. */}
  }
+ if(latest)await pruneKitCopies(latest.id);
 }
 function validateRemotePath(row){
  const selected=targetOptions(row.target_id),prefix=targetPrefix(selected),runId=z.uuid().parse(row.id);
@@ -107,7 +108,8 @@ export async function executeSelfBackup(run){
   await renameFile(published+'.partial',published);
   if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
   // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
-  transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes)audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});else console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);});
+  const completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
+  if(completed)await copyKitToCopyDestinations(run,file,evidence,targetId);
  }catch(error){
   // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold
   // set under a running backup, as by a forced upgrade) is recorded as it is.
@@ -115,6 +117,36 @@ export async function executeSelfBackup(run){
   if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),held?deploymentHoldMessage+' Your previous successful copy is kept.':'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id,held?{reason:'deployment-hold'}:{});
  }finally{if(temporary)try{await rm(temporary,{recursive:true,force:true});}catch{/* Retry interrupted staging cleanup at worker startup. */}}
  try{await pruneSelfBackups();}catch{/* Cleanup failure must not prevent ordinary site jobs. */}
+}
+// Every other destination that holds backup copies, or that a site uses as its main destination, also gets the newest
+// recovery kit, so each one can be recovered on its own (docs/backup-copies.md). A failure here never fails the kit.
+export function kitCopyDestinations(mainTargetId){
+ const ids=db.prepare("SELECT target_id AS id FROM backup_copies WHERE status<>'deleted' UNION SELECT target_id FROM site_storage_copies UNION SELECT main_target_id FROM site_storage WHERE main_target_id IS NOT NULL").all().map(row=>row.id);
+ return [...new Set(ids)].filter(targetId=>targetId!==mainTargetId&&(()=>{try{return remoteModes.includes(targetOptions(targetId).mode);}catch{return false;}})());
+}
+async function copyKitToCopyDestinations(run,file,evidence,mainTargetId){
+ for(const targetId of kitCopyDestinations(mainTargetId)){
+  try{
+   const directory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(directory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
+   await makeDirectory(directory);await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
+   if(await remoteHash(published+'.partial')!==evidence.sha256)throw new Error('Uploaded recovery kit checksum mismatch');
+   await renameFile(published+'.partial',published);
+   if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
+   db.prepare('INSERT INTO manager_backup_copies(backup_id,target_id,path,created_at) VALUES(?,?,?,?) ON CONFLICT(backup_id,target_id) DO UPDATE SET path=excluded.path').run(run.id,targetId,published,now());
+   audit('worker','manager-backup.copied',run.id,{targetId});
+  }catch{audit('worker','manager-backup.copy_failed',run.id,{targetId});}
+ }
+}
+// Only the newest kit is kept on each copy destination, as on the main one.
+async function pruneKitCopies(latestId){
+ for(const row of db.prepare('SELECT * FROM manager_backup_copies WHERE backup_id<>?').all(latestId||'')){
+  try{
+   const selected=targetOptions(row.target_id),recovery=targetPrefix(selected)+backupRoot(selected.root)+'/docknest-recovery/';
+   if(!row.path.startsWith(recovery)||!/^docknest_[a-f0-9]{16}_[0-9TZ_-]+--[0-9a-f-]{36}\.dkit$/.test(row.path.slice(recovery.length)))throw new Error('Invalid manager backup copy path');
+   for(const file of [row.path+'.partial',row.path])try{await removeFile(file);}catch(error){if(error.code!==2&&error.code!=='ENOENT')throw error;}
+   db.prepare('DELETE FROM manager_backup_copies WHERE backup_id=? AND target_id=?').run(row.backup_id,row.target_id);
+  }catch{/* Kept; retried at the next clean-up. */}
+ }
 }
 export async function recoverInterruptedSelfBackups(){
  if(!db.prepare('SELECT 1 FROM manager_backups LIMIT 1').get())return;

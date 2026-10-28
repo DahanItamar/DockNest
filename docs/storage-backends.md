@@ -94,6 +94,31 @@ These notes are not verified against each live provider. Confirm them with the c
 | Wasabi | `https://s3.<region>.wasabisys.com` | Region: filled from the endpoint. Object Lock must be chosen when the bucket is created. |
 | MinIO | `https://minio.example.internal:9000` | Use path-style addressing. Plain HTTP works only on loopback. |
 
+## Storage per site and backup copies
+
+Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
+
+- A site's main destination is `site_storage.main_target_id`; no row or NULL is the default destination
+  (`backup_storage_target`), exactly as before. A chosen destination that was removed fails the backup closed; DockNest
+  never writes to a destination the owner did not pick.
+- Copies are queued (`backup_copies`, status `pending`) in the same transaction that publishes the main copy. The worker
+  runs one due copy step when no site job waits, oldest backup first. The step checks free space on the copy
+  destination, streams the encrypted package as it is to `<path>.partial`, syncs it, authenticates it in full (GCM tag
+  and SHA-256 equal to the main copy's), renames it and only then records it. A file already at the copy path is adopted
+  only when it authenticates; a different file is never overwritten. A worker restart resumes from the row.
+- Status `copying` is the step's lease: nothing of that backup is deleted while it is read. Retries: 5 min, 30 min,
+  2 h, then every 6 h; after 7 days the copy is `gave_up`. Stored errors are fixed sentences, never storage output.
+- Retention: the site's count applies to main packages, each copy destination keeps its own count. When a main package
+  ages out while a copy is still kept, the main file is removed and `backups.path` names that copy
+  (`backup_main_removed` keeps the original path), so download, restore and older releases keep working. Pins apply to
+  every copy; an Object-Locked copy is deferred on its own (`delete_state='deferred'`).
+- Restore uses the main copy, then verified copies newest first; the owner may choose a copy (`sourceTargetId`).
+- A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or a site uses
+  it. "Move them" is not offered: storage migration re-lays files out inside one destination only, so the copies have to
+  be deleted first (`POST /api/storage-targets/:id/copies/delete`).
+- Every other destination that holds copies (or is a site's main destination) also receives the newest recovery kit.
+- Real copies and restores count as validated only after the Linux integration suite passes.
+
 ## Verification status
 
 - **Unit tests:** `tests/s3-storage.test.js` runs against `tests/s3-fixture.js`, an in-process fake S3 endpoint on loopback. The fake checks SigV4 signatures and payload hashes independently. The tests cover multipart streaming and abort, ranged reads, part copies, journal publication and reconciliation, the connect and test API without credential disclosure, and Object Lock application, deletion refusal and expiry.
