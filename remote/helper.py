@@ -18,6 +18,20 @@ Replacement requires a verified backup of the current target before stopping it,
 Delete plaintext staging securely according to your storage policy; filesystem deletion alone does not guarantee erasure on every disk.
 """
 
+INCREMENTAL_GUIDE="""
+# Incremental backups (format v2)
+manifest.backupKind says whether this package is a full backup or an increment. manifest.chain names the chain, this
+package's position and, for an increment, the backup ID and ciphertext SHA-256 of the package before it. An increment
+holds only the files that changed. To restore one, decrypt and verify every package of the chain first (the order file
+of a chain download lists them, full backup first) and check that each manifest.chain.parentSha256 matches the package
+before it. Then, for each mount, extract the full backup's mount-I-J.tar into a new empty directory and extract the
+same mount of each increment in order on top of it with GNU tar:
+  tar --listed-incremental=/dev/null --xattrs --acls --numeric-owner -xpf mount-I-J.tar -C NEW_DIRECTORY
+This also removes files deleted between backups. Check every archive for unsafe paths first, including the names in
+GNU.dumpdir records. Run docker load -i images.tar for every package of the chain, in order. The snapshot-*.snar files
+are GNU tar snapshot files; a restore does not need them.
+"""
+
 EVENT_STREAM=sys.stdout
 NOFOLLOW=getattr(os,'O_NOFOLLOW',0)
 CAPTURE_DIAGNOSTICS=False
@@ -190,14 +204,20 @@ def scoped_classify(source,table,exclusions):
     paths=exclusions.get(source,[])
     return classify_source(source,table,paths) if paths else classify_source(source,table)
 
-def source_archive(source,target,excluded=()):
+def source_archive(source,target,excluded=(),snapshot=None):
+    if snapshot is not None:
+        # Incremental archives always use the POSIX format: GNU-format incremental headers keep atime/ctime where
+        # ustar keeps the name prefix, so the restore path checks would read different names than GNU tar extracts.
+        command=source_archive_command(source,excluded,snapshot);command[command.index('-cpf')+1]=str(target)
+        run(command);return
     source=pathlib.Path(source)
     options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
     run(['tar','--xattrs','--acls','--numeric-owner',*options,'-cpf',str(target),'-C',str(source.parent),'--',source.name])
 
-def source_archive_command(source,excluded=()):
+def source_archive_command(source,excluded=(),snapshot=None):
     source=pathlib.Path(source)
     options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    if snapshot is not None:options=['--listed-incremental='+str(snapshot),*options]
     # atime changes when the first pass reads data; ctime is not restored.
     return ['tar','--format=posix','--pax-option=delete=atime,delete=ctime,exthdr.name=%d/PaxHeaders/%f','--xattrs','--acls','--numeric-owner',*options,'-cpf','-','-C',str(source.parent),'--',source.name]
 
@@ -250,10 +270,13 @@ def open_stream_archive(output,level):
     if sys.version_info>=(3,12):return tarfile.open(fileobj=output,mode='w|gz',compresslevel=level,bufsize=1024*1024)
     return tarfile.open(fileobj=output,mode='w|gz',bufsize=1024*1024)
 
-def stream_artifacts(archive,specs,spool_root=None,spooled=()):
+def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None):
+    # before: name -> callable run before each pass of that command (an incremental tar gets its parent snapshot back).
+    before=before or {}
     inventory={};files={}
     try:
         for name,command,link in specs:
+            if not link and name in before:before[name]()
             if link:inventory[name]=inventory[link]
             elif spool_root is not None and name in spooled:
                 files[name]=pathlib.Path(spool_root)/('spool-'+name)
@@ -267,13 +290,20 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=()):
             if link:
                 info=tarfile.TarInfo(name);info.type=tarfile.LNKTYPE;info.linkname=link;info.mode=0o600;archive.addfile(info)
             elif name in files:command_artifact(['cat','--',str(files[name])],archive,name,inventory[name])
-            else:command_artifact(command,archive,name,inventory[name])
+            else:
+                if name in before:before[name]()
+                command_artifact(command,archive,name,inventory[name])
         transfer_progress(0,True)
     finally:
         TRANSFER=None
         for path in files.values():path.unlink(missing_ok=True)
     return inventory
 
+def stream_file(archive,name,path,expected):
+    size=path.stat().st_size;info=tarfile.TarInfo(name);info.size=size;info.mode=0o600
+    with open(path,'rb') as source:archive.addfile(info,source)
+    if file_sha256(path)!=expected or path.stat().st_size!=size:raise ValueError('Snapshot file changed during capture')
+    return {'bytes':size,'sha256':expected}
 def stream_document(archive,name,value):
     data=value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
     archive.addfile(info,io.BytesIO(data))
@@ -805,7 +835,7 @@ def data_checks(container,service):
 def artifact_inventory(root):
     result={}
     for p in sorted(root.iterdir()):
-        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|static-files)\.tar',p.name):
+        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|static-files)\.tar|snapshot-[0-9a-f]{64}\.snar',p.name):
             digest=hashlib.sha256()
             with open(p,'rb') as f:
                 for chunk in iter(lambda:f.read(1024*1024),b''):digest.update(chunk)
@@ -819,8 +849,208 @@ def verify_artifacts(root,manifest):
     if actual!=expected:raise ValueError('Backup artifacts are missing, changed or unexpected')
     names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
+    if manifest.get('formatVersion')==2:
+        # Format v2 (incremental-enabled sites) also carries the tar snapshot file of every source after this backup.
+        for key,item in manifest_snapshots(manifest).items():
+            name='snapshot-%s.snar'%key;names.add(name)
+            if actual.get(name,{}).get('sha256')!=item['sha256']:raise ValueError('Backup snapshot file differs from its manifest')
     if set(actual)!=names:raise ValueError('Artifact inventory does not cover all manifest dependencies')
     return True
+
+# ---- Incremental backups (docs/incremental-backups.md) ----
+# A site with incremental backups gets format v2 packages: a full package (level 0), then increments made with GNU tar
+# --listed-incremental. The snapshot (.snar) file of every mount source lives in INCREMENTAL_ROOT/<siteKey>/; capture
+# works on copies in the job root, and only incremental-commit (called after the package is stored and verified) moves
+# them into the state folder. Protected (holder) mounts and configuration files are always complete.
+INCREMENTAL_ROOT=pathlib.Path('/var/lib/docknest/incremental')
+SITE_KEY=re.compile(r'[A-Za-z0-9-]{1,64}')
+CHAIN_ID=re.compile(r'[A-Za-z0-9-]{1,64}')
+HEX64=re.compile(r'[0-9a-f]{64}')
+IMAGE_ID=re.compile(r'sha256:[0-9a-f]{64}')
+FORMAT_VERSIONS=(1,2)
+MAX_CHAIN=31
+FALLBACK_TEXT={'snapshot-missing':'the snapshot file of a mount is missing on this server','snapshot-mismatch':'the snapshot file of a mount does not match the previous backup','mount-set-changed':'the set of mounts changed since the previous backup'}
+def snapshot_key(source):return hashlib.sha256(str(source).encode()).hexdigest()
+def incremental_request(req):
+    """Validated copy of the engine's `incremental` field, or None (format v1, unchanged)."""
+    inc=req.get('incremental')
+    if inc is None:return None
+    def bad(what):raise ValueError('Invalid incremental backup request: '+what)
+    if not isinstance(inc,dict) or inc.get('mode') not in ('full','incremental'):bad('mode')
+    if not isinstance(inc.get('siteKey'),str) or not SITE_KEY.fullmatch(inc['siteKey']):bad('site key')
+    if not isinstance(inc.get('chainId'),str) or not CHAIN_ID.fullmatch(inc['chainId']):bad('chain id')
+    position=inc.get('position')
+    if not isinstance(position,int) or isinstance(position,bool) or not 0<=position<MAX_CHAIN:bad('position')
+    images=inc.get('parentImageIds') or []
+    if not isinstance(images,list) or len(images)>1000 or any(not isinstance(i,str) or not IMAGE_ID.fullmatch(i) for i in images):bad('chain images')
+    snapshots=inc.get('parentSnapshots') or {}
+    if not isinstance(snapshots,dict) or len(snapshots)>1000 or any(not isinstance(k,str) or not HEX64.fullmatch(k) or not isinstance(v,str) or not HEX64.fullmatch(v) for k,v in snapshots.items()):bad('parent snapshots')
+    result={'mode':inc['mode'],'siteKey':inc['siteKey'],'chainId':inc['chainId'],'position':position,'parentImageIds':list(images),'parentSnapshots':dict(snapshots)}
+    if inc['mode']=='full':
+        if position!=0:bad('a full backup has position 0')
+        result.update(parentBackupId=None,parentSha256=None,fallbackChainId=inc.get('fallbackChainId'))
+        return result
+    if position<1:bad('an increment has position 1 or more')
+    if not isinstance(inc.get('parentBackupId'),str) or not CHAIN_ID.fullmatch(inc['parentBackupId']):bad('parent backup')
+    if not isinstance(inc.get('parentSha256'),str) or not HEX64.fullmatch(inc['parentSha256']):bad('parent checksum')
+    fallback=inc.get('fallbackChainId')
+    if not isinstance(fallback,str) or not CHAIN_ID.fullmatch(fallback) or fallback==inc['chainId']:bad('fallback chain id')
+    result.update(parentBackupId=inc['parentBackupId'],parentSha256=inc['parentSha256'],fallbackChainId=fallback)
+    return result
+def private_directory(path):
+    """A root-only folder that is never a symbolic link."""
+    path=pathlib.Path(path)
+    if path.is_symlink():raise ValueError('Incremental state folder cannot be a symbolic link')
+    path.mkdir(mode=0o700,exist_ok=True)
+    if path.is_symlink() or not path.is_dir():raise ValueError('Incremental state folder cannot be a symbolic link')
+    if os.name=='posix':os.chmod(path,0o700)
+    return path
+def incremental_root():
+    for parent in reversed(INCREMENTAL_ROOT.parents):
+        if parent.is_symlink():raise ValueError('Incremental state folder cannot be a symbolic link')
+    INCREMENTAL_ROOT.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    return private_directory(INCREMENTAL_ROOT)
+def site_state(site,create=False):
+    if not isinstance(site,str) or not SITE_KEY.fullmatch(site):raise ValueError('Invalid incremental site key')
+    if create:incremental_root();return private_directory(INCREMENTAL_ROOT/site)
+    if INCREMENTAL_ROOT.is_symlink() or (INCREMENTAL_ROOT/site).is_symlink():raise ValueError('Incremental state folder cannot be a symbolic link')
+    return INCREMENTAL_ROOT/site
+def copy_private(source,target):
+    """Copy a regular file (never through a link) to a new 0600 file and fsync it."""
+    flags=os.O_RDONLY|NOFOLLOW
+    fd=os.open(source,flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('Snapshot file is not a regular file')
+        out=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_BINARY',0),0o600)
+        try:
+            with os.fdopen(fd,'rb',closefd=False) as reader,os.fdopen(out,'wb',closefd=False) as writer:
+                shutil.copyfileobj(reader,writer,1024*1024);writer.flush();os.fsync(writer.fileno())
+        finally:os.close(out)
+    finally:os.close(fd)
+def incremental_sources(containers):
+    """source -> snapshot key for every mount that gets a snapshot file. Protected mounts are archived from an empty
+    holder and are never incremental; a source mounted twice shares one archive and one snapshot file."""
+    result={}
+    for c in containers:
+        for m in c['Mounts']:
+            if m['Type']=='bind' and protected_mount(m['Source']):continue
+            result.setdefault(m['Source'],snapshot_key(m['Source']))
+    return result
+def plan_incremental(inc,sources,root):
+    """Decide full or increment before any service stops, and copy each parent snapshot into the job root.
+    Any missing or mismatched snapshot, or a changed set of mounts, turns the whole package into a full one."""
+    work=root/'incremental';work.mkdir(mode=0o700)
+    keys=sorted(set(sources.values()));reason=None
+    if inc['mode']=='incremental':
+        state=site_state(inc['siteKey'])
+        if set(keys)!=set(inc['parentSnapshots']):reason='mount-set-changed'
+        else:
+            for key in keys:
+                path=state/(key+'.snar')
+                if not is_regular(path):reason='snapshot-missing';break
+                base=work/(key+'.base');copy_private(path,base)
+                # The copy is what tar reads, so the copy is what must match the parent package.
+                if file_sha256(base)!=inc['parentSnapshots'][key]:reason='snapshot-mismatch';break
+        if reason:
+            for base in work.glob('*.base'):base.unlink()
+            warn('This backup is a full backup instead of an increment: %s.'%FALLBACK_TEXT[reason])
+    level=0 if inc['mode']=='full' or reason else 1
+    if level:chain={'id':inc['chainId'],'position':inc['position'],'parentBackupId':inc['parentBackupId'],'parentSha256':inc['parentSha256']}
+    else:chain={'id':inc['fallbackChainId'] if reason else inc['chainId'],'position':0,'parentBackupId':None,'parentSha256':None}
+    return {'level':level,'chain':chain,'reason':reason,'work':work,'keys':keys,'siteKey':inc['siteKey'],'parentImageIds':set(inc['parentImageIds']) if level else set()}
+def reset_snapshot(state,key):
+    """Before every tar run (a direct capture runs each tar twice): the working copy starts from the parent snapshot,
+    or does not exist for a level-0 archive, so both runs make the same archive."""
+    work=state['work']/(key+'.snar');work.unlink(missing_ok=True)
+    if state['level']:copy_private(state['work']/(key+'.base'),work)
+    return work
+def snapshot_records(state):
+    """Snapshot files after this capture: key -> sha256. tar must have written every one of them."""
+    result={}
+    for key in state['keys']:
+        path=state['work']/(key+'.snar')
+        if not is_regular(path):raise ValueError('tar did not write the snapshot file of a mount')
+        result[key]=file_sha256(path)
+    return result
+def annotate_mounts(containers,sources,state,snapshots):
+    return [{**c,'Mounts':[{**m,'incremental':{'snapshotKey':sources[m['Source']],'level':state['level'],'snapshotSha256':snapshots[sources[m['Source']]]}} if m['Source'] in sources and not (m['Type']=='bind' and protected_mount(m['Source'])) else m for m in c['Mounts']]} for c in containers]
+def manifest_snapshots(manifest):
+    """snapshot key -> {archive, level, sha256} from a v2 manifest; the first archive of a shared source holds the data."""
+    result={}
+    for i,c in enumerate(manifest.get('containers') or []):
+        for j,m in enumerate(c.get('Mounts') or []):
+            info=m.get('incremental') if isinstance(m,dict) else None
+            if info is None:continue
+            if not isinstance(info,dict) or not isinstance(info.get('snapshotKey'),str) or not HEX64.fullmatch(info['snapshotKey']) or info.get('level') not in (0,1) or isinstance(info.get('level'),bool) or not isinstance(info.get('snapshotSha256'),str) or not HEX64.fullmatch(info['snapshotSha256']):raise ValueError('Invalid incremental mount record')
+            key=info['snapshotKey']
+            if key in result:
+                if (result[key]['level'],result[key]['sha256'])!=(info['level'],info['snapshotSha256']):raise ValueError('Invalid incremental mount record')
+                continue
+            result[key]={'archive':'mount-%d-%d.tar'%(i,j),'level':info['level'],'sha256':info['snapshotSha256']}
+    return result
+def site_lock(site):
+    """Serialises capture planning, commit and discard for one site's snapshot files (no-op without fcntl)."""
+    try:import fcntl
+    except ImportError:return None
+    site_state(site);incremental_root()
+    handle=open(INCREMENTAL_ROOT/('.lock-'+site),'a')
+    fcntl.flock(handle,fcntl.LOCK_EX)
+    return handle
+def incremental_commit(req):
+    """Move a stored job's snapshot copies into the site state. Called only after the package is stored,
+    authenticated and published. Idempotent; an older job never replaces a newer committed one."""
+    job=req.get('job')
+    if not isinstance(job,str) or not JOB_DIRECTORY.fullmatch(job):raise ValueError('Invalid job')
+    site=req.get('siteKey')
+    if not isinstance(site,str) or not SITE_KEY.fullmatch(site):raise ValueError('Invalid incremental site key')
+    root=staging_base(req.get('config') or {})/str(job)
+    work=root/'incremental';ready=work/'ready.json'
+    if root.is_symlink() or work.is_symlink() or not is_regular(ready):raise ValueError('This job has no snapshot files to commit')
+    record=json.loads(ready.read_text())
+    if record.get('siteKey')!=site:raise ValueError('This job belongs to another site')
+    snapshots=record.get('snapshots') or {}
+    lock=site_lock(site)
+    try:
+        state=site_state(site,create=True);marker=state/'state.json'
+        current=json.loads(marker.read_text()) if is_regular(marker) else {}
+        if current.get('job')==str(job):
+            if all(is_regular(state/(key+'.snar')) and file_sha256(state/(key+'.snar'))==sha for key,sha in snapshots.items()):
+                emit(result={'committed':True,'alreadyCommitted':True,'snapshots':len(snapshots)});return
+        elif current.get('capturedAt') is not None and float(current['capturedAt'])>float(record.get('capturedAt') or 0):
+            raise ValueError('A newer backup already committed its snapshot files')
+        for key,sha in snapshots.items():
+            if not HEX64.fullmatch(key):raise ValueError('Invalid snapshot key')
+            source=work/(key+'.snar')
+            if not is_regular(source) or file_sha256(source)!=sha:raise ValueError('A snapshot file of this job is missing or changed')
+        for key in snapshots:
+            temporary=state/('.%s.%s.tmp'%(key,uuid.uuid4().hex))
+            try:
+                copy_private(work/(key+'.snar'),temporary)
+                if file_sha256(temporary)!=snapshots[key]:raise ValueError('A snapshot file changed while it was committed')
+                os.replace(temporary,state/(key+'.snar'))
+            finally:temporary.unlink(missing_ok=True)
+        # The state holds exactly this job's sources: snapshots of removed mounts go.
+        for path in state.glob('*.snar'):
+            if path.name[:-5] not in snapshots:path.unlink()
+        atomic_json(marker,{'job':str(job),'chainId':record.get('chainId'),'position':record.get('position'),'capturedAt':record.get('capturedAt'),'snapshots':snapshots})
+        sync_directory(state)
+    finally:
+        if lock:lock.close()
+    emit(result={'committed':True,'alreadyCommitted':False,'snapshots':len(snapshots)})
+def incremental_discard(req):
+    """Forget a site's snapshot files (feature turned off, site moved or archived). The next backup is full."""
+    site=req.get('siteKey')
+    state=site_state(site)
+    lock=site_lock(site)
+    try:
+        existed=state.exists()
+        if existed:
+            if not getattr(shutil.rmtree,'avoids_symlink_attacks',False) and os.name=='posix':raise ValueError('Safe directory removal is unavailable on this host')
+            shutil.rmtree(state)
+            if os.name=='posix':sync_directory(INCREMENTAL_ROOT)
+    finally:
+        if lock:lock.close()
+    emit(result={'discarded':True,'existed':existed})
 def pinned_socket(addresses,port,timeout):
     """Connects only to addresses validated earlier, so a second DNS answer cannot redirect the probe."""
     error=OSError('No validated probe address')
@@ -1389,10 +1619,12 @@ def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
         return capture_static(req)
+    inc=incremental_request(req)
     cfg=req['config'];skip_refused_probes(cfg);cs=preflight(cfg);plan=backup_plan(cfg,cs)
     if req.get('planFingerprint') and req['planFingerprint']!=plan['fingerprint']:raise ValueError('Backup plan changed; review configuration before capture')
     base=pathlib.Path(cfg.get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts:raise ValueError('Staging path must be absolute')
+    if inc is not None and (within(lexical(base),lexical(INCREMENTAL_ROOT)) or within(lexical(INCREMENTAL_ROOT),lexical(base/req['job']))):raise ValueError('The staging folder cannot hold the incremental state folder')
     job=req['job']
     uuid.UUID(job)
     root=base/job
@@ -1410,6 +1642,17 @@ def capture(req,output=None):
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
     exclusions=mount_exclusions(cfg,cs)
+    increment=None;snapshot_sources={}
+    if inc is not None:
+        snapshot_sources=incremental_sources(cs)
+        lock=site_lock(inc['siteKey'])
+        try:increment=plan_incremental(inc,snapshot_sources,root)
+        finally:
+            if lock:lock.close()
+    # A source mounted twice is archived once; with snapshot files this keeps one snapshot per source.
+    share=bool(exclusions) or increment is not None
+    # Original images already stored earlier in the chain are not saved again; committed snapshots always are.
+    saved_ids=[image for image in original_ids if image not in increment['parentImageIds']] if increment else original_ids
     # Shared sources are archived once; account for images/configs and packing.
     needed=capture_size(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),exclusions,original_images) if exclusions else sum(int(run(['du','-sb',m['Source']]).split()[0]) for c in cs for m in c['Mounts'] if not (m['Type']=='bind' and protected_mount(m['Source'])))+sum(c.get('SizeRw',0) or 0 for c in cs)
     if output is None:
@@ -1461,7 +1704,7 @@ def capture(req,output=None):
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
-        archives={};specs=[]
+        archives={};specs=[];prepare={}
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -1474,12 +1717,17 @@ def capture(req,output=None):
                     if os.path.isdir(source):holder.mkdir(mode=0o700)
                     else:holder.touch(mode=0o600)
                     source=str(holder)
+                key=snapshot_sources.get(source) if increment else None
+                snapshot=increment['work']/(key+'.snar') if key else None
                 if output is not None:
-                    link=archives.get(source) if exclusions else None
-                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[])),link))
+                    link=archives.get(source) if share else None
+                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot),link))
+                    if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
                     archives[source]=link or target.name
-                elif exclusions and source in archives:os.link(archives[source],target)
-                else:source_archive(source,target,exclusions.get(source,[]));archives[source]=target
+                elif share and source in archives:os.link(archives[source],target)
+                else:
+                    if key:reset_snapshot(increment,key)
+                    source_archive(source,target,exclusions.get(source,[]),snapshot);archives[source]=target
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
             source=pathlib.Path(filename)
             if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None))
@@ -1489,7 +1737,7 @@ def capture(req,output=None):
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
             archive=open_stream_archive(output,level)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*original_ids,*images],None),*specs],root,{'images.tar'})
+            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare)
             revalidate_sources(plan)
         captured=time.time()
     except BaseException:
@@ -1516,7 +1764,12 @@ def capture(req,output=None):
           except Exception:raise ValueError('RESTART_FAILED: inspect remote watchdog and recovery.json')
     restarted=time.time()
     emit(stage='packing')
-    if output is None:docker('save','-o',str(root/'images.tar'),*original_ids,*images)
+    if output is None:docker('save','-o',str(root/'images.tar'),*saved_ids,*images)
+    snapshots=snapshot_records(increment) if increment else {}
+    if increment and output is None:
+        for key in increment['keys']:copy_private(increment['work']/(key+'.snar'),root/('snapshot-%s.snar'%key))
+    if increment and output is not None:
+        for key in increment['keys']:inventory['snapshot-%s.snar'%key]=stream_file(archive,'snapshot-%s.snar'%key,increment['work']/(key+'.snar'),snapshots[key])
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
@@ -1530,6 +1783,14 @@ def capture(req,output=None):
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
+    if increment:
+        manifest['formatVersion']=2
+        manifest['backupKind']='incremental' if increment['level'] else 'full'
+        manifest['chain']=increment['chain']
+        manifest['containers']=annotate_mounts(cs,snapshot_sources,increment,snapshots)
+        manifest['chainImages']=[image for image in original_ids if image not in saved_ids]
+        manifest['snapshots']=snapshots
+        if increment['reason']:manifest['fallback']={'reason':increment['reason']}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     if exclusions:
@@ -1538,14 +1799,18 @@ def capture(req,output=None):
     if protected:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Mounts that were not copied\nThe bind mounts listed in manifest.protectedMounts hold passwords, sudo rules or SSH keys. DockNest never copies them; their archives hold an empty placeholder. Recover them separately and never restore the placeholder over the real files.\n')
+    if increment:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
     if output is not None:
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
         archive.close();output.flush()
-    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')]])
+    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar'))])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass
+    # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
+    if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots})
     emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest})
 
 def owned_job_root(req):
@@ -1631,10 +1896,19 @@ def safe_extract(archive,destination):
             run(['tar','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
         else:tar.extractall(destination,filter='fully_trusted')
 def prepare_restore(req):
-    root=owned_job_root(req)
+    root=owned_job_root(req);chain=chain_paths(req,root)
     if root.exists():raise ValueError('Restore staging already exists')
     root.mkdir(parents=True,mode=0o700)
-    emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz')})
+    emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),**chain})
+def chain_length(req):
+    n=req.get('chainLength')
+    if n is None:return None
+    if not isinstance(n,int) or isinstance(n,bool) or not 1<=n<=MAX_CHAIN:raise ValueError('A backup chain holds 1 to %d packages'%MAX_CHAIN)
+    return n
+def chain_paths(req,root):
+    """Remote paths for a chain restore: payload-0.tar.gz (the full backup) up to payload-<n-1>.tar.gz."""
+    n=chain_length(req)
+    return {} if n is None else {'remotePaths':[str(root/('payload-%d.tar.gz'%k)) for k in range(n)]}
 def restore_network_plan(containers):
     if not 1<=len(containers)<=30:raise ValueError('Restore requires 1 to 30 containers')
     plans=[]
@@ -1689,7 +1963,8 @@ def external_restore_plan(manifest,references,metadata_only=False):
     return {'references':plans,'fingerprint':fingerprint}
 
 def unpack_verified(req,root):
-    """Shared by isolated restore and the move deploy: check the transfer, unpack and verify every artifact."""
+    """Shared by isolated restore, restore tests and the move deploy: check the transfer, unpack and verify every artifact."""
+    if req.get('chain') is not None:return unpack_chain(req,root)
     payload=root/'payload.tar.gz'
     digest=__import__('hashlib').sha256()
     with open(payload,'rb') as f:
@@ -1697,8 +1972,172 @@ def unpack_verified(req,root):
     if digest.hexdigest()!=req['plaintextChecksum']:raise ValueError('Restore transfer checksum mismatch')
     unpacked=root/'unpacked';safe_extract(payload,unpacked)
     manifest=json.loads((unpacked/'manifest.json').read_text())
-    if manifest.get('formatVersion')!=VERSION or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
+    if manifest.get('formatVersion') not in FORMAT_VERSIONS or not manifest.get('complete'):raise ValueError('Unsupported or incomplete backup')
+    # A v2 full package stands alone; an increment needs its whole chain.
+    if manifest['formatVersion']==2 and (manifest.get('backupKind')!='full' or (manifest.get('chain') or {}).get('position')!=0):raise ValueError('This backup is incremental; restore it together with its chain.')
     return unpacked,manifest,verify_artifacts(unpacked,manifest)
+
+# ---- Chain restore ----
+# Every package's transfer checksum and every manifest link are checked before any archive is extracted. Each mount is
+# then rebuilt in one fresh directory: the full archive, then each increment in order with --listed-incremental=/dev/null
+# (which applies deletions and renames), after the same path checks as safe_extract plus the GNU.dumpdir names.
+CHAIN_LINKS={}
+MAX_MANIFEST_BYTES=64*1024*1024
+def chain_request(value):
+    if not isinstance(value,list) or not 1<=len(value)<=MAX_CHAIN:raise ValueError('A backup chain holds 1 to %d packages'%MAX_CHAIN)
+    for link in value:
+        if not isinstance(link,dict) or not isinstance(link.get('plaintextChecksum'),str) or not HEX64.fullmatch(link['plaintextChecksum']) or not isinstance(link.get('backupId'),str) or not CHAIN_ID.fullmatch(link['backupId']) or not isinstance(link.get('sha256'),str) or not HEX64.fullmatch(link['sha256']):raise ValueError('Invalid backup chain request')
+    if len({link['backupId'] for link in value})!=len(value):raise ValueError('Invalid backup chain request')
+    return value
+def payload_manifest(payload):
+    """The manifest of a plaintext package, read without extracting anything to disk."""
+    found=None
+    with tarfile.open(payload,'r:gz') as tar:
+        for member in tar:
+            if member.name!='manifest.json':continue
+            if found is not None or not member.isfile() or member.size>MAX_MANIFEST_BYTES:raise ValueError('Invalid backup manifest')
+            found=json.loads(tar.extractfile(member).read())
+    if not isinstance(found,dict):raise ValueError('Backup has no manifest')
+    return found
+def broken_link(chain,k):
+    return 'This backup depends on backup %s, which is missing or damaged. Restore %s\'s chain from an earlier point, or pick a full backup.'%(chain[k]['backupId'],chain[k]['backupId'])
+def chain_problem(manifests,chain):
+    """None when manifests[0..n-1] form one verified chain in order, else the reason."""
+    first=manifests[0]
+    if first.get('formatVersion') not in FORMAT_VERSIONS:return 'Unsupported or incomplete backup'
+    if first.get('formatVersion')!=2 or first.get('backupKind')!='full':return 'The first backup of the chain is not a full backup.'
+    chain_id=(first.get('chain') or {}).get('id')
+    try:keys=manifest_snapshots(first)
+    except ValueError:return broken_link(chain,0)
+    for k,manifest in enumerate(manifests):
+        record=manifest.get('chain')
+        if manifest.get('formatVersion')!=2 or not manifest.get('complete'):return 'Unsupported or incomplete backup'
+        if not isinstance(record,dict) or not isinstance(chain_id,str) or record.get('id')!=chain_id or record.get('position')!=k or isinstance(record.get('position'),bool):return broken_link(chain,max(k-1,0))
+        if manifest.get('backupKind')!=('full' if k==0 else 'incremental'):return broken_link(chain,max(k-1,0))
+        if k==0 and (record.get('parentBackupId') is not None or record.get('parentSha256') is not None):return broken_link(chain,0)
+        if k>0 and (record.get('parentBackupId')!=chain[k-1]['backupId'] or record.get('parentSha256')!=chain[k-1]['sha256']):return broken_link(chain,k-1)
+        try:snapshots=manifest_snapshots(manifest)
+        except ValueError:return broken_link(chain,k)
+        # Same sources in every link; the full is level 0 and every increment level 1.
+        if set(snapshots)!=set(keys) or any(item['level']!=(0 if k==0 else 1) for item in snapshots.values()):return broken_link(chain,max(k-1,0))
+    return None
+def unpack_chain(req,root):
+    chain=chain_request(req.get('chain'))
+    if req.get('plaintextChecksum') is not None and req['plaintextChecksum']!=chain[-1]['plaintextChecksum']:raise ValueError('Restore transfer checksum mismatch')
+    payloads=[root/('payload-%d.tar.gz'%k) for k in range(len(chain))]
+    for k,payload in enumerate(payloads):
+        if not is_regular(payload) or file_sha256(payload)!=chain[k]['plaintextChecksum']:
+            raise ValueError('Restore transfer checksum mismatch' if k==len(chain)-1 else broken_link(chain,k))
+    manifests=[]
+    for k,payload in enumerate(payloads):
+        try:manifests.append(payload_manifest(payload))
+        except (tarfile.TarError,ValueError,OSError,EOFError):raise ValueError('Restore transfer checksum mismatch' if k==len(chain)-1 else broken_link(chain,k))
+    problem=chain_problem(manifests,chain)
+    if problem:raise ValueError(problem)
+    directories=[]
+    for k,payload in enumerate(payloads):
+        directory=root/('unpacked' if k==len(chain)-1 else 'chain-%d'%k);safe_extract(payload,directory)
+        if json.loads((directory/'manifest.json').read_text())!=manifests[k]:raise ValueError('Backup package changed during restore')
+        if not verify_artifacts(directory,manifests[k]):raise ValueError('Backup artifacts are missing, changed or unexpected')
+        directories.append(directory)
+    CHAIN_LINKS[str(directories[-1])]={'directories':directories,'manifests':manifests,'snapshots':[manifest_snapshots(m) for m in manifests]}
+    return directories[-1],manifests[-1],True
+def mount_archive(unpacked,i,j):
+    """The archive (v1 and full packages) or the ordered archive list (a chain) that rebuilds mount j of container i."""
+    name='mount-%d-%d.tar'%(i,j);chain=CHAIN_LINKS.get(str(unpacked))
+    if not chain:return unpacked/name
+    info=chain['manifests'][-1]['containers'][i]['Mounts'][j].get('incremental')
+    if not info:return unpacked/name  # protected placeholder: always complete
+    return [directory/snapshots[info['snapshotKey']]['archive'] for directory,snapshots in zip(chain['directories'],chain['snapshots'])]
+def mount_bytes(unpacked):
+    chain=CHAIN_LINKS.get(str(unpacked))
+    return sum(p.stat().st_size for directory in (chain['directories'] if chain else [unpacked]) for p in directory.glob('mount-*.tar'))
+def image_archives(unpacked):
+    """Every images.tar to load, in chain order (one for a single package)."""
+    chain=CHAIN_LINKS.get(str(unpacked))
+    return [directory/'images.tar' for directory in chain['directories']] if chain else [unpacked/'images.tar']
+def extract_archives(archive,destination):
+    if isinstance(archive,list):return chain_extract(archive,destination)
+    return safe_extract(archive,destination)
+DUMPDIR_CODES='YNDRTX'
+def dumpdir_problem(value,top):
+    """GNU.dumpdir lists a directory's entries (Y, N, D: one name each) and directory renames (R, T, X: paths from the
+    archive root). Every name must stay inside the archive's one top-level entry."""
+    if not isinstance(value,str):return True
+    entries=value.split('\0')
+    while entries and entries[-1]=='':entries.pop()
+    for entry in entries:
+        if len(entry)<2 or entry[0] not in DUMPDIR_CODES:return True
+        name=entry[1:]
+        if entry[0] in 'YND':
+            if '/' in name or name in ('.','..'):return True
+        else:
+            p=pathlib.PurePosixPath(name)
+            if p.is_absolute() or '..' in p.parts or str(p)!=name or p.parts[0]!=top:return True
+    return False
+def disk_symlinks(root):
+    links={}
+    for current,dirs,files in os.walk(root,followlinks=False):
+        for name in dirs+files:
+            path=os.path.join(current,name)
+            if os.path.islink(path):links[pathlib.PurePosixPath(*pathlib.Path(os.path.relpath(path,root)).parts).parts]=os.readlink(path)
+    return links
+def incremental_archive_check(archive,root,top=None):
+    """safe_extract's checks for one archive of a chain, against what the earlier archives already put on disk.
+    Returns the archive's top-level name."""
+    with tarfile.open(archive,'r:') as tar,open(archive,'rb') as raw:
+        members=tar.getmembers()
+        if not members:raise ValueError('Empty mount archive in the backup chain')
+        for member in members:
+            # Only POSIX headers: GNU-format incremental headers reuse the ustar name prefix for atime/ctime.
+            raw.seek(member.offset);header=raw.read(512)
+            if header[257:263]!=b'ustar\x00':raise ValueError('Incremental archive must use the POSIX tar format')
+        names={pathlib.PurePosixPath(m.name) for m in members}
+        directories={pathlib.PurePosixPath(m.name) for m in members if m.isdir()}
+        links=disk_symlinks(root)
+        for path in directories:links.pop(path.parts,None)
+        for m in members:
+            if m.issym():links[pathlib.PurePosixPath(m.name).parts]=m.linkname
+            elif pathlib.PurePosixPath(m.name).parts in links:links.pop(pathlib.PurePosixPath(m.name).parts)
+        archived={pathlib.PurePosixPath(m.name) for m in members if m.issym()}
+        regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
+        if shutil.disk_usage(root).free<sum(m.size for m in members if m.isfile())+EXTRACT_RESERVE_BYTES:raise ValueError('Insufficient target capacity to extract the archive')
+        seen=set()
+        for member in members:
+            p=pathlib.PurePosixPath(member.name)
+            if p.is_absolute() or '..' in p.parts or not p.parts or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+                raise ValueError('Unsafe archive member or link; use reviewed offline restore adapter')
+            top=top or p.parts[0]
+            if p.parts[0]!=top:raise ValueError('Mount archive must have exactly one source entry')
+            if p in seen or any(parent in archived for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
+            seen.add(p)
+            # A folder an earlier archive left as a symlink is written through only if this archive replaces it.
+            if any(parent.parts and (root/str(parent)).is_symlink() and parent not in directories for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
+            dumpdir=member.pax_headers.get('GNU.dumpdir')
+            if dumpdir is not None and (not member.isdir() or dumpdir_problem(dumpdir,top)):raise ValueError('Unsafe directory listing in incremental archive')
+            target=(root/member.name).resolve()
+            if os.path.commonpath([str(root),str(target)])!=str(root):raise ValueError('Archive path escapes destination')
+            if member.issym() or member.islnk():
+                link=pathlib.PurePosixPath(member.linkname)
+                if link.is_absolute():raise ValueError('Absolute archive link is not portable')
+                linked=(target.parent/member.linkname).resolve() if member.issym() else (root/member.linkname).resolve()
+                if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
+                if member.issym() and archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
+                if member.islnk():
+                    # Hard links point at a file of this archive or one an earlier archive restored (never via a link).
+                    on_disk=link not in names and is_regular(root/str(link)) and not any(parent.parts and (root/str(parent)).is_symlink() for parent in link.parents)
+                    if '..' in link.parts or not (link in regular or on_disk) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
+        return top
+def chain_extract(archives,destination):
+    """Rebuild one mount from a chain: the full archive, then each increment in order."""
+    if os.name!='posix':raise ValueError('Restoring an incremental backup needs GNU tar on Linux')
+    if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
+    destination.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if any(destination.iterdir()):raise ValueError('Restore destination must be empty')
+    root=destination.resolve();top=None
+    for archive in archives:
+        top=incremental_archive_check(archive,root,top)
+        run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
 def restore(req):
     root=owned_job_root(req)
     unpacked,manifest,artifacts_verified=unpack_verified(req,root)
@@ -1717,7 +2156,7 @@ def restore(req):
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
     multi=len(containers)>1
     if multi and int(docker('version','--format','{{.Server.Version}}').decode().split('.')[0])<28:raise ValueError('Grouped isolated restores require Docker 28 or newer')
-    if shutil.disk_usage(root).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+    if shutil.disk_usage(root).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
     definitions=[];sources={}
     for i,c in enumerate(containers):
         name='dbm-restore-'+req['job'][:12]+('-'+str(i) if multi else '')
@@ -1733,7 +2172,7 @@ def restore(req):
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
                     if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths require offline restore')
                 directory=root/('data-%d-%d'%(i,j))
-                safe_extract(unpacked/('mount-%d-%d.tar'%(i,j)),directory)
+                extract_archives(mount_archive(unpacked,i,j),directory)
                 entries=list(directory.iterdir())
                 if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
                 sources[key]=entries[0]
@@ -1754,7 +2193,7 @@ def restore(req):
         actual=cached_sqlite_file_proof(sqlite_cache,service,restored)
         if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
         sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
-    load_images_keeping_tags(unpacked/'images.tar')
+    for archive in image_archives(unpacked):load_images_keeping_tags(archive)
     created=[];networks={};running=[]
     try:
         for index,original in enumerate(dict.fromkeys(name for plan in plans for name in plan)):
@@ -2334,7 +2773,7 @@ def place_tree(archive,target,d,state,mid):
     if empty:target.rmdir()
     temporary=target.parent/('.docknest-move-%s-%s'%(mid[:8],uuid.uuid4().hex[:8]))
     if not missing:journal_resource(d,state,'paths',{'path':str(temporary),'restoreEmpty':False})
-    safe_extract(archive,temporary)
+    extract_archives(archive,temporary)
     entries=list(temporary.iterdir())
     if len(entries)!=1:raise ValueError('Archive must hold exactly one entry')
     os.replace(entries[0],target);temporary.rmdir()
@@ -2348,7 +2787,7 @@ def place_volume(archive,name,d,state,mid,mode,labels=None):
     mountpoint=pathlib.Path(json.loads(docker('volume','inspect',name))[0]['Mountpoint'])
     if any(mountpoint.iterdir()):raise ValueError('New volume is not empty')
     temporary=mountpoint.parent/('.docknest-move-'+uuid.uuid4().hex[:8])
-    safe_extract(archive,temporary)
+    extract_archives(archive,temporary)
     entries=list(temporary.iterdir())
     if len(entries)!=1:raise ValueError('Archive must hold exactly one entry')
     mountpoint.rmdir();os.replace(entries[0],mountpoint);temporary.rmdir()
@@ -2532,7 +2971,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
     if not 1<=len(containers)<=30:raise ValueError('Deploy requires 1 to 30 containers')
     for c in containers:restore_network_plan([c])  # refuses host privileges, shared namespaces and static IPs
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
-    if shutil.disk_usage(unpacked).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+    if shutil.disk_usage(unpacked).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
     sources={};volume_labels={v.get('name'):v.get('labels') for v in req.get('volumes') or [] if isinstance(v,dict)}
     for i,c in enumerate(containers):
         for j,m in enumerate(c['Mounts']):
@@ -2545,8 +2984,8 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
                     if kind!='bind':continue
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
                     if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths need a manual move')
-                placed.append(str(place_tree(unpacked/('mount-%d-%d.tar'%(i,j)),m['Source'],d,state,mid)))
-            elif m['Type']=='volume':place_volume(unpacked/('mount-%d-%d.tar'%(i,j)),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
+                placed.append(str(place_tree(mount_archive(unpacked,i,j),m['Source'],d,state,mid)))
+            elif m['Type']=='volume':place_volume(mount_archive(unpacked,i,j),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
             else:raise ValueError('Unsupported mount type')
             sources[key]=True
     configuration=[]
@@ -2574,7 +3013,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         journal_resource(d,state,'networks',test_network)
         docker('network','create','--driver','bridge','--label','docknest.move='+mid,test_network)
     for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
-    load_images_keeping_tags(unpacked/'images.tar')
+    for archive in image_archives(unpacked):load_images_keeping_tags(archive)
     created=[];ports=[];names=[]
     try:
         compose=req.get('compose')
@@ -3088,7 +3527,7 @@ def start_reaper(d,tid,source):
 def restore_test_prepare(req):
     """Copy backup, first half: the journal, the private staging root and the reaper. The package follows over SFTP."""
     if hasattr(os,'geteuid') and os.geteuid()!=0:raise ValueError('Restore tests need root SSH on the test server.')
-    tid=test_id(req);deadline=float(req['deadline'])
+    tid=test_id(req);deadline=float(req['deadline']);chain_length(req)
     # The reaper waits the manager's own clean-up time after the deadline (default 10 minutes).
     grace=req.get('grace',REAPER_GRACE)
     if not isinstance(grace,int) or isinstance(grace,bool) or not 60<=grace<=3600:raise ValueError('The clean-up time must be 60 to 3600 seconds')
@@ -3102,7 +3541,7 @@ def restore_test_prepare(req):
     state['deadline']=deadline;state['grace']=grace;state['prepared']=time.time();save_state(d,state)
     pid=start_reaper(d,tid,req['reaper']) if req.get('reaper') else None
     if isinstance(pid,int) and not isinstance(pid,bool):state['reaperPid']=pid;state['reaperStart']=process_start(pid);save_state(d,state)
-    emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None})
+    emit(result={'root':str(root),'remotePath':str(root/'payload.tar.gz'),'reaper':pid is not None,**chain_paths(req,root)})
 def backup_side(error):
     """Errors from checking and unpacking the package: the backup did not come back, unless the server ran out of room."""
     if STOPPING:return error
@@ -3282,7 +3721,7 @@ def restore_test_restore(req):
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise TestOutcome('failed','The backup is missing snapshot images.',checks)
     multi=len(containers)>1
     if multi and docker_major()<28:raise TestOutcome('couldnt_run','Sites with more than one container need Docker 28 or newer on the test server.',checks)
-    if shutil.disk_usage(root).free<sum(p.stat().st_size for p in unpacked.glob('mount-*.tar'))+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
+    if shutil.disk_usage(root).free<mount_bytes(unpacked)+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
     prefix='dbm-test-'+tid[:12]
     labels=['--label',TEST_LABEL+'='+tid,'--label','com.docker.compose.project=docknest-test-'+tid[:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
     definitions=[];sources={}
@@ -3301,7 +3740,7 @@ def restore_test_restore(req):
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
                     if os.path.commonpath([a,b]) in [a,b]:raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
                 directory=root/('data-%d-%d'%(i,j))
-                try:safe_extract(unpacked/('mount-%d-%d.tar'%(i,j)),directory)
+                try:extract_archives(mount_archive(unpacked,i,j),directory)
                 except ValueError as error:raise backup_side(error)
                 entries=list(directory.iterdir())
                 if len(entries)!=1:raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
@@ -3326,13 +3765,14 @@ def restore_test_restore(req):
     # Images: containers use snapshot image IDs, never tags. Only IDs this server did not have are test-only.
     before=set(docker('images','-aq','--no-trunc').decode().split())
     wanted=list(dict.fromkeys(manifest['snapshotImages']+[item.get('Id') for item in manifest.get('originalImages') or [] if isinstance(item,dict) and isinstance(item.get('Id'),str)]))
-    try:tags=image_archive_names(unpacked/'images.tar')
+    try:tags=[tag for archive in image_archives(unpacked) for tag in image_archive_names(archive)]
     except (tarfile.TarError,ValueError,OSError,AttributeError,TypeError):raise TestOutcome('failed','The image archive in the backup cannot be read.',checks)
     if len(tags)>200 or any(not IMAGE_TAG.fullmatch(tag) for tag in tags):raise TestOutcome('failed','The image archive in the backup names images DockNest cannot put back.',checks)
     for tag in tags:test_journal(d,state,'tags',{'tag':tag,'previous':image_id_of(tag)})
     for image in wanted:
         if image not in before:test_journal(d,state,'images',image)
-    try:docker('load','-i',str(unpacked/'images.tar'))
+    try:
+        for archive in image_archives(unpacked):docker('load','-i',str(archive))
     finally:restore_test_tags(state)
     networks={};created=[]
     # Every copy starts on fresh internal isolated networks only. With internet, a single container gets one such
@@ -3657,6 +4097,8 @@ def main(req):
         if req['enabled'] and 'public' in refused:raise ValueError("Probe URL policy: %s. Update the site's public maintenance URL before enabling maintenance."%refused['public'])
         maintenance(req['config'],req['enabled']);emit(result={'enabled':req['enabled']})
     elif op=='cleanup':cleanup_staging(req);emit(result={'removed':True})
+    elif op=='incremental-commit':incremental_commit(req)
+    elif op=='incremental-discard':incremental_discard(req)
     elif op=='list-staging':emit(result=list_staging(req['config']))
     elif op=='move-facts':move_facts(req)
     elif op=='install-status':install_status()
