@@ -47,18 +47,18 @@ export function parseRemote(file){
  return {adapter,options,value:adapter.resolve(options,remote)};
 }
 const remoteOf=options=>{const adapter=adapters[options.mode];if(!adapter)throw new Error('Unsupported storage destination type');return adapter;};
-export async function checkStorageReadiness(){
- const options=activeStorage();
+// `options`: the destination to check (a site's main destination); the default destination when omitted.
+export async function checkStorageReadiness(options=activeStorage()){
  if(options.mode==='unconfigured')throw new Error('Storage is not configured');
  if(options.mode==='local')await local.readiness();else await remoteOf(options).readiness(options);
- const capacity=await storageCapacity();
+ const capacity=await storageCapacity({options});
  if(capacity.available===null&&!capacity.unbounded)throw new Error('Storage available space could not be verified. Check the connection and filesystem capacity support.');
  if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Insufficient storage capacity');
  return {reachable:true,writeTested:false};
 }
 export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
-export function backupDirectory(server,site){
- const options=activeStorage();
+// `options`: the site's main destination (src/site-storage.js); the default destination when omitted.
+export function backupDirectory(server,site,options=activeStorage()){
  if(options.mode==='unconfigured')throw new Error('Connect a remote storage destination before backing up');
  const folders=backupLayout(server,site);
  return options.mode==='local'?local.backupDirectory(folders):targetPrefix(options)+path.posix.join(backupRoot(options.root),...folders);
@@ -89,15 +89,18 @@ export async function renameFile(from,to){
  const a=parseRemote(from),b=parseRemote(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');
  return a.adapter.renameFile(a.options,a.value,b.value);
 }
+// A backup whose main package aged out while a copy is kept points backups.path at that copy; its bytes are counted once,
+// as a copy. Copies count on the destination that holds them (docs/backup-copies.md).
+const mainOnly=' AND id NOT IN (SELECT backup_id FROM backup_main_removed)';
+export const copyBytesOn=targetId=>db.prepare("SELECT COALESCE(SUM(b.size),0) AS bytes FROM backup_copies c JOIN backups b ON b.id=c.backup_id WHERE c.target_id=? AND c.status='verified'").get(targetId).bytes;
 function managedBytes(options){
- if(options.mode==='local')return db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE "+schemes.map(()=>'path NOT LIKE ?').join(' AND ')).get(...schemes.map(scheme=>scheme+':%')).bytes;
- let bytes=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(targetPrefix(options)+'%').bytes;
+ if(options.mode==='local')return db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE "+schemes.map(()=>'path NOT LIKE ?').join(' AND ')+mainOnly).get(...schemes.map(scheme=>scheme+':%')).bytes;
+ let bytes=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?'+mainOnly).get(targetPrefix(options)+'%').bytes+copyBytesOn(options.id);
  bytes+=db.prepare("SELECT COALESCE(SUM(size),0) AS bytes FROM manager_backups WHERE status='completed' AND target_id=?").get(options.id).bytes;
- if(options.id==='env')bytes+=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?').get(options.mode+':/%').bytes;
+ if(options.id==='env')bytes+=db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM backups WHERE path LIKE ?'+mainOnly).get(options.mode+':/%').bytes;
  return bytes;
 }
-export async function storageCapacity({maxAgeMs=0}={}){
- const options=activeStorage();
+export async function storageCapacity({maxAgeMs=0,options=activeStorage()}={}){
  if(options.mode==='unconfigured')return {used:null,total:0,available:null,managedBytes:0,backend:'unconfigured',capacitySource:'none',name:'Connect a storage destination'};
  if(options.mode==='local')return {...await local.capacity(),managedBytes:managedBytes(options)};
  const bytes=managedBytes(options);
