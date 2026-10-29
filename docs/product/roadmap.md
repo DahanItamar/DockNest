@@ -8,13 +8,12 @@ This is a plan, not a commitment. Items labelled *validated* in a release need r
 ## Current plan (owner, 2026-10-28)
 
 The overview below is the original 2.1-era plan; 2.1.0 to 2.10.1 have shipped. The next three releases, in the
-owner's order (the radar moved last because it is the least critical):
+owner's order:
 
 | Release | Theme | Design |
 | --- | --- | --- |
 | 2.11.0 | Storage: S3 out of beta, storage per site, backup copies | [backup-copies.md](../backup-copies.md) |
-| 2.12.0 | Incremental backups (GNU tar chains, opt-in, beta) | [incremental-backups.md](../incremental-backups.md) |
-| 2.13.0 | Radar (draft PRs #59, #62; migration renumbered on rebase) | Existing radar drafts |
+| 2.12.0 | Incremental backups (GNU tar chains, opt-in, beta) and a provider-first Connect storage dialog | [incremental-backups.md](../incremental-backups.md) |
 
 ### 2.11.0 tasks
 
@@ -41,9 +40,7 @@ owner's order (the radar moved last because it is the least critical):
    report shows the real saving.
 4. Proof: Linux chain test (1 full + 6 increments with changes, deletes and renames; restore from every point).
 
-### 2.13.0 tasks
-
-Rebase the radar drafts on 2.12.0, renumber their migration, review and ship.
+The vulnerability radar was dropped by the owner on 2026-10-29 and is not planned.
 
 ## Overview
 
