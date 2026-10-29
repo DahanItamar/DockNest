@@ -34,8 +34,8 @@ function StorageTree({api,target,refreshKey,onSessionExpired}) {
      <Paginated rows={server.sites} label={'Storage sites on '+server.name} pageSize={5}>{sites=>sites.map(site=><details key={site.id} open>
       <summary>Site: {site.name}</summary>
       <Paginated rows={site.days.flatMap(day=>day.backups)} label={'Stored backups for '+site.name} pageSize={5}>{points=>points.map(backup=><div className="backup-tree-file" key={backup.id}>
-       <div><b>{filename(backup)}</b><small>{formatDate(backup.capturedAt)} · {formatBytes(backup.size)} · {backup.verified?'Integrity checked':'Integrity unchecked'}{backup.pinned?' · Pinned':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div>
-       <div className="actions"><ZipButton backupId={backup.id} className="button" label={'Download full ZIP '+backup.id}>Full ZIP</ZipButton><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a><button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>
+       <div><b>{filename(backup)}</b><small>{formatDate(backup.capturedAt)} · {formatBytes(backup.size)} · {backup.verified?'Integrity checked':'Integrity unchecked'}{backup.pinned?' · Pinned':''}{backup.backupKind==='incremental'?' · Increment '+backup.chainPosition+', download the chain from the backup library':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div>
+       <div className="actions">{backup.backupKind!=='incremental'&&<><ZipButton backupId={backup.id} className="button" label={'Download full ZIP '+backup.id}>Full ZIP</ZipButton><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a></>}<button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>
       </div>)}</Paginated>
      </details>)}</Paginated>
     </details>)}</Paginated>}

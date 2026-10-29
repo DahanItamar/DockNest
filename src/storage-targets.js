@@ -47,8 +47,8 @@ storageTargets.get('/:id/tree',(req,res)=>{
  const target=db.prepare('SELECT id,root,auth_type FROM storage_targets WHERE id=?').get(req.params.id);
  if(!target)return res.status(404).json({error:'Storage destination not found.'});
  const prefix=targetPrefix({mode:targetMode(target),id:target.id});
- const rows=db.prepare(`SELECT b.id,b.captured_at,b.size,b.pinned,b.verified,b.path,s.id AS site_id,s.name AS site_name,v.id AS server_id,v.name AS server_name
- FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id
+ const rows=db.prepare(`SELECT b.id,b.captured_at,b.size,b.pinned,b.verified,b.path,s.id AS site_id,s.name AS site_name,v.id AS server_id,v.name AS server_name,l.backup_kind,l.chain_position
+ FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id LEFT JOIN backup_chain_links l ON l.backup_id=b.id
  WHERE b.path LIKE ? AND b.id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY b.captured_at DESC LIMIT 1001`).all(prefix+'%');
  const limited=rows.length>1000;if(limited)rows.pop();
  const servers=new Map();
@@ -59,7 +59,7 @@ storageTargets.get('/:id/tree',(req,res)=>{
   const site=server.sites.get(row.site_id),day=row.captured_at.slice(0,10);
   if(!site.days.has(day))site.days.set(day,{date:day,backups:[]});
   const root=prefix+target.root+'/';
-  site.days.get(day).backups.push({id:row.id,capturedAt:row.captured_at,size:row.size,pinned:Boolean(row.pinned),verified:Boolean(row.verified),filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null});
+  site.days.get(day).backups.push({id:row.id,capturedAt:row.captured_at,size:row.size,pinned:Boolean(row.pinned),verified:Boolean(row.verified),backupKind:row.backup_kind||'full',chainPosition:row.chain_position??null,filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null});
  }
  const latest=db.prepare("SELECT id FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
  const kits=db.prepare("SELECT id,created_at,size,path FROM manager_backups WHERE status='completed' AND target_id=? AND path IS NOT NULL ORDER BY rowid DESC LIMIT 1001").all(target.id);
