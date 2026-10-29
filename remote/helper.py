@@ -2890,7 +2890,8 @@ def install_failure(code,tail,manager,step):
     if 'unable to locate package' in tail or 'no match for argument' in tail or 'has no installation candidate' in tail:return 'NOT_OFFERED'
     if 'temporary failure resolving' in tail or 'could not resolve' in tail or 'failed to fetch' in tail or 'cannot download' in tail or 'failed to download' in tail:return 'NO_NETWORK'
     if 'no space left' in tail:return 'NO_SPACE'
-    if 'packages will be removed' in tail or 'the following packages will be removed' in tail or 'unmet dependencies' in tail:return 'CONFLICT'
+    # apt --no-remove ends with "Packages need to be removed but remove is disabled"; the plan above it may be cut off.
+    if 'packages will be removed' in tail or 'remove is disabled' in tail or 'unmet dependencies' in tail:return 'CONFLICT'
     return 'UPDATE_FAILED' if step=='update' else 'INSTALL_FAILED'
 def verify_install(name):
     unit=INSTALL_SERVICES.get(name)

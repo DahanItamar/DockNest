@@ -150,6 +150,10 @@ class InstallTests(unittest.TestCase):
         host.install('nginx')
         self.assertEqual(seen[0][1],helper.INSTALL_UPDATE_TIMEOUT);self.assertEqual(seen[1][1],helper.INSTALL_TIMEOUT)
         self.assertLess(helper.INSTALL_UPDATE_TIMEOUT,helper.INSTALL_TIMEOUT)
+    def test_a_package_that_would_remove_another_is_a_conflict(self):
+        for tail in ['e: packages need to be removed but remove is disabled.','the following packages will be removed:\n  containerd','the following packages have unmet dependencies:']:
+            self.assertEqual(helper.install_failure(100,tail,'apt','install'),'CONFLICT',tail)
+        self.assertEqual(helper.install_failure(100,'e: sub-process /usr/bin/dpkg returned an error code (1)','apt','install'),'INSTALL_FAILED')
     def test_timeouts_say_what_to_do_and_apt_mentions_dpkg(self):
         self.assertEqual(helper.install_failure(-1,'','apt','update'),'TIMEOUT_APT_UPDATE')
         self.assertEqual(helper.install_failure(-1,'','apt','install'),'TIMEOUT_APT_INSTALL')
