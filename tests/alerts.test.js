@@ -288,6 +288,26 @@ test('the detector reads backups, moves, updates and disk without replaying hist
   assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Low disk space on mobiX-Srv: 2\.1 GB free/);
 });
 
+test('incremental chains: a backup not saved for its chain and a scrub that found a broken chain both raise Backup failed', () => {
+  reset(); db.exec("DELETE FROM settings WHERE key IN ('alerts_cursor','alerts_update_notified')");
+  const srv = server('chain-srv', '203.0.113.10'), siteId = site(srv, 'chain.example.com');
+  const channel = store.createChannel(tgNode(), 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: [...events.EVENTS] }, 'test');
+  const job = (type, status, finished, details) => db.prepare('INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(), siteId, type, status, status, finished, finished, JSON.stringify(details));
+  detect.detectJobsAndMoves('2026-02-01T00:00:00.000Z');
+  job('backup', 'failed', '2026-02-01T01:00:00.000Z', { failure: { code: 'chain_inconsistent', chainCheck: 'rename-marking-missing' } });
+  job('scrub', 'failed', '2026-02-01T02:00:00.000Z', { backupId: 'b1', chainBroken: true, brokenDependents: 2 });
+  // A scrub that failed for a plain package (no chain) and a completed scrub stay as before: no alert.
+  job('scrub', 'failed', '2026-02-01T03:00:00.000Z', { backupId: 'b2' });
+  job('scrub', 'completed', '2026-02-01T04:00:00.000Z', { backupId: 'b3' });
+  assert.equal(detect.detectJobsAndMoves('2026-02-01T05:00:00.000Z'), 2);
+  const messages = db.prepare('SELECT event,dedupe_key,message,payload FROM alert_outbox ORDER BY created_at').all().map(row => ({ event: row.event, dedupe_key: row.dedupe_key, message: row.message, reason: JSON.parse(row.payload).reason }));
+  assert.deepEqual(messages.map(row => row.event), ['backup.failed', 'backup.failed']);
+  assert.ok(messages.some(row => /could not be confirmed as part of its incremental chain, so it was not saved\. The next backup will be full\./.test(row.reason)), JSON.stringify(messages));
+  assert.ok(messages.some(row => /found a broken incremental chain/.test(row.reason) && row.dedupe_key === `backup.failed:site:${siteId}:chain`), JSON.stringify(messages));
+  assert.ok(!messages.some(row => /rename-marking|b1|\d+\.\d+\.\d+\.\d+/.test(row.message + row.reason)), 'no codes, ids or addresses in the text');
+});
+
 test('update.available fires once per new release, only when update checks are on', () => {
   reset(); db.exec("DELETE FROM settings WHERE key='alerts_update_notified'");
   const channel = store.createChannel(tgNode(), 'test'), owner = db.prepare('SELECT id FROM users LIMIT 1').get().id;

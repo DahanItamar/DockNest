@@ -3,7 +3,7 @@
 // later step; this file defines their shape. It never sees secret values: env findings arrive masked and are
 // masked again here in case a collector forgets.
 import { createHash } from 'node:crypto';
-import { installInfo } from '../install-plan.js';
+import { installInfo, dockerNeed, MIN_DOCKER_MAJOR } from '../install-plan.js';
 import { formatBytes } from '../../shared/format-bytes.js';
 
 /**
@@ -31,7 +31,6 @@ import { formatBytes } from '../../shared/format-bytes.js';
 const GiB = 1024 ** 3;
 export const PORT_SEARCH_RANGE = 100;
 export const FINAL_SYNC_LIMIT_SECONDS = 1800;
-const MIN_DOCKER_MAJOR = 28;
 const MIN_COMPOSE = [2, 0];
 const OVERRIDE_COMPOSE = [2, 24];
 
@@ -109,7 +108,7 @@ export function evaluateMove(facts, options = {}) {
 
     if (docker) {
       const dockerVersion = version(target.dockerVersion);
-      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`, installable(target, 'docker', { needDockerMajor: (site.containerCount ?? 1) > 1 ? MIN_DOCKER_MAJOR : 0 }));
+      if (!dockerVersion) add('docker', 'block', 'Docker', `${target.name} needs Docker. Install it, then try again.`, installable(target, 'docker', dockerNeed(site.containerCount)));
       else if ((site.containerCount ?? 1) > 1 && dockerVersion[0] < MIN_DOCKER_MAJOR) add('docker', 'block', 'Docker', `Docker on ${target.name} is too old. Update it to version ${MIN_DOCKER_MAJOR} or newer.`);
       if (site.architecture && target.architecture && site.architecture !== target.architecture) add('docker', 'block', 'Processor type', `${target.name} has a different processor type (${target.architecture}) than ${site.name} (${site.architecture}).`);
       if (dockerVersion && !checks.some(item => item.id === 'docker')) add('docker', 'ok', 'Docker', `Docker ${target.dockerVersion} is ready on ${target.name}.`);

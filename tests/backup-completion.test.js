@@ -106,3 +106,12 @@ test('a backup that did not copy protected mounts says so in plain words on the 
  assert.match(text,/^Not copied: \/home\/git\/\.ssh \(mounted into gitea\); \/etc\/ssh\. /);assert.match(text,/recover them separately/);
  assert.ok(protectedMountWarning([{source:'/x'.repeat(2000),container:'c'.repeat(500)}]).length<1000,'source-supplied names are bounded');
 });
+test('key folders left out of a copied mount are named on the job result',async()=>{
+ const {protectedPathWarning}=await import('../src/engine.js');
+ assert.equal(protectedPathWarning(undefined),null);assert.equal(protectedPathWarning([]),null);assert.equal(protectedPathWarning([{path:7}]),null);
+ const text=protectedPathWarning([{container:'web',source:'/home/deploy',path:'/home/deploy/.ssh'},{source:'/home/deploy',path:'/home/deploy/.gnupg'}]);
+ assert.match(text,/^Not copied: \/home\/deploy\/\.ssh \(mounted into web\); \/home\/deploy\/\.gnupg\. These folders hold SSH or GPG keys/);assert.match(text,/recover them separately/);
+ const many=protectedPathWarning(Array.from({length:25},(_,i)=>({path:'/p/'+i+'/.ssh'})));
+ assert.equal(many.match(/\/\.ssh/g).length,20);assert.match(many,/ and 5 more\./);
+ assert.ok(protectedPathWarning([{path:'/x'.repeat(2000),container:'c'.repeat(500)}]).length<1000,'source-supplied names are bounded');
+});

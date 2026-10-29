@@ -10,6 +10,8 @@ import {providerList} from '../src/alerts/providers/index.js';
 // TEST_BASE_URL=http://127.0.0.1:5205. Set SHOTS_DIR to also write screenshots (1440x900 and 402x874, both themes).
 const base=process.env.TEST_BASE_URL||'http://127.0.0.1:5173',origin=new URL(base).origin,shots=process.env.SHOTS_DIR;
 if(shots)await mkdir(shots,{recursive:true});
+// The shop site has a real UUID: the install API answers 400 for any other site id.
+const SHOP='5e0f3b1c-6a2d-4c8e-9f10-2b3c4d5e6f70';
 const long='very-long-site-name-'.repeat(8)+'.example.com';
 const state={
  servers:[
@@ -19,13 +21,13 @@ const state={
   {id:'d',name:'zeta-Srv',host:'d.example.invalid',port:22,username:'root',status:'connected'}
  ],
  sites:[
-  {id:'1',name:'shop.example.com',serverId:'b',config:{containers:[1,2,3],services:[{container:'db',engine:'postgres',version:'16.2',database:'shop_db'},{container:'cache',engine:'redis',version:'7.4.1'},{container:'app',engine:'generic'}],domains:['shop.example.com']}},
+  {id:SHOP,name:'shop.example.com',serverId:'b',config:{containers:[1,2,3],services:[{container:'db',engine:'postgres',version:'16.2',database:'shop_db'},{container:'cache',engine:'redis',version:'7.4.1'},{container:'app',engine:'generic'}],domains:['shop.example.com']}},
   {id:'2',name:'blog.example.com',serverId:'a',config:{containers:[1],domains:['blog.example.com','www.blog.example.com']}},
   {id:'3',name:long,serverId:'b',config:{containers:[1,2]}},
   {id:'4',name:'api.example.com',serverId:'a'},
   {id:'5',name:'wiki.example.com',serverId:'b'}
  ],
- jobs:[],backups:[{id:'bk1',siteId:'1',capturedAt:new Date().toISOString()},{id:'bk2',siteId:'2'}],policies:[{siteId:'3',enabled:true},{siteId:'4',enabled:false}],audit:[],storage:{used:0,total:1e12},worker:{online:true}
+ jobs:[],backups:[{id:'bk1',siteId:SHOP,capturedAt:new Date().toISOString()},{id:'bk2',siteId:'2'}],policies:[{siteId:'3',enabled:true},{siteId:'4',enabled:false}],audit:[],storage:{used:0,total:1e12},worker:{online:true}
 };
 const targets={targets:[{id:'t1',name:'nas-backup',kind:'sftp',status:'connected',capacity_bytes:2e12,trackedBytes:8e11},{id:'t2',name:'offsite-s3',kind:'s3',status:'connected',trackedBytes:5e9}],activeTargetId:'t1'};
 let browser;const errors=[];
@@ -195,7 +197,7 @@ async function moveFlow(page,scheme){
  const save=page.getByRole('button',{name:'Save changes'});
  assert.equal(await save.isDisabled(),true,'save starts disabled');
  // Keyboard path: focus a site, press Enter, choose a server
- await page.locator('.map-site[data-site="1"]').focus();await page.keyboard.press('Enter');
+ await page.locator(`.map-site[data-site="${SHOP}"]`).focus();await page.keyboard.press('Enter');
  await page.locator('.map-panel').getByRole('button',{name:'Move to…'}).click();
  await dialog(page).getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
  await dialog(page).getByText('This server is not connected. Reconnect it first.').waitFor();
@@ -207,14 +209,14 @@ async function moveFlow(page,scheme){
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  assert.equal(await save.isDisabled(),true);
  // Blocked target: greyed with the reason; nothing pending
- await dragSite(page,'1','Quiet server',false);
+ await dragSite(page,SHOP,'Quiet server',false);
  await page.locator('.map-server.blocked').getByText('This server is not connected. Reconnect it first.').waitFor();
  await shot(page,scheme,'1440-1-drag-blocked');
  await page.mouse.up();
  await page.getByText(/cannot move to Quiet server.*not connected/).waitFor();
  assert.equal(await save.isDisabled(),true,'blocked target keeps save off');
  // Valid target
- await dragSite(page,'1','itamar-Srv',false);
+ await dragSite(page,SHOP,'itamar-Srv',false);
  await page.locator('.map-server.target').waitFor();
  await shot(page,scheme,'1440-2-drag');
  await page.mouse.up();
@@ -270,7 +272,7 @@ mock.changeOnce=true;mock.needReauth=true; // the servers changed since the prev
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
  assert.deepEqual(mock.previews.at(-1).options,{dnsMode:'manual',envRewrite:['REDIS_HOST'],askBeforeSwitch:true});
- assert.equal(mock.starts[0].id,'m-1-a-opt');assert.equal(mock.starts[0].body.preflightHash,'a'.repeat(64));assert.equal(mock.starts[0].body.moveAnyway,undefined);
+ assert.equal(mock.starts[0].id,'m-'+SHOP+'-a-opt');assert.equal(mock.starts[0].body.preflightHash,'a'.repeat(64));assert.equal(mock.starts[0].body.moveAnyway,undefined);
  await d.getByRole('progressbar').waitFor();assert.equal(await d.getByRole('progressbar').getAttribute('aria-valuenow'),'40');
  await d.getByText('Copying to the new server.').waitFor();
  await d.getByRole('listitem').filter({hasText:'Check both servers'}).getByText('done').waitFor({state:'attached'});
@@ -313,7 +315,7 @@ await d.getByText('stay on itamar-Srv (not copied back)',{exact:false}).waitFor(
  assert.equal(mock.switchBacks,1);
  await d.getByRole('heading',{name:'shop.example.com is back on mobiX-Srv'}).waitFor({timeout:6000});
  mock.phase='done';mock.askRemove=true;
- mock.listMoves=[{id:'m',siteId:'1',siteName:'shop.example.com',targetServerId:'a',state:'done',actions:{askRemoveOldCopy:true,resolve:[]}}];
+ mock.listMoves=[{id:'m',siteId:SHOP,siteName:'shop.example.com',targetServerId:'a',state:'done',actions:{askRemoveOldCopy:true,resolve:[]}}];
  await d.getByRole('button',{name:'Close'}).click();await dialog(page).waitFor({state:'detached'});
  await page.getByText('The old copy can be removed').waitFor();
  await page.getByRole('button',{name:'Open',exact:true}).click();
@@ -339,7 +341,7 @@ mock.needReauth=true;await rm.click();
  // Cancel path
  mock.phase='running';
  // The map refreshes after Close; retry the drag until it registers as a pending change
- for(let i=0;i<5&&await save.isDisabled();i++){await page.waitForLoadState('networkidle');await dragSite(page,'1','itamar-Srv');}
+ for(let i=0;i<5&&await save.isDisabled();i++){await page.waitForLoadState('networkidle');await dragSite(page,SHOP,'itamar-Srv');}
  await save.click();
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('button',{name:'Cancel'}).click();
@@ -347,10 +349,10 @@ mock.needReauth=true;await rm.click();
  assert.equal(mock.cancels.length,1);
  await d.getByRole('button',{name:'Close'}).click();
  // Long downtime: warning and "Move anyway"
-mock.siteMoving=true;await dragSite(page,'1','zeta-Srv');await save.click();
+mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
  await d.getByText('This site is already being moved. Wait for that move to finish.').waitFor();
  await d.getByRole('button',{name:'Cancel'}).click();mock.siteMoving=false;
- await dragSite(page,'1','zeta-Srv');await save.click();
+ await dragSite(page,SHOP,'zeta-Srv');await save.click();
  await d.getByText(/offline for a long time/).waitFor();
  const go=d.getByRole('button',{name:'Move',exact:true});
  assert.equal(await go.isDisabled(),true,'long downtime blocks until confirmed');
@@ -376,7 +378,7 @@ mock.siteMoving=true;await dragSite(page,'1','zeta-Srv');await save.click();
  await d.getByText('Your site is back on the old server.').first().waitFor();
  await d.getByRole('button',{name:'Close'}).click();
  // Blocked at review time: plain red sentence, no Move
- await dragSite(page,'1','itamar-Srv');mock.blockA=true;await save.click();
+ await dragSite(page,SHOP,'itamar-Srv');mock.blockA=true;await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  await d.getByRole('alert').getByText('This server is not connected. Reconnect it first.').waitFor();
  assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
@@ -397,7 +399,7 @@ async function panelChecks(page,scheme){
  const sizes=[];
  const size=async()=>{const b=await panel.boundingBox();sizes.push([Math.round(b.width),Math.round(b.height)])};
  // Clicking a node opens its details and never starts a change
- await page.locator('.map-site[data-site="1"]').click();
+ await page.locator(`.map-site[data-site="${SHOP}"]`).click();
  await panel.getByRole('heading',{name:'shop.example.com'}).waitFor();
  assert.equal(await panel.getByRole('heading',{name:'shop.example.com'}).evaluate(e=>document.activeElement===e),true,'panel title is focused on open');
  await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
@@ -435,6 +437,7 @@ async function panelChecks(page,scheme){
  Object.assign(mock,{needReauth:false,installs:[],jobStatus:'running',tests:0});
  await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
  await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
+ assert.deepEqual(mock.installs,[{package:'nginx'}],'the server panel names no site');
  mock.jobStatus='completed';
  await d.getByRole('heading',{name:'nginx is installed'}).waitFor({timeout:6000});
  await d.getByRole('button',{name:'Check again'}).click();
@@ -539,7 +542,7 @@ async function installFlow(page,scheme){
  const d=dialog(page),save=page.getByRole('button',{name:'Save changes'});
  if(await page.getByRole('button',{name:'Cancel',exact:true}).count())await page.getByRole('button',{name:'Cancel',exact:true}).click();
  Object.assign(mock,{needNginx:true,needReauth:false,installs:[],jobStatus:'running',blockA:false});
- await dragSite(page,'1','itamar-Srv');
+ await dragSite(page,SHOP,'itamar-Srv');
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
  await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
@@ -567,7 +570,7 @@ async function installFlow(page,scheme){
  await shot(page,scheme,'1440-9d-install-confirm');
  await reverify(page);
  await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
- assert.deepEqual(mock.installs,[{package:'nginx'}]);
+ assert.deepEqual(mock.installs,[{package:'nginx',siteId:SHOP}],"a move's install names its site");
  await d.getByText('Connected to itamar-Srv').waitFor();
  assert.equal(await d.getByRole('button',{name:'Check again'}).isDisabled(),true,'check again waits for the install');
  await measure();await shot(page,scheme,'1440-9e-installing');
@@ -583,7 +586,7 @@ async function installFlow(page,scheme){
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  // Unsupported systems: a plain note, no Install button; the command only when it is known
  mock.needNginx=true;mock.unsupported=true;
- await dragSite(page,'1','itamar-Srv');await save.click();
+ await dragSite(page,SHOP,'itamar-Srv');await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  assert.equal(await d.getByRole('button',{name:'Install nginx'}).count(),0);
  await d.getByText('packages offer Docker 20.10',{exact:false}).waitFor();
@@ -592,7 +595,7 @@ async function installFlow(page,scheme){
  await d.getByRole('button',{name:'Cancel'}).click();
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  mock.needNginx=true;mock.unsupported=false;mock.alreadyInstalled=true;
- await dragSite(page,'1','itamar-Srv');await save.click();
+ await dragSite(page,SHOP,'itamar-Srv');await save.click();
  await d.getByRole('button',{name:'Install nginx'}).first().click();
  await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
  await d.getByRole('alert').getByText('Docker is installed but not running. Start it, then check again.').waitFor();
@@ -970,7 +973,7 @@ try{
    const {context,page}=await open({width:2551,height:1257,scheme});
    await page.locator('.map-site').first().waitFor();
    assert.ok(Math.abs(await scaleOf(page)-1)<0.001,'100% on a large screen');
-   await page.locator('.map-site[data-site="1"]').click();await page.locator('.map-panel').waitFor();
+   await page.locator(`.map-site[data-site="${SHOP}"]`).click();await page.locator('.map-panel').waitFor();
    await shot(page,scheme,'2551');
    await context.close();
   }

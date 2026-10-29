@@ -946,7 +946,67 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(sources[1],(str(base).replace(chr(92),'/'),'data'))
             manifest=emitted.call_args.kwargs['result']['manifest']
             self.assertEqual(manifest['protectedMounts'],[{'container':'web','source':'/root/.ssh','destination':'/root/.ssh'}])
-            self.assertNotIn('excludedPaths',manifest)
+            self.assertNotIn('excludedPaths',manifest);self.assertNotIn('protectedPaths',manifest)
+            mount_tars=[t for t in tars if 'mount-' in ' '.join(t)]
+            self.assertNotIn('--exclude=.ssh',mount_tars[0],'the placeholder is named .ssh and must stay in its archive')
+            self.assertIn('--exclude=.ssh',mount_tars[1])
+
+    def test_key_folders_inside_a_copied_mount_are_found_at_any_depth_by_exact_name(self):
+        from helper import protected_subpaths, protected_paths, protected_path_warning, protected_path, protected_mounts, lexical
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'home'
+            for folder in ['.ssh','a/b/.gnupg','a/x.ssh','cache/.ssh','.ssh/nested/.gnupg']:(home/folder).mkdir(parents=True)
+            for name in ['a/.ssh','a/.sshrc','.ssh/id_ed25519']:(home/name).write_text('x')
+            root=lexical(home)
+            found,complete=protected_subpaths(str(home),[lexical(home/'cache')]);self.assertTrue(complete)
+            self.assertEqual(found,[root+'/.ssh',root+'/a/.ssh',root+'/a/b/.gnupg'],'files count too, x.ssh and .sshrc do not, a found folder is not entered, declared exclusions are skipped')
+            self.assertEqual(protected_subpaths(str(home/'missing')),([],True))
+            self.assertEqual(protected_subpaths(str(home),limit=2),([],False),'the readiness walk stops at its budget')
+            self.assertEqual(protected_paths([{'Name':'/web','Mounts':[{'Type':'bind','Source':str(home)}]}],limit=2),([],[str(home)]))
+            partial=protected_path_warning([],[str(home)])
+            self.assertTrue(partial.startswith('Not fully scanned: '+str(home)+'.'));self.assertIn('leave out every .ssh and .gnupg folder',partial)
+            mounts=[{'Type':'bind','Source':str(home)},{'Type':'bind','Source':str(home)},{'Type':'volume','Source':str(home/'a')},{'Type':'bind','Source':str(home/'.ssh')}]
+            items,unscanned=protected_paths([{'Name':'/web','Mounts':mounts}]);self.assertEqual(unscanned,[])
+            self.assertEqual([item['path'] for item in items],[root+'/.ssh',root+'/a/.ssh',root+'/a/b/.gnupg',root+'/cache/.ssh'],'one record per source; volumes and protected mounts are not walked')
+            self.assertEqual({item['container'] for item in items},{'web'})
+            text=protected_path_warning(items)
+            self.assertIn(root+'/.ssh (mounted into web)',text);self.assertIn('SSH or GPG keys',text);self.assertIn('recover them separately',text)
+            self.assertTrue(protected_path_warning([{'path':'/p%d'%i,'container':'c'} for i in range(25)]).count('/p')==20)
+            self.assertIn('and 5 more',protected_path_warning([{'path':'/p%d'%i,'container':'c'} for i in range(25)]))
+        self.assertTrue(protected_path('/home/u/.gnupg/private-keys-v1.d/k.key'))
+        self.assertEqual(len(protected_mounts([{'Name':'/x','Mounts':[{'Type':'bind','Source':'/home/u/.gnupg'}]}])),1,'a .gnupg bind mount is a protected mount like .ssh')
+
+    def test_key_folder_filter_is_unanchored_literal_and_follows_declared_exclusions(self):
+        from helper import source_archive_command
+        plain=source_archive_command('/home/u')
+        self.assertFalse(any(a.startswith('--exclude') for a in plain))
+        guarded=source_archive_command('/home/u',guard=True)
+        self.assertEqual(guarded[guarded.index('--no-anchored')-1:guarded.index('--no-anchored')+3],['--no-wildcards','--no-anchored','--exclude=.ssh','--exclude=.gnupg'])
+        both=source_archive_command('/home/u',['/home/u/cache'],guard=True)
+        self.assertLess(both.index('--exclude=u/cache'),both.index('--no-anchored'),'declared exclusions stay anchored')
+        self.assertLess(both.index('--anchored'),both.index('--exclude=u/cache'))
+
+    @unittest.skipUnless(__import__('os').name=='posix' and __import__('shutil').which('tar'),'Needs GNU tar on a POSIX host')
+    def test_gnu_tar_leaves_key_folders_out_of_a_real_archive(self):
+        from helper import source_archive
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'home'
+            for folder in ['.ssh','app/.gnupg','app/x.ssh']:(home/folder).mkdir(parents=True)
+            for name in ['.ssh/id_ed25519','app/.gnupg/k','app/x.ssh/f','app/.ssh','app/.sshrc','app/data']:(home/name).write_text('x')
+            target=pathlib.Path(d)/'out.tar';source_archive(str(home),target,guard=True)
+            with tarfile.open(target) as tar:names=sorted(tar.getnames())
+            self.assertEqual(names,['home','home/app','home/app/.sshrc','home/app/data','home/app/x.ssh','home/app/x.ssh/f'])
+
+    def test_readiness_names_key_folders_that_are_not_copied(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'deploy';(home/'.ssh').mkdir(parents=True)
+            containers=[{'Id':'web','Name':'/web','Mounts':[{'Type':'bind','Source':str(home),'Destination':'/home/deploy'}]}]
+            with patch.multiple('helper',preflight=Mock(return_value=containers),backup_plan=Mock(),health=Mock(return_value=True)):
+                result=readiness({'containers':['web'],'maintenance':{}})
+            check={item['name']:item for item in result['checks']}['Key folders that are not copied']
+            self.assertEqual((check['ok'],check['required']),(False,False))
+            self.assertIn('/deploy/.ssh (mounted into web)',check['message'])
 
     def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
         from helper import protected_path, maintenance_directory_problem
@@ -997,5 +1057,67 @@ class ProtectedPathTests(unittest.TestCase):
             staged=pathlib.Path(temp)/'staging'/'maintenance'/'site'
             with patch('helper.emit'):helper.deploy_maintenance({'config':{'stagingRoot':str(pathlib.Path(temp)/'staging'),'maintenance':{'directory':str(staged)}},'html':request['html']})
             self.assertTrue((staged/'maintenance.html').is_file())
+
+POSIX=__import__('os').name=='posix'
+class PrivilegeBitTests(unittest.TestCase):
+    """2.12.1: restored files never keep setuid or setgid bits (or file capabilities); there is no opt-out."""
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_setuid_and_setgid_are_stripped_from_files_and_links_are_never_followed(self):
+        import os,stat
+        from helper import strip_privileges
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'restored';(root/'shared').mkdir(parents=True);(root/'tmp').mkdir()
+            outside=pathlib.Path(d)/'outside';outside.write_text('x');os.chmod(outside,0o4755)
+            for name,mode in [('suid',0o4755),('sgid',0o2750),('both',0o6711),('plain',0o640)]:
+                (root/'shared'/name).write_text('x');os.chmod(root/'shared'/name,mode)
+            os.chmod(root/'shared',0o2775);os.chmod(root/'tmp',0o1777)
+            os.symlink(str(outside),root/'link')
+            self.assertEqual(strip_privileges(root),3)
+            modes={name:stat.S_IMODE(os.lstat(root/'shared'/name).st_mode) for name in ['suid','sgid','both','plain']}
+            self.assertEqual(modes,{'suid':0o755,'sgid':0o750,'both':0o711,'plain':0o640})
+            self.assertEqual(stat.S_IMODE(os.stat(root/'shared').st_mode),0o2775,'setgid folders keep group inheritance')
+            self.assertEqual(stat.S_IMODE(os.stat(root/'tmp').st_mode),0o1777,'the sticky bit only restricts deletion')
+            self.assertEqual(stat.S_IMODE(os.stat(outside).st_mode),0o4755,'a link is never followed')
+            self.assertEqual(strip_privileges(root),0)
+
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_a_file_that_cannot_be_changed_stops_the_restore(self):
+        import os
+        from helper import strip_privileges
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'suid').write_text('x');os.chmod(root/'suid',0o4755)
+            with patch('helper.os.fchmod',side_effect=PermissionError('denied')),self.assertRaises(OSError):strip_privileges(root)
+            with patch('helper.os.walk',side_effect=lambda *a,**k:k['onerror'](PermissionError('unreadable')) or iter(())),self.assertRaisesRegex(ValueError,'could not be checked'):strip_privileges(root)
+
+    @unittest.skipUnless(POSIX and __import__('shutil').which('tar'),'Needs tar on a POSIX host')
+    def test_safe_extract_restores_no_setuid_file_from_an_archive(self):
+        import os,stat
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);archive=base/'mount.tar'
+            with tarfile.open(archive,'w') as tar:
+                for name,mode,kind in [('data',0o2775,tarfile.DIRTYPE),('data/su',0o4755,tarfile.REGTYPE),('data/sg',0o2755,tarfile.REGTYPE)]:
+                    info=tarfile.TarInfo(name);info.mode=mode;info.type=kind;info.uid=os.getuid();info.gid=os.getgid()
+                    tar.addfile(info,io.BytesIO(b'') if kind==tarfile.REGTYPE else None)
+            safe_extract(archive,base/'out')
+            for name in ['su','sg']:self.assertFalse(os.lstat(base/'out'/'data'/name).st_mode&(stat.S_ISUID|stat.S_ISGID),name)
+            self.assertTrue(os.lstat(base/'out'/'data').st_mode&stat.S_ISGID or os.getuid()!=0,'a setgid folder keeps its bit')
+
+    @unittest.skipUnless(POSIX,'chain restore runs on Linux')
+    def test_a_chain_restore_strips_too(self):
+        from unittest.mock import Mock
+        import helper
+        with tempfile.TemporaryDirectory() as d:
+            strip=Mock(return_value=0)
+            with patch.multiple('helper',chain_rename_problem=Mock(return_value=None),incremental_archive_check=Mock(return_value='data'),replace_directory_links=Mock(),run=Mock(),strip_privileges=strip):
+                helper.chain_extract([pathlib.Path(d)/'a.tar',pathlib.Path(d)/'b.tar'],pathlib.Path(d)/'out')
+            strip.assert_called_once_with(pathlib.Path(d)/'out')
+
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_static_digest_ignores_the_stripped_bits(self):
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'cgi').write_text('x');os.chmod(root/'cgi',0o4755);before=tree_digest(root)
+            os.chmod(root/'cgi',0o755);self.assertEqual(tree_digest(root),before)
+            os.chmod(root/'cgi',0o700);self.assertNotEqual(tree_digest(root),before)
 
 if __name__=='__main__':unittest.main()

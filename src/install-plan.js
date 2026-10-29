@@ -56,6 +56,9 @@ export function osFacts(facts) {
 }
 
 export const DOCKER_DOCS = 'https://docs.docker.com/engine/install/';
+// Several containers are restored as a group, which needs Docker 28. One gate for move preflight and install requests.
+export const MIN_DOCKER_MAJOR = 28;
+export const dockerNeed = containerCount => ({ needDockerMajor: (containerCount ?? 1) > 1 ? MIN_DOCKER_MAJOR : 0 });
 // Candidate version the system's own sources offer ("27.5"), validated; anything else is unknown.
 export function candidateMajor(facts, name) {
   const match = /^(\d{1,3})\.(\d{1,3})$/.exec(String(facts?.candidates?.[name] ?? ''));
@@ -69,10 +72,11 @@ export function candidateMajor(facts, name) {
 export function installInfo(facts, name, need = {}) {
   const os = osFacts(facts);
   const info = { package: name, command: installCommand(os.manager, os.id, name), supported: installSupported(os.manager, os.id, os.versionId, name) };
-  const offered = name === 'docker' ? candidateMajor(facts, 'docker') : null;
-  if (info.supported && offered !== null && need.needDockerMajor && offered < need.needDockerMajor) {
-    const shown = facts.candidates.docker;
-    return { package: name, supported: false, command: `# Follow Docker's official steps for your system: ${DOCKER_DOCS}`, reason: `This server's packages offer Docker ${shown}; this site needs ${need.needDockerMajor} or newer. Install Docker from Docker's own repository instead.` };
+  const needed = name === 'docker' ? need.needDockerMajor : 0, offered = candidateMajor(facts, 'docker');
+  // Fail-closed: an offered version that cannot be read does not meet the need.
+  if (info.supported && needed && !(offered >= needed)) {
+    const shown = offered === null ? "DockNest could not read which Docker version this server's packages offer" : `This server's packages offer Docker ${facts.candidates.docker}`;
+    return { package: name, supported: false, command: `# Follow Docker's official steps for your system: ${DOCKER_DOCS}`, reason: `${shown}; this site needs ${needed} or newer. Install Docker from Docker's own repository instead.` };
   }
   return info;
 }

@@ -5,40 +5,33 @@ North-star metric: **share of protected sites with an isolated restore that pass
 
 This is a plan, not a commitment. Items labelled *validated* in a release need real Linux Docker integration evidence ([AGENTS.md](../../AGENTS.md)). Nothing here claims they have it today.
 
-## Current plan (owner, 2026-10-28)
+## Current plan (owner, 2026-10-29)
 
-The overview below is the original 2.1-era plan; 2.1.0 to 2.10.1 have shipped. The next three releases, in the
-owner's order:
+The overview below is the original 2.1-era plan. Everything from 2.1.0 to 2.12.0 has shipped, including the
+infrastructure map (2.6.0), alert channels (2.10.0), storage per site and backup copies (2.11.0) and incremental
+backups (2.12.0). The next releases, in the owner's order:
 
 | Release | Theme | Design |
 | --- | --- | --- |
-| 2.11.0 | Storage: S3 out of beta, storage per site, backup copies | [backup-copies.md](../backup-copies.md) |
-| 2.12.0 | Incremental backups (GNU tar chains, opt-in, beta) and a provider-first Connect storage dialog | [incremental-backups.md](../incremental-backups.md) |
+| 2.12.0 (shipped) | Incremental backups (GNU tar chains, opt-in, beta) and a provider-first Connect storage dialog | [incremental-backups.md](../incremental-backups.md) |
+| 2.12.1 (next, patch) | Safety for incremental chains and fixes, below | [incremental-backups.md](../incremental-backups.md) |
+| 2.13.0 | Top-layer-only increments and chain ZIP | [incremental-backups.md](../incremental-backups.md) |
 
-### 2.11.0 tasks
+### 2.12.1 (patch)
 
-1. **S3 out of beta.** Linux backup and restore through S3 (PR #102) passes; `s3-integration` becomes a required
-   check; the beta labels come off in the app, README and storage docs. Cloudflare R2 passed one manual run
-   (2026-10-28); it is not tested on every release.
-2. **Storage per site.** Additive migration (`site_storage`); the backup job, readiness and capacity checks use the
-   site's main destination; site settings show "Default (name)" with a change link. DockNest's own backup keeps the
-   default destination.
-3. **Backup copies.** Migration (`site_storage_copies`, `backup_copies`); a worker copy step after the main copy is
-   verified, through the publication journal; retries and `backup.copy_failed` / `backup.copy_recovered` alerts;
-   retention per copy; restore falls back to a verified copy; a destination with copies cannot be removed; recovery
-   kit on every destination; destination chips in the backup list; storage report per destination.
-4. **Proof.** Linux integration: SFTP main + S3 copy, delete the main package, restore from the copy. README,
-   upgrade notes, release notes.
+1. Incremental safety checks before a chain is trusted.
+2. Chain restore from the recovery kit alone.
+3. `~/.ssh` is excluded inside mounts.
+4. setuid and setgid bits are stripped on restore.
+5. Fixes: flaky browser tests, a lost "New connection" click while the list loads, and a clearer updater rate-limit
+   message.
 
-### 2.12.0 tasks
+### 2.13.0
 
-1. Helper: GNU tar `--listed-incremental` mount archives, snapshot files committed only after a verified upload,
-   full-backup fallback rules.
-2. Engine: backup format v2 manifest with chain links, chain-aware restore, retention, pins, scrub, storage
-   migration and copies.
-3. UI and recovery: "Incremental backups (beta)" site setting, "Download chain", recovery kit chain steps, storage
-   report shows the real saving.
-4. Proof: Linux chain test (1 full + 6 increments with changes, deletes and renames; restore from every point).
+1. Increments that hold only the top layer.
+2. ZIP download of a whole chain.
+
+Incremental backups stay in beta until they have run as real chains for 4 weeks; then the beta label comes off.
 
 The vulnerability radar was dropped by the owner on 2026-10-29 and is not planned.
 

@@ -120,7 +120,7 @@ function moveFacts(change = () => {}) {
     site: { id: 'site', name: 'Shop', kind: 'compose', domains: ['shop.example.com'], containerCount: 2, architecture: 'x86_64', packageBytes: GiB, ports: [], bindPaths: [], names: {}, nginxDirectives: [], maintenanceReady: true, env: [], timings: { backupSeconds: 20 } },
     source: { id: 'old', name: 'old-srv', addresses: ['203.0.113.7'] },
     target: { id: 'new', name: 'new-srv', reachable: true, hostKeyOk: true, uid: 0, architecture: 'x86_64', dockerVersion: null, composeVersion: null, freeBytes: 100 * GiB, totalBytes: 200 * GiB, usedPorts: [22], reservedPorts: [], existingPaths: [], conflicts: {},
-      nginx: { installed: false }, webPortOwner: null, certbot: { installed: false, account: false }, stagingWritable: true, addresses: ['198.51.100.9'], os: { id: 'ubuntu', versionId: '24.04' }, packageManager: 'apt' },
+      nginx: { installed: false }, webPortOwner: null, certbot: { installed: false, account: false }, stagingWritable: true, addresses: ['198.51.100.9'], os: { id: 'ubuntu', versionId: '24.04' }, packageManager: 'apt', candidates: { docker: '28.2' } },
     state: {}, backupStorage: { freeBytes: 50 * GiB }, dns: { mode: 'manual', records: [{ type: 'A', name: 'shop.example.com', value: '203.0.113.7' }] },
   };
   change(facts); return facts;
@@ -291,7 +291,14 @@ test('Docker offered by the system below what the site needs is not installable,
   assert.doesNotMatch(multi.command, /curl|wget|\| *sh/);
   assert.equal(plan.installInfo(facts, 'docker', { needDockerMajor: 0 }).supported, true, 'a single container does not need 28');
   assert.equal(plan.installInfo({ ...facts, candidates: { docker: '28.2' } }, 'docker', { needDockerMajor: 28 }).supported, true);
-  assert.equal(plan.installInfo({ ...facts, candidates: { docker: 'x; rm' } }, 'docker', { needDockerMajor: 28 }).supported, true, 'an unreadable candidate is ignored');
+  for (const candidates of [{ docker: 'x; rm' }, {}, undefined]) {
+    const unread = plan.installInfo({ ...facts, candidates }, 'docker', { needDockerMajor: 28 });
+    assert.equal(unread.supported, false, 'fail-closed: an unreadable offered version does not meet the need');
+    assert.equal(unread.reason, "DockNest could not read which Docker version this server's packages offer; this site needs 28 or newer. Install Docker from Docker's own repository instead.");
+  }
+  assert.equal(plan.installInfo({ ...facts, candidates: {} }, 'docker', { needDockerMajor: 0 }).supported, true, 'without a need the offered version does not matter');
+  assert.equal(plan.installInfo({ ...facts, candidates: {} }, 'nginx', { needDockerMajor: 28 }).supported, true, 'the Docker need applies to Docker only');
+  assert.deepEqual([plan.dockerNeed(undefined), plan.dockerNeed(1), plan.dockerNeed(2)], [{ needDockerMajor: 0 }, { needDockerMajor: 0 }, { needDockerMajor: 28 }]);
   const result = evaluateMove(moveFacts(f => { f.target.candidates = { docker: '26.1' }; }));
   assert.equal(checkFor(result, 'docker')[0].install.supported, false);
   assert.match(checkFor(result, 'docker')[0].install.reason, /offer Docker 26\.1; this site needs 28 or newer/);
@@ -312,6 +319,26 @@ test('helper failure codes map to fixed sentences; free text, stdout and unknown
   const failed = installs.findInstall(job.id);
   assert.equal(failed.error, plan.installErrorText('GENERIC', 'nginx'));
   assert.doesNotMatch(JSON.stringify(failed), /hunter2|example\.invalid/);
+});
+
+test('an install for a site applies the same Docker need as move preflight; the server panel sends no site', async () => {
+  const site = containers => { const siteId = randomUUID(); db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, target, 'need-site', JSON.stringify({ containers }), at()); return siteId; };
+  const group = site(['a', 'b']), single = site(['a']);
+  system.candidates = { docker: '26.1' };
+  let response = await post(user('admin'), url, { package: 'docker', siteId: group });
+  let body = await response.json();
+  assert.equal(response.status, 409); assert.equal(body.code, 'INSTALL_UNSUPPORTED'); assert.match(body.error, /offer Docker 26\.1; this site needs 28 or newer/);
+  system.candidates = {};
+  body = await (await post(user('admin'), url, { package: 'docker', siteId: group })).json();
+  assert.match(body.error, /could not read which Docker version/);
+  assert.equal(installCalls().length, 0); assert.equal(db.prepare('SELECT COUNT(*) n FROM server_installs').get().n, 0);
+  assert.equal((await post(user('admin'), url, { package: 'docker', siteId: randomUUID() })).status, 404);
+  assert.equal((await post(user('admin'), url, { package: 'docker', siteId: 'not-a-uuid' })).status, 400);
+  system.candidates = { docker: '26.1' };
+  assert.equal((await post(user('admin'), url, { package: 'docker', siteId: single })).status, 202, 'one container does not need 28');
+  db.prepare('DELETE FROM server_installs').run();
+  assert.equal((await post(user('admin'), url, { package: 'docker' })).status, 202, 'the server panel: the move preflight still blocks an old Docker later');
+  db.prepare('DELETE FROM sites WHERE id IN (?,?)').run(group, single);
 });
 
 test('Docker already on the server, from any source, is never installed over', async () => {

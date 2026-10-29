@@ -170,6 +170,32 @@ class CaptureTests(CaptureHarness):
         (self.state/SITE/'state.json').unlink()
         manifest=self.capture(containers,self.increment_request(full['snapshots']),job=3)
         self.assertEqual(manifest['fallback'],{'reason':'snapshot-missing'},'Snapshot files without a committed record are not trusted')
+    def test_key_folders_inside_a_bind_mount_are_left_out_and_a_chain_that_held_them_restarts_full(self):
+        source,=self.sources('home');containers=self.containers([[source]])
+        full=self.capture(containers,self.full_request(),job=1);self.commit(1)
+        self.assertNotIn('protectedPaths',full)
+        tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call][-1]
+        at=tar.index('--no-anchored')
+        self.assertEqual(tar[at-1:at+3],['--no-wildcards','--no-anchored','--exclude=.ssh','--exclude=.gnupg'],'every bind mount archive leaves key folders out')
+        # 2.12.0 chains hold ~/.ssh in their full backup: once one is found, the record changes and the chain restarts.
+        (pathlib.Path(source)/'.ssh').mkdir();(pathlib.Path(source)/'app'/'.gnupg').mkdir(parents=True);(pathlib.Path(source)/'app'/'id.ssh').write_text('kept')
+        manifest=self.capture(containers,self.increment_request(full['snapshots']),job=2)
+        self.assertEqual((manifest['backupKind'],manifest['fallback']),('full',{'reason':'mount-set-changed'}))
+        paths=[helper.lexical(source+'/.ssh'),helper.lexical(source+'/app/.gnupg')]
+        self.assertEqual(manifest['protectedPaths'],[{'container':'app0','source':source,'path':path} for path in paths])
+        self.assertIn('Key folders that were not copied',(self.root/'restore-guide.md').read_text())
+        self.assertEqual(json.loads((self.root/'incremental'/'ready.json').read_text())['exclusions'],{snapshot_key(source):paths})
+        tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call][-1]
+        self.assertIn('--listed-incremental='+str(self.root/'incremental'/(snapshot_key(source)+'.snar')),tar);self.assertIn('--exclude=.ssh',tar)
+        self.commit(2)
+        manifest=self.capture(containers,self.increment_request(manifest['snapshots'],position=2),job=3)
+        self.assertEqual(manifest['backupKind'],'incremental','the same key folders keep the chain going');self.assertNotIn('fallback',manifest)
+    def test_volumes_and_protected_placeholders_are_archived_without_the_key_folder_filter(self):
+        source,=self.sources('vol');containers=self.containers([[source]]);containers[0]['Mounts'][0]['Type']='volume'
+        (pathlib.Path(source)/'.ssh').mkdir()
+        manifest=self.capture(containers,self.full_request())
+        self.assertNotIn('protectedPaths',manifest)
+        self.assertFalse(any('--exclude=.ssh' in call for call in self.calls),'a volume is the container\'s own data')
     def test_shared_source_is_archived_once_with_one_snapshot(self):
         source,=self.sources('shared');manifest=self.capture(self.containers([[source],[source]]),self.full_request())
         tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call]
@@ -707,4 +733,44 @@ class GnuTarChainTests(unittest.TestCase):
         self.assertEqual(len(calls.call_args_list),1,'Only the verified full archive was extracted')
         self.assertFalse((self.base/'escape').exists())
 
+@unittest.skipUnless(LINUX_GNU_TAR,'Needs GNU tar on Linux')
+class OfflineChainRestoreTests(ChainBuilder):
+    """Recovery kit without DockNest: python3 helper.py restore-chain reads what decrypt-backup.js --chain wrote."""
+    def kit_folder(self,archives):
+        chain=self.build(archives);folder=self.root.parent/'decrypted';folder.mkdir()
+        packages=[]
+        for k,link in enumerate(chain):
+            name='%02d-%s.tar.gz'%(k+1,link['backupId']);os.rename(self.root/('payload-%d.tar.gz'%k),folder/name)
+            packages.append({'file':name,'backupId':link['backupId'],'kind':'full' if k==0 else 'incremental','sha256':link['sha256']})
+        write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        return folder,packages
+    def run_offline(self,folder,output):
+        stream=io.StringIO()
+        with patch('helper.EVENT_STREAM',stream):helper.restore_chain_offline(str(folder),str(output))
+        return json.loads(stream.getvalue().strip().splitlines()[-1])['result']
+    def test_rebuilds_every_mount_and_lists_images_in_order(self):
+        archives=[mount_tar([('data','dir',None,None),('data/a','file','a%d'%k,None)]) for k in range(3)]
+        folder,_=self.kit_folder(archives);output=self.root.parent/'restored'
+        result=self.run_offline(folder,output)
+        self.assertEqual(result['packages'],3)
+        self.assertEqual(result['mounts'],[{'container':'/app','type':'bind','destination':'/data','path':str(output/'data-0-0'/'data')}])
+        self.assertEqual((output/'data-0-0'/'data'/'a').read_text(),'a2')
+        self.assertEqual([pathlib.Path(p).parent.name for p in result['images']],['chain-0','chain-1','unpacked'])
+    def test_a_wrong_link_or_a_used_output_folder_is_refused_before_extraction(self):
+        folder,packages=self.kit_folder(SIMPLE);output=self.root.parent/'restored'
+        self.saved_sha=packages[0]['sha256'];packages[0]['sha256']='f'*64;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with self.assertRaisesRegex(ValueError,'depends on backup backup-0, which is missing or damaged'):self.run_offline(folder,output)
+        self.assertFalse(output.exists(),'A refusal leaves nothing behind')
+        damaged=self.root.parent/'damaged-out'
+        packages[0]['sha256']=self.saved_sha;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with patch('helper.chain_extract',side_effect=ValueError('Unsafe archive member or link; use reviewed offline restore adapter')):
+            with self.assertRaisesRegex(ValueError,'Unsafe archive member'):self.run_offline(folder,damaged)
+        self.assertFalse(damaged.exists(),'A refusal during extraction removes what was unpacked')
+        used=self.root.parent/'used-empty';used.mkdir()
+        with patch('helper.chain_extract',side_effect=ValueError('refused')),self.assertRaises(ValueError):self.run_offline(folder,used)
+        self.assertEqual(list(used.iterdir()),[],'An empty folder given by the owner stays, empty')
+        used=self.root.parent/'used';used.mkdir();(used/'x').write_text('x')
+        with self.assertRaisesRegex(ValueError,'new or empty'):self.run_offline(folder,used)
+        packages[1]['file']='../escape.tar.gz';write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with self.assertRaisesRegex(ValueError,'invalid entry'):self.run_offline(folder,self.root.parent/'other')
 if __name__=='__main__':unittest.main()
