@@ -133,6 +133,32 @@ test('full reasons: parent unverified, missing (main package gone or a chain row
     { restore: ({ first }) => db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(first.backup.id) });
   await becomesFull('r-locked', ({ first }) => deferDeletion(first.backup.id, new Date(Date.now() + 86400000).toISOString()), 'parent-removing');
 });
+test('full reasons: an increment with folder renames stays valid and ends its chain (folders-renamed)', async () => {
+  site('r-renamed', 'srv'); enable('r-renamed');
+  const first = await run('r-renamed');
+  helper.forge = manifest => { if (manifest.backupKind === 'incremental') manifest.renamesSeen = true; };
+  const second = await run('r-renamed');
+  helper.forge = null;
+  assert.equal(second.row.status, 'completed');
+  assert.equal(link(second.backup.id).backup_kind, 'incremental', 'the increment that holds the renames is kept and restorable');
+  assert.equal(link(second.backup.id).parent_id, first.backup.id);
+  assert.equal(JSON.parse(second.backup.manifest).renamesSeen, true);
+  const third = await run('r-renamed');
+  assert.equal(lastRequest().mode, 'full');
+  assert.equal(link(third.backup.id).backup_kind, 'full');
+  assert.equal(details(third.row).incremental.fullReason, 'folders-renamed');
+  assert.equal(inc.FULL_REASONS['folders-renamed'], 'Folders were renamed since the last full backup, so this backup is full.');
+  const fourth = await run('r-renamed');
+  assert.equal(lastRequest().mode, 'incremental', 'the new chain continues');
+  assert.equal(JSON.parse(fourth.backup.manifest).renamesSeen, undefined);
+  // A full package never carries the flag, even if a helper sent it: a full backup has no rename records.
+  helper.forge = manifest => { manifest.renamesSeen = true; };
+  enable('r-renamed', { fullNow: true });
+  const fifth = await run('r-renamed');
+  helper.forge = null;
+  assert.equal(link(fifth.backup.id).backup_kind, 'full'); assert.equal(JSON.parse(fifth.backup.manifest).renamesSeen, undefined);
+  await run('r-renamed'); assert.equal(lastRequest().mode, 'incremental');
+});
 test('full reasons: chain fingerprint (containers, mounts, images), site moved, format changed', async () => {
   await becomesFull('r-plan', () => { helper.chainFingerprint = 'chain-b'; }, 'plan-changed');
   helper.chainFingerprint = 'chain-a';
