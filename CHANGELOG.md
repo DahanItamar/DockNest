@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-10-29
+
+See [docs/releases/2026-10-29-v2.12.1.md](docs/releases/2026-10-29-v2.12.1.md).
+
 ### Changed
 
 - Update Center: when the updater refuses because of its rate limit, the message now says which limit was reached (60 seconds between runs, or 6 runs per 24 hours) and when you can update again.
