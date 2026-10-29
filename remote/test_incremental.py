@@ -449,6 +449,26 @@ class DumpdirTests(unittest.TestCase):
             archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0Db\0Rdata/a/b\0Tdata/b\0\0'})]))
             with self.assertRaisesRegex(ValueError,'escapes'):incremental_archive_check(archive,root.resolve())
     @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_rename_through_a_restored_folder_link_is_refused(self):
+        # renameat follows data/s -> real, so tar would move real/sub (and its link) to data/new.
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'out';(root/'data'/'real'/'sub').mkdir(parents=True);os.symlink('../../../x',root/'data'/'real'/'sub'/'l');os.symlink('real',root/'data'/'s')
+            archive=pathlib.Path(d)/'m.tar'
+            for entries in [[('data','dir',None,{'GNU.dumpdir':'Dnew\0Dreal\0Ns\0Rdata/s/sub\0Tdata/new\0\0'}),('data/new','dir',None,{'GNU.dumpdir':'Nl\0\0'}),('data/new/l/evil','file','x',None)],
+                            [('data','dir',None,{'GNU.dumpdir':'Dreal\0Ns\0Rdata/real/sub\0Tdata/s/moved\0\0'})],
+                            [('data','dir',None,{'GNU.dumpdir':'Dreal\0Ns\0Rdata/s\0Tdata/t\0\0'})]]:
+                archive.write_bytes(mount_tar(entries))
+                with self.subTest(entries=entries[0][3]),self.assertRaisesRegex(ValueError,'Unsafe directory listing'):incremental_archive_check(archive,root.resolve())
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_interleaved_renames_are_checked_in_archive_order(self):
+        # Rename out, write through the moved link, rename back: the final layout looks harmless, the middle does not.
+        for target,expected in [('../../../x','escapes'),('../c','write through')]:
+            with self.subTest(target=target),tempfile.TemporaryDirectory() as d:
+                root=pathlib.Path(d)/'out';(root/'data'/'a'/'b').mkdir(parents=True);(root/'data'/'c').mkdir();os.symlink(target,root/'data'/'a'/'b'/'l')
+                archive=pathlib.Path(d)/'m.tar'
+                archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0Dc\0Rdata/a/b\0Tdata/b\0\0'}),('data/b/l/evil','file','x',None),('data/c','dir',None,{'GNU.dumpdir':'Rdata/b\0Tdata/a/b\0\0'})]))
+                with self.assertRaisesRegex(ValueError,expected):incremental_archive_check(archive,root.resolve())
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
     def test_rename_with_an_internal_link_is_accepted(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d)/'out';(root/'data'/'a'/'b').mkdir(parents=True);(root/'data'/'a'/'c').mkdir();os.symlink('../c',root/'data'/'a'/'b'/'l')

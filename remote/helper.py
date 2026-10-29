@@ -2142,26 +2142,19 @@ def incremental_archive_check(archive,root,top=None):
             # Only POSIX headers: GNU-format incremental headers reuse the ustar name prefix for atime/ctime.
             raw.seek(member.offset);header=raw.read(512)
             if header[257:263]!=b'ustar\x00':raise ValueError('Incremental archive must use the POSIX tar format')
-        names={pathlib.PurePosixPath(m.name) for m in members}
-        directories={pathlib.PurePosixPath(m.name) for m in members if m.isdir()}
-        renames=[]
-        for m in members:
-            dumpdir=m.pax_headers.get('GNU.dumpdir')
-            if isinstance(dumpdir,str) and m.isdir() and not dumpdir_problem(dumpdir,pathlib.PurePosixPath(m.name).parts[0] if pathlib.PurePosixPath(m.name).parts else ''):renames+=dumpdir_renames(dumpdir)
-        # Symlinks restored by earlier links, at the paths tar's renames move them to before any member is written.
-        on_disk=disk_symlinks(root);moved=rename_links(on_disk,renames)
-        if any(RENAME_TEMPORARY[0] in key for key in moved):raise ValueError('Unsafe directory listing in incremental archive')
-        for path in directories:
-            if path.parts in moved and path.parts not in on_disk:raise ValueError('Unsafe directory listing in incremental archive')
-        links=dict(moved)
-        for path in directories:links.pop(path.parts,None)
-        for m in members:
-            if m.issym():links[pathlib.PurePosixPath(m.name).parts]=m.linkname
-            elif pathlib.PurePosixPath(m.name).parts in links:links.pop(pathlib.PurePosixPath(m.name).parts)
         archived={pathlib.PurePosixPath(m.name) for m in members if m.issym()}
-        regular={pathlib.PurePosixPath(m.name) for m in members if m.isfile()}
         if shutil.disk_usage(root).free<sum(m.size for m in members if m.isfile())+EXTRACT_RESERVE_BYTES:raise ValueError('Insufficient target capacity to extract the archive')
-        seen=set()
+        # The symlink map follows GNU tar step by step, in archive order: a directory's dumpdir renames apply when tar
+        # reaches that directory, then the member replaces or adds a path. Every member is checked against the map as
+        # it stands at that point, and after every rename record each link must still resolve inside the destination.
+        on_disk=disk_symlinks(root);links=dict(on_disk)
+        has_renames=any(m.isdir() and isinstance(m.pax_headers.get('GNU.dumpdir'),str) and any(e[:1] in ('R','T') for e in m.pax_headers['GNU.dumpdir'].split('\0')) for m in members)
+        def unsafe_listing():raise ValueError('Unsafe directory listing in incremental archive')
+        def all_inside():
+            if any(RENAME_TEMPORARY[0] in key for key in links):unsafe_listing()
+            for key,value in links.items():
+                if archive_link_escapes(key[:-1],value,links):raise ValueError('Archive link escapes destination')
+        seen=set();regular=set()
         for member in members:
             p=pathlib.PurePosixPath(member.name)
             if p.is_absolute() or '..' in p.parts or not p.parts or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
@@ -2170,25 +2163,45 @@ def incremental_archive_check(archive,root,top=None):
             if p.parts[0]!=top:raise ValueError('Mount archive must have exactly one source entry')
             if p in seen or any(parent in archived for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             seen.add(p)
-            # A folder an earlier archive left as a symlink is written through only if this archive replaces it.
-            if any(parent.parts in moved and parent not in directories for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
+            # Never through a link: one an earlier archive restored (wherever renames moved it) or one this archive made.
+            if any(parent.parts in links for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             dumpdir=member.pax_headers.get('GNU.dumpdir')
-            if dumpdir is not None and (not member.isdir() or dumpdir_problem(dumpdir,top)):raise ValueError('Unsafe directory listing in incremental archive')
+            if dumpdir is not None:
+                if not member.isdir() or dumpdir_problem(dumpdir,top):unsafe_listing()
+                renames=dumpdir_renames(dumpdir)
+                for source,target in renames:
+                    for path in (source,target):
+                        parts=tuple(pathlib.PurePosixPath(path).parts) if path else ()
+                        # renameat follows a symlink in the path: a rename through or of a link is never modelled.
+                        if any(parts[:k] in links for k in range(1,len(parts)+1)):unsafe_listing()
+                    links=rename_links(links,[(source,target)])
+                if renames:all_inside()
             target=(root/member.name).resolve()
             if os.path.commonpath([str(root),str(target)])!=str(root):raise ValueError('Archive path escapes destination')
-            if member.issym() or member.islnk():
+            if member.isdir():
+                # tar would follow a link it finds at a folder's path; replace_directory_links removes the link first,
+                # which is only exact when no rename moved links around.
+                if p.parts in links and (has_renames or p.parts not in on_disk):unsafe_listing()
+                links.pop(p.parts,None)
+            elif member.issym():
                 link=pathlib.PurePosixPath(member.linkname)
                 if link.is_absolute():raise ValueError('Absolute archive link is not portable')
-                linked=(target.parent/member.linkname).resolve() if member.issym() else (root/member.linkname).resolve()
+                linked=(target.parent/member.linkname).resolve()
                 if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
-                if member.issym() and archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
+                links[p.parts]=member.linkname
+                if archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
+            else:
+                links.pop(p.parts,None)
                 if member.islnk():
-                    # Hard links point at a file of this archive or one an earlier archive restored (never via a link).
-                    restored=not renames and link not in names and is_regular(root/str(link)) and not any(parent.parts in on_disk for parent in link.parents)
-                    if '..' in link.parts or not (link in regular or restored) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
-        # After this archive every symlink, moved or new, must still resolve inside the destination.
-        for key,target in links.items():
-            if archive_link_escapes(key[:-1],target,links):raise ValueError('Archive link escapes destination')
+                    link=pathlib.PurePosixPath(member.linkname)
+                    if link.is_absolute():raise ValueError('Absolute archive link is not portable')
+                    linked=(root/member.linkname).resolve()
+                    if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
+                    # A hard link targets a file this archive already wrote, or (without renames) one an earlier archive restored.
+                    restored=not has_renames and link not in seen and is_regular(root/str(link)) and not any(parent.parts in on_disk for parent in link.parents)
+                    if '..' in link.parts or not (link in regular or restored) or any(parent.parts in links for parent in link.parents) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
+                else:regular.add(p)
+        all_inside()
         return top
 def replace_directory_links(archive,root):
     """A symlink an earlier link restored where this archive has a real folder: GNU tar would follow it (and purge the
