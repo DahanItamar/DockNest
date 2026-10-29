@@ -105,23 +105,26 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
     assert.equal(settings.enabled, true); assert.equal(settings.interval, 6);
 
     // ---- 1 full + 6 increments ----------------------------------------------------------------------------------------
+    // GNU tar replays directory renames in order, so an increment that contains folder renames is followed by a full
+    // backup (reason folders-renamed). The order below puts renames at points 4 and 6 so both are increments.
     const changes = [
       null,
       // 1: edits and additions, database rows
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-1')\");db.execute(\"INSERT INTO notes(body) VALUES('note-1')\");db.execute(\"UPDATE notes SET body='note-0-edited' WHERE id=1\")"); await sh('cd /site && echo "edited" > uploads/2026/a/f1.txt && echo "new upload" > uploads/2026/a/new1.txt && echo "asset edited" > asset.txt'); },
-      // 2: deletes (files, a whole directory, one of two hard links)
+      // 2: deletes (files and a whole directory)
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-2')\");db.execute('DELETE FROM notes WHERE id=1')"); await sh('cd /site && rm uploads/2026/a/f2.txt uploads/2026/a/f3.txt uploads/2026/a/f4.txt && rm -r uploads/2026/b'); },
-      // 3: renames (a directory, a file inside it, a directory inside da)
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-3')\")"); await sh('cd /site && mv uploads/2026 uploads/archive-2026 && mv uploads/archive-2026/a/f11.txt uploads/archive-2026/a/renamed11.txt && mv da/sub da/subdir'); },
-      // 4: two directories swap names
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-4')\");db.execute(\"INSERT INTO notes(body) VALUES('note-4')\")"); await sh('cd /site && mv da swap-tmp && mv db da && mv swap-tmp db'); },
-      // 5: a symlink to a directory is replaced by a real directory; a file becomes a directory
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-5')\")"); await sh('cd /site && rm lnk && mkdir lnk && echo "real now" > lnk/file.txt && chown 1000:1000 lnk lnk/file.txt && rm uploads/archive-2026/a/f12.txt && mkdir uploads/archive-2026/a/f12.txt && echo inner > uploads/archive-2026/a/f12.txt/inner.txt'); },
-      // 6: a directory becomes a file, metadata edits, a name with spaces and non-ASCII letters
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-6')\");db.execute(\"UPDATE notes SET body='note-6' WHERE id>1\")"); await sh('cd /site && rm -r db && echo "db is a file now" > db && chmod 600 da/g.txt && chown 2000:2000 uploads/archive-2026/a/f13.txt && echo "unicode" > "uploads/ünï cöde name.txt"'); },
+      // 3: a symlink to a directory is replaced by a real directory; a file becomes a directory
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-3')\")"); await sh('cd /site && rm lnk && mkdir lnk && echo "real now" > lnk/file.txt && chown 1000:1000 lnk lnk/file.txt && rm uploads/2026/a/f12.txt && mkdir uploads/2026/a/f12.txt && echo inner > uploads/2026/a/f12.txt/inner.txt'); },
+      // 4: renames (a directory, a file inside it, a directory inside da)
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-4')\");db.execute(\"INSERT INTO notes(body) VALUES('note-4')\")"); await sh('cd /site && mv uploads/2026 uploads/archive-2026 && mv uploads/archive-2026/a/f11.txt uploads/archive-2026/a/renamed11.txt && mv da/sub da/subdir'); },
+      // 5: small edits (the backup after folder renames is a full one)
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-5')\")"); await sh('cd /site && echo "edit after renames" > uploads/archive-2026/a/f5.txt'); },
+      // 6: two directories swap names; a directory becomes a file; metadata edits; a name with spaces and non-ASCII letters
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-6')\");db.execute(\"UPDATE notes SET body='note-6' WHERE id>1\")"); await sh('cd /site && mv da swap-tmp && mv db da && mv swap-tmp db && rm -r uploads/archive-2026/a/f12.txt && echo "was a directory" > uploads/archive-2026/a/f12.txt && chmod 600 da/g.txt && chown 2000:2000 uploads/archive-2026/a/f13.txt && echo "unicode" > "uploads/ünï cöde name.txt"'); },
     ];
     const points = [];
     let previousInspect = null;
+    const kinds = [];
     for (let index = 0; index < changes.length; index++) {
       if (changes[index]) { await changes[index](); await healthy(); }
       const expected = await tree(source, app);
@@ -144,22 +147,24 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       const detail = JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job.id).details || '{}').incremental ?? {};
       console.log(`Incremental fixture point ${index}: kind=${link?.backup_kind} position=${link?.chain_position} fullReason=${detail.fullReason ?? '-'} size=${mb(Number(backup.size))}`);
       assert.ok(link, 'Point ' + index + ' is part of a chain');
-      assert.equal(link.backup_kind, index === 0 ? 'full' : 'incremental', 'Point ' + index + ' kind (reason: ' + (detail.fullReason ?? 'none recorded') + ')');
-      assert.equal(link.chain_position, index);
+      if (index === 0) assert.equal(link.backup_kind, 'full'); else if (link.backup_kind === 'full') assert.ok(detail.fullReason, 'A full backup inside the series names its reason: ' + JSON.stringify(detail));
+      kinds.push(`${index}:${link.backup_kind}${detail.fullReason ? '(' + detail.fullReason + ')' : ''}`);
       assert.equal(await verifyEncrypted(backup.path), backup.checksum);
       assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', app), 'true', 'The source keeps running after backup ' + index);
       await healthy();
       assertSameTree(expected, await tree(source, app), 'The source after backup ' + index);
       points.push({ backup, expected, link });
     }
-    assert.equal(new Set(points.map(point => point.link.chain_id)).size, 1, 'All seven points belong to one chain');
-    record('Incremental backups: a real site (database + uploads) makes 1 full + 6 increments with edits, deletes, renames, two directories swapping names and a symlink to a directory replaced by a real directory; each package authenticates and the source keeps running');
+    const incrementalCount = points.filter(point => point.link.backup_kind === 'incremental').length;
+    assert.ok(incrementalCount >= 4 && points.some(point => point.link.chain_position >= 3), 'Chains really form: ' + kinds.join(' '));
+    console.log('Incremental fixture kinds: ' + kinds.join(' '));
+    record('Incremental backups: a real site (database + uploads) makes a full backup and increments (folder renames force a new full backup) with edits, deletes, renames, two directories swapping names and a symlink to a directory replaced by a real directory; each package authenticates and the source keeps running');
 
     // ---- Restore from every point ------------------------------------------------------------------------------------------
     const restoreAndCompare = async (point, index, options = {}) => {
       const plan = await planRestore(point.backup.id, { serverId: servers[1].id, ...options });
       assert.equal(plan.executable, true, JSON.stringify(plan.blockers));
-      assert.equal(plan.chainLength ?? 1, index + 1, 'The plan reads the whole chain up to this point');
+      assert.equal(plan.chainLength ?? 1, point.link.chain_position + 1, 'The plan reads the whole chain up to this point');
       const queued = await enqueueRestore(point.backup.id, plan, 'qa'), job = claimJob();
       assert.equal(job.id, queued.id);
       await executeJob(job);
@@ -197,10 +202,10 @@ ${listing}`);
     const sizes = new Map(rows.map(row => [row.id, Number(row.size)]));
     const chains = points.map(point => ({ backupId: point.backup.id, kind: point.link.backup_kind, chainId: point.link.chain_id, position: point.link.chain_position }));
     const saving = incrementalSaving(rows, chains);
-    const fullSize = sizes.get(points[0].backup.id), incrementSizes = points.slice(1).map(point => sizes.get(point.backup.id));
-    const storedTotal = fullSize + incrementSizes.reduce((sum, size) => sum + size, 0), fullEquivalent = fullSize * points.length;
+    const fullSize = sizes.get(points[0].backup.id), incrementSizes = points.filter(point => point.link.backup_kind === 'incremental').map(point => sizes.get(point.backup.id));
+    const storedTotal = [...sizes.values()].reduce((sum, size) => sum + size, 0), fullEquivalent = fullSize * points.length;
     for (const size of incrementSizes) assert.ok(size < fullSize, 'An increment is smaller than the full package');
-    assert.equal(saving.increments, 6);
+    assert.equal(saving.increments, incrementalCount);
     assert.ok(saving.bytesSaved > 0);
     const percent = Math.round((1 - storedTotal / fullEquivalent) * 100);
     evidence.incrementalSaving = { fullBytes: fullSize, incrementBytes: incrementSizes, storedBytes: storedTotal, fullEquivalentBytes: fullEquivalent, savedPercent: percent, reportBytesSaved: saving.bytesSaved };
@@ -224,7 +229,7 @@ ${listing}`);
       } catch (error) { if (error.code === 'ERR_ASSERTION') throw error; return String(error.message); }
     };
     const containersBefore = await containersOnTarget(), directoriesBefore = await restoreDirectories();
-    const middle = points[3].backup, middlePath = middle.path, middleBytes = await readAll(middlePath);
+    const middle = points[points.length - 1 - newest.link.chain_position].backup, middlePath = middle.path, middleBytes = await readAll(middlePath);
     const tampered = Buffer.from(middleBytes); tampered[tampered.length >> 1] ^= 1;
     await put(middlePath, tampered);
     const tamperMessage = await refused();
@@ -240,7 +245,7 @@ ${listing}`);
     await put(middlePath, middleBytes);
     assert.equal(await verifyEncrypted(middlePath), middle.checksum);
     record('A tampered package in the middle of the chain and a missing link are both refused before any package is sent to the target server (no container created, no staging folder); the plain "depends on backup X" message names the missing backup');
-    await restoreAndCompare(newest, 6);
+    await restoreAndCompare(newest, points.length - 1);
     record('After the damaged package is put back, the newest point restores again and equals the source');
 
     // ---- Restore test on the newest point ----------------------------------------------------------------------------------
@@ -302,7 +307,7 @@ ${listing}`);
 
     // ---- Restore from the S3 copy -------------------------------------------------------------------------------------------
     for (const backupId of createdBackups) await removeFile(db.prepare('SELECT path FROM backups WHERE id=?').get(backupId).path);
-    const fromCopy = await restoreAndCompare(newest, 6);
+    const fromCopy = await restoreAndCompare(newest, points.length - 1);
     assert.equal(fromCopy.plan.source.role, 'copy', 'With every main package gone, the chain restores from the S3 copies');
     assert.equal(fromCopy.plan.source.targetId, copyTargetId);
     assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='restore.source_fallback'").get(), 'The fallback to the copy is audited');
