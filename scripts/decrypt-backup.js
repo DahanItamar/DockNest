@@ -17,6 +17,14 @@ import { resolve, join, basename, dirname } from 'node:path';
 // chain is found from the sealed manifests: each increment names its parent's backup ID, whose file is found by name in
 // the same folder and must have the SHA-256 the increment recorded.
 const usage = 'Usage: node decrypt-backup.js <payload.enc> <master.key> <new-output.tar.gz>\n       node decrypt-backup.js --chain <chain folder with ORDER.txt | the backup_...--ID.tar.gz.enc to restore> <master.key> <new empty output folder>';
+// One backup ID pattern, as helper.py checks it (CHAIN_ID / CHAIN_PACKAGE_NAME), and its longest chain (MAX_CHAIN).
+const BACKUP_ID = /^[A-Za-z0-9-]{1,64}$/, MAX_CHAIN = 31;
+const broken = id => new Error(`This backup depends on backup ${id}, which is missing or damaged. Restore ${id}'s chain from an earlier point, or pick a full backup.`);
+// The output folder must be new or empty; it is created private.
+async function prepareOutput(output) {
+  try { if ((await readdir(output)).length) throw new Error('The output folder must be new or empty.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await mkdir(output, { recursive: true, mode: 0o700 });
+}
 const args = process.argv.slice(2), chainMode = args[0] === '--chain';
 const [inputArg, keyArg, outputArg] = chainMode ? args.slice(1) : args;
 if (!inputArg || !keyArg || !outputArg) { console.error(usage); process.exit(1); }
@@ -112,10 +120,8 @@ async function decryptChain(folder, output) {
   });
   if (!order.length) throw new Error('ORDER.txt lists no backups.');
   // ORDER.txt is not authenticated: ids become file names, so only plain ids, hashes and sizes are accepted.
-  for (const item of order) if (!/^[A-Za-z0-9-]{1,64}$/.test(item.backupId) || !/^[a-f0-9]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || (item.parent !== '-' && !/^[A-Za-z0-9-]{1,64}$/.test(item.parent))) throw new Error('ORDER.txt has an invalid line; it was not written by DockNest.');
-  try { if ((await readdir(output)).length) throw new Error('The output folder must be new or empty.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await mkdir(output, { recursive: true, mode: 0o700 });
-  const broken = id => new Error(`This backup depends on backup ${id}, which is missing or damaged. Restore ${id}'s chain from an earlier point, or pick a full backup.`);
+  for (const item of order) if (!BACKUP_ID.test(item.backupId) || !/^[a-f0-9]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || (item.parent !== '-' && !BACKUP_ID.test(item.parent))) throw new Error('ORDER.txt has an invalid line; it was not written by DockNest.');
+  await prepareOutput(output);
   // 1. Every encrypted file: present, the listed size and SHA-256, and listed in order with matching parents.
   const actual = [];
   for (const [index, item] of order.entries()) {
@@ -162,17 +168,15 @@ function report(chainId, written, output) {
 // full backup. Files are named backup_<time>--<backup ID>.tar.gz.enc (as DockNest stores them); the parent's file must
 // be the only one with that ID in the folder and must have the SHA-256 its child recorded.
 async function decryptFromPackage(file, output) {
-  const idOf = name => /^backup_.+--([A-Za-z0-9_-]{1,100})\.tar\.gz\.enc$/.exec(name)?.[1] ?? null;
+  const idOf = name => { const match = /^backup_.+--([^/\\]+)\.tar\.gz\.enc$/.exec(name); return match && BACKUP_ID.test(match[1]) ? match[1] : null; };
   const folder = dirname(file), names = await readdir(folder);
   let id = idOf(basename(file));
   if (!id) throw new Error('Name the package as DockNest stored it: backup_<time>--<backup ID>.tar.gz.enc');
-  try { if ((await readdir(output)).length) throw new Error('The output folder must be new or empty.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await mkdir(output, { recursive: true, mode: 0o700 });
-  const broken = backupId => new Error(`This backup depends on backup ${backupId}, which is missing or damaged. Restore ${backupId}'s chain from an earlier point, or pick a full backup.`);
+  await prepareOutput(output);
   const found = [], written = [];
   try {
     for (;;) {
-      if (found.length > 31) throw broken(id);
+      if (found.length >= MAX_CHAIN) throw broken(id);
       const child = found.at(-1);
       let sha256;
       try { sha256 = await sha256File(file); } catch { throw broken(id); }
