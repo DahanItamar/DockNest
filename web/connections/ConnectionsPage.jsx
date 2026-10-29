@@ -1,4 +1,4 @@
-import React,{useCallback,useEffect,useMemo,useState} from 'react';
+import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {IconPencil,IconSend,IconTrash,IconPlugConnected,IconPlus,IconEye} from '@tabler/icons-react';
 import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
@@ -20,7 +20,9 @@ export function ConnectionsPage({api,user,openNew=0,onSessionExpired}){
   catch(e){if(e.status===401)return onSessionExpired?.();setError(e)}
  },[client]);
  useEffect(()=>{load()},[load]);
- useEffect(()=>{if(openNew&&data)setDialog({kind:'new'})},[openNew]);
+ // A click on the header's New connection before the list has loaded is kept and opens the dialog once it has.
+ const handledNew=useRef(openNew);
+ useEffect(()=>{if(openNew!==handledNew.current&&data){handledNew.current=openNew;setDialog({kind:'new'})}},[openNew,data]);
  const byId=useMemo(()=>Object.fromEntries(providers.map(p=>[p.id,p])),[providers]);
  const role=data?.role||user?.role;
  async function test(c){
