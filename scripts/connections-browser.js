@@ -67,10 +67,10 @@ async function open({role='admin',width=1440,height=900,scheme='light',kind='nor
  const page=await context.newPage(),offOrigin=[];
  page.on('pageerror',e=>errors.push(e.message));
  context.on('request',req=>{const u=new URL(req.url());if(!['data:','blob:'].includes(u.protocol)&&u.origin!==origin)offOrigin.push(u.href)});
- await page.route('**/api/**',route=>{
+ await page.route('**/api/**',async route=>{
   const req=route.request(),endpoint=new URL(req.url()).pathname;
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
-  if(endpoint.startsWith('/api/connections'))return route.fulfill(api(req,endpoint));
+  if(endpoint.startsWith('/api/connections')){if(db.hold&&endpoint==='/api/connections'&&req.method()==='GET')await db.hold;return route.fulfill(api(req,endpoint))}
   if(endpoint==='/api/auth/reauth'){const b=req.postDataJSON();if(b.password==='pw'&&b.code==='123456'){db.needReauth=false;return route.fulfill({json:{ok:true}})}return route.fulfill({status:401,json:{error:'No'}})}
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
   if(endpoint==='/api/jobs/job-0001-aaaa')return route.fulfill({json:state.jobs[0]});
@@ -219,6 +219,20 @@ async function editAndReauth(scheme){
  await context.close();
 }
 
+// The header's New connection is clickable before the list has loaded; that click must not be lost (it used to be, which made the keyboard test time out on a slow runner).
+async function clickBeforeListLoads(){
+ let release;const {context,page}=await open({kind:'empty',nav:false});
+ db.hold=new Promise(r=>{release=r});
+ await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Connections',exact:true}).click();
+ await page.getByRole('button',{name:'New connection'}).first().click();
+ await page.getByText('Loading connections…').waitFor();assert.equal(await dialog(page).count(),0,'nothing opens before the list is there');
+ db.hold=null;release();
+ await dialog(page).waitFor({timeout:5000});
+ await page.keyboard.press('Escape');await dialog(page).waitFor({state:'detached'});
+ await page.getByRole('heading',{name:'No connections yet'}).waitFor();assert.equal(await dialog(page).count(),0,'the dialog does not come back after a reload');
+ await context.close();
+}
+
 async function keyboardOnly(){
  const {context,page}=await open({kind:'empty'});
  await page.getByRole('button',{name:'New connection'}).first().focus();await page.keyboard.press('Enter');
@@ -285,7 +299,7 @@ try{
  for(const scheme of ['light','dark']){await emptyAndList(scheme);await phone(scheme)}
  await everyProvider('light');await everyProvider('dark');
  await editAndReauth('light');await editAndReauth('dark');
- await keyboardOnly();await manyAndRoles();
+ await clickBeforeListLoads();await keyboardOnly();await manyAndRoles();
  assert.deepEqual(errors,[],'page errors');
  console.log('Connections browser checks passed');
 }finally{await browser?.close()}

@@ -4,8 +4,18 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Update Center: when the updater refuses because of its rate limit, the message now says which limit was reached (60 seconds between runs, or 6 runs per 24 hours) and when you can update again.
+- Update Center: a rolled-back or stuck update that the running version has already passed, for example after a manual upgrade, now shows as Superseded instead of a failure.
+- The Recovery guide on the backup page uses plus and minus icons instead of text symbols.
+
 ### Fixed
 
+- Connections: a New connection click made while the list is still loading now opens the dialog once the list appears.
+- Incremental backups: an increment that cannot be confirmed as part of its chain is no longer saved. The backup shows as failed, you get the Backup failed alert, and the next backup is full.
+- Incremental backups: re-verifying a backup also checks the backups built on it. A broken chain is shown, its backups are marked unverified, and you get an alert.
+- Recovery kit: restore an incremental backup without DockNest from a plain copy of your storage folder. The kit finds the chain, checks it and rebuilds the files, including deleted and renamed folders.
 - A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
 - Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28.
 - An install that apt stops because it would have to remove other software is reported as a conflict.

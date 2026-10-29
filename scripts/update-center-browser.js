@@ -40,7 +40,7 @@ function handler(mock){
   if(p==='/api/updates'&&m==='GET')return json(mock.state);
   if(p==='/api/updates/status')return json({requestId:'req-1',from:'v2.2.0',to:'v2.3.0',state:'running',stale:true});
   if(p.startsWith('/api/updates/releases/'))return json(meta);
-  if(p==='/api/updates/history')return json({items:[{id:'r1',version:'v2.2.0',at:iso(),outcome:'succeeded',source:'in-app'},{id:null,version:'v2.1.0',at:iso(),outcome:'succeeded',source:'cli'},{id:'r0',version:'v2.1.5',at:iso(),outcome:'rolled_back',source:'in-app'}],next:null});
+  if(p==='/api/updates/history')return json({items:[{id:'r1',version:'v2.2.0',at:iso(),outcome:'succeeded',source:'in-app'},{id:null,version:'v2.1.0',at:iso(),outcome:'succeeded',source:'cli'},{id:'r0',version:'v2.3.0',at:iso(),outcome:'rolled_back',source:'in-app'},{id:'r2',version:'v2.1.6',at:iso(),outcome:'rolled_back',source:'in-app'}],next:null});
   if(p==='/api/updates/whats-new')return json(mock.whatsNew);
   if(p==='/api/updates/whats-new/seen')return route.fulfill({status:204});
   if(p==='/api/updates/requests'&&m==='POST')return json(mock.request.body,mock.request.status);
@@ -118,8 +118,10 @@ try{
   await recent.click();
   assert.equal(await recent.getAttribute('aria-expanded'),'true');
   await page.locator('.uc-recent-list li').first().waitFor();
-  assert.equal(await page.locator('.uc-recent-list li').count(),3);assert.equal(await page.locator('table.hist').count(),0,'No history table');
+  assert.equal(await page.locator('.uc-recent-list li').count(),4);assert.equal(await page.locator('table.hist').count(),0,'No history table');
   await page.getByText('Rolled back',{exact:true}).waitFor();
+  // A failed run the installed version (2.2.0) has already passed, for example after a manual upgrade, reads Superseded and has no report entry.
+  assert.equal(await page.getByText('Superseded',{exact:true}).count(),1);assert.equal(await page.getByText('Rolled back',{exact:true}).count(),1);
   assert.equal(await page.getByRole('button',{name:'Open GitHub',exact:true}).count(),1,'Report entry on the rolled-back row only');
   // 2.4.0: the row opens the update-failure review for that run (GET /api/updates/requests/r0), not Report a bug.
   await page.getByRole('button',{name:'Open GitHub',exact:true}).click();
@@ -183,10 +185,10 @@ try{
   // 2.4.1: the updater names which limit applied and the earliest time a new run is allowed (red alert panel).
   const soon=new Date(Date.now()+40000).toISOString(),tomorrow=new Date(Date.now()+20*3600000).toISOString();
   mock.request={status:429,body:{error:'raw',code:'UPDATER_RATE_LIMITED',refusal:'rate-limited',limit:'cooldown',retryAt:soon}};await start.click();
-  await dialog.getByRole('alert').getByText(/The updater needs a minute between runs\. Try again at \d\d:\d\d\./).waitFor();
+  await dialog.getByRole('alert').getByText(/The updater waits 60 seconds between runs\. Try again at \d\d:\d\d\./).waitFor();
   assert.equal(await dialog.locator('.alert-panel.alert-error').count(),1,'The rate limit is a red alert panel');
   mock.request={status:429,body:{error:'raw',code:'UPDATER_RATE_LIMITED',refusal:'rate-limited',limit:'daily',retryAt:tomorrow}};await start.click();
-  await dialog.getByRole('alert').getByText(/The updater has reached its daily limit for updates, so nothing was changed\. You can update again at .*\d\d:\d\d\./).waitFor();
+  await dialog.getByRole('alert').getByText(/The updater has reached its daily limit for updates \(6 runs in 24 hours\), so nothing was changed\. You can update again at .*\d\d:\d\d\./).waitFor();
   assert.ok(!(await dialog.getByRole('alert').innerText()).includes('few minutes'),'No wrong claim about minutes');
   mock.request={status:202,body:{requestId:'req-1'}};mock.locked=true;mock.progress=running;
   await start.click();

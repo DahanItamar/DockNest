@@ -9,9 +9,9 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createWriteStream } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { startS3Fixture } from './integration-s3.js';
 
@@ -196,6 +196,64 @@ ${listing}`);
     };
     for (const [index, point] of points.entries()) await restoreAndCompare(point, index);
     record('Every one of the 7 restore points (the full backup and each increment) restores on a second host with a file tree, modes, owners, symlinks and database rows identical to the source when that backup was taken; copies have network none');
+
+    // ---- Recovery kit only: no DockNest database, API or ORDER.txt (docs/incremental-backups.md) -------------------------
+    // The kit is exported and restored like an owner would, and only its own files are used: master.key,
+    // recovery/decrypt-backup.js and recovery/helper.py. The packages are a plain copy of the site's storage folder.
+    {
+      const { exportRecoveryKit, restoreRecoveryKit } = await import('../src/recovery-kit.js');
+      const passphrase = randomBytes(24).toString('base64'); // throwaway, never printed
+      const kitFile = join(directory, 'incremental-kit.dkit'), kit = join(directory, 'incremental-kit'), storageCopy = join(directory, 'incremental-storage-copy');
+      try {
+        await exportRecoveryKit({ database: db, masterKey: process.env.MASTER_KEY_FILE, output: kitFile, passphrase, release: 'qa' });
+        await restoreRecoveryKit({ input: kitFile, directory: kit, passphrase, updaterStatus: join(directory, 'no-updater-status') });
+        await mkdir(storageCopy, { recursive: true });
+        const fileOf = point => point.backup.path.split('/').pop();
+        for (const point of points) {
+          assert.match(fileOf(point), new RegExp(`^backup_.+--${point.backup.id}\\.tar\\.gz\\.enc$`), 'Packages are stored under their backup ID');
+          await pipeline(await openRead(point.backup.path), createWriteStream(join(storageCopy, fileOf(point))));
+        }
+        await run('cp', join(kit, 'recovery', 'helper.py'), target + ':/kit-helper.py');
+        // The tree script with another root; paths are reported as /site/... so they compare with the source.
+        const treeAt = async root => {
+          const script = TREE.replace("os.walk('/site')", `os.walk(${JSON.stringify(root)})`).replace("'file:/site/database.sqlite?mode=ro'", JSON.stringify(`file:${root}/database.sqlite?mode=ro`));
+          const raw = JSON.parse(await run('exec', target, 'python3', '-c', script));
+          return { files: Object.fromEntries(Object.entries(raw.files).map(([key, value]) => ['/site' + key.slice(root.length), value])), db: raw.db };
+        };
+        // Point 4 ends the longest chain (edits, deletes, a symlink replaced by a folder, renames); point 6 is the increment
+        // after a new full backup in which two folders swap names.
+        for (const index of [4, 6]) {
+          const point = points[index], start = points.findLastIndex((item, k) => k <= index && item.link.backup_kind === 'full');
+          const expectedIds = points.slice(start, index + 1).map(item => item.backup.id), decrypted = join(directory, 'kit-chain-' + index);
+          const { stdout } = await exec(process.execPath, [join(kit, 'recovery', 'decrypt-backup.js'), '--chain', join(storageCopy, fileOf(point)), join(kit, 'master.key'), decrypted], { maxBuffer: 1024 * 1024 });
+          assert.match(stdout, new RegExp(`${expectedIds.length} packages, every link matches`));
+          const chainFile = JSON.parse(await readFile(join(decrypted, 'CHAIN.json'), 'utf8'));
+          assert.deepEqual(chainFile.packages.map(item => item.backupId), expectedIds, 'The kit finds the chain from the sealed manifests, full backup first');
+          assert.deepEqual(chainFile.packages.map(item => item.sha256), points.slice(start, index + 1).map(item => item.backup.checksum));
+          await run('cp', decrypted, target + ':/kit-chain-' + index);
+          const output = await run('exec', target, 'python3', '/kit-helper.py', 'restore-chain', '/kit-chain-' + index, '/kit-restore-' + index);
+          const result = JSON.parse(output.split('\n').pop()).result;
+          assert.equal(result.packages, expectedIds.length);
+          const mount = result.mounts.find(item => item.destination === '/site');
+          assert.ok(mount, 'The restore names the /site mount: ' + JSON.stringify(result.mounts.map(item => item.destination)));
+          assert.equal(result.images.length, expectedIds.length, 'One images.tar per package, in chain order');
+          assertSameTree(point.expected, await treeAt(mount.path), 'Recovery-kit-only restore of point ' + index + ' vs the source at that time');
+          await run('exec', target, 'rm', '-rf', '/kit-chain-' + index, '/kit-restore-' + index);
+          await rm(decrypted, { recursive: true, force: true });
+        }
+        // A missing package in the middle of the chain stops the kit before it writes anything.
+        const middle = points[2], refusedOutput = join(storageCopy, 'refused');
+        await rm(join(storageCopy, fileOf(middle)));
+        const refusal = await exec(process.execPath, [join(kit, 'recovery', 'decrypt-backup.js'), '--chain', join(storageCopy, fileOf(points[4])), join(kit, 'master.key'), refusedOutput]).then(() => null, error => String(error.stderr));
+        assert.ok(refusal, 'The kit refuses a chain with a missing package');
+        assert.match(refusal, new RegExp(`depends on backup ${middle.backup.id}, which is missing or damaged`));
+        assert.deepEqual(await readdir(refusedOutput), [], 'Nothing is written for a broken chain');
+        record('Recovery kit only (no DockNest database, API or order file): from a plain copy of the storage folder, the kit finds the chain from the sealed manifests, checks every link, and its helper rebuilds points 4 and 6 (deletes, a symlink replaced by a folder, renames, two folders swapping names) with a file tree and database identical to the source at that time; a missing package is refused before anything is written');
+      } finally {
+        await run('exec', target, 'rm', '-rf', '/kit-helper.py', '/kit-chain-4', '/kit-restore-4', '/kit-chain-6', '/kit-restore-6').catch(() => {});
+        for (const path of [kitFile, kit, storageCopy]) await rm(path, { recursive: true, force: true });
+      }
+    }
 
     // ---- Measured saving ---------------------------------------------------------------------------------------------------
     const rows = db.prepare('SELECT id,size FROM backups WHERE id IN (SELECT value FROM json_each(?))').all(JSON.stringify(createdBackups));

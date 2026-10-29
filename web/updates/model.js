@@ -74,6 +74,15 @@ export function liveFor({ phase, to, from }) {
 }
 export const vv = v => typeof v === 'string' && v ? (v.startsWith('v') ? v : 'v' + v) : '';
 export const safeVersion = v => typeof v === 'string' && /^v\d+\.\d+\.\d+$/.test(v) ? v : null;
+// True when version a is the same as or newer than b (both vX.Y.Z); false when either is not a plain release version.
+export function atLeast(a, b) {
+  const x = safeVersion(vv(a))?.slice(1).split('.').map(Number), y = safeVersion(vv(b))?.slice(1).split('.').map(Number);
+  if (!x || !y) return false;
+  const i = x.findIndex((n, k) => n !== y[k]);
+  return i < 0 || x[i] > y[i];
+}
+// A rolled-back run is superseded once the running version has reached its target; a stuck (needs-action) run targets the running version itself, so it needs a strictly newer one. For example after a manual scripts/upgrade.sh.
+export const isSuperseded = (item, current) => (item.outcome === 'rolled_back' && atLeast(current, item.version)) || (item.outcome === 'needs_action' && atLeast(current, item.version) && vv(current) !== vv(item.version));
 export const tagUrl = v => safeVersion(v) ? 'https://github.com/DahanItamar/DockNest/releases/tag/' + v : null;
 // Highlight chips from the (display-only) typed highlights block.
 export function highlightChips(h) {
@@ -108,13 +117,13 @@ export function submitMessage(error, now = new Date()) {
     UPDATER_LOW_DISK: 'The DockNest host has too little free disk space for this update. Free up disk space, for example old Docker images or build cache, then try again.',
     UPDATER_BUSY: 'The host updater is busy. Try again in a minute.',
     UPDATER_REFUSED: 'The host updater refused this update. Nothing was changed.',
-    UPDATER_RATE_LIMITED: 'Too many update requests. Wait a few minutes and try again.',
+    UPDATER_RATE_LIMITED: 'The updater is limiting update runs right now. Try again later.',
     UPDATER_UNAVAILABLE: 'DockNest cannot reach the host updater. Check the connection in the Update Center, then try again.',
   };
   if (code === 'UPDATER_RATE_LIMITED') {
     const when = retryTime(error?.retryAt, now);
-    if (error?.limit === 'daily') return 'The updater has reached its daily limit for updates, so nothing was changed.' + (when ? ' You can update again at ' + when + '.' : ' Try again later.');
-    if (error?.limit === 'cooldown') return 'The updater needs a minute between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
+    if (error?.limit === 'daily') return 'The updater has reached its daily limit for updates (6 runs in 24 hours), so nothing was changed.' + (when ? ' You can update again at ' + when + '.' : ' Try again later.');
+    if (error?.limit === 'cooldown') return 'The updater waits 60 seconds between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
     return 'The updater is limiting update runs right now. Try again later.';
   }
   // 2.11.1: the broker marks a refusal fixed by --repair (no verified record of the installed version) with this detail.

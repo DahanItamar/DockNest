@@ -22,14 +22,21 @@ INCREMENTAL_GUIDE="""
 # Incremental backups (format v2)
 manifest.backupKind says whether this package is a full backup or an increment. manifest.chain names the chain, this
 package's position and, for an increment, the backup ID and ciphertext SHA-256 of the package before it. An increment
-holds only the files that changed. To restore one, decrypt and verify every package of the chain first (the order file
-of a chain download lists them, full backup first) and check that each manifest.chain.parentSha256 matches the package
-before it. Then, for each mount, extract the full backup's mount-I-J.tar into a new empty directory and extract the
-same mount of each increment in order on top of it with GNU tar:
-  tar --listed-incremental=/dev/null --xattrs --acls --numeric-owner -xpf mount-I-J.tar -C NEW_DIRECTORY
-This also removes files deleted between backups. Check every archive for unsafe paths first, including the names in
-GNU.dumpdir records. Run docker load -i images.tar for every package of the chain, in order. The snapshot-*.snar files
-are GNU tar snapshot files; a restore does not need them.
+holds only the files that changed. With the recovery kit, as root on Linux with GNU tar:
+  node decrypt-backup.js --chain <backup_...--ID.tar.gz.enc or a chain download folder> <master.key> <new folder>
+  python3 helper.py restore-chain <that folder> <another new folder>
+The first step finds and verifies every package of the chain (full backup first) and every link; the second rebuilds
+each mount with the same checks as DockNest and lists the images.tar files to load, in order.
+By hand: decrypt and verify every package of the chain first and check that each manifest.chain.parentSha256 matches
+the package before it. Check every archive for unsafe paths, including the names in GNU.dumpdir records. Then, for each
+mount, go into a new empty directory and extract the full backup's mount-I-J.tar, then the same mount of each increment
+in order, from inside that directory (not with -C: GNU tar makes the temporary folder of a folder-name swap relative
+to the working directory):
+  cd NEW_DIRECTORY && tar --listed-incremental=/dev/null --xattrs --acls --numeric-owner -xpf /path/to/mount-I-J.tar
+This also applies deletions and renames. Where an earlier archive restored a symlink and a later one has a real folder
+at that path, remove the symlink before extracting that later archive (tar would follow it). Run docker load -i
+images.tar for every package of the chain, in order. The snapshot-*.snar files are GNU tar snapshot files; a restore
+does not need them.
 """
 
 EVENT_STREAM=sys.stdout
@@ -2156,10 +2163,10 @@ def chain_problem(manifests,chain):
         # Same sources in every link; the full is level 0 and every increment level 1.
         if set(snapshots)!=set(keys) or any(item['level']!=(0 if k==0 else 1) for item in snapshots.values()):return broken_link(chain,max(k-1,0))
     return None
-def unpack_chain(req,root):
+def unpack_chain(req,root,payloads=None):
     chain=chain_request(req.get('chain'))
     if req.get('plaintextChecksum') is not None and req['plaintextChecksum']!=chain[-1]['plaintextChecksum']:raise ValueError('Restore transfer checksum mismatch')
-    payloads=[root/('payload-%d.tar.gz'%k) for k in range(len(chain))]
+    payloads=payloads or [root/('payload-%d.tar.gz'%k) for k in range(len(chain))]
     for k,payload in enumerate(payloads):
         if not is_regular(payload) or file_sha256(payload)!=chain[k]['plaintextChecksum']:
             raise ValueError('Restore transfer checksum mismatch' if k==len(chain)-1 else broken_link(chain,k))
@@ -2194,6 +2201,67 @@ def image_archives(unpacked):
 def extract_archives(archive,destination):
     if isinstance(archive,list):return chain_extract(archive,destination)
     return safe_extract(archive,destination)
+class MountLayoutError(ValueError):
+    """A mount layout a restore cannot rebuild: 'overlap' (one mount source inside another) or 'entries' (an archive
+    without exactly one top-level entry)."""
+    def __init__(self,kind):
+        super().__init__('Overlapping mount paths require offline restore' if kind=='overlap' else 'Mount archive must have exactly one source entry');self.kind=kind
+def extract_mount(unpacked,i,j,m,sources,root):
+    """Mount j of container i, extracted once per (type, source) into root/data-I-J (a chain: full backup, then each
+    increment). `sources` maps (type, source) to the folder already made. Returns the source folder for the mount.
+    Extraction refusals raise ValueError; layout problems raise MountLayoutError."""
+    key=(m.get('Type'),m.get('Source'))
+    if key not in sources:
+        for _,existing in sources:
+            a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
+            if os.path.commonpath([a,b]) in [a,b]:raise MountLayoutError('overlap')
+        directory=root/('data-%d-%d'%(i,j))
+        extract_archives(mount_archive(unpacked,i,j),directory)
+        entries=list(directory.iterdir())
+        if len(entries)!=1:raise MountLayoutError('entries')
+        sources[key]=entries[0]
+    return sources[key]
+CHAIN_PACKAGE_NAME=re.compile(r'[0-9]{2}-[A-Za-z0-9-]{1,64}\.tar\.gz')
+def restore_chain_offline(folder,output):
+    """Recovery kit, without DockNest (docs/incremental-backups.md): rebuild the files of an incremental chain from the
+    packages `node decrypt-backup.js --chain` wrote and its CHAIN.json, with the same link, artifact and path checks as a
+    DockNest restore. Writes data-I-J (one folder per mount source, as a restore does) and prints where each mount, each
+    images.tar (load them in this order) and each configuration archive is. Nothing is started; no Docker command runs."""
+    if os.name!='posix':raise ValueError('Restoring an incremental backup needs GNU tar on Linux')
+    folder=pathlib.Path(folder).resolve();output=pathlib.Path(output)
+    listing=json.loads((folder/'CHAIN.json').read_text())
+    packages=listing.get('packages') if isinstance(listing,dict) else None
+    if not isinstance(packages,list) or not 1<=len(packages)<=MAX_CHAIN:raise ValueError('CHAIN.json lists no packages')
+    payloads=[];chain=[]
+    for item in packages:
+        name=item.get('file') if isinstance(item,dict) else None
+        if not isinstance(name,str) or not CHAIN_PACKAGE_NAME.fullmatch(name):raise ValueError('CHAIN.json has an invalid entry; it was not written by decrypt-backup.js')
+        payload=folder/name
+        if not is_regular(payload):raise ValueError('A package listed in CHAIN.json is missing: '+name)
+        payloads.append(payload);chain.append({'backupId':item.get('backupId'),'sha256':item.get('sha256'),'plaintextChecksum':file_sha256(payload)})
+    if output.is_symlink():raise ValueError('The output folder cannot be a symlink')
+    if output.exists() and any(output.iterdir()):raise ValueError('The output folder must be new or empty')
+    created=not output.exists()
+    output.mkdir(parents=True,exist_ok=True,mode=0o700)
+    try:
+        unpacked,manifest,_=unpack_chain({'chain':chain},output/'packages',payloads)
+        if shutil.disk_usage(output).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+        mounts=[];sources={}
+        for i,c in enumerate(manifest.get('containers') or []):
+            for j,m in enumerate(c.get('Mounts') or []):
+                source=extract_mount(unpacked,i,j,m,sources,output)
+                mounts.append({'container':c.get('Name'),'type':m.get('Type'),'destination':m.get('Destination'),'path':str(source)})
+    except BaseException:
+        # A refusal leaves nothing behind: everything under the output folder was written by this step (it was empty).
+        # rmtree never follows the restored symlinks.
+        for entry in list(output.iterdir()):
+            if entry.is_dir() and not entry.is_symlink():shutil.rmtree(entry,ignore_errors=True)
+            else:entry.unlink(missing_ok=True)
+        if created:
+            try:output.rmdir()
+            except OSError:pass
+        raise
+    emit(result={'chainId':(manifest.get('chain') or {}).get('id'),'packages':len(payloads),'mounts':mounts,'images':[str(p) for p in image_archives(unpacked)],'configurationArchives':[str(unpacked/('config-%d.tar'%i)) for i,_ in enumerate(manifest.get('configurationFiles') or [])],'manifest':str(unpacked/'manifest.json')})
 DUMPDIR_CODES='YNDRTX'
 def dumpdir_problem(value,top):
     """GNU.dumpdir lists a directory's entries (Y, N, D: one name each) and directory renames (R, T, X: paths from the
@@ -2384,17 +2452,7 @@ def restore(req):
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
         for j,m in enumerate(c['Mounts']):
-            key=(m['Type'],m['Source'])
-            if key not in sources:
-                for _,existing in sources:
-                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
-                    if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths require offline restore')
-                directory=root/('data-%d-%d'%(i,j))
-                extract_archives(mount_archive(unpacked,i,j),directory)
-                entries=list(directory.iterdir())
-                if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
-                sources[key]=entries[0]
-            source=sources[key]
+            source=extract_mount(unpacked,i,j,m,sources,root)
             if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
             mount='type=bind,src='+str(source)+',dst='+m['Destination']
             if not m.get('RW',True):mount+=',readonly'
@@ -3953,18 +4011,11 @@ def restore_test_restore(req):
             for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
         except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
         for j,m in enumerate(c['Mounts']):
-            key=(m['Type'],m['Source'])
-            if key not in sources:
-                for _,existing in sources:
-                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
-                    if os.path.commonpath([a,b]) in [a,b]:raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
-                directory=root/('data-%d-%d'%(i,j))
-                try:extract_archives(mount_archive(unpacked,i,j),directory)
-                except ValueError as error:raise backup_side(error)
-                entries=list(directory.iterdir())
-                if len(entries)!=1:raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
-                sources[key]=entries[0]
-            source=sources[key]
+            try:source=extract_mount(unpacked,i,j,m,sources,root)
+            except MountLayoutError as error:
+                if error.kind=='overlap':raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
+                raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
+            except ValueError as error:raise backup_side(error)
             if ',' in str(source) or ',' in m['Destination']:raise TestOutcome('couldnt_run','Mount paths with commas need a reviewed offline restore.',checks)
             mount='type=bind,src='+str(source)+',dst='+m['Destination']
             if not m.get('RW',True):mount+=',readonly'
@@ -4343,7 +4394,13 @@ def main(req):
         emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
     else:raise ValueError('Unsupported helper operation')
-if __name__=='__main__':
+if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
+    # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.
+    # DockNest itself runs the helper from stdin (python3 -c), so this never matches its own calls.
+    if len(sys.argv)!=4:print('Usage: python3 helper.py restore-chain <folder written by decrypt-backup.js --chain> <new empty folder>',file=sys.stderr);sys.exit(2)
+    try:restore_chain_offline(sys.argv[2],sys.argv[3])
+    except Exception as e:print('Chain restore failed: %s'%e,file=sys.stderr);sys.exit(1)
+elif __name__=='__main__':
     try:main(json.loads(sys.stdin.readline()))
     except Exception as e:
         diagnostic(phase='helper-failure',exceptionType=type(e).__name__)

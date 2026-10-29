@@ -10,7 +10,7 @@
  --success:#21704A;--success-surface:#E9F1ED;--warning:#835A00;--warning-surface:#F3EFE6;
  --error:#C62828;--error-surface:#F9EAEA;--info:#1B5FB3;--info-surface:#E8EFF7;
  --backdrop:rgb(27 23 34 / 45%);--shadow:rgb(27 23 34 / 16%);--transparent:transparent;--qr-background:#FFFFFF;
- --storage-decoration:#91B9EE;--sidebar-storage-accent:var(--primary-deep);--sidebar-nav-accent:var(--primary-deep);--sidebar-nav-soft:var(--primary-light);--metric-purple:#5E35B1;--metric-purple-decoration:#4527A0;--metric-blue:#1B5FB3;--metric-blue-decoration:#164E93;--metric-period:#18549E;
+ --storage-decoration:#91B9EE;--sidebar-storage-accent:var(--primary-deep);--sidebar-nav-accent:var(--primary-deep);--sidebar-nav-soft:var(--primary-light);--metric-purple:#5E35B1;--metric-purple-decoration:#4527A0;--metric-blue:#1B5FB3;--metric-blue-decoration:#164E93;--metric-period:#18549E;--on-solid:#FFFFFF;--metric-purple-label:#D1C4E9;--metric-blue-label:#BBDEFB;--metric-blue-soft:#E3F2FD;
  --chart-backup:#9E7EB5;--chart-unverified:#4E7FC4;--chart-restore:#5E35B1;--chart-failed:#7A7585;--chart-area:rgba(94,53,177,.25);
  /* Blue header/sidebar accents are scoped to navigation and utility controls. */
  --header-control:var(--primary-dark);--header-control-hover:var(--primary-deep);--header-profile:var(--primary-light);--header-profile-hover:var(--primary-light);
