@@ -83,7 +83,7 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
   shows the best known line (or none).
 - If the server is busy with a backup, restore or move, or the software is already there, nothing is installed.
 - Before offering Docker, DockNest reads the version the system's own sources offer. When a site has several
-  containers and the offered Docker is older than 28, `supported` is false and the check carries
+  containers and the offered Docker is older than 28, or its version cannot be read (2.12.1), `supported` is false and the check carries
   `install.reason`: "This server's packages offer Docker 26.1; this site needs 28 or newer. Install Docker from
   Docker's own repository instead." `command` is then a comment line pointing to Docker's official instructions
   (https://docs.docker.com/engine/install/); DockNest never runs a downloaded script.
@@ -113,8 +113,10 @@ tool is present (including an old Docker Compose) or when the server's system co
 
 ### POST /api/servers/:id/install
 
-Body `{ "package": "nginx" | "docker" | "compose" | "certbot" }` and nothing else (any other field, including a
-command, answers 400). Administrators only, CSRF token like every API write, and a re-verification within 5 minutes
+Body `{ "package": "nginx" | "docker" | "compose" | "certbot", "siteId"?: "<uuid>" }` and nothing else (any other
+field, including a command, answers 400). A move's install sends the site; its selected containers then decide the
+Docker need exactly as in preflight (several containers need 28), and a missing site answers 404. The server panel
+sends no site. Administrators only, CSRF token like every API write, and a re-verification within 5 minutes
 (403 `REAUTH_REQUIRED`). DockNest re-reads the server first and answers 409 with a plain `error` and one of these
 `code` values: `SERVER_BUSY` (a job, a move or another install uses the server), `SERVER_UNREACHABLE`,
 `INSTALL_UNSUPPORTED`, `ALREADY_INSTALLED`. Success is `202 { "job": { "id": "..." } }`; the request is audited as
