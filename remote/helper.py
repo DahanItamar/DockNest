@@ -229,7 +229,7 @@ def transfer_progress(count,final=False):
     if final or now-TRANSFER['emitted']>=2:
         TRANSFER['emitted']=now;emit(progress={'done':TRANSFER['done'],'total':TRANSFER['total']})
 
-def command_artifact(command,archive=None,name=None,expected=None,spool=None):
+def command_artifact(command,archive=None,name=None,expected=None,spool=None,scan=None):
     started=time.monotonic();label=pathlib.Path(command[0]).name+(' '+str(command[1]) if len(command)>1 and command[0]=='docker' else '')
     diagnostic(command=label,phase='artifact-start')
     process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
@@ -248,6 +248,7 @@ def command_artifact(command,archive=None,name=None,expected=None,spool=None):
                 while data:=reader.read(1024*1024):output.write(data)
                 output.flush();os.fsync(output.fileno())
         elif archive is None:
+            if scan is not None:scan(archive_renames_safely(reader))
             while reader.read(1024*1024):pass
         else:
             info=tarfile.TarInfo(name);info.size=expected['bytes'];info.mode=0o600
@@ -270,7 +271,7 @@ def open_stream_archive(output,level):
     if sys.version_info>=(3,12):return tarfile.open(fileobj=output,mode='w|gz',compresslevel=level,bufsize=1024*1024)
     return tarfile.open(fileobj=output,mode='w|gz',bufsize=1024*1024)
 
-def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None):
+def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=None):
     # before: name -> callable run before each pass of that command (an incremental tar gets its parent snapshot back).
     before=before or {}
     inventory={};files={}
@@ -281,7 +282,7 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None):
             elif spool_root is not None and name in spooled:
                 files[name]=pathlib.Path(spool_root)/('spool-'+name)
                 inventory[name]=command_artifact(command,spool=files[name])
-            else:inventory[name]=command_artifact(command)
+            else:inventory[name]=command_artifact(command,scan=(scans or {}).get(name))
         emit(stage='transferring')
         global TRANSFER
         TRANSFER={'done':0,'total':sum(inventory[name]['bytes'] for name,_,link in specs if not link),'emitted':0}
@@ -299,6 +300,19 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None):
         for path in files.values():path.unlink(missing_ok=True)
     return inventory
 
+def archive_has_renames(fileobj):
+    """True when a GNU tar archive holds a directory rename record (R or T in a GNU.dumpdir). GNU tar keeps writing a
+    rename's records into later increments of the same snapshot file, where a restore would replay them; so after an
+    increment with renames the next backup must be full (see the engine's `folders-renamed`)."""
+    with tarfile.open(fileobj=fileobj,mode='r|') as tar:
+        for member in tar:
+            value=member.pax_headers.get('GNU.dumpdir')
+            if isinstance(value,str) and any(entry[:1] in ('R','T') for entry in value.split('\0') if entry):return True
+    return False
+def archive_renames_safely(fileobj):
+    # An archive this scan cannot read counts as renamed: the next backup is then full, never a wrong increment.
+    try:return archive_has_renames(fileobj)
+    except (tarfile.TarError,OSError,EOFError,ValueError):return True
 def stream_file(archive,name,path,expected):
     size=path.stat().st_size;info=tarfile.TarInfo(name);info.size=size;info.mode=0o600
     with open(path,'rb') as source:archive.addfile(info,source)
@@ -979,7 +993,7 @@ def plan_incremental(inc,sources,root,exclusions=None):
     level=0 if inc['mode']=='full' or reason else 1
     if level:chain={'id':inc['chainId'],'position':inc['position'],'parentBackupId':inc['parentBackupId'],'parentSha256':inc['parentSha256']}
     else:chain={'id':inc['fallbackChainId'] if reason else inc['chainId'],'position':0,'parentBackupId':None,'parentSha256':None}
-    return {'level':level,'chain':chain,'reason':reason,'work':work,'keys':keys,'siteKey':inc['siteKey'],'exclusions':excluded,'parentImageIds':set(inc['parentImageIds']) if level else set()}
+    return {'level':level,'chain':chain,'reason':reason,'work':work,'keys':keys,'siteKey':inc['siteKey'],'exclusions':excluded,'renames':{},'parentImageIds':set(inc['parentImageIds']) if level else set()}
 def reset_snapshot(state,key):
     """Before every tar run (a direct capture runs each tar twice): the working copy starts from the parent snapshot,
     or does not exist for a level-0 archive, so both runs make the same archive."""
@@ -995,7 +1009,7 @@ def snapshot_records(state):
         result[key]=file_sha256(path)
     return result
 def annotate_mounts(containers,sources,state,snapshots):
-    return [{**c,'Mounts':[{**m,'incremental':{'snapshotKey':sources[m['Source']],'level':state['level'],'snapshotSha256':snapshots[sources[m['Source']]]}} if m['Source'] in sources and not (m['Type']=='bind' and protected_mount(m['Source'])) else m for m in c['Mounts']]} for c in containers]
+    return [{**c,'Mounts':[{**m,'incremental':{'snapshotKey':sources[m['Source']],'level':state['level'],'snapshotSha256':snapshots[sources[m['Source']]],'renames':bool(state['renames'].get(sources[m['Source']]))}} if m['Source'] in sources and not (m['Type']=='bind' and protected_mount(m['Source'])) else m for m in c['Mounts']]} for c in containers]
 def manifest_snapshots(manifest):
     """snapshot key -> {archive, level, sha256} from a v2 manifest; the first archive of a shared source holds the data."""
     result={}
@@ -1727,7 +1741,7 @@ def capture(req,output=None):
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
-        archives={};specs=[];prepare={}
+        archives={};specs=[];prepare={};scans={}
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -1746,11 +1760,14 @@ def capture(req,output=None):
                     link=archives.get(source) if share else None
                     specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot),link))
                     if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
+                    if key and not link and increment['level']:scans[target.name]=lambda found,key=key:increment['renames'].__setitem__(key,found)
                     archives[source]=link or target.name
                 elif share and source in archives:os.link(archives[source],target)
                 else:
                     if key:reset_snapshot(increment,key)
                     source_archive(source,target,exclusions.get(source,[]),snapshot);archives[source]=target
+                    if key and increment['level']:
+                        with open(target,'rb') as written:increment['renames'][key]=archive_renames_safely(written)
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
             source=pathlib.Path(filename)
             if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None))
@@ -1760,7 +1777,7 @@ def capture(req,output=None):
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
             archive=open_stream_archive(output,level)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare)
+            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans)
             revalidate_sources(plan)
         captured=time.time()
     except BaseException:
@@ -1814,6 +1831,8 @@ def capture(req,output=None):
         manifest['containers']=annotate_mounts(cs,snapshot_sources,increment,snapshots)
         manifest['chainImages']=[image for image in original_ids if image not in saved_ids]
         manifest['snapshots']=snapshots
+        # An increment whose archives carry directory renames ends the chain: the engine makes the next backup full.
+        manifest['renamesSeen']=any(increment['renames'].values())
         if increment['reason']:manifest['fallback']={'reason':increment['reason']}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
@@ -2109,12 +2128,12 @@ def dumpdir_renames(value):
     result=[];source=None
     for entry in [e for e in value.split('\0') if e]:
         if entry[0]=='R':
-            if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+            if source is not None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
             source=entry[1:]
         elif entry[0]=='T':
-            if source is None:raise ValueError('Unsafe directory listing in incremental archive')
+            if source is None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
             result.append((source,entry[1:]));source=None
-    if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+    if source is not None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
     return result
 def rename_links(links,renames):
     """Where GNU tar's directory renames move the symlinks an earlier link restored."""
@@ -2130,9 +2149,10 @@ def disk_symlinks(root):
             path=os.path.join(current,name)
             if os.path.islink(path):links[pathlib.PurePosixPath(*pathlib.Path(os.path.relpath(path,root)).parts).parts]=os.readlink(path)
     return links
-def incremental_archive_check(archive,root,top=None):
+def incremental_archive_check(archive,root,top=None,replace=None):
     """safe_extract's checks for one archive of a chain, against what the earlier archives already put on disk.
-    Returns the archive's top-level name."""
+    Returns the archive's top-level name. `replace` collects the restored symlinks this archive turns into folders
+    (removed before tar runs). Refusals name the rule that refused, never a path."""
     with tarfile.open(archive,'r:') as tar,open(archive,'rb') as raw:
         members=tar.getmembers()
         if not members:raise ValueError('Empty mount archive in the backup chain')
@@ -2148,10 +2168,17 @@ def incremental_archive_check(archive,root,top=None):
         # reaches that directory, then the member replaces or adds a path. Every member is checked against the map as
         # it stands at that point, and after every rename record each link must still resolve inside the destination.
         on_disk=disk_symlinks(root);links=dict(on_disk)
+        # Every folder a rename in this archive names (source or target); a link at or below one may move during tar.
+        renamed=set()
+        for m in members:
+            dumpdir=m.pax_headers.get('GNU.dumpdir')
+            if not (m.isdir() and isinstance(dumpdir,str)):continue
+            for entry in [e for e in dumpdir.split('\0') if e]:
+                if entry[0] in 'RT' and entry[1:]:renamed.add(tuple(pathlib.PurePosixPath(entry[1:]).parts))
         has_renames=any(m.isdir() and isinstance(m.pax_headers.get('GNU.dumpdir'),str) and any(e[:1] in ('R','T') for e in m.pax_headers['GNU.dumpdir'].split('\0')) for m in members)
-        def unsafe_listing():raise ValueError('Unsafe directory listing in incremental archive')
+        def unsafe_listing(rule):raise ValueError('Unsafe directory listing in incremental archive (%s)'%rule)
         def all_inside():
-            if any(RENAME_TEMPORARY[0] in key for key in links):unsafe_listing()
+            if any(RENAME_TEMPORARY[0] in key for key in links):unsafe_listing('rename cycle left a temporary folder')
             for key,value in links.items():
                 if archive_link_escapes(key[:-1],value,links):raise ValueError('Archive link escapes destination')
         seen=set();regular=set()
@@ -2167,21 +2194,25 @@ def incremental_archive_check(archive,root,top=None):
             if any(parent.parts in links for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             dumpdir=member.pax_headers.get('GNU.dumpdir')
             if dumpdir is not None:
-                if not member.isdir() or dumpdir_problem(dumpdir,top):unsafe_listing()
+                if not member.isdir():unsafe_listing('listing on a non-folder')
+                if dumpdir_problem(dumpdir,top):unsafe_listing('entry outside the archive or unknown code')
                 renames=dumpdir_renames(dumpdir)
                 for source,target in renames:
                     for path in (source,target):
                         parts=tuple(pathlib.PurePosixPath(path).parts) if path else ()
                         # renameat follows a symlink in the path: a rename through or of a link is never modelled.
-                        if any(parts[:k] in links for k in range(1,len(parts)+1)):unsafe_listing()
+                        if any(parts[:k] in links for k in range(1,len(parts)+1)):unsafe_listing('rename through a symlink')
                     links=rename_links(links,[(source,target)])
                 if renames:all_inside()
             target=(root/member.name).resolve()
             if os.path.commonpath([str(root),str(target)])!=str(root):raise ValueError('Archive path escapes destination')
             if member.isdir():
-                # tar would follow a link it finds at a folder's path; replace_directory_links removes the link first,
-                # which is only exact when no rename moved links around.
-                if p.parts in links and (has_renames or p.parts not in on_disk):unsafe_listing()
+                # tar would follow a link it finds at a folder's path, so the link is removed before tar runs. That is
+                # exact only for a link still where an earlier archive restored it, at a path no rename touches (a rename
+                # of an unrelated folder in the same archive, as in a swap, does not move it).
+                if p.parts in links:
+                    if p.parts not in on_disk or links[p.parts]!=on_disk[p.parts] or any(p.parts[:len(r)]==r for r in renamed):unsafe_listing('folder replaces a moved symlink')
+                    if replace is not None:replace.append(p)
                 links.pop(p.parts,None)
             elif member.issym():
                 link=pathlib.PurePosixPath(member.linkname)
@@ -2203,25 +2234,32 @@ def incremental_archive_check(archive,root,top=None):
                 else:regular.add(p)
         all_inside()
         return top
-def replace_directory_links(archive,root):
+def replace_directory_links(folders,root):
     """A symlink an earlier link restored where this archive has a real folder: GNU tar would follow it (and purge the
-    folder it points at), so the link itself is removed first. Checked archives only; links are never followed."""
-    with tarfile.open(archive,'r:') as tar:
-        folders=sorted((pathlib.PurePosixPath(m.name) for m in tar.getmembers() if m.isdir()),key=lambda p:len(p.parts))
-    for folder in folders:
+    folder it points at), so the link itself is removed first. Only the links the check approved; never followed."""
+    for folder in sorted(folders,key=lambda p:len(p.parts)):
         path=root/str(folder)
-        # Parents were checked: none is a symlink unless this archive replaces it, and shallower ones went first.
         if path.is_symlink():path.unlink()
+REPEATED_RENAMES='This backup cannot be restored safely: two backups in a row of its chain repeat the same folder renames (repeated rename records). Restore an earlier point of the chain, or pick a full backup.'
+def chain_rename_problem(archives):
+    """Chains made before DockNest ended a chain after a rename: GNU tar repeats a rename's records in the next increment
+    and a restore would replay them (a wrong tree or a tar error). Two increments in a row with renames are refused."""
+    found=[]
+    for archive in archives:
+        with open(archive,'rb') as handle:found.append(archive_renames_safely(handle))
+    return REPEATED_RENAMES if any(found[k] and found[k-1] for k in range(2,len(found))) else None
 def chain_extract(archives,destination):
     """Rebuild one mount from a chain: the full archive, then each increment in order."""
     if os.name!='posix':raise ValueError('Restoring an incremental backup needs GNU tar on Linux')
+    problem=chain_rename_problem(archives)
+    if problem:raise ValueError(problem)
     if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)
     if any(destination.iterdir()):raise ValueError('Restore destination must be empty')
     root=destination.resolve();top=None
     for archive in archives:
-        top=incremental_archive_check(archive,root,top)
-        replace_directory_links(archive,root)
+        replace=[];top=incremental_archive_check(archive,root,top,replace)
+        replace_directory_links(replace,root)
         # Run inside the destination, not with -C: GNU tar creates the temporary folder of a directory-rename cycle
         # from a relative template, which -C (openat-based) does not move.
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
