@@ -682,7 +682,8 @@ test('updater pin: a failed, busy or slow verification keeps the healthy upgrade
   assert.equal(block[2], spawnSync('sh', ['-c', 'cd "$1" && pwd -P', 'sh', f.work], { encoding: 'utf8' }).stdout.trim());
   assert.doesNotMatch(result.stderr, /removing old upgrade files was interrupted/);
   const status = await f.status(); assert.deepEqual([status.phase, status.ok, status.error], ['done', true, null]);
-  assert.match(status.warning, /^Host updater: .*could not verify and record it.*Run on this host: cd '.*' && sudo scripts\/install-updater\.sh --repair$/);
+  assert.match(status.warning, /^Host updater: .*could not verify and record it.* Run sudo scripts\/install-updater\.sh --repair in the DockNest checkout on this host\.$/);
+  assert.doesNotMatch(status.warning, /cd '/, 'the status file never carries the quoted path');
   await host.set('pin-exit', 75); result = host.run('--version', 'v2.1.0');
   assert.equal(result.status, 0); assert.match(result.stderr.match(repairBlock)?.[1] || '', /an updater run is active.*Wait for that run to finish/);
   await host.set('pin-exit', 124); result = host.run('--version', 'v2.1.0');

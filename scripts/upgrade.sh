@@ -100,7 +100,8 @@ status() { # status OK ERROR
   # The temporary name is unpredictable and created exclusively (noclobber = O_EXCL, never follows a planted link)
   # together with its contents, and mode 0644 comes from the umask, so nothing is ever opened by path twice.
   STATUS_TMP="$dir/.status.$$.$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-  # warning: set only by the cleanup phase, from fixed messages plus validated folder names and image IDs.
+  # warning: set by the cleanup phase (fixed messages plus validated folder names and image IDs) and by pin_report (fixed
+  # messages plus the version, a user name or a uid). json() and the tr below drop \ and ", so it never carries a quoted path.
   # reason: only on a failure, from the fixed list; schemaFrom/schemaTo: integers or null; requestId: validated above.
   # cleanup: the one-line retention summary of a success ("Cleaned up: N old DockNest images"), built from a count.
   if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s,"warning":%s,"reason":%s,"schemaFrom":%s,"schemaTo":%s,"requestId":%s,"cleanup":%s}\n' \
@@ -264,7 +265,7 @@ pin_report() {
   [ -n "$PIN_ACTION" ] || return 0
   _command="cd '$(pwd -P | sed "s/'/'\\\\''/g")' && sudo scripts/install-updater.sh --repair"
   printf '\nACTION NEEDED (host updater): %s\nIn-app updates are refused until this release is recorded. Run once on this host, as a user who can use sudo:\n\n  %s\n\n' "$PIN_ACTION" "$_command" >&2
-  WARNING="${WARNING:+$WARNING }Host updater: $PIN_ACTION Run on this host: $_command"
+  WARNING="${WARNING:+$WARNING }Host updater: $PIN_ACTION Run sudo scripts/install-updater.sh --repair in the DockNest checkout on this host."
   status true
 }
 [ "$PRINT_SCHEMA" = 1 ] && { echo "$(schema_of < src/migrations.js) $(floor_of < src/migrations.js)"; FINISHED=1; exit 0; }
