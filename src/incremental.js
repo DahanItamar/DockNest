@@ -241,7 +241,7 @@ export function chainRecord(decision, helperManifest, { serverId, mainTargetId, 
   if (kind === 'incremental') {
     // A restore rebuilds each mount from the same sources in every package: an increment covers exactly its parent's.
     const parentKeys = Object.keys(request.parentSnapshots ?? {}).sort(), keys = Object.keys(snapshots).sort();
-    if (!keys.length || JSON.stringify(keys) !== JSON.stringify(parentKeys)) throw mismatch('mount-set');
+    if (JSON.stringify(keys) !== JSON.stringify(parentKeys)) throw mismatch('mount-set');
     // A mount that holds renames while the package says none would let the chain continue past them.
     if (mountRenames && manifest.renamesSeen !== true) throw mismatch('rename-marking-inconsistent');
   }

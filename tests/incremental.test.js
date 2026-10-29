@@ -27,27 +27,32 @@ const site = (id, serverId, config = {}) => { db.prepare('INSERT INTO sites(id,s
 server('srv'); server('srv-2');
 
 // ---- mock helper --------------------------------------------------------------------------------------------------
-const helper = { commits: [], state: new Map(), pending: new Map(), requests: [], calls: [], chainFingerprint: 'chain-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [] };
+const helper = { commits: [], state: new Map(), pending: new Map(), requests: [], calls: [], chainFingerprint: 'chain-a', clock: 0, failCommit: false, forge: null, prepared: [], uploads: [], restores: [], noMounts: new Set() };
 const mountKey = sha('/srv/data');
-transport.remote = async (_server, request) => {
+transport.remote = async (_server, request, onStage) => {
   helper.calls.push(request.operation);
   switch (request.operation) {
     // Like the real plan: `fingerprint` changes on every container restart (EndpointID, MacAddress); `chainFingerprint` does not.
     case 'plan': return { fingerprint: 'plan-' + randomUUID(), chainFingerprint: helper.chainFingerprint };
     case 'capture': {
       helper.requests.push(request);
+      // Like the real helper: the services are back and the package is being packed when the manifest is returned, so a
+      // failure after this point is an ordinary failed backup, not recovery work.
+      onStage?.('packing');
       const manifest = { kind: 'docker', complete: true, capturedAt: Date.now() / 1000 + (++helper.clock), downtimeSeconds: 1, originalImages: [{ Id: 'sha256:base', RepoDigests: [] }], architecture: 'amd64', containers: [{ Id: 'c1', Name: '/app', Config: { Image: 'app' }, Mounts: [{ Type: 'bind', Source: '/srv/data', Destination: '/data' }] }], consistency: { status: 'passed' } };
-      const wanted = request.incremental;
+      const wanted = request.incremental, noMounts = helper.noMounts.has(wanted?.siteKey);
+      // A site whose containers have no mounts: no mount archive and no snapshot file (the real helper's empty key set).
+      if (noMounts) manifest.containers[0].Mounts = [];
       if (!wanted) return { remotePath: '/x/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest: { ...manifest, formatVersion: 1 } };
       let mode = wanted.mode, chainId = wanted.chainId, fallback = null;
       const current = helper.state.get(wanted.siteKey)?.[mountKey];
       if (mode === 'incremental' && current !== wanted.parentSnapshots[mountKey]) { mode = 'full'; chainId = wanted.fallbackChainId; fallback = { reason: current ? 'snapshot-mismatch' : 'snapshot-missing' }; }
       const snapshot = sha(randomUUID());
-      helper.pending.set(request.job, { siteKey: wanted.siteKey, snapshots: { [mountKey]: snapshot } });
+      helper.pending.set(request.job, { siteKey: wanted.siteKey, snapshots: noMounts ? {} : { [mountKey]: snapshot } });
       Object.assign(manifest, { chainFingerprint: helper.chainFingerprint, formatVersion: 2, backupKind: mode, chain: { id: chainId, position: mode === 'full' ? 0 : wanted.position, parentBackupId: mode === 'full' ? null : wanted.parentBackupId, parentSha256: mode === 'full' ? null : wanted.parentSha256 }, ...(fallback ? { fallback } : {}), ...(mode === 'incremental' ? { chainImages: wanted.parentImageIds } : {}) });
       // Like the real helper (2.12.0+): every mount says whether its archive holds folder renames, and the package says
       // whether any does (renamesSeen).
-      manifest.containers[0].Mounts[0].incremental = { snapshotKey: mountKey, level: mode === 'full' ? 0 : 1, snapshotSha256: snapshot, renames: false };
+      if (!noMounts) manifest.containers[0].Mounts[0].incremental = { snapshotKey: mountKey, level: mode === 'full' ? 0 : 1, snapshotSha256: snapshot, renames: false };
       manifest.renamesSeen = false;
       helper.forge?.(manifest);
       return { remotePath: '/x/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest };
@@ -238,8 +243,8 @@ test('full reasons: after a site move’s own backup, and after a standard packa
 test('a returned chain that does not match the request is refused and nothing is published', async () => {
   site('forged', 'srv'); enable('forged'); await run('forged');
   helper.forge = manifest => { manifest.chain.parentSha256 = 'f'.repeat(64); };
-  try { const { row, backup } = await run('forged'); assert.notEqual(row.status, 'completed'); assert.equal(backup, undefined); assert.match(row.error, /does not match/); assert.ok(!helper.calls.includes('incremental-commit')); }
-  finally { helper.forge = null; db.prepare("UPDATE jobs SET status='failed' WHERE site_id='forged' AND status='recovery_required'").run(); }
+  try { const { row, backup } = await run('forged'); assert.equal(row.status, 'failed'); assert.equal(backup, undefined); assert.match(row.error, /does not match/); assert.ok(!helper.calls.includes('incremental-commit')); }
+  finally { helper.forge = null; }
 });
 
 // ---- checks when a backup is made (2.12.1, fail-closed) ------------------------------------------------------------------
@@ -248,9 +253,9 @@ test('a returned chain that does not match the request is refused and nothing is
 async function refusedAtCapture(siteId, forge, check) {
   helper.forge = forge;
   let refused;
-  try { refused = await run(siteId); } finally { helper.forge = null; db.prepare("UPDATE jobs SET status='failed' WHERE site_id=? AND status='recovery_required'").run(siteId); }
+  try { refused = await run(siteId); } finally { helper.forge = null; }
   assert.equal(lastRequest().mode, 'incremental', 'an increment was asked for');
-  assert.notEqual(refused.row.status, 'completed', check); assert.equal(refused.backup, undefined, 'nothing is published');
+  assert.equal(refused.row.status, 'failed', check); assert.equal(refused.backup, undefined, 'nothing is published');
   assert.ok(!helper.calls.includes('incremental-commit'), 'the source keeps its snapshot files');
   assert.match(refused.row.error, new RegExp(`does not match what DockNest asked for \\(${check}\\), so the backup was not saved\\. The next backup will be full\\.`));
   assert.deepEqual({ code: details(refused.row).failure.code, chainCheck: details(refused.row).failure.chainCheck }, { code: 'chain_inconsistent', chainCheck: check });
@@ -282,6 +287,16 @@ test('capture check: inconsistent chain manifests (gap, parent, mount level, mou
   await refusedAtCapture('inconsistent', manifest => { manifest.containers[0].Mounts[0].incremental.snapshotKey = sha('another source'); }, 'mount-set');
   await refusedAtCapture('inconsistent', manifest => { manifest.containers[0].Mounts[0].incremental.renames = true; }, 'rename-marking-inconsistent');
   await refusedAtCapture('inconsistent', manifest => { manifest.chain.id = randomUUID(); }, 'chain-id');
+});
+test('capture check: a site with no mounts makes healthy increments (an empty mount set matches its parent)', async () => {
+  site('no-mounts', 'srv'); helper.noMounts.add('no-mounts'); enable('no-mounts');
+  try {
+    const first = await run('no-mounts'), second = await run('no-mounts'), third = await run('no-mounts');
+    assert.equal(link(first.backup.id).backup_kind, 'full');
+    for (const next of [second, third]) { assert.equal(next.row.status, 'completed', next.row.error); assert.equal(link(next.backup.id).backup_kind, 'incremental'); }
+    assert.deepEqual(JSON.parse(third.backup.manifest).incremental.snapshots, {});
+    assert.equal(inc.incrementalSettings('no-mounts').fullNext, false);
+  } finally { helper.noMounts.delete('no-mounts'); }
 });
 test('capture check: a healthy increment (rename marking present, consistent mounts) is saved with no forced full backup', async () => {
   site('healthy', 'srv'); enable('healthy');

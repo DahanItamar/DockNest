@@ -219,7 +219,8 @@ CREATE TABLE IF NOT EXISTS manager_backup_copies (backup_id TEXT NOT NULL,target
 // altered. `backups` keeps its columns because tests, scripts and older code insert into it positionally
 // (`INSERT INTO backups VALUES (...)`), so the chain of a backup lives beside it:
 // - site_incremental: the per-site opt-in (off by default), the chain length N and a "next backup is full" flag
-//   (force_full: 0 none, 1 the owner asked, 2 the last package's snapshot commit is unconfirmed, 3 just turned on).
+//   (force_full: 0 none, 1 the owner asked, 2 the last package's snapshot commit is unconfirmed, 3 just turned on,
+//   4 the last package could not be confirmed as part of its chain: 2.12.1, a value only, no schema change).
 // - backup_chain_links: one row per backup made as part of a chain (format v2). No row = a self-contained full package,
 //   exactly as before. The row follows its backup when an older release deletes it (ON DELETE CASCADE, never a failure);
 //   parent_id has no foreign key so deleting a parent never fails either: a broken chain is reported at restore.
