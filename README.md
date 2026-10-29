@@ -23,7 +23,7 @@
 DockNest is a self-hosted web app. It connects to your Linux servers over SSH, backs up each Docker or static nginx site to storage you own, and lets you restore any backup to a separate copy to check that it works.
 
 - Discovers the Docker projects and static nginx sites on each server you connect.
-- Backs up each site on its own schedule to encrypted SFTP or S3-compatible storage.
+- Backs up each site on its own schedule to encrypted SFTP or S3-compatible storage. Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults.
 - Verifies recovery points and restores them to a separate copy. The live site is not overwritten.
 - Shows live progress, the steps of each job and the reason when one fails.
 
@@ -36,8 +36,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis.
 - Per-site schedules, retention, and pinned backups.
 - Restore to a separate copy; DockNest does not replace a live site by itself.
-- Download a backup as an encrypted file or as a ZIP.
-- Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. See [incremental backups](docs/incremental-backups.md).
+- Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
+- Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
 - Optional maintenance page, designed in a visual editor, while a site is paused.
 
 **Operation**
@@ -163,7 +163,7 @@ scripts/upgrade.sh              # newest final release
 scripts/upgrade.sh --dry-run    # show the plan only
 ```
 
-Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path has not been validated on a real Linux Docker host yet; see that section for the current status.
+Before going back to 2.11 from 2.12, turn incremental backups off for every site, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path has not been validated on a real Linux Docker host yet; see that section for the current status.
 
 ## Security and privacy
 
