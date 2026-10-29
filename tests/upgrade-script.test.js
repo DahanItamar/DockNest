@@ -670,17 +670,25 @@ test('updater pin: a healthy root run on a root-owned checkout records the new r
   assert.equal(again.status, 0); assert.equal(await host.calls(), ''); assert.doesNotMatch(again.stdout, /Recording/);
 });
 
-test('updater pin: a failed, busy or slow verification keeps the healthy upgrade and points to --repair', { skip: !shell }, async t => {
+// 2.12.1: anything the host updater still needs is printed as the run's last lines, with the exact command for this
+// checkout, and kept in the status file's warning; the run itself stays a success (exit 0).
+const repairBlock = /ACTION NEEDED \(host updater\): ([^\n]*)\nIn-app updates are refused until this release is recorded\. Run once on this host, as a user who can use sudo:\n\n {2}cd '([^\n]*)' && sudo scripts\/install-updater\.sh --repair\n\n$/;
+test('updater pin: a failed, busy or slow verification keeps the healthy upgrade and ends with the --repair command', { skip: !shell }, async t => {
   const f = await fixture(t), host = await updaterHost(f); await host.set('pin-exit', 2);
   let result = host.run();
   assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.1.0'); assert.equal(await f.read('version'), '2.1.0');
-  assert.match(result.stderr, /could not verify and record it.*Nothing was rolled back.*sudo scripts\/install-updater\.sh --repair/);
+  const block = result.stderr.match(repairBlock); assert.ok(block, result.stderr);
+  assert.match(block[1], /could not verify and record it\. Nothing was rolled back\./);
+  assert.equal(block[2], spawnSync('sh', ['-c', 'cd "$1" && pwd -P', 'sh', f.work], { encoding: 'utf8' }).stdout.trim());
   assert.doesNotMatch(result.stderr, /removing old upgrade files was interrupted/);
-  const status = await f.status(); assert.deepEqual([status.phase, status.ok, status.error, status.warning], ['done', true, null, null]);
+  const status = await f.status(); assert.deepEqual([status.phase, status.ok, status.error], ['done', true, null]);
+  assert.match(status.warning, /^Host updater: .*could not verify and record it.*Run on this host: cd '.*' && sudo scripts\/install-updater\.sh --repair$/);
   await host.set('pin-exit', 75); result = host.run('--version', 'v2.1.0');
-  assert.equal(result.status, 0); assert.match(result.stderr, /an updater run is active.*Run later on this host: sudo scripts\/install-updater\.sh --repair/);
+  assert.equal(result.status, 0); assert.match(result.stderr.match(repairBlock)?.[1] || '', /an updater run is active.*Wait for that run to finish/);
   await host.set('pin-exit', 124); result = host.run('--version', 'v2.1.0');
-  assert.equal(result.status, 0); assert.match(result.stderr, /took longer than 5 minutes.*--repair/);
+  assert.equal(result.status, 0); assert.match(result.stderr.match(repairBlock)?.[1] || '', /took longer than 5 minutes/);
+  await host.set('pin-exit', 0); result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.doesNotMatch(result.stderr, /ACTION NEEDED/); assert.equal((await f.status()).warning, null);
 });
 
 test('updater pin: no updater, non-root, root on a non-root checkout, another checkout, bad config, pre-releases and updater runs never call the broker', { skip: !shell }, async t => {
@@ -688,11 +696,17 @@ test('updater pin: no updater, non-root, root on a non-root checkout, another ch
   assert.equal(result.status, 0, result.stderr); assert.doesNotMatch(result.stdout + result.stderr, /host updater|--repair/); assert.equal(await f.read('record-current'), '');
   assert.equal(f.run('--version', 'v2.1.0', '--updater-root', f.root).status, 1, '--updater-root is refused outside the tests');
   f = await fixture(t); const host = await updaterHost(f);
+  // A non-root run to a new release cannot record it: it ends with the command, and the status file keeps it.
   await host.set('uid', 1000); result = host.run();
-  assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /NOTE: if in-app updates are refused after this upgrade, run on this host: sudo scripts\/install-updater\.sh --repair/); assert.equal(await host.calls(), '');
+  assert.equal(result.status, 0, result.stderr); assert.equal(await host.calls(), '');
+  assert.match(result.stderr.match(repairBlock)?.[1] || '', /^DockNest 2\.1\.0 is running\. Recording a new release for the host updater needs root, so this run \(as .+\) could not do it\.$/);
+  assert.match((await f.status()).warning, /needs root.*sudo scripts\/install-updater\.sh --repair/);
+  // Re-running the current release as non-root only reminds (whether it was repaired since cannot be read without root).
+  result = host.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0); assert.match(result.stdout, /NOTE: if in-app updates are refused, run on this host: sudo scripts\/install-updater\.sh --repair/); assert.doesNotMatch(result.stderr, /ACTION NEEDED/);
   // The rest use the already-current path of the same checkout.
   await host.set('uid', null); await host.config({ ownerUid: 1000 }); result = host.run('--version', 'v2.1.0');
-  assert.equal(result.status, 0); assert.match(result.stderr, /ran as root, but the checkout belongs to uid 1000\. Run scripts\/upgrade\.sh as that user \(without sudo\)/); assert.equal(await host.calls(), '');
+  assert.equal(result.status, 0); assert.match(result.stderr.match(repairBlock)?.[1] || '', /ran as root, but the checkout belongs to uid 1000\. Run scripts\/upgrade\.sh as that user \(without sudo\) next time\./); assert.equal(await host.calls(), '');
   await host.config({ checkout: '/srv/other-docknest' }); result = host.run('--version', 'v2.1.0');
   assert.equal(result.status, 0); assert.match(result.stdout, /installed for \/srv\/other-docknest, not this checkout; nothing was recorded/); assert.equal(await host.calls(), '');
   await host.config(); await host.set('config-unreadable', ''); result = host.run('--version', 'v2.1.0');
