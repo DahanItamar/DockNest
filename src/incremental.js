@@ -35,6 +35,7 @@ export const FULL_REASONS = Object.freeze({
 });
 const HELPER_FALLBACKS = new Set(['snapshot-missing', 'snapshot-mismatch', 'mount-set-changed']);
 const hex64 = /^[a-f0-9]{64}$/, chainIdPattern = /^[A-Za-z0-9-]{1,64}$/;
+const validFingerprint = value => typeof value === 'string' && value.length >= 1 && value.length <= 128;
 const json = value => { if (value && typeof value === 'object') return value; try { return JSON.parse(value || '{}'); } catch { return {}; } };
 
 // ---- Settings ---------------------------------------------------------------------------------------------------------
@@ -167,7 +168,10 @@ export function decideCapture({ site, plan, directory, jobDetails = {} }) {
   }
   if (manifest.incremental.serverId !== site.server_id) return full('site-moved');
   if (manifest.incremental.mainTargetId !== targetIdOfPath(directory) || targetIdOfPath(latest.path) !== targetIdOfPath(directory)) return full('storage-changed');
-  if (!plan?.fingerprint || manifest.backupPlan?.fingerprint !== plan.fingerprint) return full('plan-changed');
+  // The plan's own `fingerprint` (plan approval, unchanged) includes per-start network fields such as EndpointID and
+  // MacAddress, so it differs after every restart. Chains compare the helper's stable `chainFingerprint` instead (the
+  // container, mount and image set); a parent without one starts a new chain.
+  if (!validFingerprint(plan?.chainFingerprint) || manifest.chainFingerprint !== plan.chainFingerprint) return full('plan-changed');
   const snapshots = manifest.incremental.snapshots;
   if (!snapshots || typeof snapshots !== 'object' || Object.entries(snapshots).some(([key, value]) => !hex64.test(key) || !hex64.test(value))) return full('parent-missing');
   const images = [...new Set(members.flatMap(member => (json(member.manifest).originalImages ?? []).map(image => image?.id)).filter(value => typeof value === 'string' && value))];
@@ -177,7 +181,7 @@ export function decideCapture({ site, plan, directory, jobDetails = {} }) {
 // The chain fields the public manifest records, from what the helper says it made. Returns null when the helper made
 // today's self-contained package (format v1). Throws when the returned chain does not match the request: such a package
 // could never be restored as part of this chain, so it is not published.
-export function chainRecord(decision, helperManifest, { serverId, mainTargetId }) {
+export function chainRecord(decision, helperManifest, { serverId, mainTargetId, plan = null }) {
   if (!decision) return null;
   const manifest = helperManifest || {}, kind = manifest.backupKind, chain = manifest.chain, request = decision.request;
   if (manifest.formatVersion !== CHAIN_FORMAT || !['full', 'incremental'].includes(kind) || !chain || typeof chain !== 'object') return null;
@@ -199,6 +203,8 @@ export function chainRecord(decision, helperManifest, { serverId, mainTargetId }
   const chainImages = Array.isArray(manifest.chainImages) ? manifest.chainImages.filter(value => typeof value === 'string' && value.length <= 128).slice(0, 500) : [];
   return {
     formatVersion: CHAIN_FORMAT, backupKind: kind,
+    // What the next backup compares against (see decideCapture): the capture's own value, else the plan's.
+    ...((value => validFingerprint(value) ? { chainFingerprint: value } : {})(validFingerprint(manifest.chainFingerprint) ? manifest.chainFingerprint : plan?.chainFingerprint)),
     chain: { id: chain.id, position: chain.position, parentBackupId: chain.parentBackupId ?? null, parentSha256: chain.parentSha256 ?? null },
     ...(chainImages.length ? { chainImages } : {}),
     incremental: { format: CHAIN_FORMAT, serverId, mainTargetId, snapshots, fullReason: kind === 'full' ? fallback ?? decision.reason : null, ...(fallback ? { fallback } : {}) },

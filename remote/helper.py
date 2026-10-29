@@ -337,8 +337,24 @@ def backup_plan(cfg,containers=None):
     sources.sort(key=lambda source:source['path'])
     topology=[{'id':c['Id'],'image':c['Image'],'config':c['Config'],'host':c['HostConfig'],'mounts':sorted(c['Mounts'],key=lambda mount:mount['Destination']),'networks':c.get('NetworkSettings',{}).get('Networks',{})} for c in containers]
     fingerprint=hashlib.sha256(json.dumps({'sources':sources,'topology':topology,'services':services,'configuration':{k:v for k,v in cfg.items() if not k.startswith('_')}},sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'sources':sources,'containerIds':[c['Id'] for c in containers],'services':services,'restartOrder':service_order(services),'coverage':{'status':'scoped' if exclusions else 'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed')),'excludedPaths':cfg.get('mountExclusions',[]),'externalDataIncluded':not bool(exclusions)},'unresolvedDependencies':[]}
+    return {'version':1,'kind':cfg.get('kind','docker'),'fingerprint':fingerprint,'chainFingerprint':chain_fingerprint(cfg,containers,exclusions),'sources':sources,'containerIds':[c['Id'] for c in containers],'services':services,'restartOrder':service_order(services),'coverage':{'status':'scoped' if exclusions else 'declared','externalWritersConfirmed':bool(cfg.get('exclusiveSourcesConfirmed')),'excludedPaths':cfg.get('mountExclusions',[]),'externalDataIncluded':not bool(exclusions)},'unresolvedDependencies':[]}
 
+def chain_fingerprint(cfg,containers,exclusions):
+    """What an increment depends on, from facts that survive a container restart: container ids and names, original
+    image ids, mounts, exclusions, network names and aliases, configuration files. `fingerprint` also hashes per-start
+    network state (endpoint, MAC, IP), so it changes on every backup and cannot decide whether a chain continues."""
+    def networks(c):
+        return {str(name):sorted(str(alias) for alias in (n or {}).get('Aliases') or []) for name,n in ((c.get('NetworkSettings') or {}).get('Networks') or {}).items()}
+    stable={'kind':cfg.get('kind','docker'),
+        'containers':sorted(({'id':c['Id'],'name':c.get('Name'),'image':c['Image'],'networks':networks(c),
+            'mounts':sorted(({'type':m.get('Type'),'name':m.get('Name'),'source':m.get('Source'),'destination':m.get('Destination'),'rw':m.get('RW',True)} for m in c.get('Mounts') or []),key=lambda m:(str(m['destination']),str(m['source'])))} for c in containers),key=lambda c:c['id']),
+        'exclusions':{source:sorted(paths) for source,paths in (exclusions or {}).items()},
+        'configuration':list(cfg.get('composeFiles',[]))+list(cfg.get('configFiles',[]))}
+    if cfg.get('kind')=='static':stable['documentRoot']=cfg.get('documentRoot')
+    return hashlib.sha256(json.dumps(stable,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+def v1_plan(plan):
+    """Format v1 manifests keep the plan exactly as before chain fingerprints existed."""
+    return {k:v for k,v in plan.items() if k!='chainFingerprint'}
 def public_plan(plan):
     return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn']} for s in plan['services']]}
 
@@ -1504,7 +1520,7 @@ def capture_static(req):
     for i,filename in enumerate(cfg.get('configFiles',[])):
         p=pathlib.Path(filename);run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(p.parent),'--',p.name])
     manifest={'formatVersion':1,'kind':'static','complete':True,'capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False}
-    revalidate_sources(plan);manifest['backupPlan']=plan;manifest['artifacts']=artifact_inventory(root)
+    revalidate_sources(plan);manifest['backupPlan']=v1_plan(plan);manifest['artifacts']=artifact_inventory(root)
     manifest['consistency']={'status':'passed','method':'stable source tree and extracted-file digest','scope':'static files'}
     (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text('Static website backup. static-files.tar preserves numeric owners, permissions, ACLs and xattrs. Restore into a new private directory and verify staticFiles.sha256 before an explicit nginx cutover. Original website and nginx/TLS configuration must never be overwritten automatically. Configuration archives are for review; TLS keys and external services are not included.\n')
@@ -1780,7 +1796,7 @@ def capture(req,output=None):
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
-    manifest['backupPlan']=plan
+    manifest['backupPlan']=plan if increment else v1_plan(plan)
     if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
     if exclusions:
         manifest['backupScope']='application-and-local-state'
@@ -1794,6 +1810,7 @@ def capture(req,output=None):
         manifest['formatVersion']=2
         manifest['backupKind']='incremental' if increment['level'] else 'full'
         manifest['chain']=increment['chain']
+        if plan.get('chainFingerprint'):manifest['chainFingerprint']=plan['chainFingerprint']
         manifest['containers']=annotate_mounts(cs,snapshot_sources,increment,snapshots)
         manifest['chainImages']=[image for image in original_ids if image not in saved_ids]
         manifest['snapshots']=snapshots

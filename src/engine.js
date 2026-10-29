@@ -462,7 +462,7 @@ export async function executeJob(job){
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
   // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
-  const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory)});
+  const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});
   if(chain)Object.assign(manifest,chain);
   const incrementalDetails=decision?{incremental:chain?{backupKind:chain.backupKind,chainPosition:chain.chain.position,...(chain.incremental.fullReason?{fullReason:chain.incremental.fullReason}:{})}:{backupKind:'full',standardPackage:true}}:{};
   const capturedAt=new Date(captured.ms).toISOString();

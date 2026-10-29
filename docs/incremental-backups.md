@@ -111,10 +111,12 @@ The kit's decrypt tool verifies the chain links the same way the server does.
 
 ## Upgrade safety
 
-- Additive migration: `backups.kind` (default `full`), `backups.chain_id`, `backups.parent_id`, and the site setting
-  `incremental` (default off, interval 6). Marked `compatible: true`.
+- Additive migration 12 (`compatible: true`): a `backup_chain_links` table (kind, chain id, parent id, position per
+  chain package; no row = a self-contained full package) and a `site_incremental` table (default off, interval 6).
+  `backups` keeps its columns because older code and tools insert into it positionally.
 - Existing backups are full packages and keep working unchanged.
-- Downgrade: a version without this feature refuses v2 packages. The upgrade notes say so, and the update center
+- Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Make a
+  full backup and turn incremental off before downgrading to 2.11. The upgrade notes say so, and the update center
   warns before a downgrade when the database contains incremental backups.
 - The feature ships labelled beta and opt-in, like moves and restore tests did.
 

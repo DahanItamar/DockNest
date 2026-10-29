@@ -229,9 +229,6 @@ CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERE
 CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
-// Version 12 is reserved for the radar (docs/product, 2.13.0) and is landing in parallel. Until it does, the list has
-// this one gap; tests/incremental-migration.test.js allows exactly that gap and nothing else.
-export const reservedMigrationVersions = Object.freeze([12]);
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -266,7 +263,7 @@ export const migrations = [
   // Storage per site and backup copies (docs/backup-copies.md): new tables and indexes only, so 2.10 code ignores them.
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
-  { version: 13, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
+  { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

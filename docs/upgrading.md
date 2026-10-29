@@ -206,7 +206,7 @@ them on its next maintenance run after you upgrade again.
 Incremental backups are new in 2.12 and are off for every site. Nothing needs doing and nothing changes until you turn
 them on for a site under its backup settings ("Incremental backups (beta)"):
 
-- Migration 13 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
+- Migration 12 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
 - After you turn the option on, the next backup is a full one. Then up to 6 increments follow (you can choose 1 to 30),
   each holding only the files that changed in your mounts, and a new full backup starts the next chain. Increments are
   backup format 2 packages in the same encrypted format, so the same master key opens them.
