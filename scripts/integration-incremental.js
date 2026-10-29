@@ -68,7 +68,6 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
   const { executeCopy } = await import('../src/backup-copies.js');
   const { removeFile, openRead, openWrite } = await import('../src/storage.js');
   const { incrementalSaving } = await import('../src/storage-report.js');
-  const { backupVerification } = await import('../src/recovery-evidence.js');
   const rt = await import('../src/restore-tests/engine.js');
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const app = 'inc-app';
@@ -262,7 +261,7 @@ ${listing}`);
       if (job) await executeJob(job); else await wait(500);
     }
     assert.equal(test.result, 'passed', test.reason ?? '');
-    assert.equal(backupVerification(newest.backup.id).isolatedRestore.method, 'automatic restore test');
+    assert.ok(db.prepare("SELECT COUNT(*) AS n FROM backup_verification_history WHERE backup_id=? AND json_extract(evidence,'$.testId')=?").get(newest.backup.id, testId).n > 0, 'The restore test is recorded as evidence for the newest backup');
     record('A restore test on the newest point (an increment, so the whole chain) passes and is recorded as evidence for that backup');
 
     // ---- 2.11.1 helper refuses a version 2 package ---------------------------------------------------------------------------
