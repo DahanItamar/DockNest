@@ -254,17 +254,21 @@ function recordTransferProgress(job,value){
  details.transfer={done,total:Number.isFinite(total)?total:null,startedAt:previous.startedAt||now(),updatedAt:now()};
  db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
 }
+// "Not copied: <path> (mounted into <container>); ..." from helper-supplied records: at most 20, each name bounded.
+function notCopiedList(items,key){
+ const all=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item[key]==='string');
+ const list=all.slice(0,20).map(item=>`${item[key].slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
+ return list.length?`Not copied: ${list.join('; ')}${all.length>list.length?` and ${all.length-list.length} more`:''}.`:null;
+}
 // Bind mounts of passwords, sudo rules or SSH or GPG keys are never copied (2.11.1; GPG 2.12.1); the helper lists them in the manifest.
 export function protectedMountWarning(items){
- const list=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item.source==='string').slice(0,20).map(item=>`${item.source.slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
- return list.length?`Not copied: ${list.join('; ')}. These mounts hold passwords, sudo rules or SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
+ const list=notCopiedList(items,'source');
+ return list&&`${list} These mounts hold passwords, sudo rules or SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`;
 }
 // .ssh and .gnupg folders inside a copied bind mount (such as a home folder) are left out of it (2.12.1).
 export function protectedPathWarning(items){
- const all=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item.path==='string');
- const list=all.slice(0,20).map(item=>`${item.path.slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
- const more=all.length>list.length?` and ${all.length-list.length} more`:'';
- return list.length?`Not copied: ${list.join('; ')}${more}. These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
+ const list=notCopiedList(items,'path');
+ return list&&`${list} These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`;
 }
 // Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
 function probeWarnings(job,skipped=[]){
