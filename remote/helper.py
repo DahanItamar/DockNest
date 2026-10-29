@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned Linux helper. No request values are interpolated into shell commands."""
-import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 VERSION=1
 
 RESTORE_GUIDE="""# Independent restore guide — format v1
@@ -1541,7 +1541,9 @@ def tree_digest(root):
         for name in dirs+files:
             p=pathlib.Path(current)/name;s=p.lstat();relative=str(p.relative_to(root))
             if not (stat.S_ISREG(s.st_mode) or stat.S_ISDIR(s.st_mode)):raise ValueError('Static website contains a link or special file requiring an offline capture adapter')
-            record=[relative,stat.S_IMODE(s.st_mode),s.st_uid,s.st_gid,'directory' if p.is_dir() else 'file']
+            # A restore strips setuid and setgid from files (strip_privileges), so the digest leaves those bits out.
+            mode=stat.S_IMODE(s.st_mode)&~(PRIVILEGE_BITS if stat.S_ISREG(s.st_mode) else 0)
+            record=[relative,mode,s.st_uid,s.st_gid,'directory' if p.is_dir() else 'file']
             if p.is_file():
                 file_hash=hashlib.sha256()
                 with p.open('rb') as source:
@@ -1954,6 +1956,36 @@ def archive_link_escapes(start,linkname,symlinks):
             if expansions>40 or target.startswith('/'):return True
             stack.pop();pending=list(pathlib.PurePosixPath(target).parts)+pending
     return False
+PRIVILEGE_BITS=stat.S_ISUID|stat.S_ISGID
+def strip_privileges(root):
+    """Restored files never keep setuid or setgid bits or file capabilities (2.12.1). A backup archive comes from a
+    managed server, and a restored mount can end up on a path other users reach (a move places it at the site's own
+    path), so a planted setuid-root binary must not become one. There is no opt-out: images restore their own binaries
+    through Docker, and data folders do not need privileged executables. Directories keep setgid (group inheritance
+    for shared folders, no privilege) and the sticky bit (it only restricts deletion). Fails closed: any file that
+    cannot be checked or changed stops the restore."""
+    if os.name!='posix':return 0
+    changed=0
+    def refuse(error):raise ValueError('Restored files could not be checked for setuid bits: %s'%error)
+    for current,dirs,files in os.walk(root,followlinks=False,onerror=refuse):
+        for name in files:
+            path=os.path.join(current,name)
+            mode=os.lstat(path).st_mode
+            if not stat.S_ISREG(mode):continue
+            # Never follows a link: l*xattr calls, and the mode is changed through a descriptor opened with O_NOFOLLOW.
+            # Read first: removing security.capability needs CAP_SETFCAP even when the file has none.
+            try:capability=os.getxattr(path,'security.capability',follow_symlinks=False)
+            except OSError as error:
+                if error.errno not in (errno.ENODATA,errno.ENOTSUP,errno.EOPNOTSUPP):raise
+                capability=None
+            if capability is not None:os.removexattr(path,'security.capability',follow_symlinks=False);changed+=1
+            if not mode&PRIVILEGE_BITS:continue
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|getattr(os,'O_CLOEXEC',0))
+            try:
+                mode=os.fstat(fd).st_mode
+                if stat.S_ISREG(mode) and mode&PRIVILEGE_BITS:os.fchmod(fd,stat.S_IMODE(mode)&~PRIVILEGE_BITS);changed+=1
+            finally:os.close(fd)
+    return changed
 def safe_extract(archive,destination):
     if destination.is_symlink():raise ValueError('Restore destination cannot be a symlink')
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -1987,6 +2019,7 @@ def safe_extract(archive,destination):
         if os.name=='posix':
             run(['tar','--xattrs','--acls','--numeric-owner','-xpf',str(archive),'-C',str(destination)])
         else:tar.extractall(destination,filter='fully_trusted')
+    strip_privileges(destination)
 def prepare_restore(req):
     root=owned_job_root(req);chain=chain_paths(req,root)
     if root.exists():raise ValueError('Restore staging already exists')
@@ -2312,6 +2345,7 @@ def chain_extract(archives,destination):
         # Run inside the destination, not with -C: GNU tar creates the temporary folder of a directory-rename cycle
         # from a relative template, which -C (openat-based) does not move.
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
+    strip_privileges(destination)
 def restore(req):
     root=owned_job_root(req)
     unpacked,manifest,artifacts_verified=unpack_verified(req,root)

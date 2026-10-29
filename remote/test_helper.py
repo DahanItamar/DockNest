@@ -1054,4 +1054,66 @@ class ProtectedPathTests(unittest.TestCase):
             with patch('helper.emit'):helper.deploy_maintenance({'config':{'stagingRoot':str(pathlib.Path(temp)/'staging'),'maintenance':{'directory':str(staged)}},'html':request['html']})
             self.assertTrue((staged/'maintenance.html').is_file())
 
+POSIX=__import__('os').name=='posix'
+class PrivilegeBitTests(unittest.TestCase):
+    """2.12.1: restored files never keep setuid or setgid bits (or file capabilities); there is no opt-out."""
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_setuid_and_setgid_are_stripped_from_files_and_links_are_never_followed(self):
+        import os,stat
+        from helper import strip_privileges
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'restored';(root/'shared').mkdir(parents=True);(root/'tmp').mkdir()
+            outside=pathlib.Path(d)/'outside';outside.write_text('x');os.chmod(outside,0o4755)
+            for name,mode in [('suid',0o4755),('sgid',0o2750),('both',0o6711),('plain',0o640)]:
+                (root/'shared'/name).write_text('x');os.chmod(root/'shared'/name,mode)
+            os.chmod(root/'shared',0o2775);os.chmod(root/'tmp',0o1777)
+            os.symlink(str(outside),root/'link')
+            self.assertEqual(strip_privileges(root),3)
+            modes={name:stat.S_IMODE(os.lstat(root/'shared'/name).st_mode) for name in ['suid','sgid','both','plain']}
+            self.assertEqual(modes,{'suid':0o755,'sgid':0o750,'both':0o711,'plain':0o640})
+            self.assertEqual(stat.S_IMODE(os.stat(root/'shared').st_mode),0o2775,'setgid folders keep group inheritance')
+            self.assertEqual(stat.S_IMODE(os.stat(root/'tmp').st_mode),0o1777,'the sticky bit only restricts deletion')
+            self.assertEqual(stat.S_IMODE(os.stat(outside).st_mode),0o4755,'a link is never followed')
+            self.assertEqual(strip_privileges(root),0)
+
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_a_file_that_cannot_be_changed_stops_the_restore(self):
+        import os
+        from helper import strip_privileges
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'suid').write_text('x');os.chmod(root/'suid',0o4755)
+            with patch('helper.os.fchmod',side_effect=PermissionError('denied')),self.assertRaises(OSError):strip_privileges(root)
+            with patch('helper.os.walk',side_effect=lambda *a,**k:k['onerror'](PermissionError('unreadable')) or iter(())),self.assertRaisesRegex(ValueError,'could not be checked'):strip_privileges(root)
+
+    @unittest.skipUnless(POSIX and __import__('shutil').which('tar'),'Needs tar on a POSIX host')
+    def test_safe_extract_restores_no_setuid_file_from_an_archive(self):
+        import os,stat
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);archive=base/'mount.tar'
+            with tarfile.open(archive,'w') as tar:
+                for name,mode,kind in [('data',0o2775,tarfile.DIRTYPE),('data/su',0o4755,tarfile.REGTYPE),('data/sg',0o2755,tarfile.REGTYPE)]:
+                    info=tarfile.TarInfo(name);info.mode=mode;info.type=kind;info.uid=os.getuid();info.gid=os.getgid()
+                    tar.addfile(info,io.BytesIO(b'') if kind==tarfile.REGTYPE else None)
+            safe_extract(archive,base/'out')
+            for name in ['su','sg']:self.assertFalse(os.lstat(base/'out'/'data'/name).st_mode&(stat.S_ISUID|stat.S_ISGID),name)
+            self.assertTrue(os.lstat(base/'out'/'data').st_mode&stat.S_ISGID or os.getuid()!=0,'a setgid folder keeps its bit')
+
+    @unittest.skipUnless(POSIX,'chain restore runs on Linux')
+    def test_a_chain_restore_strips_too(self):
+        from unittest.mock import Mock
+        import helper
+        with tempfile.TemporaryDirectory() as d:
+            strip=Mock(return_value=0)
+            with patch.multiple('helper',chain_rename_problem=Mock(return_value=None),incremental_archive_check=Mock(return_value='data'),replace_directory_links=Mock(),run=Mock(),strip_privileges=strip):
+                helper.chain_extract([pathlib.Path(d)/'a.tar',pathlib.Path(d)/'b.tar'],pathlib.Path(d)/'out')
+            strip.assert_called_once_with(pathlib.Path(d)/'out')
+
+    @unittest.skipUnless(POSIX,'Mode bits need a POSIX host')
+    def test_static_digest_ignores_the_stripped_bits(self):
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);(root/'cgi').write_text('x');os.chmod(root/'cgi',0o4755);before=tree_digest(root)
+            os.chmod(root/'cgi',0o755);self.assertEqual(tree_digest(root),before)
+            os.chmod(root/'cgi',0o700);self.assertNotEqual(tree_digest(root),before)
+
 if __name__=='__main__':unittest.main()
