@@ -170,7 +170,7 @@ Before going back to 2.11 from 2.12, turn incremental backups off for every site
 ## Security and privacy
 
 - Backups are encrypted, SSH host keys are pinned, and sign-in needs a password plus an authenticator app.
-- Backups never copy password files, sudo rules or SSH and GPG keys, including `.ssh` and `.gnupg` folders inside a mounted home folder; the job result names what was left out. Restored files never keep setuid or setgid bits.
+- Backups never copy password files, sudo rules or SSH and GPG keys, including `.ssh` and `.gnupg` folders inside mounted host folders (Docker volumes are copied whole); the job result names what was left out. Restored files never keep setuid or setgid bits.
 - Update checks are off until an administrator opts in, and send nothing about your servers, sites or users. See [outbound requests](docs/security.md#update-checks-outbound-requests).
 - Problem reports contain typed values only (no names, addresses, paths or error text), you review them first, and the server sends nothing. See [problem reports](docs/security.md#problem-reports).
 

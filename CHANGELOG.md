@@ -7,13 +7,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Fixed
 
 - A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
-- Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28. The request itself now checks this too, not only the move preview.
-- A move refuses a Compose project that declares an external network, another network driver or fixed subnets, also when the moved services do not join that network.
+- Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28.
 - An install that apt stops because it would have to remove other software is reported as a conflict.
 
 ### Security
 
-- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a copied bind mount, such as a home folder mounted into a container, are no longer copied. The rest of the mount is backed up as before. The job result and the readiness check name each folder that was left out; recover these keys separately. An incremental backup chain that still holds such a folder starts again with a full backup. A bind mount of a `.gnupg` folder itself is now treated like a `.ssh` mount.
+- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a host folder mounted into a container, such as a home folder, are no longer copied; the rest of the mount is. The job result and the readiness check name each folder left out, so you can recover those keys separately.
 - Restores and moves no longer keep setuid or setgid permissions (or file capabilities) on restored files, so a backup cannot plant a program that runs with another user's rights. Folders keep their setgid and sticky bits.
 
 ## [2.12.0] - 2026-10-29

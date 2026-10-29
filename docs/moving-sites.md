@@ -83,10 +83,10 @@ again (re-verification within 5 minutes). Next to it, **Show command** displays 
   shows the best known line (or none).
 - If the server is busy with a backup, restore or move, or the software is already there, nothing is installed.
 - Before offering Docker, DockNest reads the version the system's own sources offer. When a site has several
-  containers and the offered Docker is older than 28, or its version cannot be read (2.12.1), `supported` is false and the check carries
-  `install.reason`: "This server's packages offer Docker 26.1; this site needs 28 or newer. Install Docker from
-  Docker's own repository instead." `command` is then a comment line pointing to Docker's official instructions
-  (https://docs.docker.com/engine/install/); DockNest never runs a downloaded script.
+  containers and the offered Docker is older than 28, or its version cannot be read (2.12.1), `supported` is false and
+  the check carries `install.reason`: "This server's packages offer Docker 26.1; this site needs 28 or newer. Install
+  Docker from Docker's own repository instead." `command` is then a comment line pointing to Docker's official
+  instructions (https://docs.docker.com/engine/install/); DockNest never runs a downloaded script.
 - DockNest never installs over software from another source: if the binary exists, or the package manager lists any
   matching package (for example `docker-ce` or `containerd.io`), the answer is 409 `ALREADY_INSTALLED`. For Docker
   that reads "Docker is installed but not running. Start it, then check again." apt runs with `--no-remove`, so it
@@ -208,12 +208,13 @@ Collapsed by default and pre-filled; most moves need no changes here.
   refused. Below `/var/lib`, an application folder that holds an entry this move did not create is never written into. Anything else, such as `/tmp`, `/efi`,
   `/nix`, `~/.config` or `~/bin`, is refused, and the site is moved by hand.
 
-  A bind mount of password files, sudo rules or SSH or GPG keys is not copied by backups, so a move refuses a site
-  that has one. `.ssh` and `.gnupg` folders inside a copied bind mount are left out of backups (2.12.1), so the moved
-  copy has none; the backup's warning names them. Restored files never keep setuid or setgid bits (2.12.1). A backup that names the host network or another container's network, or a relative or `..` configuration path,
-  is refused. Other spellings (`//`, `./`, a trailing `/`) are normalised first. Settings are rewritten only in files
-  the move placed. An image archive that names any image tag is refused before `docker load`, because DockNest
-  backups save images by ID.
+  A bind mount of password files, sudo rules or SSH or GPG keys is not copied by backups, so a move refuses a site that
+  has one. `.ssh` and `.gnupg` folders inside a copied bind mount are left out of backups (2.12.1), so the moved copy
+  has none; the backup's warning names them. Restored files never keep setuid or setgid bits (2.12.1). A backup that
+  names the host network or another container's network, or a relative or `..` configuration path, is refused. Other
+  spellings (`//`, `./`, a trailing `/`) are normalised first. Settings are rewritten only in files the move placed.
+  An image archive that names any image tag is refused before `docker load`, because DockNest backups save images by
+  ID.
   The maintenance folder on the new server is always DockNest's own `/var/lib/docknest/maintenance/<site>`, never an
   existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
   finish and goes back on Switch back.
