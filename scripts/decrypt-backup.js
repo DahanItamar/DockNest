@@ -104,6 +104,8 @@ async function decryptChain(folder, output) {
     return { position: Number(position), file, kind, backupId, sha256, size: Number(size), parent, parentSha256 };
   });
   if (!order.length) throw new Error('ORDER.txt lists no backups.');
+  // ORDER.txt is not authenticated: ids become file names, so only plain ids, hashes and sizes are accepted.
+  for (const item of order) if (!/^[A-Za-z0-9-]{1,64}$/.test(item.backupId) || !/^[a-f0-9]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || (item.parent !== '-' && !/^[A-Za-z0-9-]{1,64}$/.test(item.parent))) throw new Error('ORDER.txt has an invalid line; it was not written by DockNest.');
   try { if ((await readdir(output)).length) throw new Error('The output folder must be new or empty.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   await mkdir(output, { recursive: true, mode: 0o700 });
   const broken = id => new Error(`This backup depends on backup ${id}, which is missing or damaged. Restore ${id}'s chain from an earlier point, or pick a full backup.`);

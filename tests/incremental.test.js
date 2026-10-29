@@ -14,7 +14,7 @@ Object.assign(process.env, { DATA_DIR: join(temporary, 'data'), BACKUP_DIR: temp
 await writeFile(process.env.MASTER_KEY_FILE, randomBytes(32).toString('base64'));
 const { db } = await import('../src/db.js');
 const { transport, enqueueBackup, enqueueScrub, claimJob, executeJob, encryptStream, verifyEncrypted, finishReconciledBackup, uploadBackupTo, retain } = await import('../src/engine.js');
-const { preparePublication, authenticatePublication, reconcileArtifacts, claimDeletion, claimCopy, deferDeletion } = await import('../src/artifact-journal.js');
+const { preparePublication, authenticatePublication, reconcileArtifacts, claimDeletion, claimCopy, deferDeletion, retryCopy } = await import('../src/artifact-journal.js');
 const inc = await import('../src/incremental.js');
 const { keptForChainIds, buildReport } = await import('../src/storage-report.js');
 const { migrationGroups } = await import('../src/storage-migration.js');
@@ -187,6 +187,25 @@ test('the commit sends the site config, so a custom staging root is committed', 
   assert.deepEqual([helper.commits.at(-1).job, helper.commits.at(-1).siteKey, helper.commits.at(-1).config.stagingRoot], [job.id, 'custom-root', '/srv/docknest-staging']);
   assert.ok(helper.calls.indexOf('incremental-commit') < helper.calls.indexOf('cleanup'), 'commit before cleanup');
 });
+test('turned off while a backup runs: the backup commits, then removes the snapshot files it just committed', async () => {
+  site('off-mid', 'srv'); enable('off-mid'); await run('off-mid');
+  helper.forge = () => { inc.updateIncrementalSettings('off-mid', { enabled: false }, 'owner'); };
+  try { await run('off-mid'); } finally { helper.forge = null; }
+  assert.deepEqual(helper.calls.filter(call => call.startsWith('incremental-')), ['incremental-commit', 'incremental-discard']);
+  assert.equal(helper.state.has('off-mid'), false);
+});
+test('full reasons: after a site move’s own backup, and after a standard package the helper made', async () => {
+  site('r-move', 'srv'); enable('r-move'); await run('r-move');
+  helper.calls.length = 0; enqueueBackup('r-move', 'test', { moveId: 'move-1' }); await executeJob(claimJob());
+  assert.equal(helper.requests.at(-1).incremental, undefined, 'a move’s own backup is a standard package');
+  const afterMove = await run('r-move');
+  assert.equal(details(afterMove.row).incremental.fullReason, 'site-moved');
+  helper.forge = manifest => { manifest.formatVersion = 1; delete manifest.backupKind; delete manifest.chain; };
+  let standard; try { standard = await run('r-move'); } finally { helper.forge = null; }
+  assert.equal(details(standard.row).incremental.standardPackage, true); assert.equal(link(standard.backup.id), null);
+  const next = await run('r-move');
+  assert.equal(details(next.row).incremental.fullReason, 'standard-package');
+});
 test('a returned chain that does not match the request is refused and nothing is published', async () => {
   site('forged', 'srv'); enable('forged'); await run('forged');
   helper.forge = manifest => { manifest.chain.parentSha256 = 'f'.repeat(64); };
@@ -330,6 +349,11 @@ test('copies: an increment is copied to a destination only after its parent is v
   assert.equal(claimCopy(), null, 'the increment waits for its parent (partial chain)');
   db.prepare("UPDATE backup_copies SET status='verified',next_attempt_at=NULL WHERE backup_id=?").run(chain[0].id);
   assert.equal(claimCopy().backup_id, chain[1].id);
+  // A parent copy that gave up is tried again when the owner retries the increment's copy.
+  db.prepare("UPDATE backup_copies SET status='gave_up',next_attempt_at=NULL WHERE backup_id=?").run(chain[0].id);
+  db.prepare("UPDATE backup_copies SET status='pending' WHERE backup_id=?").run(chain[1].id);
+  assert.equal(retryCopy(chain[1].id, 'copy-target').found, true);
+  assert.equal(db.prepare("SELECT status FROM backup_copies WHERE backup_id=? AND target_id='copy-target'").get(chain[0].id).status, 'pending');
   db.prepare("DELETE FROM backup_copies WHERE target_id='copy-target'").run(); db.prepare("DELETE FROM site_storage_copies WHERE target_id='copy-target'").run();
 });
 test('storage migration switches a chain together, full first; outside chains one package at a time', () => {

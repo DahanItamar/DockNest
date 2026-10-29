@@ -71,6 +71,11 @@ test('the decrypt tool refuses a tampered sealed link, a reordered list and a mi
   result = decrypt(missing, join(temporary, 'missing-out'));
   assert.notEqual(result.status, 0); assert.match(result.stderr, new RegExp(chain[0].id));
   assert.ok(list.length === 3);
+  // ORDER.txt is not authenticated: an id that is not a plain id (path traversal) is refused before anything is read.
+  const traversal = join(temporary, 'traversal'), items = await makeChain(traversal, 2), text = await readFile(join(traversal, 'ORDER.txt'), 'utf8');
+  await writeFile(join(traversal, 'ORDER.txt'), text.replace(` ${items[1].id} `, ' ../../escape '));
+  result = decrypt(traversal, join(temporary, 'traversal-out'));
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /invalid line/);
 });
 const python = ['python3', 'python'].find(command => { try { execFileSync(command, ['-c', 'import tarfile'], { stdio: 'ignore' }); return true; } catch { return false; } });
 test('the chain download tar is a standard archive (read by Python tarfile), ORDER.txt first, packages unchanged', { skip: !python && 'python not available' }, async () => {

@@ -237,6 +237,11 @@ export function retryCopy(backupId,targetId,at=Date.now()){
   if(!row||row.status==='deleted')return {found:false};
   if(['verified','copying'].includes(row.status)||row.delete_state)return {found:true,refused:row.delete_state?'deleting':row.status};
   db.prepare("UPDATE backup_copies SET status='pending',attempts=0,first_failed_at=NULL,next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=?").run(at,now(),backupId,targetId);
+  // An increment's copy waits for its parent's copy there: a parent copy that failed or gave up is tried again too.
+  for(let link=db.prepare('SELECT parent_id FROM backup_chain_links WHERE backup_id=?').get(backupId),steps=0;link?.parent_id&&steps<31;steps++){
+   db.prepare("UPDATE backup_copies SET status='pending',attempts=0,first_failed_at=NULL,next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=? AND status IN ('failed','gave_up') AND delete_state IS NULL").run(at,now(),link.parent_id,targetId);
+   link=db.prepare('SELECT parent_id FROM backup_chain_links WHERE backup_id=?').get(link.parent_id);
+  }
   audit('worker','backup.copy_retry',backupId,{targetId});
   return {found:true,nextAttemptAt:at};
  });
