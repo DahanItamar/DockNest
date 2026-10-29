@@ -103,11 +103,69 @@ Free space checks use the sum of the chain's package sizes.
 - Storage migration copies whole chains, the full package first, and switches a chain only when every package is
   copied and verified.
 
+## Checks when a backup is made (2.12.1)
+
+Before DockNest publishes a package from an incremental site, it checks what the helper says it made against what
+DockNest asked for and against the package itself:
+
+- the chain id, the position (no gap, no repeat) and the parent's backup ID and SHA-256;
+- the rename marking (`renamesSeen`, sent since 2.12.0): an increment without it comes from a helper that cannot say
+  whether the increment holds folder renames, so DockNest cannot know whether the chain must end there;
+- every mount archive has the package's level (0 in a full backup, 1 in an increment), an increment covers exactly the
+  mounts of its parent, and a mount that holds renames is never in a package that says it has none.
+
+If any check fails, DockNest fails closed: the package is not published, the job fails with a plain message, and the
+source keeps its previous snapshot files. The next backup of the site is full (reason `chain-inconsistent`), so a new
+chain starts from a package DockNest can trust. The site's "Backup failed" alert says the backup was not saved and the
+next one will be full. Failing the job was chosen over keeping the package and only forcing the next backup full: a
+package DockNest cannot confirm as part of its chain must never look like a good restore point. The cost is one missed
+restore point; the next scheduled backup is a full one. No database change: the forced full backup reuses the existing
+per-site flag with a new value, which an older DockNest reads as "full backup requested".
+
+DockNest sends its own helper to the server on every call, so an older helper on a site server should not happen in
+normal use; the check also covers a modified or broken helper.
+
+## Scrub and broken chains (2.12.1)
+
+A scrub (re-verify) of an increment authenticates every package of its chain and checks every link (unchanged). A scrub
+of a package that later increments build on now also checks the links of every backup built on it (the database rows
+and the stored manifests). If a link is broken, the scrub fails, names the backup the broken link depends on, marks the
+backups that can no longer be restored as unverified (so the next backup is full) and raises the site's "Backup failed"
+alert with its own reason. If the scrubbed package itself fails, every backup built on it is marked unverified too.
+DockNest has no scheduled scrub; the scheduled check of a chain is the restore test, which tests the newest restore
+point and so its whole chain.
+
 ## Recovery without DockNest
 
-The recovery kit and `independent-recovery.md` gain one step: "If the backup is incremental, decrypt and extract the
-full backup first, then each increment in order (the order file lists them), using `--listed-incremental=/dev/null`."
-The kit's decrypt tool verifies the chain links the same way the server does.
+Only the recovery kit and a copy of the site's storage folder are needed: no DockNest database, API or "Download chain".
+The kit's `decrypt-backup.js` verifies the chain links the same way the server does, and the kit's `helper.py` rebuilds
+the files with the same checks as a DockNest restore. Steps (as root on a Linux host with GNU tar, Node 24 and Python 3):
+
+1. Restore the kit into a new folder: `node scripts/recovery-kit.js restore manager.dkit NEW_KIT_FOLDER PASSPHRASE_FILE`.
+   It writes `master.key`, `recovery/decrypt-backup.js` and `recovery/helper.py`.
+2. Copy the site's backup folder from storage (all its `backup_<time>--<backup ID>.tar.gz.enc` files) to a local folder.
+3. Decrypt the chain of the backup you want:
+   `node NEW_KIT_FOLDER/recovery/decrypt-backup.js --chain COPY/backup_<time>--<ID>.tar.gz.enc NEW_KIT_FOLDER/master.key DECRYPTED`.
+   It starts at that package and follows the parent links of the sealed manifests back to the full backup (each parent
+   is found by its backup ID in the file name and must have the SHA-256 the increment recorded). It checks every
+   authentication tag and link before it keeps anything, then writes the packages in restore order and `CHAIN.json`.
+   A missing, damaged or swapped package stops it with "This backup depends on backup X, which is missing or damaged."
+   A chain download folder with `ORDER.txt` works the same way (`--chain FOLDER`).
+4. Rebuild the files: `python3 NEW_KIT_FOLDER/recovery/helper.py restore-chain DECRYPTED RESTORED`. For each mount it
+   extracts the full backup, then each increment in order with `tar --listed-incremental=/dev/null` (deletions and
+   renames are applied), after the same link, artifact, free-space and path checks as a DockNest restore, into
+   `RESTORED/data-I-J`. It prints, as JSON, which folder belongs to which container mount, the `images.tar` files to
+   `docker load` in order, and the configuration archives. It starts nothing. If any check refuses, it removes what it
+   wrote, so `RESTORED` is left as it was (empty, or not there).
+5. Continue as for a single backup: load the images in order, then create the containers from the manifest with those
+   folders as their mounts, in an isolated network first.
+
+Extracting by hand with plain GNU tar is described in the restore guide inside each package. Run tar from inside the
+destination folder rather than with `-C` (GNU tar makes the temporary folder of a folder-name swap relative to the
+working directory), and remove a restored symlink before extracting a later archive that has a real folder at that path.
+
+The Linux integration test restores two points this way (the end of the longest chain, and an increment in which two
+folders swap names) and compares the file tree and database with the source at that time.
 
 ## Upgrade safety
 

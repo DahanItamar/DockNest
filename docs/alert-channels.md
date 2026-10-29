@@ -591,8 +591,10 @@ What PR 3 settled where this document left room, or chose a narrower step:
   `payload`, so a retry sends exactly what the first try would have. A 2.8 item (`payload` NULL) and the "N more alerts"
   item are sent as their plain text (title = the part before the first `:` or sentence end).
 - **Reasons** (`reasons.js`) are keyed by event type and, where it helps, by a code: the job status for backups (`failed`,
-  `recovery_required`) and the move state or waiting reason. There is no finer failure code in the database today, so a
-  failed backup always says "The backup did not finish." Two sentences hold a value that is not raw error text: the
+  `recovery_required`) and the move state or waiting reason. Otherwise a failed backup says "The backup did not finish."
+  Since 2.12.1 two incremental-chain codes have their own sentence: `chain_inconsistent` (a backup was not saved because
+  it could not be confirmed as part of its chain) and `chain_broken` (a scrub found a broken chain; this one comes from a
+  failed scrub job, not a backup job). Two sentences hold a value that is not raw error text: the
   owner-typed target server name of a move, and the free space and used percent of a low disk.
 - **Job link.** `jobLink` gives `${APP_ORIGIN}/?job=<id>` for a backup job and the app address itself for events without a
   job, and nothing when `APP_ORIGIN` is a loopback address. The web app does not read `?job=` yet: opening the job after
