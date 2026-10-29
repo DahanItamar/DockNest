@@ -102,7 +102,17 @@ def run(args,timeout=3600,input=None,cwd=None):
         diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='exit',exitCode=error.returncode)
         raise
 def docker(*args): return run(['docker',*args])
-def inspect(ids): return json.loads(docker('inspect',*ids))
+def inspect(ids): return [tmpfs_as_host_config(c) for c in json.loads(docker('inspect',*ids))]
+# Compose long-syntax tmpfs mounts appear in Mounts; fold them into HostConfig.Tmpfs so capture and restore see one RAM folder form.
+def tmpfs_as_host_config(c):
+    host=c.get('HostConfig') or {};tmpfs=dict(host.get('Tmpfs') or {})
+    specs={m.get('Target'):m.get('TmpfsOptions') or {} for m in host.get('Mounts') or [] if m.get('Type')=='tmpfs'}
+    for m in c.get('Mounts') or []:
+        if m.get('Type')!='tmpfs' or m.get('Destination') in tmpfs:continue
+        spec=specs.get(m.get('Destination'),{});mode=spec.get('Mode') or 0
+        options=(['size=%d'%spec['SizeBytes']] if spec.get('SizeBytes') else [])+(['mode=%o'%((mode&0o777)|(0o1000 if mode&(0o1000|1<<20) else 0))] if mode else [])+([] if m.get('RW',True) else ['ro'])
+        tmpfs[m.get('Destination')]=','.join(options)
+    return {**c,'HostConfig':{**host,'Tmpfs':tmpfs},'Mounts':[m for m in c.get('Mounts') or [] if m.get('Type')!='tmpfs']}
 
 # A Docker bind path can conceal a remote filesystem. Unknown filesystems fail closed.
 LOCAL_FILESYSTEMS={'ext2','ext3','ext4','xfs','btrfs','zfs','overlay'}
@@ -1523,16 +1533,18 @@ def list_project_files(ids,directory=None):
     parent=str(p.parent) if any(p.parent.is_relative_to(root) for root in roots) else None
     return {'directory':str(p),'parent':parent,'entries':entries[:500],'limited':len(entries)>500}
 
-TEMPORARY_FOLDERS={'/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'}
-def temporary_mounts(c,declared):
+# A RAM folder is empty after every container restart, so restore recreates it empty with its original options.
+TMPFS_OPTION=r'(?:size=\d+[kKmMgG%]?|mode=0?[0-7]{3,4}|uid=\d+|gid=\d+|nr_inodes=\d+[kKmMgG]?|nr_blocks=\d+[kKmMgG]?|ro|rw|nosuid|suid|nodev|dev|noexec|exec|noatime|atime|relatime|norelatime|strictatime|nodiratime|diratime|huge=(?:never|always|within_size|advise))'
+def temporary_mounts(c):
     result=[]
-    names={c.get('Id'),c.get('Name','').lstrip('/')}
-    for destination,options in c.get('HostConfig',{}).get('Tmpfs',{}).items():
-        if destination not in TEMPORARY_FOLDERS:raise ValueError('RAM folder '+destination+' needs a reviewed capture adapter; it may contain persistent data.')
-        if not any(item.get('container') in names and item.get('destination')==destination for item in declared):raise ValueError('Review temporary RAM folders in Edit configuration. '+destination+' must be recreated empty on restore; its contents disappear when the container stops.')
-        if not isinstance(options,str) or not re.fullmatch(r'(?:(?:size=\d+[kKmMgG]?|mode=0?[0-7]{3,4}|uid=\d+|gid=\d+|nr_inodes=\d+|ro|rw|nosuid|suid|nodev|dev|noexec|exec)(?:,|$))+',options):raise ValueError('Temporary RAM folder options require a reviewed adapter')
+    for destination,options in (c.get('HostConfig',{}).get('Tmpfs') or {}).items():
+        name=c.get('Name','').lstrip('/') or c.get('Id','')
+        if not re.fullmatch(r'/[A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*',destination) or '..' in destination.split('/'):raise ValueError('Container '+name+' has a RAM folder at an unusual path ('+destination+'). DockNest cannot recreate it safely.')
+        options=options or ''
+        if options and not re.fullmatch(TMPFS_OPTION+'(?:,'+TMPFS_OPTION+')*',options):raise ValueError('Container '+name+' RAM folder '+destination+' uses options DockNest does not recognize ('+options+'). Remove or simplify them in the Compose file.')
         result.append((destination,options))
     return result
+def tmpfs_argument(destination,options):return destination+':'+options if options else destination
 
 def static_preflight(cfg):
     if cfg.get('unresolvedDependencies'):raise ValueError('Resolve required external dependencies before capture')
@@ -1633,7 +1645,7 @@ def preflight(cfg):
     others=docker('ps','-q').decode().split()
     mounts=[]
     for c in cs:
-        temporary_mounts(c,cfg.get('temporaryMemoryFolders',[]))
+        temporary_mounts(c)
         if c.get('HostConfig',{}).get('Privileged') or c.get('HostConfig',{}).get('Devices'):raise ValueError('Privileged/device-backed containers require a capture adapter')
         if c.get('Config',{}).get('Labels',{}).get('com.docker.compose.project'):
             if not cfg.get('composeFiles'):raise ValueError('Select this site\'s Compose project files in Edit configuration before backing up. No files have been selected for this backup.')
@@ -1875,7 +1887,8 @@ def capture(req,output=None):
     if increment and output is not None:
         for key in increment['keys']:inventory['snapshot-%s.snar'%key]=stream_file(archive,'snapshot-%s.snar'%key,increment['work']/(key+'.snar'),snapshots[key])
     manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
-    manifest['temporaryMemoryFolders']=cfg.get('temporaryMemoryFolders',[])
+    # Restore reads RAM folders from the container record; this list keeps backups restorable by older helpers.
+    manifest['temporaryMemoryFolders']=[{'container':c.get('Name','').lstrip('/'),'destination':destination} for c in manifest['containers'] for destination,_ in temporary_mounts(c)]
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
     manifest['backupPlan']=plan if increment else v1_plan(plan)
     if cfg.get('restoreReferences'):manifest['restoreReferences']=cfg['restoreReferences']
@@ -2450,7 +2463,7 @@ def restore(req):
         # A copy must never remain a member of the source's Compose project.
         args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
-        for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
+        for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
         for j,m in enumerate(c['Mounts']):
             source=extract_mount(unpacked,i,j,m,sources,root)
             if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
@@ -3312,7 +3325,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             if primary not in ['bridge','none'] and primary in networks:args+=aliases(primary)
             for binding in port_bindings(c):
                 spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
-            for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
+            for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
             for m in c['Mounts']:
                 if ',' in m['Source'] or ',' in m['Destination']:raise ValueError('Mount paths with commas need a manual move')
                 mount=('type=volume,src='+m['Name'] if m['Type']=='volume' else 'type=bind,src='+m['Source'])+',dst='+m['Destination']
@@ -4008,7 +4021,7 @@ def restore_test_restore(req):
         if internet:args+=['--cap-drop','NET_ADMIN']
         if multi and plans[i] and not internet:args+=['--dns','127.0.0.1']
         try:
-            for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
+            for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
         except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
         for j,m in enumerate(c['Mounts']):
             try:source=extract_mount(unpacked,i,j,m,sources,root)

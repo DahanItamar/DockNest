@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Docker sites with RAM folders (`tmpfs`) now back up without extra setup. Every RAM folder is recreated empty on restore with its original options, including `/var/run`, folders without size or mode options, and Compose long-syntax `type: tmpfs` mounts. The Edit configuration checkbox is gone. A folder at an unusual path or with options DockNest does not recognize now fails with a message naming the container and folder.
+
 ## [2.12.1] - 2026-10-29
 
 See [docs/releases/2026-10-29-v2.12.1.md](docs/releases/2026-10-29-v2.12.1.md).

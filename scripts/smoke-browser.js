@@ -172,7 +172,6 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
   assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
   assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
-  await siteDialog.getByRole('checkbox',{name:'Recreate these temporary folders empty on restore'}).check();
   await page.route('**/api/servers/host-one/project-files?**',route=>{
     const path=new URL(route.request().url()).searchParams.get('path');
     return route.fulfill({json:path==='/srv/shop/config'?{directory:path,parent:'/srv/shop',entries:[{name:'app.json',path:path+'/app.json',kind:'file',selectable:true}]}:{directory:'/srv/shop',parent:null,entries:[{name:'config',path:'/srv/shop/config',kind:'directory',selectable:false},{name:'.env',path:'/srv/shop/.env',kind:'file',selectable:true}]}});
