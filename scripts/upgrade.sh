@@ -81,7 +81,7 @@ GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
 git_() { git -c "safe.directory=$ROOT" "$@"; }
 PHASE=init LAST_PHASE=init FROM='' TO='' STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ) HINT=''
 FINISHED=0 HOLD=0 CHECKED_OUT=0 STOPPED=0 SNAPSHOT='' STATUS_TMP='' DB_SCHEMA='' IMAGE_MODE=0 PREV_IMAGE='' PREV_ID='' NEW_IMAGE=''
-SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 PINNING=0 CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
+SAVE='' NEW_ID='' IMAGES_BEFORE='' IMAGES_LISTED=0 LOCAL_IMAGE='' COMPAT_AFTER='' CLEANUP=0 PINNING=0 PIN_ACTION='' CLEANUP_PID='' WATCHDOG_PID='' WARN_FILE='' WARNING=''
 REASON='' SCHEMA_TO='' START_FAILED=0 HEALTH_FAIL='' FETCH_FAILED=0 PREV_DIGESTS='' VERIFY_DIR='' LOCKED=0 LOCK="$ROOT/data/.upgrade.lock"
 # REPO: this install's image repository; PREV_REF: the stable tag that pins the previous release's image (pin_previous).
 REPO='' PREV_REF='' OLD_PREV='' CLEAN_FILE='' CLEANED=''
@@ -100,7 +100,8 @@ status() { # status OK ERROR
   # The temporary name is unpredictable and created exclusively (noclobber = O_EXCL, never follows a planted link)
   # together with its contents, and mode 0644 comes from the umask, so nothing is ever opened by path twice.
   STATUS_TMP="$dir/.status.$$.$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-  # warning: set only by the cleanup phase, from fixed messages plus validated folder names and image IDs.
+  # warning: set by the cleanup phase (fixed messages plus validated folder names and image IDs) and by pin_report (fixed
+  # messages plus the version, a user name or a uid). json() and the tr below drop \ and ", so it never carries a quoted path.
   # reason: only on a failure, from the fixed list; schemaFrom/schemaTo: integers or null; requestId: validated above.
   # cleanup: the one-line retention summary of a success ("Cleaned up: N old DockNest images"), built from a count.
   if ( set -C; umask 022; printf '{"phase":"%s","from":"%s","to":"%s","startedAt":"%s","updatedAt":"%s","ok":%s,"error":%s,"rollbackHint":%s,"warning":%s,"reason":%s,"schemaFrom":%s,"schemaTo":%s,"requestId":%s,"cleanup":%s}\n' \
@@ -217,7 +218,8 @@ release_hold() { docker compose exec -T api node scripts/deployment-preflight.js
 # the installed broker's own record-current, which verifies it exactly as the installer does (signed manifest, tag on
 # main, image digest in image mode). Only when this run is root because the checkout belongs to root: root never works
 # on a non-root owner's checkout (F15). Updater runs (--request-id) are pinned by the broker before they start. Never
-# changes this run's result: a refusal only prints the --repair command. Without the updater nothing happens.
+# changes this run's result: anything left to do is printed by pin_report as the run's last lines. Without the updater
+# nothing happens.
 pin_for_updater() {
   _version=$1 _etc="$UPDATER_ROOT/etc/docknest-updater" _state="$UPDATER_ROOT/var/lib/docknest-updater"
   _broker="$UPDATER_ROOT/usr/local/lib/docknest-updater/current/broker.py" _repair='sudo scripts/install-updater.sh --repair'
@@ -230,9 +232,15 @@ pin_for_updater() {
     echo "NOTE: could not read the host updater configuration. If in-app updates are refused, run on this host: $_repair"; return 0
   fi
   if [ "$_checkout" != "$(pwd -P)" ]; then echo "NOTE: the host updater is installed for $_checkout, not this checkout; nothing was recorded for it."; return 0; fi
-  if [ "$(id -u)" != 0 ]; then echo "NOTE: if in-app updates are refused after this upgrade, run on this host: $_repair"; return 0; fi
+  # A non-root run cannot write the root-owned record (nor read whether it is there): a new release always needs the
+  # repair, which is printed last; re-running the current release only reminds.
+  if [ "$(id -u)" != 0 ]; then
+    if [ "$FROM" = "$_version" ]; then echo "NOTE: if in-app updates are refused, run on this host: $_repair"
+    else PIN_ACTION="DockNest $_version is running. Recording a new release for the host updater needs root, so this run (as $(id -un 2>/dev/null || id -u)) could not do it."; fi
+    return 0
+  fi
   if [ "$_owner" != 0 ]; then
-    echo "WARNING: this upgrade ran as root, but the checkout belongs to uid $_owner. Run scripts/upgrade.sh as that user (without sudo), and run $_repair before the next in-app update." >&2
+    PIN_ACTION="this upgrade ran as root, but the checkout belongs to uid $_owner. Run scripts/upgrade.sh as that user (without sudo) next time."
     return 0
   fi
   if grep -Fq "\"v$_version\"" "$_state/pins.json" 2>/dev/null; then return 0; fi
@@ -244,11 +252,21 @@ pin_for_updater() {
   if [ -f "$_broker" ]; then PINNING=1; if "$@"; then _rc=0; else _rc=$?; fi; PINNING=0; fi
   case "$_rc" in
     0) return 0 ;;
-    75) echo "WARNING: DockNest $_version is running, but an updater run is active, so it was not recorded. Nothing was rolled back. Run later on this host: $_repair" >&2 ;;
-    124) echo "WARNING: DockNest $_version is running, but verifying it for the host updater took longer than 5 minutes, so it was not recorded. Nothing was rolled back. Run on this host: $_repair" >&2 ;;
-    *) echo "WARNING: DockNest $_version is running, but the host updater could not verify and record it, so in-app updates are refused until it does. Nothing was rolled back. Run on this host: $_repair" >&2 ;;
+    75) PIN_ACTION="DockNest $_version is running, but an updater run is active, so it was not recorded for the host updater. Nothing was rolled back. Wait for that run to finish." ;;
+    124) PIN_ACTION="DockNest $_version is running, but verifying it for the host updater took longer than 5 minutes, so it was not recorded. Nothing was rolled back." ;;
+    *) PIN_ACTION="DockNest $_version is running, but the host updater could not verify and record it. Nothing was rolled back." ;;
   esac
   return 0
+}
+# pin_report: the host updater still needs this release recorded. Printed as the run's last lines, with the exact command
+# for this checkout, and kept in the status file's warning. The run's result stays a success (exit 0): DockNest is
+# running the new release; only in-app updates are refused (state-mismatch) until the repair has run.
+pin_report() {
+  [ -n "$PIN_ACTION" ] || return 0
+  _command="cd '$(pwd -P | sed "s/'/'\\\\''/g")' && sudo scripts/install-updater.sh --repair"
+  printf '\nACTION NEEDED (host updater): %s\nIn-app updates are refused until this release is recorded. Run once on this host, as a user who can use sudo:\n\n  %s\n\n' "$PIN_ACTION" "$_command" >&2
+  WARNING="${WARNING:+$WARNING }Host updater: $PIN_ACTION Run sudo scripts/install-updater.sh --repair in the DockNest checkout on this host."
+  status true
 }
 [ "$PRINT_SCHEMA" = 1 ] && { echo "$(schema_of < src/migrations.js) $(floor_of < src/migrations.js)"; FINISHED=1; exit 0; }
 # Put the previous release back after a failure; only when the metadata is provably untouched. Then lift the hold.
@@ -650,7 +668,7 @@ TO=$(package_field "$TARGET_REF" version)
 echo "Current: $FROM ($(git_ describe --tags --always HEAD))   Target: $TO ($TARGET)   Mode: $([ "$IMAGE_MODE" = 1 ] && echo published image || echo build from source)"
 if [ -n "$EXPECT_COMMIT" ] && [ "$TARGET_REF" != "$EXPECT_COMMIT" ]; then fail 2 "$TARGET points to $TARGET_REF, not the verified commit $EXPECT_COMMIT. Nothing was changed." verify-manifest-mismatch; fi
 if [ "$UPGRADE_ONLY" = 1 ] && ! { matches "$TO" "$SEMVER" && semver_gt "$TO" "$FROM"; }; then fail 2 "--upgrade-only: $TO is not newer than the installed $FROM. Nothing was changed."; fi
-if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; pin_for_updater "$TO"; exit 0; fi
+if [ "$TARGET_REF" = "$FROM_REF" ] && healthy "$(expect HEAD)" 0; then FINISHED=1 PHASE=done HINT=''; echo "Already running $TO."; status true; pin_for_updater "$TO"; pin_report; exit 0; fi
 # The updater verified the commit itself (--expect-commit) and never passes --no-verify.
 if [ "$NO_VERIFY" = 1 ]; then echo "WARNING: --no-verify: $TARGET was not checked against origin/main or a release signature." >&2
 elif [ -z "$EXPECT_COMMIT" ]; then verify_target; fi
@@ -820,3 +838,4 @@ PHASE=done; status true
 echo "DockNest $TO is running. Configuration backup: $SAVE"
 pin_for_updater "$TO"
 echo 'If boot recovery is installed on any site, reinstall it from that site so hosts get the new helper (sites report bootRecoveryOutdated).'
+pin_report

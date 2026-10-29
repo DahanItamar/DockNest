@@ -170,6 +170,32 @@ class CaptureTests(CaptureHarness):
         (self.state/SITE/'state.json').unlink()
         manifest=self.capture(containers,self.increment_request(full['snapshots']),job=3)
         self.assertEqual(manifest['fallback'],{'reason':'snapshot-missing'},'Snapshot files without a committed record are not trusted')
+    def test_key_folders_inside_a_bind_mount_are_left_out_and_a_chain_that_held_them_restarts_full(self):
+        source,=self.sources('home');containers=self.containers([[source]])
+        full=self.capture(containers,self.full_request(),job=1);self.commit(1)
+        self.assertNotIn('protectedPaths',full)
+        tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call][-1]
+        at=tar.index('--no-anchored')
+        self.assertEqual(tar[at-1:at+3],['--no-wildcards','--no-anchored','--exclude=.ssh','--exclude=.gnupg'],'every bind mount archive leaves key folders out')
+        # 2.12.0 chains hold ~/.ssh in their full backup: once one is found, the record changes and the chain restarts.
+        (pathlib.Path(source)/'.ssh').mkdir();(pathlib.Path(source)/'app'/'.gnupg').mkdir(parents=True);(pathlib.Path(source)/'app'/'id.ssh').write_text('kept')
+        manifest=self.capture(containers,self.increment_request(full['snapshots']),job=2)
+        self.assertEqual((manifest['backupKind'],manifest['fallback']),('full',{'reason':'mount-set-changed'}))
+        paths=[helper.lexical(source+'/.ssh'),helper.lexical(source+'/app/.gnupg')]
+        self.assertEqual(manifest['protectedPaths'],[{'container':'app0','source':source,'path':path} for path in paths])
+        self.assertIn('Key folders that were not copied',(self.root/'restore-guide.md').read_text())
+        self.assertEqual(json.loads((self.root/'incremental'/'ready.json').read_text())['exclusions'],{snapshot_key(source):paths})
+        tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call][-1]
+        self.assertIn('--listed-incremental='+str(self.root/'incremental'/(snapshot_key(source)+'.snar')),tar);self.assertIn('--exclude=.ssh',tar)
+        self.commit(2)
+        manifest=self.capture(containers,self.increment_request(manifest['snapshots'],position=2),job=3)
+        self.assertEqual(manifest['backupKind'],'incremental','the same key folders keep the chain going');self.assertNotIn('fallback',manifest)
+    def test_volumes_and_protected_placeholders_are_archived_without_the_key_folder_filter(self):
+        source,=self.sources('vol');containers=self.containers([[source]]);containers[0]['Mounts'][0]['Type']='volume'
+        (pathlib.Path(source)/'.ssh').mkdir()
+        manifest=self.capture(containers,self.full_request())
+        self.assertNotIn('protectedPaths',manifest)
+        self.assertFalse(any('--exclude=.ssh' in call for call in self.calls),'a volume is the container\'s own data')
     def test_shared_source_is_archived_once_with_one_snapshot(self):
         source,=self.sources('shared');manifest=self.capture(self.containers([[source],[source]]),self.full_request())
         tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call]

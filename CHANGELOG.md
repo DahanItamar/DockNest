@@ -16,6 +16,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Incremental backups: an increment that cannot be confirmed as part of its chain is no longer saved. The backup shows as failed, you get the Backup failed alert, and the next backup is full.
 - Incremental backups: re-verifying a backup also checks the backups built on it. A broken chain is shown, its backups are marked unverified, and you get an alert.
 - Recovery kit: restore an incremental backup without DockNest from a plain copy of your storage folder. The kit finds the chain, checks it and rebuilds the files, including deleted and renamed folders.
+- A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
+- Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28.
+- An install that apt stops because it would have to remove other software is reported as a conflict.
+
+### Security
+
+- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a host folder mounted into a container, such as a home folder, are no longer copied; the rest of the mount is. The job result and the readiness check name each folder left out, so you can recover those keys separately.
+- Restores and moves no longer keep setuid or setgid permissions (or file capabilities) on restored files, so a backup cannot plant a program that runs with another user's rights. Folders keep their setgid and sticky bits.
 
 ## [2.12.0] - 2026-10-29
 
