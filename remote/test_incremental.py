@@ -469,6 +469,24 @@ class DumpdirTests(unittest.TestCase):
                 archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0Dc\0Rdata/a/b\0Tdata/b\0\0'}),('data/b/l/evil','file','x',None),('data/c','dir',None,{'GNU.dumpdir':'Rdata/b\0Tdata/a/b\0\0'})]))
                 with self.assertRaisesRegex(ValueError,expected):incremental_archive_check(archive,root.resolve())
     @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_link_replaced_by_a_folder_next_to_a_swap_is_accepted(self):
+        # Linux integration (points 4 and 5): lnk -> da, da and db swapped, then lnk becomes a real folder. GNU tar 1.35
+        # repeats the swap's rename records in later increments; the swap never moves lnk, so the link is replaced.
+        swap='Nasset.txt\0Dda\0Ndatabase.sqlite\0Ddb\0Dlnk\0Duploads\0X_data\0R_data/db\0T\0R_data/da\0T_data/db\0R\0T_data/da\0\0'
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'out'
+            for name in ['da','db','uploads']:(root/'_data'/name).mkdir(parents=True)
+            os.symlink('da',root/'_data'/'lnk')
+            archive=pathlib.Path(d)/'m.tar'
+            archive.write_bytes(mount_tar([('_data','dir',None,{'GNU.dumpdir':swap}),('_data/da','dir',None,{'GNU.dumpdir':'Ng.txt\0\0'}),('_data/db','dir',None,{'GNU.dumpdir':'Nf.txt\0\0'}),('_data/lnk','dir',None,{'GNU.dumpdir':'Yfile.txt\0\0'}),('_data/lnk/file.txt','file','real now',None),('_data/uploads','dir',None,{'GNU.dumpdir':'\0'})]))
+            replace=[]
+            self.assertEqual(incremental_archive_check(archive,root.resolve(),None,replace),'_data')
+            self.assertEqual(replace,[pathlib.PurePosixPath('_data/lnk')])
+            # A rename that moves the link, then a folder at its new place: still refused, naming the rule only.
+            os.unlink(root/'_data'/'lnk');(root/'_data'/'x').mkdir();os.symlink('../da',root/'_data'/'x'/'l')
+            archive.write_bytes(mount_tar([('_data','dir',None,{'GNU.dumpdir':'Dz\0R_data/x\0T_data/z\0\0'}),('_data/z','dir',None,{'GNU.dumpdir':'Dl\0\0'}),('_data/z/l','dir',None,{'GNU.dumpdir':'\0'})]))
+            with self.assertRaisesRegex(ValueError,r'^Unsafe directory listing in incremental archive \(folder replaces a moved symlink\)$'):incremental_archive_check(archive,root.resolve())
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
     def test_rename_with_an_internal_link_is_accepted(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d)/'out';(root/'data'/'a'/'b').mkdir(parents=True);(root/'data'/'a'/'c').mkdir();os.symlink('../c',root/'data'/'a'/'b'/'l')
@@ -598,6 +616,19 @@ class GnuTarChainTests(unittest.TestCase):
         self.dump()
         restored=self.restore(2)
         self.assertEqual(tree(restored),self.trees[1]);self.assertEqual((restored/'a'/'d'/'l').read_text(),'f')
+    def test_integration_sequence_swap_then_link_becomes_a_folder(self):
+        s=self.source
+        for name in ['da','db']:(s/name).mkdir()
+        (s/'da'/'f.txt').write_text('da');(s/'db'/'g.txt').write_text('db');os.symlink('da',s/'lnk')
+        self.dump()
+        os.rename(s/'da',s/'swap-tmp');os.rename(s/'db',s/'da');os.rename(s/'swap-tmp',s/'db')
+        self.dump()
+        os.unlink(s/'lnk');(s/'lnk').mkdir();(s/'lnk'/'file.txt').write_text('real now')
+        self.dump()
+        shutil.rmtree(s/'db');(s/'db').write_text('db is a file now');os.chmod(s/'da'/'g.txt',0o600)
+        self.dump()
+        for count in range(1,5):
+            with self.subTest(point=count):self.assertEqual(tree(self.restore(count)),self.trees[count-1])
     def test_symlink_to_a_folder_replaced_by_a_real_folder(self):
         s=self.source;(s/'real').mkdir();(s/'real'/'kept').write_text('k');os.symlink('real',s/'a')
         self.dump()
