@@ -33,6 +33,7 @@ export const FULL_REASONS = Object.freeze({
   'snapshot-missing': 'The change record on the server is missing.',
   'snapshot-mismatch': 'The change record on the server does not match the previous backup.',
   'mount-set-changed': 'The set of mounts changed.',
+  'folders-renamed': 'Folders were renamed since the last full backup, so this backup is full.',
 });
 const HELPER_FALLBACKS = new Set(['snapshot-missing', 'snapshot-mismatch', 'mount-set-changed']);
 const hex64 = /^[a-f0-9]{64}$/, chainIdPattern = /^[A-Za-z0-9-]{1,64}$/;
@@ -185,6 +186,9 @@ export function decideCapture({ site, plan, directory, jobDetails = {} }) {
   // MacAddress, so it differs after every restart. Chains compare the helper's stable `chainFingerprint` instead (the
   // container, mount and image set); a parent without one starts a new chain.
   if (!validFingerprint(plan?.chainFingerprint) || manifest.chainFingerprint !== plan.chainFingerprint) return full('plan-changed');
+  // GNU tar keeps writing a folder rename's records into later increments, where a restore would replay them. The
+  // increment that first holds a rename stays valid; the chain ends there.
+  if (manifest.renamesSeen === true) return full('folders-renamed');
   const snapshots = manifest.incremental.snapshots;
   if (!snapshots || typeof snapshots !== 'object' || Object.entries(snapshots).some(([key, value]) => !hex64.test(key) || !hex64.test(value))) return full('parent-missing');
   const images = [...new Set(members.flatMap(member => (json(member.manifest).originalImages ?? []).map(image => image?.id)).filter(value => typeof value === 'string' && value))];
@@ -220,6 +224,8 @@ export function chainRecord(decision, helperManifest, { serverId, mainTargetId, 
     ...((value => validFingerprint(value) ? { chainFingerprint: value } : {})(validFingerprint(manifest.chainFingerprint) ? manifest.chainFingerprint : plan?.chainFingerprint)),
     chain: { id: chain.id, position: chain.position, parentBackupId: chain.parentBackupId ?? null, parentSha256: chain.parentSha256 ?? null },
     ...(chainImages.length ? { chainImages } : {}),
+    // The helper scanned the increment's archives: directory renames end the chain (see decideCapture).
+    ...(kind === 'incremental' && manifest.renamesSeen === true ? { renamesSeen: true } : {}),
     incremental: { format: CHAIN_FORMAT, serverId, mainTargetId, snapshots, fullReason: kind === 'full' ? fallback ?? decision.reason : null, ...(fallback ? { fallback } : {}) },
   };
 }
