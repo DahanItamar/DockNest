@@ -30,20 +30,26 @@ Validate recovery on a clean host with the original manager unavailable. Reconne
 
 ## Restoring an incremental chain
 
-An incremental backup depends on the packages before it. Use **Download chain** on the backup you want (or copy the
-packages from storage yourself). You get the encrypted packages, full backup first, and an `ORDER.txt` that lists them
-in restore order with the SHA-256 of each file and the parent each one expects.
+An incremental backup depends on the packages before it. You need only the recovery kit and a copy of the site's
+storage folder (DockNest itself, its database and **Download chain** are not needed). Run these as root on a Linux host
+with GNU tar, Node 24 and Python 3; the full steps and what each one checks are in
+[incremental-backups.md](incremental-backups.md#recovery-without-docknest).
 
-1. Check and decrypt the whole chain with the recovery kit tool. It verifies every file's size and checksum, every
-   authentication tag and every parent link before it writes anything:
-   `node decrypt-backup.js --chain <chain folder> <master.key> <new empty folder>`. Without the tool, decrypt each
-   package the same way as a single backup (authenticate the whole file to a private temporary file first).
-2. Unpack the full backup first and follow the single-backup steps for it.
-3. Then unpack each increment in `ORDER.txt` order, and extract each of its `mount-I-J.tar` archives over the same
-   directory as the full backup's matching mount, with `tar --listed-incremental=/dev/null -x`. That option also removes
-   the files that were deleted after the previous backup. Never skip a package or change the order: a missing or
-   swapped increment gives a wrong tree, and a link that does not match is a reason to stop.
-4. Load the images each package lists, in the same order, then continue as for a single backup.
+1. Restore the kit into a new folder (above). It holds `master.key`, `recovery/decrypt-backup.js` and
+   `recovery/helper.py`.
+2. Copy the site's `backup_<time>--<backup ID>.tar.gz.enc` files from storage into one local folder.
+3. Check and decrypt the chain of the backup you want:
+   `node recovery/decrypt-backup.js --chain <copy>/backup_<time>--<ID>.tar.gz.enc master.key <new empty folder>`.
+   It finds the chain from the sealed manifests and verifies every file's checksum, every authentication tag and every
+   parent link before it keeps anything. A chain download (a folder with `ORDER.txt`) works too: pass the folder.
+4. Rebuild the files: `python3 recovery/helper.py restore-chain <decrypted folder> <new empty folder>`. Each mount is
+   rebuilt from the full backup and then each increment in order (deletions and renames applied), after the same path
+   checks DockNest makes. It prints which folder belongs to which container mount and the `images.tar` files to load.
+5. Load the images in the order printed, then continue as for a single backup.
+
+Never skip a package or change the order: a missing or swapped increment gives a wrong tree, and a link that does not
+match is a reason to stop. Extracting by hand is described in the restore guide inside each package; prefer the kit's
+helper, which also handles a symlink later replaced by a folder and two folders that swap names.
 
 Check paths in every archive as for a full backup, including directory-listing entries.
 
