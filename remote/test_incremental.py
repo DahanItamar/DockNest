@@ -707,4 +707,36 @@ class GnuTarChainTests(unittest.TestCase):
         self.assertEqual(len(calls.call_args_list),1,'Only the verified full archive was extracted')
         self.assertFalse((self.base/'escape').exists())
 
+@unittest.skipUnless(LINUX_GNU_TAR,'Needs GNU tar on Linux')
+class OfflineChainRestoreTests(ChainBuilder):
+    """Recovery kit without DockNest: python3 helper.py restore-chain reads what decrypt-backup.js --chain wrote."""
+    def kit_folder(self,archives):
+        chain=self.build(archives);folder=self.root.parent/'decrypted';folder.mkdir()
+        packages=[]
+        for k,link in enumerate(chain):
+            name='%02d-%s.tar.gz'%(k+1,link['backupId']);os.rename(self.root/('payload-%d.tar.gz'%k),folder/name)
+            packages.append({'file':name,'backupId':link['backupId'],'kind':'full' if k==0 else 'incremental','sha256':link['sha256']})
+        write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        return folder,packages
+    def run_offline(self,folder,output):
+        stream=io.StringIO()
+        with patch('helper.EVENT_STREAM',stream):helper.restore_chain_offline(str(folder),str(output))
+        return json.loads(stream.getvalue().strip().splitlines()[-1])['result']
+    def test_rebuilds_every_mount_and_lists_images_in_order(self):
+        archives=[mount_tar([('data','dir',None,None),('data/a','file','a%d'%k,None)]) for k in range(3)]
+        folder,_=self.kit_folder(archives);output=self.root.parent/'restored'
+        result=self.run_offline(folder,output)
+        self.assertEqual(result['packages'],3)
+        self.assertEqual(result['mounts'],[{'container':'/app','type':'bind','destination':'/data','path':str(output/'data-0-0'/'data')}])
+        self.assertEqual((output/'data-0-0'/'data'/'a').read_text(),'a2')
+        self.assertEqual([pathlib.Path(p).parent.name for p in result['images']],['chain-0','chain-1','unpacked'])
+    def test_a_wrong_link_or_a_used_output_folder_is_refused_before_extraction(self):
+        folder,packages=self.kit_folder(SIMPLE);output=self.root.parent/'restored'
+        packages[0]['sha256']='f'*64;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with self.assertRaisesRegex(ValueError,'depends on backup backup-0, which is missing or damaged'):self.run_offline(folder,output)
+        self.assertFalse((output/'data-0-0').exists())
+        used=self.root.parent/'used';used.mkdir();(used/'x').write_text('x')
+        with self.assertRaisesRegex(ValueError,'new or empty'):self.run_offline(folder,used)
+        packages[1]['file']='../escape.tar.gz';write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with self.assertRaisesRegex(ValueError,'invalid entry'):self.run_offline(folder,self.root.parent/'other')
 if __name__=='__main__':unittest.main()

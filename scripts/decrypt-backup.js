@@ -4,14 +4,19 @@ import { createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { createGunzip } from 'node:zlib';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { resolve, join, basename } from 'node:path';
+import { resolve, join, basename, dirname } from 'node:path';
 // Recovery kit tool: decrypts DockNest packages without DockNest. Standard library only.
 //   node decrypt-backup.js <payload.enc> <master.key> <new-output.tar.gz>
 //   node decrypt-backup.js --chain <chain folder with ORDER.txt> <master.key> <new empty output folder>
+//   node decrypt-backup.js --chain <backup_...--ID.tar.gz.enc> <master.key> <new empty output folder>
 // Chain mode (incremental backups, docs/incremental-backups.md) checks every file and every link before it writes a
 // single package: each file's size and SHA-256, its AES-256-GCM tag, and inside each sealed manifest the chain id, the
-// position and the parent's backup id and SHA-256. It then writes the decrypted packages in restore order.
-const usage = 'Usage: node decrypt-backup.js <payload.enc> <master.key> <new-output.tar.gz>\n       node decrypt-backup.js --chain <chain folder with ORDER.txt> <master.key> <new empty output folder>';
+// position and the parent's backup id and SHA-256. It then writes the decrypted packages in restore order, and
+// CHAIN.json, which the bundled helper (python3 helper.py restore-chain) reads to rebuild the files.
+// Given one package file instead of a folder (no DockNest, no ORDER.txt: a copy of the site's storage folder), the
+// chain is found from the sealed manifests: each increment names its parent's backup ID, whose file is found by name in
+// the same folder and must have the SHA-256 the increment recorded.
+const usage = 'Usage: node decrypt-backup.js <payload.enc> <master.key> <new-output.tar.gz>\n       node decrypt-backup.js --chain <chain folder with ORDER.txt | the backup_...--ID.tar.gz.enc to restore> <master.key> <new empty output folder>';
 const args = process.argv.slice(2), chainMode = args[0] === '--chain';
 const [inputArg, keyArg, outputArg] = chainMode ? args.slice(1) : args;
 if (!inputArg || !keyArg || !outputArg) { console.error(usage); process.exit(1); }
@@ -51,6 +56,8 @@ if (!chainMode) {
   await decryptTo(input, output);
   console.log('Authenticated package written: ' + output);
   console.log('Inspect the bundled manifest and restore guide before extracting or restoring.');
+} else if ((await stat(resolve(inputArg))).isFile()) {
+  await decryptFromPackage(resolve(inputArg), resolve(outputArg));
 } else {
   await decryptChain(resolve(inputArg), resolve(outputArg));
 }
@@ -123,10 +130,9 @@ async function decryptChain(folder, output) {
   // 2. Decrypt each one (GCM-authenticated) and check the links inside its sealed manifest against the real files.
   let chainId = null;
   const written = [];
-  try { await decryptMembers(); } catch (error) { for (const file of written) await rm(file, { force: true }); throw error; }
-  console.log(`Chain ${chainId} verified: ${written.length} ${written.length === 1 ? 'package' : 'packages'}, every link matches.`);
-  console.log('Restore in this order (full backup first). Extract each mount archive with tar --listed-incremental=/dev/null:');
-  for (const file of written) console.log('  ' + file);
+  try { await decryptMembers(); await writeChainFile(output, chainId, order.map((item, index) => ({ file: basename(written[index]), backupId: item.backupId, kind: item.kind, sha256: actual[index] }))); }
+  catch (error) { for (const file of written) await rm(file, { force: true }); throw error; }
+  report(chainId, written, output);
   async function decryptMembers() { for (const [index, item] of order.entries()) {
     const target = join(output, `${String(index + 1).padStart(2, '0')}-${item.backupId}.tar.gz`), reader = manifestReader();
     try { await decryptTo(join(folder, basename(item.file)), target, [reader]); } catch { throw broken(item.backupId); }
@@ -137,4 +143,64 @@ async function decryptChain(folder, output) {
     if (chain.id !== chainId) throw broken(order[index - 1].backupId);
     if (index === 0 ? chain.parentBackupId != null || chain.parentSha256 != null : chain.parentBackupId !== order[index - 1].backupId || chain.parentSha256 !== actual[index - 1]) throw broken(order[Math.max(0, index - 1)].backupId);
   } }
+}
+
+// CHAIN.json: the decrypted packages in restore order with each backup ID and encrypted SHA-256 (the parent links the
+// sealed manifests name). The helper's restore-chain step checks those links again before it extracts anything.
+async function writeChainFile(output, chainId, packages) {
+  const handle = await open(join(output, 'CHAIN.json'), 'wx', 0o600);
+  try { await handle.writeFile(JSON.stringify({ formatVersion: 1, chainId, packages }, null, 1) + '\n'); } finally { await handle.close(); }
+}
+function report(chainId, written, output) {
+  console.log(`Chain ${chainId} verified: ${written.length} ${written.length === 1 ? 'package' : 'packages'}, every link matches.`);
+  console.log('Restore in this order (full backup first):');
+  for (const file of written) console.log('  ' + file);
+  console.log(`Rebuild the files as root on Linux with GNU tar: python3 helper.py restore-chain ${output} <new empty folder>`);
+}
+
+// Without ORDER.txt: start at the package to restore and follow the parent links of the sealed manifests back to the
+// full backup. Files are named backup_<time>--<backup ID>.tar.gz.enc (as DockNest stores them); the parent's file must
+// be the only one with that ID in the folder and must have the SHA-256 its child recorded.
+async function decryptFromPackage(file, output) {
+  const idOf = name => /^backup_.+--([A-Za-z0-9_-]{1,100})\.tar\.gz\.enc$/.exec(name)?.[1] ?? null;
+  const folder = dirname(file), names = await readdir(folder);
+  let id = idOf(basename(file));
+  if (!id) throw new Error('Name the package as DockNest stored it: backup_<time>--<backup ID>.tar.gz.enc');
+  try { if ((await readdir(output)).length) throw new Error('The output folder must be new or empty.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await mkdir(output, { recursive: true, mode: 0o700 });
+  const broken = backupId => new Error(`This backup depends on backup ${backupId}, which is missing or damaged. Restore ${backupId}'s chain from an earlier point, or pick a full backup.`);
+  const found = [], written = [];
+  try {
+    for (;;) {
+      if (found.length > 31) throw broken(id);
+      const child = found.at(-1);
+      let sha256;
+      try { sha256 = await sha256File(file); } catch { throw broken(id); }
+      if (child && sha256 !== child.manifest.chain.parentSha256) throw broken(id);
+      const staged = join(output, `.pending-${id}.tar.gz`), reader = manifestReader();
+      try { await decryptTo(file, staged, [reader]); } catch { throw broken(id); }
+      written.push(staged);
+      const manifest = await reader.finish().catch(() => null), chain = manifest?.chain;
+      if (!child && (manifest?.formatVersion !== 2 || !chain)) throw new Error('This package is not part of an incremental chain. Decrypt it alone: node decrypt-backup.js <payload.enc> <master.key> <new-output.tar.gz>');
+      if (manifest?.formatVersion !== 2 || !['full', 'incremental'].includes(manifest.backupKind) || !chain || typeof chain.id !== 'string' || !Number.isInteger(chain.position)) throw broken(id);
+      if (child && (chain.id !== child.manifest.chain.id || chain.position !== child.manifest.chain.position - 1)) throw broken(id);
+      found.push({ id, file, sha256, manifest, staged });
+      if (manifest.backupKind === 'full') {
+        if (chain.position !== 0 || chain.parentBackupId != null || chain.parentSha256 != null) throw broken(id);
+        break;
+      }
+      if (chain.position < 1 || typeof chain.parentBackupId !== 'string' || !/^[a-f0-9]{64}$/.test(String(chain.parentSha256))) throw broken(id);
+      const parent = chain.parentBackupId, matches = names.filter(name => idOf(name) === parent);
+      if (matches.length !== 1) throw broken(parent);
+      id = parent; file = join(folder, matches[0]);
+    }
+    found.reverse();
+    const finals = [];
+    for (const [index, item] of found.entries()) {
+      const target = join(output, `${String(index + 1).padStart(2, '0')}-${item.id}.tar.gz`);
+      await rename(item.staged, target); written[written.indexOf(item.staged)] = target; finals.push(target);
+    }
+    await writeChainFile(output, found[0].manifest.chain.id, found.map((item, index) => ({ file: basename(finals[index]), backupId: item.id, kind: item.manifest.backupKind, sha256: item.sha256 })));
+    report(found[0].manifest.chain.id, finals, output);
+  } catch (error) { for (const staged of written) await rm(staged, { force: true }); throw error; }
 }
