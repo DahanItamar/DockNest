@@ -27,12 +27,15 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   const copies = cursor.copies ? detectCopies(cursor.copies) : { count: 0, at };
   count += copies.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
-    WHERE j.type='backup' AND j.status IN ('completed','failed','recovery_required') AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
+    WHERE (j.type='backup' AND j.status IN ('completed','failed','recovery_required') OR j.type='scrub' AND j.status='failed' AND json_extract(j.details,'$.chainBroken')=1) AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
     jobs = job.finished_at;
     let details = {}; try { details = JSON.parse(job.details); } catch { /* keep {} */ }
     if (details.moveId) continue; // the backups a move takes are part of the move, reported by its own events
-    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: `site:${job.site_id}`, at: job.finished_at, jobId: job.id, code: job.status, siteId: job.site_id, timeZone: zoneFor(job.site_id), serverId: job.server_id, siteName: job.site, serverName: job.server });
+    // Incremental chains (2.12.1): a scrub that found a broken chain and a backup that was not saved because its chain
+    // could not be confirmed are both reported as the site's "Backup failed", with their own reason.
+    const chainBroken = details.chainBroken === true, code = chainBroken ? 'chain_broken' : details.failure?.code === 'chain_inconsistent' ? 'chain_inconsistent' : job.status;
+    count += emit({ type: job.status === 'completed' ? 'backup.succeeded' : 'backup.failed', key: chainBroken ? `site:${job.site_id}:chain` : `site:${job.site_id}`, at: job.finished_at, jobId: job.id, code, siteId: job.site_id, timeZone: zoneFor(job.site_id), serverId: job.server_id, siteName: job.site, serverName: job.server });
   }
   const changed = db.prepare(`SELECT m.id,m.state,m.waiting_for,m.updated_at,m.site_id,m.source_server_id,m.target_server_id,s.name AS site,a.name AS source,b.name AS target FROM site_moves m JOIN sites s ON s.id=m.site_id JOIN servers a ON a.id=m.source_server_id JOIN servers b ON b.id=m.target_server_id
     WHERE m.updated_at>? AND m.state IN ('completed','rolled_back','failed','waiting','recovery_required') ORDER BY m.updated_at LIMIT 100`).all(cursor.moves);

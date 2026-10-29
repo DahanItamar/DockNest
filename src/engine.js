@@ -20,7 +20,7 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
-import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,hasDependents } from './incremental.js';
+import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
@@ -86,17 +86,35 @@ async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  // An increment is only as good as its chain: its scrub authenticates every package it builds on and every link
  // (docs/incremental-backups.md). A backup outside a chain is checked alone, exactly as before.
- let members=null,damaged=null,chainError=null;
- if(backup&&linkOf(backupId)){try{members=verifyChainLinks(loadChain(backupId));}catch(error){chainError=error;}}
+ // 2.12.1: a scrub of a package that later increments build on also checks their links (database rows and the public
+ // manifests, which mirror the sealed ones), so a broken chain is found from any of its packages. A broken chain fails
+ // the job, marks the backups that can no longer be restored as unverified (the next backup is then full) and raises
+ // the site's "Backup failed" alert (src/alerts/detect.js, details.chainBroken).
+ let members=null,damaged=null,chainError=null;const brokenDependents=[];let dependentError=null;
+ if(backup&&linkOf(backupId)){
+  try{members=verifyChainLinks(loadChain(backupId));}catch(error){chainError=error;}
+  for(const dependent of dependentsOf(backupId)){try{verifyChainLinks(loadChain(dependent));}catch(error){brokenDependents.push(dependent);dependentError??=error;}}
+ }
+ const failBrokenDependents=()=>{for(const dependent of brokenDependents){recordVerification(dependent,'integrity',{status:'failed',method:'a chain link it depends on is missing or does not match, found during the scrub of '+backupId},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(dependent);}};
  try{
   stage(job.id,'verifying');
   if(chainError)throw chainError;
   for(const member of members??[backup]){if(await verifyEncrypted(packagePath(member)).catch(()=>null)!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}}
-  transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;for(const member of members??[backup]){recordVerification(member.id,'integrity',{status:'passed',method:member.id===backupId?'full AES-256-GCM authentication and SHA256':'full AES-256-GCM authentication and SHA256, as part of the chain of '+backupId},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(member.id);}audit('worker','backup.scrub.completed',backupId,{job:job.id,...(members?{chainLength:members.length}:{})});});
+  const passed=()=>{for(const member of members??[backup]){recordVerification(member.id,'integrity',{status:'passed',method:member.id===backupId?'full AES-256-GCM authentication and SHA256':'full AES-256-GCM authentication and SHA256, as part of the chain of '+backupId},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(member.id);}};
+  if(brokenDependents.length){
+   // This package and the chain below it authenticate; a backup built on it cannot be restored.
+   const details=JSON.stringify({backupId,chainBroken:true,brokenDependents:brokenDependents.length});
+   transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?,details=?",now(),dependentError.message,details))return;passed();failBrokenDependents();audit('worker','backup.scrub.failed',backupId,{job:job.id,chainBroken:true,brokenDependents:brokenDependents.length});});
+   return;
+  }
+  transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;passed();audit('worker','backup.scrub.completed',backupId,{job:job.id,...(members?{chainLength:members.length}:{})});});
  }
  catch{
+  // Every backup built on this one can no longer be restored either.
+  if(backup)for(const dependent of dependentsOf(backupId))if(!brokenDependents.includes(dependent))brokenDependents.push(dependent);
   const chained=Boolean(chainError||damaged),message=chained?(chainError??new ChainError(damaged.id)).message:'Package integrity could not be verified; review storage and recovery evidence.';
-  transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),message))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:chained?'a package this backup depends on is missing or failed authentication':'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}if(damaged){recordVerification(damaged.id,'integrity',{status:'failed',method:'full package authentication failed during the chain check of '+backupId},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(damaged.id);}audit('worker','backup.scrub.failed',backupId,{job:job.id,...(damaged?{damaged:damaged.id}:{})});});
+  const details=JSON.stringify({backupId,...(chained||brokenDependents.length?{chainBroken:true}:{}),...(brokenDependents.length?{brokenDependents:brokenDependents.length}:{})});
+  transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?,details=?",now(),message,details))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:chained?'a package this backup depends on is missing or failed authentication':'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}if(damaged){recordVerification(damaged.id,'integrity',{status:'failed',method:'full package authentication failed during the chain check of '+backupId},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(damaged.id);}failBrokenDependents();audit('worker','backup.scrub.failed',backupId,{job:job.id,...(damaged?{damaged:damaged.id}:{}),...(chained||brokenDependents.length?{chainBroken:true}:{})});});
  }
 }
 // Where a backup can be restored from (docs/backup-copies.md, "Restore"): the main copy first, then its copies, verified
@@ -509,6 +527,9 @@ export async function executeJob(job){
   const recovery=site.config.kind!=='static' && contacted && !['source_ready','packing'].includes(remoteStage) && !(remoteStage==='preflight'&&error.remoteReported);
   const row=db.prepare('SELECT details FROM jobs WHERE id=?').get(job.id);let details={};try{details=JSON.parse(row?.details||'{}');}catch{}
   details.failure={at:now(),lastStage:remoteStage,errorType:error.name||'Error',remoteReported:!!error.remoteReported};
+  // Fail-closed (docs/incremental-backups.md, "Checks when a backup is made"): a package DockNest could not confirm as
+  // part of its chain was not published, and the next backup starts a new chain instead of building on it.
+  if(error instanceof ChainIntegrityError){details.failure.code='chain_inconsistent';details.failure.chainCheck=error.reason;setForceFull(site.id,FORCE.inconsistent);audit('worker','backup.incremental_inconsistent',site.id,{job:job.id,reason:error.reason});}
   // Record the underlying transport/storage reason; strip paths and limit length.
   const cause=error.cause;if(cause&&typeof cause==='object')details.failure.cause={type:String(cause.name||'Error').slice(0,60),...(cause.code!=null?{code:String(cause.code).slice(0,40)}:{}),...(cause.level?{level:String(cause.level).slice(0,40)}:{}),message:String(cause.message||'').replace(/\/[^\s'"]+/g,'[path]').slice(0,240)};
   if(finishJob(job.id,'status=?,stage=?,finished_at=?,error=?,details=?',recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details)))audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});

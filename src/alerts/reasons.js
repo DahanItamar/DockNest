@@ -6,6 +6,8 @@ export const UNKNOWN_REASON = 'Open DockNest to see why.';
 const catalogue = Object.freeze({
   'backup.failed': 'The backup did not finish. Open DockNest to see why.',
   'backup.failed:recovery_required': 'The backup stopped and the site needs recovery. Open DockNest to continue.',
+  'backup.failed:chain_inconsistent': 'The backup could not be confirmed as part of its incremental chain, so it was not saved. The next backup will be full.',
+  'backup.failed:chain_broken': 'A check found a broken incremental chain: some backups cannot be restored. Open DockNest to see which.',
   'backup.succeeded': 'The backup finished.',
   'move.finished': 'The site now runs on {target}.',
   'move.finished:rolled_back': 'The move was undone and the site is back where it was. Open DockNest for details.',
