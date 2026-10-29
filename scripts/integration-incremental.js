@@ -215,7 +215,7 @@ ${listing}`);
     // ---- Tampered package and missing link are refused before anything is sent -----------------------------------------
     const newest = points.at(-1);
     const readAll = async path => { const chunks = []; for await (const chunk of await openRead(path)) chunks.push(chunk); return Buffer.concat(chunks); };
-    const put = async (path, data) => { await removeFile(path); const output = await openWrite(path); await new Promise((resolve, reject) => { output.once('error', reject); output.end(data, error => error ? reject(error) : resolve()); }); };
+    const put = async (path, data) => { await removeFile(path).catch(() => {}); const output = await openWrite(path); await new Promise((resolve, reject) => { output.once('error', reject); output.end(data, error => error ? reject(error) : resolve()); }); };
     const refused = async () => {
       try {
         const plan = await planRestore(newest.backup.id, { serverId: servers[1].id });
