@@ -14,8 +14,10 @@ import { targetIdOfPath } from './site-storage.js';
 
 export const DEFAULT_INTERVAL = 6, MIN_INTERVAL = 1, MAX_INTERVAL = 30, CHAIN_FORMAT = 2;
 // site_incremental.force_full values.
-export const FORCE = Object.freeze({ none: 0, owner: 1, uncommitted: 2, enabled: 3 });
-const forceReasons = { 1: 'full-now', 2: 'snapshot-not-committed', 3: 'feature-enabled' };
+// `inconsistent` (2.12.1): the server returned a package DockNest could not confirm as part of its chain (see
+// chainRecord). An older DockNest reads the unknown value as 'full-now', which still makes the next backup full.
+export const FORCE = Object.freeze({ none: 0, owner: 1, uncommitted: 2, enabled: 3, inconsistent: 4 });
+const forceReasons = { 1: 'full-now', 2: 'snapshot-not-committed', 3: 'feature-enabled', 4: 'chain-inconsistent' };
 // Why a backup in an incremental site is full. Stable codes in job details and the audit trail; plain sentences for the UI.
 export const FULL_REASONS = Object.freeze({
   'feature-enabled': 'This is the first backup since incremental backups were turned on.',
@@ -34,6 +36,7 @@ export const FULL_REASONS = Object.freeze({
   'snapshot-mismatch': 'The change record on the server does not match the previous backup.',
   'mount-set-changed': 'The set of mounts changed.',
   'folders-renamed': 'Folders were renamed since the last full backup, so this backup is full.',
+  'chain-inconsistent': 'The previous backup could not be confirmed as part of its chain and was not saved, so a new chain starts.',
 });
 const HELPER_FALLBACKS = new Set(['snapshot-missing', 'snapshot-mismatch', 'mount-set-changed']);
 const hex64 = /^[a-f0-9]{64}$/, chainIdPattern = /^[A-Za-z0-9-]{1,64}$/;
@@ -89,6 +92,12 @@ export const linkOf = backupId => db.prepare('SELECT * FROM backup_chain_links W
 export const chainBrokenMessage = backupId => `This backup depends on backup ${backupId}, which is missing or damaged. Restore ${backupId}'s chain from an earlier point, or pick a full backup.`;
 export class ChainError extends Error {
   constructor(backupId) { super(chainBrokenMessage(backupId)); this.status = 409; this.code = 'chain_broken'; this.publicCode = 'chain_broken'; this.backupId = backupId; }
+}
+// A package the helper made that DockNest cannot confirm as a restorable part of its chain (chainRecord). The backup job
+// fails (fail-closed: the package is never published) and the next backup of the site is full. `reason` is a short
+// stable code for the job details and the audit trail, never helper text.
+export class ChainIntegrityError extends Error {
+  constructor(reason) { super(`The server returned a backup chain that does not match what DockNest asked for (${reason}), so the backup was not saved. The next backup will be full.`); this.code = 'chain_inconsistent'; this.reason = reason; }
 }
 // The backup and its ancestors back to the full package, full first. A backup outside any chain is a chain of one.
 // Each member carries its link row (null outside a chain).
@@ -196,25 +205,45 @@ export function decideCapture({ site, plan, directory, jobDetails = {} }) {
 }
 
 // The chain fields the public manifest records, from what the helper says it made. Returns null when the helper made
-// today's self-contained package (format v1). Throws when the returned chain does not match the request: such a package
-// could never be restored as part of this chain, so it is not published.
+// today's self-contained package (format v1). Throws ChainIntegrityError when the returned chain does not match the
+// request or is not consistent in itself (positions, parent, mount levels and sources, the rename marking): such a
+// package could not be relied on as part of this chain, so it is not published.
 export function chainRecord(decision, helperManifest, { serverId, mainTargetId, plan = null }) {
   if (!decision) return null;
   const manifest = helperManifest || {}, kind = manifest.backupKind, chain = manifest.chain, request = decision.request;
   if (manifest.formatVersion !== CHAIN_FORMAT || !['full', 'incremental'].includes(kind) || !chain || typeof chain !== 'object') return null;
-  const mismatch = () => new Error('The server returned a backup chain that does not match what DockNest asked for, so the backup was not saved. The next backup will be full.');
-  if (!chainIdPattern.test(String(chain.id))) throw mismatch();
+  const mismatch = reason => new ChainIntegrityError(reason);
+  if (!chainIdPattern.test(String(chain.id))) throw mismatch('chain-id');
   if (kind === 'incremental') {
-    if (request.mode !== 'incremental' || chain.id !== request.chainId || chain.position !== request.position || chain.parentBackupId !== request.parentBackupId || chain.parentSha256 !== request.parentSha256) throw mismatch();
-  } else if (chain.position !== 0 || chain.parentBackupId != null || chain.parentSha256 != null || chain.id !== (request.mode === 'full' ? request.chainId : request.fallbackChainId)) throw mismatch();
-  const snapshots = {};
+    if (request.mode !== 'incremental') throw mismatch('kind');
+    if (chain.id !== request.chainId) throw mismatch('chain-id');
+    // A gap or a repeat in the chain positions.
+    if (chain.position !== request.position) throw mismatch('position');
+    if (chain.parentBackupId !== request.parentBackupId || chain.parentSha256 !== request.parentSha256) throw mismatch('parent');
+    // The rename marking (2.12.0): without it DockNest cannot know whether this increment holds folder renames, and a
+    // chain that continues after renames cannot be restored. A helper that does not send it is not the current helper.
+    if (typeof manifest.renamesSeen !== 'boolean') throw mismatch('rename-marking-missing');
+  } else if (chain.position !== 0 || chain.parentBackupId != null || chain.parentSha256 != null || chain.id !== (request.mode === 'full' ? request.chainId : request.fallbackChainId)) throw mismatch('full-link');
+  const snapshots = {}, level = kind === 'full' ? 0 : 1;
+  let mountRenames = false;
   for (const container of Array.isArray(manifest.containers) ? manifest.containers : []) {
     for (const mount of Array.isArray(container?.Mounts) ? container.Mounts : []) {
       const item = mount?.incremental;
       if (!item) continue;
-      if (!hex64.test(String(item.snapshotKey)) || !hex64.test(String(item.snapshotSha256))) throw mismatch();
+      if (!hex64.test(String(item.snapshotKey)) || !hex64.test(String(item.snapshotSha256))) throw mismatch('snapshot-record');
+      // Every mount archive has the package's level: 0 in a full backup, 1 in an increment (a restore refuses others).
+      if (item.level !== level) throw mismatch('mount-level');
+      if (snapshots[item.snapshotKey] !== undefined && snapshots[item.snapshotKey] !== item.snapshotSha256) throw mismatch('snapshot-record');
       snapshots[item.snapshotKey] = item.snapshotSha256;
+      if (item.renames === true) mountRenames = true;
     }
+  }
+  if (kind === 'incremental') {
+    // A restore rebuilds each mount from the same sources in every package: an increment covers exactly its parent's.
+    const parentKeys = Object.keys(request.parentSnapshots ?? {}).sort(), keys = Object.keys(snapshots).sort();
+    if (!keys.length || JSON.stringify(keys) !== JSON.stringify(parentKeys)) throw mismatch('mount-set');
+    // A mount that holds renames while the package says none would let the chain continue past them.
+    if (mountRenames && manifest.renamesSeen !== true) throw mismatch('rename-marking-inconsistent');
   }
   const fallback = kind === 'full' && request.mode === 'incremental' ? (HELPER_FALLBACKS.has(manifest.fallback?.reason) ? manifest.fallback.reason : 'snapshot-mismatch') : null;
   const chainImages = Array.isArray(manifest.chainImages) ? manifest.chainImages.filter(value => typeof value === 'string' && value.length <= 128).slice(0, 500) : [];

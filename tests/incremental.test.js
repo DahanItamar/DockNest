@@ -45,7 +45,10 @@ transport.remote = async (_server, request) => {
       const snapshot = sha(randomUUID());
       helper.pending.set(request.job, { siteKey: wanted.siteKey, snapshots: { [mountKey]: snapshot } });
       Object.assign(manifest, { chainFingerprint: helper.chainFingerprint, formatVersion: 2, backupKind: mode, chain: { id: chainId, position: mode === 'full' ? 0 : wanted.position, parentBackupId: mode === 'full' ? null : wanted.parentBackupId, parentSha256: mode === 'full' ? null : wanted.parentSha256 }, ...(fallback ? { fallback } : {}), ...(mode === 'incremental' ? { chainImages: wanted.parentImageIds } : {}) });
-      manifest.containers[0].Mounts[0].incremental = { snapshotKey: mountKey, level: mode === 'full' ? 0 : 1, snapshotSha256: snapshot };
+      // Like the real helper (2.12.0+): every mount says whether its archive holds folder renames, and the package says
+      // whether any does (renamesSeen).
+      manifest.containers[0].Mounts[0].incremental = { snapshotKey: mountKey, level: mode === 'full' ? 0 : 1, snapshotSha256: snapshot, renames: false };
+      manifest.renamesSeen = false;
       helper.forge?.(manifest);
       return { remotePath: '/x/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest };
     }
@@ -136,7 +139,7 @@ test('full reasons: parent unverified, missing (main package gone or a chain row
 test('full reasons: an increment with folder renames stays valid and ends its chain (folders-renamed)', async () => {
   site('r-renamed', 'srv'); enable('r-renamed');
   const first = await run('r-renamed');
-  helper.forge = manifest => { if (manifest.backupKind === 'incremental') manifest.renamesSeen = true; };
+  helper.forge = manifest => { if (manifest.backupKind === 'incremental') { manifest.renamesSeen = true; manifest.containers[0].Mounts[0].incremental.renames = true; } };
   const second = await run('r-renamed');
   helper.forge = null;
   assert.equal(second.row.status, 'completed');
@@ -239,6 +242,58 @@ test('a returned chain that does not match the request is refused and nothing is
   finally { helper.forge = null; db.prepare("UPDATE jobs SET status='failed' WHERE site_id='forged' AND status='recovery_required'").run(); }
 });
 
+// ---- checks when a backup is made (2.12.1, fail-closed) ------------------------------------------------------------------
+// The next backup asks for an increment; the helper returns `forge`d manifest. The job fails, nothing is published or
+// committed, the reason code is recorded and audited, and the next backup is full ('chain-inconsistent').
+async function refusedAtCapture(siteId, forge, check) {
+  helper.forge = forge;
+  let refused;
+  try { refused = await run(siteId); } finally { helper.forge = null; db.prepare("UPDATE jobs SET status='failed' WHERE site_id=? AND status='recovery_required'").run(siteId); }
+  assert.equal(lastRequest().mode, 'incremental', 'an increment was asked for');
+  assert.notEqual(refused.row.status, 'completed', check); assert.equal(refused.backup, undefined, 'nothing is published');
+  assert.ok(!helper.calls.includes('incremental-commit'), 'the source keeps its snapshot files');
+  assert.match(refused.row.error, new RegExp(`does not match what DockNest asked for \\(${check}\\), so the backup was not saved\\. The next backup will be full\\.`));
+  assert.deepEqual({ code: details(refused.row).failure.code, chainCheck: details(refused.row).failure.chainCheck }, { code: 'chain_inconsistent', chainCheck: check });
+  assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='backup.incremental_inconsistent' AND target=? AND detail LIKE ?").get(siteId, `%${refused.job.id}%`), 'audited');
+  assert.deepEqual({ fullNext: inc.incrementalSettings(siteId).fullNext, reason: inc.incrementalSettings(siteId).fullNextReason }, { fullNext: true, reason: 'chain-inconsistent' });
+  const next = await run(siteId);
+  assert.equal(next.row.status, 'completed'); assert.equal(lastRequest().mode, 'full');
+  assert.equal(details(next.row).incremental.fullReason, 'chain-inconsistent');
+  assert.equal(inc.incrementalSettings(siteId).fullNext, false, 'the flag clears with the full backup');
+  return next;
+}
+test('capture check: an increment from a helper without the rename marking (an older helper) fails closed; the next backup is full', async () => {
+  site('old-helper', 'srv'); enable('old-helper'); await run('old-helper');
+  await refusedAtCapture('old-helper', manifest => { if (manifest.backupKind === 'incremental') delete manifest.renamesSeen; }, 'rename-marking-missing');
+  assert.equal(inc.FULL_REASONS['chain-inconsistent'], 'The previous backup could not be confirmed as part of its chain and was not saved, so a new chain starts.');
+  // A full package needs no rename marking (it has no rename records): it is kept, and the chain continues after it.
+  enable('old-helper', { fullNow: true });
+  helper.forge = manifest => { delete manifest.renamesSeen; delete manifest.containers[0].Mounts[0].incremental.renames; };
+  let full; try { full = await run('old-helper'); } finally { helper.forge = null; }
+  assert.equal(full.row.status, 'completed'); assert.equal(link(full.backup.id).backup_kind, 'full');
+  const after = await run('old-helper');
+  assert.equal(after.row.status, 'completed'); assert.equal(link(after.backup.id).backup_kind, 'incremental');
+});
+test('capture check: inconsistent chain manifests (gap, parent, mount level, mount set, rename marking) fail closed', async () => {
+  site('inconsistent', 'srv'); enable('inconsistent'); await run('inconsistent');
+  await refusedAtCapture('inconsistent', manifest => { manifest.chain.position += 1; }, 'position');
+  await refusedAtCapture('inconsistent', manifest => { manifest.chain.parentBackupId = randomUUID(); }, 'parent');
+  await refusedAtCapture('inconsistent', manifest => { manifest.containers[0].Mounts[0].incremental.level = 0; }, 'mount-level');
+  await refusedAtCapture('inconsistent', manifest => { manifest.containers[0].Mounts[0].incremental.snapshotKey = sha('another source'); }, 'mount-set');
+  await refusedAtCapture('inconsistent', manifest => { manifest.containers[0].Mounts[0].incremental.renames = true; }, 'rename-marking-inconsistent');
+  await refusedAtCapture('inconsistent', manifest => { manifest.chain.id = randomUUID(); }, 'chain-id');
+});
+test('capture check: a healthy increment (rename marking present, consistent mounts) is saved with no forced full backup', async () => {
+  site('healthy', 'srv'); enable('healthy');
+  const first = await run('healthy'), second = await run('healthy');
+  assert.equal(second.row.status, 'completed'); assert.equal(link(second.backup.id).backup_kind, 'incremental');
+  assert.equal(link(second.backup.id).parent_id, first.backup.id);
+  assert.equal(details(second.row).failure, undefined);
+  assert.equal(inc.incrementalSettings('healthy').fullNext, false);
+  assert.ok(!db.prepare("SELECT 1 FROM audit_events WHERE action='backup.incremental_inconsistent' AND target='healthy'").get());
+  assert.ok(helper.calls.includes('incremental-commit'));
+});
+
 test('worker restart mid-increment: published by startup reconciliation, never committed, so the next backup is full', async () => {
   site('restart', 'srv'); enable('restart');
   const first = await run('restart');
@@ -325,7 +380,39 @@ test('scrub of an increment verifies its whole chain and marks the damaged packa
   const job = await scrub();
   assert.equal(job.status, 'failed'); assert.match(job.error, new RegExp(`depends on backup ${chain[0].id}`));
   assert.deepEqual(db.prepare('SELECT id,verified FROM backups WHERE id IN (?,?,?) ORDER BY captured_at').all(...chain.map(b => b.id)).map(row => row.verified), [0, 1, 0]);
+  assert.equal(JSON.parse(job.details).chainBroken, true, 'a broken chain is marked for the Backup failed alert');
   await writeFile(chain[0].path, original);
+});
+test('scrub chain check: a package that increments build on also checks their links; broken ones are marked and the next backup is full', async () => {
+  const chain = await chainOf('scrub-links', 4);
+  const scrub = async backupId => { const { id } = enqueueScrub(backupId, 'test'); await executeJob(claimJob()); return db.prepare('SELECT * FROM jobs WHERE id=?').get(id); };
+  const verified = () => db.prepare('SELECT id,verified FROM backups WHERE site_id=? ORDER BY captured_at').all('scrub-links').map(row => row.verified);
+  // Healthy: the full package and every link built on it pass.
+  const healthy = await scrub(chain[0].id);
+  assert.equal(healthy.status, 'completed'); assert.equal(JSON.parse(healthy.details).chainBroken, undefined);
+  assert.deepEqual(verified(), [1, 1, 1, 1]);
+  // The third package's manifest names the wrong parent: it and the package built on it cannot be restored.
+  const original = db.prepare('SELECT manifest FROM backups WHERE id=?').get(chain[2].id).manifest, forged = JSON.parse(original);
+  forged.chain.parentSha256 = 'f'.repeat(64);
+  db.prepare('UPDATE backups SET manifest=? WHERE id=?').run(JSON.stringify(forged), chain[2].id);
+  const job = await scrub(chain[0].id);
+  assert.equal(job.status, 'failed'); assert.match(job.error, new RegExp(`depends on backup ${chain[1].id}, which is missing or damaged`));
+  assert.deepEqual({ ...JSON.parse(job.details) }, { backupId: chain[0].id, chainBroken: true, brokenDependents: 2 });
+  assert.deepEqual(verified(), [1, 1, 0, 0], 'the scrubbed package and its own chain pass; the broken ones are unverified');
+  const evidence = db.prepare("SELECT evidence FROM backup_verification_history WHERE backup_id=? ORDER BY rowid DESC LIMIT 1").get(chain[3].id);
+  assert.match(evidence.evidence, /found during the scrub of/);
+  assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='backup.scrub.failed' AND target=? AND detail LIKE '%chainBroken%'").get(chain[0].id));
+  const next = await run('scrub-links');
+  assert.equal(lastRequest().mode, 'full', 'the next backup does not build on a broken chain');
+  assert.equal(next.row.status, 'completed');
+  db.prepare('UPDATE backups SET manifest=? WHERE id=?').run(original, chain[2].id);
+  // A full package that fails its own check takes the backups built on it with it.
+  const bytes = await readFile(chain[0].path), damaged = Buffer.from(bytes); damaged[30] ^= 1; await writeFile(chain[0].path, damaged);
+  db.prepare('UPDATE backups SET verified=1 WHERE site_id=?').run('scrub-links');
+  const failed = await scrub(chain[0].id);
+  assert.equal(failed.status, 'failed'); assert.equal(JSON.parse(failed.details).chainBroken, true);
+  assert.deepEqual(verified().slice(0, 4), [0, 0, 0, 0]);
+  await writeFile(chain[0].path, bytes);
 });
 
 // ---- retention, pins, deletion, Object Lock ---------------------------------------------------------------------------
