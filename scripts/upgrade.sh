@@ -235,11 +235,11 @@ pin_for_updater() {
   # repair, which is printed last; re-running the current release only reminds.
   if [ "$(id -u)" != 0 ]; then
     if [ "$FROM" = "$_version" ]; then echo "NOTE: if in-app updates are refused, run on this host: $_repair"
-    else pin_needed "DockNest $_version is running. Recording a new release for the host updater needs root, so this run (as $(id -un 2>/dev/null || id -u)) could not do it."; fi
+    else PIN_ACTION="DockNest $_version is running. Recording a new release for the host updater needs root, so this run (as $(id -un 2>/dev/null || id -u)) could not do it."; fi
     return 0
   fi
   if [ "$_owner" != 0 ]; then
-    pin_needed "this upgrade ran as root, but the checkout belongs to uid $_owner. Run scripts/upgrade.sh as that user (without sudo) next time."
+    PIN_ACTION="this upgrade ran as root, but the checkout belongs to uid $_owner. Run scripts/upgrade.sh as that user (without sudo) next time."
     return 0
   fi
   if grep -Fq "\"v$_version\"" "$_state/pins.json" 2>/dev/null; then return 0; fi
@@ -251,13 +251,12 @@ pin_for_updater() {
   if [ -f "$_broker" ]; then PINNING=1; if "$@"; then _rc=0; else _rc=$?; fi; PINNING=0; fi
   case "$_rc" in
     0) return 0 ;;
-    75) pin_needed "DockNest $_version is running, but an updater run is active, so it was not recorded for the host updater. Nothing was rolled back. Wait for that run to finish." ;;
-    124) pin_needed "DockNest $_version is running, but verifying it for the host updater took longer than 5 minutes, so it was not recorded. Nothing was rolled back." ;;
-    *) pin_needed "DockNest $_version is running, but the host updater could not verify and record it. Nothing was rolled back." ;;
+    75) PIN_ACTION="DockNest $_version is running, but an updater run is active, so it was not recorded for the host updater. Nothing was rolled back. Wait for that run to finish." ;;
+    124) PIN_ACTION="DockNest $_version is running, but verifying it for the host updater took longer than 5 minutes, so it was not recorded. Nothing was rolled back." ;;
+    *) PIN_ACTION="DockNest $_version is running, but the host updater could not verify and record it. Nothing was rolled back." ;;
   esac
   return 0
 }
-pin_needed() { PIN_ACTION=$1; }
 # pin_report: the host updater still needs this release recorded. Printed as the run's last lines, with the exact command
 # for this checkout, and kept in the status file's warning. The run's result stays a success (exit 0): DockNest is
 # running the new release; only in-app updates are refused (state-mismatch) until the repair has run.
