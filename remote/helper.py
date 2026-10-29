@@ -2109,12 +2109,12 @@ def dumpdir_renames(value):
     result=[];source=None
     for entry in [e for e in value.split('\0') if e]:
         if entry[0]=='R':
-            if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+            if source is not None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
             source=entry[1:]
         elif entry[0]=='T':
-            if source is None:raise ValueError('Unsafe directory listing in incremental archive')
+            if source is None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
             result.append((source,entry[1:]));source=None
-    if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+    if source is not None:raise ValueError('Unsafe directory listing in incremental archive (unpaired rename)')
     return result
 def rename_links(links,renames):
     """Where GNU tar's directory renames move the symlinks an earlier link restored."""
@@ -2130,9 +2130,10 @@ def disk_symlinks(root):
             path=os.path.join(current,name)
             if os.path.islink(path):links[pathlib.PurePosixPath(*pathlib.Path(os.path.relpath(path,root)).parts).parts]=os.readlink(path)
     return links
-def incremental_archive_check(archive,root,top=None):
+def incremental_archive_check(archive,root,top=None,replace=None):
     """safe_extract's checks for one archive of a chain, against what the earlier archives already put on disk.
-    Returns the archive's top-level name."""
+    Returns the archive's top-level name. `replace` collects the restored symlinks this archive turns into folders
+    (removed before tar runs). Refusals name the rule that refused, never a path."""
     with tarfile.open(archive,'r:') as tar,open(archive,'rb') as raw:
         members=tar.getmembers()
         if not members:raise ValueError('Empty mount archive in the backup chain')
@@ -2148,10 +2149,16 @@ def incremental_archive_check(archive,root,top=None):
         # reaches that directory, then the member replaces or adds a path. Every member is checked against the map as
         # it stands at that point, and after every rename record each link must still resolve inside the destination.
         on_disk=disk_symlinks(root);links=dict(on_disk)
-        has_renames=any(m.isdir() and isinstance(m.pax_headers.get('GNU.dumpdir'),str) and any(e[:1] in ('R','T') for e in m.pax_headers['GNU.dumpdir'].split('\0')) for m in members)
-        def unsafe_listing():raise ValueError('Unsafe directory listing in incremental archive')
+        # Every folder a rename in this archive names (source or target); a link at or below one may move during tar.
+        renamed=set()
+        for m in members:
+            dumpdir=m.pax_headers.get('GNU.dumpdir')
+            if not (m.isdir() and isinstance(dumpdir,str)):continue
+            for entry in [e for e in dumpdir.split('\0') if e]:
+                if entry[0] in 'RT' and entry[1:]:renamed.add(tuple(pathlib.PurePosixPath(entry[1:]).parts))
+        def unsafe_listing(rule):raise ValueError('Unsafe directory listing in incremental archive (%s)'%rule)
         def all_inside():
-            if any(RENAME_TEMPORARY[0] in key for key in links):unsafe_listing()
+            if any(RENAME_TEMPORARY[0] in key for key in links):unsafe_listing('rename cycle left a temporary folder')
             for key,value in links.items():
                 if archive_link_escapes(key[:-1],value,links):raise ValueError('Archive link escapes destination')
         seen=set();regular=set()
@@ -2167,21 +2174,25 @@ def incremental_archive_check(archive,root,top=None):
             if any(parent.parts in links for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             dumpdir=member.pax_headers.get('GNU.dumpdir')
             if dumpdir is not None:
-                if not member.isdir() or dumpdir_problem(dumpdir,top):unsafe_listing()
+                if not member.isdir():unsafe_listing('listing on a non-folder')
+                if dumpdir_problem(dumpdir,top):unsafe_listing('entry outside the archive or unknown code')
                 renames=dumpdir_renames(dumpdir)
                 for source,target in renames:
                     for path in (source,target):
                         parts=tuple(pathlib.PurePosixPath(path).parts) if path else ()
                         # renameat follows a symlink in the path: a rename through or of a link is never modelled.
-                        if any(parts[:k] in links for k in range(1,len(parts)+1)):unsafe_listing()
+                        if any(parts[:k] in links for k in range(1,len(parts)+1)):unsafe_listing('rename through a symlink')
                     links=rename_links(links,[(source,target)])
                 if renames:all_inside()
             target=(root/member.name).resolve()
             if os.path.commonpath([str(root),str(target)])!=str(root):raise ValueError('Archive path escapes destination')
             if member.isdir():
-                # tar would follow a link it finds at a folder's path; replace_directory_links removes the link first,
-                # which is only exact when no rename moved links around.
-                if p.parts in links and (has_renames or p.parts not in on_disk):unsafe_listing()
+                # tar would follow a link it finds at a folder's path, so the link is removed before tar runs. That is
+                # exact only for a link still where an earlier archive restored it, at a path no rename touches (a rename
+                # of an unrelated folder in the same archive, as in a swap, does not move it).
+                if p.parts in links:
+                    if p.parts not in on_disk or links[p.parts]!=on_disk[p.parts] or any(p.parts[:len(r)]==r for r in renamed):unsafe_listing('folder replaces a moved symlink')
+                    if replace is not None:replace.append(p)
                 links.pop(p.parts,None)
             elif member.issym():
                 link=pathlib.PurePosixPath(member.linkname)
@@ -2198,19 +2209,16 @@ def incremental_archive_check(archive,root,top=None):
                     linked=(root/member.linkname).resolve()
                     if os.path.commonpath([str(root),str(linked)])!=str(root):raise ValueError('Archive link escapes destination')
                     # A hard link targets a file this archive already wrote, or (without renames) one an earlier archive restored.
-                    restored=not has_renames and link not in seen and is_regular(root/str(link)) and not any(parent.parts in on_disk for parent in link.parents)
+                    restored=not renamed and link not in seen and is_regular(root/str(link)) and not any(parent.parts in on_disk for parent in link.parents)
                     if '..' in link.parts or not (link in regular or restored) or any(parent.parts in links for parent in link.parents) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
                 else:regular.add(p)
         all_inside()
         return top
-def replace_directory_links(archive,root):
+def replace_directory_links(folders,root):
     """A symlink an earlier link restored where this archive has a real folder: GNU tar would follow it (and purge the
-    folder it points at), so the link itself is removed first. Checked archives only; links are never followed."""
-    with tarfile.open(archive,'r:') as tar:
-        folders=sorted((pathlib.PurePosixPath(m.name) for m in tar.getmembers() if m.isdir()),key=lambda p:len(p.parts))
-    for folder in folders:
+    folder it points at), so the link itself is removed first. Only the links the check approved; never followed."""
+    for folder in sorted(folders,key=lambda p:len(p.parts)):
         path=root/str(folder)
-        # Parents were checked: none is a symlink unless this archive replaces it, and shallower ones went first.
         if path.is_symlink():path.unlink()
 def chain_extract(archives,destination):
     """Rebuild one mount from a chain: the full archive, then each increment in order."""
@@ -2220,8 +2228,8 @@ def chain_extract(archives,destination):
     if any(destination.iterdir()):raise ValueError('Restore destination must be empty')
     root=destination.resolve();top=None
     for archive in archives:
-        top=incremental_archive_check(archive,root,top)
-        replace_directory_links(archive,root)
+        replace=[];top=incremental_archive_check(archive,root,top,replace)
+        replace_directory_links(replace,root)
         # Run inside the destination, not with -C: GNU tar creates the temporary folder of a directory-rename cycle
         # from a relative template, which -C (openat-based) does not move.
         run(['tar','--listed-incremental=/dev/null','--xattrs','--acls','--numeric-owner','-xpf',str(pathlib.Path(archive).resolve())],cwd=str(destination))
