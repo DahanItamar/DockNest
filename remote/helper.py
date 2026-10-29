@@ -2109,6 +2109,26 @@ def image_archives(unpacked):
 def extract_archives(archive,destination):
     if isinstance(archive,list):return chain_extract(archive,destination)
     return safe_extract(archive,destination)
+class MountLayoutError(ValueError):
+    """A mount layout a restore cannot rebuild: 'overlap' (one mount source inside another) or 'entries' (an archive
+    without exactly one top-level entry)."""
+    def __init__(self,kind):
+        super().__init__('Overlapping mount paths require offline restore' if kind=='overlap' else 'Mount archive must have exactly one source entry');self.kind=kind
+def extract_mount(unpacked,i,j,m,sources,root):
+    """Mount j of container i, extracted once per (type, source) into root/data-I-J (a chain: full backup, then each
+    increment). `sources` maps (type, source) to the folder already made. Returns the source folder for the mount.
+    Extraction refusals raise ValueError; layout problems raise MountLayoutError."""
+    key=(m.get('Type'),m.get('Source'))
+    if key not in sources:
+        for _,existing in sources:
+            a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
+            if os.path.commonpath([a,b]) in [a,b]:raise MountLayoutError('overlap')
+        directory=root/('data-%d-%d'%(i,j))
+        extract_archives(mount_archive(unpacked,i,j),directory)
+        entries=list(directory.iterdir())
+        if len(entries)!=1:raise MountLayoutError('entries')
+        sources[key]=entries[0]
+    return sources[key]
 CHAIN_PACKAGE_NAME=re.compile(r'[0-9]{2}-[A-Za-z0-9-]{1,64}\.tar\.gz')
 def restore_chain_offline(folder,output):
     """Recovery kit, without DockNest (docs/incremental-backups.md): rebuild the files of an incremental chain from the
@@ -2129,19 +2149,26 @@ def restore_chain_offline(folder,output):
         payloads.append(payload);chain.append({'backupId':item.get('backupId'),'sha256':item.get('sha256'),'plaintextChecksum':file_sha256(payload)})
     if output.is_symlink():raise ValueError('The output folder cannot be a symlink')
     if output.exists() and any(output.iterdir()):raise ValueError('The output folder must be new or empty')
+    created=not output.exists()
     output.mkdir(parents=True,exist_ok=True,mode=0o700)
-    unpacked,manifest,_=unpack_chain({'chain':chain},output/'packages',payloads)
-    mounts=[];sources={}
-    for i,c in enumerate(manifest.get('containers') or []):
-        for j,m in enumerate(c.get('Mounts') or []):
-            key=(m.get('Type'),m.get('Source'))
-            if key not in sources:
-                directory=output/('data-%d-%d'%(i,j))
-                extract_archives(mount_archive(unpacked,i,j),directory)
-                entries=list(directory.iterdir())
-                if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
-                sources[key]=entries[0]
-            mounts.append({'container':c.get('Name'),'type':m.get('Type'),'destination':m.get('Destination'),'path':str(sources[key])})
+    try:
+        unpacked,manifest,_=unpack_chain({'chain':chain},output/'packages',payloads)
+        if shutil.disk_usage(output).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+        mounts=[];sources={}
+        for i,c in enumerate(manifest.get('containers') or []):
+            for j,m in enumerate(c.get('Mounts') or []):
+                source=extract_mount(unpacked,i,j,m,sources,output)
+                mounts.append({'container':c.get('Name'),'type':m.get('Type'),'destination':m.get('Destination'),'path':str(source)})
+    except BaseException:
+        # A refusal leaves nothing behind: everything under the output folder was written by this step (it was empty).
+        # rmtree never follows the restored symlinks.
+        for entry in list(output.iterdir()):
+            if entry.is_dir() and not entry.is_symlink():shutil.rmtree(entry,ignore_errors=True)
+            else:entry.unlink(missing_ok=True)
+        if created:
+            try:output.rmdir()
+            except OSError:pass
+        raise
     emit(result={'chainId':(manifest.get('chain') or {}).get('id'),'packages':len(payloads),'mounts':mounts,'images':[str(p) for p in image_archives(unpacked)],'configurationArchives':[str(unpacked/('config-%d.tar'%i)) for i,_ in enumerate(manifest.get('configurationFiles') or [])],'manifest':str(unpacked/'manifest.json')})
 DUMPDIR_CODES='YNDRTX'
 def dumpdir_problem(value,top):
@@ -2332,17 +2359,7 @@ def restore(req):
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
         for j,m in enumerate(c['Mounts']):
-            key=(m['Type'],m['Source'])
-            if key not in sources:
-                for _,existing in sources:
-                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
-                    if os.path.commonpath([a,b]) in [a,b]:raise ValueError('Overlapping mount paths require offline restore')
-                directory=root/('data-%d-%d'%(i,j))
-                extract_archives(mount_archive(unpacked,i,j),directory)
-                entries=list(directory.iterdir())
-                if len(entries)!=1:raise ValueError('Mount archive must have exactly one source entry')
-                sources[key]=entries[0]
-            source=sources[key]
+            source=extract_mount(unpacked,i,j,m,sources,root)
             if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
             mount='type=bind,src='+str(source)+',dst='+m['Destination']
             if not m.get('RW',True):mount+=',readonly'
@@ -3900,18 +3917,11 @@ def restore_test_restore(req):
             for destination,options in temporary_mounts(c,manifest.get('temporaryMemoryFolders',[])):args+=['--tmpfs',destination+':'+options]
         except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
         for j,m in enumerate(c['Mounts']):
-            key=(m['Type'],m['Source'])
-            if key not in sources:
-                for _,existing in sources:
-                    a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
-                    if os.path.commonpath([a,b]) in [a,b]:raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
-                directory=root/('data-%d-%d'%(i,j))
-                try:extract_archives(mount_archive(unpacked,i,j),directory)
-                except ValueError as error:raise backup_side(error)
-                entries=list(directory.iterdir())
-                if len(entries)!=1:raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
-                sources[key]=entries[0]
-            source=sources[key]
+            try:source=extract_mount(unpacked,i,j,m,sources,root)
+            except MountLayoutError as error:
+                if error.kind=='overlap':raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
+                raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
+            except ValueError as error:raise backup_side(error)
             if ',' in str(source) or ',' in m['Destination']:raise TestOutcome('couldnt_run','Mount paths with commas need a reviewed offline restore.',checks)
             mount='type=bind,src='+str(source)+',dst='+m['Destination']
             if not m.get('RW',True):mount+=',readonly'

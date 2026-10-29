@@ -732,9 +732,17 @@ class OfflineChainRestoreTests(ChainBuilder):
         self.assertEqual([pathlib.Path(p).parent.name for p in result['images']],['chain-0','chain-1','unpacked'])
     def test_a_wrong_link_or_a_used_output_folder_is_refused_before_extraction(self):
         folder,packages=self.kit_folder(SIMPLE);output=self.root.parent/'restored'
-        packages[0]['sha256']='f'*64;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        self.saved_sha=packages[0]['sha256'];packages[0]['sha256']='f'*64;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
         with self.assertRaisesRegex(ValueError,'depends on backup backup-0, which is missing or damaged'):self.run_offline(folder,output)
-        self.assertFalse((output/'data-0-0').exists())
+        self.assertFalse(output.exists(),'A refusal leaves nothing behind')
+        damaged=self.root.parent/'damaged-out'
+        packages[0]['sha256']=self.saved_sha;write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})
+        with patch('helper.chain_extract',side_effect=ValueError('Unsafe archive member or link; use reviewed offline restore adapter')):
+            with self.assertRaisesRegex(ValueError,'Unsafe archive member'):self.run_offline(folder,damaged)
+        self.assertFalse(damaged.exists(),'A refusal during extraction removes what was unpacked')
+        used=self.root.parent/'used-empty';used.mkdir()
+        with patch('helper.chain_extract',side_effect=ValueError('refused')),self.assertRaises(ValueError):self.run_offline(folder,used)
+        self.assertEqual(list(used.iterdir()),[],'An empty folder given by the owner stays, empty')
         used=self.root.parent/'used';used.mkdir();(used/'x').write_text('x')
         with self.assertRaisesRegex(ValueError,'new or empty'):self.run_offline(folder,used)
         packages[1]['file']='../escape.tar.gz';write_json(folder/'CHAIN.json',{'formatVersion':1,'chainId':'chain-a','packages':packages})

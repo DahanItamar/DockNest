@@ -153,9 +153,10 @@ the files with the same checks as a DockNest restore. Steps (as root on a Linux 
    A chain download folder with `ORDER.txt` works the same way (`--chain FOLDER`).
 4. Rebuild the files: `python3 NEW_KIT_FOLDER/recovery/helper.py restore-chain DECRYPTED RESTORED`. For each mount it
    extracts the full backup, then each increment in order with `tar --listed-incremental=/dev/null` (deletions and
-   renames are applied), after the same path checks as a DockNest restore, into `RESTORED/data-I-J`. It prints, as JSON,
-   which folder belongs to which container mount, the `images.tar` files to `docker load` in order, and the
-   configuration archives. It starts nothing.
+   renames are applied), after the same link, artifact, free-space and path checks as a DockNest restore, into
+   `RESTORED/data-I-J`. It prints, as JSON, which folder belongs to which container mount, the `images.tar` files to
+   `docker load` in order, and the configuration archives. It starts nothing. If any check refuses, it removes what it
+   wrote, so `RESTORED` is left as it was (empty, or not there).
 5. Continue as for a single backup: load the images in order, then create the containers from the manifest with those
    folders as their mounts, in an isolated network first.
 
