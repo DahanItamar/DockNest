@@ -3350,9 +3350,10 @@ def check_compose_config(config,services,manifest):
     declared_networks=config.get('networks') or {}
     # A service without its own networks joins the project's default network.
     used_networks={network for name in services for network in (((config.get('services') or {}).get(name) or {}).get('networks') or {'default':None})}
+    # Every network the project declares is checked; only Compose's implicit `default` is skipped while no moved service joins it.
     for key,item in declared_networks.items():
         problem=compose_network_problem(item or {})
-        if problem and key in used_networks:refuse('The Compose network %s %s.'%(key,problem))
+        if problem and (key!='default' or key in used_networks):refuse('The Compose network %s %s.'%(key,problem))
     declared=config.get('volumes') or {}
     for key,item in declared.items():
         problem=compose_volume_problem(item or {})
