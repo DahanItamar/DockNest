@@ -41,6 +41,24 @@ const TREE = [
   "print(json.dumps({'files':out,'db':db},sort_keys=True))",
 ].join('\n');
 
+// Precise, non-secret difference between two tree snapshots: paths relative to the mount and the kind of difference.
+function treeDifferences(expected, actual) {
+  const out = [], names = ['type', 'mode', 'uid', 'gid', 'target-or-sha256', 'link-count'];
+  const keys = new Set([...Object.keys(expected.files), ...Object.keys(actual.files)]);
+  for (const key of [...keys].sort()) {
+    const a = expected.files[key], b = actual.files[key], path = key.replace(/^\/site\/?/, '') || '.';
+    if (!a) out.push(`extra in restore: ${path} (${b[0]})`);
+    else if (!b) out.push(`missing in restore: ${path} (${a[0]})`);
+    else for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) out.push(`${path}: ${names[i] ?? 'field ' + i} differs (${a[0]} -> ${b[0]}; ${i === 4 ? 'content or link target' : String(a[i]) + ' -> ' + String(b[i])})`);
+  }
+  if (JSON.stringify(expected.db) !== JSON.stringify(actual.db)) out.push('database differs: ' + JSON.stringify(expected.db).slice(0, 300) + ' -> ' + JSON.stringify(actual.db).slice(0, 300));
+  return out;
+}
+function assertSameTree(expected, actual, label) {
+  const differences = treeDifferences(expected, actual);
+  assert.equal(differences.length, 0, label + ' differs in ' + differences.length + ' place(s):' + String.fromCharCode(10) + differences.slice(0, 40).join(String.fromCharCode(10)));
+}
+
 export async function runIncrementalScenario({ run, until, hosts, servers, db, directory, record, evidence, sftpDestinationId }) {
   const [source, target] = hosts;
   const { enqueueBackup, claimJob, executeJob, planRestore, enqueueRestore, verifyEncrypted } = await import('../src/engine.js');
@@ -131,7 +149,7 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       assert.equal(await verifyEncrypted(backup.path), backup.checksum);
       assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', app), 'true', 'The source keeps running after backup ' + index);
       await healthy();
-      assert.deepEqual(await tree(source, app), expected, 'The backup did not change the source');
+      assertSameTree(expected, await tree(source, app), 'The source after backup ' + index);
       points.push({ backup, expected, link });
     }
     assert.equal(new Set(points.map(point => point.link.chain_id)).size, 1, 'All seven points belong to one chain');
@@ -166,7 +184,7 @@ ${listing}`);
       }
       assert.equal(row.status, 'completed', 'Restore of point ' + index + ': ' + row.error);
       const { containerId } = JSON.parse(row.details).result;
-      assert.deepEqual(await tree(target, containerId), point.expected, 'Restore point ' + index + ' equals the source at that time (files, modes, owners, links and database)');
+      assertSameTree(point.expected, await tree(target, containerId), 'Restore point ' + index + ' vs the source at that time');
       assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', containerId), 'none');
       await run('exec', target, 'docker', 'rm', '-f', '-v', containerId);
       return { plan, row };
