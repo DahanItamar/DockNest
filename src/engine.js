@@ -20,6 +20,7 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
+import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,hasDependents } from './incremental.js';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
@@ -59,19 +60,21 @@ export async function verifyRecovery(job){
 function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
 // Restore tests never make their site busy: a test runs on its test server and its clean-up blocks only that server.
 function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type NOT IN ('site-move','restore-test') AND status IN ('queued','running','recovery_required')").get(siteId);}
+export const busySite=siteId=>Boolean(busy(siteId));
 // A site in an unfinished move (past its preview, before it is done) refuses other mutating work; the move's own
 // backups pass the actor `move:<id>`.
 const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
 export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
 export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
-export function enqueueBackup(siteId,actor='scheduler',extra={}){
+// `within` runs first inside the enqueue transaction (Full backup now: its settings change and the job commit together).
+export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}){
  requireNoDeploymentHold();requireNotMoving(siteId,actor);
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
  if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
@@ -81,8 +84,20 @@ export function enqueueScrub(backupId,actor='administrator'){
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
- try{stage(job.id,'verifying');if(await verifyEncrypted(packagePath(backup))!==backup.checksum)throw new Error('Stored checksum differs');transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;recordVerification(backupId,'integrity',{status:'passed',method:'full AES-256-GCM authentication and SHA256'},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(backupId);audit('worker','backup.scrub.completed',backupId,{job:job.id});});}
- catch{transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error='Package integrity could not be verified; review storage and recovery evidence.'",now()))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}audit('worker','backup.scrub.failed',backupId,{job:job.id});});}
+ // An increment is only as good as its chain: its scrub authenticates every package it builds on and every link
+ // (docs/incremental-backups.md). A backup outside a chain is checked alone, exactly as before.
+ let members=null,damaged=null,chainError=null;
+ if(backup&&linkOf(backupId)){try{members=verifyChainLinks(loadChain(backupId));}catch(error){chainError=error;}}
+ try{
+  stage(job.id,'verifying');
+  if(chainError)throw chainError;
+  for(const member of members??[backup]){if(await verifyEncrypted(packagePath(member)).catch(()=>null)!==member.checksum){damaged=member.id===backupId?null:member;throw new Error('Stored checksum differs');}}
+  transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?",now()))return;for(const member of members??[backup]){recordVerification(member.id,'integrity',{status:'passed',method:member.id===backupId?'full AES-256-GCM authentication and SHA256':'full AES-256-GCM authentication and SHA256, as part of the chain of '+backupId},job.id);db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(member.id);}audit('worker','backup.scrub.completed',backupId,{job:job.id,...(members?{chainLength:members.length}:{})});});
+ }
+ catch{
+  const chained=Boolean(chainError||damaged),message=chained?(chainError??new ChainError(damaged.id)).message:'Package integrity could not be verified; review storage and recovery evidence.';
+  transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),message))return;if(backup){recordVerification(backupId,'integrity',{status:'failed',method:chained?'a package this backup depends on is missing or failed authentication':'full package authentication unavailable or failed'},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(backupId);}if(damaged){recordVerification(damaged.id,'integrity',{status:'failed',method:'full package authentication failed during the chain check of '+backupId},job.id);db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(damaged.id);}audit('worker','backup.scrub.failed',backupId,{job:job.id,...(damaged?{damaged:damaged.id}:{})});});
+ }
 }
 // Where a backup can be restored from (docs/backup-copies.md, "Restore"): the main copy first, then its copies, verified
 // ones newest-verified first. A main package that aged out (its copies keep the backup) is listed as missing.
@@ -104,6 +119,40 @@ async function authenticatedSource(backup,sourceTargetId=null){
  }
  throw new Error(sourceTargetId?'The chosen copy could not be read or did not authenticate':'Encrypted backup checksum differs from stored checksum');
 }
+// Every package a restore of `backup` needs, full first, each authenticated in full (stored size, SHA-256 and GCM tag)
+// from its first readable source after every chain link was checked. Nothing is sent before all of them pass. A backup
+// outside a chain is one package, read exactly as before. With `sourceTargetId` the chosen copy is used for the backup
+// itself; the packages it builds on prefer that destination and fall back to any verified source (the bytes are the same).
+async function authenticatedChain(backup,sourceTargetId=null){
+ const members=verifyChainLinks(loadChain(backup.id));
+ if(!inChain(members))return [{member:members[0],...await authenticatedSource(backup,sourceTargetId)}];
+ const chain=[];
+ for(const member of members){
+  const own=member.id===backup.id;let found;
+  try{found=own?await authenticatedSource(member,sourceTargetId):await authenticatedSource(member,sourceTargetId).catch(()=>authenticatedSource(member));}
+  catch(error){if(own)throw error;throw new ChainError(member.id);}
+  if(found.size!==member.size){if(own)throw new Error('Encrypted backup checksum differs from stored checksum');throw new ChainError(member.id);}
+  chain.push({member,...found});
+ }
+ return chain;
+}
+const chainDescriptor=chain=>chain.map(item=>({plaintextChecksum:item.plaintextChecksum,backupId:item.member.id,sha256:item.member.checksum}));
+function chainPaths(staging,length){
+ const paths=staging?.remotePaths;
+ if(!Array.isArray(paths)||paths.length!==length||paths.some(path=>typeof path!=='string'||!path.startsWith('/')))throw new Error('The server did not prepare room for every backup in the chain. Update the server helper and try again.');
+ return paths;
+}
+// Streams one authenticated package, decrypted only inside the GCM-authenticated stream, to `remotePath`.
+async function sendPackage(server,item,remotePath,{signal,upload=transport.uploadStream}={}){
+ const {size,header,tag,source}=item;
+ const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
+ const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
+ const stop=()=>pass.destroy(Object.assign(new Error('DockNest stopped this step.'),{aborted:true}));
+ if(signal?.aborted)stop();else signal?.addEventListener('abort',stop,{once:true});
+ const decrypting=pipeline(await openRead(source.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
+ try{await upload(server,pass,remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
+ finally{signal?.removeEventListener('abort',stop);}
+}
 export async function planRestore(backupId,{serverId,mode='new-copy',mappings={},sourceTargetId=null}={}){
  if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
  const backup=parse(db.prepare('SELECT * FROM backups WHERE id=?').get(backupId));
@@ -120,6 +169,13 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  if(!Object.keys(mappings||{}).length&&configuredReferences.length)mappings={externalReadOnly:configuredReferences};
  const target=db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);if(!target)throw new Error('Target server not found');
  const capabilities=await testServer(target),blockers=[];
+ // An increment restores its whole chain: every package it builds on must be readable, and space is the chain's sum.
+ let restoreBytes=backup.size,chainLength=1;
+ try{
+  const members=verifyChainLinks(loadChain(backupId));chainLength=members.length;restoreBytes=members.reduce((sum,member)=>sum+Number(member.size||0),0);
+  const unusable=members.slice(0,-1).find(member=>!restoreSources(member).some(source=>source.status==='verified'));
+  if(unusable)throw new ChainError(unusable.id);
+ }catch(error){blockers.push(error.message);}
  if(mode!=='new-copy')blockers.push('Replacement restore requires a safety backup and rollback adapter; unavailable');
  const staticSite=backup.manifest.kind==='static';
  if(!staticSite&&capabilities.architecture!==backup.manifest.architecture)blockers.push('Target architecture does not match backup');
@@ -129,7 +185,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  if(capabilities.uid!==0)blockers.push('Root SSH required to restore ownership');
  const externalOnly=Object.keys(mappings||{}).every(name=>name==='externalReadOnly')&&(!mappings.externalReadOnly||Array.isArray(mappings.externalReadOnly));
  if(!externalOnly)blockers.push('Custom port and writable host directory maps require reviewed offline restore');
- if(capabilities.freeBytes<backup.size*3+1024**3)blockers.push('Insufficient estimated target capacity');
+ if(capabilities.freeBytes<restoreBytes*3+1024**3)blockers.push('Insufficient estimated target capacity');
  const excludedPaths=backup.manifest.excludedPaths||backup.manifest.backupPlan?.coverage?.excludedPaths||[];
  let externalReferences;
  if(externalOnly&&(mappings.externalReadOnly?.length||excludedPaths.some(path=>path.requiredForRestore))){
@@ -137,7 +193,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
   catch{blockers.push('Required external storage is unavailable or not a reviewed read-only mount on the restore target.');}
  }
  const externalWarnings=excludedPaths.length?['This backup excludes external or redundant data paths. Review the backup scope and reattach required external storage separately after validating the isolated copy. Never replace external storage with empty restored directories.']:[];
- return {backupId,serverId,mode,mappings,capabilities,externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
+ return {backupId,serverId,mode,mappings,capabilities,...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
  requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id);}
@@ -222,32 +278,49 @@ export async function retain(siteId){
  const policy=db.prepare('SELECT retention FROM policies WHERE site_id=?').get(siteId);const count=policy?.retention||7;
  // Main packages only: a backup whose main package already aged out lives on its copies, under their own counts.
  const stale=db.prepare("SELECT * FROM backups WHERE site_id=? AND verified=1 AND pinned=0 AND id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY captured_at DESC").all(siteId).slice(count);
- for(const backup of stale){
-  // Object-Locked points are deferred until their lock ends; they stay fully usable meanwhile.
-  if(deletionDeferred(backup.id))continue;
-  if(claimDeletion(backup.id))await finishDeletion(backup.id);
+ // Incremental chains (docs/incremental-backups.md): a package stays while a backup that builds on it is kept, so
+ // dependents go first (newest first), then what they freed. Outside chains this is one pass, exactly as before.
+ let pending=stale;
+ for(let pass=0;pass<=31&&pending.length;pass++){
+  const blocked=[];let progressed=false;
+  for(const backup of pending){
+   // Object-Locked points are deferred until their lock ends; they stay fully usable meanwhile.
+   if(deletionDeferred(backup.id))continue;
+   if(hasDependents(backup.id)){blocked.push(backup);continue;}
+   if(claimDeletion(backup.id)){await finishDeletion(backup.id);progressed=true;}
+  }
+  if(!progressed)break;pending=blocked;
  }
  // Each copy destination keeps its own count (docs/backup-copies.md).
  await retainCopies(siteId);
 }
 
 export {siteInfo};
+// Removes the source's incremental snapshot files of a site (option turned off, site moved or removed). Best effort:
+// a stale or missing snapshot only ever makes the next backup full.
+export async function discardIncrementalState(siteId,{server=null}={}){
+ let target=server;
+ try{target??=siteInfo(siteId).server;await transport.remote(target,{operation:'incremental-discard',siteKey:siteId});audit('worker','site.incremental_discarded',siteId,{serverId:target.id});return true;}
+ catch{audit('worker','site.incremental_discard_failed',siteId,{serverId:target?.id??null});return false;}
+}
 // Streams a verified backup, decrypted only inside the authenticated stream, into `jobId`'s restore staging root on `server`.
 // Restore tests pass `prepare` (their own journalled staging) and `signal` (cancel and time limit stop the transfer).
+// An increment sends its whole chain (full first) after every package and link passed: `prepare` (or prepare-restore)
+// gets `chainLength` and answers `remotePaths`, and the result carries `chain` for the helper's own link check.
 export async function uploadBackupTo(server,backupId,jobId,{prepare,signal}={}){
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
  if(!backup||!(backup.verified||db.prepare("SELECT 1 FROM backup_copies WHERE backup_id=? AND status='verified'").get(backupId)))throw new Error('Verified backup not found');
  // The main copy, or a verified copy when the main one is missing or fails authentication.
- const {size,header,tag,plaintextChecksum,source}=await authenticatedSource(backup);
- const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
- const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
- const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
- const stop=()=>pass.destroy(Object.assign(new Error('DockNest stopped this step.'),{aborted:true}));
- if(signal?.aborted)stop();else signal?.addEventListener('abort',stop,{once:true});
- const decrypting=pipeline(await openRead(source.path,{start:16,end:size-17}),decipher,pass);decrypting.catch(error=>pass.destroy(error));
- try{await transport.uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
- finally{signal?.removeEventListener('abort',stop);}
- return {plaintextChecksum,source:publicSource(source)};
+ const chain=await authenticatedChain(backup),last=chain.at(-1);
+ if(!inChain(chain.map(item=>item.member))){
+  const staging=prepare?await prepare():await transport.remote(server,{operation:'prepare-restore',job:jobId});
+  await sendPackage(server,last,staging.remotePath,{signal});
+  return {plaintextChecksum:last.plaintextChecksum,source:publicSource(last.source)};
+ }
+ const staging=prepare?await prepare({chainLength:chain.length}):await transport.remote(server,{operation:'prepare-restore',job:jobId,chainLength:chain.length});
+ const paths=chainPaths(staging,chain.length);
+ for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{signal});
+ return {plaintextChecksum:last.plaintextChecksum,chain:chainDescriptor(chain),source:publicSource(last.source)};
 }
 async function executeRestoreJob(job){
  const details=typeof job.details==='string'?JSON.parse(job.details):job.details;
@@ -258,21 +331,30 @@ async function executeRestoreJob(job){
   db.prepare("UPDATE restores SET status='running' WHERE id=?").run(restore.id);
   stage(job.id,'verifying');
   // Main copy first; if it is missing or fails authentication, the newest verified copy, unless the owner chose one.
-  const {size,header,tag,plaintextChecksum,source}=await authenticatedSource(backup,details.sourceTargetId||null);
+  // An increment authenticates its whole chain here, before anything is sent.
+  const chain=await authenticatedChain(backup,details.sourceTargetId||null),chained=inChain(chain.map(item=>item.member));
+  const {plaintextChecksum,source}=chain.at(-1);
   if(source.role==='copy'){
    const used={targetId:source.targetId,name:source.name,role:'copy',chosen:Boolean(details.sourceTargetId)};
    db.prepare("UPDATE jobs SET details=? WHERE id=? AND status='running'").run(JSON.stringify({...details,source:used}),job.id);details.source=used;
    audit('worker',details.sourceTargetId?'restore.source_chosen':'restore.source_fallback',backup.id,{job:job.id,targetId:source.targetId,targetName:source.name});
   }
-  const decipher=createDecipheriv('aes-256-gcm',key(),header.subarray(4));decipher.setAAD(header);decipher.setAuthTag(tag);
-  const staging=await remote(server,{operation:'prepare-restore',job:job.id});
-  stage(job.id,'transferring');
-  const pass=new Transform({transform(chunk,_e,cb){cb(null,chunk);}});pass.on('error',()=>{});
-  const decrypting=pipeline(await openRead(source.path,{start:16,end:size-17}),decipher,pass);
-  decrypting.catch(error=>pass.destroy(error));
-  try{await uploadStream(server,pass,staging.remotePath);await decrypting;}catch(error){pass.destroy(error);await decrypting.catch(()=>{});throw error;}
-  // Only invoke extraction after the complete GCM-authenticated stream finishes.
-  stage(job.id,'restoring');const result=await remote(server,{operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint});
+  let result;
+  const restoreRequest={operation:'restore',job:job.id,plaintextChecksum,externalReadOnly:restore.plan.mappings?.externalReadOnly||[],externalFingerprint:restore.plan.externalReferences?.fingerprint};
+  if(!chained){
+   const staging=await remote(server,{operation:'prepare-restore',job:job.id});
+   stage(job.id,'transferring');
+   await sendPackage(server,chain[0],staging.remotePath,{upload:uploadStream});
+   // Only invoke extraction after the complete GCM-authenticated stream finishes.
+   stage(job.id,'restoring');result=await remote(server,restoreRequest);
+  }else{
+   const staging=await remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
+   const paths=chainPaths(staging,chain.length);
+   stage(job.id,'transferring');
+   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:uploadStream});
+   // The helper checks every package's checksum and link again before it extracts the full package, then each increment.
+   stage(job.id,'restoring');result=await remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
+  }
   // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
   if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
    recordVerification(backup.id,'integrity',{status:'passed',method:'full AES-256-GCM authentication and stored SHA256'},job.id);
@@ -315,6 +397,8 @@ export async function sweepStaging(server,site,currentJob){
 // Startup reconciliation published a crashed job's package and completed that job: finish its source cleanup and retention.
 export async function finishReconciledBackup(jobId){
  const job=db.prepare("SELECT id,site_id FROM jobs WHERE id=? AND type='backup' AND status='completed'").get(jobId);if(!job)return;
+ // Its snapshot files were never committed on the source (the worker stopped first), so the next backup is full.
+ if(db.prepare('SELECT 1 FROM backup_chain_links l JOIN backups b ON b.id=l.backup_id WHERE b.job_id=?').get(jobId))setForceFull(job.site_id,FORCE.uncommitted);
  const {site,server}=siteInfo(job.site_id);
  await transport.remote(server,{operation:'cleanup',root:(site.config.stagingRoot||'/var/lib/docknest').replace(/\/+$/,'')+'/'+job.id}).catch(()=>{});
  await sweepStaging(server,site,job.id).catch(()=>{});
@@ -347,8 +431,11 @@ export async function executeJob(job){
   const direct=site.config.deliveryMode==='direct';
   let result,published,temporary,captured;
   let jobDetails={};try{jobDetails=JSON.parse(job.details||'{}');}catch{}
+  // Incremental backups (opt-in per site): full or increment is decided here, before the job contacts the source.
+  // Without the option the request and the package are exactly as before.
+  const decision=decideCapture({site,plan,directory,jobDetails});
   // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{})};
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -375,6 +462,10 @@ export async function executeJob(job){
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
+  // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
+  const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});
+  if(chain)Object.assign(manifest,chain);
+  const incrementalDetails=decision?{incremental:chain?{backupKind:chain.backupKind,chainPosition:chain.chain.position,...(chain.incremental.fullReason?{fullReason:chain.incremental.fullReason}:{})}:{backupKind:'full',standardPackage:true}}:{};
   const capturedAt=new Date(captured.ms).toISOString();
   if(direct)completePreparedMetadata(backupId,manifest,capturedAt);
   else{
@@ -389,13 +480,25 @@ export async function executeJob(job){
   const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
   const notCopied=protectedMountWarning(manifest.protectedMounts);if(notCopied)warnings.push(notCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
+  if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
-  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{})}});
+  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{})}});
   publishedBackup=true;
   // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
-  if(!owned){console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
-  audit('worker','backup.completed',site.id,{job:job.id,backupId,size});
+  // Its snapshot files are not committed, so the next backup of the site is full.
+  if(!owned){if(chain)setForceFull(site.id,FORCE.uncommitted);console.error(`Job ${job.id} is no longer running (another worker marked it for recovery); its final status was not written.`);audit('worker','job.superseded',job.id,{});return;}
+  audit('worker','backup.completed',site.id,{job:job.id,backupId,size,...(chain?{backupKind:chain.backupKind}:{})});
+  if(chain){
+   if(chain.incremental.fallback)audit('worker','backup.incremental_fallback',site.id,{job:job.id,backupId,reason:chain.incremental.fallback});
+   clearForceFull(site.id,decision.force);
+   // Only now, with the package stored, authenticated and published, may the source move its snapshot files forward.
+   // If that is not confirmed the next backup is full (the helper would also refuse a mismatched snapshot).
+   try{await transport.remote(server,{operation:'incremental-commit',job:job.id,siteKey:site.id,config:site.config});}
+   catch{setForceFull(site.id,FORCE.uncommitted);audit('worker','backup.incremental_commit_failed',site.id,{job:job.id,backupId});}
+   // The option was turned off while this backup ran (the discard was skipped then): remove the files just committed.
+   if(!incrementalSettings(site.id).enabled)await discardIncrementalState(site.id,{server});
+  }
   await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await sweepStaging(server,site,job.id).catch(()=>{});
   await retain(site.id).catch(()=>audit('worker','retention.failed',site.id,{job:job.id}));

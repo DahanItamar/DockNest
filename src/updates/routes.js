@@ -12,6 +12,14 @@ import { releaseNotes as noteFile, frontMatter } from '../../scripts/release-man
 import { eligibility } from './eligibility.js';
 import { recoveryReviewPending } from './requests.js';
 import { TransportError } from './transport.js';
+import { incrementalBackupCount } from '../incremental.js';
+
+// Incremental backups (2.12.0) are format v2 packages. A version before 2.12.0 refuses to restore them and its retention
+// does not know about chains, so the update center warns before a downgrade while this database holds any.
+export const INCREMENTAL_SINCE = '2.12.0';
+export function downgradeWarning(database, count = incrementalBackupCount(database)) {
+  return count > 0 ? { incrementalBackups: count, below: INCREMENTAL_SINCE, message: `This database holds ${count} incremental ${count === 1 ? 'backup' : 'backups'}. DockNest versions before ${INCREMENTAL_SINCE} cannot restore them and may delete the full backups they depend on. Make a full backup and turn incremental off before downgrading to 2.11.` } : null;
+}
 
 const answer = z.strictObject({ checkEnabled: z.boolean() });
 const iso = ms => Number.isFinite(ms) ? new Date(ms).toISOString() : null;
@@ -50,6 +58,8 @@ function baseState(database, release) {
     state, current: { version: release.version, schemaVersion: release.schemaVersion },
     consent: { checkEnabled: enabled, decidedBy: preference ? { id: preference.decided_by, name: preference.name || preference.email || null } : null, decidedAt: preference?.decided_at ?? null },
     check,
+    // Only present while incremental backups exist, so older clients see the state they know.
+    ...((warning => warning ? { downgradeWarning: warning } : {})(downgradeWarning(database))),
   };
 }
 
