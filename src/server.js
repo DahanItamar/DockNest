@@ -31,13 +31,15 @@ import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
 import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
-import { installBootRecovery, bootRecoveryStatus, requireNotMoving } from './engine.js';
+import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
 import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
 import { backupCopyViews } from './backup-copies.js';
 import { retryCopy, packagePath } from './artifact-journal.js';
+import { incrementalRoutes } from './incremental-routes.js';
+import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 await clearInterruptedExports();
 
 export const app = express();
@@ -72,6 +74,7 @@ app.use('/api/alerts', alertRoutes);
 app.use('/api/connections', connectionRoutes);
 app.use('/api', restoreTestRoutes);
 app.use('/api', storageReportRoutes);
+app.use('/api', incrementalRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
@@ -149,7 +152,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: ((tested, copies) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare('SELECT * FROM jobs ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
@@ -160,8 +163,8 @@ for (const [name, { table, time }] of Object.entries(histories)) app.get('/api/'
   const rows = db.prepare(`SELECT * FROM ${table} ${cursor ? `WHERE (${time},id)<(?,?)` : ''} ORDER BY ${time} DESC,id DESC LIMIT ?`).all(...(cursor || []), limit + 1), page = rows.slice(0, limit), last = page.at(-1);
   // Backup listings never expose storage paths, matching /api/state.
   const backups = name === 'backups', verifications = backups ? backupVerifications(page.map(row => row.id)) : null;
-  const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null;
-  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
+  const tested = backups ? backupTestStates(page.map(row => row.id)) : null, copies = backups ? backupCopyViews(page) : null, chains = backups ? chainViews(page) : null;
+  res.json({ items: page.map(row => { if (backups) { const { path: _path, ...rest } = row; return { ...view(rest, verifications), restoreTest: tested.get(rest.id) ?? notTested, ...copies.get(rest.id), ...chains.get(rest.id) }; } return view(row, verifications); }), nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last[time], last.id])).toString('base64url') : null });
 });
 app.get('/api/servers/onboarding', requireAdmin, (_req,res) => res.json({reportCommand:serverReportCommand}));
 app.post('/api/servers/prepare-key', requireAdmin, rateLimit('server-key',5), async (req,res) => {
@@ -316,6 +319,8 @@ app.delete('/api/sites/:id', requireAdmin, (req,res)=>{
     db.prepare('UPDATE policies SET enabled=0,next_run=NULL WHERE site_id=?').run(site.id);
     audit(req.user.id,'site.removed',site.id,{backupsPreserved:true});
   });
+  // Incremental backups: the source's snapshot files of a removed site go too (best effort; backups stay restorable).
+  if(incrementalSettings(site.id).enabled)discardIncrementalState(site.id).catch(()=>{});
   res.json({id:site.id,removed:true,backupsPreserved:true});
 });
 app.post('/api/sites/:id/backup', (req, res) => res.status(202).json(enqueueBackup(req.params.id, req.user.id)));
@@ -344,10 +349,12 @@ const verifiedBackup=backupId=>{
   // Reads the main package, or its newest verified copy once the main one aged out (docs/backup-copies.md).
   return {...row,path:packagePath(row)};
 };
+// ZIP export is for full backups (docs/incremental-backups.md, phase 1); an increment offers Download chain.
+const refuseIncrementalZip=backupId=>{if(linkOf(backupId)?.backup_kind==='incremental')throw Object.assign(new Error('This backup is incremental. Use Download chain.'),{status:409,publicCode:'incremental_zip'});};
 const zipExportOf=req=>{const backup=verifiedBackup(req.params.id),item=findZipExport(backup.id,req.params.exportId)||notFound('ZIP preparation not found.');return {backup,item};};
 app.post('/api/backups/:id/zip-exports', (req, res) => {
   // The retention check and the lease that protects the backup while it is read happen in one transaction.
-  const {backup,result}=transaction(()=>{const row=verifiedBackup(req.params.id);return {backup:row,result:startZipExport(row)};});
+  const {backup,result}=transaction(()=>{const row=verifiedBackup(req.params.id);refuseIncrementalZip(row.id);return {backup:row,result:startZipExport(row)};});
   if(result.created)audit(req.user.id,'backup.zip_prepare',backup.id);
   res.status(202).json(result.item);
 });
@@ -380,6 +387,7 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
   res.once('close',clear);res.once('finish',clear);
   try{
     if(req.query.format==='zip'){
+      refuseIncrementalZip(backup.id);
       if(req.headers.range)return res.status(416).json({error:'Full ZIP downloads do not support byte ranges. Start a new download.'});
       if(req.method==='HEAD'){res.attachment(backup.site_id+'_'+backup.id+'_full-site.zip');return res.type('application/zip').end();}
       audit(req.user.id,'backup.download_zip',backup.id,{decrypted:true});
@@ -398,13 +406,16 @@ app.get('/api/backups/:id/download', async (req, res, next) => {
   }catch(error){if(!res.headersSent)next(error);else res.destroy();}
   finally{clear();}
 });
+const chainAncestors = backupId => { const ids = []; for (let link = linkOf(backupId); link?.parent_id && ids.length < 31; link = linkOf(link.parent_id)) ids.push(link.parent_id); return ids; };
 app.post('/api/backups/:id/pin', (req, res) => {
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(req.params.id))throw Object.assign(new Error('Package retention is in progress.'),{status:409});
   const data = z.object({ pinned: z.boolean() }).parse(req.body);
   const result = db.prepare('UPDATE backups SET pinned=? WHERE id=?').run(Number(data.pinned), req.params.id);
   if (!result.changes) notFound('Backup not found.');
   // A pinned backup must never be removed when its Object Lock ends.
-  if (data.pinned) { db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(req.params.id); db.prepare("UPDATE backup_copies SET delete_state=NULL,delete_after=NULL WHERE backup_id=? AND delete_state='deferred'").run(req.params.id); }
+  // Pinning an increment pins its whole chain: the packages it builds on are kept while it is (deletionBlocked), and none
+  // of them is removed when an Object Lock ends.
+  if (data.pinned) for (const backupId of [req.params.id, ...chainAncestors(req.params.id)]) { db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(backupId); db.prepare("UPDATE backup_copies SET delete_state=NULL,delete_after=NULL WHERE backup_id=? AND delete_state='deferred'").run(backupId); }
   audit(req.user.id, 'backup.pin', req.params.id, data); res.json(data);
 });
 app.post('/api/backups/:id/copies/:targetId/retry', requireAdmin, (req, res) => {

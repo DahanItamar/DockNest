@@ -42,3 +42,24 @@
 @media(max-width:767px){.rebrand-page .sr-root .storage-grid{grid-auto-rows:auto}}
 /* Connect storage dialog: the form starts right under the header, like New connection. */
 .storage-dialog .modal-body>:first-child{margin-top:0}
+/* Connect storage dialog: header and footer stay in view, only the form body scrolls (no visible scrollbar). */
+dialog.storage-dialog[open]{display:flex;flex-direction:column;overflow:hidden}
+.storage-dialog .modal-head{flex:none;position:static}
+.storage-dialog .storage-form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+.storage-dialog .storage-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain;display:flex;flex-direction:column;gap:24px}
+.storage-dialog .storage-scroll::-webkit-scrollbar{display:none}
+.storage-dialog .storage-scroll>*,.storage-dialog .storage-sftp>*{margin-top:0;margin-bottom:0}
+.storage-dialog .storage-sftp{display:flex;flex-direction:column;gap:24px}
+.storage-dialog .storage-sftp>.form-grid+.form-grid,.storage-dialog .storage-scroll .form-grid+.form-grid{margin-top:0}
+.storage-dialog .storage-scroll .form-grid{gap:24px}
+.storage-dialog .storage-scroll .hint,.storage-dialog .storage-scroll .alert-panel{width:100%;max-width:none;margin:0}
+.storage-dialog .storage-more p{display:block;width:100%;box-sizing:border-box;margin:0;padding:12px 16px;border-radius:var(--radius);background:var(--surface-muted);color:var(--text-secondary);font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.storage-dialog .storage-more[open] summary{margin-bottom:8px}
+.storage-dialog .storage-foot{flex:none;margin:0;padding:16px 24px;border-top:1px solid var(--border-subtle);background:var(--surface);justify-content:flex-end}
+.storage-dialog .storage-foot button{white-space:nowrap}
+@media(max-width:767px){
+ .storage-dialog .storage-foot{padding:16px}
+}
+.storage-dialog details.storage-more{display:block;width:100%;max-width:none}
+.storage-dialog .storage-more p{max-width:none}
+.storage-dialog .storage-more code{display:inline;padding:0;background:none;white-space:normal}

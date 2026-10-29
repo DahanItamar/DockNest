@@ -29,6 +29,7 @@ try{
  const context=await browser.newContext({viewport:{width:1440,height:1000}});
  await context.addCookies([{name:'dbm_session',value:token,url:base}]);
  const page=await context.newPage(),errors=[],consoleMessages=[],posts=[];
+ const choose=async name=>{await page.locator('.storage-dialog .cx-combo').click();await page.getByRole('option',{name}).click();};
  page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>consoleMessages.push(message.text()));
  page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/api/storage-targets'))posts.push(new URL(request.url()).pathname);});
  await page.goto(base);
@@ -41,7 +42,7 @@ try{
  await page.getByRole('button',{name:'Add storage destination',exact:true}).click();
  const form=page.locator('form.storage-form');
  await form.getByLabel('Destination name').fill('Fixture bucket');
- await form.getByLabel('Destination type').selectOption('s3');
+ await choose('Other S3 service');
  await form.locator('input[name="bucket"]').waitFor();
  // B6: region follows the endpoint until edited.
  const region=form.locator('input[name="region"]'),endpoint=form.locator('input[name="endpoint"]');
@@ -51,7 +52,7 @@ try{
  // B3: patterns are valid in Chrome and block malformed values before any request.
  await region.fill('NOT VALID REGION');await form.locator('input[name="bucket"]').fill('Bad_Bucket!!');
  await form.locator('input[name="accessKeyId"]').fill(fixture.credentials.accessKeyId);await form.locator('input[name="secretAccessKey"]').fill('wrong-secret');
- await form.getByRole('button',{name:'Test & connect storage'}).click();
+ await form.getByRole('button',{name:'Test & connect'}).click();
  assert.equal(await region.evaluate(element=>element.validity.patternMismatch),true);
  assert.equal(await form.locator('input[name="bucket"]').evaluate(element=>element.validity.patternMismatch),true);
  assert.equal(posts.length,0,'Invalid values must not be posted');
@@ -64,7 +65,7 @@ try{
  await form.getByLabel('Keep each backup for (days)').fill('2');
  assert.equal(await form.getByText('Shop keeps about 3 days',{exact:false}).count(),0);
  await region.fill('us-east-1');await form.locator('input[name="bucket"]').fill(fixture.options.bucket);await endpoint.fill(fixture.options.endpoint);await form.getByLabel('Addressing style').selectOption('path');
- const submit=form.getByRole('button',{name:'Test & connect storage'});
+ const submit=form.getByRole('button',{name:'Test & connect'});
  assert.equal(await submit.getAttribute('aria-disabled'),'true');
  await submit.click({force:true});await form.getByText('Confirm that you understand Compliance mode before connecting.',{exact:false}).waitFor();
  assert.equal(posts.length,0);
@@ -74,7 +75,7 @@ try{
  // B2 + B4 + B5: an upstream 401 keeps the session and form, focus stays on the button while busy, and the error is focused in the form.
  fixture.faults.status={status:401,code:''};fixture.faults.delayMs=1500;
  await submit.focus();await page.keyboard.press('Enter');
- assert.equal(await page.evaluate(()=>document.activeElement?.textContent),'Testing storage…');
+ assert.equal(await page.evaluate(()=>document.activeElement?.textContent),'Testing…');
  await page.keyboard.press('Enter');
  await form.locator('#storage-form-error').waitFor();
  assert.equal(await page.evaluate(()=>document.activeElement?.id),'storage-form-error');
@@ -89,10 +90,10 @@ try{
  await page.locator('p.sr-only[role="status"]',{hasText:'Storage connected.'}).waitFor();
  await page.locator('.storage-card',{hasText:'S3 object storage'}).waitFor();assert.equal(await page.locator('.badge',{hasText:'Beta'}).count(),0);
  await page.getByRole('button',{name:'Add storage destination',exact:true}).click();
- assert.equal(await page.locator('form.storage-form').getByLabel('Destination type').inputValue(),'sftp');
+ assert.equal(await page.locator('.storage-dialog .cx-combo').innerText(),'Own server or NAS');
  assert.equal(await page.locator('form.storage-form input[name="endpoint"]').count(),0);
  // S2: 24px between stacked S3 rows and 44px selects at desktop and phone widths.
- await page.locator('form.storage-form').getByLabel('Destination type').selectOption('s3');
+ await choose('Other S3 service');
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:900});
   const gap=await page.locator('form.storage-form .form-grid').evaluateAll(grids=>grids[1].firstElementChild.getBoundingClientRect().top-grids[0].lastElementChild.getBoundingClientRect().bottom);
@@ -100,6 +101,59 @@ try{
   for(const height of await page.locator('form.storage-form select').evaluateAll(selects=>selects.map(select=>select.getBoundingClientRect().height)))assert.ok(Math.abs(height-44)<1,'Select height '+height+' at '+width);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
+ // Provider presets: defaults, endpoints built from region or account ID, hand-edited endpoints kept, footer in view, no focus style on pre-filled fields.
+ await page.setViewportSize({width:1440,height:1000});
+ await choose('Hetzner Storage Box');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'23');
+ assert.equal(await form.locator('input[name="host"]').getAttribute('placeholder'),'uXXXXXX.your-storagebox.de');
+ await choose('Own server or NAS');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'22');
+ await form.locator('summary').click();await form.getByText('ssh-keyscan -t ed25519',{exact:false}).waitFor();
+ // A typed port and hostname survive a switch between SFTP providers; defaults only fill untouched fields.
+ await form.locator('input[name="host"]').fill('my.nas.lan');await form.locator('input[name="port"]').fill('2222');
+ await choose('Other SFTP server');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'2222');assert.equal(await form.locator('input[name="host"]').inputValue(),'my.nas.lan');
+ await form.locator('input[name="port"]').fill('22');await choose('Hetzner Storage Box');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'22','A port the user typed is kept even when it equals another default');
+ // Secrets never survive a type switch (SFTP <-> S3).
+ await form.locator('input[name="password"]').fill('typed-sftp-secret');
+ await choose('Amazon S3');
+ await choose('Own server or NAS');
+ assert.equal(await form.locator('input[name="password"]').inputValue(),'');
+ assert.equal(await form.locator('input[name="port"]').inputValue(),'22');
+ await choose('Cloudflare R2');await form.locator('input[name="secretAccessKey"]').fill('typed-s3-secret');await form.locator('input[name="accessKeyId"]').fill('typed-key');
+ await choose('Own server or NAS');await choose('Cloudflare R2');
+ assert.equal(await form.locator('input[name="secretAccessKey"]').inputValue(),'');assert.equal(await form.locator('input[name="accessKeyId"]').inputValue(),'');
+ // A hand-edited AWS endpoint is not overwritten by a region change; emptying it lets the region build it again.
+ await choose('Amazon S3');
+ await form.locator('input[name="endpoint"]').fill('https://s3.custom.example.com');await form.locator('input[name="region"]').fill('eu-west-1');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.custom.example.com');
+ await form.locator('input[name="endpoint"]').fill('');await form.locator('input[name="region"]').fill('eu-west-2');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.eu-west-2.amazonaws.com');
+ await choose('Cloudflare R2');
+ assert.equal(await form.locator('input[name="region"]').inputValue(),'auto');
+ assert.equal(await form.locator('select[name="addressing"]').inputValue(),'path');
+ await form.locator('input[name="accountId"]').fill('0123abcd4567');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://0123abcd4567.r2.cloudflarestorage.com');
+ await form.locator('input[name="endpoint"]').fill('https://custom.eu.r2.cloudflarestorage.com');
+ await form.locator('input[name="accountId"]').fill('ffff0000aaaa');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://custom.eu.r2.cloudflarestorage.com','A hand-edited endpoint is never overwritten');
+ await choose('Backblaze B2');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.us-west-004.backblazeb2.com');
+ await form.locator('input[name="region"]').fill('eu-central-003');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.eu-central-003.backblazeb2.com');
+ await form.locator('input[name="endpoint"]').fill('https://mine.example.com');await form.locator('input[name="region"]').fill('us-west-002');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://mine.example.com');
+ await choose('Amazon S3');await form.locator('input[name="region"]').fill('eu-west-1');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.eu-west-1.amazonaws.com');
+ await choose('Wasabi');
+ assert.equal(await form.locator('input[name="endpoint"]').inputValue(),'https://s3.us-east-1.wasabisys.com');
+ await page.mouse.move(0,0);
+ for(const name of ['endpoint','region','bucket'])assert.equal(await form.locator('input[name="'+name+'"]').evaluate(element=>element!==document.activeElement&&getComputedStyle(element).outlineStyle==='none'),true,name+' shows no focus style until focused');
+ await choose('Hetzner Storage Box');
+ assert.equal(await form.locator('input[name="port"]').evaluate(element=>element!==document.activeElement&&getComputedStyle(element).outlineStyle==='none'),true,'Pre-filled port shows no focus style');
+ await page.setViewportSize({width:390,height:700});
+ assert.ok(await page.getByRole('dialog',{name:'Connect storage'}).getByRole('button',{name:'Test & connect',exact:true}).evaluate(button=>{const box=button.getBoundingClientRect();return box.top>=0&&box.bottom<=innerHeight;}),'Footer stays visible at 390 px');
  await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('dialog',{name:'Connect storage'}).getByRole('button',{name:'Cancel',exact:true}).click();await page.getByRole('dialog',{name:'Connect storage'}).waitFor({state:'detached'});
  // B4 + B5 on cards: keyboard focus stays on Test connection and failures appear in the card.
@@ -119,7 +173,7 @@ try{
  // Hold the request so both presses land while it is in flight; a closed port fails fast enough to finish in between.
  const hold=async route=>{await new Promise(resolve=>setTimeout(resolve,750));await route.continue();};
  await page.route('**/api/storage-targets/connect',hold);
- await sftp.getByRole('button',{name:'Test & connect storage'}).focus();await page.keyboard.press('Enter');await page.keyboard.press('Enter');
+ await sftp.getByRole('button',{name:'Test & connect'}).focus();await page.keyboard.press('Enter');await page.keyboard.press('Enter');
  await sftp.locator('#storage-form-error').waitFor({timeout:30000});
  await page.unroute('**/api/storage-targets/connect',hold);
  assert.equal(posts.filter(path=>path.endsWith('/storage-targets/connect')).length-before,1);

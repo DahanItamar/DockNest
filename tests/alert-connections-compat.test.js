@@ -50,7 +50,7 @@ test('2.9.0 -> this version -> 2.9.0 -> this version: alerts keep working and a 
       store.createChannel({ kind: 'telegram', name: 'New chat', credentialId: fresh.id, config: { chatId: '-1009' } }, 't');
       store.createChannel({ kind: 'telegram', name: 'Ops', credentialId: '${ids.bot}', config: { chatId: '-1003' } }, 't');
       console.log(JSON.stringify({ ...before, sent, version: db.prepare('PRAGMA user_version').get().user_version, connections: db.prepare('SELECT COUNT(*) AS n FROM connections').get().n }));`);
-    assert.equal(upgraded.version, 11);
+    assert.equal(upgraded.version, (await import('../src/migrations.js')).schemaVersion);
     assert.deepEqual(upgraded.credentials.find(item => item[0] === ids.bot), [ids.bot, 'Bot', ['Family', 'Work']]);
     assert.deepEqual(upgraded.channels.find(item => item[0] === ids.family), [ids.family, { chatId: '-1001' }, false]);
     assert.deepEqual(upgraded.sent.map(item => item.chat).sort(), ['-1001', '-1002'], 'the alert waiting at upgrade time is sent once per chat');

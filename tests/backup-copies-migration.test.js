@@ -57,7 +57,7 @@ async function legacyBackup(backupId) {
 test('migration 11 is one compatible line, adds only its own tables, and the floor stays 1', () => {
   const entry = migrations.find(item => item.version === 11);
   assert.equal(entry.name, 'backup-copies'); assert.equal(entry.compatible, true);
-  assert.equal(schemaVersion, 11); assert.equal(compatFloor(migrations), 1);
+  assert.ok(schemaVersion >= 11); assert.equal(compatFloor(migrations), 1);
 });
 
 test('a 2.10.1 database with backups: nothing changes, no copies, and the default destination stays the default', async () => {
@@ -74,13 +74,13 @@ test('a 2.10.1 database with backups: nothing changes, no copies, and the defaul
       INSERT INTO backups VALUES('backup','site','job','${at}','sftp:target:/home/u/BACKUP/x.enc',100,'${'b'.repeat(64)}','{}',1,1,'${at}');`);
     const before = schema(old), tables = before.filter(row => row.type === 'table').map(row => row.name), contents = Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
     const result = migrate(old, { file, now: () => new Date('2026-10-28T08:00:00.000Z'), log: quiet });
-    assert.deepEqual([result.from, result.to], [10, 11]); assert.match(result.snapshot, /state-v10-to-v11-/);
+    assert.deepEqual([result.from, result.to], [10, schemaVersion]); assert.match(result.snapshot, new RegExp(`state-v10-to-v${schemaVersion}-`));
     for (const row of before) assert.deepEqual(schema(old).find(item => item.name === row.name), row, 'existing objects keep their definition');
     assert.deepEqual(Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')])), contents, 'no row of an existing table changes');
     for (const table of ['site_storage', 'site_storage_copies', 'backup_copies', 'backup_main_removed', 'manager_backup_copies']) assert.equal(rowsOf(old, table).length, 0, table + ' starts empty');
     assert.equal(old.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');
     assert.equal(old.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
-    assert.deepEqual(migrate(old, { file, log: quiet }), { from: 11, to: 11, snapshot: null }, 'a restart is a no-op');
+    assert.deepEqual(migrate(old, { file, log: quiet }), { from: schemaVersion, to: schemaVersion, snapshot: null }, 'a restart is a no-op');
   } finally { old.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -97,7 +97,7 @@ test('downgrade: 2.10 code starts on the new schema and its retention can still 
       INSERT INTO site_storage_copies VALUES('site','t3',30,'${at}');
       INSERT INTO backup_copies(backup_id,target_id,path,status,attempts,created_at,updated_at) VALUES('backup','t3','s3:t3:/x.enc','verified',0,'${at}','${at}');`);
     const messages = [];
-    assert.deepEqual(migrate(database, { file, list: migrations.slice(0, 10), log: message => messages.push(message) }), { from: 11, to: 11, snapshot: null });
+    assert.deepEqual(migrate(database, { file, list: migrations.slice(0, 10), log: message => messages.push(message) }), { from: schemaVersion, to: schemaVersion, snapshot: null });
     assert.match(messages[0], /only adds compatible objects/);
     // The exact statements 2.10 retention and publication run: no foreign key on the new tables blocks or cascades.
     database.prepare("INSERT INTO retention_operations VALUES('backup','pending',?)").run(at);

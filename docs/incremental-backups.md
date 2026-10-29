@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: accepted by the owner on 2026-10-28 (option A). Not implemented. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0 as a beta; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 
@@ -36,7 +36,7 @@ on the storage report after release, is far below the estimate.
 | Default | Off. Opt in per site under backup settings: "Incremental backups (beta)". Existing sites and backups do not change. |
 | Chain | One full package, then up to N increments. Default N = 6 (with daily backups, one full per week). Range 1 to 30. |
 | What is incremental | Mount archives (`mount-I-J.tar`). Images only when their ID is new to the chain (see Images). Manifest, config files and restore guide are always complete. |
-| New full package when | The interval is reached; the chain's full package is missing, unverified or being removed; the source's tar snapshot file is missing or does not match; the container, mount or image set changed; the storage destination changed; the site moved; the manifest format changed; the owner asks ("Make a full backup now"). |
+| New full package when | The interval is reached; the chain's full package is missing, unverified or being removed; the source's tar snapshot file is missing or does not match; the container, mount or image set changed; the storage destination changed; the site moved; the manifest format changed; the previous increment renamed folders (GNU tar repeats rename records in later increments, so the chain ends there); the owner asks ("Make a full backup now"). |
 | Restore | Restore the full package, then each increment in order, into a fresh directory. Every package in the chain is authenticated before any byte is extracted. |
 | Retention | Counts restore points as today. A full package is deleted only when none of its increments are still kept. So up to N extra packages may stay. Pinning an increment pins its whole chain. |
 | Integrity | Every increment's encrypted manifest names its parent's backup ID and ciphertext SHA-256. A chain is valid only when every link matches. |
@@ -111,10 +111,12 @@ The kit's decrypt tool verifies the chain links the same way the server does.
 
 ## Upgrade safety
 
-- Additive migration: `backups.kind` (default `full`), `backups.chain_id`, `backups.parent_id`, and the site setting
-  `incremental` (default off, interval 6). Marked `compatible: true`.
+- Additive migration 12 (`compatible: true`): a `backup_chain_links` table (kind, chain id, parent id, position per
+  chain package; no row = a self-contained full package) and a `site_incremental` table (default off, interval 6).
+  `backups` keeps its columns because older code and tools insert into it positionally.
 - Existing backups are full packages and keep working unchanged.
-- Downgrade: a version without this feature refuses v2 packages. The upgrade notes say so, and the update center
+- Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Turn
+  incremental off for every site, then make a backup, before downgrading to 2.11. The upgrade notes say so, and the update center
   warns before a downgrade when the database contains incremental backups.
 - The feature ships labelled beta and opt-in, like moves and restore tests did.
 
@@ -143,7 +145,7 @@ The kit's decrypt tool verifies the chain links the same way the server does.
 1. Option A (hybrid GNU tar chains) is approved.
 2. Default interval: one full backup every 7 backups (N = 6).
 3. Phase 1: "Download chain" for increments; ZIP export for full backups only.
-4. Release: 2.12.0, after storage per site and backup copies (2.11.0), so each destination can hold whole chains. The radar moves to 2.13.0.
+4. Release: 2.12.0, after storage per site and backup copies (2.11.0), so each destination can hold whole chains.
 
 ## Leaving beta
 

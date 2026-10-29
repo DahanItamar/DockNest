@@ -13,6 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, uploadBackupTo, jobRunners } from '../engine.js';
+import { chainSize } from '../incremental.js';
 import { recordTestVerification, recordVerification } from '../recovery-evidence.js';
 import { secretValue } from '../moves/state.js';
 import { validateLimits, cpuProblem } from './limits.js';
@@ -287,7 +288,8 @@ const STEP_RUNNERS = {
     const backup = test.backup_id && db.prepare('SELECT * FROM backups WHERE id=?').get(test.backup_id);
     if (!backup) { conclude(test, 'couldnt_run', { step: 'check_space', reason: 'The backup was removed before the test started.' }); return; }
     const manifest = JSON.parse(backup.manifest || '{}');
-    const need = { bytes: backup.size, kind: manifest.kind === 'static' ? 'static' : 'docker', containers: manifest.containers?.length || 1, grouped: (manifest.containers?.length || 0) > 1, architecture: manifest.kind === 'static' ? null : manifest.architecture ?? null, liveServer: !!test.limits.liveServer };
+    // An increment restores its whole chain, so the space needed is the chain's sum (docs/incremental-backups.md).
+    const need = { bytes: chainSize(backup.id), kind: manifest.kind === 'static' ? 'static' : 'docker', containers: manifest.containers?.length || 1, grouped: (manifest.containers?.length || 0) > 1, architecture: manifest.kind === 'static' ? null : manifest.architecture ?? null, liveServer: !!test.limits.liveServer };
     const answer = await call(test, { operation: 'restore-test-check', testId: test.id, need, limits: helperLimits(test) }, signal);
     // The test server's CPU count is kept with its facts, so the settings sheet and PUT settings can cap the CPU limit.
     if (Number.isInteger(answer?.facts?.nproc) && answer.facts.nproc >= 1 && answer.facts.nproc <= 4096) db.prepare("UPDATE servers SET capabilities=json_set(COALESCE(capabilities,'{}'),'$.cpus',?) WHERE id=? AND json_valid(COALESCE(capabilities,'{}'))").run(answer.facts.nproc, test.server_id);
@@ -298,11 +300,17 @@ const STEP_RUNNERS = {
   async copy_backup(test, signal) {
     db.prepare("UPDATE restore_tests SET cleanup='pending' WHERE id=? AND cleanup IS NULL").run(test.id);
     const target = server(test.server_id);
-    const prepare = () => call(test, { operation: 'restore-test-prepare', testId: test.id, deadline: Date.parse(test.deadline_at) / 1000, grace: Math.min(3600, Math.max(60, Math.round(testTiming.cleanupSeconds * testTiming.scale))), reaper: reaperSource }, signal);
+    // An increment asks for room for its whole chain (`chainLength`) and the helper answers one path per package.
+    const prepare = ({ chainLength } = {}) => call(test, { operation: 'restore-test-prepare', testId: test.id, deadline: Date.parse(test.deadline_at) / 1000, grace: Math.min(3600, Math.max(60, Math.round(testTiming.cleanupSeconds * testTiming.scale))), reaper: reaperSource, ...(chainLength ? { chainLength } : {}) }, signal);
     let upload;
     try { upload = await testTransport.upload(target, test.backup_id, null, { prepare, signal }); }
     catch (error) {
       if (signal.aborted) throw error;
+      // A package the tested backup builds on is missing or damaged: the backup cannot be restored as it is.
+      if (error?.code === 'chain_broken') {
+        conclude(loadTest(test.id), 'failed', { step: 'copy_backup', reason: error.message, checks: [{ name: 'Backup authentic', kind: 'authentic', target: null, status: 'failed', detail: null }] });
+        return;
+      }
       if (/checksum differs|unable to authenticate|Unsupported backup format|Truncated backup/i.test(String(error?.message))) {
         // As a scrub does: the package is marked unverified, so no test, restore or move picks it again.
         transaction(() => {
@@ -317,10 +325,10 @@ const STEP_RUNNERS = {
       return;
     }
     addChecks(test, [{ name: 'Backup authentic', kind: 'authentic', target: null, status: 'passed', detail: 'AES-256-GCM and SHA256' }]);
-    advanceTo(test, 'copy_backup', null, { plaintextChecksum: upload.plaintextChecksum });
+    advanceTo(test, 'copy_backup', null, { plaintextChecksum: upload.plaintextChecksum, ...(upload.chain ? { chain: upload.chain } : {}) });
   },
   async restore_copy(test, signal) {
-    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, limits: helperLimits(test) }, signal);
+    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test) }, signal);
     if (!verdict(test, 'restore_copy', answer)) return;
     if (answer.kind === 'static') {
       advanceTo(test, 'restore_copy', null, { kind: 'static' });

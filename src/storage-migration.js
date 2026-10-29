@@ -9,12 +9,13 @@ import { fileExists } from './artifact-journal.js';
 export function migrationPlan(){
  const entries=[];
  // A main package that aged out (backup_main_removed) is gone; its copies keep their own paths.
- for(const row of db.prepare('SELECT b.*,s.name AS site_name,s.server_id,v.name AS server_name FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id WHERE b.id NOT IN (SELECT backup_id FROM backup_main_removed)').all()){
+ // Incremental chains (docs/incremental-backups.md) are listed whole and in order, the full package first.
+ for(const row of db.prepare('SELECT b.*,s.name AS site_name,s.server_id,v.name AS server_name,l.chain_id,l.chain_position FROM backups b JOIN sites s ON s.id=b.site_id JOIN servers v ON v.id=s.server_id LEFT JOIN backup_chain_links l ON l.backup_id=b.id WHERE b.id NOT IN (SELECT backup_id FROM backup_main_removed) ORDER BY l.chain_id IS NULL,l.chain_id,l.chain_position,b.captured_at,b.id').all()){
   if(!isRemoteFile(row.path))throw new Error('Local archives need a separate import');
   const {options}=parseRemote(row.path);
   const folders=backupLayout({id:row.server_id,name:row.server_name},{id:row.site_id,name:row.site_name});
   const destination=targetPrefix(options)+path.posix.join(backupRoot(options.root),...folders,backupFilename(row.id,new Date(row.captured_at)));
-  if(destination!==row.path)entries.push({kind:'site',id:row.id,source:row.path,destination,checksum:row.checksum,size:row.size});
+  if(destination!==row.path)entries.push({kind:'site',id:row.id,source:row.path,destination,checksum:row.checksum,size:row.size,...(row.chain_id?{chainId:row.chain_id}:{})});
  }
  for(const row of db.prepare("SELECT * FROM manager_backups WHERE status='completed'").all()){
   if(!row.path)throw new Error('Local recovery kits need a separate import');
@@ -24,6 +25,16 @@ export function migrationPlan(){
   if(destination!==row.path)entries.push({kind:'manager',id:row.id,source:row.path,destination,checksum:row.checksum,size:row.size});
  }
  return entries;
+}
+// Entries that switch together: every package of one chain (full first), or one package outside a chain.
+export function migrationGroups(plan){
+ const groups=[],byChain=new Map();
+ for(const entry of plan){
+  if(!entry.chainId){groups.push([entry]);continue;}
+  if(!byChain.has(entry.chainId)){const group=[];byChain.set(entry.chainId,group);groups.push(group);}
+  byChain.get(entry.chainId).push(entry);
+ }
+ return groups;
 }
 async function verify(entry,file){
  if(!/^[a-f0-9]{64}$/.test(entry.checksum)||(await statFile(file)).size!==entry.size)throw new Error('Migration size mismatch');
@@ -48,7 +59,7 @@ export async function migrateStorage(){
  db.exec('CREATE TABLE IF NOT EXISTS storage_migrations(kind TEXT NOT NULL,id TEXT NOT NULL,source TEXT NOT NULL,destination TEXT NOT NULL,checksum TEXT NOT NULL,size INTEGER NOT NULL,state TEXT NOT NULL,PRIMARY KEY(kind,id))');
  // Deferred Object-Locked backups are copied like any other point; the locked original stays until its lock ends.
  let migrated=0,lockedOriginals=0;
- for(const entry of plan){
+ async function copyEntry(entry){
   const saved=db.prepare('SELECT * FROM storage_migrations WHERE kind=? AND id=?').get(entry.kind,entry.id);
   if(saved&&['source','destination','checksum','size'].some(key=>saved[key]!==entry[key]))throw new Error('Migration journal changed');
   const temporary=entry.destination+'.migration-partial';
@@ -65,16 +76,22 @@ export async function migrateStorage(){
    await syncFile(temporary);await verify(entry,temporary);await renameFile(temporary,entry.destination);
   }
   await syncFile(entry.destination);await verify(entry,entry.destination);
+ }
+ // A chain switches only when every one of its packages is copied and verified, all in one transaction.
+ for(const group of migrationGroups(plan)){
+  for(const entry of group)await copyEntry(entry);
   transaction(()=>{
-   const table=entry.kind==='site'?'backups':'manager_backups';
-   if(db.prepare('UPDATE '+table+' SET path=? WHERE id=? AND path=?').run(entry.destination,entry.id,entry.source).changes!==1)throw new Error('Migration metadata changed');
-   if(entry.kind==='site')db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(entry.destination,entry.id);
-   // A copy row naming the moved file (same backup, same destination) follows it in the same transaction.
-   if(entry.kind==='site')db.prepare('UPDATE backup_copies SET path=? WHERE backup_id=? AND path=?').run(entry.destination,entry.id,entry.source);
-   db.prepare("UPDATE storage_migrations SET state='completed' WHERE kind=? AND id=?").run(entry.kind,entry.id);
-   if(entry.kind==='site'&&db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(entry.id).changes)lockedOriginals++;
+   for(const entry of group){
+    const table=entry.kind==='site'?'backups':'manager_backups';
+    if(db.prepare('UPDATE '+table+' SET path=? WHERE id=? AND path=?').run(entry.destination,entry.id,entry.source).changes!==1)throw new Error('Migration metadata changed');
+    if(entry.kind==='site')db.prepare("UPDATE artifact_operations SET published=? WHERE backup_id=? AND state='completed'").run(entry.destination,entry.id);
+    // A copy row naming the moved file (same backup, same destination) follows it in the same transaction.
+    if(entry.kind==='site')db.prepare('UPDATE backup_copies SET path=? WHERE backup_id=? AND path=?').run(entry.destination,entry.id,entry.source);
+    db.prepare("UPDATE storage_migrations SET state='completed' WHERE kind=? AND id=?").run(entry.kind,entry.id);
+    if(entry.kind==='site'&&db.prepare('DELETE FROM retention_deferrals WHERE backup_id=?').run(entry.id).changes)lockedOriginals++;
+   }
   });
-  migrated++;
+  migrated+=group.length;
  }
  return {migrated,originalsRetained:true,...(lockedOriginals?{lockedOriginals}:{})};
 }
