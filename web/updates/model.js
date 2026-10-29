@@ -74,6 +74,15 @@ export function liveFor({ phase, to, from }) {
 }
 export const vv = v => typeof v === 'string' && v ? (v.startsWith('v') ? v : 'v' + v) : '';
 export const safeVersion = v => typeof v === 'string' && /^v\d+\.\d+\.\d+$/.test(v) ? v : null;
+// True when version a is the same as or newer than b (both vX.Y.Z); false when either is not a plain release version.
+export function atLeast(a, b) {
+  const x = safeVersion(vv(a))?.slice(1).split('.').map(Number), y = safeVersion(vv(b))?.slice(1).split('.').map(Number);
+  if (!x || !y) return false;
+  const i = x.findIndex((n, k) => n !== y[k]);
+  return i < 0 || x[i] > y[i];
+}
+// A rolled-back or stuck run is superseded once the running version has reached its target, for example after a manual scripts/upgrade.sh.
+export const isSuperseded = (item, current) => ['rolled_back', 'needs_action'].includes(item.outcome) && atLeast(current, item.version);
 export const tagUrl = v => safeVersion(v) ? 'https://github.com/DahanItamar/DockNest/releases/tag/' + v : null;
 // Highlight chips from the (display-only) typed highlights block.
 export function highlightChips(h) {

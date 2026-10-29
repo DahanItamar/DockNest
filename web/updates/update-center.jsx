@@ -5,7 +5,7 @@ import {createUpdatesClient,LOCKED_EVENT} from './client.js';
 import {UCDialog,ExtLink,CodeBlock,Notes,DOCS_ROLLBACK,DOCS_UPGRADE} from './parts.jsx';
 import {ConsentDialog} from './dialogs.jsx';
 import {UpdateReportButton} from '../report/UpdateReport.jsx';
-import {highlightChips,HISTORY_STATUS,REPAIR_COMMAND,submitMessage,tagUrl,vv} from './model.js';
+import {highlightChips,HISTORY_STATUS,isSuperseded,REPAIR_COMMAND,submitMessage,tagUrl,vv} from './model.js';
 import './updates.css';
 
 export const fmt=(value,dateOnly)=>{if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString(undefined,dateOnly?{day:'numeric',month:'short',year:'numeric'}:{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})};
@@ -139,9 +139,9 @@ function RecentUpdates({client,version,installMode,startOpen=false}){
  const Chevron=open?IconChevronUp:IconChevronDown;
  return <article className="card uc-recent"><button type="button" id="uc-recent-toggle" className="uc-recent-toggle" aria-expanded={open} aria-controls="uc-recent-list" onClick={()=>setOpen(!open)}><Chevron size={20} aria-hidden="true"/>Recent updates</button>
   {open&&<div className="uc-recent-body" id="uc-recent-list">{error&&<AlertPanel variant="error">{error}</AlertPanel>}
-   {items===null&&!error?<p role="status" className="t-body">Loading recent updates{'…'}</p>:items?.length?<ul className="uc-recent-list">{items.map((r,i)=>{const k=HISTORY_STATUS[r.outcome],failed=k==='Rolled back'||k==='Needs manual action';return <li key={(r.id||'cli')+r.version+r.at+i}>
+   {items===null&&!error?<p role="status" className="t-body">Loading recent updates{'…'}</p>:items?.length?<ul className="uc-recent-list">{items.map((r,i)=>{const k=HISTORY_STATUS[r.outcome],superseded=isSuperseded(r,version),failed=!superseded&&(k==='Rolled back'||k==='Needs manual action');return <li key={(r.id||'cli')+r.version+r.at+i}>
     <div className="uc-recent-line"><span className="uc-recent-ver">{sameTag(r.version)?r.version:'Version unknown'}</span><span className="uc-recent-date">{fmt(r.at,true)}</span></div>
-    <div className="uc-recent-line"><OutcomeIcon outcome={r.outcome}/><span className="t-caption">{r.source==='cli'?'Command line':'In-app'}</span></div>
+    <div className="uc-recent-line">{superseded?<StatusLabel state="queued">Superseded</StatusLabel>:<OutcomeIcon outcome={r.outcome}/>}<span className="t-caption">{r.source==='cli'?'Command line':'In-app'}</span></div>
     {failed&&r.id&&<UpdateReportButton client={client} requestId={r.id} view={r.outcome==='needs_action'?'needs_action':'rolled_back'} version={version} className="text link-btn uc-recent-report"/>}
    </li>})}</ul>:!error&&<p className="t-body">No updates yet. Installed versions appear here.</p>}
    <p className="t-caption uc-foot">Older versions are restored from the server command line. <ExtLink href={DOCS_ROLLBACK}>Rolling back</ExtLink></p></div>}
