@@ -946,7 +946,63 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(sources[1],(str(base).replace(chr(92),'/'),'data'))
             manifest=emitted.call_args.kwargs['result']['manifest']
             self.assertEqual(manifest['protectedMounts'],[{'container':'web','source':'/root/.ssh','destination':'/root/.ssh'}])
-            self.assertNotIn('excludedPaths',manifest)
+            self.assertNotIn('excludedPaths',manifest);self.assertNotIn('protectedPaths',manifest)
+            mount_tars=[t for t in tars if 'mount-' in ' '.join(t)]
+            self.assertNotIn('--exclude=.ssh',mount_tars[0],'the placeholder is named .ssh and must stay in its archive')
+            self.assertIn('--exclude=.ssh',mount_tars[1])
+
+    def test_key_folders_inside_a_copied_mount_are_found_at_any_depth_by_exact_name(self):
+        from helper import protected_subpaths, protected_paths, protected_path_warning, protected_path, protected_mounts, lexical
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'home'
+            for folder in ['.ssh','a/b/.gnupg','a/x.ssh','cache/.ssh','.ssh/nested/.gnupg']:(home/folder).mkdir(parents=True)
+            for name in ['a/.ssh','a/.sshrc','.ssh/id_ed25519']:(home/name).write_text('x')
+            root=lexical(home)
+            found=protected_subpaths(str(home),[lexical(home/'cache')])
+            self.assertEqual(found,[root+'/.ssh',root+'/a/.ssh',root+'/a/b/.gnupg'],'files count too, x.ssh and .sshrc do not, a found folder is not entered, declared exclusions are skipped')
+            self.assertEqual(protected_subpaths(str(home/'missing')),[])
+            mounts=[{'Type':'bind','Source':str(home)},{'Type':'bind','Source':str(home)},{'Type':'volume','Source':str(home/'a')},{'Type':'bind','Source':str(home/'.ssh')}]
+            items=protected_paths([{'Name':'/web','Mounts':mounts}])
+            self.assertEqual([item['path'] for item in items],[root+'/.ssh',root+'/a/.ssh',root+'/a/b/.gnupg',root+'/cache/.ssh'],'one record per source; volumes and protected mounts are not walked')
+            self.assertEqual({item['container'] for item in items},{'web'})
+            text=protected_path_warning(items)
+            self.assertIn(root+'/.ssh (mounted into web)',text);self.assertIn('SSH or GPG keys',text);self.assertIn('recover them separately',text)
+            self.assertTrue(protected_path_warning([{'path':'/p%d'%i,'container':'c'} for i in range(25)]).count('/p')==20)
+            self.assertIn('and 5 more',protected_path_warning([{'path':'/p%d'%i,'container':'c'} for i in range(25)]))
+        self.assertTrue(protected_path('/home/u/.gnupg/private-keys-v1.d/k.key'))
+        self.assertEqual(len(protected_mounts([{'Name':'/x','Mounts':[{'Type':'bind','Source':'/home/u/.gnupg'}]}])),1,'a .gnupg bind mount is a protected mount like .ssh')
+
+    def test_key_folder_filter_is_unanchored_literal_and_follows_declared_exclusions(self):
+        from helper import source_archive_command
+        plain=source_archive_command('/home/u')
+        self.assertFalse(any(a.startswith('--exclude') for a in plain))
+        guarded=source_archive_command('/home/u',guard=True)
+        self.assertEqual(guarded[guarded.index('--no-anchored')-1:guarded.index('--no-anchored')+3],['--no-wildcards','--no-anchored','--exclude=.ssh','--exclude=.gnupg'])
+        both=source_archive_command('/home/u',['/home/u/cache'],guard=True)
+        self.assertLess(both.index('--exclude=u/cache'),both.index('--no-anchored'),'declared exclusions stay anchored')
+        self.assertLess(both.index('--anchored'),both.index('--exclude=u/cache'))
+
+    @unittest.skipUnless(__import__('os').name=='posix' and __import__('shutil').which('tar'),'Needs GNU tar on a POSIX host')
+    def test_gnu_tar_leaves_key_folders_out_of_a_real_archive(self):
+        from helper import source_archive
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'home'
+            for folder in ['.ssh','app/.gnupg','app/x.ssh']:(home/folder).mkdir(parents=True)
+            for name in ['.ssh/id_ed25519','app/.gnupg/k','app/x.ssh/f','app/.ssh','app/.sshrc','app/data']:(home/name).write_text('x')
+            target=pathlib.Path(d)/'out.tar';source_archive(str(home),target,guard=True)
+            with tarfile.open(target) as tar:names=sorted(tar.getnames())
+            self.assertEqual(names,['home','home/app','home/app/.sshrc','home/app/data','home/app/x.ssh','home/app/x.ssh/f'])
+
+    def test_readiness_names_key_folders_that_are_not_copied(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as d:
+            home=pathlib.Path(d)/'deploy';(home/'.ssh').mkdir(parents=True)
+            containers=[{'Id':'web','Name':'/web','Mounts':[{'Type':'bind','Source':str(home),'Destination':'/home/deploy'}]}]
+            with patch.multiple('helper',preflight=Mock(return_value=containers),backup_plan=Mock(),health=Mock(return_value=True)):
+                result=readiness({'containers':['web'],'maintenance':{}})
+            check={item['name']:item for item in result['checks']}['Key folders that are not copied']
+            self.assertEqual((check['ok'],check['required']),(False,False))
+            self.assertIn('/deploy/.ssh (mounted into web)',check['message'])
 
     def test_double_slash_and_ssh_host_keys_cannot_bypass_the_protected_list(self):
         from helper import protected_path, maintenance_directory_problem

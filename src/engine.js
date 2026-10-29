@@ -254,10 +254,17 @@ function recordTransferProgress(job,value){
  details.transfer={done,total:Number.isFinite(total)?total:null,startedAt:previous.startedAt||now(),updatedAt:now()};
  db.prepare('UPDATE jobs SET details=? WHERE id=?').run(JSON.stringify(details),job);
 }
-// Bind mounts of passwords, sudo rules or SSH keys are never copied (2.11.1); the helper lists them in the manifest.
+// Bind mounts of passwords, sudo rules or SSH or GPG keys are never copied (2.11.1; GPG 2.12.1); the helper lists them in the manifest.
 export function protectedMountWarning(items){
  const list=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item.source==='string').slice(0,20).map(item=>`${item.source.slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
- return list.length?`Not copied: ${list.join('; ')}. These mounts hold passwords, sudo rules or SSH keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
+ return list.length?`Not copied: ${list.join('; ')}. These mounts hold passwords, sudo rules or SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
+}
+// .ssh and .gnupg folders inside a copied bind mount (such as a home folder) are left out of it (2.12.1).
+export function protectedPathWarning(items){
+ const all=(Array.isArray(items)?items:[]).filter(item=>item&&typeof item.path==='string');
+ const list=all.slice(0,20).map(item=>`${item.path.slice(0,512)}${typeof item.container==='string'&&item.container?` (mounted into ${item.container.slice(0,128)})`:''}`);
+ const more=all.length>list.length?` and ${all.length-list.length} more`:'';
+ return list.length?`Not copied: ${list.join('; ')}${more}. These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`:null;
 }
 // Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
 function probeWarnings(job,skipped=[]){
@@ -479,6 +486,7 @@ export async function executeJob(job){
   const size=(await statFile(temporary)).size;authenticatePublication(backupId,checksum,size);
   const warnings=probeWarnings(job.id,manifest.probePolicyFallback);
   const notCopied=protectedMountWarning(manifest.protectedMounts);if(notCopied)warnings.push(notCopied);
+  const keysNotCopied=protectedPathWarning(manifest.protectedPaths);if(keysNotCopied)warnings.push(keysNotCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
   if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
   await renameFile(temporary,published);

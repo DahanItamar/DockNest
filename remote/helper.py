@@ -99,11 +99,14 @@ def inspect(ids): return json.loads(docker('inspect',*ids))
 
 # A Docker bind path can conceal a remote filesystem. Unknown filesystems fail closed.
 LOCAL_FILESYSTEMS={'ext2','ext3','ext4','xfs','btrfs','zfs','overlay'}
-# Credentials, SSH keys and kernel interfaces are never captured, whoever configured the site.
+# Credentials, SSH and GPG keys and kernel interfaces are never captured, whoever configured the site.
 PROTECTED_FILES={'/etc/shadow','/etc/shadow-','/etc/gshadow','/etc/gshadow-'}
 PROTECTED_TREES=('/root/.ssh','/proc','/sys','/dev')
 # A directory source that contains any of these would capture them too.
 PROTECTED_CONTENT=tuple(PROTECTED_FILES)+PROTECTED_TREES+('/etc/ssh','/etc/sudoers','/etc/sudoers.d')
+# Per-user key folders: an entry with one of these names is never captured, wherever it is (a /home/<user> bind mount
+# would otherwise carry ~/.ssh and ~/.gnupg). Only private key stores; tokens such as ~/.aws stay application data.
+PROTECTED_NAMES=('.ssh','.gnupg')
 def lexical(value):
     # The helper runs on Linux; the separator swap only lets the unit tests run on a Windows workstation.
     path=posixpath.normpath(str(value).replace(os.sep,'/'))
@@ -117,22 +120,50 @@ def resolved(value):
     path=lexical(value)
     return [path,lexical(os.path.realpath(path))] if path.startswith('/') else [path]
 def protected_lexical(path):
-    return path in PROTECTED_FILES or path.startswith('/etc/sudoers') or bool(re.fullmatch(r'/etc/ssh/[^/]*_key',path)) or any(within(path,root) for root in PROTECTED_TREES) or '.ssh' in pathlib.PurePosixPath(path).parts
+    return path in PROTECTED_FILES or path.startswith('/etc/sudoers') or bool(re.fullmatch(r'/etc/ssh/[^/]*_key',path)) or any(within(path,root) for root in PROTECTED_TREES) or any(part in PROTECTED_NAMES for part in pathlib.PurePosixPath(path).parts)
 def protected_path(value):
     return any(protected_lexical(path) for path in resolved(value))
 def protected_content(value):
     return any(any(within(item,path) for item in PROTECTED_CONTENT) for path in resolved(value) if os.path.isdir(path))
 def refuse_protected_sources(cfg):
     for value in ([cfg['documentRoot']] if cfg.get('kind')=='static' and cfg.get('documentRoot') else [])+cfg.get('composeFiles',[])+cfg.get('configFiles',[]):
-        if protected_path(value) or protected_content(value):raise ValueError('Protected system path refused: %s. Password databases, sudoers, SSH keys, /proc, /sys and /dev are never captured.'%value)
+        if protected_path(value) or protected_content(value):raise ValueError('Protected system path refused: %s. Password databases, sudoers, SSH and GPG keys, /proc, /sys and /dev are never captured.'%value)
 def protected_mount(source):
     return bool(source) and (protected_path(source) or protected_content(source))
 def protected_mounts(containers):
-    """Bind mounts of password databases, sudoers, SSH keys (or folders holding them) are never copied: the backup keeps
+    """Bind mounts of password databases, sudoers, SSH or GPG keys (or folders holding them) are never copied: the backup keeps
     an empty placeholder in their place and records them here, so they are recovered separately like external data."""
     return [{'container':c.get('Name','').lstrip('/'),'source':m['Source'],'destination':m.get('Destination','')} for c in containers for m in c.get('Mounts') or [] if m.get('Type')=='bind' and protected_mount(m.get('Source'))]
 def protected_mount_warning(items):
-    return 'Not copied: %s. These mounts hold passwords, sudo rules or SSH keys, which DockNest never copies; recover them separately before using a restored copy.'%'; '.join('%s (mounted into %s)'%(item['source'],item['container'] or 'a container') for item in items)
+    return 'Not copied: %s. These mounts hold passwords, sudo rules or SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.'%'; '.join('%s (mounted into %s)'%(item['source'],item['container'] or 'a container') for item in items)
+def protected_subpaths(source,excluded=()):
+    """Entries named .ssh or .gnupg inside a copied bind mount (2.12.1), at any depth. tar leaves out every entry with
+    these names whatever this walk finds (guarded archives); the list names them in the warning and the manifest."""
+    found=[]
+    if not source or not os.path.isdir(source) or os.path.islink(source):return found
+    for current,dirs,files in os.walk(source,followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs+files):
+            path=lexical(os.path.join(current,name))
+            if name in PROTECTED_NAMES and not excluded_path(path,excluded):found.append(path)
+        dirs[:]=[name for name in dirs if name not in PROTECTED_NAMES and not excluded_path(lexical(os.path.join(current,name)),excluded)]
+    return found
+def guarded_mount(m):
+    """A copied bind mount: its archive leaves out every .ssh and .gnupg entry. Volumes are the container's own data."""
+    return m.get('Type')=='bind' and not protected_mount(m.get('Source'))
+def protected_paths(containers,exclusions=None):
+    """Key folders left out of copied bind mounts, one record per mount source (the first container that mounts it)."""
+    result=[];seen=set()
+    for c in containers:
+        for m in c.get('Mounts') or []:
+            source=m.get('Source')
+            if source in seen or not guarded_mount(m):continue
+            seen.add(source)
+            for path in protected_subpaths(source,(exclusions or {}).get(source,[])):result.append({'container':c.get('Name','').lstrip('/'),'source':source,'path':path})
+    return result
+def protected_path_warning(items):
+    more=' and %d more'%(len(items)-20) if len(items)>20 else ''
+    return 'Not copied: %s%s. These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.'%('; '.join('%s (mounted into %s)'%(item['path'],item['container'] or 'a container') for item in items[:20]),more)
 # The maintenance page belongs in the site's staging root, its project folders or a web root, never in system folders.
 MAINTENANCE_ROOTS=('/var/lib/docknest','/var/www','/srv','/usr/share/nginx')
 SYSTEM_TREES=('/etc','/root','/boot','/proc','/sys','/dev','/bin','/sbin','/lib','/lib32','/lib64','/usr/bin','/usr/sbin','/usr/lib','/usr/local/bin','/usr/local/sbin','/var/spool','/var/log','/run')
@@ -204,19 +235,25 @@ def scoped_classify(source,table,exclusions):
     paths=exclusions.get(source,[])
     return classify_source(source,table,paths) if paths else classify_source(source,table)
 
-def source_archive(source,target,excluded=(),snapshot=None):
+def exclude_options(source,excluded=(),guard=False):
+    options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    # Unanchored, literal: any member whose last component is .ssh or .gnupg (and all below it), at any depth.
+    if guard:options+=['--no-wildcards','--no-anchored',*('--exclude='+name for name in PROTECTED_NAMES)]
+    return options
+
+def source_archive(source,target,excluded=(),snapshot=None,guard=False):
     if snapshot is not None:
         # Incremental archives always use the POSIX format: GNU-format incremental headers keep atime/ctime where
         # ustar keeps the name prefix, so the restore path checks would read different names than GNU tar extracts.
-        command=source_archive_command(source,excluded,snapshot);command[command.index('-cpf')+1]=str(target)
+        command=source_archive_command(source,excluded,snapshot,guard);command[command.index('-cpf')+1]=str(target)
         run(command);return
     source=pathlib.Path(source)
-    options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    options=exclude_options(source,excluded,guard)
     run(['tar','--xattrs','--acls','--numeric-owner',*options,'-cpf',str(target),'-C',str(source.parent),'--',source.name])
 
-def source_archive_command(source,excluded=(),snapshot=None):
+def source_archive_command(source,excluded=(),snapshot=None,guard=False):
     source=pathlib.Path(source)
-    options=['--no-wildcards','--anchored',*('--exclude='+source.name+'/'+os.path.relpath(path,source) for path in excluded)] if excluded else []
+    options=exclude_options(source,excluded,guard)
     if snapshot is not None:options=['--listed-incremental='+str(snapshot),*options]
     # atime changes when the first pass reads data; ctime is not restored.
     return ['tar','--format=posix','--pax-option=delete=atime,delete=ctime,exthdr.name=%d/PaxHeaders/%f','--xattrs','--acls','--numeric-owner',*options,'-cpf','-','-C',str(source.parent),'--',source.name]
@@ -1637,6 +1674,9 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         protected=protected_mounts(selected.get('containers') or [])
         if protected:checks.append({'name':'Mounts that are not copied','ok':False,'required':False,'message':protected_mount_warning(protected)})
+        try:keys=protected_paths(selected.get('containers') or [],mount_exclusions(cfg,selected.get('containers') or []))
+        except ValueError:keys=[]  # the configuration check above already names the problem
+        if keys:checks.append({'name':'Key folders that are not copied','ok':False,'required':False,'message':protected_path_warning(keys)})
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -1679,11 +1719,16 @@ def capture(req,output=None):
     original_ids=list({c['Image'] for c in cs})
     original_images=json.loads(docker('image','inspect',*original_ids))
     exclusions=mount_exclusions(cfg,cs)
+    # .ssh and .gnupg entries inside copied bind mounts are left out (2.12.1). The ones found join the incremental
+    # exclusion record, so a chain whose earlier archives still hold them restarts with a full backup.
+    keys_left_out=protected_paths(cs,exclusions)
     increment=None;snapshot_sources={}
     if inc is not None:
         snapshot_sources=incremental_sources(cs)
         lock=site_lock(inc['siteKey'])
-        try:increment=plan_incremental(inc,snapshot_sources,root,exclusions)
+        recorded={source:list(paths) for source,paths in exclusions.items()}
+        for item in keys_left_out:recorded.setdefault(item['source'],[]).append(item['path'])
+        try:increment=plan_incremental(inc,snapshot_sources,root,recorded)
         finally:
             if lock:lock.close()
     # A source mounted twice is archived once; with snapshot files this keeps one snapshot per source.
@@ -1747,7 +1792,7 @@ def capture(req,output=None):
             image=docker('commit',c['Id']).decode().strip();images.append(image)
             if output is not None:atomic_json(root/'snapshot-images.json',images)
             for j,m in enumerate(c['Mounts']):
-                source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j))
+                source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j));guard=guarded_mount(m)
                 if m['Type']=='bind' and protected_mount(source):
                     # Never copied: the archive holds an empty folder or file of the same name instead.
                     holder=root/('protected-%d-%d'%(i,j))/(pathlib.PurePosixPath(source).name or 'root');holder.parent.mkdir(mode=0o700)
@@ -1758,14 +1803,14 @@ def capture(req,output=None):
                 snapshot=increment['work']/(key+'.snar') if key else None
                 if output is not None:
                     link=archives.get(source) if share else None
-                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot),link))
+                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot,guard),link))
                     if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
                     if key and not link and increment['level']:scans[target.name]=lambda found,key=key:increment['renames'].__setitem__(key,found)
                     archives[source]=link or target.name
                 elif share and source in archives:os.link(archives[source],target)
                 else:
                     if key:reset_snapshot(increment,key)
-                    source_archive(source,target,exclusions.get(source,[]),snapshot);archives[source]=target
+                    source_archive(source,target,exclusions.get(source,[]),snapshot,guard);archives[source]=target
                     if key and increment['level']:
                         with open(target,'rb') as written:increment['renames'][key]=archive_renames_safely(written)
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
@@ -1820,6 +1865,7 @@ def capture(req,output=None):
         manifest['excludedPaths']=cfg['mountExclusions']
     protected=protected_mounts(cs)
     if protected:manifest['protectedMounts']=protected
+    if keys_left_out:manifest['protectedPaths']=keys_left_out
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
@@ -1841,7 +1887,10 @@ def capture(req,output=None):
             guide.write('\n# Selected backup scope\nThis package intentionally excludes the paths listed in manifest.excludedPaths. Recover or reattach that external data separately after validating the isolated application copy. Never replace external storage contents with empty restored directories. Retention of this package does not protect excluded data.\n')
     if protected:
         with (root/'restore-guide.md').open('a') as guide:
-            guide.write('\n# Mounts that were not copied\nThe bind mounts listed in manifest.protectedMounts hold passwords, sudo rules or SSH keys. DockNest never copies them; their archives hold an empty placeholder. Recover them separately and never restore the placeholder over the real files.\n')
+            guide.write('\n# Mounts that were not copied\nThe bind mounts listed in manifest.protectedMounts hold passwords, sudo rules or SSH or GPG keys. DockNest never copies them; their archives hold an empty placeholder. Recover them separately and never restore the placeholder over the real files.\n')
+    if keys_left_out:
+        with (root/'restore-guide.md').open('a') as guide:
+            guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
     if output is not None:
@@ -3104,7 +3153,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             if key in sources:continue
             if m['Type']=='bind':
                 # A protected mount is never copied, so a move never writes it (nor binds the new server's own copy).
-                if protected_mount(m['Source']) or any(item.get('source')==m['Source'] for item in manifest.get('protectedMounts') or [] if isinstance(item,dict)):raise ValueError('%s holds passwords, sudo rules or SSH keys, which DockNest does not copy; move this site by hand.'%m['Source'])
+                if protected_mount(m['Source']) or any(item.get('source')==m['Source'] for item in manifest.get('protectedMounts') or [] if isinstance(item,dict)):raise ValueError('%s holds passwords, sudo rules or SSH or GPG keys, which DockNest does not copy; move this site by hand.'%m['Source'])
                 for kind,existing in sources:
                     if kind!='bind':continue
                     a,b=os.path.normpath(existing),os.path.normpath(m['Source'])
