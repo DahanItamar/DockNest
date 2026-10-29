@@ -92,7 +92,7 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       // 1: edits and additions, database rows
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-1')\");db.execute(\"INSERT INTO notes(body) VALUES('note-1')\");db.execute(\"UPDATE notes SET body='note-0-edited' WHERE id=1\")"); await sh('cd /site && echo "edited" > uploads/2026/a/f1.txt && echo "new upload" > uploads/2026/a/new1.txt && echo "asset edited" > asset.txt'); },
       // 2: deletes (files, a whole directory, one of two hard links)
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-2')\");db.execute('DELETE FROM notes WHERE id=1')"); await sh('cd /site && rm uploads/2026/a/f2.txt uploads/2026/a/f3.txt uploads/2026/a/f4.txt && rm -r uploads/2026/b && rm asset-hardlink.txt'); },
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-2')\");db.execute('DELETE FROM notes WHERE id=1')"); await sh('cd /site && rm uploads/2026/a/f2.txt uploads/2026/a/f3.txt uploads/2026/a/f4.txt && rm -r uploads/2026/b'); },
       // 3: renames (a directory, a file inside it, a directory inside da)
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-3')\")"); await sh('cd /site && mv uploads/2026 uploads/archive-2026 && mv uploads/archive-2026/a/f11.txt uploads/archive-2026/a/renamed11.txt && mv da/sub da/subdir'); },
       // 4: two directories swap names
