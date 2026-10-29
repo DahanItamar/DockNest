@@ -16,6 +16,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - ZIP download is for full backups; for an increment use Download chain.
 - Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.
 
+### Fixed
+
+- Incremental backups: an increment that cannot be confirmed as part of its chain is no longer saved. The backup shows as failed, you get the Backup failed alert, and the next backup is full.
+- Incremental backups: re-verifying a backup also checks the backups built on it. A broken chain is shown, its backups are marked unverified, and you get an alert.
+- Recovery kit: restore an incremental backup without DockNest from a plain copy of your storage folder. The kit finds the chain, checks it and rebuilds the files, including deleted and renamed folders.
+
 ## [2.11.1] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.1.md](docs/releases/2026-10-28-v2.11.1.md).
