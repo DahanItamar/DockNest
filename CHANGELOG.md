@@ -4,6 +4,22 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
+- Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28. The request itself now checks this too, not only the move preview.
+- A move refuses a Compose project that declares an external network, another network driver or fixed subnets, also when the moved services do not join that network.
+- An install that apt stops because it would have to remove other software is reported as a conflict.
+
+### Security
+
+- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a copied bind mount, such as a home folder mounted into a container, are no longer copied. The rest of the mount is backed up as before. The job result and the readiness check name each folder that was left out; recover these keys separately. An incremental backup chain that still holds such a folder starts again with a full backup. A bind mount of a `.gnupg` folder itself is now treated like a `.ssh` mount.
+- Restores and moves no longer keep setuid or setgid permissions (or file capabilities) on restored files, so a backup cannot plant a program that runs with another user's rights. Folders keep their setgid and sticky bits.
+
+## [2.12.0] - 2026-10-29
+
+See [docs/releases/2026-10-29-v2.12.0.md](docs/releases/2026-10-29-v2.12.0.md).
+
 ### Added
 
 - Incremental backups (beta, off by default, per site). By default a full backup is followed by 6 increments (you can change it) that hold only the files that changed in your mounts, so backups of large uploads or database folders take less storage. Every restore point restores to a complete copy, from the main storage or from a backup copy. Images are saved as before, so the saving comes from mount data. The storage report shows what was saved.
@@ -15,19 +31,6 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Before going back to 2.11, turn incremental backups off for every site, then make a backup. With the option off it is a plain full package that 2.11 restores.
 - ZIP download is for full backups; for an increment use Download chain.
 - Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.
-
-### Fixed
-
-- A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
-
-- Install on server refuses to install Docker for a site with several containers when it cannot read which Docker version the server's packages offer, as it already did for a version older than 28. The request itself now checks this too, not only the move preview.
-- A move refuses a Compose project that declares an external network, another network driver or fixed subnets, also when the moved services do not join that network.
-- An install that apt stops because it would have to remove other software is reported as a conflict.
-
-### Security
-
-- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a copied bind mount, such as a home folder mounted into a container, are no longer copied. The rest of the mount is backed up as before. The job result and the readiness check name each folder that was left out; recover these keys separately. An incremental backup chain that still holds such a folder starts again with a full backup. A bind mount of a `.gnupg` folder itself is now treated like a `.ssh` mount.
-- Restores and moves no longer keep setuid or setgid permissions (or file capabilities) on restored files, so a backup cannot plant a program that runs with another user's rights. Folders keep their setgid and sticky bits.
 
 ## [2.11.1] - 2026-10-28
 
