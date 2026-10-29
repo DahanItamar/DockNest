@@ -1071,8 +1071,8 @@ def incremental_discard(req):
             shutil.rmtree(state)
             if os.name=='posix':sync_directory(INCREMENTAL_ROOT)
     finally:
+        # The lock file stays: removing it could let two processes lock different files for the same site.
         if lock:lock.close()
-        (INCREMENTAL_ROOT/('.lock-'+site)).unlink(missing_ok=True)
     emit(result={'discarded':True,'existed':existed})
 def pinned_socket(addresses,port,timeout):
     """Connects only to addresses validated earlier, so a second DNS answer cannot redirect the probe."""
@@ -1543,7 +1543,7 @@ def capture_static_stream(req,output):
         inventory=stream_artifacts(archive,specs)
         if tree_digest(source)!=before:raise ValueError('Website changed during direct capture')
         revalidate_sources(plan)
-        manifest={'formatVersion':1,'kind':'static','complete':True,'deliveryMode':'direct','capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False,'backupPlan':plan,'artifacts':inventory,'consistency':{'status':'passed','method':'stable source tree and streamed artifact digests','scope':'static files'}}
+        manifest={'formatVersion':1,'kind':'static','complete':True,'deliveryMode':'direct','capturedAt':time.time(),'architecture':'portable-static','containers':[],'originalImages':[],'snapshotImages':[],'documentRoot':str(source),'staticFiles':before,'configurationFiles':cfg.get('configFiles',[]),'downtimeSeconds':0,'containerDowntimeSeconds':0,'visitorDowntimeSeconds':0,'restoreTested':False,'backupPlan':v1_plan(plan),'artifacts':inventory,'consistency':{'status':'passed','method':'stable source tree and streamed artifact digests','scope':'static files'}}
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md','Static website backup. Restore static-files.tar into a new private directory and verify staticFiles.sha256. Never overwrite the live website automatically.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600);output.flush()
@@ -2101,8 +2101,28 @@ def dumpdir_problem(value,top):
             if '/' in name or name in ('.','..'):return True
         else:
             p=pathlib.PurePosixPath(name)
-            if p.is_absolute() or '..' in p.parts or str(p)!=name or p.parts[0]!=top:return True
+            if not p.parts or p.is_absolute() or '..' in p.parts or str(p)!=name or p.parts[0]!=top:return True
     return False
+RENAME_TEMPORARY=('\0rename',)
+def dumpdir_renames(value):
+    """(source, target) directory renames of one GNU.dumpdir record, in order; '' is the cycle's temporary folder."""
+    result=[];source=None
+    for entry in [e for e in value.split('\0') if e]:
+        if entry[0]=='R':
+            if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+            source=entry[1:]
+        elif entry[0]=='T':
+            if source is None:raise ValueError('Unsafe directory listing in incremental archive')
+            result.append((source,entry[1:]));source=None
+    if source is not None:raise ValueError('Unsafe directory listing in incremental archive')
+    return result
+def rename_links(links,renames):
+    """Where GNU tar's directory renames move the symlinks an earlier link restored."""
+    for source,target in renames:
+        old=tuple(pathlib.PurePosixPath(source).parts) if source else RENAME_TEMPORARY
+        new=tuple(pathlib.PurePosixPath(target).parts) if target else RENAME_TEMPORARY
+        links={(new+key[len(old):] if key[:len(old)]==old else key):value for key,value in links.items()}
+    return links
 def disk_symlinks(root):
     links={}
     for current,dirs,files in os.walk(root,followlinks=False):
@@ -2124,7 +2144,16 @@ def incremental_archive_check(archive,root,top=None):
             if header[257:263]!=b'ustar\x00':raise ValueError('Incremental archive must use the POSIX tar format')
         names={pathlib.PurePosixPath(m.name) for m in members}
         directories={pathlib.PurePosixPath(m.name) for m in members if m.isdir()}
-        links=disk_symlinks(root)
+        renames=[]
+        for m in members:
+            dumpdir=m.pax_headers.get('GNU.dumpdir')
+            if isinstance(dumpdir,str) and m.isdir() and not dumpdir_problem(dumpdir,pathlib.PurePosixPath(m.name).parts[0] if pathlib.PurePosixPath(m.name).parts else ''):renames+=dumpdir_renames(dumpdir)
+        # Symlinks restored by earlier links, at the paths tar's renames move them to before any member is written.
+        on_disk=disk_symlinks(root);moved=rename_links(on_disk,renames)
+        if any(RENAME_TEMPORARY[0] in key for key in moved):raise ValueError('Unsafe directory listing in incremental archive')
+        for path in directories:
+            if path.parts in moved and path.parts not in on_disk:raise ValueError('Unsafe directory listing in incremental archive')
+        links=dict(moved)
         for path in directories:links.pop(path.parts,None)
         for m in members:
             if m.issym():links[pathlib.PurePosixPath(m.name).parts]=m.linkname
@@ -2142,7 +2171,7 @@ def incremental_archive_check(archive,root,top=None):
             if p in seen or any(parent in archived for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             seen.add(p)
             # A folder an earlier archive left as a symlink is written through only if this archive replaces it.
-            if any(parent.parts and (root/str(parent)).is_symlink() and parent not in directories for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
+            if any(parent.parts in moved and parent not in directories for parent in p.parents):raise ValueError('Duplicate archive path or write through archive symlink')
             dumpdir=member.pax_headers.get('GNU.dumpdir')
             if dumpdir is not None and (not member.isdir() or dumpdir_problem(dumpdir,top)):raise ValueError('Unsafe directory listing in incremental archive')
             target=(root/member.name).resolve()
@@ -2155,8 +2184,11 @@ def incremental_archive_check(archive,root,top=None):
                 if member.issym() and archive_link_escapes(p.parent.parts,member.linkname,links):raise ValueError('Archive link escapes destination')
                 if member.islnk():
                     # Hard links point at a file of this archive or one an earlier archive restored (never via a link).
-                    on_disk=link not in names and is_regular(root/str(link)) and not any(parent.parts and (root/str(parent)).is_symlink() for parent in link.parents)
-                    if '..' in link.parts or not (link in regular or on_disk) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
+                    restored=not renames and link not in names and is_regular(root/str(link)) and not any(parent.parts in on_disk for parent in link.parents)
+                    if '..' in link.parts or not (link in regular or restored) or any(parent in archived for parent in link.parents):raise ValueError('Hard link must target an archived regular file')
+        # After this archive every symlink, moved or new, must still resolve inside the destination.
+        for key,target in links.items():
+            if archive_link_escapes(key[:-1],target,links):raise ValueError('Archive link escapes destination')
         return top
 def replace_directory_links(archive,root):
     """A symlink an earlier link restored where this archive has a real folder: GNU tar would follow it (and purge the
