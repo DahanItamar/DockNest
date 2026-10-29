@@ -36,7 +36,7 @@ class CaptureHarness(unittest.TestCase):
         self.base=pathlib.Path(directory.name)
         self.state=self.base/'state';self.staging=self.base/'staging';(self.base/'src').mkdir()
         patcher=patch('helper.INCREMENTAL_ROOT',self.state);patcher.start();self.addCleanup(patcher.stop)
-        self.calls=[];self.saved=[];self.counter=0
+        self.calls=[];self.saved=[];self.counter=0;self.dumpdir='Ya\0\0'
     def sources(self,*names):
         result=[]
         for name in names:
@@ -52,7 +52,8 @@ class CaptureHarness(unittest.TestCase):
                 if option.startswith('--listed-incremental='):
                     snar=pathlib.Path(option.split('=',1)[1]);previous=snar.read_bytes() if snar.exists() else b'level0'
                     snar.write_bytes(previous+b'+'+args[-1].encode())
-            pathlib.Path(args[args.index('-cpf')+1]).write_bytes(('archive of '+args[-1]+(' incremental' if any(a.startswith('--listed') for a in args) else '')).encode())
+            # A real (tiny) POSIX archive, so the rename scan reads what GNU tar would write.
+            pathlib.Path(args[args.index('-cpf')+1]).write_bytes(mount_tar([(args[-1],'dir',None,{'GNU.dumpdir':self.dumpdir} if any(a.startswith('--listed') for a in args) else None)]))
         if args[0]=='tar' and '-czf' in args:
             root=pathlib.Path(args[args.index('-C')+1])
             with tarfile.open(args[args.index('-czf')+1],'w:gz') as tar:
@@ -109,7 +110,8 @@ class CaptureTests(CaptureHarness):
         self.assertEqual(manifest['chain'],{'id':'chain-a','position':0,'parentBackupId':None,'parentSha256':None})
         snar=(self.root/'incremental'/(key+'.snar')).read_bytes()
         self.assertTrue(snar.startswith(b'level0'),'tar starts a level-0 archive without a snapshot file')
-        self.assertEqual(manifest['containers'][0]['Mounts'][0]['incremental'],{'snapshotKey':key,'level':0,'snapshotSha256':sha(snar)})
+        self.assertEqual(manifest['containers'][0]['Mounts'][0]['incremental'],{'snapshotKey':key,'level':0,'snapshotSha256':sha(snar),'renames':False})
+        self.assertIs(manifest['renamesSeen'],False)
         self.assertEqual(manifest['snapshots'],{key:sha(snar)})
         self.assertIn('snapshot-%s.snar'%key,self.payload_names());self.assertIn('snapshot-%s.snar'%key,manifest['artifacts'])
         tar=next(call for call in self.calls if call[0]=='tar' and '-cpf' in call)
@@ -134,6 +136,16 @@ class CaptureTests(CaptureHarness):
         self.assertEqual(manifest['chainImages'],['sha256:'+'0'*64])
         self.assertEqual(len(manifest['originalImages']),1,'The manifest still describes every original image')
 
+    def test_an_increment_with_folder_renames_is_marked_so_the_next_backup_is_full(self):
+        source,=self.sources('data');containers=self.containers([[source]])
+        full=self.capture(containers,self.full_request(),job=1);self.commit(1)
+        self.dumpdir='Dnew\0Rdata/old\0Tdata/new\0\0'
+        manifest=self.capture(containers,self.increment_request(full['snapshots']),job=2)
+        self.assertEqual(manifest['backupKind'],'incremental','The increment that first holds the rename stays valid')
+        self.assertIs(manifest['renamesSeen'],True);self.assertIs(manifest['containers'][0]['Mounts'][0]['incremental']['renames'],True)
+        self.dumpdir='Ya\0\0';self.commit(2)
+        manifest=self.capture(containers,self.increment_request(manifest['snapshots'],position=2),job=3)
+        self.assertIs(manifest['renamesSeen'],False)
     def test_missing_mismatched_or_changed_snapshots_make_a_full_backup_with_a_reason(self):
         a,b=self.sources('a','b');key=snapshot_key(a)
         full=self.capture(self.containers([[a]]),self.full_request(),job=1);self.commit(1)
@@ -493,6 +505,28 @@ class DumpdirTests(unittest.TestCase):
             archive=pathlib.Path(d)/'m.tar'
             archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0\0'}),('data/a','dir',None,{'GNU.dumpdir':'Dc\0Dd\0Rdata/a/b\0Tdata/a/d\0\0'}),('data/a/d','dir',None,{'GNU.dumpdir':'Nl\0Ynew\0\0'}),('data/a/d/new','file','n',None)]))
             self.assertEqual(incremental_archive_check(archive,root.resolve()),'data')
+    def test_repeated_rename_records_in_consecutive_increments_are_refused_before_extraction(self):
+        with tempfile.TemporaryDirectory() as d:
+            def archive(name,dumpdir):
+                path=pathlib.Path(d)/name;path.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':dumpdir})]));return path
+            full=archive('0.tar','Da\0Db\0\0');swap='Da\0Db\0Xdata\0Rdata/b\0T\0Rdata/a\0Tdata/b\0R\0Tdata/a\0\0'
+            first=archive('1.tar',swap);again=archive('2.tar',swap);plain=archive('3.tar','Da\0Db\0\0')
+            self.assertIsNone(helper.chain_rename_problem([full,first]))
+            self.assertIsNone(helper.chain_rename_problem([full,first,plain,first]))
+            self.assertIn('(repeated rename records)',helper.chain_rename_problem([full,first,again]))
+            junk=pathlib.Path(d)/'junk.tar';junk.write_bytes(b'not a tar')
+            self.assertIn('(repeated rename records)',helper.chain_rename_problem([full,first,junk]),'An unreadable archive counts as renamed')
+            if os.name=='posix':
+                with self.assertRaisesRegex(ValueError,'repeated rename records'):helper.chain_extract([full,first,again],pathlib.Path(d)/'out')
+                self.assertFalse((pathlib.Path(d)/'out').exists(),'Refused before anything is extracted')
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_link_in_place_under_a_renamed_parent_cannot_become_a_folder(self):
+        # The parent is renamed away and back, so the model leaves the link where it was; tar's renames still touch it.
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'out';(root/'_data'/'p').mkdir(parents=True);os.symlink('../x',root/'_data'/'p'/'l')
+            archive=pathlib.Path(d)/'m.tar'
+            archive.write_bytes(mount_tar([('_data','dir',None,{'GNU.dumpdir':'Dp\0R_data/p\0T_data/t\0R_data/t\0T_data/p\0\0'}),('_data/p','dir',None,{'GNU.dumpdir':'Dl\0\0'}),('_data/p/l','dir',None,{'GNU.dumpdir':'\0'})]))
+            with self.assertRaisesRegex(ValueError,r'\(folder replaces a moved symlink\)'):incremental_archive_check(archive,root.resolve())
     def test_global_pax_headers_are_refused(self):
         with tempfile.TemporaryDirectory() as d:
             buffer=io.BytesIO()
@@ -616,19 +650,35 @@ class GnuTarChainTests(unittest.TestCase):
         self.dump()
         restored=self.restore(2)
         self.assertEqual(tree(restored),self.trees[1]);self.assertEqual((restored/'a'/'d'/'l').read_text(),'f')
-    def test_integration_sequence_swap_then_link_becomes_a_folder(self):
-        s=self.source
+    def test_integration_sequence_swap_ends_the_chain_and_every_point_restores(self):
+        # Points as in the Linux integration. An increment whose archive carries renames ends its chain (the engine
+        # makes the next backup full, `folders-renamed`), so GNU tar's repeated rename records never reach a restore.
+        s=self.source;chains=[[]];points=[]
+        def renamed(path):
+            with open(path,'rb') as handle:return helper.archive_renames_safely(handle)
+        def point():
+            if chains[-1] and renamed(self.archives[-1]):
+                chains.append([]);self.snar.unlink()  # the next backup is full: a fresh snapshot, level 0
+            archive=self.dump();chains[-1].append(archive);points.append(list(chains[-1]))
         for name in ['da','db']:(s/name).mkdir()
-        (s/'da'/'f.txt').write_text('da');(s/'db'/'g.txt').write_text('db');os.symlink('da',s/'lnk')
-        self.dump()
+        (s/'da'/'f.txt').write_text('da');(s/'da'/'sub').mkdir();(s/'da'/'sub'/'s.txt').write_text('s');(s/'db'/'g.txt').write_text('db');os.symlink('da',s/'lnk')
+        point()                                                                             # 0 full
         os.rename(s/'da',s/'swap-tmp');os.rename(s/'db',s/'da');os.rename(s/'swap-tmp',s/'db')
-        self.dump()
+        point()                                                                             # 1 increment with renames
+        self.assertTrue(renamed(self.archives[-1]),'GNU tar wrote the swap as rename records')
         os.unlink(s/'lnk');(s/'lnk').mkdir();(s/'lnk'/'file.txt').write_text('real now')
-        self.dump()
+        point()                                                                             # 2 full (new chain)
+        self.assertEqual(len(points[-1]),1)
+        point()                                                                             # 3 no change
+        (s/'da'/'g.txt').write_text('edited');(s/'db'/'sub'/'s.txt').write_text('edited too')
+        point()                                                                             # 4 edits inside da and db
         shutil.rmtree(s/'db');(s/'db').write_text('db is a file now');os.chmod(s/'da'/'g.txt',0o600)
-        self.dump()
-        for count in range(1,5):
-            with self.subTest(point=count):self.assertEqual(tree(self.restore(count)),self.trees[count-1])
+        point()                                                                             # 5 db becomes a file
+        for index,archives in enumerate(points):
+            with self.subTest(point=index):
+                destination=self.base/('chain-%d-%s'%(index,uuid.uuid4().hex[:6]))
+                helper.chain_extract(archives,destination)
+                self.assertEqual(tree(destination/'data'),self.trees[index])
     def test_symlink_to_a_folder_replaced_by_a_real_folder(self):
         s=self.source;(s/'real').mkdir();(s/'real'/'kept').write_text('k');os.symlink('real',s/'a')
         self.dump()
