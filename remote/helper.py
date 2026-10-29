@@ -136,34 +136,44 @@ def protected_mounts(containers):
     return [{'container':c.get('Name','').lstrip('/'),'source':m['Source'],'destination':m.get('Destination','')} for c in containers for m in c.get('Mounts') or [] if m.get('Type')=='bind' and protected_mount(m.get('Source'))]
 def protected_mount_warning(items):
     return 'Not copied: %s. These mounts hold passwords, sudo rules or SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.'%'; '.join('%s (mounted into %s)'%(item['source'],item['container'] or 'a container') for item in items)
-def protected_subpaths(source,excluded=()):
-    """Entries named .ssh or .gnupg inside a copied bind mount (2.12.1), at any depth. tar leaves out every entry with
-    these names whatever this walk finds (guarded archives); the list names them in the warning and the manifest."""
-    found=[]
-    if not source or not os.path.isdir(source) or os.path.islink(source):return found
+# The readiness check stops walking a mount after this many entries; capture always walks it all.
+READINESS_SCAN_ENTRIES=200000
+def protected_subpaths(source,excluded=(),limit=None):
+    """Entries named .ssh or .gnupg inside a copied bind mount (2.12.1), at any depth, and whether the walk finished
+    (it stops after `limit` entries). tar leaves out every entry with these names whatever this walk finds (guarded
+    archives); the list names them in the warning and the manifest."""
+    found=[];seen=0
+    if not source or not os.path.isdir(source) or os.path.islink(source):return found,True
     for current,dirs,files in os.walk(source,followlinks=False):
+        seen+=len(dirs)+len(files)
+        if limit is not None and seen>limit:return found,False
         dirs.sort()
         for name in sorted(dirs+files):
             path=lexical(os.path.join(current,name))
             if name in PROTECTED_NAMES and not excluded_path(path,excluded):found.append(path)
         dirs[:]=[name for name in dirs if name not in PROTECTED_NAMES and not excluded_path(lexical(os.path.join(current,name)),excluded)]
-    return found
+    return found,True
 def guarded_mount(m):
     """A copied bind mount: its archive leaves out every .ssh and .gnupg entry. Volumes are the container's own data."""
     return m.get('Type')=='bind' and not protected_mount(m.get('Source'))
-def protected_paths(containers,exclusions=None):
-    """Key folders left out of copied bind mounts, one record per mount source (the first container that mounts it)."""
-    result=[];seen=set()
+def protected_paths(containers,exclusions=None,limit=None):
+    """Key folders left out of copied bind mounts, one record per mount source (the first container that mounts it),
+    and the sources whose walk stopped at `limit`."""
+    result=[];seen=set();unscanned=[]
     for c in containers:
         for m in c.get('Mounts') or []:
             source=m.get('Source')
             if source in seen or not guarded_mount(m):continue
             seen.add(source)
-            for path in protected_subpaths(source,(exclusions or {}).get(source,[])):result.append({'container':c.get('Name','').lstrip('/'),'source':source,'path':path})
-    return result
-def protected_path_warning(items):
+            found,complete=protected_subpaths(source,(exclusions or {}).get(source,[]),limit)
+            if not complete:unscanned.append(source)
+            result+=[{'container':c.get('Name','').lstrip('/'),'source':source,'path':path} for path in found]
+    return result,unscanned
+def protected_path_warning(items,unscanned=()):
     more=' and %d more'%(len(items)-20) if len(items)>20 else ''
-    return 'Not copied: %s%s. These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.'%('; '.join('%s (mounted into %s)'%(item['path'],item['container'] or 'a container') for item in items[:20]),more)
+    text='Not copied: %s%s. These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.'%('; '.join('%s (mounted into %s)'%(item['path'],item['container'] or 'a container') for item in items[:20]),more) if items else ''
+    if unscanned:text+=(' ' if text else '')+'Not fully scanned: %s. Backups leave out every .ssh and .gnupg folder in them anyway.'%'; '.join(unscanned[:20])
+    return text
 # The maintenance page belongs in the site's staging root, its project folders or a web root, never in system folders.
 MAINTENANCE_ROOTS=('/var/lib/docknest','/var/www','/srv','/usr/share/nginx')
 SYSTEM_TREES=('/etc','/root','/boot','/proc','/sys','/dev','/bin','/sbin','/lib','/lib32','/lib64','/usr/bin','/usr/sbin','/usr/lib','/usr/local/bin','/usr/local/sbin','/var/spool','/var/log','/run')
@@ -1676,9 +1686,9 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         protected=protected_mounts(selected.get('containers') or [])
         if protected:checks.append({'name':'Mounts that are not copied','ok':False,'required':False,'message':protected_mount_warning(protected)})
-        try:keys=protected_paths(selected.get('containers') or [],mount_exclusions(cfg,selected.get('containers') or []))
-        except ValueError:keys=[]  # the configuration check above already names the problem
-        if keys:checks.append({'name':'Key folders that are not copied','ok':False,'required':False,'message':protected_path_warning(keys)})
+        try:keys,unscanned=protected_paths(selected.get('containers') or [],mount_exclusions(cfg,selected.get('containers') or []),READINESS_SCAN_ENTRIES)
+        except ValueError:keys,unscanned=[],[]  # the configuration check above already names the problem
+        if keys or unscanned:checks.append({'name':'Key folders that are not copied','ok':False,'required':False,'message':protected_path_warning(keys,unscanned)})
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -1723,7 +1733,7 @@ def capture(req,output=None):
     exclusions=mount_exclusions(cfg,cs)
     # .ssh and .gnupg entries inside copied bind mounts are left out (2.12.1). The ones found join the incremental
     # exclusion record, so a chain whose earlier archives still hold them restarts with a full backup.
-    keys_left_out=protected_paths(cs,exclusions)
+    keys_left_out,_=protected_paths(cs,exclusions)
     increment=None;snapshot_sources={}
     if inc is not None:
         snapshot_sources=incremental_sources(cs)
