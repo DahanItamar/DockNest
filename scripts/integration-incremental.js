@@ -146,7 +146,25 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       assert.equal(job.id, queued.id);
       await executeJob(job);
       const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(job.id);
-      assert.equal(row.status, 'completed', row.error);
+      if (row.status !== 'completed') {
+        // Fixture names only: show the directory-listing records of the failing package so the refusal can be judged.
+        const encrypted = join(directory, 'diag-' + index + '.enc'), plain = join(directory, 'diag-' + index + '.tar.gz');
+        await pipeline(await openRead(point.backup.path), createWriteStream(encrypted));
+        await exec('node', ['scripts/decrypt-backup.js', encrypted, process.env.MASTER_KEY_FILE, plain], { maxBuffer: 1024 * 1024 });
+        const script = `import tarfile,sys,io
+t=tarfile.open(sys.argv[1])
+for m in t:
+ if m.name.startswith('mount-') and m.name.endswith('.tar'):
+  for n in tarfile.open(fileobj=t.extractfile(m)):
+   d=n.pax_headers.get('GNU.dumpdir')
+   if d is not None:print(m.name,repr(n.name),repr(d)[:400])
+`;
+        const listing = (await exec('python3', ['-I', '-c', script, plain], { maxBuffer: 8 * 1024 * 1024 })).stdout;
+        console.log(`Restore of point ${index} failed: ${row.error}
+Directory listings in its last package:
+${listing}`);
+      }
+      assert.equal(row.status, 'completed', 'Restore of point ' + index + ': ' + row.error);
       const { containerId } = JSON.parse(row.details).result;
       assert.deepEqual(await tree(target, containerId), point.expected, 'Restore point ' + index + ' equals the source at that time (files, modes, owners, links and database)');
       assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', containerId), 'none');
