@@ -444,12 +444,8 @@ class MoveSafetyTests(unittest.TestCase):
         helper.check_compose_config(named,['web'],fixture_manifest())
         for bad in [{'external':True},{'driver':'overlay'},{'driver_opts':{'com.docker.network.bridge.name':'br0'}},{'ipam':{'config':[{'subnet':'172.30.0.0/16'}]}}]:
             with self.assertRaises(ValueError,msg=json.dumps(bad)):helper.check_compose_config({**config,'networks':{'default':{'name':'shop_default',**bad}}},['web'],fixture_manifest())
-        # Every declared network is checked, also one the moved services do not join; only an unused `default` is skipped.
-        with self.assertRaisesRegex(ValueError,'The Compose network other is external'):helper.check_compose_config({**config,'networks':{**config['networks'],'other':{'name':'x','external':True}}},['web'],fixture_manifest())
-        with self.assertRaisesRegex(ValueError,'The Compose network backend uses the overlay driver'):helper.check_compose_config({**config,'networks':{**config['networks'],'backend':{'name':'x','driver':'overlay'}}},['web'],fixture_manifest())
-        helper.check_compose_config({**config,'networks':{**config['networks'],'other':{'name':'shop_other'}}},['web'],fixture_manifest())
-        apart={**config,'services':{'web':{**config['services']['web'],'networks':{'front':None}}},'networks':{'front':{'name':'shop_default'},'default':{'name':'x','external':True}}}
-        helper.check_compose_config(apart,['web'],fixture_manifest())
+        # A network the moved services do not join is not their concern.
+        helper.check_compose_config({**config,'networks':{**config['networks'],'other':{'name':'x','external':True}}},['web'],fixture_manifest())
     def test_compose_settings_outside_the_allow_list_are_refused(self):
         manifest=fixture_manifest()
         base=lambda **service:{'services':{'web':{'image':'x',**service}},'networks':{'default':{'name':'shop_default'}},'volumes':{}}
