@@ -100,7 +100,7 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
       // 5: a symlink to a directory is replaced by a real directory; a file becomes a directory
       async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-5')\")"); await sh('cd /site && rm lnk && mkdir lnk && echo "real now" > lnk/file.txt && chown 1000:1000 lnk lnk/file.txt && rm uploads/archive-2026/a/f12.txt && mkdir uploads/archive-2026/a/f12.txt && echo inner > uploads/archive-2026/a/f12.txt/inner.txt'); },
       // 6: a directory becomes a file, metadata edits, a name with spaces and non-ASCII letters
-      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-6')\");db.execute(\"UPDATE notes SET body='note-6' WHERE id>1\")"); await sh('cd /site && rm -r db && echo "db is a file now" > db && chmod 600 da/f.txt && chown 2000:2000 uploads/archive-2026/a/f13.txt && echo "unicode" > "uploads/ünï cöde name.txt"'); },
+      async () => { await sql("db.execute(\"INSERT INTO records VALUES('point-6')\");db.execute(\"UPDATE notes SET body='note-6' WHERE id>1\")"); await sh('cd /site && rm -r db && echo "db is a file now" > db && chmod 600 da/g.txt && chown 2000:2000 uploads/archive-2026/a/f13.txt && echo "unicode" > "uploads/ünï cöde name.txt"'); },
     ];
     const points = [];
     let previousInspect = null;
