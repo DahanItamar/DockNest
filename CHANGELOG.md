@@ -374,3 +374,4 @@ See [docs/releases/2026-10-17-v2.0.md](docs/releases/2026-10-17-v2.0.md) for the
 [2.1.0]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0
 [2.1.0-rc.1]: https://github.com/DahanItamar/DockNest/compare/v2.0.0...v2.1.0-rc.1
 [2.0.0]: https://github.com/DahanItamar/DockNest/releases/tag/v2.0.0
+- Update Center: when the updater refuses because of its rate limit, the message now says which limit was reached (60 seconds between runs, or 6 runs per 24 hours) and when you can update again.

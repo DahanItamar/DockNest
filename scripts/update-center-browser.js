@@ -183,10 +183,10 @@ try{
   // 2.4.1: the updater names which limit applied and the earliest time a new run is allowed (red alert panel).
   const soon=new Date(Date.now()+40000).toISOString(),tomorrow=new Date(Date.now()+20*3600000).toISOString();
   mock.request={status:429,body:{error:'raw',code:'UPDATER_RATE_LIMITED',refusal:'rate-limited',limit:'cooldown',retryAt:soon}};await start.click();
-  await dialog.getByRole('alert').getByText(/The updater needs a minute between runs\. Try again at \d\d:\d\d\./).waitFor();
+  await dialog.getByRole('alert').getByText(/The updater waits 60 seconds between runs\. Try again at \d\d:\d\d\./).waitFor();
   assert.equal(await dialog.locator('.alert-panel.alert-error').count(),1,'The rate limit is a red alert panel');
   mock.request={status:429,body:{error:'raw',code:'UPDATER_RATE_LIMITED',refusal:'rate-limited',limit:'daily',retryAt:tomorrow}};await start.click();
-  await dialog.getByRole('alert').getByText(/The updater has reached its daily limit for updates, so nothing was changed\. You can update again at .*\d\d:\d\d\./).waitFor();
+  await dialog.getByRole('alert').getByText(/The updater has reached its daily limit for updates \(6 runs in 24 hours\), so nothing was changed\. You can update again at .*\d\d:\d\d\./).waitFor();
   assert.ok(!(await dialog.getByRole('alert').innerText()).includes('few minutes'),'No wrong claim about minutes');
   mock.request={status:202,body:{requestId:'req-1'}};mock.locked=true;mock.progress=running;
   await start.click();

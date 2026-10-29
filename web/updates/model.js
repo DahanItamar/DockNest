@@ -108,13 +108,13 @@ export function submitMessage(error, now = new Date()) {
     UPDATER_LOW_DISK: 'The DockNest host has too little free disk space for this update. Free up disk space, for example old Docker images or build cache, then try again.',
     UPDATER_BUSY: 'The host updater is busy. Try again in a minute.',
     UPDATER_REFUSED: 'The host updater refused this update. Nothing was changed.',
-    UPDATER_RATE_LIMITED: 'Too many update requests. Wait a few minutes and try again.',
+    UPDATER_RATE_LIMITED: 'The updater is limiting update runs right now. Try again later.',
     UPDATER_UNAVAILABLE: 'DockNest cannot reach the host updater. Check the connection in the Update Center, then try again.',
   };
   if (code === 'UPDATER_RATE_LIMITED') {
     const when = retryTime(error?.retryAt, now);
-    if (error?.limit === 'daily') return 'The updater has reached its daily limit for updates, so nothing was changed.' + (when ? ' You can update again at ' + when + '.' : ' Try again later.');
-    if (error?.limit === 'cooldown') return 'The updater needs a minute between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
+    if (error?.limit === 'daily') return 'The updater has reached its daily limit for updates (6 runs in 24 hours), so nothing was changed.' + (when ? ' You can update again at ' + when + '.' : ' Try again later.');
+    if (error?.limit === 'cooldown') return 'The updater waits 60 seconds between runs.' + (when ? ' Try again at ' + when + '.' : ' Try again shortly.');
     return 'The updater is limiting update runs right now. Try again later.';
   }
   // 2.11.1: the broker marks a refusal fixed by --repair (no verified record of the installed version) with this detail.
