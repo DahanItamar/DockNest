@@ -207,19 +207,21 @@ Incremental backups are new in 2.12 and are off for every site. Nothing needs do
 them on for a site under its backup settings ("Incremental backups (beta)"):
 
 - Migration 12 (compatible) only adds tables and settings. Existing backups stay complete packages and keep working.
-- After you turn the option on, the next backup is a full one. Then up to 6 increments follow (you can choose 1 to 30),
-  each holding only the files that changed in your mounts, and a new full backup starts the next chain. Increments are
-  backup format 2 packages in the same encrypted format, so the same master key opens them.
+- After you turn the option on, the next backup is a full one. By default a full backup is made every 7 backups (the
+  setting "Full backup every" takes 2 to 31), and the backups in between hold only the files that changed in your
+  mounts. Every backup made while the option is on is a format 2 package in the same encrypted format, so the same
+  master key opens them.
 - A full backup is kept as long as an increment that needs it is kept, so a few more packages than your retention count
   can stay. Pinning an increment pins its chain.
-- Turning the option off makes the next backup full. Existing chains stay restorable.
+- Turning the option off makes the next backup a plain full package. Existing chains stay restorable.
 
-**Going back to 2.11.** Make a full backup and turn incremental backups off for every site first. 2.11 starts on the
-same database (the migration is compatible), but it does not read format 2 packages: it refuses to restore an increment
-or a format 2 full package with the plain message "Unsupported or incomplete backup", and its retention can delete the
-full backup an increment needs. If the database still holds increments, the Update Center warns before a downgrade.
-Backups made while incremental backups were off are plain packages and restore on 2.11 as before. To recover an
-increment without DockNest or on 2.12 again, see [independent recovery](independent-recovery.md).
+**Going back to 2.11.** Turn incremental backups off for every site, then make a backup. With the option off, that
+backup is a plain full package that 2.11 restores. 2.11 starts on the same database (the migration is compatible), but
+it refuses every format 2 package, increments and the full backups made while the option was on, with the plain message
+"Unsupported or incomplete backup", and its retention does not know that an increment needs its full backup. If the
+database still holds increments, the Update Center warns before a downgrade. Backups made while the option was off are
+plain packages and restore on 2.11 as before. To recover a format 2 backup without DockNest or on 2.12 again, see
+[independent recovery](independent-recovery.md).
 
 ## Protected mounts are no longer copied (2.11.1)
 

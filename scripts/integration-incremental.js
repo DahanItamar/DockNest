@@ -157,6 +157,7 @@ export async function runIncrementalScenario({ run, until, hosts, servers, db, d
     const incrementalCount = points.filter(point => point.link.backup_kind === 'incremental').length;
     assert.ok(incrementalCount >= 4 && points.some(point => point.link.chain_position >= 3), 'Chains really form: ' + kinds.join(' '));
     console.log('Incremental fixture kinds: ' + kinds.join(' '));
+    assert.deepEqual(kinds, ['0:full(feature-enabled)', '1:incremental', '2:incremental', '3:incremental', '4:incremental', '5:full(folders-renamed)', '6:incremental']);
     record('Incremental backups: a real site (database + uploads) makes a full backup and increments (folder renames force a new full backup) with edits, deletes, renames, two directories swapping names and a symlink to a directory replaced by a real directory; each package authenticates and the source keeps running');
 
     // ---- Restore from every point ------------------------------------------------------------------------------------------
@@ -215,11 +216,12 @@ ${listing}`);
     const newest = points.at(-1);
     const readAll = async path => { const chunks = []; for await (const chunk of await openRead(path)) chunks.push(chunk); return Buffer.concat(chunks); };
     const put = async (path, data) => { await removeFile(path).catch(() => {}); const output = await openWrite(path); await new Promise((resolve, reject) => { output.once('error', reject); output.end(data, error => error ? reject(error) : resolve()); }); };
-    const refused = async () => {
+    // Tries to restore `target`; returns the refusal text and whether it came at planning time or from the job.
+    const refused = async target => {
       try {
-        const plan = await planRestore(newest.backup.id, { serverId: servers[1].id });
+        const plan = await planRestore(target.backup.id, { serverId: servers[1].id });
         if (!plan.executable) return JSON.stringify(plan.blockers);
-        const queued = await enqueueRestore(newest.backup.id, plan, 'qa'), job = claimJob();
+        const queued = await enqueueRestore(target.backup.id, plan, 'qa'), job = claimJob();
         assert.equal(job.id, queued.id);
         await executeJob(job);
         const row = db.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id);
@@ -228,24 +230,25 @@ ${listing}`);
       } catch (error) { if (error.code === 'ERR_ASSERTION') throw error; return String(error.message); }
     };
     const containersBefore = await containersOnTarget(), directoriesBefore = await restoreDirectories();
-    const middle = points[points.length - 1 - newest.link.chain_position].backup, middlePath = middle.path, middleBytes = await readAll(middlePath);
+    // The longest chain is points 0-4: restore point 4 while a package in the middle (point 2) is damaged or gone.
+    const longest = points[4], middle = points[2].backup, middlePath = middle.path, middleBytes = await readAll(middlePath);
     const tampered = Buffer.from(middleBytes); tampered[tampered.length >> 1] ^= 1;
     await put(middlePath, tampered);
-    const tamperMessage = await refused();
-    assert.match(tamperMessage, /depends on backup|did not authenticate|authenticat|checksum|damaged/i, 'Tampered package refused: ' + tamperMessage);
+    const tamperMessage = await refused(longest);
+    assert.match(tamperMessage, new RegExp('depends on backup ' + middle.id + ', which is missing or damaged'), 'Tampered package refused: ' + tamperMessage);
     assert.deepEqual(await containersOnTarget(), containersBefore, 'No container was created from a tampered chain');
     assert.equal(await restoreDirectories(), directoriesBefore, 'Nothing was sent to the target server for a tampered chain');
     await put(middlePath, middleBytes);
     await removeFile(middlePath);
-    const missingMessage = await refused();
+    const missingMessage = await refused(longest);
     assert.match(missingMessage, new RegExp('depends on backup ' + middle.id + ', which is missing or damaged'), 'Missing link refused with the plain message: ' + missingMessage);
     assert.deepEqual(await containersOnTarget(), containersBefore, 'No container was created from a chain with a missing link');
     assert.equal(await restoreDirectories(), directoriesBefore, 'Nothing was sent to the target server for a chain with a missing link');
     await put(middlePath, middleBytes);
     assert.equal(await verifyEncrypted(middlePath), middle.checksum);
     record('A tampered package in the middle of the chain and a missing link are both refused before any package is sent to the target server (no container created, no staging folder); the plain "depends on backup X" message names the missing backup');
-    await restoreAndCompare(newest, points.length - 1);
-    record('After the damaged package is put back, the newest point restores again and equals the source');
+    await restoreAndCompare(longest, 4);
+    record('After the damaged package is put back, the end of the longest chain restores again and equals the source');
 
     // ---- Restore test on the newest point ----------------------------------------------------------------------------------
     rt.testTiming.scale = 0.25; rt.testTiming.cancelPollMs = 200;
@@ -289,7 +292,8 @@ ${listing}`);
       await run('exec', target, 'rm', '-rf', root);
     };
     await downgradeAttempt(points[0], 'downgrade-full');
-    record('The 2.11.1 helper refuses a version 2 package (the full package of a chain) with the plain message "Unsupported or incomplete backup" and restores nothing');
+    await downgradeAttempt(points[1], 'downgrade-increment');
+    record('The 2.11.1 helper refuses a version 2 package (a full package and an increment) with the plain message "Unsupported or incomplete backup" and restores nothing');
 
     // ---- The S3 copies of the chain (made after the refusal checks: a restore may fall back to a verified copy of a damaged package, by design) ----------------------------------------------------------------------------------------
     const copyRow = id => db.prepare('SELECT * FROM backup_copies WHERE backup_id=? AND target_id=?').get(id, copyTargetId);
@@ -309,7 +313,7 @@ ${listing}`);
     const fromCopy = await restoreAndCompare(newest, points.length - 1);
     assert.equal(fromCopy.plan.source.role, 'copy', 'With every main package gone, the chain restores from the S3 copies');
     assert.equal(fromCopy.plan.source.targetId, copyTargetId);
-    assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='restore.source_fallback'").get(), 'The fallback to the copy is audited');
+    assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='restore.source_fallback' AND target=?").get(newest.backup.id), 'The fallback to the copy is audited');
     record('With every main package deleted from SFTP, the newest point restores from the S3 copies of the whole chain and equals the source at that time');
   } finally {
     const failures = [];
@@ -320,7 +324,8 @@ ${listing}`);
       for (const id of ids) { db.prepare('DELETE FROM backup_copies WHERE backup_id=?').run(id); db.prepare('DELETE FROM backup_chain_links WHERE backup_id=?').run(id); db.prepare('DELETE FROM backups WHERE id=?').run(id); }
     } catch { failures.push('test backup removal'); }
     try { db.prepare("UPDATE settings SET value=? WHERE key='backup_storage_target'").run(sftpDestinationId); } catch { failures.push('default destination'); }
-    await stopS3();
+    try { updateIncrementalSettings(siteId, { enabled: false }, 'qa'); } catch { failures.push('incremental setting'); }
+    try { await stopS3(); } catch { failures.push('S3 fixture'); }
     if (failures.length) console.warn('Incremental scenario cleanup incomplete: ' + failures.join(', '));
   }
 }
