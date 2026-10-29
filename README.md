@@ -163,11 +163,14 @@ scripts/upgrade.sh              # newest final release
 scripts/upgrade.sh --dry-run    # show the plan only
 ```
 
+With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
+
 Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path has not been validated on a real Linux Docker host yet; see that section for the current status.
 
 ## Security and privacy
 
 - Backups are encrypted, SSH host keys are pinned, and sign-in needs a password plus an authenticator app.
+- Backups never copy password files, sudo rules or SSH and GPG keys, including `.ssh` and `.gnupg` folders inside a mounted home folder; the job result names what was left out. Restored files never keep setuid or setgid bits.
 - Update checks are off until an administrator opts in, and send nothing about your servers, sites or users. See [outbound requests](docs/security.md#update-checks-outbound-requests).
 - Problem reports contain typed values only (no names, addresses, paths or error text), you review them first, and the server sends nothing. See [problem reports](docs/security.md#problem-reports).
 

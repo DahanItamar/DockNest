@@ -206,8 +206,9 @@ Collapsed by default and pre-filled; most moves need no changes here.
   refused. Below `/var/lib`, an application folder that holds an entry this move did not create is never written into. Anything else, such as `/tmp`, `/efi`,
   `/nix`, `~/.config` or `~/bin`, is refused, and the site is moved by hand.
 
-  A bind mount of password files, sudo rules or SSH keys is not copied by backups, so a move refuses a site that has
-  one. A backup that names the host network or another container's network, or a relative or `..` configuration path,
+  A bind mount of password files, sudo rules or SSH or GPG keys is not copied by backups, so a move refuses a site
+  that has one. `.ssh` and `.gnupg` folders inside a copied bind mount are left out of backups (2.12.1), so the moved
+  copy has none; the backup's warning names them. Restored files never keep setuid or setgid bits (2.12.1). A backup that names the host network or another container's network, or a relative or `..` configuration path,
   is refused. Other spellings (`//`, `./`, a trailing `/`) are normalised first. Settings are rewritten only in files
   the move placed. An image archive that names any image tag is refused before `docker load`, because DockNest
   backups save images by ID.

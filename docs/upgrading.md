@@ -238,6 +238,29 @@ rules or SSH keys is not copied into new backups. Examples are a `.ssh` folder (
 - A move refuses such a site and asks you to move it by hand, because DockNest never writes these locations.
 - Backups made before 2.11.1 are unchanged and still hold what they captured.
 
+### Key folders inside copied mounts (2.12.1)
+
+From 2.12.1 the same rule reaches inside the mounts that are copied. An entry named `.ssh` or `.gnupg` anywhere in a
+copied bind mount (for example `/home/deploy` mounted into a container, which holds `~/.ssh` and `~/.gnupg`) is left
+out of the backup; the rest of the mount is copied as before. Names that only contain these words, such as
+`x.ssh` or `.sshrc`, are still copied. Docker volumes are the container's own data and are copied whole.
+
+- The job result and the readiness check list each folder that was left out, as a warning. Recover these keys
+  separately; the restored mount simply has no such folder.
+- With incremental backups, a chain whose full backup still holds one of these folders starts again with a full
+  backup the first time 2.12.1 finds it. Later increments continue normally.
+- A bind mount of a `.gnupg` folder itself is now a protected mount, like a `.ssh` mount: it is not copied, and a
+  move refuses the site.
+
+## Restored files never keep setuid or setgid (2.12.1)
+
+Restores, restore tests and moves clear the setuid and setgid bits on every restored file and remove file
+capabilities (`security.capability`). Folders keep their setgid bit (new files inherit the folder's group) and the
+sticky bit. There is no setting to keep them: container images bring their own programs back through Docker, and
+application data does not need privileged programs. If a restored application really needs one, set it again by
+hand after checking the file. A static website that holds such a file restores without the bits; static backups
+made before 2.12.1 that hold one no longer pass the restore check.
+
 ## Use the published image
 
 Releases from 2.1 onward are published as `ghcr.io/dahanitamar/docknest` with the tags `X.Y.Z`, `X.Y`, `X` and `latest`. Only final releases are published; release candidates are validated privately and get no image or GitHub Release. Building from source stays the default. To use the image, add `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:2.1.0` to `.env` and use the override in `compose.override.example.yaml` (Docker Compose 2.24 or later). Use a tag, not a digest. To upgrade, run `scripts/upgrade.sh --version v2.1.1`: the script records the current tag and image ID in the upgrade backup, switches only the tag for its own `pull` and `up` commands, and writes the new tag to `.env` after the release is healthy. If the start fails, it returns to the recorded image ID (`up --pull never`), not to whatever tag `.env` names. The signature is not verified by the script; use the cosign command below when you want that.
@@ -343,7 +366,7 @@ The installer refuses:
 - A host where exactly one running `api` container of the `docknest` project is not found, where the `docknest_updater` volume is missing (start DockNest 2.2.0 or later with `docker compose up -d` first) or is not a plain local volume, or where a required tool is missing.
 - `--repair`, `--ack` and `--uninstall` while an in-app upgrade is running.
 
-**Command-line upgrades on a host with the updater.** The updater only accepts a request when it has verified the installed release itself and recorded its commit (`/var/lib/docknest-updater/pins.json`). Run `scripts/upgrade.sh` as the checkout's owner, never with `sudo` on a checkout that belongs to another user. When `upgrade.sh` already runs as root (a root-owned checkout), from 2.11.1 it records the release itself after a healthy run, through the installed broker and with the same checks as the installer (signed manifest, tag on `main`, image digest in image mode). This can take a few minutes. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade. Do the same if the script warns that it could not record the release; the upgrade itself is kept either way. `--repair` also clears an earlier "cannot confirm which version is installed" refusal for that version. Until the release is recorded, the Update Center refuses with "The host updater has not verified the installed version yet" and shows the `--repair` command. A host without the updater is not affected.
+**Command-line upgrades on a host with the updater.** The updater only accepts a request when it has verified the installed release itself and recorded its commit (`/var/lib/docknest-updater/pins.json`). Run `scripts/upgrade.sh` as the checkout's owner, never with `sudo` on a checkout that belongs to another user. When `upgrade.sh` already runs as root (a root-owned checkout), from 2.11.1 it records the release itself after a healthy run, through the installed broker and with the same checks as the installer (signed manifest, tag on `main`, image digest in image mode). This can take a few minutes. Otherwise run `sudo scripts/install-updater.sh --repair` after a command-line upgrade. From 2.12.1 the script ends such a run with an `ACTION NEEDED (host updater)` block that gives the reason and the exact command for your checkout (`cd '<checkout>' && sudo scripts/install-updater.sh --repair`), and writes the same text to the status file's `warning`. This happens when the run is not root (a checkout owned by another user), when root ran it on a checkout that belongs to another user, and when recording the release failed, timed out or met a running update. The exit code stays 0, because DockNest runs the new release; only in-app updates wait for the repair. `--repair` also clears an earlier "cannot confirm which version is installed" refusal for that version. Until the release is recorded, the Update Center refuses with "The host updater has not verified the installed version yet" and shows the `--repair` command. A host without the updater is not affected.
 
 In image mode, in-app updates need `DOCKNEST_IMAGE=ghcr.io/dahanitamar/docknest:<version>`. An install whose `DOCKNEST_IMAGE` names a mirror or has no tag is refused in-app (`state-mismatch`, nothing changed), because its image could not be verified; upgrade it with `scripts/upgrade.sh`.
 

@@ -16,6 +16,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - ZIP download is for full backups; for an increment use Download chain.
 - Connect storage starts with a provider (own server or NAS, Hetzner, rsync.net, MinIO, Amazon S3, Cloudflare R2, Backblaze B2, Wasabi or another) and fills in its defaults, including the endpoint from your region or Cloudflare account ID. The footer buttons stay in view on small screens.
 
+### Fixed
+
+- A command-line upgrade that cannot register the new version with the host updater (for example a checkout that does not belong to root) now ends with the exact `sudo scripts/install-updater.sh --repair` command to run, instead of a note in the middle of the output.
+
+### Security
+
+- **This changes what new backups contain.** `.ssh` and `.gnupg` folders inside a copied bind mount, such as a home folder mounted into a container, are no longer copied. The rest of the mount is backed up as before. The job result and the readiness check name each folder that was left out; recover these keys separately. An incremental backup chain that still holds such a folder starts again with a full backup. A bind mount of a `.gnupg` folder itself is now treated like a `.ssh` mount.
+- Restores and moves no longer keep setuid or setgid permissions (or file capabilities) on restored files, so a backup cannot plant a program that runs with another user's rights. Folders keep their setgid and sticky bits.
+
 ## [2.11.1] - 2026-10-28
 
 See [docs/releases/2026-10-28-v2.11.1.md](docs/releases/2026-10-28-v2.11.1.md).
