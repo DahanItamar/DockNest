@@ -57,6 +57,22 @@ async function openStorage(viewport, colorScheme, { report, targets, reportStatu
   return { context, page, errors };
 }
 const box = locator => locator.boundingBox();
+async function settledColumns(page, region) {
+  const handle = await region.elementHandle();
+  return handle.evaluate(async element => {
+    await document.fonts.ready;
+    const read = () => {
+      const rect = el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
+      const cards = element.querySelectorAll('.sr-split > .card');
+      return { left: rect(cards[0]), right: rect(cards[1]), metrics: rect(element.querySelector('.sr-metrics')) };
+    };
+    const frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // Wait until two reads one frame pair apart are identical (layout has stopped moving), for at most 5 s.
+    let previous = JSON.stringify(read());
+    for (let i = 0; i < 100; i++) { await frame(); const now = JSON.stringify(read()); if (now === previous) break; previous = now; }
+    return read();
+  });
+}
 try {
   browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome', headless: true });
 
@@ -92,9 +108,11 @@ try {
     const metrics = await box(region.locator('.sr-metrics')), head = await box(page.locator('.storage-intro'));
     assert.ok(Math.abs(metrics.x - head.x) < 1 && Math.abs(metrics.width - head.width) < 1, label + ': one content width');
     if (viewport.width >= 1280) {
-      const cards = region.locator('.sr-split > .card'), left = await box(cards.nth(0)), right = await box(cards.nth(1));
-      assert.ok(Math.abs(left.height - right.height) < 1 && Math.abs(left.y - right.y) < 1, label + ': equal columns');
-      assert.ok(Math.abs(left.width - right.width) < 1 && Math.abs(right.x + right.width - (metrics.x + metrics.width)) < 1, label + ': columns fill the width');
+      // Both cards and the metrics row are read in one script run, after web fonts and two frames have settled. Reading them
+      // with separate calls let a late font or chart layout change land between the two reads on a slow runner.
+      const {left, right, metrics: row} = await settledColumns(page, region);
+      assert.ok(Math.abs(left.height - right.height) < 1 && Math.abs(left.y - right.y) < 1, label + ': equal columns ' + JSON.stringify({ left, right }));
+      assert.ok(Math.abs(left.width - right.width) < 1 && Math.abs(right.x + right.width - (row.x + row.width)) < 1, label + ': columns fill the width ' + JSON.stringify({ left, right, row }));
     } else assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), label + ': no horizontal scroll');
     if (colorScheme === 'dark') assert.notEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(255, 255, 255)');
     assert.deepEqual(errors, [], label);

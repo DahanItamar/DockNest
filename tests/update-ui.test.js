@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {buildBugReport,ISSUE_BASE,URL_LIMIT} from '../web/updates/report.js';
 import {parseNotes,stripFrontMatter,safeHref,NOTES_LIMIT} from '../web/updates/notes-parse.js';
-import {isLocking,trackFor,phaseStatuses,formatElapsed,retryDelay,highlightChips,submitMessage,REPAIR_COMMAND,STAGES,PHASES} from '../web/updates/model.js';
+import {isLocking,trackFor,phaseStatuses,formatElapsed,retryDelay,highlightChips,submitMessage,atLeast,isSuperseded,REPAIR_COMMAND,STAGES,PHASES} from '../web/updates/model.js';
 
 test('report URL has only the allow-listed fields on the constant base',()=>{
  const r=buildBugReport({version:'2.2.0',installMode:'source'}),u=new URL(r.href);
@@ -83,14 +83,23 @@ test('the update center shows the repair command when the last refusal was a mis
  assert.match(text,/notice\?\.code==='UPDATER_PIN_MISSING'/);assert.match(text,/<CodeBlock command=\{REPAIR_COMMAND\}\/>/);
  assert.equal(REPAIR_COMMAND,'sudo scripts/install-updater.sh --repair');
 });
+test('a failed run is superseded once the running version has reached its target',()=>{
+ assert.equal(atLeast('v2.12.1','v2.12.0'),true);assert.equal(atLeast('2.12.0','v2.12.0'),true);assert.equal(atLeast('v2.11.9','v2.12.0'),false);assert.equal(atLeast('v2.10.0','v2.9.5'),true);assert.equal(atLeast('dev','v2.9.5'),false);
+ assert.equal(isSuperseded({outcome:'rolled_back',version:'v2.12.0'},'v2.12.1'),true);
+ assert.equal(isSuperseded({outcome:'needs_action',version:'v2.12.0'},'v2.12.0'),false,'a stuck run at the running version is a current failure');
+ assert.equal(isSuperseded({outcome:'needs_action',version:'v2.12.0'},'v2.12.1'),true);
+ assert.equal(isSuperseded({outcome:'rolled_back',version:'v2.12.0'},'v2.11.1'),false,'still the newest failed attempt');
+ assert.equal(isSuperseded({outcome:'succeeded',version:'v2.12.0'},'v2.12.1'),false,'only failed runs');
+});
 test('the updater rate-limit message names the limit and the earliest time, and the API limit message uses Retry-After',()=>{
  const now=new Date(2026,9,23,12,0,0),later=new Date(2026,9,23,14,5,0),tomorrow=new Date(2026,9,24,9,30,0);
  const hhmm=d=>d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
- assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'cooldown',retryAt:later.toISOString()},now),'The updater needs a minute between runs. Try again at '+hhmm(later)+'.');
- assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:later.toISOString()},now),'The updater has reached its daily limit for updates, so nothing was changed. You can update again at '+hhmm(later)+'.');
+ assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'cooldown',retryAt:later.toISOString()},now),'The updater waits 60 seconds between runs. Try again at '+hhmm(later)+'.');
+ assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:later.toISOString()},now),'The updater has reached its daily limit for updates (6 runs in 24 hours), so nothing was changed. You can update again at '+hhmm(later)+'.');
  const next=submitMessage({code:'UPDATER_RATE_LIMITED',limit:'daily',retryAt:tomorrow.toISOString()},now);
- assert.match(next,/^The updater has reached its daily limit for updates, so nothing was changed\. You can update again at .+ at \d\d:\d\d\.$/);assert.ok(next.includes(hhmm(tomorrow)));
- assert.ok(!/few minutes/.test(submitMessage({code:'UPDATER_RATE_LIMITED'},now)),'no detail: no wrong claim about minutes');
+ assert.match(next,/^The updater has reached its daily limit for updates \(6 runs in 24 hours\), so nothing was changed\. You can update again at .+ at \d\d:\d\d\.$/);assert.ok(next.includes(hhmm(tomorrow)));
+ // An older updater names no limit: the generic text, with no claim about minutes or a daily cap.
+ assert.equal(submitMessage({code:'UPDATER_RATE_LIMITED'},now),'The updater is limiting update runs right now. Try again later.');
  assert.equal(submitMessage({status:429,code:'RATE_LIMITED',retryAfter:12}),'Too many requests. Try again in 12 seconds.');
  assert.equal(submitMessage({status:429,code:'RATE_LIMITED',retryAfter:1}),'Too many requests. Try again in 1 second.');
 });
