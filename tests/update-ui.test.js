@@ -86,7 +86,8 @@ test('the update center shows the repair command when the last refusal was a mis
 test('a failed run is superseded once the running version has reached its target',()=>{
  assert.equal(atLeast('v2.12.1','v2.12.0'),true);assert.equal(atLeast('2.12.0','v2.12.0'),true);assert.equal(atLeast('v2.11.9','v2.12.0'),false);assert.equal(atLeast('v2.10.0','v2.9.5'),true);assert.equal(atLeast('dev','v2.9.5'),false);
  assert.equal(isSuperseded({outcome:'rolled_back',version:'v2.12.0'},'v2.12.1'),true);
- assert.equal(isSuperseded({outcome:'needs_action',version:'v2.12.0'},'v2.12.0'),true);
+ assert.equal(isSuperseded({outcome:'needs_action',version:'v2.12.0'},'v2.12.0'),false,'a stuck run at the running version is a current failure');
+ assert.equal(isSuperseded({outcome:'needs_action',version:'v2.12.0'},'v2.12.1'),true);
  assert.equal(isSuperseded({outcome:'rolled_back',version:'v2.12.0'},'v2.11.1'),false,'still the newest failed attempt');
  assert.equal(isSuperseded({outcome:'succeeded',version:'v2.12.0'},'v2.12.1'),false,'only failed runs');
 });

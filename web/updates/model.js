@@ -81,8 +81,8 @@ export function atLeast(a, b) {
   const i = x.findIndex((n, k) => n !== y[k]);
   return i < 0 || x[i] > y[i];
 }
-// A rolled-back or stuck run is superseded once the running version has reached its target, for example after a manual scripts/upgrade.sh.
-export const isSuperseded = (item, current) => ['rolled_back', 'needs_action'].includes(item.outcome) && atLeast(current, item.version);
+// A rolled-back run is superseded once the running version has reached its target; a stuck (needs-action) run targets the running version itself, so it needs a strictly newer one. For example after a manual scripts/upgrade.sh.
+export const isSuperseded = (item, current) => (item.outcome === 'rolled_back' && atLeast(current, item.version)) || (item.outcome === 'needs_action' && atLeast(current, item.version) && vv(current) !== vv(item.version));
 export const tagUrl = v => safeVersion(v) ? 'https://github.com/DahanItamar/DockNest/releases/tag/' + v : null;
 // Highlight chips from the (display-only) typed highlights block.
 export function highlightChips(h) {

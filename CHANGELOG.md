@@ -10,6 +10,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Update Center: a rolled-back or stuck update that the running version has already passed, for example after a manual upgrade, now shows as Superseded instead of a failure.
 - The Recovery guide on the backup page uses plus and minus icons instead of text symbols.
 
+### Fixed
+
+- Connections: a New connection click made while the list is still loading now opens the dialog once the list appears.
+
 ## [2.12.0] - 2026-10-29
 
 See [docs/releases/2026-10-29-v2.12.0.md](docs/releases/2026-10-29-v2.12.0.md).
