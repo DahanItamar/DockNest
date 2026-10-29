@@ -1,0 +1,56 @@
+/* 2.12 incremental backups. Tokens only; switch rows, alert panels, status labels, data tables and buttons come from the system. */
+dialog.inc-dialog{scrollbar-width:none}
+dialog.inc-dialog::-webkit-scrollbar{display:none}
+
+/* Setting rows: label and a short description left, the control right. */
+.inc-form{display:flex;flex-direction:column;gap:0}
+.inc-form .sb-switch-row{border-top:0}
+.inc-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}
+.inc-row-text{display:flex;flex-direction:column;min-width:0}
+.inc-row-label{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;color:var(--heading)}
+.inc-row-control{display:flex;align-items:center;gap:8px;flex:0 1 192px;min-width:0}
+.inc-row-control input{min-width:0;text-align:right}
+.inc-row-control input[aria-invalid=true]{border-color:var(--error)}
+.inc-unit{flex:none;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-muted)}
+.inc-row-add{flex:none}
+.inc-row-add button{white-space:nowrap}
+.inc-form .inc-next{margin:12px 0 0}
+.inc-load{min-height:var(--control-height);display:flex;align-items:center}
+.inc-hint{display:block;color:var(--text-muted)}
+.inc-form>.alert-panel{margin-top:16px}
+
+.inc-chain .inc-table .inc-when{white-space:normal}.inc-when b,.inc-when small{display:block}.inc-when small{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
+@media(max-width:599px){
+ .inc-row{flex-direction:column;align-items:stretch;gap:8px}
+ .inc-row-control{flex:none}
+ .inc-row-add button{width:100%}
+}
+
+/* Backup row: kind, parent and chain actions on one quiet line under the recovery point. */
+.inc-line{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 16px;min-width:0;font-size:var(--fs-caption);line-height:var(--lh-caption)}
+.inc-kind{display:inline-flex;align-items:center;gap:8px;font-weight:500;white-space:nowrap}
+.inc-kind .status-icon{flex:none}
+.inc-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
+.inc-link{width:auto;min-height:32px;height:auto;padding:8px 12px;margin:-8px -12px -8px 0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;white-space:nowrap}
+.inc-link:hover{background:var(--transparent);text-decoration:underline}
+.inc-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.inc-spacer{flex:1}
+
+/* Chain dialog: a compact table at every width. 40px header on the muted surface, 56px rows, numbers right-aligned. */
+.inc-chain-sum{margin:0 0 16px}
+.inc-chain .alert-panel{margin-bottom:16px}
+.inc-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.inc-table{width:100%;border-collapse:collapse;table-layout:fixed;border:1px solid var(--border-subtle)}
+.inc-chain .inc-table th{height:var(--header-row-height);padding:0 12px;background:var(--surface-muted);text-align:left;font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;color:var(--text-muted)}
+.inc-chain .inc-table td{height:var(--row-height);padding:0 12px;border-top:1px solid var(--border-subtle);font-size:var(--fs-body);line-height:var(--lh-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inc-table .num{text-align:right;font-variant-numeric:tabular-nums;width:88px}
+.inc-table th:nth-child(2),.inc-table td:nth-child(2){width:128px}
+.inc-table .inc-status{width:48px;text-align:center}
+.inc-table .inc-status svg{vertical-align:middle}
+.inc-table td b{font-weight:500;color:var(--heading)}
+.inc-current td{background:var(--accent-soft)}
+.inc-download{white-space:nowrap}
+.inc-chain .modal-foot{display:flex;justify-content:flex-end}
+@media(max-width:599px){.inc-chain .inc-table th,.inc-chain .inc-table td{padding:0 6px}.inc-chain .inc-table td b{font-size:var(--fs-caption);line-height:var(--lh-caption)}.inc-table th:nth-child(2),.inc-table td:nth-child(2){width:104px}.inc-table .num{width:68px}.inc-table .inc-status{width:36px}.inc-table td,.inc-chain .inc-table td b{font-size:var(--fs-caption)}}
+
+/* Storage report: kept-for-chain note in the saving tile. */

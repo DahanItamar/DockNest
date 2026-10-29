@@ -36,6 +36,7 @@
     "test:storage": "node scripts/storage-browser.js",
     "test:storage-report": "node scripts/storage-report-browser.js",
     "test:copies": "node scripts/copies-browser.js",
+    "test:incremental": "node scripts/incremental-browser.js",
     "test:s3": "node --no-addons scripts/s3-integration.js",
     "test:mobile": "node scripts/mobile-browser.js",
     "audit:repo": "node scripts/audit-repository.js",
