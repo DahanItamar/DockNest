@@ -6,14 +6,15 @@ import { z } from 'zod';
 import { db, id, audit } from './db.js';
 import { transport } from './engine.js';
 import { HELD as TEST_HELD, heldBy } from './restore-tests/hold.js';
-import { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo, installErrorText } from './install-plan.js';
+import { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo, installErrorText, dockerNeed } from './install-plan.js';
 
 export { INSTALL_PACKAGES, PACKAGE_MAP, installLabel, installSupported, installCommand, osFacts, installInfo };
 const LABELS = Object.fromEntries(INSTALL_PACKAGES.map(name => [name, installLabel(name)]));
 
 // ---------- API ----------
 const httpError = (status, message, code) => Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
-const bodySchema = z.object({ package: z.enum(INSTALL_PACKAGES) }).strict();
+// siteId: the site whose move asked for the install, so its Docker need applies (the server panel sends none).
+const bodySchema = z.object({ package: z.enum(INSTALL_PACKAGES), siteId: z.uuid().optional() }).strict();
 const ACTIVE_JOB = "('queued','running','recovery_required','move_queued','move_running')";
 const ENDED_MOVE = "('draft','rolled_back','cancelled','failed','switched_back','cleaned')";
 
@@ -34,18 +35,29 @@ export function serverBusy(serverId) {
 
 const plainRemote = (error, name) => (error?.hostKeyRejected ? `The saved host key for ${name} no longer matches. Check the server on the Servers page.` : `DockNest could not read ${name}. Test the connection on the Servers page.`);
 
+// The site's own selected containers decide its Docker need, as in move preflight.
+function siteNeed(siteId) {
+  if (!siteId) return {};
+  const site = db.prepare('SELECT config FROM sites WHERE id=?').get(siteId);
+  if (!site) throw httpError(404, 'Site not found.');
+  let config = {};
+  try { config = JSON.parse(site.config); } catch { /* An unreadable configuration counts as several containers. */ }
+  return dockerNeed(Array.isArray(config.containers) ? config.containers.length : 2);
+}
+
 export async function requestInstall(serverId, body, actor) {
-  const { package: name } = bodySchema.parse(body ?? {});
+  const { package: name, siteId } = bodySchema.parse(body ?? {});
   const server = db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);
   if (!server) throw httpError(404, 'Server not found.');
+  const need = siteNeed(siteId);
   const busy = () => httpError(409, `${server.name} is busy with another job. Try again when it finishes.`, 'SERVER_BUSY');
   if (serverBusy(server.id)) throw busy();
   let status;
   try { status = await transport.remote(server, { operation: 'install-status' }); }
   catch (error) { throw httpError(409, plainRemote(error, server.name), 'SERVER_UNREACHABLE'); }
   // Re-verified here, not trusted from the browser: the person saw an earlier preview.
-  const info = installInfo(status, name);
-  if (!info.supported) throw httpError(409, `DockNest cannot install ${LABELS[name]} on ${server.name}. Use "Show command" or install it yourself.`, 'INSTALL_UNSUPPORTED');
+  const info = installInfo(status, name, need);
+  if (!info.supported) throw httpError(409, info.reason ?? `DockNest cannot install ${LABELS[name]} on ${server.name}. Use "Show command" or install it yourself.`, 'INSTALL_UNSUPPORTED');
   if (status?.installed?.[name] !== false) throw httpError(409, name === 'docker' ? installErrorText('DOCKER_NOT_RUNNING', name) : `${LABELS[name]} is already installed on ${server.name}.`, 'ALREADY_INSTALLED');
   // The checks above awaited the network; look again right before writing so two requests cannot both start.
   if (serverBusy(server.id)) throw busy();

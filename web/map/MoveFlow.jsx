@@ -221,11 +221,11 @@ function CommandBox({command}){
  return <div className="map-code"><code>{command}</code><button type="button" onClick={copy}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>;
 }
 
-export function InstallConfirmDialog({server,check,client,onCancel,onStarted,onCheckAgain}){
+export function InstallConfirmDialog({server,siteId,check,client,onCancel,onStarted,onCheckAgain}){
  const guard=useGuard(client),[busy,setBusy]=useState(false),[err,setErr]=useState(''),[already,setAlready]=useState(false),i=check.install,name=PACKAGE_NAME[i.package];
  async function go(){
   setBusy(true);setErr('');
-  await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
+  await guard.run(async()=>{const r=await client.install(check.serverId||server.id,i.package,siteId);onStarted(r?.job?.id)},e=>{setErr(friendly(e));setAlready(e.code==='ALREADY_INSTALLED')});
   setBusy(false);
  }
  return <Sheet title={`Install ${name} on ${server.name}`} labelId="map-install-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button>{already?<button type="button" className="primary" onClick={onCheckAgain}>Check again</button>:<button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Install {name}</button>}</>}>

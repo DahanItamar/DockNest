@@ -18,7 +18,7 @@ export function createMovesClient(api){
   cloudflareStatus:()=>api('/settings/cloudflare-dns'),
   saveCloudflareToken:token=>api('/settings/cloudflare-dns',{token},'PUT'),
   // Installs a missing package on a server (admin, needs a recent re-check). Returns {job:{id}}; progress is GET /jobs/:id.
-  install:(serverId,pkg)=>api('/servers/'+id(serverId)+'/install',{package:pkg}),
+  install:(serverId,pkg,siteId)=>api('/servers/'+id(serverId)+'/install',{package:pkg,...(siteId?{siteId}:{})}),
   job:jobId=>api('/jobs/'+id(jobId))
  };
 }
