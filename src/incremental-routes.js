@@ -12,7 +12,7 @@ import { requireAdmin, requireRecentAuth } from './auth.js';
 import { statFile, openRead } from './storage.js';
 import { packagePath } from './artifact-journal.js';
 import { discardIncrementalState, busySite, enqueueBackup } from './engine.js';
-import { incrementalSettings, updateIncrementalSettings, setForceFull, loadChain, verifyChainLinks, inChain, ChainError, FULL_REASONS } from './incremental.js';
+import { incrementalSettings, updateIncrementalSettings, applyIncrementalSettings, loadChain, verifyChainLinks, inChain, ChainError, FULL_REASONS } from './incremental.js';
 
 const notFound = message => { throw Object.assign(new Error(message), { status: 404 }); };
 const site = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
@@ -66,18 +66,19 @@ const settingsChange = (req, res, next) => fullNowOnly(req.body) ? next() : requ
 incrementalRoutes.put('/sites/:id/incremental', settingsChange, async (req, res) => {
   const row = site(req.params.id);
   if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(row.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
-  let outcome;
-  try { outcome = updateIncrementalSettings(row.id, req.body, req.user.id, { staticSite: row.config?.kind === 'static' }); }
-  catch (error) { if (error.status && error.code) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
-  // Turning the option off removes the source's snapshot files. A running backup may still write them; that only ever
-  // makes a later backup full, so the discard is skipped while the site is busy and never blocks the change.
+  const staticSite = row.config?.kind === 'static';
+  let outcome, job = null;
+  try {
+    // fullNow marks the next backup full and starts it now through the same enqueue as Back up now (deployment hold,
+    // site moving, busy and archived guards, audit). The settings change commits in the job's transaction, so a refused
+    // backup leaves the settings and the audit trail exactly as they were.
+    if (req.body?.fullNow === true) job = enqueueBackup(row.id, req.user.id, {}, { within: () => { outcome = applyIncrementalSettings(row.id, req.body, req.user.id, { staticSite }); } });
+    else outcome = updateIncrementalSettings(row.id, req.body, req.user.id, { staticSite });
+  } catch (error) { if (error.status && error.code) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
+  // Turning the option off removes the source's snapshot files. A running backup may still write them; it removes them
+  // itself after its commit once it sees the option off (src/engine.js), so the discard is skipped while the site is busy.
   if (outcome.discard && !busySite(row.id)) await discardIncrementalState(row.id);
-  // fullNow marks the next backup full and starts it now through the same enqueue as Back up now (deployment hold, site
-  // moving, busy and archived guards, audit). If it cannot start, the mark is undone and the reason returned.
-  if (req.body?.fullNow === true) {
-    let job;
-    try { job = enqueueBackup(row.id, req.user.id); }
-    catch (error) { setForceFull(row.id, outcome.previousForce); throw error; }
+  if (job) {
     audit(req.user.id, 'backup.full_now', row.id, { job: job.id });
     return res.status(202).json({ ...view(row, incrementalSettings(row.id)), job: { id: job.id } });
   }
@@ -94,7 +95,8 @@ incrementalRoutes.get('/backups/:id/chain-download', async (req, res, next) => {
       const chain = verifyChainLinks(loadChain(req.params.id));
       if (!inChain(chain)) throw Object.assign(new Error('This backup is not part of an incremental chain. Use Download.'), { status: 409, publicCode: 'not_incremental' });
       for (const member of chain) {
-        if (db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(member.id)) throw new ChainError(member.id);
+        // Every package must be verified, as for a single Download.
+        if (member.verified !== 1 || db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(member.id)) throw new ChainError(member.id);
         // The same download lease as a single download: nothing of the chain is deleted while it streams.
         const lease = id(); db.prepare('INSERT INTO downloads VALUES (?,?,?)').run(lease, member.id, Date.now() + 120000); leases.push(lease);
       }

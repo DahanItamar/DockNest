@@ -72,7 +72,16 @@ test('GET and PUT /api/sites/:id/incremental: off by default, admin only, valida
   const busy = await operator('PUT', '/sites/site/incremental', { fullNow: true });
   assert.ok(busy.status >= 400); assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE site_id='site' AND status='queued'").get().n, 1);
   assert.equal(db.prepare("SELECT force_full FROM site_incremental WHERE site_id='site'").get().force_full, 3);
-  db.prepare('DELETE FROM jobs WHERE id=?').run(now.body.job.id);
+  // Turning the option on together with fullNow: a refused backup rolls back the settings change and its audit row.
+  db.prepare("INSERT INTO sites(id,server_id,name,config,created_at) VALUES('site-b','srv','site-b','{}',?)").run(at);
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('busy-b','site-b','backup','queued','queued',?)").run(at);
+  const audits = () => db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='site.incremental_update' AND target='site-b'").get().n;
+  assert.ok((await admin('PUT', '/sites/site-b/incremental', { enabled: true, fullNow: true })).status >= 400);
+  assert.equal(db.prepare("SELECT 1 FROM site_incremental WHERE site_id='site-b'").get(), undefined); assert.equal(audits(), 0);
+  db.prepare("DELETE FROM jobs WHERE id='busy-b'").run();
+  const both = await json(await admin('PUT', '/sites/site-b/incremental', { enabled: true, fullNow: true }));
+  assert.deepEqual([both.status, both.body.enabled, both.body.fullNextReason, audits()], [202, true, 'full-now', 1]);
+  db.prepare('DELETE FROM jobs WHERE id IN (?,?)').run(now.body.job.id, both.body.job.id);
   // /api/state carries the setting for Docker sites only.
   const state = (await json(await operator('GET', '/state'))).body;
   assert.deepEqual(state.sites.find(item => item.id === 'site').incremental, { enabled: true, interval: 13 });
@@ -117,6 +126,10 @@ test('ZIP export is refused for an increment; Download chain streams the encrypt
   assert.deepEqual([broken.status, broken.body.code], [409, 'chain_broken']);
   assert.match(broken.body.error, new RegExp(`depends on backup ${members[0].id}`));
   db.prepare('UPDATE backups SET size=size-1 WHERE id=?').run(members[0].id);
+  // Every package must be verified, as for a single Download.
+  db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(members[1].id);
+  assert.equal((await json(await operator('GET', `/backups/${members[2].id}/chain-download`))).body.code, 'chain_broken');
+  db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(members[1].id);
 });
 
 test('pinning an increment clears Object Lock deferrals of the packages it builds on', async () => {

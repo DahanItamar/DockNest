@@ -27,6 +27,7 @@ export const FULL_REASONS = Object.freeze({
   'plan-changed': 'The containers, mounts or images changed since the last backup.',
   'storage-changed': 'The main storage destination changed.',
   'site-moved': 'The site moved to another server.',
+  'standard-package': 'The previous backup was a standard full package, not part of a chain.',
   'format-changed': 'The backup format changed.',
   'snapshot-not-committed': 'The server could not confirm the change record of the previous backup.',
   'snapshot-missing': 'The change record on the server is missing.',
@@ -48,24 +49,31 @@ const httpError = (status, code, message) => Object.assign(new Error(message), {
 // settings and whether the source's snapshot files should be discarded (the option was turned off).
 export function updateIncrementalSettings(siteId, body, actor, { staticSite = false } = {}) {
   const input = body && typeof body === 'object' ? body : {};
+  validateSettings(input);
+  return transaction(() => applyIncrementalSettings(siteId, input, actor, { staticSite }));
+}
+function validateSettings(input) {
   for (const key of Object.keys(input)) if (!['enabled', 'interval', 'fullNow'].includes(key)) throw httpError(400, 'invalid_field', 'Unknown field: ' + key.slice(0, 40));
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw httpError(400, 'invalid_enabled', 'enabled must be true or false.');
   if (input.fullNow !== undefined && typeof input.fullNow !== 'boolean') throw httpError(400, 'invalid_full_now', 'fullNow must be true or false.');
   if (input.interval !== undefined && !(Number.isInteger(input.interval) && input.interval >= MIN_INTERVAL && input.interval <= MAX_INTERVAL)) throw httpError(400, 'invalid_interval', `Choose between ${MIN_INTERVAL} and ${MAX_INTERVAL} increments per full backup.`);
-  return transaction(() => {
-    const before = incrementalSettings(siteId);
-    const enabled = input.enabled ?? before.enabled, interval = input.interval ?? before.interval;
-    if (enabled && staticSite) throw httpError(400, 'static_site', 'Static sites always make full backups.');
-    if (input.fullNow && !enabled) throw httpError(409, 'incremental_off', 'Incremental backups are off for this site, so every backup is already full.');
-    let force = before.forceFull;
-    if (enabled && !before.enabled) force = FORCE.enabled;
-    if (!enabled) force = FORCE.none;
-    if (input.fullNow) force = FORCE.owner;
-    db.prepare('INSERT INTO site_incremental(site_id,enabled,interval,force_full,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,interval=excluded.interval,force_full=excluded.force_full,updated_at=excluded.updated_at')
-      .run(siteId, Number(enabled), interval, force, new Date().toISOString());
-    audit(actor, 'site.incremental_update', siteId, { enabled, interval, ...(input.fullNow ? { fullNow: true } : {}) });
-    return { settings: incrementalSettings(siteId), discard: before.enabled && !enabled, previousForce: before.forceFull };
-  });
+}
+// The same change without its own transaction, for a caller that holds one (Full backup now commits it with its job).
+export function applyIncrementalSettings(siteId, body, actor, { staticSite = false } = {}) {
+  const input = body && typeof body === 'object' ? body : {};
+  validateSettings(input);
+  const before = incrementalSettings(siteId);
+  const enabled = input.enabled ?? before.enabled, interval = input.interval ?? before.interval;
+  if (enabled && staticSite) throw httpError(400, 'static_site', 'Static sites always make full backups.');
+  if (input.fullNow && !enabled) throw httpError(409, 'incremental_off', 'Incremental backups are off for this site, so every backup is already full.');
+  let force = before.forceFull;
+  if (enabled && !before.enabled) force = FORCE.enabled;
+  if (!enabled) force = FORCE.none;
+  if (input.fullNow) force = FORCE.owner;
+  db.prepare('INSERT INTO site_incremental(site_id,enabled,interval,force_full,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,interval=excluded.interval,force_full=excluded.force_full,updated_at=excluded.updated_at')
+    .run(siteId, Number(enabled), interval, force, new Date().toISOString());
+  audit(actor, 'site.incremental_update', siteId, { enabled, interval, ...(input.fullNow ? { fullNow: true } : {}) });
+  return { settings: incrementalSettings(siteId), discard: before.enabled && !enabled };
 }
 export function setForceFull(siteId, value) {
   db.prepare('UPDATE site_incremental SET force_full=?,updated_at=? WHERE site_id=? AND enabled=1').run(value, new Date().toISOString(), siteId);
@@ -156,7 +164,12 @@ export function decideCapture({ site, plan, directory, jobDetails = {} }) {
   const latest = db.prepare('SELECT * FROM backups WHERE site_id=? ORDER BY captured_at DESC,id DESC LIMIT 1').get(site.id);
   if (!latest) return full('feature-enabled');
   const link = linkOf(latest.id), manifest = json(latest.manifest);
-  if (!link) return full('feature-enabled');
+  if (!link) {
+    // The newest backup is a self-contained package: a site move's own backup, a standard package the helper made
+    // although an increment was asked for, or one from before the option was turned on.
+    const made = json(db.prepare('SELECT details FROM jobs WHERE id=?').get(latest.job_id)?.details);
+    return full(made.moveId ? 'site-moved' : made.incremental?.standardPackage ? 'standard-package' : 'feature-enabled');
+  }
   if (manifest.formatVersion !== CHAIN_FORMAT || manifest.incremental?.format !== CHAIN_FORMAT) return full('format-changed');
   if (link.chain_position + 1 > settings.interval) return full('interval');
   let members;

@@ -20,7 +20,7 @@ import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
-import { decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,hasDependents } from './incremental.js';
+import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,hasDependents } from './incremental.js';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
 export const discover=server=>remote(server,{operation:'discover'});
@@ -67,13 +67,14 @@ const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table
 export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
 export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
-export function enqueueBackup(siteId,actor='scheduler',extra={}){
+// `within` runs first inside the enqueue transaction (Full backup now: its settings change and the job commit together).
+export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}){
  requireNoDeploymentHold();requireNotMoving(siteId,actor);
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
  if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
@@ -347,12 +348,12 @@ async function executeRestoreJob(job){
    // Only invoke extraction after the complete GCM-authenticated stream finishes.
    stage(job.id,'restoring');result=await remote(server,restoreRequest);
   }else{
-   const staging=await transport.remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
+   const staging=await remote(server,{operation:'prepare-restore',job:job.id,chainLength:chain.length});
    const paths=chainPaths(staging,chain.length);
    stage(job.id,'transferring');
-   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index]);
+   for(const [index,item] of chain.entries())await sendPackage(server,item,paths[index],{upload:uploadStream});
    // The helper checks every package's checksum and link again before it extracts the full package, then each increment.
-   stage(job.id,'restoring');result=await transport.remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
+   stage(job.id,'restoring');result=await remote(server,{...restoreRequest,chain:chainDescriptor(chain)});
   }
   // Evidence, job and restore outcome commit together, and only while this worker still owns the job.
   if(!transaction(()=>{if(!finishJob(job.id,"status='completed',stage='completed',finished_at=?,details=?",now(),JSON.stringify({...details,result})))return false;
@@ -482,7 +483,7 @@ export async function executeJob(job){
   if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
-  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails}});
+  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{})}});
   publishedBackup=true;
   // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
   // Its snapshot files are not committed, so the next backup of the site is full.
@@ -495,6 +496,8 @@ export async function executeJob(job){
    // If that is not confirmed the next backup is full (the helper would also refuse a mismatched snapshot).
    try{await transport.remote(server,{operation:'incremental-commit',job:job.id,siteKey:site.id,config:site.config});}
    catch{setForceFull(site.id,FORCE.uncommitted);audit('worker','backup.incremental_commit_failed',site.id,{job:job.id,backupId});}
+   // The option was turned off while this backup ran (the discard was skipped then): remove the files just committed.
+   if(!incrementalSettings(site.id).enabled)await discardIncrementalState(site.id,{server});
   }
   await transport.remote(server,{operation:'cleanup',root:result.root}).catch(()=>{});
   await sweepStaging(server,site,job.id).catch(()=>{});
