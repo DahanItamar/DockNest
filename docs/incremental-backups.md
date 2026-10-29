@@ -1,6 +1,6 @@
 # Incremental backups (ADR, Q6)
 
-Status: accepted by the owner on 2026-10-28 (option A). Not implemented. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28 (option A). Implemented in 2.12.0 as a beta; not validated until the Linux integration passes on the release commit. Date: 2026-10-28.
 Background: [open question Q6](product/open-questions.md), the storage report in [restore-tests.md](restore-tests.md)
 (Storage report), and the backup package format in [backup-format.md](backup-format.md).
 
@@ -115,8 +115,8 @@ The kit's decrypt tool verifies the chain links the same way the server does.
   chain package; no row = a self-contained full package) and a `site_incremental` table (default off, interval 6).
   `backups` keeps its columns because older code and tools insert into it positionally.
 - Existing backups are full packages and keep working unchanged.
-- Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Make a
-  full backup and turn incremental off before downgrading to 2.11. The upgrade notes say so, and the update center
+- Downgrade: a version without this feature refuses v2 packages, and its retention does not know about chains. Turn
+  incremental off for every site, then make a backup, before downgrading to 2.11. The upgrade notes say so, and the update center
   warns before a downgrade when the database contains incremental backups.
 - The feature ships labelled beta and opt-in, like moves and restore tests did.
 

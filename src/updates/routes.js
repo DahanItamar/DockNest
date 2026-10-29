@@ -18,7 +18,7 @@ import { incrementalBackupCount } from '../incremental.js';
 // does not know about chains, so the update center warns before a downgrade while this database holds any.
 export const INCREMENTAL_SINCE = '2.12.0';
 export function downgradeWarning(database, count = incrementalBackupCount(database)) {
-  return count > 0 ? { incrementalBackups: count, below: INCREMENTAL_SINCE, message: `This database holds ${count} incremental ${count === 1 ? 'backup' : 'backups'}. DockNest versions before ${INCREMENTAL_SINCE} cannot restore them and may delete the full backups they depend on. Make a full backup and turn incremental off before downgrading to 2.11.` } : null;
+  return count > 0 ? { incrementalBackups: count, below: INCREMENTAL_SINCE, message: `This database holds ${count} incremental ${count === 1 ? 'backup' : 'backups'}. DockNest versions before ${INCREMENTAL_SINCE} cannot restore them and may delete the full backups they depend on. Turn incremental off, then make a backup, before downgrading to 2.11.` } : null;
 }
 
 const answer = z.strictObject({ checkEnabled: z.boolean() });
