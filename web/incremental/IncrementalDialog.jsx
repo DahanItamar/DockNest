@@ -7,18 +7,18 @@ import './incremental.css';
 export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}){
  const [data,setData]=useState(null),[loadError,setLoadError]=useState('');
  const [enabled,setEnabled]=useState(false),[every,setEvery]=useState(String(DEFAULT_BACKUPS));
- const [busy,setBusy]=useState(false),[error,setError]=useState(null),[touched,setTouched]=useState(false);
+ const [tries,setTries]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(null),[touched,setTouched]=useState(false);
  useEffect(()=>{
-  let alive=true;
+  let alive=true;setLoadError('');
   client.get(site.id).then(settings=>{
    if(!alive)return;
    setData(settings);setEnabled(!!settings.enabled);setEvery(String(toBackups(settings.interval??DEFAULT_BACKUPS-1)));
   }).catch(failure=>{if(!alive)return;if(failure.status===401)onSessionExpired?.();else setLoadError(failure.message||'Incremental settings could not be loaded.')});
   return()=>{alive=false};
- },[client,site.id]);
+ },[client,site.id,tries]);
 
- if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button></div></div>;
- if(!data)return <div className="modal-body"><p role="status">Loading settings…</p></div>;
+ if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load settings">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button><button type="button" className="primary" onClick={()=>{setData(null);setTries(n=>n+1)}}>Try again</button></div></div>;
+ if(!data)return <div className="modal-body"><div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Loading settings…</StatusLabel></div></div>;
 
  const bad=enabled&&!validBackups(every),failed=failure=>{if(failure.status===401){onSessionExpired?.();return}setError(saveError(failure))};
  async function save(event){
@@ -43,7 +43,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
    <div className="inc-row-control"><input id="inc-every" type="number" inputMode="numeric" min={MIN_BACKUPS} max={MAX_BACKUPS} step="1" value={every} disabled={!enabled} aria-invalid={enabled&&touched&&bad?'true':undefined} aria-describedby="inc-every-help" onChange={event=>{setError(null);setEvery(event.target.value)}} onBlur={()=>setTouched(true)}/><span className="inc-unit">backups</span></div>
   </div>
   <div className="inc-row">
-   <div className="inc-row-text"><span className="inc-row-label" id="inc-full">New chain</span><span className="t-caption" id="inc-full-help">A full backup, then increments. Old backups stay.</span></div>
+   <div className="inc-row-text"><span className="inc-row-label" id="inc-full">New chain</span><span className="t-caption" id="inc-full-help">A full backup, then increments. Old backups stay.</span>{(!data.enabled||!enabled)&&<span className="t-caption inc-hint">Save first.</span>}</div>
    <div className="inc-row-add"><button type="button" aria-describedby="inc-full-help" disabled={busy||!data.enabled||!enabled} onClick={fullNow}>Full backup now</button></div>
   </div>
   {data.available===false&&<AlertPanel variant="info" title="Not available">Incremental backups need a Docker site on a server with the latest helper.</AlertPanel>}

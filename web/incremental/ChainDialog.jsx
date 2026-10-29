@@ -18,7 +18,7 @@ export function ChainDialog({backup,backups,date,bytes,onClose}){
     <td className="inc-when">{(parts=>[<b key="d">{parts[0]}</b>,parts[1]&&<small key="t">{parts[1]}</small>])(String(date(item.capturedAt||item.createdAt)).split(' | '))}</td>
     <td>{item.backupKind==='incremental'?'Increment '+item.chainPosition:'Full'}</td>
     <td className="num">{bytes(item.size||item.sizeBytes)}</td>
-    <td className="inc-status"><Icon className={'status-icon '+(ok?'status-success':'status-queued')} size={18} stroke={2} role="img" aria-label={ok?'Integrity checked':'Not checked yet'}/></td>
+    <td className="inc-status"><Icon className={'status-icon '+(ok?'status-success':'status-queued')} size={18} stroke={2} aria-hidden="true"/><span className="inc-sr">{ok?'Integrity checked':'Not checked yet'}</span></td>
    </tr>})}</tbody>
   </table>
   <div className="modal-foot"><button type="button" onClick={onClose}>Close</button><a className="button primary inc-download" href={chainDownloadUrl(backup.id)}><Download size={18} stroke={1.75} aria-hidden="true"/>Download chain</a></div>

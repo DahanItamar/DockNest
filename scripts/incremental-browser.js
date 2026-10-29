@@ -171,7 +171,7 @@ try {
       await openGroup(page);
       const rows = page.locator('.recovery-row');
       await rows.first().waitFor();
-      assert.match(await rows.first().innerText(), /Increment 1 of 1/, label + ': newest is an increment');
+      assert.match(await rows.first().innerText(), /Increment 1/, label + ': newest is an increment');
       assert.equal(await rows.first().getByLabel(/^Download full ZIP/).count(), 0, label + ': no ZIP for an increment');
       assert.equal(await rows.first().getByLabel(/^Download chain/).count(), 1, label + ': chain download');
       assert.equal(await rows.nth(1).getByLabel(/^Download full ZIP/).count(), 1, label + ': ZIP for a full backup');

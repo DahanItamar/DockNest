@@ -14,7 +14,9 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 .inc-unit{flex:none;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-muted)}
 .inc-row-add{flex:none}
 .inc-row-add button{white-space:nowrap}
-.inc-next{margin:12px 0 0}
+.inc-form .inc-next{margin:12px 0 0}
+.inc-load{min-height:var(--control-height);display:flex;align-items:center}
+.inc-hint{display:block;color:var(--text-muted)}
 .inc-form>.alert-panel{margin-top:16px}
 
 .inc-chain .inc-table .inc-when{white-space:normal}.inc-when b,.inc-when small{display:block}.inc-when small{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
@@ -29,7 +31,7 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 .inc-kind{display:inline-flex;align-items:center;gap:8px;font-weight:500;white-space:nowrap}
 .inc-kind .status-icon{flex:none}
 .inc-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
-.inc-link{width:auto;min-height:0;height:auto;padding:0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;white-space:nowrap}
+.inc-link{width:auto;min-height:32px;height:auto;padding:8px 12px;margin:-8px -12px -8px 0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;white-space:nowrap}
 .inc-link:hover{background:var(--transparent);text-decoration:underline}
 .inc-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .inc-spacer{flex:1}
@@ -52,4 +54,3 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 @media(max-width:599px){.inc-chain .inc-table th,.inc-chain .inc-table td{padding:0 6px}.inc-chain .inc-table td b{font-size:var(--fs-caption);line-height:var(--lh-caption)}.inc-table th:nth-child(2),.inc-table td:nth-child(2){width:104px}.inc-table .num{width:68px}.inc-table .inc-status{width:36px}.inc-table td,.inc-chain .inc-table td b{font-size:var(--fs-caption)}}
 
 /* Storage report: kept-for-chain note in the saving tile. */
-.sr-metrics .inc-saving .metric-tile{background:none;color:var(--link)}

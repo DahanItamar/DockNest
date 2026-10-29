@@ -10,7 +10,7 @@ export const intervalLine=backups=>'1 full, then '+count(backups-1,'increment');
 export const isIncremental=backup=>backup?.backupKind==='incremental';
 // A row shows chain details for increments and for full backups that start a chain.
 export const inChain=backup=>!!backup&&(isIncremental(backup)||(backup.backupKind==='full'&&(backup.dependents>0||backup.chainLength>1)));
-export const kindLabel=backup=>isIncremental(backup)?'Increment '+backup.chainPosition+(backup.chainLength?' of '+(backup.chainLength-1):''):'Full';
+export const kindLabel=backup=>isIncremental(backup)?'Increment '+backup.chainPosition:'Full';
 export const dependentsLine=backup=>backup.dependents>0?count(backup.dependents,'backup')+(backup.dependents===1?' depends':' depend')+' on this':'';
 export const chainOf=(backup,all)=>all.filter(item=>item.chainId&&item.chainId===backup.chainId).sort((a,b)=>a.chainPosition-b.chainPosition);
 

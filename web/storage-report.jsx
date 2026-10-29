@@ -1,6 +1,7 @@
 import React,{useEffect,useState} from 'react';
 import {Sparkline} from './charts.jsx';
 import {BrandIcon} from './brand.jsx';
+import {DatabaseMinus} from './icons.jsx';
 import {REPO} from './updates/parts.jsx';
 import './dashboard.css';
 import {DataTable} from './data-table.jsx';
@@ -29,7 +30,7 @@ export function useStorageReport(api,onSessionExpired=()=>{}) {
 
 // The Overview compact metric (dash-metric berry-metric-compact), with a secondary line and an optional slim bar in the text column.
 function Metric({icon,label,value,hint,children,action}) {
- return <section className="dash-metric berry-metric-compact"><span className="metric-tile"><BrandIcon name={icon} size={24}/></span><div className="sr-metric-body"><strong>{value}</strong><span className="metric-label">{label}{action}</span>{children}<small title={typeof hint==='string'?hint:undefined}>{hint}</small></div></section>;
+ return <section className="dash-metric berry-metric-compact"><span className="metric-tile">{typeof icon==='string'?<BrandIcon name={icon} size={24}/>:React.createElement(icon,{size:24,stroke:1.75,'aria-hidden':true})}</span><div className="sr-metric-body"><strong>{value}</strong><span className="metric-label">{label}{action}</span>{children}<small title={typeof hint==='string'?hint:undefined}>{hint}</small></div></section>;
 }
 
 // Main copies, extra copies and the parts kept for an incremental chain, one row per destination (2.11.0).
@@ -54,7 +55,7 @@ export function StorageReport({report,error,onOpenSites}) {
    <Metric icon="backups" label="Stored" value={size(report.totals.bytes)} hint={`${report.totals.packages} ${report.totals.packages===1?'backup':'backups'} across ${report.sites.length} ${report.sites.length===1?'site':'sites'}`}/>
    <Metric icon="storage" label="Capacity used" value={percent==null?'Not reported':percent+'%'} hint={percent==null?'This storage does not report its capacity.':`${size(used)} of ${size(capacity)}`}>{percent!=null&&<progress value={percent} max="100" aria-label="Capacity used"/>}</Metric>
    <Metric icon="jobs" label="Growth" value={history.values.length>1?sign+size(Math.abs(change)):'—'} hint={history.values.length>1?(history.full?'Last 30 days':'Since '+sinceLabel(history.since)):'Needs a few days of history'}/>
-   {saving?<Metric icon="update" label="Space saved" value={size(saving.bytesSaved)} hint="By incremental backups"><small className="sr-kept">{saving.keptForChain} kept for a chain</small></Metric>:<Metric icon="update" label="Possible saving" value={enough?'About '+report.totals.estimateUpToPercent+'%':'—'} hint={enough?'With incremental backups, best case':'Not enough backups yet to estimate'} action={<a className="sr-info" href={GUIDE} target="_blank" rel="noopener noreferrer" aria-label="About this estimate" title="How this estimate is made"><BrandIcon name="details" size={18}/></a>}/>}
+   {saving?<Metric icon={DatabaseMinus} label="Space saved" value={size(saving.bytesSaved)} hint="By incremental backups"><small className="sr-kept">{saving.keptForChain} kept for a chain</small></Metric>:<Metric icon="update" label="Possible saving" value={enough?'About '+report.totals.estimateUpToPercent+'%':'—'} hint={enough?'With incremental backups, best case':'Not enough backups yet to estimate'} action={<a className="sr-info" href={GUIDE} target="_blank" rel="noopener noreferrer" aria-label="About this estimate" title="How this estimate is made"><BrandIcon name="details" size={18}/></a>}/>}
   </div>
   <div className="sr-split">
    <section className="card"><div className="card-body"><h2 className="card-title">By site</h2><div className="sr-scroll" tabIndex={report.sites.length>8?0:undefined} aria-label={report.sites.length>8?'Sites by size, scrollable':undefined}><table className="sr-table"><thead className="sr-sr"><tr><th>Site</th><th>Share</th><th>Size</th></tr></thead><tbody>{report.sites.map(site=><tr key={site.siteId}><th scope="row" title={site.name}><span>{site.name}</span></th><td><span className="sr-bar" aria-hidden="true"><i style={{width:Math.max(2,Math.round(site.bytes/top*100))+'%'}}/></span></td><td className="num">{size(site.bytes)}</td></tr>)}</tbody></table></div></div>{onOpenSites&&<footer className="card-footer"><button type="button" onClick={onOpenSites}>Open sites</button></footer>}</section>
