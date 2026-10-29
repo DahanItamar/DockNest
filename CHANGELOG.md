@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-10-29
+
+See [docs/releases/2026-10-29-v2.12.0.md](docs/releases/2026-10-29-v2.12.0.md).
+
 ### Added
 
 - Incremental backups (beta, off by default, per site). By default a full backup is followed by 6 increments (you can change it) that hold only the files that changed in your mounts, so backups of large uploads or database folders take less storage. Every restore point restores to a complete copy, from the main storage or from a backup copy. Images are saved as before, so the saving comes from mount data. The storage report shows what was saved.
