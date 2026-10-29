@@ -222,7 +222,7 @@ class CommitTests(CaptureHarness):
         with patch('helper.emit') as emitted,patch('helper.sync_directory'):
             self.state.mkdir(exist_ok=True);(self.state/('.lock-'+SITE)).write_text('')
             helper.incremental_discard({'siteKey':SITE});self.assertTrue(emitted.call_args.kwargs['result']['existed'])
-            self.assertFalse((self.state/('.lock-'+SITE)).exists())
+            self.assertTrue((self.state/('.lock-'+SITE)).exists(),'The lock file stays so two processes never lock different files')
             helper.incremental_discard({'siteKey':SITE});self.assertFalse(emitted.call_args.kwargs['result']['existed'])
             with self.assertRaises(ValueError):helper.incremental_discard({'siteKey':'../etc'})
         self.assertFalse((self.state/SITE).exists())
@@ -404,7 +404,7 @@ class DumpdirTests(unittest.TestCase):
         self.assertFalse(dumpdir_problem('Dmoved\0Nx\0Rdata/sub\0Tdata/moved\0\0','data'))
         # A swap of a and b, as GNU tar 1.35 writes it: X names the temporary folder, empty R/T stand for it.
         self.assertFalse(dumpdir_problem('Da\0Db\0Xdata\0Rdata/b\0T\0Rdata/a\0Tdata/b\0R\0Tdata/a\0\0','data'))
-        for value in ['Y../x\0\0','Ya/b\0\0','Y..\0\0','Q\0\0','Rdata/../..\0Tdata/x\0\0','R/etc\0Tdata/x\0\0','Rdata/a\0T../b\0\0','Rother/a\0Tdata/a\0\0','Xdata//a\0\0','Y\0\0','X\0\0','N\0\0','D\0\0','X../t\0\0',None]:
+        for value in ['Y../x\0\0','Ya/b\0\0','Y..\0\0','Q\0\0','Rdata/../..\0Tdata/x\0\0','R/etc\0Tdata/x\0\0','Rdata/a\0T../b\0\0','Rother/a\0Tdata/a\0\0','Xdata//a\0\0','Y\0\0','X\0\0','N\0\0','D\0\0','X../t\0\0','X.\0\0','R.\0Tdata/a\0\0',None]:
             with self.subTest(value=value):self.assertTrue(dumpdir_problem(value,'data'))
     def check(self,entries,destination=None):
         with tempfile.TemporaryDirectory() as d:
@@ -429,6 +429,32 @@ class DumpdirTests(unittest.TestCase):
                 info=tarfile.TarInfo('data');info.type=tarfile.DIRTYPE;tar.addfile(info)
             archive=pathlib.Path(d)/'m.tar';archive.write_bytes(buffer.getvalue());(pathlib.Path(d)/'out').mkdir()
             with self.assertRaisesRegex(ValueError,'POSIX tar format'):incremental_archive_check(archive,(pathlib.Path(d)/'out').resolve())
+    def test_renames_move_restored_symlinks_before_they_are_checked(self):
+        links={('data','a','b','l'):'../../../x'}
+        self.assertFalse(helper.archive_link_escapes(('data','a','b'),'../../../x',links),'Inside the destination where it was restored')
+        moved=helper.rename_links(links,helper.dumpdir_renames('Da\0Db\0Rdata/a/b\0Tdata/b\0\0'))
+        self.assertEqual(moved,{('data','b','l'):'../../../x'})
+        self.assertTrue(helper.archive_link_escapes(('data','b'),'../../../x',moved),'After the rename the same link leaves the destination')
+        cycle=helper.rename_links({('data','a','l'):'x'},helper.dumpdir_renames('Da\0Db\0Xdata\0Rdata/b\0T\0Rdata/a\0Tdata/b\0R\0Tdata/a\0\0'))
+        self.assertEqual(cycle,{('data','b','l'):'x'})
+        for value in ['Rdata/a\0\0','Tdata/a\0\0','Rdata/a\0Rdata/b\0Tdata/c\0\0']:
+            with self.subTest(value=value),self.assertRaises(ValueError):helper.dumpdir_renames(value)
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_rename_that_carries_a_link_outside_the_destination_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'out';(root/'data'/'a'/'b').mkdir(parents=True);os.symlink('../../../x',root/'data'/'a'/'b'/'l')
+            archive=pathlib.Path(d)/'m.tar'
+            archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0Db\0Rdata/a/b\0Tdata/b\0\0'}),('data/b','dir',None,{'GNU.dumpdir':'Yl\0\0'}),('data/b/l/evil','file','x',None)]))
+            with self.assertRaisesRegex(ValueError,'write through|escapes'):incremental_archive_check(archive,root.resolve())
+            archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0Db\0Rdata/a/b\0Tdata/b\0\0'})]))
+            with self.assertRaisesRegex(ValueError,'escapes'):incremental_archive_check(archive,root.resolve())
+    @unittest.skipUnless(os.name=='posix','Needs symbolic links')
+    def test_rename_with_an_internal_link_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d)/'out';(root/'data'/'a'/'b').mkdir(parents=True);(root/'data'/'a'/'c').mkdir();os.symlink('../c',root/'data'/'a'/'b'/'l')
+            archive=pathlib.Path(d)/'m.tar'
+            archive.write_bytes(mount_tar([('data','dir',None,{'GNU.dumpdir':'Da\0\0'}),('data/a','dir',None,{'GNU.dumpdir':'Dc\0Dd\0Rdata/a/b\0Tdata/a/d\0\0'}),('data/a/d','dir',None,{'GNU.dumpdir':'Nl\0Ynew\0\0'}),('data/a/d/new','file','n',None)]))
+            self.assertEqual(incremental_archive_check(archive,root.resolve()),'data')
     def test_global_pax_headers_are_refused(self):
         with tempfile.TemporaryDirectory() as d:
             buffer=io.BytesIO()
@@ -545,6 +571,13 @@ class GnuTarChainTests(unittest.TestCase):
         os.rename(s/'a',s/'tmp');os.rename(s/'b',s/'a');os.rename(s/'tmp',s/'b')
         self.dump()
         self.assertEqual(tree(self.restore(2)),self.trees[1])
+    def test_renamed_folder_with_an_internal_link_restores(self):
+        s=self.source;(s/'a'/'b').mkdir(parents=True);(s/'a'/'c').mkdir();(s/'a'/'c'/'f').write_text('f');os.symlink('../c/f',s/'a'/'b'/'l')
+        self.dump()
+        os.rename(s/'a'/'b',s/'a'/'d');(s/'a'/'d'/'new').write_text('n')
+        self.dump()
+        restored=self.restore(2)
+        self.assertEqual(tree(restored),self.trees[1]);self.assertEqual((restored/'a'/'d'/'l').read_text(),'f')
     def test_symlink_to_a_folder_replaced_by_a_real_folder(self):
         s=self.source;(s/'real').mkdir();(s/'real'/'kept').write_text('k');os.symlink('real',s/'a')
         self.dump()
