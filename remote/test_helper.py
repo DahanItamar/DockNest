@@ -298,6 +298,64 @@ class VerifyRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaisesRegex(ValueError,'pre-backup state'):self.run_verify(d,['watchdog.done'],running=False)
 
+class MaintenanceSetupTests(unittest.TestCase):
+    CONF=('# server { example.com\n'
+        'server { listen 80; server_name example.com; return 301 https://$host$request_uri; }\n'
+        'server {\n    listen 443 ssl;\n    server_name example.com www.example.com; # main\n'
+        '    location / { proxy_pass http://127.0.0.1:3500; add_header X-A "a;b{"; }\n}\n'
+        'server { server_name other.org; location / { root /srv; } }\n')
+    def test_include_goes_after_server_name_only_in_serving_blocks_of_the_domain(self):
+        from helper import maintenance_nginx_edits
+        with tempfile.TemporaryDirectory() as d:
+            folder=pathlib.Path(d)/'sites-enabled';folder.mkdir();site=folder/'shop';site.write_text(self.CONF)
+            (folder/'docknest-move.conf').write_text('server { server_name example.com; }')
+            edits=maintenance_nginx_edits(['www.example.com'],'include /etc/nginx/docknest/x.conf;',folders=[str(folder)],root=d)
+            import os
+            self.assertEqual(list(edits),[os.path.realpath(site)])
+            text=edits[os.path.realpath(site)]
+            self.assertEqual(text.count('include /etc/nginx/docknest/x.conf;'),1)
+            self.assertIn('server_name example.com www.example.com;\n    include /etc/nginx/docknest/x.conf; # main',text)
+            self.assertEqual(text.replace('\n    include /etc/nginx/docknest/x.conf;',''),self.CONF)
+            site.write_text(text)
+            self.assertEqual(maintenance_nginx_edits(['example.com'],'include /etc/nginx/docknest/x.conf;',folders=[str(folder)],root=d),{})
+            with self.assertRaisesRegex(ValueError,'not found'):maintenance_nginx_edits(['missing.example'],'include x;',folders=[str(folder)],root=d)
+    def test_snippet_serves_the_page_only_while_the_flag_exists(self):
+        from helper import maintenance_snippet
+        text=maintenance_snippet('8df5710b-9e0d-422a-87a4-d57d45de133b','/var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b')
+        self.assertIn('if (-f /var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b/enabled)',text)
+        self.assertIn('if ($uri = /__docknest_maintenance.html) { set $dn_maint_8df5710b9e0d 0; }',text)
+        self.assertIn('location = /__docknest_maintenance.html { internal; alias',text)
+    @unittest.skipUnless(__import__('os').name=='posix','Needs root-style file ownership calls')
+    def test_failed_visitor_test_puts_every_file_back(self):
+        import helper
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);page=base/'maintenance';page.mkdir();(page/'maintenance.html').write_text('dbm-maintenance-v1')
+            folder=base/'sites-enabled';folder.mkdir();site=folder/'shop';site.write_text(self.CONF)
+            cfg={'domains':['example.com'],'maintenance':{'required':True,'directory':str(page),'publicUrl':'https://example.com/'}}
+            plan=lambda domains,line:helper.maintenance_nginx_edits(domains,line,folders=[str(folder)],root=d)
+            with patch('helper.MAINTENANCE_SNIPPETS',base/'docknest'),patch('helper.maintenance_nginx_edits',side_effect=plan),patch('helper.os.geteuid',return_value=0),\
+                 patch('helper.shutil.which',return_value='/usr/sbin/nginx'),patch('helper.process_running',return_value=True),patch('helper.run'),\
+                 patch('helper.nginx_reload') as reload,patch('helper.public_probe',return_value=(200,b'origin')):
+                with self.assertRaisesRegex(ValueError,'did not get the maintenance page'):helper.setup_maintenance({'siteId':'8df5710b-9e0d-422a-87a4-d57d45de133b','config':cfg})
+            self.assertEqual(site.read_text(),self.CONF);self.assertFalse((page/'enabled').exists());self.assertFalse((page/'ready').exists())
+            self.assertFalse((base/'docknest'/'8df5710b-9e0d-422a-87a4-d57d45de133b.conf').exists());self.assertEqual(reload.call_count,2)
+    @unittest.skipUnless(__import__('os').name=='posix','Needs root-style file ownership calls')
+    def test_successful_setup_marks_the_site_ready_and_leaves_the_page_off(self):
+        import helper
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d);page=base/'maintenance';page.mkdir();(page/'maintenance.html').write_text('dbm-maintenance-v1')
+            folder=base/'sites-enabled';folder.mkdir();site=folder/'shop';site.write_text(self.CONF)
+            cfg={'domains':['example.com'],'maintenance':{'required':True,'directory':str(page),'publicUrl':'https://example.com/'}}
+            probe=lambda m,domains=():(503,b'dbm-maintenance-v1') if (page/'enabled').exists() else (200,b'origin')
+            plan=lambda domains,line:helper.maintenance_nginx_edits(domains,line,folders=[str(folder)],root=d)
+            with patch('helper.MAINTENANCE_SNIPPETS',base/'docknest'),patch('helper.maintenance_nginx_edits',side_effect=plan),patch('helper.os.geteuid',return_value=0),\
+                 patch('helper.shutil.which',return_value='/usr/sbin/nginx'),patch('helper.process_running',return_value=True),patch('helper.run'),\
+                 patch('helper.nginx_reload'),patch('helper.public_probe',side_effect=probe),patch('helper.emit') as emitted:
+                helper.setup_maintenance({'siteId':'8df5710b-9e0d-422a-87a4-d57d45de133b','config':cfg})
+            self.assertTrue((page/'ready').exists());self.assertFalse((page/'enabled').exists())
+            self.assertIn('include %s/docknest/8df5710b-9e0d-422a-87a4-d57d45de133b.conf;'%d,site.read_text())
+            self.assertTrue(emitted.call_args.kwargs['result']['configured'])
+
 class FullZipTests(unittest.TestCase):
     def test_static_zip_contains_browsable_files_and_original_archive(self):
         with tempfile.TemporaryDirectory() as d:

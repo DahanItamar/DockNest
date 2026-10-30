@@ -9,7 +9,8 @@ import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
 const containerStatus=container=>typeof container.state==='object'?container.state.status:container.state||container.State?.Status||'unknown';
 
-export function SiteWizard({api,Field,servers,initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
+export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
+ const [autoMaintenance,setAutoMaintenance]=useState(true);
  const [step,setStep]=useState(initialSite?2:1),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
  const [containers,setContainers]=useState([]),[primary,setPrimary]=useState(initialSite?.config.containers?.[0]||''),[additional,setAdditional]=useState(initialSite?.config.containers?.slice(1)||[]);
  const [staticSites,setStaticSites]=useState([]),[staticRoot,setStaticRoot]=useState(initialSite?.config.kind==='static'?initialSite.config.documentRoot:'');
@@ -76,6 +77,11 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
   const domains=settings.domains.split(',').map(normalizeDomain).filter(Boolean);
   try{
    const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,kind:isStatic?'static':'docker',...(isStatic?{documentRoot:staticRoot}:{}),containers:selected,temporaryMemoryFolders:temporaryFolders,stagingRoot:settings.stagingRoot,deliveryMode:settings.deliveryMode,maintenanceRequired:!isStatic,maintenanceProbeOrigin:!!settings.probeOrigin,maintenancePublicUrl:isStatic?settings.healthUrl:publicUrl,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:!isStatic,healthUrl:settings.healthUrl,publicUrl:isStatic?settings.healthUrl:publicUrl}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
+   if(!initialSite&&!isStatic&&canSetUpMaintenance&&autoMaintenance&&domains.length){
+    try{await api('/sites/'+site.id+'/maintenance/setup',{});onSaved(site,'Site added with its maintenance page, tested on your domain. Set its schedule when ready.');}
+    catch(error){if(error.status===401){onSessionExpired();return;}onSaved(site,'Site added. The maintenance page was not set up: '+error.message+' Backups still work; visitors may see an error for a few seconds during each one.');}
+    return;
+   }
    onSaved(site);
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
@@ -140,7 +146,8 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
    <label className="check"><input type="checkbox" name="externalReferencesConfirmed" checked={settings.externalReferencesConfirmed} onChange={update} required/> I reviewed external dependencies and included the configuration files and secrets needed to recreate this site.</label>
    {!isStatic&&<label className="check"><input type="checkbox" name="cleanShutdownConfirmed" checked={settings.cleanShutdownConfirmed} onChange={update} required={settings.shutdownProfile==='generic'}/> I verified that a normal stop cleanly closes the application and database writers (required for Generic).</label>}
    <label className="check"><input type="checkbox" name="exclusiveSourcesConfirmed" checked={settings.exclusiveSourcesConfirmed} onChange={update} required/> {isStatic?'No deployment or process will change these website files during capture.':'No containers or processes outside this site write to its mounted data.'}</label>
-   <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, deploy the maintenance page and integrate the source proxy, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
+   {!isStatic&&!initialSite&&canSetUpMaintenance&&<label className="check"><input type="checkbox" checked={autoMaintenance} onChange={event=>setAutoMaintenance(event.target.checked)}/> Show a maintenance page during backups. DockNest adds it to this site's nginx, tests it and undoes the change if anything fails.</label>}
+   <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
   </>}
   {error&&<AlertPanel variant="error" title="The site could not be saved">{error}</AlertPanel>}
   <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step>1&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>value-1);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step===1&&!!error)}>{busy?'Saving site…':step===3?(initialSite?'Save configuration':'Add site'):'Continue'}</button></div>

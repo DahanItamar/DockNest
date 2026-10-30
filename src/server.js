@@ -29,7 +29,7 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin, requireRecentAuth } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
@@ -450,6 +450,7 @@ app.patch('/api/maintenance', (req, res) => {
 });
 app.post('/api/sites/:id/maintenance', async (req, res) => { const data = z.object({ enabled: z.boolean() }).parse(req.body); res.json(await setMaintenance(req.params.id, data.enabled)); });
 app.post('/api/sites/:id/maintenance/deploy', async (req, res) => res.json(await deployMaintenance(req.params.id)));
+app.post('/api/sites/:id/maintenance/setup', requireAdmin, async (req, res) => res.json(await setupMaintenance(getSite(req.params.id).id, req.user.id)));
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint not found.' }));
 const dist = path.resolve('dist');
 // Unknown non-API paths get the app with a 404 status; the app renders its own 404 page.

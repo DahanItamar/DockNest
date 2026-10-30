@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Automatic maintenance page for sites behind nginx on the server. Add a site with **Show a maintenance page during backups** ticked, or use **Set up maintenance page** on a site card. DockNest adds its own snippet with one include line per server block, tests nginx, checks the page on your domain, and undoes everything if a step fails.
+
 ### Changed
 
 - The maintenance page is now optional for Docker sites. When it is not set up, a backup still runs and the job shows a warning that visitors may see an error for the few seconds the containers are stopped. Check readiness lists it as optional.
