@@ -9,7 +9,8 @@ the result, and removes everything it created. It answers one question on a sche
 I needed it today?"
 
 Real restore tests count as validated only when the Linux integration test below passes (see AGENTS.md). Until then
-the feature ships with its own "beta" label, like moves did.
+the feature ships with its own "beta" label, like moves did. It left beta in 2.13.1 after real-site validation (see
+[acceptance.md](acceptance.md)).
 
 ## Decisions at a glance
 
