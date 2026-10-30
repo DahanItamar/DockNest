@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Security
+
+- Updated body-parser, qs and zod to versions that fix denial-of-service issues reported by Dependabot (oversized or malformed requests could slow or crash the API).
+
 ## [2.13.0] - 2026-10-30
 
 See [docs/releases/2026-10-30-v2.13.0.md](docs/releases/2026-10-30-v2.13.0.md).
