@@ -339,7 +339,6 @@ export const CATALOGUE=Object.freeze([
  "System mount is not portable",
  "TRUST_PROXY must be a comma-separated list of exact IP addresses or CIDR ranges",
  "Target did not create an isolated restore network",
- "Temporary RAM folder options require a reviewed adapter",
  "The S3 bucket does not exist at this endpoint.",
  "The backup changed after it was checked. Prepare the ZIP again.",
  "The backup could not be verified, so no ZIP was prepared. The encrypted download remains available.",

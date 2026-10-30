@@ -117,7 +117,7 @@ const siteSchema = z.object({
     mountExclusions:z.array(z.object({source:linuxPath,path:linuxPath,reason:z.string().trim().min(1).max(300),requiredForRestore:z.boolean().optional()})).max(50).default([]),
     mountExclusionsConfirmed:z.boolean().default(false),
     restoreReferences:z.array(z.object({serverId:z.uuid(),capturedPath:linuxPath,source:linuxPath})).max(50).default([]),
-    temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.enum(['/tmp','/run/mysqld','/var/run/mysqld','/var/cache/nginx','/app/.next/cache'])})).max(90).default([]),
+    temporaryMemoryFolders:z.array(z.object({container:z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/),destination:z.string().max(4096).regex(/^\/[A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*$/)})).max(90).default([]),
     composeFiles: z.array(linuxPath).max(20).default([]),
     externalReferencesConfirmed: z.boolean().default(false),
     maintenanceRequired: z.boolean().default(true),

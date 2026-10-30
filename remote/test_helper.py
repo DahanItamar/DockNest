@@ -2,7 +2,7 @@ import unittest, tempfile, pathlib, tarfile, io, urllib.error
 import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, nginx_sites, web_hints, tree_digest, static_preflight
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
@@ -259,17 +259,21 @@ class StaticSiteTests(unittest.TestCase):
                     with self.assertRaises(ValueError):static_preflight(cfg)
 
 class TemporaryMemoryTests(unittest.TestCase):
-    def test_explicit_temporary_folder_preserves_options(self):
-        c={'Id':'123','Name':'/app','HostConfig':{'Tmpfs':{'/tmp':'size=128m,mode=1777'}}}
-        self.assertEqual(temporary_mounts(c,[{'container':'app','destination':'/tmp'}]),[('/tmp','size=128m,mode=1777')])
-        with self.assertRaises(ValueError):temporary_mounts(c,[])
-        c['HostConfig']['Tmpfs']={'/database':'size=128m'}
-        with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/database'}])
-        c['HostConfig']['Tmpfs']={'/tmp':'size=128m,unknown=1'}
-        with self.assertRaises(ValueError):temporary_mounts(c,[{'container':'app','destination':'/tmp'}])
-        for destination in ['/var/cache/nginx','/app/.next/cache']:
-            c['HostConfig']['Tmpfs']={destination:'size=8m,mode=0700'}
-            self.assertEqual(temporary_mounts(c,[{'container':'app','destination':destination}]),[(destination,'size=8m,mode=0700')])
+    def test_every_ram_folder_is_recreated_empty_with_its_options(self):
+        c={'Id':'123','Name':'/app','HostConfig':{'Tmpfs':{'/tmp':'size=128m,mode=1777','/var/run':'','/var/cache/nginx':'','/data/sessions':'noexec,nosuid'}}}
+        self.assertEqual(temporary_mounts(c),[('/tmp','size=128m,mode=1777'),('/var/run',''),('/var/cache/nginx',''),('/data/sessions','noexec,nosuid')])
+        self.assertEqual([tmpfs_argument(*item) for item in temporary_mounts(c)],['/tmp:size=128m,mode=1777','/var/run','/var/cache/nginx','/data/sessions:noexec,nosuid'])
+    def test_unrecognized_options_and_paths_fail_with_the_folder_named(self):
+        for tmpfs in [{'/tmp':'size=128m,unknown=1'},{'/tmp':'size=1m;rm'},{'/a/../etc':''},{'relative':''},{'/x y':''}]:
+            with self.assertRaises(ValueError) as error:temporary_mounts({'Id':'123','Name':'/app','HostConfig':{'Tmpfs':tmpfs}})
+            self.assertIn('app',str(error.exception))
+    def test_long_syntax_tmpfs_mounts_become_ram_folders(self):
+        c={'Id':'1','Name':'/app','HostConfig':{'Tmpfs':{'/tmp':''},'Mounts':[{'Type':'tmpfs','Target':'/cache','TmpfsOptions':{'SizeBytes':1048576,'Mode':1023}},{'Type':'tmpfs','Target':'/sticky','TmpfsOptions':{'Mode':(1<<20)|0o777}}]},
+           'Mounts':[{'Type':'volume','Name':'v','Source':'/var/lib/docker/volumes/v/_data','Destination':'/data'},{'Type':'tmpfs','Source':'','Destination':'/cache','RW':True},{'Type':'tmpfs','Source':'','Destination':'/sticky','RW':False}]}
+        n=tmpfs_as_host_config(c)
+        self.assertEqual(n['HostConfig']['Tmpfs'],{'/tmp':'','/cache':'size=1048576,mode=1777','/sticky':'mode=1777,ro'})
+        self.assertEqual([m['Type'] for m in n['Mounts']],['volume'])
+        self.assertEqual(temporary_mounts(n),[('/tmp',''),('/cache','size=1048576,mode=1777'),('/sticky','mode=1777,ro')])
 
 class FullZipTests(unittest.TestCase):
     def test_static_zip_contains_browsable_files_and_original_archive(self):
