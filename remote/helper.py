@@ -51,7 +51,7 @@ def sync_directory(path):
     finally:os.close(directory)
 
 SHARED_SYSTEM_FOLDERS={'/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp','/usr','/var/www'}
-def private_staging_base(base):
+def private_staging_base(base,traverse=False):
     """The shared staging folder: root-owned, never readable or writable by others.
     Others may only pass through it (0711), so nginx can reach a maintenance page kept under it."""
     base=pathlib.Path(base)
@@ -60,7 +60,8 @@ def private_staging_base(base):
     info=base.stat()
     # The helper runs as root, so this is the root-ownership check.
     if info.st_uid!=os.geteuid():raise ValueError('Staging directory must be owned by root')
-    if info.st_mode&0o066:os.chmod(base,0o711 if info.st_mode&0o011 else 0o700)
+    mode=0o711 if traverse or info.st_mode&0o011 else 0o700
+    if stat.S_IMODE(info.st_mode)&0o077!=mode&0o077:os.chmod(base,mode)
     return base
 def create_staging_root(root):
     root=pathlib.Path(root)
@@ -2556,7 +2557,7 @@ def deploy_maintenance(req):
         if maintenance_link_escape(p) or not (p/'maintenance.html').is_file():raise ValueError(problem+'. Choose a directory under the staging root or a web root.')
         warn(problem+'; kept because a maintenance page is already deployed there')
     staging=cfg.get('stagingRoot')
-    if staging and within(lexical(p),lexical(staging)) and os.name=='posix' and os.geteuid()==0:private_staging_base(staging)
+    if staging and within(lexical(p),lexical(staging)) and os.name=='posix' and os.geteuid()==0:private_staging_base(staging,traverse=True)
     p.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(req['html'])
     if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')

@@ -367,6 +367,8 @@ class StagingBaseTests(unittest.TestCase):
             os.chmod(base,0o777);private_staging_base(base);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o711)
             os.chmod(base,0o700);private_staging_base(base);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o700)
             fresh=pathlib.Path(d)/'new';private_staging_base(fresh);self.assertEqual(stat.S_IMODE(fresh.stat().st_mode)&0o077,0)
+            page=pathlib.Path(d)/'with-page';private_staging_base(page,traverse=True);self.assertEqual(stat.S_IMODE(page.stat().st_mode),0o711)
+            os.chmod(base,0o700);private_staging_base(base,traverse=True);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o711)
             for shared in ['/','/var/lib','/tmp']:
                 with self.assertRaises(ValueError):private_staging_base(shared)
 
