@@ -53,7 +53,7 @@ class BootRecoveryTests(unittest.TestCase):
             record={'version':1,'bootId':'previous','running':['db','web'],'identities':{'db':'image-db','web':'image-web','idle':'image-idle'},'config':{'_serviceContracts':[],'maintenance':{}}}
             (root/'boot-recovery.json').write_text(json.dumps(record))
             states=[{'Id':cid,'Image':image,'State':{'Running':False}} for cid,image in record['identities'].items()]
-            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states),patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json') as write,patch('boot_recovery.complete_recovery'):
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a,**k:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states),patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json') as write,patch('boot_recovery.complete_recovery'):
                 result=recover_jobs([d],'current');self.assertEqual(result['recovered'],1)
                 restart.assert_called_once_with(['db','web'],[]);flags.assert_called_once_with(record['config'],False)
                 restart.reset_mock();self.assertEqual(recover_jobs([d],'previous')['ignored'],1);restart.assert_not_called()
@@ -69,7 +69,7 @@ class BootRecoveryTests(unittest.TestCase):
             # Emulate the atomic writer to exercise replay on Windows too; production
             # atomic_json fsyncs both the completion file and its parent directory.
             def write_journal(path,value):pathlib.Path(path).write_text(json.dumps(value))
-            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states) as inspect_source,patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json',side_effect=write_journal),patch('helper.atomic_json',side_effect=write_journal) as write:
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a,**k:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect',return_value=states) as inspect_source,patch('boot_recovery.restart_services') as restart,patch('boot_recovery.health',return_value=True),patch('boot_recovery.maintenance') as flags,patch('boot_recovery.atomic_json',side_effect=write_journal),patch('helper.atomic_json',side_effect=write_journal) as write:
                 self.assertEqual(recover_jobs([d],'recovery-boot')['recovered'],1)
                 completion=json.loads((root/'disarmed').read_text())
                 self.assertTrue(completion['completed']);self.assertEqual(completion['bootId'],'recovery-boot')
@@ -93,7 +93,7 @@ class BootRecoveryTests(unittest.TestCase):
                 self.assertTrue(json.loads((root/'recovery.json').read_text())['recovered'])
             # The operator stops the recovered database. A later host boot must
             # preserve that choice even though the interrupted job is retained.
-            with patch('boot_recovery.private_path',side_effect=lambda p,*a:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect') as inspect_source,patch('boot_recovery.restart_services') as restart:
+            with patch('boot_recovery.private_path',side_effect=lambda p,*a,**k:pathlib.Path(p)),patch('boot_recovery.os.geteuid',return_value=0,create=True),patch('boot_recovery.inspect') as inspect_source,patch('boot_recovery.restart_services') as restart:
                 self.assertEqual(recover_jobs([d],'later-boot')['ignored'],1)
                 inspect_source.assert_not_called();restart.assert_not_called()
     def test_failed_public_recovery_or_marker_sync_keeps_watchdog_armed(self):
@@ -371,6 +371,23 @@ class StagingBaseTests(unittest.TestCase):
             os.chmod(base,0o700);private_staging_base(base,traverse=True);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o711)
             for shared in ['/','/var/lib','/tmp']:
                 with self.assertRaises(ValueError):private_staging_base(shared)
+
+class BootRecoveryPathTests(unittest.TestCase):
+    @unittest.skipUnless(__import__('os').name=='posix','POSIX permissions')
+    def test_staging_base_may_be_traverse_only_but_jobs_stay_private(self):
+        import os
+        from boot_recovery import private_path
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(os.path.realpath(d))/'docknest';base.mkdir();job=base/'job';job.mkdir()
+            os.chmod(base,0o711);os.chmod(job,0o700)
+            self.assertEqual(private_path(base,True,traverse=True),base)
+            self.assertEqual(private_path(job,True),job)
+            with self.assertRaises(ValueError):private_path(base,True)
+            for mode in (0o755,0o733):
+                os.chmod(base,mode)
+                with self.assertRaises(ValueError):private_path(base,True,traverse=True)
+            os.chmod(job,0o711)
+            with self.assertRaises(ValueError):private_path(job,True)
 
 class FullZipTests(unittest.TestCase):
     def test_static_zip_contains_browsable_files_and_original_archive(self):
