@@ -332,7 +332,7 @@ class MaintenanceSetupTests(unittest.TestCase):
             base=pathlib.Path(d);page=base/'maintenance';page.mkdir();(page/'maintenance.html').write_text('dbm-maintenance-v1')
             folder=base/'sites-enabled';folder.mkdir();site=folder/'shop';site.write_text(self.CONF)
             cfg={'domains':['example.com'],'maintenance':{'required':True,'directory':str(page),'publicUrl':'https://example.com/'}}
-            plan=lambda domains,line:helper.maintenance_nginx_edits(domains,line,folders=[str(folder)],root=d)
+            real=helper.maintenance_nginx_edits;plan=lambda domains,line:real(domains,line,folders=[str(folder)],root=d)
             with patch('helper.MAINTENANCE_SNIPPETS',base/'docknest'),patch('helper.maintenance_nginx_edits',side_effect=plan),patch('helper.os.geteuid',return_value=0),\
                  patch('helper.shutil.which',return_value='/usr/sbin/nginx'),patch('helper.process_running',return_value=True),patch('helper.run'),\
                  patch('helper.nginx_reload') as reload,patch('helper.public_probe',return_value=(200,b'origin')):
@@ -347,7 +347,7 @@ class MaintenanceSetupTests(unittest.TestCase):
             folder=base/'sites-enabled';folder.mkdir();site=folder/'shop';site.write_text(self.CONF)
             cfg={'domains':['example.com'],'maintenance':{'required':True,'directory':str(page),'publicUrl':'https://example.com/'}}
             probe=lambda m,domains=():(503,b'dbm-maintenance-v1') if (page/'enabled').exists() else (200,b'origin')
-            plan=lambda domains,line:helper.maintenance_nginx_edits(domains,line,folders=[str(folder)],root=d)
+            real=helper.maintenance_nginx_edits;plan=lambda domains,line:real(domains,line,folders=[str(folder)],root=d)
             with patch('helper.MAINTENANCE_SNIPPETS',base/'docknest'),patch('helper.maintenance_nginx_edits',side_effect=plan),patch('helper.os.geteuid',return_value=0),\
                  patch('helper.shutil.which',return_value='/usr/sbin/nginx'),patch('helper.process_running',return_value=True),patch('helper.run'),\
                  patch('helper.nginx_reload'),patch('helper.public_probe',side_effect=probe),patch('helper.emit') as emitted:

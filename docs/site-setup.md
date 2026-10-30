@@ -12,7 +12,7 @@ Temporary RAM folders (`tmpfs`) are listed in the wizard for information. Docker
 
 Connect **Storage** and use **Check readiness**.
 
-**Maintenance page (optional).** While a Docker site's containers are stopped for a backup, visitors can see a friendly "back in a minute" page instead of an error. When you add a site, **Show a maintenance page during backups** is ticked. For an existing site, use **Set up maintenance page** on its card (administrators only). DockNest then:
+**Maintenance page (optional).** While a Docker site's containers are stopped for a backup, visitors can see a friendly "back in a minute" page instead of an error. When you add a site, **Show a maintenance page during backups** is ticked. For an existing site, run **Check readiness** and choose **Set up maintenance page** next to the maintenance check (administrators only). DockNest then:
 
 1. copies the page from **Maintenance** to the server,
 2. writes its own file `/etc/nginx/docknest/<site id>.conf` and adds one `include` line after `server_name` in each nginx server block that serves the site's domain (blocks that only redirect are left alone),
