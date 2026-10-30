@@ -38,7 +38,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Restore to a separate copy; DockNest does not replace a live site by itself.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
 - Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
-- Optional maintenance page, designed in a visual editor, while a site is paused.
+- Optional maintenance page, designed in a visual editor, while a site is paused. For sites behind nginx on the server, DockNest sets it up, tests it on your domain and undoes it if anything fails.
 
 **Operation**
 - Jobs page with transfer progress, a step timeline and plain-language error explanations.
@@ -136,7 +136,7 @@ In a second terminal run `npm run worker`, then open http://127.0.0.1:3000. On W
 2. **Connect storage** under **Storage**.
 3. **Add a server** and confirm its SSH fingerprint. See [server connection](docs/server-connection.md).
 4. **Add a site.** DockNest discovers Docker projects and static nginx sites; review what it found. See [site setup](docs/site-setup.md).
-5. **Check readiness.** For Docker sites, set up the maintenance page first.
+5. **Check readiness.** The maintenance page is optional. Without it, visitors may see an error for the few seconds a Docker site is stopped.
 6. **Run a backup**, then watch it under **Jobs**.
 7. **Verify and restore.** Restore a recovery point to a separate copy to confirm it works. See [recovery verification](docs/recovery-verification.md).
 8. **Turn on the schedule** for the site.
