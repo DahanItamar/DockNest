@@ -304,7 +304,7 @@ export const CATALOGUE=Object.freeze([
  "Staging already exists; inspect retained job before retry",
  "Staging and source paths cannot overlap",
  "Staging and static website paths cannot overlap",
- "Staging directory must be root-owned with mode 0700",
+ "Staging directory must be owned by root",
  "Staging path must be absolute",
  "Stateful service requires a supported per-service database contract",
  "Static IP assignments require a reviewed offline restore",

@@ -356,6 +356,20 @@ class MaintenanceSetupTests(unittest.TestCase):
             self.assertIn('include %s/docknest/8df5710b-9e0d-422a-87a4-d57d45de133b.conf;'%d,site.read_text())
             self.assertTrue(emitted.call_args.kwargs['result']['configured'])
 
+class StagingBaseTests(unittest.TestCase):
+    @unittest.skipUnless(__import__('os').name=='posix','POSIX permissions')
+    def test_staging_base_is_private_but_lets_nginx_pass_through(self):
+        import os,stat
+        from helper import private_staging_base
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d)/'docknest';base.mkdir(mode=0o755);os.chmod(base,0o755)
+            private_staging_base(base);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o711)
+            os.chmod(base,0o777);private_staging_base(base);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o711)
+            os.chmod(base,0o700);private_staging_base(base);self.assertEqual(stat.S_IMODE(base.stat().st_mode),0o700)
+            fresh=pathlib.Path(d)/'new';private_staging_base(fresh);self.assertEqual(stat.S_IMODE(fresh.stat().st_mode)&0o077,0)
+            for shared in ['/','/var/lib','/tmp']:
+                with self.assertRaises(ValueError):private_staging_base(shared)
+
 class FullZipTests(unittest.TestCase):
     def test_static_zip_contains_browsable_files_and_original_archive(self):
         with tempfile.TemporaryDirectory() as d:
