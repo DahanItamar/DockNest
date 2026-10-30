@@ -10,7 +10,17 @@ Compose files and their `.env` / `env_file` references are detected inside the p
 
 Temporary RAM folders (`tmpfs`) are listed in the wizard for information. Docker empties them on every container restart, so a backup has nothing to capture there and a restore recreates them empty with their original size, mode and flags. Database and uploaded content must be in persistent mounts. A RAM folder at an unusual path, or with mount options DockNest does not recognize, stops the backup with a message naming the container and folder.
 
-Connect **Storage**, deploy the maintenance page, integrate the source proxy, and use **Check readiness**. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
+Connect **Storage** and use **Check readiness**.
+
+**Maintenance page (optional).** While a Docker site's containers are stopped for a backup, visitors can see a friendly "back in a minute" page instead of an error. When you add a site, **Show a maintenance page during backups** is ticked. For an existing site, run **Check readiness** and choose **Set up maintenance page** next to the maintenance check (administrators only). DockNest then:
+
+1. copies the page from **Maintenance** to the server,
+2. writes its own file `/etc/nginx/docknest/<site id>.conf` and adds one `include` line after `server_name` in each nginx server block that serves the site's domain (blocks that only redirect are left alone),
+3. runs `nginx -t` and reloads nginx,
+4. switches the page on, checks that your domain answers with the maintenance page, switches it off, and checks that the site answers normally,
+5. only then marks the site ready.
+
+If any step fails, DockNest puts every file back and reloads nginx. The site is still added and its backups still run without the page. Automatic setup needs nginx running on the server itself. For Caddy, Traefik, Nginx Proxy Manager or nginx inside a container, integrate the page by hand; without it, backups still work. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
 
 ## Static nginx websites
 

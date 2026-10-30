@@ -195,8 +195,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await siteDialog.getByLabel('Domains (comma separated)').inputValue(),'shop.example.org','Advanced settings survive navigation');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
+  let maintenanceSetups=0;
+  await page.route('**/api/sites/fixture-site/maintenance/setup',route=>{assert.equal(route.request().method(),'POST');maintenanceSetups++;return route.fulfill({json:{configured:true,files:['/etc/nginx/sites-enabled/shop']}});});
+  assert.equal(await siteDialog.getByRole('checkbox',{name:/Show a maintenance page during backups/}).isChecked(),true,'New Docker sites set up the maintenance page by default');
   await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
+  assert.equal(maintenanceSetups,1,'Adding the site sets up its maintenance page once');
+  await page.getByText('Site added with its maintenance page, tested on your domain. Set its schedule when ready.').waitFor();
   await page.route('**/api/sites/fixture-site',route=>{
     if(route.request().method()==='DELETE'){fixtureSites=[];fixturePolicies=[];return route.fulfill({json:{id:'fixture-site',removed:true,backupsPreserved:true}});}
     assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
