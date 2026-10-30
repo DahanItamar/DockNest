@@ -275,6 +275,29 @@ class TemporaryMemoryTests(unittest.TestCase):
         self.assertEqual([m['Type'] for m in n['Mounts']],['volume'])
         self.assertEqual(temporary_mounts(n),[('/tmp',''),('/cache','size=1048576,mode=1777'),('/sticky','mode=1777,ro')])
 
+class VerifyRecoveryTests(unittest.TestCase):
+    def run_verify(self,root,files,running=True,healthy=True):
+        from helper import verify_recovery
+        job='797ba644-5277-4af4-b2ca-c966be3bcd23';folder=pathlib.Path(root)/job;folder.mkdir()
+        (folder/'recovery-plan.json').write_text(json.dumps({'running':['c1'],'containers':['c1']}))
+        for name in files:(folder/name).write_text('{"recovered": false}' if name=='recovery.json' else '')
+        cfg={'kind':'docker','stagingRoot':root,'containers':['c1'],'healthUrl':'http://127.0.0.1:3500/','maintenance':{'required':True,'directory':str(pathlib.Path(root)/'none'),'publicUrl':'https://fixture.example/'}}
+        with patch('helper.inspect',return_value=[{'Id':'c1','State':{'Running':running}}]),patch('helper.health',return_value=healthy),patch('helper.public_probe',return_value=(200,b'ok')),patch('helper.emit') as emitted:
+            verify_recovery({'job':job,'config':cfg})
+        return folder,emitted
+    @unittest.skipUnless(__import__('os').name=='posix','Directory fsync requires Linux')
+    def test_unlocks_a_healthy_site_after_a_failed_automatic_recovery_and_disarms_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder,emitted=self.run_verify(d,['watchdog.done','recovery.json'])
+            self.assertTrue(emitted.call_args.kwargs['result']['healthVerified']);self.assertTrue((folder/'disarmed').exists())
+    def test_refuses_while_the_watchdog_is_still_waiting_or_the_site_is_unhealthy(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError,'still waiting'):self.run_verify(d,[])
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError,'health'):self.run_verify(d,['watchdog.done'],healthy=False)
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError,'pre-backup state'):self.run_verify(d,['watchdog.done'],running=False)
+
 class FullZipTests(unittest.TestCase):
     def test_static_zip_contains_browsable_files_and_original_archive(self):
         with tempfile.TemporaryDirectory() as d:
@@ -533,6 +556,14 @@ class MaintenanceTests(unittest.TestCase):
             with patch('helper.public_probe',side_effect=probe),patch('helper.health',return_value=True),patch('helper.sync_maintenance_flag',side_effect=lambda directory:events.append(('sync',(directory/'enabled').exists()))):
                 maintenance(cfg,True);maintenance(cfg,False)
             self.assertEqual(events,[('probe',True),('sync',True),('probe',False),('sync',False)])
+    def test_site_without_maintenance_page_backs_up_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=pathlib.Path(d)
+            cfg={'containers':['fixture'],'maintenance':{'required':True,'directory':d,'publicUrl':'http://fixture/'}}
+            with patch('helper.public_probe') as probe,patch('helper.health') as health_check,patch('helper.warn') as warned:
+                maintenance(cfg,True);maintenance(cfg,False)
+            from helper import MAINTENANCE_NOT_SET_UP;warned.assert_called_once_with(MAINTENANCE_NOT_SET_UP);probe.assert_not_called();health_check.assert_not_called()
+            self.assertFalse((base/'enabled').exists())
     def test_failed_clear_restores_and_syncs_maintenance_before_completion(self):
         with tempfile.TemporaryDirectory() as d:
             base=pathlib.Path(d);(base/'ready').touch();(base/'enabled').touch()

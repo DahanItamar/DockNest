@@ -4,6 +4,15 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- The maintenance page is now optional for Docker sites. When it is not set up, a backup still runs and the job shows a warning that visitors may see an error for the few seconds the containers are stopped. Check readiness lists it as optional.
+- Jobs table: the details icon comes first in the Details column, so it lines up on every row, with Review recovery after it.
+
+### Fixed
+
+- A Docker site without the maintenance page could not be backed up, and the failed attempt locked the site with RESTART_FAILED even though nothing had been stopped. Review recovery could then never unlock it. Leaving maintenance now never fails when the page was never on, and Review recovery unlocks a site once automatic recovery has finished and the live health, container and public checks pass.
+
 ## [2.12.2] - 2026-10-30
 
 See [docs/releases/2026-10-30-v2.12.2.md](docs/releases/2026-10-30-v2.12.2.md).

@@ -1335,12 +1335,18 @@ def health(containers,url=None,domains=(),fallback=False):
             policy_fallback('health')
         except Exception:return False
     return True
+class MaintenanceOptional(ValueError):pass
+MAINTENANCE_NOT_SET_UP='The maintenance page is not set up for this site, so visitors may see an error for the few seconds its containers are stopped.'
 def maintenance(cfg,enabled):
     m=cfg.get('maintenance',{})
     if not m.get('required'):return
     directory=pathlib.Path(m['directory'])
     if not directory.is_absolute() or '..' in directory.parts:raise ValueError('Invalid maintenance directory')
-    if not (directory/'ready').is_file():raise ValueError('Maintenance proxy integration is not ready')
+    # The maintenance page is optional: without the proxy integration a backup still runs, visitors just see the
+    # origin's own error while containers are stopped. There is then nothing to switch on or off.
+    if not (directory/'ready').is_file():
+        if enabled:warn(MAINTENANCE_NOT_SET_UP)
+        return
     problem=maintenance_directory_problem(cfg,directory)
     # Leaving maintenance is never blocked, so a site can always return to service.
     if enabled and maintenance_link_escape(directory):raise ValueError(problem+'. The maintenance directory links into a system folder.')
@@ -1716,12 +1722,14 @@ def readiness(cfg):
         m=cfg.get('maintenance',{})
         if not m.get('required'):raise ValueError('Enable maintenance protection before backing up a live site.')
         directory=pathlib.Path(m.get('directory',''))
-        if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise ValueError('Deploy the maintenance page and integrate it with the source proxy. The proxy readiness marker is missing.')
+        if not (directory/'ready').is_file() or not (directory/'maintenance.html').is_file():raise MaintenanceOptional(MAINTENANCE_NOT_SET_UP)
         if (directory/'enabled').exists():raise ValueError('Maintenance is currently enabled. Restore normal access before the readiness check.')
         try:status,body=public_probe(m,cfg.get('domains',()))
         except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's public maintenance URL."%error)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Website probe must return HTTP 200. If a CDN blocks server probes, choose the local origin probe after verifying the source proxy.')
-    if cfg.get('kind')!='static':check('Maintenance proxy and website',proxy)
+    if cfg.get('kind')!='static':
+        check('Maintenance proxy and website',proxy)
+        if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False}
 def capture(req,output=None):
     if req['config'].get('kind')=='static':
@@ -1948,8 +1956,9 @@ def verify_recovery(req):
     root=pathlib.Path(cfg.get('stagingRoot','/var/lib/docker-backup-manager'))/job
     if not (root/'recovery-plan.json').is_file():raise ValueError('Recovery journal is missing; offline review required')
     plan=json.loads((root/'recovery-plan.json').read_text())
-    recovered=json.loads((root/'recovery.json').read_text()).get('recovered') if (root/'recovery.json').is_file() else False
-    if not (root/'watchdog.done').exists() or not ((root/'disarmed').exists() or recovered):raise ValueError('Local recovery has not finished successfully')
+    # A watchdog that is still waiting could act later, so it must have finished. A failed automatic recovery is
+    # accepted here only because every live check below must pass before the site is unlocked.
+    if not (root/'watchdog.done').exists() and not (root/'disarmed').exists():raise ValueError('Automatic recovery is still waiting on the server. Try again in a few minutes.')
     states=inspect(plan['containers'])
     if any(bool(c['State']['Running'])!=(c['Id'] in plan['running']) for c in states):raise ValueError('Container states do not match the pre-backup state')
     skip_refused_probes(cfg)
@@ -1961,6 +1970,7 @@ def verify_recovery(req):
             if not m.get('publicUrl'):raise ValueError('Public health probe required')
             status,body=public_probe(m,cfg.get('domains',()))
             if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('Public access has not recovered')
+    complete_recovery(root)
     emit(result={'recoveryReviewed':True,'healthVerified':True,'originalStatesPreserved':True,**({'probePolicyFallback':sorted(set(PROBE_POLICY_FALLBACKS))} if PROBE_POLICY_FALLBACKS else {})})
 
 def verify_restore_recovery(req):
