@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-10-30
+
+See [docs/releases/2026-10-30-v2.13.0.md](docs/releases/2026-10-30-v2.13.0.md).
+
 ### Added
 
 - Automatic maintenance page for sites behind nginx on the server. Add a site with **Show a maintenance page during backups** ticked, or choose **Set up maintenance page** in Check readiness. DockNest adds its own snippet with one include line per server block, tests nginx, checks the page on your domain, and undoes everything if a step fails.
