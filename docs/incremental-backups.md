@@ -207,7 +207,8 @@ folders swap names) and compares the file tree and database with the source at t
 
 ## Leaving beta
 
-Incremental backups stay beta until all of these are true:
+Incremental backups stay beta until all of these are true. The 4-week clock started on 2026-10-30, when the first real
+chain (one full backup and two increments) was captured, re-verified and restored in an isolated restore test.
 
 - The Linux integration tests above pass on the release commit and are part of the required checks.
 - The owner's server has run chains for at least 4 weeks with no failed restore test on an increment.

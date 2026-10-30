@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.1] - 2026-10-30
+
+See [docs/releases/2026-10-30-v2.13.1.md](docs/releases/2026-10-30-v2.13.1.md).
+
+### Changed
+
+- Restore tests are no longer beta. They were validated on real production sites, including a restore from an incremental chain.
+
 ### Security
 
 - Updated body-parser, qs and zod to versions that fix denial-of-service issues reported by Dependabot (oversized or malformed requests could slow or crash the API).

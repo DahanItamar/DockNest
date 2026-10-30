@@ -25,6 +25,18 @@ Automated checks cover only the behavior asserted by their test suite. Docker/SS
 - [ ] Recover the central manager from independent state/backups/key copies; decrypt and restore without the original manager.
 - [ ] Review sanitized audit/job logs and verify no secrets are leaked.
 
+## Real-site validation — 2026-10-30 (2.13.0)
+
+On the owner's three-server installation, with private names and addresses withheld:
+
+- Upgrade 2.12.2 to 2.13.0 with the command-line upgrade, and an earlier in-app Update Center update by the owner.
+- Review recovery unlocked a site whose failed backup had locked it; the automatic recovery had finished without clearing maintenance.
+- Automatic maintenance page setup on host nginx: one include added to the serving HTTPS block, the redirect block left alone, `nginx -t` passed, the page answered during the test and the site answered normally afterwards.
+- A Docker backup with the maintenance page shown completed and verified.
+- Incremental chain on a one-container site: a full backup (about 525 MB) and two increments (about 85 MB each), all verified; re-verifying the chain passed.
+- Isolated restore tests on a separate test server: a one-container site from a full backup (127 s), the same site from the second increment through its whole chain (151 s), and a two-container site (328 s). Each cleaned up after itself.
+- Readiness passed on four sites.
+
 ## Known release limitations
 
 Controlled replacement of an existing site is blocked until a validated pre-replacement backup and rollback workflow exists. Generic proxy provisioning, external-source adapters, full graceful-shutdown profiles for every database, and deployment-specific operational alerts require further work and validation. Check implemented API/UI behavior against the original spec; do not infer support from this checklist.
