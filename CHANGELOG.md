@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.2] - 2026-10-30
+
+See [docs/releases/2026-10-30-v2.13.2.md](docs/releases/2026-10-30-v2.13.2.md).
+
+### Fixed
+
+- Boot recovery could not be installed on a server that had already made a backup or held a maintenance page: the staging folder `/var/lib/docknest` was created readable by everyone (0755), and boot recovery requires it private. DockNest now keeps it root-only with pass-through access for others (0711), which nginx needs to reach a maintenance page kept inside it, and fixes existing folders automatically.
+
 ## [2.13.1] - 2026-10-30
 
 See [docs/releases/2026-10-30-v2.13.1.md](docs/releases/2026-10-30-v2.13.1.md).

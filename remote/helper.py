@@ -50,8 +50,23 @@ def sync_directory(path):
     try:os.fsync(directory)
     finally:os.close(directory)
 
+SHARED_SYSTEM_FOLDERS={'/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp','/usr','/var/www'}
+def private_staging_base(base,traverse=False):
+    """The shared staging folder: root-owned, never readable or writable by others.
+    Others may only pass through it (0711), so nginx can reach a maintenance page kept under it."""
+    base=pathlib.Path(base)
+    if str(base) in SHARED_SYSTEM_FOLDERS or not base.is_absolute() or '..' in base.parts:raise ValueError('Dedicated root-owned staging directory required')
+    base.mkdir(parents=True,exist_ok=True,mode=0o700)
+    info=base.stat()
+    # The helper runs as root, so this is the root-ownership check.
+    if info.st_uid!=os.geteuid():raise ValueError('Staging directory must be owned by root')
+    mode=0o711 if traverse or info.st_mode&0o011 else 0o700
+    if stat.S_IMODE(info.st_mode)&0o077!=mode&0o077:os.chmod(base,mode)
+    return base
 def create_staging_root(root):
-    root=pathlib.Path(root);root.mkdir(parents=True,mode=0o700)
+    root=pathlib.Path(root)
+    if os.name=='posix' and os.geteuid()==0 and str(root.parent) not in SHARED_SYSTEM_FOLDERS:private_staging_base(root.parent)
+    root.mkdir(parents=True,mode=0o700)
     # Each new ancestor entry must survive before a journal can authorize stop.
     for directory in [root,*root.parents]:sync_directory(directory)
 
@@ -2541,6 +2556,8 @@ def deploy_maintenance(req):
         # A page deployed there by an earlier release keeps working; a new location or a link into a system folder is refused.
         if maintenance_link_escape(p) or not (p/'maintenance.html').is_file():raise ValueError(problem+'. Choose a directory under the staging root or a web root.')
         warn(problem+'; kept because a maintenance page is already deployed there')
+    staging=cfg.get('stagingRoot')
+    if staging and within(lexical(p),lexical(staging)) and os.name=='posix' and os.geteuid()==0:private_staging_base(staging,traverse=True)
     p.mkdir(parents=True,exist_ok=True,mode=0o755)
     content=__import__('base64').b64decode(req['html'])
     if len(content)>256*1024:raise ValueError('Maintenance asset exceeds size limit')
@@ -2669,8 +2686,7 @@ def install_boot_recovery(req):
     if os.geteuid()!=0:raise ValueError('Boot recovery installation requires root')
     base=pathlib.Path(req['config'].get('stagingRoot','/var/lib/docknest'))
     if not base.is_absolute() or '..' in base.parts or base.resolve()!=base or str(base) in ['/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp']:raise ValueError('Dedicated root-owned staging directory required')
-    base.mkdir(parents=True,exist_ok=True,mode=0o700)
-    if base.stat().st_uid!=0 or base.stat().st_mode&0o077:raise ValueError('Staging directory must be root-owned with mode 0700')
+    private_staging_base(base)
     library=pathlib.Path('/usr/local/lib/docknest');registry=pathlib.Path('/etc/docknest')
     for directory in [library,registry]:
         if directory.resolve()!=directory:raise ValueError('Recovery installation paths cannot be symbolic links')
