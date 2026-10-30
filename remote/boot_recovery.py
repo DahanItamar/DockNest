@@ -3,11 +3,13 @@
 import json,os,pathlib,stat,uuid,time,sys
 from helper import inspect,restart_services,health,maintenance,atomic_json,complete_recovery,probe_url
 
-def private_path(path,directory=False):
+def private_path(path,directory=False,traverse=False):
     path=pathlib.Path(path)
     if not path.is_absolute() or path.resolve()!=path:raise ValueError('Recovery paths must not use symlinks')
     value=path.stat()
-    if value.st_uid!=0 or value.st_mode&0o077:raise ValueError('Recovery journals must be root-owned and private')
+    # The shared staging folder may let others pass through (0711) to reach a maintenance page kept inside it;
+    # job folders and journals stay private to root. The driver runs as root, so the owner check compares to it.
+    if value.st_uid!=os.geteuid() or value.st_mode&(0o066 if traverse else 0o077):raise ValueError('Recovery journals must be root-owned and private')
     if directory and not stat.S_ISDIR(value.st_mode):raise ValueError('Recovery directory required')
     if not directory and not stat.S_ISREG(value.st_mode):raise ValueError('Recovery journal must be a regular file')
     return path
@@ -17,7 +19,7 @@ def recover_jobs(roots,boot_id=None):
     boot_id=boot_id or pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     result={'recovered':0,'reviewRequired':0,'ignored':0}
     for value in roots:
-        base=private_path(value,True)
+        base=private_path(value,True,traverse=True)
         for candidate in base.iterdir():
             try:uuid.UUID(candidate.name)
             except ValueError:continue

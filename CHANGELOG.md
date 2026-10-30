@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.3] - 2026-10-30
+
+See [docs/releases/2026-10-30-v2.13.3.md](docs/releases/2026-10-30-v2.13.3.md).
+
+### Fixed
+
+- Boot recovery stopped at the first step after a reboot and left the maintenance page on: since 2.13.2 the shared staging folder lets others pass through (0711), and the boot recovery driver still required 0700. The driver now accepts a pass-through staging folder while job folders and journals stay private to root. Found in a real reboot drill.
+
 ## [2.13.2] - 2026-10-30
 
 See [docs/releases/2026-10-30-v2.13.2.md](docs/releases/2026-10-30-v2.13.2.md).
