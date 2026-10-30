@@ -24,7 +24,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
  useEffect(()=>{
   let current=true;
   const preserve=firstDiscovery.current&&!!initialSite;firstDiscovery.current=false;
-  setContainers([]);setStaticSites([]);setSiteSearch('');if(!preserve){setStaticRoot('');setTemporaryReviewed(false);setPrimary('');setAdditional([]);filesEdited.current={composeFiles:false,configFiles:false};healthEdited.current=false;domainsEdited.current=false;publicEdited.current=false;setPublicUrl('');}setBrowser('');setError('');setLoading(!!serverId);
+  setContainers([]);setStaticSites([]);setSiteSearch('');if(!preserve){setStaticRoot('');setPrimary('');setAdditional([]);filesEdited.current={composeFiles:false,configFiles:false};healthEdited.current=false;domainsEdited.current=false;publicEdited.current=false;setPublicUrl('');}setBrowser('');setError('');setLoading(!!serverId);
   setSettings(previous=>({...previous,...(!nameEdited.current?{name:''}:{}),...(!preserve?{composeFiles:'',configFiles:'',externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}:{})}));
   if(serverId)api('/servers/'+serverId+'/discover').then(result=>{
    if(current){setContainers((result.containers||[]).filter(container=>containerName(container)));setStaticSites(result.staticSites||[]);}
@@ -49,8 +49,8 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
   const web=containers.filter(container=>selected.includes(containerName(container))).map(container=>container.webHints).find(hints=>hints?.healthUrls?.length);
   setSettings(previous=>({...previous,...(!filesEdited.current.composeFiles?{composeFiles:discovery.composeFiles.join('\n')}:{ }),...(!filesEdited.current.configFiles?{configFiles:discovery.configFiles.join('\n')}:{ }),...(!healthEdited.current?{healthUrl:web?.healthUrls?.[0]||''}:{}),...(!domainsEdited.current?{domains:web?.domains?.join(', ')||''}:{})}));
  },[containers,primary,additional,loading]);
- function selectNames(names,title){if(names.length>30){setError('A site can include up to 30 containers. Select the services it needs individually.');return;}setStaticRoot('');setTemporaryReviewed(false);setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
- function selectStatic(site){setStaticRoot(site.documentRoot);setPrimary('');setAdditional([]);setTemporaryReviewed(false);setError('');filesEdited.current={composeFiles:false,configFiles:false};setSettings(previous=>({...previous,...(!nameEdited.current?{name:site.name}:{}),healthUrl:site.healthUrl,domains:site.domains.join(', '),composeFiles:'',configFiles:site.configFiles.join('\n'),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
+ function selectNames(names,title){if(names.length>30){setError('A site can include up to 30 containers. Select the services it needs individually.');return;}setStaticRoot('');setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
+ function selectStatic(site){setStaticRoot(site.documentRoot);setPrimary('');setAdditional([]);setError('');filesEdited.current={composeFiles:false,configFiles:false};setSettings(previous=>({...previous,...(!nameEdited.current?{name:site.name}:{}),healthUrl:site.healthUrl,domains:site.domains.join(', '),composeFiles:'',configFiles:site.configFiles.join('\n'),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
  function toggleGrouped(name,checked){selectNames(checked?[...selected,name]:selected.filter(value=>value!==name),settings.name);}
  const source=containers.find(container=>containerName(container)===primary);
  const update=event=>{
@@ -62,7 +62,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
   setSettings(previous=>({...previous,[name]:type==='checkbox'?checked:value}));
  };
  function chooseContainer(event){
-  const value=event.target.value;setStaticRoot('');setTemporaryReviewed(false);setPrimary(value);setAdditional([]);
+  const value=event.target.value;setStaticRoot('');setPrimary(value);setAdditional([]);
   setSettings(previous=>({...previous,...(!nameEdited.current?{name:value}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));
  }
  async function submit(event){
@@ -103,7 +103,7 @@ export function SiteWizard({api,Field,servers,initialServer='',initialPick='',in
      <p>Select the app and its database or other services. Docker project labels suggest membership; check that shared services belong in this backup.</p>
      <Field label="Docker container (site)" value={primary} onChange={chooseContainer} options={[[ '', 'Choose a Docker container'],...containers.map(container=>[containerName(container),containerName(container)+' · '+containerStatus(container)])]}/>
      {source&&<div className="hint"><b>{primary}</b><p>{source.image||source.Config?.Image||'Docker container'} · {containerStatus(source)}</p><p>{(source.mounts||source.Mounts)?.map(mount=>(mount.Type||mount.type)+': '+(mount.Destination||mount.destination)).join(' · ')||'Mounted data is inspected during backup preflight.'}</p></div>}
-     {primary&&containers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same site.</p><div className="container-list">{containers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setTemporaryReviewed(false);setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
+     {primary&&containers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same site.</p><div className="container-list">{containers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
      </details>
     </>:<p role="status">No Docker containers found. Check the selected server, or create your site’s container and refresh.</p>}
    </>}
