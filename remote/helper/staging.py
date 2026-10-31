@@ -18,7 +18,7 @@ def install_boot_recovery(req):
         if directory.stat().st_uid!=0 or directory.stat().st_mode&0o077:raise ValueError('Recovery installation directory must be private and root-owned')
     for name,key_name in [('helper.py','helper'),('boot_recovery.py','bootHelper')]:
         content=__import__('base64').b64decode(req[key_name],validate=True)
-        if len(content)>512*1024:raise ValueError('Recovery helper exceeds size limit')
+        if len(content)>1024*1024:raise ValueError('Recovery helper exceeds size limit')  # same limit as the restore test reaper
         temporary=library/(name+'.new')
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
         with os.fdopen(fd,'wb') as output:output.write(content);output.flush();os.fsync(output.fileno())

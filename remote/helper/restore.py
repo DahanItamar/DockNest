@@ -177,12 +177,21 @@ def chain_paths(req,root):
     """Remote paths for a chain restore: payload-0.tar.gz (the full backup) up to payload-<n-1>.tar.gz."""
     n=chain_length(req)
     return {} if n is None else {'remotePaths':[str(root/('payload-%d.tar.gz'%k)) for k in range(n)]}
+# Docker's default capabilities: every container already has them, so adding one changes nothing. A copy (restore,
+# restore test, move) is created without the original's CapAdd and CapDrop, so it is accepted only when the original's
+# effective set is exactly that default: nothing dropped and nothing added beyond it. NET_RAW is left out on purpose.
+DEFAULT_CAPABILITIES={'AUDIT_WRITE','CHOWN','DAC_OVERRIDE','FOWNER','FSETID','KILL','MKNOD','NET_BIND_SERVICE','SETFCAP','SETGID','SETPCAP','SETUID','SYS_CHROOT'}
+def extra_capabilities(hc):
+    added=hc.get('CapAdd') or []
+    if not added:return False
+    if hc.get('CapDrop'):return True  # a hardened container: its copy would silently get more than the original
+    return not all(isinstance(cap,str) and cap.upper().removeprefix('CAP_') in DEFAULT_CAPABILITIES for cap in added)
 def restore_network_plan(containers):
     if not 1<=len(containers)<=30:raise ValueError('Restore requires 1 to 30 containers')
     plans=[]
     for c in containers:
         hc=c['HostConfig'];mode=hc.get('NetworkMode','')
-        if hc.get('Privileged') or hc.get('Devices') or hc.get('CapAdd') or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
+        if hc.get('Privileged') or hc.get('Devices') or extra_capabilities(hc) or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
         networks={}
         for name,n in c.get('NetworkSettings',{}).get('Networks',{}).items():
             if name=='none':continue
