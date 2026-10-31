@@ -33,7 +33,7 @@ Runs about 5–40 client sites (WordPress, Laravel, Node or static) as Docker Co
 **What success looks like**
 - Every client site shows a recent restore that passed within a target window, at a glance. **[A]**
 - Can produce a short recovery report for a client without exposing other clients' data. **[A]** (no such feature yet; see the roadmap)
-- Gets told about a failed backup within hours, not weeks. **[A]** DockNest has no outbound notifications today (no notification code in `src/`); the bell in the top bar lists active jobs only (`web/shell.jsx`).
+- Gets told about a failed backup within hours, not weeks. Met: alerts in 13 channels for failed backups, moves, unreachable servers and low disk (`src/alerts/`, [alerts](../alerts.md)).
 - Recovery time for one site is measured, not guessed. **[A]**
 
 **Fit with DockNest today:** strong on whole-site capture, isolated restore and per-person accounts (shared password plus personal TOTP, admin and operator roles; [security.md](../security.md)). Weak on alerting, scheduled restore proof and client-facing reporting.
