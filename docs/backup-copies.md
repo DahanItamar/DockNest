@@ -1,6 +1,6 @@
 # Storage per site and backup copies (ADR)
 
-Status: accepted by the owner on 2026-10-28. Not implemented. Date: 2026-10-28.
+Status: accepted by the owner on 2026-10-28. Implemented in 2.11.0. Date: 2026-10-28.
 Related: [storage-backends.md](storage-backends.md), [incremental-backups.md](incremental-backups.md),
 [backup-format.md](backup-format.md).
 

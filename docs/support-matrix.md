@@ -17,7 +17,7 @@ Qualification is per release commit. "Qualified at release 3e58f01" means the ex
 | Other stateful images, stopped native databases, external PostgreSQL tablespaces, unsupported credentials/tool layouts | Blocked or require reviewed adapters. External dependencies cannot be inferred universally from Docker labels. |
 | Static nginx roots | Discovered native static root, stable captured/extracted tree; live hosting remains unchanged. Application/CDN behavior needs independent review. |
 | Restore | Fresh owned paths, original exact images, no published ports, none/internal isolated networks; no replacement, production cutover or arbitrary mappings. |
-| Source boot recovery | Opt-in systemd helper. CI tests its Linux driver with simulated boot identity change; a real provider/VM reboot drill is still required before treating automatic host recovery as supported. Use `--require-host-reboot` to enforce that gate. |
+| Source boot recovery | Opt-in systemd helper. CI tests its Linux driver with simulated boot identity change. A real server reboot drill on 2026-10-30 found two bugs, both fixed in 2.13.2 and 2.13.3; the fixed driver then recovered the site on that server. Use `--require-host-reboot` to enforce that gate. |
 | Independent state/key recovery | Authenticated kit using a consistent SQLite snapshot, independent passphrase and clean target; matching release/environment credentials must be kept separately. |
 | Independent protected copy | Root-controlled archive on a separate Linux host with no manager deletion credential; manager-uid deletion refusal is tested. Not a WORM guarantee. |
 

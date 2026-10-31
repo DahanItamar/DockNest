@@ -3,7 +3,6 @@
   <p><strong>Back up Docker sites. Verify recovery points. Restore a private copy.</strong></p>
   <a href="https://github.com/DahanItamar/DockNest/releases/latest"><img src="https://img.shields.io/github/v/release/DahanItamar/DockNest?style=flat-square&label=version&color=5E35B1&sort=semver&display_name=tag" alt="Latest release" /></a>
   <a href="https://github.com/DahanItamar/DockNest/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/DahanItamar/DockNest/ci.yml?branch=main&style=flat-square&label=verify" alt="Verify workflow status" /></a>
-  <img src="https://img.shields.io/badge/status-beta-orange?style=flat-square" alt="Status: beta" />
   <img src="https://img.shields.io/badge/deployment-self--hosted-5E35B1?style=flat-square" alt="Self-hosted" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5E35B1?style=flat-square" alt="License: AGPL-3.0" /></a>
 </div>
@@ -13,7 +12,8 @@
   <a href="#using-docknest">Using DockNest</a> ·
   <a href="#updating">Updating</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="https://github.com/DahanItamar/DockNest/releases/latest">Latest release</a>
+  <a href="https://github.com/DahanItamar/DockNest/releases/latest">Latest release</a> ·
+  <a href="https://trydocknest.com">Website</a>
 </p>
 
 ![DockNest dashboard with synthetic sites, activity and storage metrics](docs/media/dashboard.png)
@@ -28,7 +28,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Shows live progress, the steps of each job and the reason when one fails.
 
 > [!NOTE]
-> DockNest is in beta. The [support matrix](docs/support-matrix.md) states what has been tested and what has not. Automatic recovery after a server reboot is not ready for production use.
+> DockNest runs real Docker and static sites in production, and every release passes real Linux Docker tests. The [support matrix](docs/support-matrix.md) lists the tested configurations. Incremental backups are still in beta.
 
 ## Features
 
@@ -36,6 +36,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis.
 - Per-site schedules, retention, and pinned backups.
 - Restore to a separate copy; DockNest does not replace a live site by itself.
+- Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. See [restore tests](docs/restore-tests-guide.md).
+- Keep up to three extra copies of each backup on other storage, for example SFTP plus S3, each with its own retention.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
 - Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
 - Optional maintenance page, designed in a visual editor, while a site is paused. For sites behind nginx on the server, DockNest sets it up, tests it on your domain and undoes it if anything fails.
@@ -43,6 +45,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 **Operation**
 - Jobs page with transfer progress, a step timeline and plain-language error explanations.
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
+- A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
+- Storage page with space per site and per destination, and growth over time.
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.
@@ -60,6 +64,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 
 **Security**
 - Backups are encrypted with AES-256-GCM.
+- Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
 - SSH host keys are pinned and checked before connecting.
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.
@@ -82,7 +87,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 | Where | What you need |
 | :-- | :-- |
 | DockNest host (runs the dashboard) | Linux with Docker and Docker Compose, and Node.js 24 for the one-time setup. |
-| Each server you back up | Linux, Docker, Python 3 and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
+| Each server you back up | Linux, Docker, Python 3.9 or newer and SSH with a key. Root access, and free disk space for a temporary copy (or use direct streaming). |
 | Backup storage | SFTP server that supports `fsync@openssh.com`, or an S3-compatible bucket. S3-compatible storage is supported: backup and restore are validated against a MinIO-compatible server, and Cloudflare R2 passed a manual run; other providers are not tested on every release. See [storage backends](docs/storage-backends.md). |
 | You | A browser and an authenticator app. |
 
@@ -165,7 +170,7 @@ scripts/upgrade.sh --dry-run    # show the plan only
 
 With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
 
-Before going back to 2.11 from 2.12, turn incremental backups off for every site, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path has not been validated on a real Linux Docker host yet; see that section for the current status.
+Before going back to 2.11 from 2.12, turn incremental backups off for every site, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path is in use on a real Linux Docker host.
 
 ## Security and privacy
 
@@ -181,7 +186,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 | Topic | Guides |
 | :-- | :-- |
 | Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Alerts](docs/alerts.md) |
-| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
+| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |

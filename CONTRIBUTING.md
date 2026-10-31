@@ -10,7 +10,7 @@ Thanks for helping. DockNest protects other people's data, so changes are judged
 
 ## Development setup
 
-You need **Node.js 24+** and **Python 3**.
+You need **Node.js 24+** and **Python 3.9+**.
 
 ```sh
 npm ci
