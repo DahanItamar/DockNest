@@ -28,7 +28,7 @@ Priorities are host filesystem classification, per-service consistency contracts
 | Restore | Fresh paths, no public ports, isolated grouped networks, blocked replacement/custom mappings | Container health is weaker than application data validation; containers without health checks need additional probes |
 | Evidence | Linux capture/restore, SQLite records, files/metadata, grouped networking, static files, corruption and watchdog scenarios | Inspected fixtures do not establish PostgreSQL, MySQL or MariaDB recovery coverage |
 
-Evidence: [remote helper](../../remote/helper.py), particularly `preflight`, `capture`, `health` and `restore`; [engine](../../src/engine.js), particularly `inspectEncrypted`, `executeJob` and `planRestore`; [worker](../../src/worker.js); [Linux suite](../../scripts/integration-linux.js); [SQLite fixture](../../tests/integration/site/app.py); [format guide](../backup-format.md); [acceptance evidence](../acceptance.md).
+Evidence: [remote helper](../../remote/helper/), particularly `preflight`, `capture`, `health` and `restore`; [engine](../../src/engine.js), particularly `inspectEncrypted`, `executeJob` and `planRestore`; [worker](../../src/worker.js); [Linux suite](../../scripts/integration-linux.js); [SQLite fixture](../../tests/integration/site/app.py); [format guide](../backup-format.md); [acceptance evidence](../acceptance.md).
 
 The `verified` field is assigned after package authentication/read-back. The manifest retains `restoreTested: false`, including in the current automatic restore result. Public status conversion nevertheless uses “Verified.” This is an evidence-model and terminology gap, not proof that a restore drill occurred.
 
