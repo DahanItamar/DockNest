@@ -69,7 +69,8 @@ try{
  await page.getByRole('button',{name:'Fit to screen'}).click();await settle(page);
  assert.equal(await page.locator('.map-site').count(),sites.length);await shot(page,'map.png');
  await context.close();
- ({context,page}=await open({height:1100}));
+ // Same 1440x1000 viewport as the other three images in the README's 2x2 grid, so the cells line up.
+ ({context,page}=await open({height:1000}));
  await page.getByRole('navigation').getByRole('button',{name:/Update Center/}).click();
  await page.getByRole('heading',{name:'Update Center',level:1}).waitFor();await settle(page);await shot(page,'update-center.png');
  await context.close();
