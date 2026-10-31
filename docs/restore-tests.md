@@ -1,6 +1,6 @@
 # Automatic restore tests (ADR, PM-22)
 
-Status: accepted design for 2.9.0. Not implemented yet. Date: 2026-10-26.
+Status: accepted design for 2.9.0. Implemented in 2.9.0; out of beta since 2.13.1. Date: 2026-10-26.
 Backlog: PM-22 (this design), PM-23 (build), PM-19 (storage report part). Owner answers: Q9 (test server), Q6 (no
 incremental backups in 2.9.0). Release order: restore tests are 2.9.0; the radar moves to 2.10.0.
 

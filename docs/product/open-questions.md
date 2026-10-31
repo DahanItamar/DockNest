@@ -49,7 +49,7 @@ These decisions belong to the owner. Each has a PM recommendation, the date by w
 - **Would change if:** a company asks for a non-AGPL license. Then choose (b) *before* merging significant outside code.
 
 ### Q4 — Telemetry and outbound calls
-- **Why it matters:** 2.2.0's update check is the manager's first outbound call. 2.4.0 adds heartbeat and notifications. Today the server code makes no outbound HTTP calls of its own, and no document tells operators to expect any.
+- **Why it matters:** 2.2.0's update check is the manager's first outbound call. 2.4.0 adds heartbeat and notifications. Today the server's outbound calls are the opt-in update check and the alerts an administrator configures ([security](../security.md#update-checks-outbound-requests), [alerts](../alerts.md)).
 - **Recommendation:**
   - No telemetry, ever: no install IDs, usage pings or third-party crash reporting.
   - Every outbound call is admin-configured and opt-in.

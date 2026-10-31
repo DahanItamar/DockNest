@@ -17,9 +17,9 @@ DockNest competes in C, gets compared with A′ and B, and sits **alongside** D.
 
 ## Comparison
 
-Legend: **Yes** = documented or implemented. **Partial** = possible with limits or user scripting. **No** = not offered. **Unknown** = not verified by this review. DockNest cells were checked against the code on `main` (2.0.0). Competitor cells cite the linked public docs as of 2026-10-21. Re-check them before publishing any comparison.
+Legend: **Yes** = documented or implemented. **Partial** = possible with limits or user scripting. **No** = not offered. **Unknown** = not verified by this review. DockNest cells were checked against the code on `main` (2.13.3, 2026-10-31). Competitor cells cite the linked public docs as of 2026-10-21. Re-check them before publishing any comparison.
 
-| Capability | DockNest 2.0 | restic / Kopia | Backrest | offen/docker-volume-backup | VolumeVault | Provider snapshot |
+| Capability | DockNest 2.13 | restic / Kopia | Backrest | offen/docker-volume-backup | VolumeVault | Provider snapshot |
 | --- | --- | --- | --- | --- | --- | --- |
 | Restore one site as a unit | Yes | Partial (paths you choose) | Partial | Partial (volumes) | Partial (volumes into new volumes) | No (whole VM) |
 | Docker images and writable layers | Yes (`docs/backup-format.md`) | No | No | No | No | Yes (disk-level) |
@@ -27,17 +27,17 @@ Legend: **Yes** = documented or implemented. **Partial** = possible with limits 
 | Database capture after a checked clean shutdown | Yes for qualified PostgreSQL 16 / MySQL 8.4 / MariaDB 11.4 / Redis 7.4 fixtures ([support matrix](../support-matrix.md)) | Partial (user scripts) | Partial (hooks) | Partial (stops labelled containers; no shutdown proof) | Partial (inherits offen) | Depends on provider |
 | Restore into an isolated copy (no ports, isolated network) | Yes (`planRestore`, `src/engine.js`) | No (restores files only) | No | No | Restores to new volumes | No |
 | Recorded restore evidence, kept separate from integrity | Yes: 4 dimensions ([recovery-verification.md](../recovery-verification.md)) | Repository check only ([restic check](https://restic.readthedocs.io/en/stable/045_working_with_repos.html#checking-integrity-and-consistency)) | Repository check | No | Unknown | No |
-| **Scheduled** restore tests | **No** (restore and scrub are on demand; the scheduler only queues backups, `tickScheduler`) | No | No | No | Unknown | No |
-| Scheduled repository/integrity checks | **No** (on-demand `POST /api/backups/:id/scrub`) | Yes (cron) | Yes, scheduled maintenance ([overview](https://linuxlinks.com/backrest-web-ui-orchestrator-restic-backup)) | No | Unknown | n/a |
-| Outbound notifications | **No** (no notification code in `src/`) | Partial (scripts) | Yes: Discord, Slack, Gotify, Shoutrrr, Healthchecks ([overview](https://linuxlinks.com/backrest-web-ui-orchestrator-restic-backup)) | Yes ([README](https://github.com/offen/docker-volume-backup)) | Yes ([docs](https://raw.githubusercontent.com/Darkdragon14/VolumeVault/HEAD/docs/index.md)) | Provider-dependent |
-| Dedup / incremental | **No** (full packages) | Yes | Yes | No | No | Provider-dependent |
-| Storage backends | SFTP (local disk only with an explicit `ALLOW_LOCAL_BACKUP_STORAGE` override); S3-compatible with Object Lock in flight for 2.1.0 | Many | Many (restic) | S3, WebDAV, SSH, Azure, Dropbox, Google Drive, local ([README](https://github.com/offen/docker-volume-backup)) | S3, R2, WebDAV, SFTP, Azure, Dropbox, Google Drive, local ([docs](https://raw.githubusercontent.com/Darkdragon14/VolumeVault/HEAD/docs/index.md)) | Provider |
+| **Scheduled** restore tests | **Yes** (daily, weekly or monthly on a test server, `src/restore-tests/`) | No | No | No | Unknown | No |
+| Scheduled repository/integrity checks | Partial (restore tests run on a schedule; scrub is on demand, `POST /api/backups/:id/scrub`) | Yes (cron) | Yes, scheduled maintenance ([overview](https://linuxlinks.com/backrest-web-ui-orchestrator-restic-backup)) | No | Unknown | n/a |
+| Outbound notifications | **Yes**: Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix, webhook (`src/alerts/`) | Partial (scripts) | Yes: Discord, Slack, Gotify, Shoutrrr, Healthchecks ([overview](https://linuxlinks.com/backrest-web-ui-orchestrator-restic-backup)) | Yes ([README](https://github.com/offen/docker-volume-backup)) | Yes ([docs](https://raw.githubusercontent.com/Darkdragon14/VolumeVault/HEAD/docs/index.md)) | Provider-dependent |
+| Dedup / incremental | Partial (incremental mount data, beta; no dedup) | Yes | Yes | No | No | Provider-dependent |
+| Storage backends | SFTP and S3-compatible with optional Object Lock; up to 3 extra copies per backup (local disk only with an explicit `ALLOW_LOCAL_BACKUP_STORAGE` override) | Many | Many (restic) | S3, WebDAV, SSH, Azure, Dropbox, Google Drive, local ([README](https://github.com/offen/docker-volume-backup)) | S3, R2, WebDAV, SFTP, Azure, Dropbox, Google Drive, local ([docs](https://raw.githubusercontent.com/Darkdragon14/VolumeVault/HEAD/docs/index.md)) | Provider |
 | Many remote hosts from one dashboard | Yes, over SSH with pinned host keys | No (per host) | Partial (one instance per host, or a remote repo) | No (per host) | No remote Docker host support at v1.0.0 ([release](https://newreleases.io/project/github/Darkdragon14/VolumeVault/release/v1.0.0); may have changed) | Per provider |
 | Manager needs the Docker socket | **No** (`compose.yaml`) | n/a | n/a | Yes, to stop containers | Uses the Docker CLI (socket access assumed; verify) | n/a |
 | Maintenance page during capture | Yes | No | No | No | No | No |
-| Independent copy the manager cannot delete | Partial: `scripts/protected-copy.py` on a separate host; Object Lock in flight | Partial (append-only modes / backend locks) | Partial | No | Unknown | Provider-dependent |
+| Independent copy the manager cannot delete | Yes on S3 with Object Lock; also `scripts/protected-copy.py` on a separate host | Partial (append-only modes / backend locks) | Partial | No | Unknown | Provider-dependent |
 | Multi-user with per-person MFA | Yes (shared password + personal TOTP; admin/operator) | n/a | Basic auth | n/a | Unknown | Provider IAM |
-| Maturity / adoption | New: 3 stars, created 2026-10-19 | Very mature | Mature | Mature | Early | Mature |
+| Maturity / adoption | New: 44 stars (2026-10-31), created 2026-10-19 | Very mature | Mature | Mature | Early | Mature |
 
 ## Where DockNest wins
 
@@ -49,11 +49,11 @@ Legend: **Yes** = documented or implemented. **Partial** = possible with limits 
 
 ## Where DockNest loses
 
-1. **Proof is on demand, not continuous.** No scheduled scrubs, no scheduled restore drills and no alerts. That is the very gap the positioning depends on. This is the top product risk.
-2. **Storage efficiency.** Full packages, no dedup. restic and Kopia will be much cheaper for frequent backups of large sites. A benchmark is needed so this can be stated with numbers (backlog item PM-19).
+1. **Integrity scrubs run on demand only.** Restore tests and alerts run on their own, but a scheduled scrub of every stored package is not offered yet.
+2. **Storage efficiency.** Incremental backups cover mount data only and are beta; there is no dedup. restic and Kopia will be much cheaper for frequent backups of large sites. A benchmark is needed so this can be stated with numbers (backlog item PM-19).
 3. **Downtime.** Docker captures pause writers. Engines and volume tools can do online file copies (with consistency caveats).
 4. **Prerequisites.** Root SSH on each source, Python 3 and, today, an SFTP target. Each one loses some trial users.
-5. **Trust and maturity.** 3 stars, one maintainer, beta notice in the README. Backup buyers are conservative.
+5. **Trust and maturity.** 44 stars (2026-10-31) and one maintainer. Backup buyers are conservative.
 6. **Platform scope.** x86_64 rootful Docker only, no NFS/CIFS mounts, no Kubernetes.
 
 ## Threats
