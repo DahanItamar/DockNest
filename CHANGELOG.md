@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.4] - 2026-10-31
+
+See [docs/releases/2026-10-31-v2.13.4.md](docs/releases/2026-10-31-v2.13.4.md).
+
 ### Changed
 
 - If you installed boot recovery on a site, install it once more after this update (administrators: `POST /api/sites/:id/boot-recovery`); until then it reports `bootRecoveryOutdated`. The server helper was reorganised internally; what it does is unchanged.
