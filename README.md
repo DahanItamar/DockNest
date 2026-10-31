@@ -73,12 +73,12 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/servers.png" alt="Servers page with three synthetic servers" /></td>
-    <td width="50%"><img src="docs/media/backups.png" alt="Backup library listing recovery points per synthetic site" /></td>
+    <td width="50%"><img src="docs/media/servers.png" width="100%" alt="Servers page with three synthetic servers" /></td>
+    <td width="50%"><img src="docs/media/backups.png" width="100%" alt="Backup library listing recovery points per synthetic site" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/update-center.png" alt="Update Center showing an available update and the host updater status" /></td>
-    <td width="50%"><img src="docs/media/job-details.png" alt="Job details for a running backup of a synthetic site, with transfer progress and a step timeline" /></td>
+    <td width="50%"><img src="docs/media/update-center.png" width="100%" alt="Update Center showing an available update and the host updater status" /></td>
+    <td width="50%"><img src="docs/media/job-details.png" width="100%" alt="Job details for a running backup of a synthetic site, with transfer progress and a step timeline" /></td>
   </tr>
 </table>
 
