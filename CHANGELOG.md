@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore tests and restores now accept containers that add only capabilities every container already has (for example `CHOWN`, `SETUID`, `SETGID`). They used to stop with "Host privileges or shared namespace networking cannot be restored automatically". Containers that add other capabilities, or drop any, are still refused.
+- Boot recovery can be installed with a larger server helper (limit raised from 512 KiB to 1 MiB, like the restore test reaper).
+
 ## [2.13.4] - 2026-10-31
 
 See [docs/releases/2026-10-31-v2.13.4.md](docs/releases/2026-10-31-v2.13.4.md).

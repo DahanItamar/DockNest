@@ -77,7 +77,7 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
 
   At "Check space" C is also refused above the test server's `nproc`, with a plain reason ("The test server has 2
   CPUs, so it cannot give each container 4. Lower the CPU limit.").
-- Captures already refuse privileged containers, devices, added capabilities and host namespaces
+- Restores already refuse privileged containers, devices, host namespaces and added capabilities beyond Docker's defaults (adding a default one such as `CHOWN` is accepted only when nothing is dropped, so the copy matches the original)
   (`restore_network_plan`), so a test never gets them either.
 - The time limit runs from claim to the end of the checks. Clean-up has its own 10 minutes.
 - Disk is not capped. Docker has no portable per-container disk quota for bind mounts. Instead:
