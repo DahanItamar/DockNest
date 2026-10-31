@@ -36,6 +36,7 @@ On the owner's three-server installation, with private names and addresses withh
 - Incremental chain on a one-container site: a full backup (about 525 MB) and two increments (about 85 MB each), all verified; re-verifying the chain passed.
 - Isolated restore tests on a separate test server: a one-container site from a full backup (127 s), the same site from the second increment through its whole chain (151 s), and a two-container site (328 s). Each cleaned up after itself.
 - Readiness passed on four sites.
+- Boot recovery reboot drill on the DockNest host (2.13.2): boot recovery installed for one site, the server rebooted during a backup and was back in 51 s with every container running. The driver stopped at its first check (it required the staging folder to be 0700; 2.13.2 makes it 0711), so the maintenance page stayed on for about 3–4 minutes until it was turned off by hand after a health check. Fixed in 2.13.3; the fixed driver, started on the same server, recovered the site (1 recovered, 2 ignored, watchdog done) and the site answered normally.
 
 ## Known release limitations
 

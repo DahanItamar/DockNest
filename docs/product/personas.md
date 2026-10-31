@@ -36,7 +36,7 @@ Runs about 5–40 client sites (WordPress, Laravel, Node or static) as Docker Co
 - Gets told about a failed backup within hours, not weeks. Met: alerts in 13 channels for failed backups, moves, unreachable servers and low disk (`src/alerts/`, [alerts](../alerts.md)).
 - Recovery time for one site is measured, not guessed. **[A]**
 
-**Fit with DockNest today:** strong on whole-site capture, isolated restore and per-person accounts (shared password plus personal TOTP, admin and operator roles; [security.md](../security.md)). Weak on alerting, scheduled restore proof and client-facing reporting.
+**Fit with DockNest today:** strong on whole-site capture, isolated restore and per-person accounts (shared password plus personal TOTP, admin and operator roles; [security.md](../security.md)). Alerts and scheduled restore tests are covered; weak on client-facing reporting.
 
 ---
 
@@ -81,7 +81,7 @@ Runs 10–60 containers in Compose across a handful of servers. Has PostgreSQL, 
 - Independent copy with separate deletion authority, verified on a schedule. **[A]**
 - Alerts reach the team's existing channel. **[A]**
 
-**Fit with DockNest today:** partial. The verification model and independent recovery kit are ahead of volume tools. Online database capture, alerting and scale are gaps. This is a **secondary** persona: do not design 2.x around it.
+**Fit with DockNest today:** partial. The verification model and independent recovery kit are ahead of volume tools. Online database capture and scale are gaps. This is a **secondary** persona: do not design 2.x around it.
 
 ---
 
