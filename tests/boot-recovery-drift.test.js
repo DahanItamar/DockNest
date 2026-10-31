@@ -12,7 +12,8 @@ const {bootRecoveryBundle,bootRecoveryStatus}=await import('../src/engine.js');
 test.after(async()=>{db.close();await rm(directory,{recursive:true,force:true});});
 
 test('boot recovery copies are flagged when the installed helper bundle differs from this release',async()=>{
- const [helper,boot]=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
+ const {helperSource}=await import('../src/helper-bundle.js');
+ const [helper,boot]=[helperSource(),await readFile(new URL('../remote/boot_recovery.py',import.meta.url))];
  assert.equal(bootRecoveryBundle.sha256,createHash('sha256').update(helper).update('\0').update(boot).digest('hex'));
  assert.ok(bootRecoveryBundle.helperVersion>=1);
  db.exec("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('server','fixture','host.example.invalid',22,'root','sealed','fixture','2026-01-01')");

@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
+import { writeHelperBundle } from '../src/helper-bundle.js';
 
 const exec = promisify(execFile);
 const run = async (...args) => {
@@ -84,6 +85,9 @@ try {
   db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(destinationId);
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
   await run('cp','remote',hosts[0]+':/qa-helper');
+  // The tests import the built helper (one file, as servers receive it) from bundle/ (remote/helper_path.py).
+  await run('exec',hosts[0],'mkdir','-p','/qa-helper/bundle');
+  await run('cp',writeHelperBundle(),hosts[0]+':/qa-helper/bundle/helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');

@@ -2,6 +2,7 @@
 Tests that need GNU tar's --listed-incremental extraction run on Linux only and are skipped elsewhere."""
 import unittest,tempfile,pathlib,tarfile,io,json,hashlib,os,sys,stat,shutil,time,subprocess,uuid,zipfile,collections
 from unittest.mock import patch,Mock
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 from helper import incremental_request,dumpdir_problem,incremental_archive_check,chain_problem,unpack_verified,mount_archive,image_archives,snapshot_key
 from export_zip import export_zip,scan_stream,IncrementalBackup

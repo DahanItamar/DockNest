@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { writeHelperBundle } from '../src/helper-bundle.js';
 
 export async function runRestoreTestScenario({ run, until, hosts, servers, db, record, staticSiteId, evidence }) {
   const { enqueueBackup, claimJob, executeJob, planBackup } = await import('../src/engine.js');
@@ -283,7 +284,8 @@ export async function runRestoreTestScenario({ run, until, hosts, servers, db, r
   // Each step names itself on failure (docker arguments here hold no secrets); the helper step keeps its traceback.
   const step = async (name, ...args) => { try { return await run(...args); } catch (error) { throw new Error(`Tag collision case: ${name} failed${name.startsWith('helper ') ?': ' + String(error.stderr || error.message).slice(-800) : ''}`); } };
   await step('clear paths', 'exec', target, 'rm', '-rf', '/rt-qa-helper', '/rt-collide-site');
-  await step('copy helper', 'cp', 'remote', target + ':/rt-qa-helper');
+  await step('helper folder', 'exec', target, 'mkdir', '-p', '/rt-qa-helper');
+  await step('copy helper', 'cp', writeHelperBundle(), target + ':/rt-qa-helper/helper.py');
   await step('copy fixture', 'cp', 'tests/integration/site', target + ':/rt-collide-site');
   const loaded = (await step('build loaded image', 'exec', target, 'docker', 'build', '-q', '-t', 'rt-collide:1', '--label', 'rt=loaded', '/rt-collide-site')).trim();
   await step('save tagged archive', 'exec', target, 'docker', 'save', '-o', '/tmp/rt-collide.tar', 'rt-collide:1');

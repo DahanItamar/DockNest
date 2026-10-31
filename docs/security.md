@@ -160,7 +160,7 @@ An administrator can ask DockNest to install nginx, Docker, Docker Compose or ce
 - The API accepts only a package name from a fixed list; the body is strict, so no command, argument or package list
   from the client is read. The browser's earlier preview is not trusted: the server is re-read and the support,
   already-installed and busy checks run again before a job is queued.
-- The helper (`remote/helper.py`) maps the name to fixed argv in its own table and runs it without a shell:
+- The helper (`remote/helper/install.py`) maps the name to fixed argv in its own table and runs it without a shell:
   `apt-get update` (5 minute limit) then `apt-get install -y --no-install-recommends --no-remove <packages>` (15
   minute limit) with `DEBIAN_FRONTEND=noninteractive`, or `dnf install -y <packages>`, with a clean environment and a
   fixed `PATH`. Each tool runs in its own process group; on a timeout it gets SIGTERM, 60 seconds to stop, then

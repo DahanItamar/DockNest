@@ -1,7 +1,7 @@
 // Incremental backups (docs/incremental-backups.md, option A: hybrid GNU tar chains). One full package, then up to N
 // increments that hold only what changed. This module holds the database side: the per-site setting, which kind the
 // next backup is (and why), the chain a backup belongs to, link checks, and the views the API and storage report read.
-// Every package stays the existing AES-256-GCM format; the helper (remote/helper.py) makes and restores them.
+// Every package stays the existing AES-256-GCM format; the remote helper (remote/helper/) makes and restores them.
 //
 // Trust rules:
 // - The engine only asks for an increment. What the package is comes from the helper's returned manifest, which is the

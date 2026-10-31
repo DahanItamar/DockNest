@@ -415,7 +415,7 @@ The number is the next free one at merge time (currently 9). New objects only; n
 
 ## Helper version
 
-`VERSION=1` in `remote/helper.py` stays 1. It is also the backup `formatVersion` that `unpack_verified` requires, so
+`VERSION=1` in `remote/helper/common.py` stays 1. It is also the backup `formatVersion` that `unpack_verified` requires, so
 raising it would refuse every existing backup. New operations are detected by name. Boot recovery's "outdated" flag
 is hash based (`bootRecoveryBundle.sha256`), so any helper change already shows installed copies as outdated until
 reinstalled. If a helper protocol version is ever needed, it becomes a separate constant from the format version.

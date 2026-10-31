@@ -26,9 +26,11 @@ npm run dev:web    # frontend development server
 Run these before you open a pull request:
 
 ```sh
-npm run check        # builds the UI, runs Node and Python tests
+npm run check        # builds the UI and the remote helper, runs Node and Python tests
 npm run audit:repo   # privacy checks: no credentials, private addresses or workstation paths
 ```
+
+The remote helper is edited as modules in `remote/helper/` and shipped as one built `helper.py`; read [docs/remote-helper.md](docs/remote-helper.md) before changing it.
 
 If you change capture, restore, SSH or SFTP code, also run the Linux integration suite (needs Docker):
 

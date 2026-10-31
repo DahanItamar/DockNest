@@ -1,6 +1,7 @@
 import hashlib, json, secrets, subprocess, unittest, tempfile, pathlib, os
 from types import SimpleNamespace
 from unittest.mock import patch
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services, redis_aof_check
 
 

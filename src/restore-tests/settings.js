@@ -14,7 +14,7 @@ const httpError = (status, code, message, extra = {}) => Object.assign(new Error
 const iso = ms => new Date(ms).toISOString();
 
 const container = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/);
-// The same path rule the helper applies (remote/helper.py TEST_PATH): an absolute path with plain URL characters.
+// The same path rule the helper applies (remote/helper/restore_test.py TEST_PATH): an absolute path with plain URL characters.
 const probePath = z.string().max(200).regex(/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$/, 'The health check path must start with / and use plain URL characters.');
 const probeSchema = z.object({ service: container.nullable().optional(), port: z.number().int().min(1).max(65535).nullable().optional(), path: probePath.optional() }).strict()
   .transform(value => ({ service: value.service ?? null, port: value.port ?? null, path: value.path || '/' }));

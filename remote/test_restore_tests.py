@@ -5,6 +5,7 @@ Run: python3 remote/test_restore_tests.py"""
 import unittest, tempfile, pathlib, json, io, os, sys, tarfile, subprocess, hashlib
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 
 TID='3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b'

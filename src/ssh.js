@@ -1,11 +1,10 @@
 import { Client } from 'ssh2';
 import { Transform } from 'node:stream';
 import { open } from './crypto.js';
-import { readFile } from 'node:fs/promises';
 import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
 import { pipeline } from 'node:stream/promises';
-const helper = new URL('../remote/helper.py', import.meta.url);
+import { helperSource } from './helper-bundle.js';
 export function connect(server) {
   return new Promise((resolve,reject)=>{
     const client=new Client();let hostKeyRejected=false;
@@ -21,7 +20,7 @@ export function connect(server) {
 export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{}, options={}) {
  const client=await connect(server);
  try {
-  const source=await readFile(helper,'utf8');
+  const source=helperSource().toString('utf8');
   // Send trusted code and request through stdin; a fixed loader avoids shell
   // argument limits as the helper grows. Request values never enter the command.
   const encoded=Buffer.from(source).toString('base64');
@@ -65,7 +64,7 @@ export async function download(server,remotePath,output,onProgress=null) {
 export async function remoteCaptureStream(server,request,output,onStage=()=>{},onDiagnostic=()=>{},onProgress=()=>{}) {
  const client=await connect(server);
  try {
-  const encoded=Buffer.from(await readFile(helper,'utf8')).toString('base64');
+  const encoded=helperSource().toString('base64');
   const command='python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
   return await new Promise((resolve,reject)=>client.exec(command,{pty:false},(error,stream)=>{
    if(error)return reject(error);
