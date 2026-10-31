@@ -17,7 +17,7 @@ export function buildHelper(directory = source) {
   const expected = [...HELPER_MODULES].sort();
   if (present.join() !== expected.join()) throw new Error(`remote/helper modules ${present.join(', ')} do not match HELPER_MODULES`);
   return HELPER_MODULES.map(name => {
-    const text = readFileSync(join(directory, name + '.py'), 'utf8');
+    const text = readFileSync(join(directory, name + '.py'), 'utf8').replace(/\r\n/g, '\n');  // same bytes on every OS
     const lines = text.split('\n'), start = lines.indexOf(OPEN), end = lines.indexOf(CLOSE);
     if (start < 0 || end < start || lines.indexOf(OPEN, start + 1) >= 0) throw new Error(`remote/helper/${name}.py needs exactly one build header`);
     return [...lines.slice(0, start), ...lines.slice(end + 1)].join('\n');
