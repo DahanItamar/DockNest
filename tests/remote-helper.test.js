@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { writeHelperBundle } from '../src/helper-bundle.js';
-// The Python tests import the built helper.py (dist/remote), the same bytes servers receive.
+// The Python tests import the built helper.py (build/remote), the same bytes servers receive.
 writeHelperBundle();
 test('remote helper rejects unsafe archives and preserves safe maintenance failure states',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_helper.py'],{encoding:'utf8'});

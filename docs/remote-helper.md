@@ -30,10 +30,10 @@ remote/
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
 ├── boot_recovery.py        boot driver; imports names from the built helper.py
 ├── export_zip.py           ZIP export
-├── helper_path.py          makes the Python tests import the built helper.py
+├── helper_path.py          makes the Python tests import the built helper.py (refuses a stale one)
 └── test_*.py               Python tests (run against the built helper.py)
 src/helper-bundle.js        joins the modules into helper.py (HELPER_MODULES order)
-dist/remote/helper.py       written by `npm run build:helper` (not committed)
+build/remote/helper.py      written by `npm run build:helper` for tests (gitignored, never served)
 ```
 
 ## How it is built and run
@@ -48,7 +48,7 @@ flowchart LR
   B -->|"installBootRecovery"| R["/usr/local/lib/docknest/helper.py<br/>+ boot_recovery.py"]
   B -->|"restore-test-prepare"| P["restore-tests/&lt;id&gt;/reaper.py"]
   B -->|"recovery kit"| K["recovery/helper.py<br/>python3 helper.py restore-chain"]
-  B -->|"npm run build:helper / tests"| D[dist/remote/helper.py]
+  B -->|"npm run build:helper / tests"| D[build/remote/helper.py]
 ```
 
 The app builds the bundle in memory once per process from the checked-in source (`helperSource()`), so the bytes sent
@@ -153,9 +153,9 @@ The full, exact dependency list of each module is its build header (the `from .x
 
 ## Verifying a change to the layout
 
-- `npm run check` builds the helper and runs every test against the built file, including `tests/helper-bundle.test.js`
+- `npm run check` runs every test against the built file (the test run writes it first), including `tests/helper-bundle.test.js`
   (every operation through the real server loader answers in JSON; `capture-stream` keeps stdout clean) and
   `remote/test_bundle.py` (state and load-order rules).
-- `python3 scripts/verify-helper-split.py OLD_HELPER.py dist/remote/helper.py` proves two builds are the same
+- `python3 scripts/verify-helper-split.py OLD_HELPER.py build/remote/helper.py` proves two builds are the same
   program: identical function and class ASTs, identical other statements, safe order. The split itself was checked
   against `git show 48105c3:remote/helper.py` (307 functions and classes, 103 other statements, all identical).

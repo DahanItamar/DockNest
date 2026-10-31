@@ -61,8 +61,13 @@ def order_problems(tree):
 
 
 def split(tree):
-    defs, rest = {}, collections.Counter()
+    defs, rest, names = {}, collections.Counter(), set()
     for node in tree.body:
+        # Every top-level name is bound once, so moving a statement can never swap two bindings of one name.
+        twice = bound(node) & names
+        if twice and not isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise SystemExit('bound twice at top level: ' + ', '.join(sorted(twice)))
+        names |= bound(node)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name in defs:
                 raise SystemExit('defined twice: ' + node.name)

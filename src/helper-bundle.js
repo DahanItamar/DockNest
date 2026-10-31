@@ -29,7 +29,8 @@ let cached;
 export const helperSource = () => (cached ??= Buffer.from(buildHelper(), 'utf8'));
 
 // Python tests and integration hosts import the built file: `import helper`.
-export function writeHelperBundle(directory = fileURLToPath(new URL('../dist/remote/', import.meta.url))) {
+// Never under dist/: the API serves dist/ without login, and the app itself never reads this file.
+export function writeHelperBundle(directory = fileURLToPath(new URL('../build/remote/', import.meta.url))) {
   mkdirSync(directory, { recursive: true });
   const file = join(directory, 'helper.py');
   writeFileSync(file, helperSource());
