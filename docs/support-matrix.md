@@ -6,7 +6,7 @@ Qualification is per release commit. "Qualified at release 3e58f01" means the ex
 
 | Configuration | Policy / required evidence |
 | --- | --- |
-| Rootful Linux Docker, Python 3, x86_64; Docker 28+ for grouped copies | Tested Docker version is recorded by each integration run. Other architectures need their own image/capture/restore evidence. |
+| Rootful Linux Docker, Python 3.9+, x86_64; Docker 28+ for grouped copies | Tested Docker version is recorded by each integration run. Other architectures need their own image/capture/restore evidence. |
 | Local bind mounts and default local Docker volumes | Actual Linux mount table, root identity, nested mount detection and exclusive-writer declaration required. Integration uses overlay/local filesystems and a separate bind file. |
 | ext2/3/4, XFS, Btrfs, ZFS | Classifier permits them; acceptance is limited to configurations with dedicated capture/restore evidence. Classifier recognition alone does not establish support. |
 | NFS/NFS4, CIFS, FUSE, unknown filesystems; nested mounts | Blocked. Linux parser fixtures cover remote filesystem classification; actual nested/tmpfs fixtures verify preflight refusal. No network filesystem adapter is advertised. |

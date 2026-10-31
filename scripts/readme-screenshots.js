@@ -64,6 +64,8 @@ try{
  await context.close();
  ({context,page}=await open({height:1300}));
  await go(page,'Map');await page.locator('.map-site').first().waitFor();
+ // Storage and alert nodes load from their own requests; capture only once both are drawn.
+ await page.locator('[data-node^="storage:"]').first().waitFor();await page.locator('[data-node^="alert:"]').first().waitFor();
  await page.getByRole('button',{name:'Fit to screen'}).click();await settle(page);
  assert.equal(await page.locator('.map-site').count(),sites.length);await shot(page,'map.png');
  await context.close();

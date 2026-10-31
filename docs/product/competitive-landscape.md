@@ -52,7 +52,7 @@ Legend: **Yes** = documented or implemented. **Partial** = possible with limits 
 1. **Integrity scrubs run on demand only.** Restore tests and alerts run on their own, but a scheduled scrub of every stored package is not offered yet.
 2. **Storage efficiency.** Incremental backups cover mount data only and are beta; there is no dedup. restic and Kopia will be much cheaper for frequent backups of large sites. A benchmark is needed so this can be stated with numbers (backlog item PM-19).
 3. **Downtime.** Docker captures pause writers. Engines and volume tools can do online file copies (with consistency caveats).
-4. **Prerequisites.** Root SSH on each source, Python 3 and, today, an SFTP target. Each one loses some trial users.
+4. **Prerequisites.** Root SSH and Python 3.9+ on each source, and an SFTP or S3-compatible target. Each one loses some trial users.
 5. **Trust and maturity.** 44 stars (2026-10-31) and one maintainer. Backup buyers are conservative.
 6. **Platform scope.** x86_64 rootful Docker only, no NFS/CIFS mounts, no Kubernetes.
 
