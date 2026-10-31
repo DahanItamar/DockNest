@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.13.5] - 2026-11-01
+
+See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
+
 ### Fixed
 
 - Restore tests and restores now accept containers that add only capabilities every container already has (for example `CHOWN`, `SETUID`, `SETGID`). They used to stop with "Host privileges or shared namespace networking cannot be restored automatically". Containers that add other capabilities, or drop any, are still refused.
