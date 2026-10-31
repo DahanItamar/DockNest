@@ -84,7 +84,7 @@ Date: 2026-10-21. Owner: Product Manager. Ordered by target release, then by dep
 - **Owner role:** [Test Automation Engineer](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-test-automation-engineer.md) · **Tier:** sonnet-medium · **Depends on:** `docs/verification-wording` · **Target:** 2.1.0
 
 ### PM-05 — One outbound-URL policy for probes, webhooks and pings
-- **Problem:** URL validation today lives in the Python helper (`public_probe` in `remote/helper.py`), and SSRF hardening is in flight. 2.2.0 to 2.4.0 add outbound calls from the Node manager (update check, heartbeat, webhooks, ntfy). Two divergent validators would be a security risk.
+- **Problem:** URL validation today lives in the Python helper (`public_probe` in `remote/helper/net.py`), and SSRF hardening is in flight. 2.2.0 to 2.4.0 add outbound calls from the Node manager (update check, heartbeat, webhooks, ntfy). Two divergent validators would be a security risk.
 - **Acceptance criteria:**
   - A documented policy covers schemes, credentials in the URL, private and link-local ranges, DNS rebinding (resolve, then connect to the resolved address), redirects, timeouts and response-size caps.
   - The Node and Python implementations share one test vector file.

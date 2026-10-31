@@ -49,7 +49,7 @@ function backupRow(siteId, seconds = 20) {
   db.prepare('INSERT INTO backups VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(randomUUID(), siteId, jobId, new Date(Date.now() - 3600000).toISOString(), join(directory, 'x.enc'), 1024, 'a'.repeat(64), '{}', 0, 1, at());
 }
 
-// The fake helper keeps per-move target state like remote/helper.py does (deploy-status, idempotent deploys).
+// The fake helper keeps per-move target state like remote/helper/move.py does (deploy-status, idempotent deploys).
 const calls = [], deployed = new Map(), faults = {};
 moves.moveTransport.wait = async () => {};
 moves.moveTransport.upload = async () => ({ plaintextChecksum: 'f'.repeat(64) });

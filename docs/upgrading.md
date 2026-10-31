@@ -295,7 +295,7 @@ DockNest checks for updates only after an administrator agrees (see [the Update 
 
 ## Boot recovery after upgrades
 
-Most remote operations stream the current helper over SSH, so they update automatically. Boot recovery is the exception: installing it copies `remote/helper.py` and `remote/boot_recovery.py` onto the host, and those copies go stale after an upgrade. DockNest records the SHA-256 of the installed bundle. Site state (`GET /api/state`) and `GET /api/sites/:id/boot-recovery` report `bootRecoveryOutdated: true` when the copy differs from the running release. This includes installs made before fingerprints were recorded. Upgrades never connect to your hosts. After each upgrade, reinstall boot recovery on the affected sites (`POST /api/sites/:id/boot-recovery`, administrators only) once no work is active. The dashboard does not show this flag yet.
+Most remote operations stream the current helper over SSH, so they update automatically. Boot recovery is the exception: installing it copies the built `helper.py` (see [remote helper](remote-helper.md)) and `remote/boot_recovery.py` onto the host, and those copies go stale after an upgrade. DockNest records the SHA-256 of the installed bundle. Site state (`GET /api/state`) and `GET /api/sites/:id/boot-recovery` report `bootRecoveryOutdated: true` when the copy differs from the running release. This includes installs made before fingerprints were recorded. Upgrades never connect to your hosts. After each upgrade, reinstall boot recovery on the affected sites (`POST /api/sites/:id/boot-recovery`, administrators only) once no work is active. The dashboard does not show this flag yet.
 
 ## Customising without conflicts
 

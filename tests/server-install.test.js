@@ -63,7 +63,7 @@ const installCalls = () => calls.filter(item => item.request.operation === 'inst
 
 // ---------- the allow-list and the per-distro field ----------
 test('the package table is distro packages only, and the helper has the identical table', async () => {
-  const source = await readFile(new URL('../remote/helper.py', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../remote/helper/install.py', import.meta.url), 'utf8');
   const helperTable = JSON.parse(/INSTALL_PLAN_JSON=r'''(.*?)'''/s.exec(source)[1]);
   assert.deepEqual(helperTable, plan.PACKAGE_MAP);
   assert.deepEqual([...plan.INSTALL_PACKAGES], ['nginx', 'docker', 'compose', 'certbot']);
@@ -71,8 +71,8 @@ test('the package table is distro packages only, and the helper has the identica
 });
 
 test('the helper maps the name to fixed argv and never runs a shell or a downloaded script', async () => {
-  const source = await readFile(new URL('../remote/helper.py', import.meta.url), 'utf8');
-  const section = source.slice(source.indexOf('# ---- Install on server'), source.indexOf('def place_tree(')).split(/\r?\n/).filter(line => !line.startsWith('#')).join('\n');
+  const source = await readFile(new URL('../remote/helper/install.py', import.meta.url), 'utf8');
+  const section = source.slice(source.indexOf('# ---- Install on server')).split(/\r?\n/).filter(line => !line.startsWith('#')).join('\n');
   assert.match(section, /'apt-get','-o','DPkg::Lock::Timeout=120','install','-y','--no-install-recommends','--no-remove']\+names/);
   assert.match(section, /command=\['dnf','install','-y'\]\+names/);
   assert.doesNotMatch(section, /shell=True|os\.system|curl|wget|add-apt-repository|apt-key|\.repo|'(auto)?remove'|'purge'|\bsed\b/);

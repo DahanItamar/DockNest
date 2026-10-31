@@ -4,6 +4,7 @@ unknown requests are refused before any command starts."""
 import unittest, tempfile, pathlib, json, io, sys, inspect
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 try:import fcntl
 except ImportError:
@@ -184,11 +185,11 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(str(caught.exception),'GENERIC');self.assertNotIn('abc123',str(caught.exception))
     def test_every_error_the_helper_raises_is_a_known_code(self):
         import re
-        source=pathlib.Path(helper.__file__).read_text()
-        section=source[source.index('# ---- Install on server'):source.index('def place_tree(')]
+        source=(pathlib.Path(__file__).resolve().parent/'helper'/'install.py').read_text()  # the install module
+        section=source[source.index('# ---- Install on server'):]
         self.assertNotIn('ValueError(',section)
         codes=set(re.findall(r"InstallError\('([A-Z_0-9]+)'\)",section))|set(re.findall(r"return '([A-Z_0-9]{4,})'",section))|{'TIMEOUT_APT_UPDATE','TIMEOUT_APT_INSTALL','TIMEOUT_UPDATE','TIMEOUT_INSTALL'}
-        plan=(pathlib.Path(helper.__file__).parent.parent/'src'/'install-plan.js').read_text()
+        plan=(pathlib.Path(__file__).resolve().parent.parent/'src'/'install-plan.js').read_text()
         for code in codes:self.assertIn('  '+code+':',plan,code)
         self.assertGreater(len(codes),12)
     def test_candidate_versions_are_parsed_defensively(self):

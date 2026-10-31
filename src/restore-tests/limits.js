@@ -1,6 +1,6 @@
 // Restore test limits (docs/restore-tests.md, "Resource limits"). Each limit offers presets and a custom number the
 // administrator types; DockNest stores the number, never a preset name. The same ranges are enforced by the database
-// CHECKs (migration 9) and by the helper (remote/helper.py test_limits). The CPU limit is also refused above the test
+// CHECKs (migration 9) and by the helper (remote/helper/restore_test.py test_limits). The CPU limit is also refused above the test
 // server's nproc, which only the test server knows, at "Check space".
 export const LIMIT_PRESETS = Object.freeze({
   timeLimitMinutes: Object.freeze([15, 30, 60, 120]),

@@ -268,7 +268,7 @@ import { join } from 'node:path';
 const fieldOf = (href, name) => new URL(href).searchParams.get(name);
 const sourceText = async () => {
   const walk = async dir => (await Promise.all((await readdir(dir, { withFileTypes: true })).map(e => e.isDirectory() ? walk(join(dir, e.name)) : /\.(js|py)$/.test(e.name) ? readFile(join(dir, e.name), 'utf8') : ''))).flat().join('\n');
-  return (await walk('src')) + '\n' + (await readFile('remote/helper.py', 'utf8'));
+  return (await walk('src')) + '\n' + (await walk('remote/helper'));
 };
 test('catalogue: every entry is a literal that still exists in DockNest code, with no interpolation', async () => {
   const source = await sourceText();

@@ -2,6 +2,7 @@ import unittest, tempfile, pathlib, tarfile, io, urllib.error
 import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan

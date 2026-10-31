@@ -3,6 +3,7 @@ restore code paths did not change isolated restore. Run: python3 remote/test_mov
 import unittest, tempfile, pathlib, json, io, hashlib, os, sys, tarfile, subprocess
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 
 GOLDEN=pathlib.Path(__file__).parent/'fixtures'/'restore-golden.json'

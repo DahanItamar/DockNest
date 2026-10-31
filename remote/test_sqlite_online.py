@@ -1,5 +1,6 @@
 import unittest, tempfile, pathlib, sqlite3, os, shutil, json, tarfile, io
 from unittest.mock import patch
+import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 from helper import sqlite_checked_online, sqlite_file_proof, online_sqlite_checks
 

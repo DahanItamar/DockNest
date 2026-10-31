@@ -1,6 +1,6 @@
 // Optional "Install on server" (docs/moving-sites.md). A person can ask DockNest to install nginx, Docker, Docker
 // Compose or certbot on a server a move is blocked on. Everything about WHAT runs lives in the helper
-// (remote/helper.py: a fixed package name -> fixed argv table). This file never builds a command for execution; the
+// (remote/helper/install.py: a fixed package name -> fixed argv table). This file never builds a command for execution; the
 // `command` text it produces is only shown to the person ("Show command") so they can run it themselves.
 import { z } from 'zod';
 import { db, id, audit } from './db.js';

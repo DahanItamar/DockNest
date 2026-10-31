@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { writeHelperBundle } from '../src/helper-bundle.js';
+// The Python tests import the built helper.py (build/remote), the same bytes servers receive.
+writeHelperBundle();
 test('remote helper rejects unsafe archives and preserves safe maintenance failure states',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_helper.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification; install it before running npm run check');
@@ -34,5 +37,10 @@ test('install on server runs only fixed argv for a fixed package list and refuse
 test('restore test helper journals before every create, limits and isolates the copy, blocks mail and tears down only what it made',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_restore_tests.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for restore test helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('the helper source keeps shared state in common.py and builds into one helper.py that loads in a safe order',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_bundle.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });

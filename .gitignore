@@ -1,5 +1,8 @@
 node_modules/
 dist/
+# Built remote helper for tests (src/helper-bundle.js); never served.
+build/
+remote/bundle/
 data/
 backups/
 .env

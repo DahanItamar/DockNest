@@ -9,7 +9,7 @@
 // - The result is written once (a trigger enforces it). Backup evidence is written only for passed and failed, and
 //   never replaces evidence from another method (recordTestVerification).
 // - Clean-up always runs once anything reached the server, also after a failure, cancel, time limit or restart.
-import { readFile } from 'node:fs/promises';
+import { helperSource } from '../helper-bundle.js';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, uploadBackupTo, jobRunners } from '../engine.js';
@@ -32,7 +32,7 @@ export const testTransport = {
   now: () => Date.now(),
 };
 // The reaper the helper starts on the test server is the reviewed helper itself.
-const reaperSource = (await readFile(new URL('../../remote/helper.py', import.meta.url))).toString('base64');
+const reaperSource = helperSource().toString('base64');
 const LOCKED = new Set(['restore-test-prepare', 'restore-test-run', 'restore-test-teardown']);
 const iso = ms => new Date(ms).toISOString();
 const clock = () => testTransport.now();

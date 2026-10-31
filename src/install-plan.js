@@ -1,12 +1,12 @@
 // Pure rules for "Install on server" (docs/moving-sites.md): which packages DockNest may install where, and the line a
 // person would run themselves. No I/O, so the move preflight can use it. What actually runs is decided in
-// remote/helper.py (INSTALL_PLAN_JSON); tests/server-install.test.js keeps the two package tables identical.
+// remote/helper/install.py (INSTALL_PLAN_JSON); tests/server-install.test.js keeps the two package tables identical.
 export const INSTALL_PACKAGES = Object.freeze(['nginx', 'docker', 'compose', 'certbot']);
 const LABELS = { nginx: 'nginx', docker: 'Docker', compose: 'Docker Compose', certbot: 'certbot' };
 export const installLabel = name => LABELS[name];
 
 // Distro packages only: no curl|sh, no third-party repositories. Keep identical to INSTALL_PLAN_JSON in
-// remote/helper.py; tests/server-install.test.js compares the two.
+// remote/helper/install.py; tests/server-install.test.js compares the two.
 export const PACKAGE_MAP = Object.freeze({
   apt: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['docker.io'], compose: ['docker-compose-v2'] },
   dnf: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['moby-engine'], compose: [] },

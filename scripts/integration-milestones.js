@@ -28,7 +28,7 @@ export async function nativeFixtureDiagnostics(run,source,name) {
 
 export async function bootFixtureDiagnostics(run,source,base,job) {
  const probe=`import json,sys,pathlib
-sys.path.insert(0,'/qa-helper')
+sys.path[:0]=['/qa-helper/bundle','/qa-helper']
 import boot_recovery as driver
 diagnostic={'lastStage':'not-started','failureCategory':None}
 def category(error):
@@ -73,7 +73,7 @@ export async function runMilestones({run,until,hosts,servers,db,remote,directory
  // Actual Linux nested and unsupported tmpfs mounts, including a bind over them.
  await run('exec',source,'mkdir','-p','/qa-mount','/qa-mount/nested');
  await run('exec',source,'mount','-t','tmpfs','tmpfs','/qa-mount/nested');
- const mountProbe="import sys;sys.path.insert(0,'/qa-helper');from helper import classify_source\nfor p in ['/qa-mount','/qa-mount/nested']:\n try:classify_source(p);raise AssertionError('Unsupported mount passed')\n except ValueError:pass\nprint('blocked')";
+ const mountProbe="import sys;sys.path.insert(0,'/qa-helper/bundle');from helper import classify_source\nfor p in ['/qa-mount','/qa-mount/nested']:\n try:classify_source(p);raise AssertionError('Unsupported mount passed')\n except ValueError:pass\nprint('blocked')";
  assert.equal(await run('exec',source,'python3','-c',mountProbe),'blocked');
  await run('exec',source,'umount','/qa-mount/nested');
  passed('M1: actual Linux nested/tmpfs mounts block before stop; NFS/CIFS mount-table policy fixtures pass');

@@ -1,6 +1,7 @@
 import {renderMaintenancePage} from '../shared/maintenance-design.js';
 import { db, parse, id, audit, transaction } from './db.js';
 import { config } from './config.js';
+import { helperSource } from './helper-bundle.js';
 import { deploymentHeld, requireNoDeploymentHold as requireNoHold } from './deployment-hold.js';
 import { recordVerification } from './recovery-evidence.js';
 import { preparePublication,completePreparedMetadata,authenticatePublication,finalizePublication,claimDeletion,finishDeletion,deletionDeferred } from './artifact-journal.js';
@@ -29,7 +30,7 @@ export const browseProjectFiles=(server,containers,directory)=>remote(server,{op
 export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
 // Boot recovery copies these files onto the host; other operations stream the current helper each time.
-const bootBundle=await Promise.all(['../remote/helper.py','../remote/boot_recovery.py'].map(file=>readFile(new URL(file,import.meta.url))));
+const bootBundle=[helperSource(),await readFile(new URL('../remote/boot_recovery.py',import.meta.url))];
 export const bootRecoveryBundle=Object.freeze({sha256:createHash('sha256').update(bootBundle[0]).update('\0').update(bootBundle[1]).digest('hex'),helperVersion:Number(/^VERSION=(\d+)$/m.exec(bootBundle[0].toString())?.[1]||0)});
 export function bootRecoveryStatus(siteId){
  const row=db.prepare('SELECT bundle_sha256,helper_version,installed_at FROM boot_recovery_installs WHERE site_id=?').get(siteId);

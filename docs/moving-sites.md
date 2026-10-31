@@ -176,7 +176,7 @@ Collapsed by default and pre-filled; most moves need no changes here.
   job; every step that touches a server runs as one short `site-move` job, and `claimJob` keeps both servers busy
   while it runs. A worker restart fails the interrupted `site-move` job and the move resumes from its journal: an
   unfinished deploy is checked with `deploy-status`, undone with `deploy-teardown` and run again.
-- Helper operations (`remote/helper.py`): `move-facts` (read-only; env keys with masked values only),
+- Helper operations (`remote/helper/move.py`): `move-facts` (read-only; env keys with masked values only),
   `deploy-restore` (test or live; journals every folder, volume, network, container, image, firewall rule and nginx
   file on the target before creating it; refuses anything that already exists), `deploy-teardown` (removes only what
   the journal lists and the `docknest.move=<id>` label confirms; refused once the move finished), `deploy-status`,

@@ -1,6 +1,6 @@
 // Static allow-list of DockNest's OWN fixed error messages (2.4.1). Every entry is a literal that DockNest code throws
 // or returns with no interpolated value, so it can carry no host, path, name, address or secret. tests/problem-reports.test.js
-// checks that every entry still exists in src/ or remote/helper.py, so the list cannot drift into free text.
+// checks that every entry still exists in src/ or remote/helper/, so the list cannot drift into free text.
 // Only an EXACT match is ever used, and the text sent to GitHub always comes from this list, never from the server string.
 export const CATALOGUE=Object.freeze([
  "A DockNest backup is already queued or running.",
