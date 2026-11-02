@@ -19,7 +19,7 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, launches: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
   // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
   const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
@@ -27,6 +27,9 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   // Backup copies: a cursor from before 2.11.0 has no `copies` field, which means "start now" (no history replayed).
   const copies = cursor.copies ? detectCopies(cursor.copies) : { count: 0, at };
   count += copies.count;
+  // Launches: a cursor from before 2.16.0 has no `launches` field, which means "start now" (no history replayed).
+  const launches = cursor.launches ? detectLaunches(cursor.launches) : { count: 0, at };
+  count += launches.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE (j.type='backup' AND j.status IN ('completed','failed','recovery_required') OR j.type='scrub' AND j.status='failed' AND json_extract(j.details,'$.chainBroken')=1) AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -46,7 +49,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || launches.at !== cursor.launches) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, launches: launches.at });
   return count;
 }
 
@@ -75,6 +78,20 @@ function detectRestoreTests(since, cleanupsSince) {
     count += emit({ type: 'restore_test.needs_you', key: `occ:restore-test-cleanup:${row.id}`, at: row.created_at, siteId: row.site_id, serverId: info.live_id, targetServerId: info.server_id, timeZone: zoneFor(row.site_id), siteName: info.site, serverName: info.server });
   }
   return { count, tests: last, cleanups: lastCleanup };
+}
+
+// Launches (docs/launch-site.md): a launch that entered needs_attention (its teardown did not finish). Read from the audit
+// row the engine writes when it enters that state, so a retried teardown that fails again alerts again.
+function detectLaunches(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT a.id,a.created_at,a.target FROM audit_events a WHERE a.action='launch.needs_attention' AND a.created_at>? ORDER BY a.created_at,a.id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    const info = db.prepare('SELECT v.id AS server_id,v.name AS server FROM site_launches l JOIN servers v ON v.id=l.server_id WHERE l.id=?').get(row.target);
+    if (!info) continue;
+    count += emit({ type: 'launch.needs_you', key: `occ:launch:${row.id}`, at: row.created_at, serverId: info.server_id, serverName: info.server });
+  }
+  return { count, at: last };
 }
 
 // Backup copies (docs/backup-copies.md): read from the audit rows the copy step writes. backup.copy_failed is written once
