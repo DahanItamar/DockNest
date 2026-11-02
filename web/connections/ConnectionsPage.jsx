@@ -62,6 +62,22 @@ export function ConnectionsPage({api,user,openNew=0,onSessionExpired}){
  </div>;
 }
 
+// Certificate warning (docs/alerts.md, "Certificates"): how many days before a certificate expires the
+// "Certificate expires soon" alert goes out. 1 to 90; saved with the same fresh check as the switches.
+function CertificateDays({saved,disabled,onSave}){
+ const [value,setValue]=useState(String(saved));
+ useEffect(()=>{setValue(String(saved))},[saved]);
+ const days=Number(value),valid=Number.isInteger(days)&&days>=1&&days<=90,changed=valid&&days!==saved;
+ return <div className="cx-days-row">
+  <div className="cx-days-text"><label className="sb-switch-label" htmlFor="cx-cert-days">Certificate warning</label><span className="t-caption" id="cx-cert-days-help">{valid?'Alert this many days before a certificate expires.':'Enter 1 to 90.'}</span></div>
+  <div className="cx-days-control">
+   <input id="cx-cert-days" type="number" inputMode="numeric" min="1" max="90" step="1" value={value} disabled={disabled} aria-invalid={valid?undefined:'true'} aria-describedby="cx-cert-days-help" onChange={event=>setValue(event.target.value)}/>
+   <span className="cx-days-unit">days</span>
+   <button type="button" disabled={disabled||!changed} onClick={()=>onSave(days)}>Save</button>
+  </div>
+ </div>;
+}
+
 // "Allow private network" and "Operators can manage alerts": administrators only, each change after a fresh check.
 function Settings({client,settings,onChanged}){
  const guard=useReauth(client),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -70,6 +86,7 @@ function Settings({client,settings,onChanged}){
   <h2 id="cx-settings-title" className="t-section">Connections settings</h2>
   <SwitchRow id="cx-private" label="Allow private network" help="Connections an administrator saves while this is on may reach servers on your own network, such as a self-hosted ntfy, Gotify, Matrix or Mattermost. Loopback and cloud metadata addresses stay blocked." checked={!!settings?.allowPrivateNetwork} disabled={busy||guard.waiting} onChange={v=>change({allowPrivateNetwork:v})}/>
   <SwitchRow id="cx-operators" label="Operators can manage alerts" help="Operators can then add and change alert nodes and connections, and send their alert text to accounts they choose. They never see saved secrets. Other (webhook URL) and these settings stay with administrators." checked={!!settings?.operatorsManage} disabled={busy||guard.waiting} onChange={v=>change({operatorsManage:v})}/>
+  <CertificateDays saved={settings?.certificateDays??14} disabled={busy||guard.waiting} onSave={days=>change({certificateDays:days})}/>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   {guard.box}
  </section>;

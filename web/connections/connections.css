@@ -22,6 +22,18 @@
 .cx-switch-row+.cx-switch-row{border-top:1px solid var(--border-subtle)}
 .cx-switch-row .t-caption{max-width:72ch}
 .cx-settings button[role=switch]:focus:not(:focus-visible):before{outline:none}
+/* Certificate warning: label and help on the left, days and Save on the right; stacked on phones. */
+.cx-days-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 0}
+.cx-days-text{display:flex;flex-direction:column;min-width:0}
+.cx-days-text .t-caption{max-width:72ch}
+.cx-days-control{display:flex;align-items:center;gap:8px;flex:none;min-width:0}
+/* Inputs are 44 px tall in the app; the Save beside the days field matches it. */
+.cx-days-control input,.cx-days-control button{height:44px;min-height:44px}
+.cx-days-control input{width:88px;min-width:0;text-align:right}
+.cx-days-control input[aria-invalid=true]{border-color:var(--error)}
+.cx-days-control button{flex:none;white-space:nowrap}
+.cx-days-unit{flex:none;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-muted)}
+@media(max-width:680px){.cx-days-row{flex-direction:column;align-items:stretch;gap:8px}.cx-days-control input{flex:1 1 auto;width:auto}}
 
 /* Dialog */
 dialog.cx-dialog{width:min(560px,calc(100vw - 2 * var(--edge)));scrollbar-width:none}
