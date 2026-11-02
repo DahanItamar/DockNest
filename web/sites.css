@@ -8,11 +8,18 @@
 .site-metadata dd{display:flex;flex-direction:column;align-items:flex-end}
 .site-metadata code{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-primary)}
 .site-metadata .container-labels{gap:0}
-.site-card-actions{justify-content:space-between;padding:0 16px 0 12px}
-.site-card-tools{display:flex;align-items:center;gap:4px}
+.card-footer.site-card-actions{justify-content:space-between;padding:0 12px}
+.site-card-tools{display:flex;align-items:center;gap:0}
 .site-card-actions .primary{flex:none;padding-inline:16px}
 .site-card-actions button:disabled{opacity:.5;cursor:wait}
+.site-card{container-type:inline-size}
 @media(max-width:767px){
+ .card-footer.site-card-actions{flex-direction:column-reverse;align-items:stretch;height:auto;padding:16px;gap:12px}
+ .site-card-actions .primary{width:100%}
+ .site-card-tools{justify-content:space-between}
+}
+/* A card too narrow for the five tools plus the button stacks them like a phone instead of clipping. */
+@container (max-width:345px){
  .card-footer.site-card-actions{flex-direction:column-reverse;align-items:stretch;height:auto;padding:16px;gap:12px}
  .site-card-actions .primary{width:100%}
  .site-card-tools{justify-content:space-between}
