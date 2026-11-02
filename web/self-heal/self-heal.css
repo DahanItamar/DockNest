@@ -35,3 +35,5 @@
  .sh-limit-control .sh-count{width:76px}
  .sh-limit-control .sh-window{width:132px}
 }
+
+.sh-watched{margin:-8px 0 0;color:var(--text-secondary)}
