@@ -16,6 +16,8 @@ import { tickRestoreTestSchedule } from './restore-tests/scheduler.js';
 import { tickSiteEdits, recoverInterruptedSiteEdits } from './site-edits/engine.js';
 import { claimInstall, executeInstall, failInterruptedInstalls } from './installs.js';
 import { tickAlerts, tickReachability } from './alerts/detect.js';
+import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks, haltSelfHeal } from './self-heal/engine.js';
+import { syncStreams, stopStreams } from './self-heal/streams.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
 // so a SIGKILLed worker cannot crash-loop its replacement. A legacy worker.lock is only reported: exclusion lives in the
@@ -34,25 +36,34 @@ recoverInterruptedRestoreTests();
 recoverInterruptedSiteEdits();
 // An install was a single helper call; it is not resumed. The person is told and can try again.
 failInterruptedInstalls();
+// A self-heal restart is one helper call; an interrupted one is failed, counts toward the limit and is not retried.
+recoverInterruptedHeals();
 // Any job still 'running' belonged to a worker that no longer holds the lease.
 db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
 let stopping=false,lost=false;
 await recoverInterruptedSelfBackups();
 // A copy step the previous worker did not finish resumes from its journal (src/artifact-journal.js).
 try{await recoverInterruptedCopies(verifyEncrypted);}catch{console.error('Backup copy recovery is pending; it is retried by the copy step.');}
+// Self-heal restarts queued by an event start at once beside the running job (src/self-heal/engine.js healNow), only
+// while this worker may claim work.
+healRunner.active=()=>!stopping&&!lost;
 function heartbeat(running=true){db.prepare("INSERT INTO settings VALUES ('worker_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({running,lastSeen:new Date().toISOString()}));}
 // Renewal fails only when the lease expired and another worker took it over: stop claiming at once.
-function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');return false;}
+// Lease lost: self-heal stops at once too (streams closed, re-checks cancelled, nothing more recorded or queued), since
+// the worker that took over runs its own streams.
+function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');try{haltSelfHeal();stopStreams();}catch{/* best effort */}return false;}
 heartbeat();
-const heartbeatTimer=setInterval(()=>{if(renew())heartbeat();},LEASE_TTL_MS/4);
+// The heartbeat (every 15 s) also wakes self-heal, so settings changes, re-pins and finished site work reach the
+// streams and queued restarts promptly even while the loop runs a long job of another site.
+const heartbeatTimer=setInterval(()=>{if(renew()){heartbeat();if(!stopping)try{syncStreams();tickSelfHeal();}catch{/* Retried at the next heartbeat. */}}},LEASE_TTL_MS/4);
 // Drain: the first signal stops claiming and lets the current job finish, then the lease is released and the worker
 // exits 0. A second signal exits at once and leaves the lease to expire; the next worker marks the job recovery_required.
 let signals=0;
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){console.error(`${event} received again; exiting without draining. The lease expires in ${LEASE_TTL_MS/1000}s and interrupted jobs become recovery_required on next start.`);process.exit(1);}stopping=true;console.log(`${event} received; draining: no new jobs will be claimed, waiting for the current job to finish.`);});
 try{
  let reconcileAt=0;
- const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickAlerts();tickReachability();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
-}finally{clearInterval(heartbeatTimer);if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
+ const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}try{purgeSelfHealEvents();}catch{/* Self-heal history older than 90 days is deleted at the next maintenance. */}reconcileAt=Date.now()+300000;};
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
+}finally{clearInterval(heartbeatTimer);stopStreams();cancelRechecks();await healRunner.running;if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);

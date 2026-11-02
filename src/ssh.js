@@ -5,14 +5,15 @@ import { sftpWriteStream } from './sftp-streams.js';
 import { sftpReadStream } from './sftp-read-stream.js';
 import { pipeline } from 'node:stream/promises';
 import { helperSource } from './helper-bundle.js';
-export function connect(server) {
+// options: ssh2 transport keepalive for long-held sessions (the self-heal event stream uses 15 s, 3 misses).
+export function connect(server,{keepaliveInterval=10000,keepaliveCountMax=10}={}) {
   return new Promise((resolve,reject)=>{
     const client=new Client();let hostKeyRejected=false;
     // SSH can emit a second error while closing a rejected handshake. hostKeyRejected only classifies a failed test.
     client.on('error',error=>reject(hostKeyRejected&&error&&typeof error==='object'?Object.assign(error,{hostKeyRejected}):error)).once('ready',()=>resolve(client));
     if (!/^[a-f0-9]{64}$/i.test(server.host_key||'')) return reject(new Error('A verified SHA256 SSH host-key fingerprint is required'));
     client.connect({host:server.host,port:server.port||22,username:server.username,
-      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>{const ok=hash.toLowerCase()===server.host_key.toLowerCase();hostKeyRejected=!ok;return ok;},readyTimeout:15000,keepaliveInterval:10000,keepaliveCountMax:10});
+      privateKey:open(server.private_key),hostHash:'sha256',hostVerifier:hash=>{const ok=hash.toLowerCase()===server.host_key.toLowerCase();hostKeyRejected=!ok;return ok;},readyTimeout:15000,keepaliveInterval,keepaliveCountMax});
   });
 }
 // options.keepStdinOpen: stdin stays open while the helper works (site moves); options.signal closes the channel, which

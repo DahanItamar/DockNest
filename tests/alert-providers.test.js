@@ -632,6 +632,7 @@ test('template: every event has a title, a catalogue reason, the names the owner
     'restore_test.needs_you': ['Restore test needs you', 'A restore test could not clean up its test server. Open DockNest to check it.'], 'update.available': ['Update available', 'DockNest 2.10.0 is available. Open DockNest to update.'],
     'backup.copy_failed': ['Backup copy failed', 'The copy to the copy destination did not finish. DockNest retries automatically.'], 'backup.copy_recovered': ['Backup copy saved', 'The copy to the copy destination is saved now.'], 'backup.copy_gave_up': ['Backup copy stopped', 'DockNest stopped retrying the copy to the copy destination after 7 days. Open DockNest to retry it.'],
     'edit.rolled_back': ['Change undone', 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.'], 'edit.needs_you': ['Change needs you', 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.'],
+    'self_heal.restarted': ['Container restarted', 'A container failed its health check and DockNest restarted it.'], 'self_heal.gave_up': ['Self-heal stopped', 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.'],
   };
   assert.deepEqual(Object.keys(expected).sort(), [...events.EVENTS].sort(), 'the catalogue covers every event');
   for (const [type, [title, reason]] of Object.entries(expected)) {

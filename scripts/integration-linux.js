@@ -288,6 +288,9 @@ try {
   await until(async()=>Boolean((await verifyRecovery({...interrupted,status:'recovery_required'})).healthVerified),'Watchdog did not restore health and maintenance state',30);
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-b'),'true');
   record('Detached Linux watchdog terminates a stuck capture, restarts the original site and clears maintenance after health; central job remains locked until verified recovery');
+  // Last: its Docker daemon restart case stops every container on the source host.
+  const {runSelfHealScenario}=await import('./integration-self-heal.js');
+  await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
   evidence.status = 'passed';
 } catch (error) {
   evidence.status = 'failed';

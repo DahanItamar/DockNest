@@ -1,0 +1,6 @@
+{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"health_status: unhealthy","timeNano":1762070400123456789,"name":"shop-web-1","project":"shop","service":"web","restoreTest":"","move":""}
+{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"health_status: healthy","timeNano":1762070460987654321,"name":"shop-web-1","project":"shop","service":"web","restoreTest":"","move":""}
+{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","action":"health_status: starting","timeNano":1762070401000000001,"name":"shop-web-1","project":"shop","service":"web","restoreTest":"","move":""}
+{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","action":"health_status: unhealthy","timeNano":1762070402000000002,"name":"dbm-test-0b5e8d3c1f2a-web","project":"shop","service":"web","restoreTest":"0b5e8d3c-1f2a","move":""}
+{"id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","action":"health_status: unhealthy","timeNano":1762070403000000003,"name":"shop-web-1-move","project":"shop","service":"web","restoreTest":"","move":"7c1d"}
+{"id":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","action":"health_status: unhealthy","timeNano":1762070404000000004,"name":"cache","project":"","service":"","restoreTest":"","move":""}

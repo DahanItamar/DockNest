@@ -31,6 +31,8 @@ from .restore_test import (
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
 from .edit import (
     edit_operation)
+from .heal import (
+    health_events, self_heal_restart, self_heal_resolve)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
@@ -146,6 +148,9 @@ def main(req):
     elif op=='edit-rollback':edit_operation(req,watch_stdin)
     elif op=='edit-finish':edit_operation(req,watch_stdin)
     elif op=='edit-status':edit_operation(req,watch_stdin)
+    elif op=='health-events':health_events(req)
+    elif op=='self-heal-resolve':self_heal_resolve(req)
+    elif op=='self-heal-restart':self_heal_restart(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.
