@@ -107,7 +107,7 @@ class Host:
         patches=[patch('helper.launch_watch',side_effect=self.watch),patch('helper.LAUNCH_ROOT',self.launches),patch('helper.LAUNCH_SITES',self.sites),
             patch('helper.LAUNCH_LOCK_PATH',str(self.root/'launch.lock')),patch('helper.ACME_ROOT',self.acme),patch('helper.LETSENCRYPT',self.le),
             patch('helper.launch_root_user',return_value=None),patch('helper.socket.getaddrinfo',side_effect=self.getaddrinfo),
-            patch('helper.EVENT_STREAM',self.events),patch('helper.shutil.which',side_effect=self.which),
+            patch('helper.os.path.expanduser',side_effect=lambda p:p.replace('~','/nonexistent-home')),            patch('helper.EVENT_STREAM',self.events),patch('helper.shutil.which',side_effect=self.which),
             patch('helper.tool_version',side_effect=lambda args:'29.0.0' if 'docker' in self.tools and ('buildx' not in args or 'buildx' in self.tools) else None),patch('helper.listening_ports',return_value=self.ports),
             patch('helper.host_addresses',return_value=self.addresses),patch('helper.nginx_conf_dir',return_value=str(self.conf)),
             patch('helper.process_running',return_value=False),patch('helper.os_release',return_value={'id':'ubuntu','versionId':'24.04'}),
@@ -795,6 +795,14 @@ class ReviewTests(unittest.TestCase):
         for text,code in cases.items():self.assertEqual(helper.launch_compose_text_problem(text.encode()),code,text)
         for text in ('--- {"services": {a: {image: alpine}}}\n','--- !!map {services: {}}\n','---\n&a {services: {}}\n'):
             self.assertEqual(helper.launch_compose_text_problem(text.encode()),'COMPOSE_FLOW_REFUSED',text)
+    def test_compose_plugin_folders_are_bound_back_but_not_docker_config(self):
+        config=pathlib.Path(tempfile.mkdtemp());(config/'cli-plugins').mkdir();(config/'config.json').write_text('{}')
+        with patch.dict(os.environ,{'DOCKER_CONFIG':str(config)}):
+            host=Host(self,gate=gate_ok);self.assertTrue(host.run('launch-fetch',source='compose',composeText='x: 1\n')['ok'])
+        argv=[c for c in host.calls if 'config' in c['argv']][0]['argv']
+        spec=json.loads(argv[argv.index('docker')-1])
+        self.assertEqual(spec['keep'],[str(host.site()),str(config/'cli-plugins')])
+        self.assertNotIn(str(config),spec['keep']);self.assertIn('/root',spec['hide'])
     def test_compose_config_without_a_sandbox_is_refused(self):
         host=Host(self,gate=gate_ok);host.tools.discard('unshare')
         self.assertEqual(host.run('launch-fetch',source='compose',composeText='x: 1\n')['code'],'SANDBOX_UNAVAILABLE')

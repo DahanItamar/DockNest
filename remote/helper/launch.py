@@ -589,12 +589,23 @@ try:
 except OSError:os._exit(97)
 os.execvp(argv[0],argv)
 '''
+def launch_plugin_dirs():
+    """Docker CLI plugin folders (where the compose plugin may live) under the hidden home folders: /root/.docker,
+    the helper user's ~/.docker and $DOCKER_CONFIG. Each existing, real folder is bound back read-only in the sandbox;
+    the rest of .docker (config.json can hold registry credentials) stays hidden."""
+    found=[]
+    for base in ('/root/.docker',os.path.expanduser('~/.docker'),os.environ.get('DOCKER_CONFIG') or ''):
+        if not base or not os.path.isabs(base):continue
+        path=os.path.join(base,'cli-plugins')
+        if os.path.isdir(path) and not os.path.islink(path) and path not in found:found.append(path)
+    return found
 def launch_sandboxed(argv,keep):
     """argv wrapped in the compose config sandbox. Refuses SANDBOX_UNAVAILABLE without unshare (fail closed)."""
     if shutil.which('unshare',path=LAUNCH_PATH) is None or shutil.which('mount',path=LAUNCH_PATH) is None:launch_refuse('SANDBOX_UNAVAILABLE')
     hide=list(dict.fromkeys([str(LAUNCH_SITES),str(LAUNCH_ROOT),*LAUNCH_SANDBOX_HIDE]))
+    keep=[str(k) for k in keep]+launch_plugin_dirs()
     python=sys.executable if sys.executable and os.path.isabs(sys.executable) else 'python3'
-    return ['unshare','--mount','--propagation','private','--',python,'-I','-c',LAUNCH_SANDBOX_CODE,json.dumps({'keep':[str(k) for k in keep],'hide':hide}),*argv]
+    return ['unshare','--mount','--propagation','private','--',python,'-I','-c',LAUNCH_SANDBOX_CODE,json.dumps({'keep':keep,'hide':hide}),*argv]
 def launch_model(slug,files,project_dir,env_file):
     # Every file Compose may read for this launch lives in the env file's folder (the site folder or a check folder).
     argv=launch_sandboxed(launch_compose_base(slug,files,project_dir,env_file)+['config','--format','json'],[os.path.dirname(str(env_file))])
