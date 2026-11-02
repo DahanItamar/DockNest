@@ -39,6 +39,11 @@ test('restore test helper journals before every create, limits and isolates the 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for restore test helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('self-heal helper pins the docker events format, never matches copies, bounds the stream and restarts only a running unhealthy container',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_heal.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for self-heal helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('the helper source keeps shared state in common.py and builds into one helper.py that loads in a safe order',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_bundle.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification');
