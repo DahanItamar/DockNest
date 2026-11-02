@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Self-heal (off by default, per site): when Docker marks a container of a site unhealthy, DockNest restarts it, up to 3 times an hour by default and at least 60 seconds apart, and never while a backup, restore, move, Safe Edit or maintenance is in progress. Two new alert events, "Container restarted" (first restart in a window) and "Self-heal stopped"; existing alert lines do not get them automatically. Works only while DockNest is running. See [docs/self-heal-guide.md](docs/self-heal-guide.md).
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
