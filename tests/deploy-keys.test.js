@@ -131,7 +131,9 @@ test('re-pin after a host key rotation, and a key confirmed on one server is ref
   assert.equal(ask.code, 'HOST_KEY_CONFIRM'); assert.equal(ask.hostKey.sha256, fp(hostBlob(hostKey)));
   const pinned = await send(admin, 'POST', `/deploy-keys/${key.id}/pin`, { serverId: other, hostKeySha256: ask.hostKey.sha256 });
   assert.equal(pinned.status, 200);
-  const view = (await pinned.json()).key;
+  const pinBody = await pinned.json(), view = pinBody.key;
+  assert.deepEqual({ ...pinBody.replacedPin, text: undefined }, { serverId: web, serverName: 'web-1', text: undefined }, 'the answer says the old server now needs a re-pin');
+  assert.match(pinBody.replacedPin.text, /web-1/);
   assert.equal(view.pinnedFromServerId, other); assert.equal(view.hostKey.sha256, ask.hostKey.sha256); assert.equal(view.publicKey, key.publicKey, 'the deploy key itself is unchanged');
   assert.equal(keys.deployKeyForLaunch(key.id, other).hostKeyLine, `github.com ssh-ed25519 ${hostBlob(hostKey).toString('base64')}`);
   assert.equal((await send(staleAdmin, 'POST', `/deploy-keys/${key.id}/pin`, { serverId: web })).status, 403);
