@@ -16,6 +16,7 @@ import { requestInstall, findInstall } from './installs.js';
 import { alertRoutes, connectionRoutes } from './alerts/routes.js';
 import { canManageAlerts } from './alerts/connections.js';
 import { restoreTestRoutes, acknowledgeTestJob } from './restore-tests/routes.js';
+import { siteEditRoutes, REVIEW_PATH } from './site-edits/routes.js';
 import { storageReportRoutes } from './storage-report.js';
 import { backupTestStates, notTested } from './restore-tests/views.js';
 import { config, trustedOrigins } from './config.js';
@@ -47,7 +48,9 @@ app.disable('x-powered-by');
 // Default: trust no proxy (req.ip is the socket peer). TRUST_PROXY lists the exact proxy addresses (see src/config.js).
 app.set('trust proxy', config.trustProxy);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"] } }, strictTransportSecurity: config.secureCookies ? undefined : false }));
-app.use(express.json({ limit: '128kb' }));
+// The Safe Edit review carries whole Compose files and has its own body limit (src/site-edits/routes.js).
+const jsonBody = express.json({ limit: '128kb' });
+app.use((req, res, next) => (REVIEW_PATH.test(req.path) ? next() : jsonBody(req, res, next)));
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !trustedOrigins.has(req.headers.origin)) return res.status(403).json({ error: 'Request origin does not match APP_ORIGIN. Open the configured application address.' });
@@ -73,6 +76,7 @@ app.use('/api/moves', moveRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/connections', connectionRoutes);
 app.use('/api', restoreTestRoutes);
+app.use('/api', siteEditRoutes);
 app.use('/api', storageReportRoutes);
 app.use('/api', incrementalRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);

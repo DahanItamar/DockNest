@@ -29,6 +29,8 @@ from .install import (
 from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
+from .edit import (
+    edit_operation)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
@@ -89,6 +91,8 @@ def main(req):
     elif op=='discover':
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
+        # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
+        cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites()
         emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c in cs]})
@@ -134,6 +138,14 @@ def main(req):
         tid=test_id(req);_,state=test_state(tid);ids=[item['id'] for item in (state.get('restored') or {}).get('containers',[]) if item['id'] in (state.get('restored') or {}).get('running',[])]
         emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
+    elif op=='edit-load':edit_operation(req,watch_stdin)
+    elif op=='edit-check':edit_operation(req,watch_stdin)
+    elif op=='edit-prepare':edit_operation(req,watch_stdin)
+    elif op=='edit-apply':edit_operation(req,watch_stdin)
+    elif op=='edit-poll':edit_operation(req,watch_stdin)
+    elif op=='edit-rollback':edit_operation(req,watch_stdin)
+    elif op=='edit-finish':edit_operation(req,watch_stdin)
+    elif op=='edit-status':edit_operation(req,watch_stdin)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.

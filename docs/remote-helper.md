@@ -27,6 +27,7 @@ remote/
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
+│   ├── edit.py             Safe Edit: load, gate, journal, data safety copy, atomic writes, apply, health poll, rollback (docs/safe-edit.md)
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
 ├── boot_recovery.py        boot driver; imports names from the built helper.py
 ├── export_zip.py           ZIP export
@@ -96,6 +97,7 @@ classDiagram
   class restore { verify_recovery() safe_extract() unpack_chain() restore() restore_chain_offline() }
   class move { move_facts() deploy_restore() compose_up() move_* steps }
   class restore_test { restore_test_prepare/run/teardown() start_reaper() }
+  class edit { edit_operation() edit_gate() edit_env_apply() edit_apply() edit_rollback() }
   class databases { sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
   class incremental { plan_incremental() incremental_commit() }
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
@@ -109,6 +111,7 @@ classDiagram
   main --> restore
   main --> move
   main --> restore_test
+  main --> edit
   main --> install
   main --> staging
   backup --> databases
@@ -117,6 +120,8 @@ classDiagram
   backup --> guides
   restore --> backup
   restore_test --> restore
+  edit --> move
+  edit --> maintenance
   move --> restore
   maintenance --> net
   databases --> net

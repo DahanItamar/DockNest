@@ -29,6 +29,9 @@ const catalogue = Object.freeze({
   'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
   'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
+  // Safe Edit (docs/safe-edit.md). Never the changed values or the step's own reason.
+  'edit.rolled_back': 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.',
+  'edit.needs_you': 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

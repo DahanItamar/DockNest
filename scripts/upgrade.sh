@@ -198,6 +198,17 @@ floor_of() { grep -E '^ *\{ *version: *[0-9]+,' | grep -v 'compatible: true' | s
 schema_at() { git_ show "$1:src/migrations.js" 2>/dev/null | schema_of; }
 package_field() { git_ show "$1:package.json" | sed -n "s/^ *\"$2\": *\"\([^\"]*\)\".*/\1/p" | head -n 1; }
 in_data() { script=$1; shift; docker compose run --rm --no-deps -T --entrypoint /bin/sh worker -ec "$script" sh "$@"; }
+# Unfinished Safe Edits (docs/safe-edit.md): rows of site_edits without a result; 0 before migration 14 created the table.
+open_edits() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});const t=d.prepare("SELECT 1 FROM sqlite_master WHERE type=? AND name=?").get("table","site_edits");console.log(t?d.prepare("SELECT COUNT(*) AS n FROM site_edits WHERE result IS NULL").get().n:0);d.close()' 2>/dev/null | tail -n 1; }
+# Safe Edit (security review item 9): a release before migration 14 cannot see an unfinished edit and would never finish
+# or roll it back, so going back to one is refused until every edit has finished. Checked before and again after the hold.
+EDIT_SCHEMA=14
+refuse_open_edits() {
+  [ "${TARGET_SCHEMA:-0}" -lt "$EDIT_SCHEMA" ] && [ "${DB_SCHEMA:-0}" -ge "$EDIT_SCHEMA" ] || return 0
+  count=$(open_edits)
+  case "$count" in ''|*[!0-9]*) $1; fail 2 'Could not check the state volume for unfinished Safe Edits. Downgrade refused; nothing was changed.' jobs-did-not-finish ;; esac
+  [ "$count" = 0 ] || { $1; fail 2 "A Safe Edit has not finished on $count site$([ "$count" = 1 ] || echo s). $TO cannot see it, so the downgrade is refused. Let it finish or resolve it in the dashboard, then retry. Nothing was changed." jobs-did-not-finish; }
+}
 db_schema() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});console.log(d.prepare("PRAGMA user_version").get().user_version);d.close()' 2>/dev/null | tail -n 1; }
 # healthy VERSION SECONDS: the API reports VERSION and the worker runs. VERSION "legacy" means a release without
 # /api/version (v2.0.0 answers 401 there), where /healthz is the only signal.
@@ -213,6 +224,7 @@ healthy() {
   done
 }
 expect() { if [ "$(schema_at "$1")" = 0 ]; then echo legacy; else package_field "$1" version; fi; }
+release_open_hold() { release_hold; HOLD=0; }
 release_hold() { docker compose exec -T api node scripts/deployment-preflight.js release >/dev/null 2>&1; }
 # pin_for_updater VERSION: after a healthy manual run on a host with the in-app updater, record the running release with
 # the installed broker's own record-current, which verifies it exactly as the installer does (signed manifest, tag on
@@ -705,6 +717,7 @@ if [ "$DB_SCHEMA" -gt "$COMPATIBLE" ]; then
     [ "$INTERACTIVE" = 1 ] || [ "$DATA_ROLLBACK" = 1 ] || fail 2 'Restoring an older metadata snapshot requires --allow-data-rollback in non-interactive mode.'
   fi
 fi
+refuse_open_edits :
 if [ "$DRY_RUN" = 1 ]; then
   FINISHED=1; echo "Dry run: would upgrade $FROM to $TO. Nothing was fetched, held, written or changed."
   # The plan for after a successful upgrade: this run adds one backup and the running image becomes the previous one.
@@ -729,6 +742,7 @@ done
 if docker compose exec -T worker test -f src/worker-status.js >/dev/null 2>&1; then
   docker compose exec -T worker node src/worker-status.js || { [ "$FORCE" = 1 ] || { release_hold; HOLD=0; fail 3 'The worker reports active work. Retry when it is idle (or use --force).' jobs-did-not-finish; }; }
 fi
+refuse_open_edits 'release_open_hold'
 HINT="docker compose exec api node scripts/deployment-preflight.js release   # lifts the hold set by this script"
 
 phase backup 'Saving configuration and secrets for rollback'
