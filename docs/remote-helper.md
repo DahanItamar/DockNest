@@ -28,6 +28,8 @@ remote/
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
 │   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
+│   ├── launch.py           launch a new site: facts, Git fetch (env -i, pinned address), build, start, poll,
+│   │                       nginx, certificate, journal-gated teardown and status (docs/launch-site.md)
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
 ├── boot_recovery.py        boot driver; imports names from the built helper.py
 ├── export_zip.py           ZIP export
@@ -41,7 +43,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (16 modules)"]
+  subgraph Source["remote/helper/ (17 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
