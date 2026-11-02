@@ -1,0 +1,48 @@
+/* Safe Edit (2.15.0). Built on the product tokens only; the dialogs reuse the Map sheet (.map-dialog). */
+
+/* The dark dialog edge: transparent in light, the subtle border in dark. Only dialogs that opt in. */
+.map-root dialog.dialog-edge{border:1px solid var(--dialog-edge)}
+
+.se-root dialog,.se-root .map-dialog-body,.se-root .se-code{scrollbar-width:none}
+.se-root dialog::-webkit-scrollbar,.se-root .map-dialog-body::-webkit-scrollbar,.se-root .se-code::-webkit-scrollbar{display:none}
+
+/* Compose editor: a plain textarea in the product's mono face. */
+.se-root .se-code{flex:1;min-height:120px;resize:none;line-height:var(--lh-body);white-space:pre;overflow:auto}
+
+/* Table and list inputs. */
+.se-root .se-input{min-height:var(--control-height);height:var(--control-height);padding:8px 12px;min-width:0;width:100%}
+.se-root .se-port{width:104px;text-align:right}
+.se-root .se-ell{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.se-root .se-link{white-space:nowrap}
+
+/* Diff: line numbers, then the text; added and removed lines on the status surfaces. */
+.se-root .se-diff{flex:none;overflow:hidden;padding:8px 0;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);font-size:var(--fs-caption);line-height:20px}
+.se-root .se-diff-line{display:grid;grid-template-columns:40px minmax(0,1fr);padding:0 8px 0 0}
+.se-root .se-diff-line.add{background:var(--success-surface)}
+.se-root .se-diff-line.del{background:var(--error-surface)}
+.se-root .se-diff-n{padding-right:12px;text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.se-root .se-diff-line code{white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.se-root .se-diff-file{padding:0 8px 0 40px;color:var(--text-muted)}
+
+/* Review summary. */
+.se-root .se-defs{border-top:1px solid var(--border-subtle)}
+.se-root .se-defs dd.se-grow{flex:1;min-width:0}
+
+/* Rows as a list on a phone: same bordered box as the table. */
+.se-root .se-list{padding:0 16px}
+.se-root .se-list .def-row{min-height:var(--row-height);align-items:center;box-sizing:border-box}
+.se-root .se-list .def-row.wrap{flex-wrap:wrap}
+.se-root .se-list dt{font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-primary)}
+.se-root .se-list dd{display:flex;align-items:center;justify-content:flex-end;gap:4px}
+.se-root .se-list .wrap dd{flex:1 1 100%;justify-content:flex-start}
+.se-root .se-list .wrap dt{flex:1 1 100%}
+
+@media(max-width:767px){
+ .se-root .se-code{flex:none}
+ .se-root .se-input{height:44px;min-height:44px}
+ .se-root .se-port{width:120px}
+ .se-root .se-list .def-row:not(.wrap) dd{flex:1}
+}
+
+/* Panels in these dialogs span the row, so a panel button can be full width on a phone. */
+.se-root .alert-panel-body{flex:1}

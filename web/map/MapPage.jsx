@@ -72,7 +72,7 @@ function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onA
  </div>;
 }
 
-export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
+export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh,onSafeEdit,onEditHistory}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
  const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
@@ -376,10 +376,11 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
-   return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
+   return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" onClick={()=>onSafeEdit(s)}>Edit</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
+    {onEditHistory&&<button type="button" className="map-found" onClick={()=>onEditHistory(s)}>Edit history</button>}
     {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
