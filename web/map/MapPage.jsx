@@ -10,6 +10,7 @@ import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
+import {LaunchFlow} from './LaunchFlow.jsx';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
@@ -353,6 +354,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install'&&<InstallConfirmDialog server={checkServer(flow.check)} siteId={serverFlow?undefined:flow.siteId} check={flow.check} client={client} onCancel={backToReview} onStarted={jobId=>setFlow(f=>({...f,kind:'install-run',jobId}))} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
+  {flow?.kind==='launch'&&byId.servers[flow.serverId]&&<LaunchFlow server={byId.servers[flow.serverId]} api={api} narrow={narrow} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
   {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
   {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
@@ -373,7 +375,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(!panel)return null;
   const close=()=>closePanel(true);
   if(panel.kind==='add')return <SidePanel narrow={narrow} labelId="map-panel-title" title="Add to the map" onClose={close}><AddToMap onDragItem={canMove||alertsOn?i=>{dragItem.current=i}:undefined} onAddServer={canMove?()=>{closePanel(false);onAddServer?.()}:undefined} onAddStorage={canMove?()=>{closePanel(false);onAddStorage?.()}:undefined} onAddAlert={alertsOn?()=>addNode():undefined} onConnections={alertsOn&&onOpenConnections?()=>{closePanel(false);onOpenConnections()}:undefined}/></SidePanel>;
-  if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} onDragItem={canMove?i=>{dragItem.current={...i,serverId:panel.id}}:undefined} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}}/>;
+  if(panel.kind==='add-server'&&byId.servers[panel.id])return <AddServerPanel key={panel.id} onDragItem={canMove?i=>{dragItem.current={...i,serverId:panel.id}}:undefined} server={byId.servers[panel.id]} sites={sites} api={api} narrow={narrow} onClose={close} onPick={c=>{closePanel(false);onAddSite?.(panel.id,c.name)}} onNewSite={canMove?e=>{closePanel(false);setFlow({kind:'launch',serverId:panel.id})}:undefined}/>;
   if(panel.kind==='site'&&byId.sites[panel.id]){
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
@@ -530,7 +532,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  </section>;
 }
 
-function AddServerPanel({server,sites,api,narrow,onClose,onPick,onDragItem}){
+function AddServerPanel({server,sites,api,narrow,onClose,onPick,onDragItem,onNewSite}){
  const found=useDiscovery(api,server,sites);
- return <SidePanel narrow={narrow} labelId="map-panel-title" title={'Add to '+server.name} onClose={onClose} footer={<DiscoverFooter found={found}/>}><AddToServer found={found} onPick={onPick} onDragItem={onDragItem}/></SidePanel>;
+ return <SidePanel narrow={narrow} labelId="map-panel-title" title={'Add to '+server.name} onClose={onClose} footer={<DiscoverFooter found={found}/>}><AddToServer found={found} onPick={onPick} onDragItem={onDragItem} onNewSite={onNewSite}/></SidePanel>;
 }
