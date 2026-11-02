@@ -82,7 +82,7 @@ export const findInstall = jobId => installJobView(db.prepare('SELECT * FROM ser
 export function claimInstall() {
   db.exec('BEGIN IMMEDIATE');
   try {
-    const job = db.prepare(`SELECT i.* FROM server_installs i WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM site_moves m WHERE (m.source_server_id=i.server_id OR m.target_server_id=i.server_id) AND m.state NOT IN ${ENDED_MOVE}) AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running') AND i.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),''))) AND NOT EXISTS (SELECT 1 FROM restore_tests t WHERE t.server_id=i.server_id AND ${TEST_HELD}) ORDER BY i.created_at LIMIT 1`).get();
+    const job = db.prepare(`SELECT i.* FROM server_installs i WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM site_moves m WHERE (m.source_server_id=i.server_id OR m.target_server_id=i.server_id) AND m.state NOT IN ${ENDED_MOVE}) AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running','heal_running') AND i.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),''))) AND NOT EXISTS (SELECT 1 FROM restore_tests t WHERE t.server_id=i.server_id AND ${TEST_HELD}) ORDER BY i.created_at LIMIT 1`).get();
     if (job) db.prepare("UPDATE server_installs SET status='running',stage='connecting',started_at=? WHERE id=?").run(new Date().toISOString(), job.id);
     db.exec('COMMIT');
     return job;
