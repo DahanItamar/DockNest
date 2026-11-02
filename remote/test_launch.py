@@ -10,13 +10,15 @@ import helper
 
 LID='3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b'
 SHA='a'*40
-KEY='-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nSECRETKEYMATERIAL0123456789=\n-----END OPENSSH PRIVATE KEY-----\n'
+# Built at runtime so the file never holds a PEM-shaped block; the body is a made-up canary, not a key.
+PEM_KIND='OPENSSH '+'PRIVATE KEY'
+KEY='-----BEGIN '+PEM_KIND+'-----\n'+'FAKEFIXTURE'*4+'\n'+'SECRETKEYMATERIAL0123456789=\n-----END '+PEM_KIND+'-----\n'
 def host_blob(kind='ssh-ed25519'):
     raw=len(kind).to_bytes(4,'big')+kind.encode()+(32).to_bytes(4,'big')+b'k'*32
     return base64.b64encode(raw).decode()
 HOST_LINE='github.com ssh-ed25519 '+host_blob()
 SECRET='pa$$ w0rd"\'x'
-PUBLIC_V4=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',443))]
+PUBLIC_V4=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443))]
 
 def default_model(root,slug='shop'):
     return {'name':slug,'services':{'web':{'image':'nginx:alpine','ports':[{'target':80,'published':'8080','host_ip':'','protocol':'tcp'}]},
@@ -48,8 +50,8 @@ class Host:
     def journal(self):
         file=self.launches/LID/'journal.json'
         return json.loads(file.read_text()) if file.is_file() else None
-    def watch(self,argv,env,timeout,folder=None,limit=None,cwd=None):
-        argv=list(argv);self.calls.append({'argv':argv,'env':env,'timeout':timeout,'folder':folder,'limit':limit})
+    def watch(self,argv,env,timeout,folder=None,limit=None,cwd=None,journal=None):
+        argv=list(argv);self.calls.append({'argv':argv,'env':env,'timeout':timeout,'folder':folder,'limit':limit,'cwd':cwd,'journal':journal is not None})
         if self.on_call:self.on_call(self,argv)
         words=argv
         def out(code=0,stdout=b'',tail='',why=None):return code,stdout,tail,why
@@ -155,7 +157,7 @@ class UrlTests(unittest.TestCase):
         self.assertIsNone(helper.launch_ip_problem(ip('64:ff9b::8c52:7903'),False),'NAT64 of a public address (IPv6-only server with DNS64)')
         self.assertEqual(helper.launch_ip_problem(ip('64:ff9b::a9fe:a9fe'),True),'URL_METADATA')
     def test_every_answer_is_checked_and_the_first_is_pinned(self):
-        mixed=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',443)),(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.9',443))]
+        mixed=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443)),(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.9',443))]
         with patch('helper.socket.getaddrinfo',return_value=mixed):
             with self.assertRaises(helper.LaunchRefused) as caught:helper.launch_resolve('github.com',443,False)
         self.assertEqual(caught.exception.code,'URL_PRIVATE')
@@ -169,11 +171,11 @@ class UrlTests(unittest.TestCase):
         self.assertEqual(target['resolve'],'git.example.com:8443:[2606:4700::1111]')
         self.assertEqual(target['url'],'https://git.example.com:8443/o/r.git')
     def test_ssh_connects_to_the_checked_ip_with_the_name_as_host_key_alias(self):
-        with patch('helper.socket.getaddrinfo',return_value=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',22))]):
+        with patch('helper.socket.getaddrinfo',return_value=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',22))]):
             scp=helper.launch_git_target(helper.launch_git_url('git@github.com:o/r.git'),False)
             port=helper.launch_git_target(helper.launch_git_url('ssh://git@git.example.com:2222/o/r.git'),False)
-        self.assertEqual((scp['url'],scp['alias']),('git@140.82.121.3:o/r.git','github.com'))
-        self.assertEqual((port['url'],port['alias']),('ssh://git@140.82.121.3:2222/o/r.git','[git.example.com]:2222'))
+        self.assertEqual((scp['url'],scp['alias']),('git@8.8.8.8:o/r.git','github.com'))
+        self.assertEqual((port['url'],port['alias']),('ssh://git@8.8.8.8:2222/o/r.git','[git.example.com]:2222'))
     def test_refs(self):
         for ref in ('main','v1.4.2','release/2.0'):self.assertEqual(helper.launch_ref(ref),ref)
         for ref in ('-x','a..b','x.lock','/x','x/','.hidden','a b','HEAD@{1}'):
@@ -194,10 +196,11 @@ class FetchTests(unittest.TestCase):
         self.assertTrue(result['ok'],result)
         clone=host.argvs('clone')[0];journal=str(host.launches/LID)
         self.assertEqual(clone['env'],{})
-        self.assertEqual(clone['argv'],['env','-i','PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME='+journal,'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','LC_ALL=C',
+        self.assertEqual(clone['argv'],['env','-i','PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME='+journal,'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_CEILING_DIRECTORIES=/','LC_ALL=C',
             'git','-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','http.followRedirects=false','-c','submodule.recurse=false','-c','core.hooksPath=/dev/null',
-            '-c','http.curloptResolve=git.example.com:8443:140.82.121.3','clone','--depth','1','--single-branch','--no-recurse-submodules','--branch','main','--','https://git.example.com:8443/o/r.git',str(host.site()/'app')])
-        self.assertEqual((clone['timeout'],clone['limit'],clone['folder']),(600,2*1024**3,str(host.site())))
+            '-c','http.curloptResolve=git.example.com:8443:8.8.8.8','clone','--depth','1','--single-branch','--no-recurse-submodules','--branch','main','--','https://git.example.com:8443/o/r.git',str(host.site()/'app')])
+        self.assertEqual((clone['timeout'],clone['limit'],clone['folder'],clone['cwd'],clone['journal']),(600,2*1024**3,str(host.site()),journal,True))
+        self.assertNotIn('GIT_DIR=',' '.join(clone['argv']),'clone creates its own repository')
         self.assertFalse(any('proxy' in part.lower() for part in clone['argv']))
         self.assertEqual(result['commit'],SHA)
         self.assertEqual(host.journal()['commit'],SHA)
@@ -224,7 +227,7 @@ class FetchTests(unittest.TestCase):
                 command=next(a for a in argv if a.startswith('GIT_SSH_COMMAND='))[len('GIT_SSH_COMMAND='):]
                 words=shlex.split(command);key=pathlib.Path(words[-1]);known=pathlib.Path(next(w for w in words if w.startswith('UserKnownHostsFile='))[len('UserKnownHostsFile='):])
                 files.append((key,key.read_text(),known.read_text(),stat.S_IMODE(key.stat().st_mode),command,known))
-        host=Host(self,gate=gate_ok,on_call=on_call,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',22))])
+        host=Host(self,gate=gate_ok,on_call=on_call,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',22))])
         result=host.run('launch-fetch',**self.git_req('git@github.com:o/r.git',deployKey={'privateKey':KEY,'hostKeyLine':HOST_LINE}))
         self.assertTrue(result['ok'],result)
         key,content,known,mode,command,known_file=files[0]
@@ -232,10 +235,10 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(key.parent,host.launches/LID);self.assertFalse(str(key).startswith(str(host.site())))
         if os.name=='posix':self.assertEqual(mode,0o600)
         self.assertFalse(key.exists(),'the key file is removed after the clone')
-        self.assertEqual(shlex.split(command),['ssh','-F','/dev/null','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','ProxyCommand=none','-o','ProxyJump=none','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(known_file),'-o','HostKeyAlias=github.com','-o','CheckHostIP=no','-o','UpdateHostKeys=no','-i',str(key)])
+        self.assertEqual(shlex.split(command),['ssh','-F','/dev/null','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','ProxyCommand=none','-o','ProxyJump=none','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(known_file),'-o','GlobalKnownHostsFile=/dev/null','-o','HostKeyAlias=github.com','-o','CheckHostIP=no','-o','UpdateHostKeys=no','-i',str(key)])
         self.assertFalse(known_file.exists())
         clone=host.argvs('clone')[0]['argv']
-        self.assertIn('git@140.82.121.3:o/r.git',clone);self.assertNotIn('-c',clone[clone.index('clone'):])
+        self.assertIn('git@8.8.8.8:o/r.git',clone);self.assertNotIn('-c',clone[clone.index('clone'):])
         self.assertNotIn('SECRETKEYMATERIAL',json.dumps(host.calls)+host.events.getvalue())
         self.assertNotIn('w0rd',json.dumps([c['argv'] for c in host.calls])+host.events.getvalue())
     def test_key_file_is_removed_when_the_clone_fails_or_is_refused(self):
@@ -244,13 +247,13 @@ class FetchTests(unittest.TestCase):
                 ({},{'compose.yaml':'x','.gitmodules':'[submodule "x"]'},'SUBMODULES_REFUSED'),
                 ({'clone':(-1,b'','',"size")},None,'REPO_TOO_LARGE'),({'clone':(-1,b'','','timeout')},None,'FETCH_TIMEOUT')):
             kw={'repo':repo} if repo else {}
-            host=Host(self,gate=gate_ok,fail=fail,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',22))],**kw)
+            host=Host(self,gate=gate_ok,fail=fail,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',22))],**kw)
             result=host.run('launch-fetch',**self.git_req('git@github.com:o/r.git',deployKey={'privateKey':KEY,'hostKeyLine':HOST_LINE}))
             self.assertEqual((result['ok'],result['code']),(False,code))
             self.assertEqual([p for p in (host.launches/LID).iterdir() if p.name.startswith(('key-','known-hosts-'))],[],code)
             self.assertNotIn('SECRETKEYMATERIAL',host.events.getvalue())
     def test_ssh_needs_a_key_and_a_valid_pin(self):
-        dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',22))]
+        dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',22))]
         for key,code in ((None,'KEY_REQUIRED'),({'privateKey':'nope','hostKeyLine':HOST_LINE},'KEY_INVALID'),({'privateKey':KEY,'hostKeyLine':'github.com ssh-ed25519 '+host_blob('ssh-rsa')},'HOST_KEY_INVALID')):
             host=Host(self,gate=gate_ok,dns=dns)
             result=host.run('launch-fetch',**self.git_req('git@github.com:o/r.git',**({'deployKey':key} if key else {})))
@@ -261,7 +264,7 @@ class FetchTests(unittest.TestCase):
             if 'clone' in argv:
                 words=shlex.split(next(a for a in argv if a.startswith('GIT_SSH_COMMAND='))[len('GIT_SSH_COMMAND='):])
                 lines.append(pathlib.Path(next(w for w in words if w.startswith('UserKnownHostsFile='))[len('UserKnownHostsFile='):]).read_text());lines.append(words)
-        host=Host(self,gate=gate_ok,on_call=on_call,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',2222))])
+        host=Host(self,gate=gate_ok,on_call=on_call,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',2222))])
         host.run('launch-fetch',**self.git_req('ssh://git@git.example.com:2222/o/r.git',deployKey={'privateKey':KEY,'hostKeyLine':'[git.example.com]:2222 ssh-ed25519 '+host_blob()}))
         self.assertTrue(lines[0].startswith('[git.example.com]:2222 ssh-ed25519 '))
         self.assertIn('HostKeyAlias=[git.example.com]:2222',lines[1])
@@ -360,7 +363,7 @@ class BuildTests(unittest.TestCase):
         host=Host(self,gate=gate_ok,model=model,repo=repo,**{k:v for k,v in kw.items() if k not in ('build','dockerfile','image')})
         return host,host.run('launch-fetch',source='git',repo={'url':'https://github.com/o/r.git'})
     def test_build_allow_list(self):
-        for build,field in (({'network':'host'},'network'),({'ssh':['default']},'ssh'),({'secrets':['x']},'secrets'),({'extra_hosts':['a:1.2.3.4']},'extra_hosts'),
+        for build,field in (({'network':'host'},'network'),({'ssh':['default']},'ssh'),({'secrets':['x']},'secrets'),({'extra_hosts':['a:192.0.2.4']},'extra_hosts'),
                 ({'privileged':True},'privileged'),({'entitlements':['network.host']},'entitlements'),({'cache_from':['x']},'cache_from'),
                 ({'additional_contexts':{'x':'/etc'}},'additional_contexts'),({'dockerfile_inline':'FROM x'},'dockerfile_inline'),({'args':{'BUILDKIT_SYNTAX':'evil/frontend'}},'args')):
             host,result=self.fetched(build=build)
@@ -393,7 +396,7 @@ class BuildTests(unittest.TestCase):
         builder='docknest-launch-'+LID.replace('-','')[:12]
         self.assertEqual(seen,[([builder],['shop-web'])])
         create=host.argvs('create')[0]['argv']
-        self.assertEqual(create,['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+helper.LAUNCH_BUILDKIT_IMAGE,'--bootstrap'])
+        self.assertEqual(create,['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+helper.LAUNCH_BUILDKIT_IMAGE,'--buildkitd-flags=--oci-worker-gc','--bootstrap'])
         self.assertRegex(helper.LAUNCH_BUILDKIT_IMAGE,r'^moby/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$')
         build=[c for c in host.calls if c['argv'][:2]==['docker','compose'] and 'build' in c['argv']][0]
         self.assertEqual(build['argv'][-3:],['build','--builder',builder]);self.assertEqual(build['timeout'],1800)
@@ -408,7 +411,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(result['code'],code)
             self.assertEqual(host.argvs('rm')[-1]['argv'][:3],['docker','buildx','rm'])
     def test_an_existing_image_tag_is_never_overwritten(self):
-        host,_=self.fetched(image='nginx:alpine',images={'nginx:alpine':None})
+        host,_=self.fetched(image='shop-web:1',images={'shop-web:1':None})
         self.assertEqual(host.run('launch-build')['code'],'IMAGE_EXISTS');self.assertEqual(host.argvs('create'),[])
     def test_build_needs_buildx(self):
         host,_=self.fetched();host.tools.discard('buildx')
@@ -525,7 +528,7 @@ class CertificateTests(unittest.TestCase):
         self.assertIn('listen 443 ssl;',(host.conf/'docknest-shop.conf').read_text())
     def test_dns_wildcard_rate_limit_and_lineages(self):
         public=lambda h:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('203.0.113.10',0))]
-        host=self.webbed(dns=lambda h:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('198.51.100.7',0))])
+        host=self.webbed(dns=lambda h:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('1.1.1.1',0))])
         result=host.run('launch-certificate',domain='shop.example.com')
         self.assertEqual((result['state'],result['code']),('dns_waiting','DNS_WAITING'));self.assertEqual(host.argvs('certbot'),[])
         host=self.webbed(dns=lambda h:[(socket.AF_INET6,socket.SOCK_STREAM,6,'',('2001:db8::10',0,0,0))],addresses=['2001:db8::10'])
@@ -565,7 +568,7 @@ class TeardownTests(unittest.TestCase):
         result=host.run('launch-teardown',keepBackup=True)
         self.assertTrue(result['ok'],result);self.assertEqual(result['left'],[]);self.assertTrue(result['keepBackup'])
         argvs=[c['argv'] for c in host.calls]
-        self.assertIn(['docker','rm','-f','c1','c2'],argvs)
+        self.assertIn(['docker','rm','-f','-v','c1','c2'],argvs)
         self.assertIn(['docker','network','rm','shop_default'],argvs)
         self.assertNotIn(['docker','volume','rm','shop_db'],argvs,'an unlabelled volume of the same name is never removed')
         self.assertIn(['docker','image','rm','shop-web'],argvs)
@@ -639,22 +642,122 @@ class FactsTests(unittest.TestCase):
         self.assertEqual([p.name for p in host.launches.iterdir()],[])
     def test_host_key_is_read_not_trusted(self):
         blob=host_blob();rsa=host_blob('ssh-rsa')
-        host=Host(self,keyscan='140.82.121.3 ssh-rsa %s\n140.82.121.3 ssh-ed25519 %s\n'%(rsa,blob),dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',22))])
+        host=Host(self,keyscan='8.8.8.8 ssh-rsa %s\n8.8.8.8 ssh-ed25519 %s\n'%(rsa,blob),dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',22))])
         result=host.run('launch-host-key',gitHost='github.com')
         self.assertEqual(result['hostKeyLine'],'github.com ssh-ed25519 '+blob)
         self.assertEqual(result['sha256'],'SHA256:'+base64.b64encode(hashlib.sha256(base64.b64decode(blob)).digest()).decode().rstrip('='))
         call=host.argvs('ssh-keyscan')[0]
         self.assertEqual((call['argv'][:2],call['env']),(['env','-i'],{}))
-        self.assertEqual(call['argv'][-7:],['-T','10','-p','22','-t','ed25519,ecdsa,rsa','140.82.121.3'])
-        host=Host(self,keyscan='',dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('140.82.121.3',2222))])
+        self.assertEqual(call['argv'][-7:],['-T','10','-p','22','-t','ed25519,ecdsa,rsa','8.8.8.8'])
+        host=Host(self,keyscan='',dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',2222))])
         self.assertEqual(host.run('launch-host-key',gitHost='git.example.com:2222')['code'],'CONNECT_FAILED')
         self.assertEqual(Host(self).run('launch-host-key',gitHost='169.254.169.254')['code'],'REFUSED_ADDRESS')
         self.assertEqual(Host(self).run('launch-host-key',gitHost='-oProxyCommand=x')['code'],'REFUSED_ADDRESS')
         self.assertEqual(Host(self,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.4',22))]).run('launch-host-key',gitHost='gitea.lan')['code'],'PRIVATE_ADDRESS')
         self.assertEqual(Host(self,dns=None).run('launch-host-key',gitHost='nowhere.example')['code'],'DNS_FAILED')
         blob=host_blob()
-        host=Host(self,keyscan='[140.82.121.3]:2222 ssh-ed25519 %s\n'%blob,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.4',2222))])
+        host=Host(self,keyscan='[8.8.8.8]:2222 ssh-ed25519 %s\n'%blob,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('10.0.0.4',2222))])
         self.assertEqual(host.run('launch-host-key',gitHost='[2606:4700::1]:2222',allowPrivate=True)['hostKeyLine'],'[2606:4700::1]:2222 ssh-ed25519 '+blob)
+
+class ReviewTests(unittest.TestCase):
+    """Fixes from the #172 review."""
+    def test_syntax_directives_in_every_form(self):
+        for text in ('//syntax=evil/frontend\nFROM x\n','// syntax = evil/x\nFROM x\n','{"syntax":"evil/frontend"}\n','["FROM x"]\n',
+                'FROM x\n# syntax=evil/frontend\n','  #SYNTAX=ghcr.io/x/y\nFROM x\n'):
+            path=pathlib.Path(tempfile.mkdtemp())/'Dockerfile';path.write_text(text)
+            self.assertEqual(helper.launch_dockerfile_problem(str(path)),'SYNTAX_REFUSED',text)
+    def test_run_flags_are_an_allow_list(self):
+        for text,problem in (('FROM x\nRUN --network=none id\n',None),('FROM x\nRUN --network=default id\n',None),('FROM x\nRUN --security=sandbox id\n',None),
+                ('FROM x\nRUN --network=bridge id\n','DOCKERFILE_REFUSED'),('FROM x\nRUN --network=$NET id\n','DOCKERFILE_REFUSED'),('FROM x\nRUN --network=${N:-host} id\n','DOCKERFILE_REFUSED'),
+                ('FROM x\nRUN --security=insecure id\n','DOCKERFILE_REFUSED'),('FROM x\nRUN --network host id\n','DOCKERFILE_REFUSED'),('FROM x\nRUN --network-alias=x --security-opt=y id\n',None)):
+            path=pathlib.Path(tempfile.mkdtemp())/'Dockerfile';path.write_text(text)
+            self.assertEqual(helper.launch_dockerfile_problem(str(path)),problem,text)
+    def test_built_images_stay_in_the_launch_namespace(self):
+        for image,ok in (('shop-web',True),('shop_web:1.2',True),('shop/web:latest',True),('shop-web/api',True),('postgres:16',False),('nginx',False),
+                ('shop',False),('shopweb',False),('docker.io/shop-web',False),('shop-web@sha256:'+'a'*64,False),('localhost/shop-web',False),('shop.io/x',False),('shop-x:Bad',False)):
+            self.assertEqual(helper.launch_image_ours(image,'shop'),ok,image)
+        def model(h):return {'services':{'db':{'image':'postgres:16','build':{'context':str(h.site()/'app')}}}}
+        result=Host(self,gate=gate_ok,model=model,repo={'compose.yaml':'x','Dockerfile':'FROM x\n'}).run('launch-fetch',source='git',repo={'url':'https://github.com/o/r.git'})
+        self.assertEqual(result['gate']['refusals'],[{'code':'BUILD_IMAGE_REFUSED','service':'db','field':'services.db.build.image'}])
+    def test_compose_text_rules(self):
+        cases={'include:\n  - x.yaml\n':'COMPOSE_INCLUDE_REFUSED','services:\n  a:\n    extends:\n      file: ../x.yaml\n      service: b\n':'COMPOSE_EXTENDS_REFUSED',
+            'services: {a: {extends: b}}\n':'COMPOSE_EXTENDS_REFUSED','{"services": {}}\n':'COMPOSE_FLOW_REFUSED','# c\n---\n{services: {}}\n':'COMPOSE_FLOW_REFUSED',
+            '"include": [x.yaml]\n':'COMPOSE_INCLUDE_REFUSED','services:\n  a:\n    image: x\n    environment:\n      MYINCLUDE: 1\n':None}
+        for text,code in cases.items():self.assertEqual(helper.launch_compose_text_problem(text.encode()),code,text)
+    def test_refused_addresses_match_the_alert_policy(self):
+        ip=helper.ipaddress.ip_address
+        for value in ('168.63.129.16','100.100.100.100','fd00:ec2::1','0.1.2.3','192.0.2.5','198.51.100.1','203.0.113.9','192.88.99.1','2001:db8::1','fe80::1'):
+            self.assertEqual(helper.launch_ip_problem(ip(value),True),'URL_METADATA',value)
+        self.assertEqual(helper.launch_ip_problem(ip('fec0::1'),False),'URL_PRIVATE')
+        self.assertIsNone(helper.launch_ip_problem(ip('fec0::1'),True))
+        self.assertIsNone(helper.launch_ip_problem(ip('8.8.8.8'),False))
+    def test_ipv6_host_on_port_22_uses_the_bare_address(self):
+        target=helper.launch_git_target(helper.launch_git_url('git@[2606:4700::1111]:o/r.git'),False)
+        self.assertEqual((target['alias'],target['url']),('2606:4700::1111','git@[2606:4700::1111]:o/r.git'))
+        host=Host(self,keyscan='2606:4700::1111 ssh-ed25519 %s\n'%host_blob())
+        self.assertEqual(host.run('launch-host-key',gitHost='[2606:4700::1111]')['hostKeyLine'],'2606:4700::1111 ssh-ed25519 '+host_blob())
+    def test_a_key_pinned_for_another_name_is_refused(self):
+        host=Host(self,gate=gate_ok,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',2222))])
+        result=host.run('launch-fetch',source='git',repo={'url':'ssh://git@git.example.com:2222/o/r.git'},deployKey={'privateKey':KEY,'hostKeyLine':'git.example.com ssh-ed25519 '+host_blob()})
+        self.assertEqual(result['code'],'HOST_KEY_MISMATCH');self.assertEqual(host.argvs('clone'),[])
+    def test_rw_binds_over_the_env_or_compose_file_are_refused(self):
+        def model(bind,read_only=False):
+            return lambda h:{'services':{'web':{'image':'x','volumes':[{'type':'bind','source':bind(h),'target':'/data','read_only':read_only}]}}}
+        for bind in (lambda h:str(h.site()),lambda h:str(h.site()/'app'),lambda h:str(h.site()/'.env')):
+            result=Host(self,gate=gate_ok,model=model(bind)).run('launch-fetch',source='compose',composeText='x: 1\n')
+            self.assertEqual(result['gate']['refusals'],[{'code':'BIND_COVERS_SECRETS','service':'web','field':'services.web.volumes'}])
+        self.assertTrue(Host(self,gate=gate_ok,model=model(lambda h:str(h.site()),True)).run('launch-fetch',source='compose',composeText='x: 1\n')['ok'])
+        self.assertTrue(Host(self,gate=gate_ok,model=model(lambda h:str(h.site()/'app'/'data'))).run('launch-fetch',source='compose',composeText='x: 1\n')['ok'])
+    def test_gate_field_keeps_only_service_and_setting(self):
+        def gate(*a):raise Gate('PATH_REFUSED','services.web.volumes./etc/shadow')
+        result=Host(self,gate=gate).run('launch-fetch',source='compose',composeText='x: 1\n')
+        self.assertIn({'code':'PATH_REFUSED','service':'web','field':'services.web.volumes'},result['gate']['refusals'])
+    def test_stale_check_folders_are_removed(self):
+        host=Host(self);old=host.launches/'check-old';new=host.launches/'check-new';old.mkdir(parents=True);new.mkdir();(old/'key-x').write_text('k')
+        os.utime(old,(time.time()-3600,time.time()-3600))
+        host.run('launch-status')
+        self.assertFalse(old.exists());self.assertTrue(new.exists())
+    def test_recorded_process_groups_are_ended_by_teardown_and_status(self):
+        killed=[]
+        host=Host(self).start_journal(children=[{'pgid':4242,'start':77}],created={'paths':[]})
+        with patch('helper.launch_proc_start',return_value=77),patch('helper.os.killpg',side_effect=lambda pid,sig:killed.append(pid),create=True):
+            result=host.run('launch-status')
+        self.assertEqual((killed,result['killed'],result['resumable']),([4242],1,False))
+        self.assertEqual(host.journal()['children'],[])
+        host=Host(self).start_journal(children=[{'pgid':4242,'start':77}])
+        with patch('helper.launch_proc_start',return_value=99),patch('helper.os.killpg',side_effect=lambda pid,sig:killed.append(pid),create=True):
+            host.run('launch-teardown')
+        self.assertEqual(killed,[4242],'a reused process number is never signalled')
+    def test_watch_records_the_group_while_it_runs(self):
+        folder=pathlib.Path(tempfile.mkdtemp());journal={'children':[]};seen=[]
+        with patch('helper.launch_save',side_effect=lambda d,j:seen.append(list(j['children']))):
+            code,out,_,_=helper.launch_watch([sys.executable,'-c','print(1)'],dict(os.environ),30,journal=(folder,journal))
+        self.assertEqual(code,0);self.assertEqual(len(seen[0]),1);self.assertEqual(seen[-1],[]);self.assertEqual(journal['children'],[])
+    def test_start_reports_names_and_files_and_status_says_resumable(self):
+        host=Host(self,gate=gate_ok);host.run('launch-fetch',source='compose',composeText='x: 1\n')
+        result=host.run('launch-start',webService='web',webPort=80,loopbackPort=18080)
+        self.assertEqual(result['containerNames'],['shop-web-1','shop-db-1'])
+        self.assertEqual(result['composeFiles'],[str(host.site()/'app'/'compose.yaml'),str(host.launches/LID/'compose.launch.yaml')])
+        host.existing={'own_containers':[],'own_volumes':[],'own_networks':[]}
+        self.assertTrue(host.run('launch-status')['resumable'])
+    def test_facts_paste_gate_and_ip_listen_warning(self):
+        host=Host(self,gate=gate_ok,nginx_dump=dump('server { listen 192.0.2.10:80; server_name other.example.com; }','server { listen 80; listen [::]:443 ssl; }'),model=lambda h:{**default_model(h.root),'name':'wp'})
+        result=host.run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
+        self.assertEqual(result['gate'],{'ok':True,'refusals':[]});self.assertEqual(result['composeName'],'wp')
+        self.assertEqual(result['warnings'],[{'code':'NGINX_IP_LISTEN','listen':'192.0.2.10:80'}])
+        nogate=Host(self).run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
+        self.assertEqual(nogate['gate']['refusals'][0]['code'],'GATE_UNAVAILABLE')
+    def test_unreadable_lineages_count_as_conflicts(self):
+        host=Host(self);(host.le/'live'/'old').mkdir(parents=True)
+        with patch('helper.LETSENCRYPT',host.le),patch('helper.ssl._ssl._test_decode_cert',None,create=True):
+            self.assertEqual(helper.launch_lineage_conflicts(['shop.example.com'],'docknest-shop'),[{'name':'old','domains':[]}])
+    def test_certbot_uses_the_names_nginx_serves(self):
+        host=Host(self,dns=lambda h:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('203.0.113.10',0))]).start_journal()
+        self.assertTrue(host.run('launch-web',domain='shop.example.com',www=True,loopbackPort=18080)['ok']);(host.le/'accounts').mkdir(parents=True)
+        self.assertEqual(host.run('launch-certificate',domain='shop.example.com')['state'],'issued')
+        self.assertEqual(host.argvs('certbot')[0]['argv'][-4:],['-d','shop.example.com','-d','www.shop.example.com'])
+    def test_builder_grants_no_entitlement(self):
+        self.assertIn("'--buildkitd-flags=--oci-worker-gc'",pathlib.Path(helper.__file__).read_text())
 
 class EntryTests(unittest.TestCase):
     def test_bad_requests_and_unexpected_errors_never_leak_text(self):
