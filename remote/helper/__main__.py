@@ -30,10 +30,12 @@ from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
 from .cleanup import (
-    cleanup_apply, cleanup_scan)
-# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
+    cleanup_apply, cleanup_scan, cleanup_shared)
+# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, CLEANUP_SHARED, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
+# Steps that create or need Docker resources hold the shared cleanup lock for their whole run (remote/helper/cleanup.py).
+CLEANUP_SHARED_OPS={'capture','capture-stream','prepare-restore','restore','restore-test-prepare','restore-test-run'}
 LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
 def move_lock(mid,wait=False):
     import fcntl
@@ -64,7 +66,9 @@ def stop_after_stdin(read=None,limit=180):
     os._exit(1)
 def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
+    if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:CLEANUP_SHARED=cleanup_shared()
     if req.get('operation')=='move-lock-status':
         handle=move_lock(move_id(req))
         emit(result={'busy':handle is None})

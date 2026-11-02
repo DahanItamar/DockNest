@@ -22,7 +22,7 @@ def volume(name,labels=None,created=OLD):return {'Name':name,'Labels':labels or 
 def facts(containers=(),images=(),volumes=(),snapshots=(),journals=None,build=None,active=None):
     j={'move':set(),'oldCopy':set(),'restoreTest':set()};j.update(journals or {})
     return {'containers':list(containers),'images':list(images),'volumes':list(volumes),'buildCacheBytes':build,'snapshotImages':set(snapshots),'journals':j,'active':active,'now':NOW}
-def protect(containers=(),volumes=()):return {'containers':set(containers),'volumes':set(volumes),'stagingRoots':['/var/lib/docknest'],'minAge':3600}
+def protect(containers=(),volumes=(),projects=()):return {'containers':set(containers),'volumes':set(volumes),'projects':set(projects),'stagingRoots':['/var/lib/docknest'],'minAge':3600}
 def split(f,p):
     eligible,kept=helper.cleanup_classify(f,p)
     return {(i['kind'],i['id']) for i in eligible},{(i['kind'],i['id']):i['reason'] for i in kept}
@@ -34,6 +34,16 @@ class Protection(unittest.TestCase):
         eligible,kept=split(f,protect(['shop','blog']))
         self.assertNotIn(('volumes','shared'),eligible);self.assertEqual(kept[('volumes','shared')],'inUse')
         self.assertEqual(kept[('containers','c2')],'site')
+    def test_anonymous_volume_of_a_site_project_is_kept_when_its_containers_are_gone(self):
+        # `compose down` removed every container of the site; its backups name the project, so its anonymous volume stays.
+        f=facts(volumes=[volume(ANON,{'com.docker.compose.project':'shop'}),volume(ANON2,{'com.docker.compose.project':'other'})])
+        eligible,kept=split(f,protect(projects=['shop']))
+        self.assertEqual(kept[('volumes',ANON)],'site');self.assertIn(('volumes',ANON2),eligible)
+    def test_volume_sizing_stops_at_the_scan_deadline(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pathlib.Path(folder,'f').write_bytes(b'x'*10)
+            self.assertEqual(helper.volume_bytes(folder),10)
+            self.assertIsNone(helper.volume_bytes(folder,helper.time.monotonic()-1),'after the overall deadline the size is unknown')
     def test_stopped_site_keeps_container_and_its_named_data_volume(self):
         # The site's container was removed by `compose down`; its named volume is now dangling but the site lists it.
         f=facts([container('c1','shop-db',labels={'com.docker.compose.project':'shop'})],volumes=[volume('shop_data',{'com.docker.compose.project':'shop'}),volume('orphan_data')])
@@ -196,6 +206,55 @@ class Clean(unittest.TestCase):
         self.assertEqual(self.scan(fake)['busy'],'backup')
         with self.assertRaisesRegex(ValueError,'backup is running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
         self.assertIn('c1',fake.containers)
+    def test_an_old_unfinished_job_folder_still_blocks(self):
+        fake=FakeDocker([container('c1','tmp')]);items=self.scan(fake)['items']
+        job=self.root/'staging'/'0b5e8d3c-1f2a-4c3d-9e8f-123456789abc';job.mkdir(parents=True)
+        helper.os.utime(job,(NOW-30*86400,NOW-30*86400))
+        with self.assertRaisesRegex(ValueError,'backup is running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
+        (job/'disarmed').touch();(job/'watchdog.done').touch()
+        self.assertEqual(self.scan(fake)['busy'],None,'a finished job folder does not block')
+    def test_restore_staging_folder_blocks(self):
+        fake=FakeDocker([container('c1','tmp')])
+        (self.root/'restore'/'0b5e8d3c-1f2a-4c3d-9e8f-123456789abc').mkdir(parents=True)
+        self.assertEqual(self.scan(fake)['busy'],'restore')
+    def test_journal_written_between_check_and_removal_is_honoured(self):
+        fake=FakeDocker([container('c1','tmp')]);items=[i for i in self.scan(fake)['items'] if i['kind']=='containers']
+        calls=[]
+        def journals():
+            calls.append(1)
+            found={'move':set(),'oldCopy':set(),'restoreTest':set()}
+            if len(calls)>1:found['restoreTest'].add('c1')  # appears after the up-front scan, before the removal
+            return found
+        with patch('helper.cleanup_journals',side_effect=journals):done=self.run_op(helper.cleanup_apply,{'items':items},fake)
+        self.assertEqual(done['results'][0]['status'],'skipped');self.assertIn('c1',fake.containers)
+    @unittest.skipIf(sys.platform=='win32','fcntl locks exist only on the Linux servers')
+    def test_clean_refuses_while_a_move_or_test_step_holds_its_lock(self):
+        import fcntl
+        fake=FakeDocker([container('c1','tmp')]);items=self.scan(fake)['items']
+        for root in ['moves','tests']:
+            d=self.root/root/'3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b';d.mkdir(parents=True)
+            held=open(d/'.lock','a');fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            try:
+                with self.assertRaisesRegex(ValueError,'site move or restore test step'):self.run_op(helper.cleanup_apply,{'items':items},fake)
+            finally:held.close()
+        self.assertIn('c1',fake.containers)
+    @unittest.skipIf(sys.platform=='win32','fcntl locks exist only on the Linux servers')
+    def test_steps_and_clean_exclude_each_other(self):
+        step=helper.cleanup_shared(0)
+        try:
+            with self.assertRaisesRegex(ValueError,'DockNest step is running'):helper.cleanup_lock()
+        finally:step.close()
+        clean=helper.cleanup_lock()
+        try:
+            with self.assertRaisesRegex(ValueError,'server cleanup is running'):helper.cleanup_shared(0)
+        finally:clean.close()
+        helper.cleanup_shared(0).close()
+    def test_docker_steps_take_the_shared_lock_before_anything_else(self):
+        seen=[]
+        with patch('helper.cleanup_shared',side_effect=lambda:seen.append('shared') or io.StringIO()),patch('helper.capture',side_effect=lambda req,*a:seen.append('capture')),patch('helper.move_lock',side_effect=lambda *a,**k:seen.append('move') or io.StringIO()),patch('helper.move_test',side_effect=lambda req:seen.append('step')):
+            helper.main({'operation':'capture'})
+            helper.main({'operation':'move-test','moveId':'3f2b8a6e-4c1d-4e5f-9a7b-0c1d2e3f4a5b'})
+        self.assertEqual(seen,['shared','capture','shared','move','step'])
     @unittest.skipIf(sys.platform=='win32','fcntl locks exist only on the Linux servers')
     def test_two_cleans_never_run_at_once(self):
         fake=FakeDocker([container('c1','tmp')]);items=self.scan(fake)['items']

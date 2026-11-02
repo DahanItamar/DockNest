@@ -16,7 +16,9 @@ const { app } = await import('../src/server.js');
 const { db } = await import('../src/db.js');
 const { digest } = await import('../src/crypto.js');
 const { transport } = await import('../src/engine.js');
-const { protectionFor, manifestVolumes } = await import('../src/server-cleanup.js');
+const { protectionFor, manifestVolumes, manifestProjects, setCleanupTestMinAge } = await import('../src/server-cleanup.js');
+const { claimJob, enqueueBackup } = await import('../src/engine.js');
+const { cleanupHeld, takeCleanupHold, releaseCleanupHold, HOLD_MS } = await import('../src/cleanup-hold.js');
 const listener = app.listen(0, '127.0.0.1'); await new Promise(resolve => listener.once('listening', resolve));
 const base = `http://127.0.0.1:${listener.address().port}/api`;
 const at = (offset = 0) => new Date(Date.now() - 86400000 + offset).toISOString();
@@ -72,7 +74,7 @@ const audits = serverId => db.prepare("SELECT * FROM audit_events WHERE action='
 test('protection lists: every site container, the volumes recent backups list, archived and moved-away sites, staging roots', () => {
   const server = serverRow('prod'), other = serverRow('other');
   const shop = siteRow(server, 'shop', { containers: ['shop-web', 'shop-db'], stagingRoot: '/srv/docknest-staging' });
-  backupRow(shop, { containers: [{ Mounts: [{ Type: 'volume', Name: 'shop_data' }, { Type: 'bind', Source: '/srv/shop' }] }] });
+  backupRow(shop, { containers: [{ Config: { Labels: { 'com.docker.compose.project': 'shop' } }, Mounts: [{ Type: 'volume', Name: 'shop_data' }, { Type: 'bind', Source: '/srv/shop' }] }] });
   const archived = siteRow(server, 'old blog', { containers: ['blog'] });
   db.prepare('INSERT INTO site_archives VALUES(?,?)').run(archived, at());
   // Moved to `other`: the site row points there now, its stopped old copy stays here until the move ends.
@@ -83,6 +85,8 @@ test('protection lists: every site container, the volumes recent backups list, a
   assert.deepEqual(new Set(protect.containers), new Set(['shop-web', 'shop-db', 'blog', 'moved-app']));
   assert.deepEqual(new Set(protect.volumes), new Set(['shop_data', 'moved_data']));
   assert.deepEqual(protect.stagingRoots, ['/srv/docknest-staging']);
+  assert.deepEqual(protect.projects, ['shop'], 'Compose projects from the backups: their anonymous volumes stay even when every container is gone');
+  assert.deepEqual(manifestProjects({ containers: [{ Config: { Labels: {} } }, {}] }), []);
   assert.deepEqual(manifestVolumes(null), []);
   assert.deepEqual(new Set(protectionFor(other).containers), new Set(['moved-app']));
 });
@@ -103,7 +107,7 @@ test('scan sends protection, returns a preview with sizes and plain reasons, and
   assert.deepEqual(calls.at(-1).request.protect.containers, ['shop-web']);
   assert.equal(scan.body.items.length, 4); assert.equal(scan.body.totalBytes, 7400); assert.equal(scan.body.busy, null);
   assert.ok(scan.body.items.every(item => !('fingerprint' in item)), 'fingerprints stay on the server side');
-  assert.deepEqual(scan.body.protected.map(item => item.reason), ['site', 'site'], 'an unknown reason reads as protected, never as removable');
+  assert.deepEqual(scan.body.protected.map(item => item.reason), ['site', 'unknown'], 'a reason this release does not know reads as unknown, and the item stays kept');
 
   // Not in the preview: refused before anything runs.
   const before = calls.length;
@@ -174,6 +178,50 @@ test('protection that cannot be sent whole blocks the scan', async () => {
   const server = serverRow('odd'); siteRow(server, 'odd', { containers: ['bad name with spaces'] });
   const scan = await json(await admin(`/servers/${server}/cleanup/scan`));
   assert.equal(scan.status, 409); assert.equal(scan.body.code, 'PROTECTION_UNAVAILABLE');
+});
+
+test('a scheduled backup cannot be claimed while a clean runs, and runs right after it', async () => {
+  const server = serverRow('held'), site = siteRow(server, 'held site', { containers: ['held-web'] }); scanReply = preview();
+  const scan = await json(await admin(`/servers/${server}/cleanup/scan`));
+  let claimedDuring = 'not tried', queued = null;
+  applyReply = request => {
+    // The worker's scheduler queues a backup mid-clean; the claim must defer it, not fail it.
+    assert.equal(cleanupHeld(server), true, 'the hold is in the database, visible to the worker process');
+    queued = enqueueBackup(site, 'scheduler');
+    claimedDuring = claimJob();
+    return { results: request.items.map(item => ({ ...item, status: 'removed' })) };
+  };
+  const clean = await json(await admin(`/servers/${server}/cleanup`, { token: scan.body.token, items: [{ kind: 'images', id: scan.body.items[1].id }] }));
+  applyReply = null;
+  assert.equal(clean.status, 200);
+  assert.equal(claimedDuring ?? null, null, 'nothing was claimed on the held server');
+  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(queued.id).status, 'queued', 'the backup waited, it did not fail');
+  assert.equal(cleanupHeld(server), false, 'released when the clean ended');
+  assert.equal(claimJob()?.id, queued.id, 'and it starts right after');
+  db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(queued.id);
+});
+
+test('the hold is released when the clean fails, and a hold left by a crash goes stale', async () => {
+  const server = serverRow('crash'); scanReply = preview();
+  const scan = await json(await admin(`/servers/${server}/cleanup/scan`));
+  fault = new Error('connection reset');
+  assert.equal((await admin(`/servers/${server}/cleanup`, { token: scan.body.token, items: [{ kind: 'images', id: scan.body.items[1].id }] })).status, 502);
+  fault = null;
+  assert.equal(cleanupHeld(server), false);
+  assert.equal(takeCleanupHold(server, 'qa', () => null), null);
+  assert.equal(takeCleanupHold(server, 'qa', () => (cleanupHeld(server) ? 'held' : null)), 'held', 'a second clean is refused while the first holds');
+  db.prepare("UPDATE settings SET value=? WHERE key=?").run(JSON.stringify({ actor: 'qa', expiresAt: Date.now() - 5000 }), 'cleanup_hold:' + server);
+  assert.equal(cleanupHeld(server), false, `a hold older than ${HOLD_MS / 60000} minutes no longer blocks the server`);
+  releaseCleanupHold(server);
+});
+
+test('the integration-only minimum age is a checked number, sent only when set', async () => {
+  const server = serverRow('age'); scanReply = preview();
+  assert.throws(() => setCleanupTestMinAge(-1)); assert.throws(() => setCleanupTestMinAge('0'));
+  await admin(`/servers/${server}/cleanup/scan`);
+  assert.equal('minAgeSeconds' in calls.at(-1).request, false);
+  setCleanupTestMinAge(0); await admin(`/servers/${server}/cleanup/scan`); setCleanupTestMinAge(null);
+  assert.equal(calls.at(-1).request.minAgeSeconds, 0);
 });
 
 test.after(() => new Promise(resolve => listener.close(resolve)));

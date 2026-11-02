@@ -27,7 +27,8 @@ CLEANUP_OWN_NAMES=re.compile(r'(docknest|docker-backup-manager)([_.-].*)?')
 CLEANUP_ANONYMOUS=re.compile(r'[0-9a-f]{64}')
 CLEANUP_REF=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}')
 CLEANUP_FRESH_SECONDS=3600
-CLEANUP_ACTIVE_SECONDS=6*3600
+CLEANUP_SIZE_SECONDS=60
+CLEANUP_SHARED_WAIT=120
 CLEANUP_BUILD_CACHE_AGE='24h'
 CLEANUP_MAX_ITEMS=500
 CLEANUP_WALK_LIMIT=200000
@@ -70,7 +71,7 @@ def cleanup_protect(req):
     # Only the Linux integration test lowers this (it cannot wait an hour); DockNest itself never sends it.
     age=req.get('minAgeSeconds',CLEANUP_FRESH_SECONDS)
     if not isinstance(age,int) or isinstance(age,bool) or not 0<=age<=86400:raise ValueError('Invalid minimum age')
-    return {'containers':cleanup_refs(protect.get('containers')),'volumes':cleanup_refs(protect.get('volumes')),'stagingRoots':list(dict.fromkeys([CLEANUP_DEFAULT_STAGING,*roots])),'minAge':age}
+    return {'containers':cleanup_refs(protect.get('containers')),'volumes':cleanup_refs(protect.get('volumes')),'projects':cleanup_refs(protect.get('projects')),'stagingRoots':list(dict.fromkeys([CLEANUP_DEFAULT_STAGING,*roots])),'minAge':age}
 
 # ---- What the server says ----
 def journal_strings(value,into):
@@ -100,7 +101,8 @@ def cleanup_journals():
     return found
 def cleanup_activity(roots,now):
     """Snapshot images of every DockNest job folder (a backup commits them while it runs), and whether a backup or
-    restore looks active: an unfinished job folder or restore staging folder changed in the last six hours."""
+    restore looks active: any unfinished job folder, or any restore staging folder, however old. A folder left by an
+    interrupted job keeps blocking cleanup until DockNest's recovery finishes it (fail closed)."""
     images=set();active=None
     for base in [pathlib.Path(r) for r in roots]+[RESTORE_ROOT]:
         try:
@@ -112,13 +114,13 @@ def cleanup_activity(roots,now):
             folder=pathlib.Path(entry.path)
             snapshots=set();read_journal(folder/'snapshot-images.json',snapshots);images|=snapshots
             if base!=RESTORE_ROOT and job_folder_finished(folder):continue
-            try:latest=max([os.lstat(folder).st_mtime]+[os.lstat(os.path.join(folder,name)).st_mtime for name in os.listdir(folder)])
-            except OSError:latest=now
-            if now-latest<CLEANUP_ACTIVE_SECONDS:active='restore' if base==RESTORE_ROOT else 'backup'
+            active='restore' if base==RESTORE_ROOT else 'backup'
     return images,active
-def volume_bytes(mountpoint):
-    """Bytes under a volume, without following links; None when it is too large or slow to count."""
-    total=0;count=0;deadline=time.monotonic()+CLEANUP_WALK_SECONDS
+def volume_bytes(mountpoint,overall=None):
+    """Bytes under a volume, without following links; None when it is too large or slow to count, or when the scan's
+    overall sizing deadline (`overall`, monotonic seconds) has passed."""
+    total=0;count=0;deadline=min(time.monotonic()+CLEANUP_WALK_SECONDS,overall if overall is not None else float('inf'))
+    if time.monotonic()>=deadline:return None
     try:
         if not mountpoint or not os.path.isdir(mountpoint) or os.path.islink(mountpoint):return None
         for current,dirs,files in os.walk(mountpoint,followlinks=False):
@@ -169,7 +171,9 @@ def cleanup_classify(facts,protect):
     site_ids=set()
     for c in containers:
         if ref_matches(container_refs(c),protect['containers']):site_ids.add(c.get('Id'))
-    site_projects={compose_project((c.get('Config') or {}).get('Labels')) for c in containers if c.get('Id') in site_ids}-{None}
+    # Compose projects of sites: from the site containers still on the server, and from the site backups (DockNest sends
+    # those), so a stack that is down keeps its anonymous volumes too.
+    site_projects=({compose_project((c.get('Config') or {}).get('Labels')) for c in containers if c.get('Id') in site_ids}|set(protect.get('projects') or ()))-{None}
     running_projects={compose_project((c.get('Config') or {}).get('Labels')) for c in containers if (c.get('State') or {}).get('Status') not in CLEANUP_STOPPED}-{None}
     used_images={c.get('Image') for c in containers}-{None}
     used_volumes={m.get('Name') for c in containers for m in c.get('Mounts') or [] if m.get('Type')=='volume'}-{None}
@@ -225,19 +229,52 @@ def public_item(item):return {k:item.get(k) for k in ['kind','id','name','bytes'
 def cleanup_scan(req,now=None):
     protect=cleanup_protect(req);facts=cleanup_facts(protect,now)
     eligible,kept=cleanup_classify(facts,protect)
+    overall=time.monotonic()+CLEANUP_SIZE_SECONDS
     for item in eligible:
-        if item['kind']=='volumes':item['bytes']=volume_bytes(item.get('mountpoint'))
+        if item['kind']=='volumes':item['bytes']=volume_bytes(item.get('mountpoint'),overall)
     emit(result={'items':[public_item(i) for i in eligible],'protected':[public_item(i) for i in kept][:CLEANUP_MAX_ITEMS],'busy':facts['active']})
 
 # ---- Clean ----
 def cleanup_lock():
+    """Exclusive: no backup, restore, restore test or move step holds the shared side (cleanup_shared), and none can start
+    until the clean ends."""
     import fcntl
     CLEANUP_LOCK.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
     if CLEANUP_LOCK.is_symlink():raise ValueError('The cleanup lock cannot be a symbolic link')
     handle=open(CLEANUP_LOCK,'a')
     try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except BlockingIOError:handle.close();raise ValueError('Another cleanup is already running on this server.')
+    except BlockingIOError:handle.close();raise ValueError('Another cleanup or DockNest step is running on this server. Clean up after it finishes.')
     return handle
+def cleanup_shared(wait_seconds=CLEANUP_SHARED_WAIT):
+    """Shared side of the cleanup lock, taken (and kept for the whole step) by every step that creates or needs Docker
+    resources: backup capture, restore, restore test prepare and run, and move steps. It waits briefly for a running
+    clean, then refuses. None where the lock folder cannot exist (not root): then no clean can run either."""
+    try:import fcntl
+    except ImportError:return None
+    try:CLEANUP_LOCK.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    except OSError:return None
+    if CLEANUP_LOCK.is_symlink():raise ValueError('The cleanup lock cannot be a symbolic link')
+    handle=open(CLEANUP_LOCK,'a');deadline=time.time()+wait_seconds
+    while True:
+        try:fcntl.flock(handle,fcntl.LOCK_SH|fcntl.LOCK_NB);return handle
+        except BlockingIOError:
+            if time.time()>=deadline:handle.close();raise ValueError('A server cleanup is running on this server. Try again when it finishes.')
+            time.sleep(2)
+def step_locks_held():
+    """Whether a move or restore test step holds its own lock right now. Probed only while cleanup holds the exclusive
+    lock, so no new step can be taking one at the same moment (steps take the shared cleanup lock first)."""
+    try:import fcntl
+    except ImportError:return False
+    for root in [MOVES_ROOT,RESTORE_TESTS_ROOT]:
+        try:folders=[pathlib.Path(e.path) for e in os.scandir(root) if e.is_dir(follow_symlinks=False)] if root.is_dir() and not root.is_symlink() else []
+        except OSError:folders=[]
+        for folder in folders:
+            lock=folder/'.lock'
+            if lock.is_symlink() or not lock.is_file():continue
+            with open(lock,'a') as handle:
+                try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB);fcntl.flock(handle,fcntl.LOCK_UN)
+                except BlockingIOError:return True
+    return False
 def cleanup_requested(req):
     items=req.get('items')
     if not isinstance(items,list) or not items or len(items)>CLEANUP_MAX_ITEMS:raise ValueError('Choose up to %d items to clean'%CLEANUP_MAX_ITEMS)
@@ -261,6 +298,10 @@ def still_eligible(item):
             return CLEANUP_ANONYMOUS.fullmatch(v.get('Name',''))is not None and not own_labels(v.get('Labels')) and not docker_lines('ps','-aq','--no-trunc','--filter','volume='+ref) and cleanup_digest(v.get('Name'),v.get('CreatedAt'))==item['fingerprint']
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,IndexError,TypeError):return False
     return False
+def journal_protects(item,journals):
+    """Journals re-read right before each removal. The shared lock already keeps new steps out; this is the second net."""
+    ref=item['id'];refs={ref,ref[:12],ref.split(':')[-1],ref.split(':')[-1][:12]}
+    return any(ref_matches(refs,journals[kind]) for kind in ['move','oldCopy','restoreTest'])
 def remove_item(item):
     if item['kind']=='containers':docker('rm',item['id'])
     elif item['kind']=='images':docker('image','rm',item['id'])
@@ -273,6 +314,7 @@ def cleanup_apply(req,now=None):
     requested=cleanup_requested(req);protect=cleanup_protect(req)
     lock=cleanup_lock()
     try:
+        if step_locks_held():raise ValueError('A site move or restore test step is running on this server. Clean up after it finishes.')
         facts=cleanup_facts(protect,now)
         if facts['active']:raise ValueError('A %s is running on this server. Clean up after it finishes.'%facts['active'])
         eligible,kept=cleanup_classify(facts,protect)
@@ -287,6 +329,7 @@ def cleanup_apply(req,now=None):
             elif item['kind']=='buildCache':
                 try:outcome.update(status='removed',bytes=prune_build_cache())
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):outcome.update(status='failed',reason='buildCache')
+            elif journal_protects(item,cleanup_journals()):outcome.update(status='skipped',reason='move')
             elif not still_eligible(item):outcome.update(status='skipped',reason='changed')
             else:
                 try:remove_item(item);outcome.update(status='removed',bytes=now_item.get('bytes') if item['kind']!='volumes' else None)

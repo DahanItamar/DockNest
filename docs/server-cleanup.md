@@ -13,7 +13,7 @@ Administrators only. Open **Storage**, scroll to **Server cleanup**, pick a serv
 | Stopped containers | Exited, created or dead containers that nothing below protects |
 | Dangling images | Images without a tag that no container uses |
 | Unused volumes | Anonymous volumes (64-character names) that no container mounts |
-| Build cache | Build cache no build is using, older than one day |
+| Build cache | Build cache no build is using, older than one day (shown as "up to": Docker's figure is an upper bound) |
 
 Each group lists its items with their size. Untick a group to leave it out. **Kept items** lists what DockNest found but
 will not remove, with the reason.
@@ -26,6 +26,8 @@ and the outcome (also when it was refused).
 
 - Containers, images and volumes a registered site uses, including archived sites, other services of the same Compose
   project, and named volumes that the site's recent backups list even if their container is gone.
+- Anonymous volumes of a site's Compose project (from the site's recent backups), even when every container of that
+  stack is gone after `docker compose down`.
 - Anything of a backup in progress (its snapshot images), of a restore or restore test (its copies and their images and
   volumes), and of a site move (its copies, and the stopped old copy kept on the old server after a move).
 - DockNest itself: its containers, images (also old builds), volumes and staging folders.
@@ -44,9 +46,16 @@ When it is unclear who owns something, it stays.
   it is removed. An item that changed, came into use or became protected since the scan is skipped.
 - A preview is valid for 15 minutes and can be used once, by the administrator who made it. Scan again after that.
 - Cleanup waits while a backup, restore, restore test or site move uses the server, and only one cleanup runs per server.
+  On the server it also refuses while any backup job folder is unfinished or any restore staging folder exists, however
+  old: a folder an interrupted job left behind blocks cleanup until DockNest's recovery finishes it.
+- Nothing starts while a clean runs. DockNest puts a hold on the server for the length of the clean: backups, restores,
+  restore tests, move steps and installs queued meanwhile wait and start right after it, they never fail. A hold left
+  by a crash expires after 45 minutes. On the server, every backup, restore, restore test and move step shares a lock
+  that the clean takes exclusively, so the two can never overlap even if the hold were missed.
 - Build cache is the one group cleaned as a whole: DockNest runs `docker builder prune --filter until=24h` without
   `--all`, so BuildKit removes only cache no build references. Build cache never holds site data; the next build may be
   slower.
 
 Sizes are what Docker reports. Images can share layers, so the space actually freed by images can be smaller than the
-sum shown. A volume too large to count quickly shows Unknown.
+sum shown. A volume too large to count quickly shows Unknown, and so does any volume left when the scan's one-minute
+sizing budget runs out.

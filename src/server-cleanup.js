@@ -4,7 +4,8 @@
 // Protection is decided twice and fails closed: DockNest sends what its records say a server must keep (site
 // containers, the volumes their backups list, kept old copies after a move), and the helper adds what the server says
 // (DockNest labels and journals, backups in progress, restore tests, move copies, DockNest itself).
-// A preview lives in memory for 15 minutes and is used once; nothing is stored and no timer runs.
+// A preview lives in memory for 15 minutes and is used once. While a clean runs, a database hold on the server
+// (src/cleanup-hold.js) defers every job there, and the helper's shared lock keeps Docker steps out. No timer runs.
 import express from 'express';
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
@@ -12,10 +13,13 @@ import { db, audit } from './db.js';
 import { requireAdmin } from './auth.js';
 import { transport } from './engine.js';
 import { heldBy } from './restore-tests/hold.js';
+import { cleanupHeld, takeCleanupHold, releaseCleanupHold } from './cleanup-hold.js';
 
 export const serverCleanupRoutes = express.Router();
-// Extra helper request fields; only the Linux integration test sets one ({ minAgeSeconds: 0 }).
-export const cleanupOptions = {};
+// Test only: the Linux integration test cannot wait an hour for its fixtures to age. DockNest itself never calls this.
+let testMinAgeSeconds = null;
+export function setCleanupTestMinAge(seconds) { testMinAgeSeconds = seconds === null ? null : z.number().int().min(0).max(86400).parse(seconds); }
+const testFields = () => (testMinAgeSeconds === null ? {} : { minAgeSeconds: testMinAgeSeconds });
 export const CLEANUP_KINDS = Object.freeze(['containers', 'images', 'volumes', 'buildCache']);
 const PREVIEW_MS = 15 * 60_000, MAX_PREVIEWS = 50, MAX_ITEMS = 500, MAX_REFS = 2000;
 const REF = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}$/;
@@ -24,29 +28,32 @@ const ACTIVE_JOB = "('queued','running','recovery_required','move_queued','move_
 // which the protection lists below cover, so it does not block a clean.
 const RUNNING_MOVE = "('queued','running','waiting','rolling_back','recovery_required','switching_back')";
 const ENDED_MOVE = "('rolled_back','cancelled','failed','switched_back','cleaned')";
-const previews = new Map(), cleaning = new Set();
+const previews = new Map();
 const httpError = (status, message, code) => Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
 
 const parse = text => { try { return JSON.parse(text); } catch { return null; } };
+const manifestContainers = manifest => (Array.isArray(manifest?.containers) ? manifest.containers : []);
 // Volume names of the containers a stored backup manifest lists (the full capture manifest).
 export function manifestVolumes(manifest) {
   const names = [];
-  for (const container of Array.isArray(manifest?.containers) ? manifest.containers : [])
+  for (const container of manifestContainers(manifest))
     for (const mount of Array.isArray(container?.Mounts) ? container.Mounts : []) if (mount?.Type === 'volume' && typeof mount.Name === 'string') names.push(mount.Name);
   return names;
 }
+// Compose projects of those containers: a stack that is down keeps its anonymous volumes through them.
+export const manifestProjects = manifest => manifestContainers(manifest).map(container => container?.Config?.Labels?.['com.docker.compose.project']).filter(project => typeof project === 'string' && project);
 // What DockNest's records say this server must keep. Archived sites count too; a moved site counts on its old server
 // until its move has ended (its old copy is kept there, stopped).
 export function protectionFor(serverId) {
   const siteIds = new Set(db.prepare('SELECT id FROM sites WHERE server_id=?').all(serverId).map(row => row.id));
   for (const row of db.prepare(`SELECT site_id FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state NOT IN ${ENDED_MOVE}`).all(serverId, serverId)) siteIds.add(row.site_id);
-  const containers = new Set(), volumes = new Set(), stagingRoots = new Set();
+  const containers = new Set(), volumes = new Set(), projects = new Set(), stagingRoots = new Set();
   for (const siteId of siteIds) {
     const config = parse(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId)?.config) ?? {};
     for (const name of Array.isArray(config.containers) ? config.containers : []) containers.add(String(name));
     if (typeof config.stagingRoot === 'string' && config.stagingRoot.startsWith('/')) stagingRoots.add(config.stagingRoot);
     for (const row of db.prepare('SELECT manifest FROM backups WHERE site_id=? ORDER BY captured_at DESC,id DESC LIMIT 5').all(siteId))
-      for (const name of manifestVolumes(parse(row.manifest))) volumes.add(name);
+    { const manifest = parse(row.manifest); for (const name of manifestVolumes(manifest)) volumes.add(name); for (const project of manifestProjects(manifest)) projects.add(project); }
   }
   const list = set => {
     const values = [...set];
@@ -54,7 +61,7 @@ export function protectionFor(serverId) {
     if (values.length > MAX_REFS || values.some(value => !REF.test(value))) throw httpError(409, 'DockNest cannot describe what this server must keep, so it will not clean it.', 'PROTECTION_UNAVAILABLE');
     return values;
   };
-  return { containers: list(containers), volumes: list(volumes), stagingRoots: [...stagingRoots].filter(root => root.length <= 512 && !root.split('/').includes('..')) };
+  return { containers: list(containers), volumes: list(volumes), projects: list(projects), stagingRoots: [...stagingRoots].filter(root => root.length <= 512 && !root.split('/').includes('..')) };
 }
 // Why a clean must wait: work that uses this server, or another clean of it.
 export function busyReason(serverId) {
@@ -62,12 +69,13 @@ export function busyReason(serverId) {
   if (job) return { restore: 'A restore is running on this server.', 'restore-test': 'A restore test is running on this server.', 'site-move': 'A site move is running on this server.' }[job.type] ?? 'A backup is running on this server.';
   if (heldBy(serverId)) return 'A restore test is running on this server.';
   if (db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state IN ${RUNNING_MOVE}`).get(serverId, serverId)) return 'A site move is running on this server.';
-  if (cleaning.has(serverId)) return 'A cleanup is already running on this server.';
+  if (cleanupHeld(serverId)) return 'A cleanup is already running on this server.';
   return null;
 }
 
 const itemOf = item => ({ kind: item.kind, id: String(item.id), name: String(item.name ?? '').slice(0, 128), bytes: Number.isFinite(item.bytes) ? item.bytes : null, fingerprint: String(item.fingerprint ?? '') });
 const REASONS = new Set(['site', 'oldCopy', 'move', 'restoreTest', 'restoreCopy', 'backup', 'docknest', 'inUse', 'runningStack', 'named', 'tooNew']);
+// A reason this release does not know (a newer helper) is shown as unknown; the item is kept either way.
 function remember(preview) {
   const now = Date.now();
   for (const [token, entry] of previews) if (entry.expires <= now) previews.delete(token);
@@ -90,10 +98,10 @@ const handle = fn => async (req, res, next) => {
 export async function scanServer(serverId, actor) {
   const server = serverOf(serverId), protect = protectionFor(server.id);
   let result;
-  try { result = await transport.remote(server, { ...cleanupOptions, operation: 'cleanup-scan', protect }); }
+  try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-scan', protect }); }
   catch (error) { if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED'); throw unreachable(error, server); }
   const items = (Array.isArray(result?.items) ? result.items : []).filter(item => CLEANUP_KINDS.includes(item?.kind) && REF.test(String(item?.id))).map(itemOf).slice(0, MAX_ITEMS);
-  const kept = (Array.isArray(result?.protected) ? result.protected : []).filter(item => CLEANUP_KINDS.includes(item?.kind)).map(item => ({ ...itemOf(item), reason: REASONS.has(item.reason) ? item.reason : 'site' })).map(({ fingerprint: _f, ...item }) => item);
+  const kept = (Array.isArray(result?.protected) ? result.protected : []).filter(item => CLEANUP_KINDS.includes(item?.kind)).map(item => ({ ...itemOf(item), reason: REASONS.has(item.reason) ? item.reason : 'unknown' })).map(({ fingerprint: _f, ...item }) => item);
   const busy = busyReason(server.id) ?? (result?.busy === 'restore' ? 'A restore is running on this server.' : result?.busy ? 'A backup is running on this server.' : null);
   const { token, expiresAt } = remember({ serverId: server.id, actor, items: new Map(items.map(item => [item.kind + '\0' + item.id, item])) });
   return { token, expiresAt, busy, items: items.map(({ fingerprint: _f, ...item }) => item), protected: kept, totalBytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
@@ -110,13 +118,13 @@ export async function cleanServer(serverId, body, actor) {
     if (!known) throw httpError(400, 'Only items from the preview can be cleaned.', 'NOT_IN_PREVIEW');
     if (!chosen.includes(known)) chosen.push(known);
   }
-  const busy = busyReason(server.id);
+  // The busy check and the hold commit together, so no job can be claimed in between.
+  const busy = takeCleanupHold(server.id, actor, () => busyReason(server.id));
   if (busy) { audit(actor, 'server.cleanup', server.id, { result: 'refused', reason: busy, requested: chosen.length }); throw httpError(409, busy + ' Clean up after it finishes.', 'SERVER_BUSY'); }
   previews.delete(token);  // used once, whatever happens next
-  cleaning.add(server.id);
   try {
     let result;
-    try { result = await transport.remote(server, { ...cleanupOptions, operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
+    try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
     catch (error) {
       audit(actor, 'server.cleanup', server.id, { result: error.remoteReported ? 'refused' : 'failed', requested: chosen.length, removed: 0, bytes: 0 });
       if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED');
@@ -132,7 +140,7 @@ export async function cleanServer(serverId, body, actor) {
     const outcome = summary.removed === chosen.length ? 'completed' : summary.removed ? 'partial' : 'nothing_removed';
     audit(actor, 'server.cleanup', server.id, { result: outcome, requested: chosen.length, ...summary, items: results.filter(row => row.status === 'removed').slice(0, 100).map(row => ({ kind: row.kind, name: row.name })) });
     return { result: outcome, ...summary, results };
-  } finally { cleaning.delete(server.id); }
+  } finally { releaseCleanupHold(server.id); }
 }
 
 serverCleanupRoutes.post('/servers/:id/cleanup/scan', requireAdmin, handle(async (req, res) => res.json(await scanServer(req.params.id, req.user.id))));
