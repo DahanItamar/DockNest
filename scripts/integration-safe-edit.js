@@ -104,7 +104,10 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
 
   // ---------- 3. an environment value that makes the app exit after 20 s: fails at stability ----------
   // The project's .env feeds ${CRASH}; a service env_file is not editable in 2.15.
-  const crashCompose = 'services:\n  web:\n    image: edit-app:1.0\n    environment:\n      CRASH: ${CRASH}\n    command: ["sh","-c","python /app/app.py & if [ \\"$CRASH\\" = yes ]; then sleep 20; exit 1; fi; wait"]\n    ports:\n      - "127.0.0.1:8302:8080"\n';
+  // PID 1 is a shell, so it forwards SIGTERM to the app and exits 0: a backup needs a clean stop (a shell that ignores
+  // SIGTERM is killed after the stop timeout with exit code 137, and the backup refuses it as an unclean shutdown).
+  const crashCommand = "[\"sh\", \"-c\", \"trap 'kill -TERM $$pid 2>/dev/null; wait $$pid; exit 0' TERM; python /app/app.py & pid=$$!; if [ \\\"$$CRASH\\\" = yes ]; then sleep 20; exit 1; fi; wait $$pid\"]";
+  const crashCompose = `services:\n  web:\n    image: edit-app:1.0\n    environment:\n      CRASH: \${CRASH}\n    command: ${crashCommand}\n    ports:\n      - "127.0.0.1:8302:8080"\n`;
   const crash = await composeSite('editcrash', { '/srv/editcrash/compose.yaml': crashCompose, '/srv/editcrash/.env': '# app settings\nCRASH=no\nexport GREETING="hello # not a comment"\n' });
   loaded = await view(crash);
   const appEnv = loaded.env.find(item => item.file.endsWith('/editcrash/.env'));

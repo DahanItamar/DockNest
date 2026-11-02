@@ -1241,6 +1241,9 @@ def edit_prepare(req,edit_id,site,roots,inv):
             elif missing:edit_compose(inv,['pull','--quiet',*missing],context['files'],context['envs'],timeout=EDIT_PULL_SECONDS)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):
             if any(not edit_image_present(wanted[name],inv) for name in missing):edit_refuse('DISK_FULL' if edit_disk_low() else 'PULL_FAILED')
+        # Checked again after a pull that reported success: Compose skips a service with pull_policy: never (and may
+        # skip others), so an image that is still missing fails here, before the maintenance page, not at apply.
+        if any(not edit_image_present(wanted[name],inv) for name in missing):edit_refuse('PULL_FAILED')
         emit(result={'ok':True,'pulled':missing})
     finally:
         if not container:shutil.rmtree(context['folder'],ignore_errors=True)
