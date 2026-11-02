@@ -1,31 +1,31 @@
-// The only place that knows the Safe Edit API (docs/safe-edit.md, "API"). `api` is the app's fetch helper:
-// api(path, body, method). Field names are assumptions until the backend lands; see the notes next to each call.
+// The only place that knows the Safe Edit API (docs/safe-edit.md, "API"; src/site-edits/routes.js, views.js, diff.js).
+// `api` is the app's fetch helper: api(path, body, method).
 export function createSafeEditClient(api){
  const id=x=>encodeURIComponent(x);
  return {
-  // View: {kind:'compose'|'container', envFile, files:[{path,sha256,text}], env:[{file,key,set}],
-  //  ports:[{service,container,host|null,file,line,editable,reason}], images:[{service,image,file,line,editable,reason}],
-  //  tabs:{compose|environment|ports|image:{usable,reason}}}. Answers 403 REAUTH_REQUIRED without a recent re-check.
+  // {kind:'compose'|'container', files:[{path,sha256,text}], env:[{file,keys:[{key,set}]}],
+  //  services:[{name,image,ports:[{host,container,protocol,hostIp}],frozen,healthcheck}],
+  //  usable:{compose,env,ports,image}, reasons:{tab:{code,message}}}. 403 REAUTH_REQUIRED without a recent re-check.
   load:siteId=>api('/sites/'+id(siteId)+'/edit'),
-  // change: {files?:[{path,sha256,text}], env?:[{file,key,value}]} -> {token, diff, summary, warnings} or 422 {code, error}.
-  // diff: [{path, lines:[{n, type:'add'|'del'|'ctx', text}]}]; summary: {backupFirst, healthUrl, rollback, dataRollback};
-  // warnings: [{code, title, text}]
+  // change: {files?:[{path,sha256,text}], env?:[{file,key,value}], containerChanges?:{image?,ports?}}
+  // -> {token, diff:{files:[{path,hunks}],env:[{file,key,change,value}]}, summary, warnings:[{code,message,port?}]} or 422 {code,error}
   review:(siteId,change)=>api('/sites/'+id(siteId)+'/edit/review',change),
   // 202 {edit:{id}}; 403 REAUTH_REQUIRED; 409 SITE_BUSY | MOVE_RUNNING | EDIT_RUNNING
   apply:(siteId,token)=>api('/sites/'+id(siteId)+'/edit/apply',{token}),
-  // {id, siteId, state, result, reason, failedStep, backupId, steps:[{step,state,startedAt,finishedAt,detail}]}
+  // {id,state,result,reason,backupId,steps:[{step,label,state,startedAt,finishedAt,detail}],actions:{cancel,retry,restoreBackup},restore}
   get:editId=>api('/site-edits/'+id(editId)),
-  // {items:[{id,state,result,reason,createdAt,finishedAt,changes:{fields:[]}}], next}
+  // {items:[{id,state,result,changed:[],env:{added,replaced,removed},createdAt}], nextCursor}
   history:(siteId,cursor)=>api('/sites/'+id(siteId)+'/edits'+(cursor?'?cursor='+id(cursor):'')),
   cancel:editId=>api('/site-edits/'+id(editId)+'/cancel',{}),
-  // Assumed route: re-runs a failed rollback.
   retryRollback:editId=>api('/site-edits/'+id(editId)+'/retry',{}),
+  restoreBackup:editId=>api('/site-edits/'+id(editId)+'/restore-backup',{}),
   reauth:(password,code)=>api('/auth/reauth',{password,code})
  };
 }
 
 export const ACTIVE=new Set(['queued','running','checking','rolling_back']);
 export const TABS=['Compose','Environment','Ports','Image'];
+export const TAB_KEY={Compose:'compose',Environment:'env',Ports:'ports',Image:'image'};
 export const STEP_TEXT={backup:'Back up',prepare:'Prepare',apply:'Apply',check_health:'Check health',finish:'Finish',roll_back:'Roll back'};
 export const STATUS_LINE={backup:'Backing up…',prepare:'Getting ready…',apply:'Applying the change…',check_health:'Checking the site…',finish:'Finishing…',roll_back:'Rolling back…'};
 const FRIENDLY={
@@ -35,6 +35,11 @@ const FRIENDLY={
  TOKEN_EXPIRED:'The review expired. Review the change again.'
 };
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
+
+// Review warnings: a short title in front of the server's sentence.
+const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',NO_HEALTH_CHECK:'No health check'};
+export const warningView=w=>({title:WARNING_TITLE[w.code]||'Check this',text:w.code==='PUBLIC_PORT'?w.message+' Check your firewall.':w.message});
+export const healthText=health=>({url:'The health URL answers',docker:'Docker health check'}[health]||'Running and stable');
 
 // Steps shown in the timeline: the prepare step only when it matters, roll back only once it starts.
 export function visibleSteps(edit){
@@ -50,10 +55,50 @@ export function outcomeOf(edit){
  if(ACTIVE.has(edit.state))return 'applying';
  return {applied:'done',rolled_back:'rolled',failed:'failed',cancelled:'cancelled'}[edit.result]||'failed';
 }
+export const historyChanges=e=>{
+ const names=[...(e.changed||[]).map(p=>String(p).replace(/^services\./,'')),...['added','replaced','removed'].flatMap(k=>e.env?.[k]||[])];
+ return names.length?names.slice(0,3).join(', ')+(names.length>3?' and more':''):'Changed the site';
+};
 
-// Guided edits make the same text edit as typing it in Compose. A line is only edited when it still holds what the
-// server reported, so a hand edit in the Compose tab turns the row into "Edit this in Compose".
+// ---- Guided edits: ports and image make the same text edit as typing it in Compose.
 const esc=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const indent=l=>l.match(/^\s*/)[0].length;
+const blank=l=>/^\s*(#.*)?$/.test(l);
+// Lines of one service block, or null when the service is not found exactly once.
+function serviceBlock(lines,name){
+ const root=lines.findIndex(l=>/^services:\s*(#.*)?$/.test(l));
+ if(root<0)return null;
+ let end=lines.length;
+ for(let i=root+1;i<lines.length;i++)if(!blank(lines[i])&&indent(lines[i])===0){end=i;break}
+ const hits=[];
+ for(let i=root+1;i<end;i++)if(new RegExp('^\\s+["\']?'+esc(name)+'["\']?:\\s*(#.*)?$').test(lines[i]))hits.push(i);
+ if(hits.length!==1)return null;
+ const start=hits[0],base=indent(lines[start]);let stop=end;
+ for(let i=start+1;i<end;i++)if(!blank(lines[i])&&indent(lines[i])<=base){stop=i;break}
+ return {start,stop};
+}
+// Where a service's image and published ports live in the files. Anything ambiguous or interpolated is left out, and
+// the row then says "Edit this in Compose".
+export function locate(files,service){
+ const found=[];
+ for(const f of files){
+  if(typeof f.text!=='string')continue;
+  const lines=f.text.split('\n'),block=serviceBlock(lines,service.name);
+  if(block)found.push({file:f.path,lines,block});
+ }
+ if(found.length!==1)return {image:null,ports:service.ports.map(()=>null)};
+ const {file,lines,block}=found[0];
+ const inBlock=i=>i>block.start&&i<block.stop;
+ const imageLines=lines.map((l,i)=>inBlock(i)&&/^\s+image:\s*\S/.test(l)?i:-1).filter(i=>i>=0);
+ const image=imageLines.length===1&&!/\$\{?[A-Za-z_]/.test(lines[imageLines[0]])?{file,line:imageLines[0]+1}:null;
+ const ports=service.ports.map(p=>{
+  if(p.host==null)return null;
+  const re=new RegExp('(^|[^\\d])'+esc(p.host)+':'+esc(p.container)+'(?!\\d)');
+  const hits=lines.map((l,i)=>inBlock(i)&&/^\s*-/.test(l)&&re.test(l)&&!/\$\{?[A-Za-z_]/.test(l)?i:-1).filter(i=>i>=0);
+  return hits.length===1?{file,line:hits[0]+1}:null;
+ });
+ return {image,ports};
+}
 export function setHostPort(text,line,container,from,to){
  const lines=text.split('\n'),current=lines[line-1];
  if(current==null)return null;

@@ -29,9 +29,22 @@ export function Timeline({edit}){
 }
 
 export function Diff({diff}){
- const files=Array.isArray(diff)?diff:[];
- return <div className="se-diff mono" role="group" aria-label="Changes">{files.map(f=><React.Fragment key={f.path}>
-  {files.length>1&&<div className="se-diff-file">{f.path}</div>}
-  {(f.lines||[]).map((l,i)=><div key={i} className={'se-diff-line '+(l.type||'ctx')}><span className="se-diff-n">{l.n}</span><code>{l.text}</code></div>)}
- </React.Fragment>)}</div>;
+ const files=diff?.files||[],env=diff?.env||[];
+ const multi=files.length+(env.length?1:0)>1;
+ return <div className="se-diff mono" role="group" aria-label="Changes">
+  {files.map(f=><React.Fragment key={f.path}>
+   {multi&&<div className="se-diff-file">{f.path}</div>}
+   {(f.hunks||[]).map((h,hi)=>{
+    let oldN=h.oldStart,newN=h.newStart;
+    return <React.Fragment key={hi}>{(h.lines||[]).map((l,i)=>{
+     const n=l.type==='remove'?oldN++:l.type==='add'?newN++:(oldN++,newN++);
+     return <div key={i} className={'se-diff-line '+(l.type==='remove'?'del':l.type==='add'?'add':'ctx')}><span className="se-diff-n">{n}</span><code>{l.text}</code></div>;
+    })}</React.Fragment>;
+   })}
+  </React.Fragment>)}
+  {env.length>0&&<>
+   {multi&&<div className="se-diff-file">Environment</div>}
+   {env.map(e=><div key={e.file+e.key} className={'se-diff-line '+(e.change==='removed'?'del':'add')}><span className="se-diff-n"/><code>{e.change==='removed'?e.key:e.key+'='+e.value}</code></div>)}
+  </>}
+ </div>;
 }
