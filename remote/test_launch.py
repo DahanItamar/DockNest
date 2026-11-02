@@ -808,6 +808,30 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(host.run('launch-fetch',source='compose',composeText='x: 1\n')['code'],'SANDBOX_UNAVAILABLE')
         host=Host(self,gate=gate_ok,fail={' config ':(97,b'','',None)})
         self.assertEqual(host.run('launch-fetch',source='compose',composeText='x: 1\n')['code'],'SANDBOX_UNAVAILABLE')
+    def test_certificate_resets_the_maintenance_setup(self):
+        site='7c9e6679-7425-40de-944b-e07fc1f90ae7'
+        host=Host(self,dns=lambda h:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('203.0.113.10',0))]).start_journal()
+        mroot=host.root/'maintenance';(mroot/site).mkdir(parents=True);(mroot/site/'ready').write_text('')
+        self.assertTrue(host.run('launch-web',domain='shop.example.com',loopbackPort=18080)['ok']);(host.le/'accounts').mkdir(parents=True)
+        with patch('helper.LAUNCH_MAINTENANCE_ROOT',mroot):
+            for bad in (str(mroot),str(mroot/'x'),str(mroot/site/'..'/site),'/etc/'+site,str(host.root/'other'/site),5):
+                self.assertEqual(host.run('launch-certificate',domain='shop.example.com',maintenanceDirectory=bad)['code'],'INVALID_REQUEST',bad)
+            self.assertTrue((mroot/site/'ready').exists(),'nothing changes on a refused request')
+            result=host.run('launch-certificate',domain='shop.example.com',maintenanceDirectory=str(mroot)+'/'+site)
+        self.assertEqual((result['state'],result['maintenanceReset']),('issued',True))
+        self.assertFalse((mroot/site/'ready').exists())
+        self.assertIn('listen 443 ssl;',(host.conf/'docknest-shop.conf').read_text())
+        host.events=io.StringIO()
+        with patch('helper.LAUNCH_MAINTENANCE_ROOT',mroot):
+            self.assertFalse(host.run('launch-certificate',domain='shop.example.com',maintenanceDirectory=str(mroot)+'/'+site)['maintenanceReset'])
+        self.assertFalse(host.run('launch-certificate',domain='shop.example.com')['maintenanceReset'])
+    def test_maintenance_folder_through_a_link_is_refused(self):
+        root=pathlib.Path(tempfile.mkdtemp());real=root/'real';real.mkdir()
+        try:os.symlink(real,root/'maintenance')
+        except (OSError,NotImplementedError):self.skipTest('symbolic links need privileges here')
+        site='7c9e6679-7425-40de-944b-e07fc1f90ae7'
+        with patch('helper.LAUNCH_MAINTENANCE_ROOT',root/'maintenance'):
+            with self.assertRaises(helper.LaunchRefused):helper.launch_maintenance_dir(str(root/'maintenance')+'/'+site)
     def test_git_too_old_reason(self):
         self.assertEqual(helper.LAUNCH_REASONS['GIT_TOO_OLD'],'Git 2.37 or newer is needed. Update git, then try again.')
 

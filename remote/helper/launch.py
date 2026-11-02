@@ -1244,8 +1244,21 @@ def launch_web_op(req):
         launch_answer({'file':str(path)})
     finally:
         if lock:lock.close()
+LAUNCH_MAINTENANCE_ROOT=pathlib.Path('/var/lib/docknest/maintenance')
+def launch_maintenance_dir(value):
+    """None, or exactly <LAUNCH_MAINTENANCE_ROOT>/<site id> with no symbolic link anywhere on the path."""
+    if value is None:return None
+    if not isinstance(value,str):launch_refuse('INVALID_REQUEST')
+    name=value[len(str(LAUNCH_MAINTENANCE_ROOT))+1:] if value.startswith(str(LAUNCH_MAINTENANCE_ROOT)+'/') else ''
+    if not LAUNCH_UUID.fullmatch(name):launch_refuse('INVALID_REQUEST')
+    path=LAUNCH_MAINTENANCE_ROOT/name;current=pathlib.Path(path.anchor)
+    for part in path.parts[1:]:
+        current=current/part
+        if os.path.islink(current):launch_refuse('INVALID_REQUEST')
+    return path
 def launch_certificate_op(req):
     lid,slug=launch_ids(req);launch_root_user();domain=launch_domain(req);names=launch_names(req,domain)
+    maintenance=launch_maintenance_dir(req.get('maintenanceDirectory'))
     cert_name='docknest-'+slug
     email=req.get('email')
     if email is not None and (not isinstance(email,str) or not LAUNCH_EMAIL.fullmatch(email)):launch_refuse('INVALID_REQUEST')
@@ -1277,7 +1290,14 @@ def launch_certificate_op(req):
         live=LETSENCRYPT/'live'/cert_name
         launch_write_nginx(d,journal,lid,slug,names,web['loopbackPort'],{'cert':str(live/'fullchain.pem'),'key':str(live/'privkey.pem')})
         journal['phase']='certificate';launch_save(d,journal)
-        state('issued')
+        # The rewritten file has no maintenance include yet: removing `ready` makes the engine run the maintenance setup
+        # (2.13) again, which adds it back. Only a regular file is removed, never through a link.
+        reset=False
+        if maintenance is not None:
+            ready=maintenance/'ready'
+            if os.path.islink(ready):launch_refuse('INVALID_REQUEST')
+            if ready.is_file():ready.unlink();reset=True
+        launch_answer({'state':'issued','certName':cert_name,'maintenanceReset':reset})
     finally:
         if lock:lock.close()
 def launch_present(lid,journal):
