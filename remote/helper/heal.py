@@ -65,10 +65,12 @@ def heal_containers():
     if not ids:return []
     found=subprocess.run(['docker','inspect',*ids],capture_output=True,timeout=60)
     try:items=json.loads(found.stdout or b'[]')
-    except ValueError:
-        if found.returncode!=0:return []
-        raise
-    return [c for c in items if isinstance(c,dict) and isinstance(c.get('Name'),str) and isinstance(c.get('Id'),str)] if isinstance(items,list) else []
+    except ValueError:items=None
+    items=[c for c in items if isinstance(c,dict) and isinstance(c.get('Name'),str) and isinstance(c.get('Id'),str)] if isinstance(items,list) else []
+    # Containers exist but none could be inspected: Docker itself failed. Raise, so the stream closes and reconnects,
+    # rather than report every watched container as gone (which would give up with "container recreated").
+    if not items and found.returncode!=0:raise ValueError('docker inspect failed.')
+    return items
 def heal_resolve(watch,containers):
     """Each watched entry's current container, or None. A Compose service scaled to several containers prefers the one
     with the saved name, then a running one, then the first by name, so the choice is stable."""

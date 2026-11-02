@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { connect } from '../ssh.js';
 import { helperSource } from '../helper-bundle.js';
-import { recordHealth, gaveUp, healClock } from './engine.js';
+import { recordHealth, gaveUp, healClock, healRunner, tickSelfHeal } from './engine.js';
 import { STREAM, CONTAINER, CONTAINER_ID, STATUSES, WATCH_PER_SERVER, backoffMs, timing } from './limits.js';
 
 // SSH, timers and randomness; tests replace members.
@@ -189,6 +189,8 @@ export class ServerStream {
       for (const name of site.missing) { try { gaveUp(siteId, name, 'recreated'); } catch (error) { console.error(`Self-heal could not record a missing container: ${error.code ?? error.name}`); } }
     }
     this.setState('connected');
+    // Restarts that waited for this server (unreachable) are tried now.
+    try { tickSelfHeal(); } catch (error) { console.error(`Self-heal tick after connect failed: ${error.code ?? error.name}`); }
     persist();
   }
   closed(client) {
@@ -228,6 +230,7 @@ function renameWatched(siteId, renamed) {
 
 // On the worker tick: open, close or reopen streams whose fingerprint changed.
 export function syncStreams() {
+  if (healRunner.halted) return;
   let desired;
   try { desired = desiredStreams(); } catch (error) { console.error(`Self-heal streams could not be read: ${error.code ?? error.name}`); return; }
   let changed = false;
@@ -251,3 +254,4 @@ export function stopStreams() {
   persist();
 }
 export const openStreams = () => new Map(streams);
+healRunner.serverConnected = serverId => streams.get(serverId)?.state === 'connected';

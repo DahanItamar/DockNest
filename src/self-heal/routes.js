@@ -126,14 +126,15 @@ selfHealRoutes.put('/sites/:id/self-heal', requireAdmin, handle(async (req, res)
   }
   const at = new Date().toISOString(), text = JSON.stringify(watched);
   if (text.length > 4096) throw httpError(422, 'TOO_MANY_CONTAINERS', 'Too many containers to watch in one site.');
-  if (data.enabled) {
-    // One stream per server watches at most WATCH_PER_SERVER containers, counted over every enabled site on it.
-    const others = db.prepare('SELECT h.watched FROM self_heal_settings h JOIN sites s ON s.id=h.site_id WHERE h.enabled=1 AND s.server_id=? AND h.site_id<>? AND h.site_id NOT IN (SELECT site_id FROM site_archives)').all(site.server_id, site.id)
-      .reduce((sum, row) => sum + watchedOf(row).length, 0);
-    if (others + watched.length > WATCH_PER_SERVER) throw httpError(422, 'TOO_MANY_CONTAINERS', `Self-heal can watch up to ${WATCH_PER_SERVER} containers per server; this server would have ${others + watched.length}.`);
-  }
   const action = !current?.enabled && data.enabled ? 'self_heal.enabled' : current?.enabled && !data.enabled ? 'self_heal.disabled' : (current && (current.max_restarts !== data.maxRestarts || current.window_minutes !== data.windowMinutes)) ? 'self_heal.changed' : null;
   transaction(() => {
+    if (data.enabled) {
+      // One stream per server watches at most WATCH_PER_SERVER containers, counted over every enabled site on it,
+      // inside the write transaction so two administrators can never pass the cap together.
+      const others = db.prepare('SELECT h.watched FROM self_heal_settings h JOIN sites s ON s.id=h.site_id WHERE h.enabled=1 AND s.server_id=? AND h.site_id<>? AND h.site_id NOT IN (SELECT site_id FROM site_archives)').all(site.server_id, site.id)
+        .reduce((sum, row) => sum + watchedOf(row).length, 0);
+      if (others + watched.length > WATCH_PER_SERVER) throw httpError(422, 'TOO_MANY_CONTAINERS', `Self-heal can watch up to ${WATCH_PER_SERVER} containers per server; this server would have ${others + watched.length}.`);
+    }
     db.prepare(`INSERT INTO self_heal_settings(site_id,enabled,max_restarts,window_minutes,watched,updated_at,updated_by) VALUES(?,?,?,?,?,?,?)
       ON CONFLICT(site_id) DO UPDATE SET enabled=excluded.enabled,max_restarts=excluded.max_restarts,window_minutes=excluded.window_minutes,watched=excluded.watched,updated_at=excluded.updated_at,updated_by=excluded.updated_by`)
       .run(site.id, Number(data.enabled), data.maxRestarts, data.windowMinutes, text, at, req.user.id);

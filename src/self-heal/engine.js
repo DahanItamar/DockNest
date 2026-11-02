@@ -37,7 +37,8 @@ const latestOf = (siteId, container) => db.prepare('SELECT *,rowid FROM self_hea
 // clears by itself (busy, maintenance, settle...), an attempt to retry after the gap (a failed restart, an unreachable
 // server, the server-side lock or maintenance marker), or a limit reached, retried when the window has room again. A
 // healthy event (recovered) or a check by the helper (no longer unhealthy, not running, recreated...) closes it.
-export const wantsRestart = row => Boolean(row) && (row.kind === 'unhealthy' || row.kind === 'restart_failed' || row.kind === 'limit_reached' || (row.kind === 'skipped' && (TRANSIENT.has(row.reason) || RETRYABLE.has(row.reason))));
+// An interrupted restart (the worker stopped while it ran) is never retried: it may have happened; the next event decides.
+export const wantsRestart = row => Boolean(row) && (row.kind === 'unhealthy' || (row.kind === 'restart_failed' && row.reason !== 'interrupted') || row.kind === 'limit_reached' || (row.kind === 'skipped' && (TRANSIENT.has(row.reason) || RETRYABLE.has(row.reason))));
 function record(event) {
   const row = { id: id(), at: iso(healClock.now()), reason: null, jobId: null, containerId: null, ...event };
   db.prepare('INSERT INTO self_heal_events(id,site_id,server_id,container,container_id,kind,reason,job_id,at) VALUES(?,?,?,?,?,?,?,?,?)')
@@ -90,6 +91,7 @@ export function gaveUp(siteId, container, reason, nowMs = healClock.now()) {
 // ---------- events from the stream ----------
 // `event` was validated by streams.js and mapped to its site through the watched names of that server.
 export function recordHealth({ siteId, serverId, container, status, id: containerId }) {
+  if (healRunner.halted) return null;
   if (!CONTAINER.test(container) || !STATUSES.includes(status) || !CONTAINER_ID.test(containerId)) return null;
   const settings = settingsOf(siteId);
   if (!settings?.enabled || !settings.watched.some(entry => entry.name === container)) return null;
@@ -110,7 +112,13 @@ export function recordHealth({ siteId, serverId, container, status, id: containe
 // worker therefore sets `healRunner.active`, and a restart queued by an event (or by a gap ending) is claimed and run
 // at once beside the running job: claimJob's site rules (src/job-claim.js) keep it off a busy site, the claim is
 // atomic, and only self-heal jobs are claimed here. Off unless the worker turns it on (tests drive claims themselves).
-export const healRunner = { active: () => false, running: null };
+// `halted`: set once when this worker lost its lease (src/worker.js); from then on nothing here records, queues or
+// schedules anything. Separate from `active`, which tests leave off while they drive claims themselves.
+// `serverConnected`: whether the server's event stream is connected (set by streams.js); an unreachable server is
+// retried only then, so a server that is down raises no limit or gave_up alerts.
+export const healRunner = { active: () => false, running: null, halted: false, serverConnected: () => true };
+export function haltSelfHeal() { healRunner.halted = true; cancelRechecks(); }
+export const armedRechecks = () => rechecks.size;
 export function healNow() {
   if (healRunner.running || !healRunner.active()) return healRunner.running;
   healRunner.running = (async () => {
@@ -130,8 +138,8 @@ export function healNow() {
 // (every 15 s, src/worker.js) covers waits that end with another job, such as a backup finishing.
 const rechecks = new Map();
 function recheckAt(siteId, ms) {
-  if (rechecks.has(siteId) || !healRunner.active()) return;
-  rechecks.set(siteId, healClock.setTimeout(() => { rechecks.delete(siteId); try { tickSite(siteId); } catch (error) { console.error(`Self-heal re-check failed: ${error.code ?? error.name}`); } }, Math.max(1000, ms)));
+  if (rechecks.has(siteId) || !healRunner.active() || healRunner.halted) return;
+  rechecks.set(siteId, healClock.setTimeout(() => { rechecks.delete(siteId); if (!healRunner.active() || healRunner.halted) return; try { tickSite(siteId); } catch (error) { console.error(`Self-heal re-check failed: ${error.code ?? error.name}`); } }, Math.max(1000, ms)));
 }
 export function cancelRechecks() { for (const timer of rechecks.values()) healClock.clearTimeout(timer); rechecks.clear(); }
 
@@ -142,6 +150,7 @@ export function tickSelfHeal(nowMs = healClock.now()) {
   }
 }
 function tickSite(siteId, nowMs = healClock.now()) {
+  if (healRunner.halted) return;
   const settings = settingsOf(siteId);
   if (!settings?.enabled) return;
   const serverId = db.prepare('SELECT server_id FROM sites WHERE id=?').get(siteId)?.server_id;
@@ -152,6 +161,7 @@ function tickSite(siteId, nowMs = healClock.now()) {
   for (const row of open) {
     const entry = settings.watched.find(item => item.name === row.container);
     if (!entry || activeHealJob(siteId, row.container)) continue;
+    if (row.kind === 'skipped' && row.reason === 'unreachable' && !healRunner.serverConnected(serverId)) continue; // retried once the stream is back
     transaction(() => {
       const latest = latestOf(siteId, row.container);
       if (!wantsRestart(latest) || latest.id !== row.id) return;

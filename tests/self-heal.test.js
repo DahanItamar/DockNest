@@ -30,6 +30,9 @@ test.after(() => { streams.stopStreams(); listener.close(); });
 
 let now = Date.parse('2026-11-02T08:00:00.000Z');
 heal.healClock.now = () => now;
+// No real streams here: every server counts as connected unless a test says otherwise.
+const connectedServers = { all: true, set: new Set() };
+heal.healRunner.serverConnected = serverId => connectedServers.all || connectedServers.set.has(serverId);
 const at = (ms = now) => new Date(ms).toISOString();
 const ID = c => c.repeat(64);
 let restartAnswer = () => ({ outcome: 'restarted' });
@@ -236,6 +239,9 @@ test('worker restart: an interrupted restart is failed, counts, and is not retri
   assert.deepEqual(jobsOf(f.siteId), ['failed/failed']);
   assert.match(history(f.siteId).at(-1), /restart_failed:interrupted$/);
   assert.ok(!claimJob(), 'nothing is retried');
+  now += 120_000; heal.tickSelfHeal();
+  assert.ok(!claimJob(), 'not even after the gap: an interrupted restart may have happened; the next event decides');
+  assert.deepEqual(jobsOf(f.siteId), ['failed/failed']);
   db.prepare("INSERT INTO self_heal_events(id,site_id,server_id,container,kind,at) VALUES(?,?,?,?,'unhealthy',?)").run(randomUUID(), f.siteId, f.serverId, 'old', new Date(Date.now() - 91 * 86_400_000).toISOString());
   heal.healClock.now = () => Date.now();
   try { assert.ok(heal.purgeSelfHealEvents() >= 1); } finally { heal.healClock.now = () => now; }
@@ -309,6 +315,23 @@ test('one re-check is scheduled when a wait ends: the settle time, a failed rest
     assert.equal(history(f.siteId).at(-1), 'shop-web-1:restarted', 'restarted again once the window had room');
     assert.equal(restarts.filter(r => r.siteKey === f.siteId).length, 4);
   } finally { heal.healRunner.active = () => false; heal.cancelRechecks(); }
+});
+
+test('an unreachable server is retried only while its stream is connected, so a down server raises no limit or gave_up', async () => {
+  const f = fixture('down'); enable(f.siteId, { max: 2, window: 10 });
+  connectedServers.all = false;
+  try {
+    restartAnswer = () => { throw new Error('connect ETIMEDOUT'); };
+    unhealthy(f); heal.tickSelfHeal(); await work();
+    assert.match(history(f.siteId).at(-1), /skipped:unreachable$/);
+    for (let round = 0; round < 5; round++) { now += 61_000; heal.tickSelfHeal(); await work(); }
+    assert.equal(restarts.filter(r => r.siteKey === f.siteId).length, 1, 'not retried while the stream is down');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE target=? AND action='self_heal.gave_up'").get(f.siteId).n, 0);
+    // The stream is back: the retry happens.
+    connectedServers.set.add(f.serverId); restartAnswer = () => ({ outcome: 'restarted' });
+    heal.tickSelfHeal(); await work();
+    assert.equal(history(f.siteId).at(-1), 'shop-web-1:restarted');
+  } finally { connectedServers.all = true; connectedServers.set.clear(); }
 });
 
 // ---------- streams ----------
@@ -491,4 +514,39 @@ test('API: read for everyone, change for administrators with CSRF, 422 NO_HEALTH
   queueJob(siteId, { type: 'self-heal', status: 'completed' });
   const state = await operator('GET', '/jobs?limit=200');
   assert.equal(state.body.items.some(item => item.type === 'self-heal'), false);
+});
+
+// Last: halting is final for this process, like a worker that lost its lease.
+test('after the lease is lost, self-heal stops at once: no streams, no armed re-checks, nothing recorded or queued', async () => {
+  streams.stopStreams(); connects.length = 0; timers.length = 0;
+  db.exec('UPDATE self_heal_settings SET enabled=0');
+  const f = fixture('lease');
+  const armed = [];
+  heal.healClock.setTimeout = (fn, ms) => { const timer = { fn, ms }; armed.push(timer); return timer; };
+  heal.healClock.clearTimeout = timer => { const index = armed.indexOf(timer); if (index >= 0) armed.splice(index, 1); };
+  heal.healRunner.active = () => true;
+  try {
+    streams.syncStreams(); await tick();
+    assert.equal(streams.openStreams().size, 1);
+    // A re-check is armed (settle time after site work).
+    queueJob(f.siteId, { status: 'completed', finishedAt: at(now - 30_000) });
+    unhealthy(f);
+    assert.equal(heal.armedRechecks(), 1);
+    const pending = armed[0];
+    // What src/worker.js renew() does when the lease is lost.
+    heal.healRunner.active = () => false;
+    streams.stopStreams(); heal.haltSelfHeal();
+    assert.equal(streams.openStreams().size, 0, 'no stream is open');
+    assert.equal(heal.armedRechecks(), 0, 'no re-check is armed');
+    assert.equal(armed.length, 0, 'the timer was cleared');
+    assert.equal(connects[0].client.ended, true, 'the SSH connection was closed');
+    // Even a timer that fired late, a tick, an event or a sync does nothing now.
+    const rows = history(f.siteId).length;
+    pending.fn(); heal.tickSelfHeal(); now += 600_000; heal.tickSelfHeal();
+    assert.equal(heal.recordHealth({ siteId: f.siteId, serverId: f.serverId, container: 'shop-db-1', status: 'unhealthy', id: ID('b') }), null);
+    streams.syncStreams(); await tick();
+    assert.equal(streams.openStreams().size, 0); assert.equal(connects.length, 1);
+    assert.equal(history(f.siteId).length, rows);
+    assert.deepEqual(jobsOf(f.siteId), []);
+  } finally { heal.healRunner.active = () => false; }
 });

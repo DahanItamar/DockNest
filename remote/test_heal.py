@@ -99,7 +99,14 @@ class Containers(unittest.TestCase):
         def gone(args,**kw):
             if args[:2]==['docker','ps']:return subprocess.CompletedProcess(args,0,(A+'\n').encode(),b'')
             return subprocess.CompletedProcess(args,1,b'[]',b'Error')
-        with patch.object(helper.subprocess,'run',side_effect=gone):self.assertEqual(helper.heal_containers(),[])
+        with patch.object(helper.subprocess,'run',side_effect=gone):
+            self.assertRaises(ValueError,helper.heal_containers)  # Docker failed: reconnect, never 'every container gone'
+        def broken(args,**kw):
+            if args[:2]==['docker','ps']:return subprocess.CompletedProcess(args,0,(A+'\n').encode(),b'')
+            return subprocess.CompletedProcess(args,1,b'',b'Cannot connect to the Docker daemon')
+        with patch.object(helper.subprocess,'run',side_effect=broken):self.assertRaises(ValueError,helper.heal_containers)
+        def empty(args,**kw):return subprocess.CompletedProcess(args,0,b'',b'')
+        with patch.object(helper.subprocess,'run',side_effect=empty):self.assertEqual(helper.heal_containers(),[],'no containers at all is fine')
 
 class Resolve(unittest.TestCase):
     def test_reports_health_checks_and_compose_identity_without_secrets(self):
