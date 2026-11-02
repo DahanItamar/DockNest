@@ -1,0 +1,34 @@
+/* Server cleanup on the Storage page (docs/server-cleanup.md). Tokens only; card, table, alert and dialog come from the system. */
+.sc-root .card-title{margin:0}
+.sc-lead{margin:4px 0 0}
+.sc-controls{display:flex;align-items:flex-end;gap:12px;margin-top:16px}
+.sc-controls .field{margin:0;flex:0 1 320px;min-width:0}
+.sc-controls button{flex:0 0 auto;min-width:120px;white-space:nowrap}
+.sc-root .alert-panel{margin-top:16px}
+.sc-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.sc-actions button{flex:0 0 auto;min-width:120px;white-space:nowrap}
+.sc-preview,.sc-result{display:flex;flex-direction:column;gap:16px;margin-top:16px}
+.sc-preview>.alert-panel,.sc-result>.alert-panel{margin-top:0}
+.sc-total{margin:0;display:flex;align-items:baseline;gap:8px}
+.sc-total strong{font-size:var(--fs-card);line-height:var(--lh-card);color:var(--heading);font-variant-numeric:tabular-nums}
+.sc-empty{margin:0}
+.sc-group{display:flex;flex-direction:column;gap:8px;min-width:0}
+.sc-group-head{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px}
+.sc-include{margin:0;align-items:center}
+.sc-include input{margin:0}
+.sc-group-size{font-variant-numeric:tabular-nums;white-space:nowrap}
+.sc-note{margin:0}
+.sc-foot{display:flex;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border-subtle)}
+.sc-foot button{min-width:120px;white-space:nowrap}
+.sc-kept summary{cursor:pointer;font-weight:500;color:var(--heading);min-height:40px;display:flex;align-items:center}
+.sc-kept summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--radius)}
+.sc-kept p{margin:0 0 8px}
+dialog.sc-dialog{width:min(520px,calc(100vw - 2 * var(--edge)));scrollbar-width:none}
+dialog.sc-dialog::-webkit-scrollbar{display:none}
+.sc-dialog .modal-body p{margin:0 0 8px}
+@media(max-width:480px){
+ .sc-controls{flex-direction:column;align-items:stretch}
+ .sc-controls .field{flex:1 1 auto}
+ .sc-foot button,.sc-actions button{flex:1 1 auto}
+ .sc-dialog .modal-foot button{flex:1 1 100%}
+}
