@@ -58,8 +58,10 @@ function inMaintenance(siteId) {
 export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) return 'removed';
   if (deploymentHeld(db)) return 'deployment_hold';
-  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND id IS NOT ? AND status IN ('running','recovery_required','move_running','edit_running','heal_running')").get(siteId, ownJobId)) return 'site_busy';
+  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND id IS NOT ? AND status IN ('running','recovery_required','move_running','edit_running','edit_waiting','heal_running')").get(siteId, ownJobId)) return 'site_busy';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','move_queued','edit_queued')").get(siteId)) return 'work_queued';
+  // An unfinished Safe Edit pauses self-heal for its site between its steps too (docs/safe-edit.md, "Locks").
+  if (db.prepare('SELECT 1 FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)) return 'site_busy';
   if (movingSite(siteId)) return 'moving';
   if (inMaintenance(siteId)) return 'maintenance';
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';

@@ -3,8 +3,9 @@ const mode=process.argv[2]||'check';
 try{
  if(!['check','hold','release'].includes(mode))throw new Error('Invalid mode');
  const result=transaction(()=>{
-  // Self-heal restarts (heal_queued/heal_running, 2.15.0) count too: the upgrade and downgrade wait lets them finish.
-  const pending=db.prepare("SELECT status,COUNT(*) AS count FROM jobs WHERE status IN ('queued','running','recovery_required','heal_queued','heal_running') GROUP BY status").all();
+  // Safe Edit steps (edit_queued/edit_running/edit_waiting) and self-heal work (heal_*) count as work in progress too
+  // (docs/safe-edit.md, security review item 15): the upgrade waits for them like for backups.
+  const pending=db.prepare("SELECT status,COUNT(*) AS count FROM jobs WHERE status IN ('queued','running','recovery_required') OR substr(status,1,5) IN ('edit_','heal_') GROUP BY status").all();
   const artifacts=db.prepare("SELECT COUNT(*) AS count FROM artifact_operations WHERE state IN ('prepared','authenticated')").get().count;
   const deletions=db.prepare('SELECT COUNT(*) AS count FROM retention_operations').get().count;
   const reconciliation=JSON.parse(db.prepare("SELECT value FROM settings WHERE key='artifact_reconciliation'").get()?.value||'{}');

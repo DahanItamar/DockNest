@@ -18,7 +18,7 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, edits: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
   // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
   const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
@@ -26,6 +26,9 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   // Backup copies: a cursor from before 2.11.0 has no `copies` field, which means "start now" (no history replayed).
   const copies = cursor.copies ? detectCopies(cursor.copies) : { count: 0, at };
   count += copies.count;
+  // Safe Edit: a cursor from before 2.15.0 has no `edits` field, which means "start now" (no history replayed).
+  const edits = cursor.edits ? detectEdits(cursor.edits) : { count: 0, at };
+  count += edits.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE (j.type='backup' AND j.status IN ('completed','failed','recovery_required') OR j.type='scrub' AND j.status='failed' AND json_extract(j.details,'$.chainBroken')=1) AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -45,7 +48,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || edits.at !== cursor.edits) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, edits: edits.at });
   return count;
 }
 
@@ -89,6 +92,23 @@ function detectCopies(since) {
     if (!info) continue;
     const jobId = db.prepare('SELECT job_id FROM backups WHERE id=?').get(row.target)?.job_id;
     count += emit({ type: row.action, key: `occ:copy:${row.id}`, at: row.created_at, jobId, code: detail.reason, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server, destinationName: detail.targetName });
+  }
+  return { count, at: last };
+}
+
+// Safe Edit (docs/safe-edit.md): read from the audit rows the engine writes when an edit is rolled back or needs the owner.
+// Each row is one occurrence (a retried rollback that fails again alerts again). Names only, never a field or value.
+const EDIT_EVENTS = Object.freeze({ 'site.edit.rolled_back': 'edit.rolled_back', 'site.edit.needs_attention': 'edit.needs_you' });
+function detectEdits(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT id,action,target,detail,created_at FROM audit_events WHERE action IN ('site.edit.rolled_back','site.edit.needs_attention') AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
+    const info = db.prepare('SELECT s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(row.target ?? '');
+    if (!info) continue;
+    const jobId = typeof detail.edit === 'string' ? db.prepare('SELECT job_id FROM site_edits WHERE id=?').get(detail.edit)?.job_id : undefined;
+    count += emit({ type: EDIT_EVENTS[row.action], key: `occ:edit:${row.id}`, at: row.created_at, jobId, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server });
   }
   return { count, at: last };
 }

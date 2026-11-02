@@ -44,6 +44,11 @@ test('self-heal helper pins the docker events format, never matches copies, boun
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for self-heal helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('Safe Edit helper gates privilege, keeps env values out of argv, journals before writing and rolls back idempotently',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_edit.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Safe Edit helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('the helper source keeps shared state in common.py and builds into one helper.py that loads in a safe order',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_bundle.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification');

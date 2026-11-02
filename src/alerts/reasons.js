@@ -29,6 +29,9 @@ const catalogue = Object.freeze({
   'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
   'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
+  // Safe Edit (docs/safe-edit.md). Never the changed values or the step's own reason.
+  'edit.rolled_back': 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.',
+  'edit.needs_you': 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.',
   // Self-heal (docs/self-heal.md). The code is 'failed' for a restart that did not work, the reason for "gave up".
   'self_heal.restarted': 'A container failed its health check and DockNest restarted it.',
   'self_heal.restarted:failed': 'A container failed its health check and DockNest could not restart it. Open DockNest to see why.',

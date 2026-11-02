@@ -138,6 +138,17 @@ test('busy, queued work, maintenance, move and settle make a restart wait (recor
   const target = serverRow('skips-target');
   db.prepare("INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,'copying','{}','{}','x','admin',?,?)").run(randomUUID(), f.siteId, f.serverId, target, at(), at());
   assert.equal(heal.blockReason(f.siteId), 'moving');
+  // Safe Edit: queued, running, resting between health polls, and an unfinished edit between its steps.
+  const g = fixture('skips-edit');
+  for (const [status, reason] of [['edit_queued', 'work_queued'], ['edit_running', 'site_busy'], ['edit_waiting', 'site_busy']]) {
+    const jobId = queueJob(g.siteId, { type: 'site-edit', status });
+    assert.equal(heal.blockReason(g.siteId), reason, status);
+    db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(now - 600_000), jobId);
+  }
+  assert.equal(heal.blockReason(g.siteId), null);
+  const editId = randomUUID();
+  db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,created_by,created_at) VALUES(?,?,?,'running','admin',?)").run(editId, g.siteId, g.serverId, at());
+  assert.equal(heal.blockReason(g.siteId), 'site_busy');
 });
 
 test('claim: heal jobs go first, are site-scoped, block their own site and never deadlock with a queued backup', async () => {
@@ -155,6 +166,9 @@ test('claim: heal jobs go first, are site-scoped, block their own site and never
   // While A's restart runs, a backup of A waits; site B's work and other servers are unaffected.
   const backupA = queueJob(a);
   assert.notEqual(db.prepare(CLAIMABLE_JOB_SQL).get()?.id, backupA);
+  const editA = queueJob(a, { type: 'site-edit', status: 'edit_queued' });
+  assert.notEqual(db.prepare(CLAIMABLE_JOB_SQL).get()?.id, editA, 'a running restart holds a Safe Edit of its site');
+  db.prepare('DELETE FROM jobs WHERE id=?').run(editA);
   await executeJob({ ...first, status: 'heal_running' });
   db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id IN (?,?)").run(at(), backupB, olderBackup);
   // Queued heal plus queued backup for the same site: the heal yields (skipped), then the backup is claimed.
