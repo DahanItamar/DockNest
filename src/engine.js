@@ -564,17 +564,29 @@ export function tickScheduler(currentDate=new Date()){
   }catch{audit('scheduler','schedule.invalid',policy.site_id,{});}
  }
 }
+// Self-heal registers its claim-time check here (src/self-heal/engine.js), keeping this module free of a circular import.
+// It runs inside claimJob's BEGIN IMMEDIATE for a heal_queued job and returns null (start it) or a reason code; a job
+// that steps aside is finished as skipped by `skip`, and the next claimable job is considered at once.
+export const claimHooks={};
 export function claimJob(){
+ for(let attempt=0;attempt<20;attempt++){
  db.exec('BEGIN IMMEDIATE');
  try{
   // A job occupies its target (or its site's) server and, for a site move, also its source server. A started restore
   // test holds its test server (src/restore-tests/hold.js) for every job but its own steps. Restore test steps go
-  // after every other queued job, so backups go first.
+  // after every other queued job, so backups go first. Self-heal restarts are site-scoped and go first (src/job-claim.js).
   const job=db.prepare(CLAIMABLE_JOB_SQL).get();
-  // Site-move and restore-test jobs use their own statuses so a release without them (for example after a rollback)
-  // never claims them as backups, and its startup never turns them into recovery work.
+  if(job?.status==='heal_queued'){
+   // Fail closed: without the self-heal module loaded, a restart is never started.
+   const reason=claimHooks.heal?claimHooks.heal.check(job):'unavailable';
+   if(reason){if(claimHooks.heal)claimHooks.heal.skip(job,reason);else db.prepare("UPDATE jobs SET status='completed',stage='skipped',finished_at=? WHERE id=? AND status='heal_queued'").run(now(),job.id);db.exec('COMMIT');continue;}
+  }
+  // Site-move, restore-test and self-heal jobs use their own statuses so a release without them (for example after a
+  // rollback) never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.
-  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' ELSE 'running' END,stage=CASE status WHEN 'test_queued' THEN stage ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
+  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'heal_queued' THEN 'heal_running' ELSE 'running' END,stage=CASE status WHEN 'test_queued' THEN stage WHEN 'heal_queued' THEN 'restarting' ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
+ }
+ return null;
 }

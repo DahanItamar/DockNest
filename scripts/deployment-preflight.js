@@ -3,7 +3,8 @@ const mode=process.argv[2]||'check';
 try{
  if(!['check','hold','release'].includes(mode))throw new Error('Invalid mode');
  const result=transaction(()=>{
-  const pending=db.prepare("SELECT status,COUNT(*) AS count FROM jobs WHERE status IN ('queued','running','recovery_required') GROUP BY status").all();
+  // Self-heal restarts (heal_queued/heal_running, 2.15.0) count too: the upgrade and downgrade wait lets them finish.
+  const pending=db.prepare("SELECT status,COUNT(*) AS count FROM jobs WHERE status IN ('queued','running','recovery_required','heal_queued','heal_running') GROUP BY status").all();
   const artifacts=db.prepare("SELECT COUNT(*) AS count FROM artifact_operations WHERE state IN ('prepared','authenticated')").get().count;
   const deletions=db.prepare('SELECT COUNT(*) AS count FROM retention_operations').get().count;
   const reconciliation=JSON.parse(db.prepare("SELECT value FROM settings WHERE key='artifact_reconciliation'").get()?.value||'{}');
