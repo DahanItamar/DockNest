@@ -230,6 +230,17 @@ CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERE
 CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
+// The latest certificate facts per site (src/alerts/certificates.js) and which alert each one already gave.
+// not_after: ISO time, NULL when a probe only learned that the certificate has expired. renewal: certbot's newest outcome;
+// renewal_failed_at: when the failed run happened, so a later failure alerts again.
+const siteCertificatesSchema = `
+CREATE TABLE IF NOT EXISTS site_certificates (site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,source TEXT NOT NULL CHECK (source IN ('tls','certbot')),name TEXT NOT NULL CHECK (length(name) <= 255),serial TEXT CHECK (serial IS NULL OR length(serial) <= 64),not_after TEXT,expired INTEGER NOT NULL DEFAULT 0 CHECK (expired IN (0,1)),renewal TEXT CHECK (renewal IS NULL OR renewal IN ('ok','failed')),renewal_failed_at TEXT,checked_at TEXT NOT NULL,alerted_not_after TEXT,alerted_stage TEXT CHECK (alerted_stage IS NULL OR alerted_stage IN ('expiring','expired')),renewal_alerted INTEGER NOT NULL DEFAULT 0 CHECK (renewal_alerted IN (0,1)));
+`;
+// Hardening score per site (docs/hardening-score.md): the latest container configuration facts for each site, as cleaned
+// JSON (booleans, port bindings, image reference, capability names; never environment values). One additive table.
+export const hardeningSchema = `
+CREATE TABLE IF NOT EXISTS site_hardening (site_id TEXT PRIMARY KEY REFERENCES sites(id),checked_at TEXT NOT NULL,facts TEXT NOT NULL CHECK (length(facts) <= 262144));
+`;
 // Safe Edit (docs/safe-edit.md, "Data model"). Additive only: new tables, indexes and triggers, no rows, nothing altered.
 // - site_edits: one append-only row per edit. `changes` holds field paths, environment key names and file hashes, never a
 //   value; `progress` holds the step machine's non-secret position. The partial unique index keeps one unfinished edit
@@ -296,13 +307,19 @@ export const migrations = [
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
   { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
-  // Reserved for 2.14.0's migration (built in parallel): a no-op so versions stay contiguous. The 2.14 merge replaces
-  // this line with the real migration 13; only pre-release databases ever ran the placeholder.
-  { version: 13, name: 'reserved-2.14', compatible: true, up: () => {} },
+  // Certificate alerts (docs/alerts.md, "Certificates"): one new table, nothing altered, so 2.13 code ignores it.
+  // Purely additive: renumber before release if another migration lands first.
+  { version: 13, name: 'site-certificates', compatible: true, up: db => db.exec(siteCertificatesSchema) },
+  // Hardening score (docs/hardening-score.md): one new table, so 2.13 code ignores it. Purely additive: renumber before
+  // release if another migration lands first.
+  { version: 14, name: 'site-hardening', compatible: true, up: db => db.exec(hardeningSchema) },
+  // Pre-release 2.15 databases ran a no-op placeholder 13 and Safe Edit and self-heal as 14 and 15, so they skip 13 and 14
+  // above. Both statements are CREATE ... IF NOT EXISTS, so 15 and 16 first make sure 2.14's tables exist (a no-op on
+  // every released database). No release ever shipped the placeholder.
   // Safe Edit (docs/safe-edit.md): new tables, indexes and triggers only, so 2.14 code ignores them.
-  { version: 14, name: 'safe-edits', compatible: true, up: db => db.exec(safeEditsSchema) },
+  { version: 15, name: 'safe-edits', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(safeEditsSchema); } },
   // Self-heal (docs/self-heal.md): new tables, an index and triggers only, so 2.14 code ignores them.
-  { version: 15, name: 'self-heal', compatible: true, up: db => db.exec(selfHealSchema) },
+  { version: 16, name: 'self-heal', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(selfHealSchema); } },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

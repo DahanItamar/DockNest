@@ -52,6 +52,14 @@ try{
   if(width===2560){await app.navigate('Audit');await shot(app.page,'audit-2560-'+side);await app.navigate('Overview');await shot(app.page,'overview-2560-'+side);await app.navigate('Sites & schedules');await shot(app.page,'sites-2560-'+side);await app.navigate('Jobs');await shot(app.page,'jobs-2560-'+side);}
   assert.deepEqual(app.errors,[]);await app.close();
  }
+ // Site card footers: every tool and the button stay fully inside the card at 3-column desktop widths and on a phone.
+ for(const [width,height] of [[390,900],[900,900],[1024,900],[1280,900],[1440,900],[1920,1100]]){
+  const app=await open(width,height);await app.navigate('Sites & schedules');
+  const boxes=await app.page.evaluate(()=>[...document.querySelectorAll('.site-card')].map(card=>{const c=card.getBoundingClientRect(),parts=[...card.querySelectorAll('.site-card-actions .icon-button,.site-card-actions .primary')].map(el=>el.getBoundingClientRect());return {left:c.left,right:c.right,parts:parts.map(r=>({left:r.left,right:r.right}))}}));
+  assert.ok(boxes.length>0,'site cards render at '+width);
+  for(const card of boxes)for(const part of card.parts)assert.ok(part.left>=card.left&&part.right<=card.right,`site card footer control inside the card at ${width}: ${JSON.stringify({card:[card.left,card.right],part})}`);
+  await app.close();
+ }
  // 11: Overview metrics: 3 columns x 2 rows at every desktop width, edges aligned.
  for(const [width,height] of [[1024,900],[1440,1000],[1920,1100],[2560,1300],[3840,1600]]){
   const app=await open(width,height);

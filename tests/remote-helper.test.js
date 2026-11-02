@@ -49,8 +49,28 @@ test('Safe Edit helper gates privilege, keeps env values out of argv, journals b
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Safe Edit helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('server cleanup protects sites, backups, restore tests, moves, old copies and DockNest, and removes only previewed items by ID',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_cleanup.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for server cleanup helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('certificate facts come only from public certificate files, certbot renewal outcomes and verified probes, and never fail an operation',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_certificates.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for certificate helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('copies keep the original read-only root, dropped capabilities and security options, or refuse with a reason',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_hardening.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for copy hardening verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('the helper source keeps shared state in common.py and builds into one helper.py that loads in a safe order',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_bundle.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('hardening facts: privileged, socket, root, ports, limits, image pin, healthcheck, capabilities and no secrets',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_hardening_score.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for hardening helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });

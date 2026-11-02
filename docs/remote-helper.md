@@ -27,6 +27,7 @@ remote/
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
+│   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
 │   ├── edit.py             Safe Edit: load, gate, journal, data safety copy, atomic writes, apply, health poll, rollback (docs/safe-edit.md)
 │   ├── heal.py             self-heal: health event stream, health-check lookup, guarded restart
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
@@ -42,7 +43,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (15 modules)"]
+  subgraph Source["remote/helper/ (16 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -90,7 +91,7 @@ classDiagram
     atomic_json() complete_recovery()
   }
   class main["__main__"] {
-    main(req) dispatch of 52 operations
+    main(req) dispatch of 54 operations
     move_lock() stop_after_stdin()
     restore-chain entry point
   }

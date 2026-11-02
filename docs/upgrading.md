@@ -5,7 +5,7 @@ releases ignore move jobs but cannot continue or undo a move.
 
 Before rolling back to 2.8.x or older, finish or cancel every automatic restore test and its clean-up ([restore-tests-guide.md](restore-tests-guide.md)). Older releases ignore test jobs and cannot continue a test or clean up its copy on the test server. The test server's safety timer removes leftovers in that case, but it is better to see "Clean up" finish first. Releases from 2.9.0 add new tables only (migration 9, `compatible: true`), so older releases run on the upgraded database. Restore test settings and history stay in the database and show again after you upgrade.
 
-Before rolling back to 2.14.x or older, let every Safe Edit finish ([safe-edit-guide.md](safe-edit-guide.md)), including one that needs attention. Older releases cannot see Safe Edit jobs, so they could neither finish nor roll back a change. `scripts/upgrade.sh` refuses such a downgrade while an edit is unfinished (and when it cannot check), and its wait for running work counts Safe Edit and self-heal steps. Releases from 2.15.0 add new tables only (migration 14, `compatible: true`), so older releases run on the upgraded database.
+Before rolling back to 2.14.x or older, let every Safe Edit finish ([safe-edit-guide.md](safe-edit-guide.md)), including one that needs attention. Older releases cannot see Safe Edit jobs, so they could neither finish nor roll back a change. `scripts/upgrade.sh` refuses such a downgrade while an edit is unfinished (and when it cannot check), and its wait for running work counts Safe Edit and self-heal steps. Releases from 2.15.0 add new tables only (migrations 15 and 16, `compatible: true`), so older releases run on the upgraded database.
 
 This page covers upgrades and rollbacks for a server installed with `git clone`, `scripts/setup.js` and `docker compose up -d --build`. It also lists what stays stable between versions.
 
@@ -229,7 +229,7 @@ plain packages and restore on 2.11 as before. To recover a format 2 backup witho
 
 Safe Edit (beta) is new in 2.15. Nothing changes for existing sites until an administrator saves a change:
 
-- Migration 14 (compatible) only adds tables: the edit history, its steps, and the Compose invocation recorded per
+- Migration 15 (compatible) only adds tables: the edit history, its steps, and the Compose invocation recorded per
   site. For sites that existed before, DockNest derives that invocation once from the Compose labels Docker keeps on
   the containers, the first time someone opens Safe Edit for the site.
 - Existing alert lines do not gain the two new events (Change undone, Change needs you); add them on the Map if you
@@ -240,6 +240,12 @@ Safe Edit (beta) is new in 2.15. Nothing changes for existing sites until an adm
 **Going back to 2.14.** Let every Safe Edit finish first. `scripts/upgrade.sh` refuses the downgrade while one is
 unfinished. If a server was left mid-edit anyway, it keeps its journal under `/var/lib/docknest/edits/`, and the next
 2.15 start rolls the change back.
+
+## Self-heal in 2.15
+
+Self-heal is new in 2.15 and is off for every site ([self-heal-guide.md](self-heal-guide.md)). Migration 16
+(compatible) only adds its settings and history tables. Going back to 2.14 ignores them and any queued restart, which
+then never runs; `scripts/upgrade.sh` waits for a running restart like for any other job.
 
 ## Protected mounts are no longer copied (2.11.1)
 

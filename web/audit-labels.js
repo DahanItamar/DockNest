@@ -8,7 +8,7 @@ const ACTIONS={
  'backup.enqueue':'Backup queued','backup.completed':'Backup completed','backup.failed':'Backup failed','site.storage_update':'Site storage changed','backup.pin':'Backup pin changed','backup.download':'Backup downloaded','backup.download_zip':'Backup downloaded as zip',
  'backup.scrub.enqueue':'Integrity check queued','backup.scrub.completed':'Integrity check completed','backup.scrub.failed':'Integrity check failed',
  'restore.enqueue':'Restore queued','restore.completed':'Restore completed','restore.failed':'Restore failed',
- 'server.create':'Server added','server.update':'Server updated','server.details_updated':'Server details updated','server.test':'Server tested','server.connected':'Server connected','server.key_prepared':'Server key prepared',
+ 'server.create':'Server added','server.update':'Server updated','server.details_updated':'Server details updated','server.test':'Server tested','server.connected':'Server connected','server.key_prepared':'Server key prepared','server.cleanup':'Server cleaned up',
  'site.create':'Site added','site.update':'Site updated','site.removed':'Site removed','policy.update':'Schedule updated',
  'storage.connected':'Storage connected','storage.selected':'Storage selected','storage.test':'Storage tested',
  'maintenance.design':'Maintenance page designed','maintenance.set':'Maintenance mode changed',

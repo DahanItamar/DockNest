@@ -579,14 +579,15 @@ test('reason codes: busy, build failure and an unhealthy start report fixed code
   assert.deepEqual([status.reason, status.schemaFrom, status.schemaTo], ['health-timeout-api', 0, 2]);
 });
 
-// Safe Edit (docs/safe-edit.md, security review item 9): a release before migration 14 cannot see an unfinished edit.
+// Safe Edit (docs/safe-edit.md, security review item 9): a release before migration 15 cannot see an unfinished edit.
+// 2.14.0 (schema 14: site-certificates 13, site-hardening 14) is such a release.
 test('a downgrade to a release before Safe Edit is refused while an edit is unfinished or cannot be checked; upgrades never ask', { skip: !shell }, async t => {
   const f = await fixture(t), origin = join(f.root, 'origin');
-  await writeFile(join(origin, 'package.json'), pkg('2.3.0', '2.0.0')); await writeFile(join(origin, 'src/migrations.js'), migrations([1, -2, -14]));
+  await writeFile(join(origin, 'package.json'), pkg('2.3.0', '2.0.0')); await writeFile(join(origin, 'src/migrations.js'), migrations([1, -2, -15]));
   git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'v2.3.0'); git(origin, 'tag', 'v2.3.0');
   await writeFile(join(f.state, 'open-edits'), '1\n'); // an upgrade does not look at edits at all
   let result = f.run('--version', 'v2.3.0');
-  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await f.read('schema'), '14');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await f.read('schema'), '15');
   result = f.run('--version', 'v2.1.0');
   assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /A Safe Edit has not finished on 1 site\. 2\.1\.0 cannot see it/);
   assert.equal((await f.status()).reason, 'jobs-did-not-finish'); assert.equal(f.head(), 'v2.3.0'); assert.notEqual(await f.read('hold'), 'true');

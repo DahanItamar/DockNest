@@ -5,7 +5,7 @@ import { classify } from './addresses.js';
 import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
 export const SOURCE_KINDS = Object.freeze(['docknest', 'server', 'site']);
 // Disk threshold: low when more than 90 percent is used or less than 5 GB is free.
 export const DISK_USED_PERCENT = 90;
@@ -27,6 +27,7 @@ const timeOf = (iso, timeZone = 'UTC') => {
 };
 const clock = (iso, timeZone) => { const time = timeOf(iso, timeZone); return time ? ` at ${time}` : ''; };
 const gb = formatBytes;
+const daysText = value => { const days = Math.max(0, Math.floor(Number(value) || 0)); return days === 0 ? 'less than a day' : days === 1 ? '1 day' : `${days} days`; };
 
 // event: { type, at, siteName?, serverName?, targetName?, destinationName?, detail?, version?, freeBytes?, usedPercent?, key, siteId?, serverId? }
 // destinationName: the storage destination's name as the owner typed it (backup copies), never a host or bucket.
@@ -55,6 +56,11 @@ export function messageFor(event) {
     case 'backup.copy_failed': return `Backup copy failed: ${site} to ${clean(event.destinationName, 'the copy destination')}${when}. DockNest retries automatically.`;
     case 'backup.copy_recovered': return `Backup copy saved: ${site} to ${clean(event.destinationName, 'the copy destination')}${when}.`;
     case 'backup.copy_gave_up': return `Backup copy stopped: ${site} to ${clean(event.destinationName, 'the copy destination')} failed for 7 days${when}. Open DockNest to retry it.`;
+    // Certificates (docs/alerts.md, "Certificates"): {site} is the site the certificate serves.
+    case 'certificate.expiring':
+      if (event.code === 'expired') return `Certificate expired: ${site}. Visitors see a security warning. Renew it now.`;
+      return `Certificate expires soon: ${site} in ${daysText(event.daysLeft)}. Renew it before visitors see a warning.`;
+    case 'certificate.renewal_failed': return `Certificate renewal failed: ${site} on ${server}. Check certbot on the server.`;
     // Safe Edit (docs/safe-edit.md): changed field names and reasons stay in DockNest; the alert names the site only.
     case 'edit.rolled_back': return `Change undone: ${site} on ${server}${when} did not come up, so the previous version is back. Open DockNest to see why.`;
     case 'edit.needs_you': return `Change needs you: ${site} on ${server}${when} could not be put back by itself and stays behind the maintenance page. Open DockNest.`;
@@ -81,9 +87,9 @@ export function ruleMatches(rule, event) {
 // - reason: one fixed sentence from the reasons catalogue (reasons.js), keyed by event type and `event.code` / `event.detail`.
 // - time: the event's time of day in its time zone, for example "03:00 UTC" ('' for events without one).
 // - url: the job deep link, only when APP_ORIGIN is not a loopback address (no link a phone cannot open).
-const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'edit.rolled_back': 'Change undone', 'edit.needs_you': 'Change needs you', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped' };
+const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'certificate.expiring': 'Certificate expires soon', 'certificate.renewal_failed': 'Certificate renewal failed', 'edit.rolled_back': 'Change undone', 'edit.needs_you': 'Change needs you', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped' };
 const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
-const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
+const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
 const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you']);
 export const loopbackOrigin = origin => {
   try { const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return host === 'localhost' || host.endsWith('.localhost') || (isIP(host) !== 0 && classify(host) === 'refused'); } catch { return true; }
@@ -96,9 +102,9 @@ export function jobLink(jobId, origin = config.origin) {
 export function templateFor(event, { origin = config.origin } = {}) {
   const at = event.at ?? new Date().toISOString();
   if (event.type === 'move.finished' && !event.detail) event = { ...event, detail: 'completed' };
-  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : TITLES[event.type];
+  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : event.type === 'certificate.expiring' && event.code === 'expired' ? 'Certificate expired' : TITLES[event.type];
   if (!title) return null;
-  const reason = reasonFor(event.type, event.code ?? event.detail, { target: clean(event.targetName, 'the new server'), version: event.type === 'update.available' ? clean(event.version, 'update') : '', destination: clean(event.destinationName, 'the copy destination'), free: event.freeBytes === undefined ? '' : gb(event.freeBytes), used: Math.round(Number(event.usedPercent) || 0) });
+  const reason = reasonFor(event.type, event.code ?? event.detail, { target: clean(event.targetName, 'the new server'), version: event.type === 'update.available' ? clean(event.version, 'update') : '', destination: clean(event.destinationName, 'the copy destination'), free: event.freeBytes === undefined ? '' : gb(event.freeBytes), used: Math.round(Number(event.usedPercent) || 0), days: event.type === 'certificate.expiring' ? daysText(event.daysLeft) : '' });
   return {
     title, site: siteEvents.has(event.type) ? clean(event.siteName) : '', server: serverEvents.has(event.type) ? clean(event.serverName, 'your server') : '', reason,
     time: timed.has(event.type) ? timeOf(at, event.timeZone) : '', url: event.type === 'test' ? null : jobLink(event.jobId, origin), event: event.type, at,

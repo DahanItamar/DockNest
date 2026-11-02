@@ -334,6 +334,42 @@ test('an unreachable server is retried only while its stream is connected, so a 
   } finally { connectedServers.all = true; connectedServers.set.clear(); }
 });
 
+test('2.14 and 2.15 exclusivity together: a server cleanup holds restarts and Safe Edit steps; restarts and edits hold installs and cleanups', async () => {
+  const { takeCleanupHold, releaseCleanupHold } = await import('../src/cleanup-hold.js');
+  const { busyReason } = await import('../src/server-cleanup.js');
+  const installs = await import('../src/installs.js');
+  const f = fixture('cross');
+  unhealthy(f);
+  const heal = db.prepare("SELECT id FROM jobs WHERE site_id=? AND status='heal_queued'").get(f.siteId).id;
+  const edit = queueJob(siteRow(f.serverId, 'cross-edit'), { type: 'site-edit', status: 'edit_queued' });
+  assert.equal(takeCleanupHold(f.serverId, 'admin', () => null), null);
+  try {
+    assert.equal(db.prepare(CLAIMABLE_JOB_SQL).get(), undefined, 'neither a restart nor a Safe Edit step starts during a cleanup');
+    assert.ok(!claimJob({ healOnly: true }));
+  } finally { releaseCleanupHold(f.serverId); }
+  assert.equal(db.prepare(CLAIMABLE_JOB_SQL).get().id, heal, 'after the cleanup the restart goes first');
+  // Active restarts and edit steps make a cleanup wait, with a plain reason.
+  assert.ok(busyReason(f.serverId));
+  db.prepare("UPDATE jobs SET status='edit_waiting' WHERE id=?").run(edit);
+  db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), heal);
+  assert.equal(busyReason(f.serverId), 'A Safe Edit is running on this server.', 'also between health polls');
+  db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), edit);
+  const running = queueJob(f.siteId, { type: 'self-heal', status: 'heal_running' });
+  assert.equal(busyReason(f.serverId), 'A self-heal restart is running on this server.');
+  db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), running);
+  assert.equal(busyReason(f.serverId), null);
+  // A running restart or Safe Edit step (also between health polls) holds a package install on its server.
+  const installId = randomUUID();
+  db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES(?,?,'docker','queued','queued','[]','admin',?)").run(installId, f.serverId, at());
+  for (const status of ['heal_running', 'edit_running', 'edit_waiting']) {
+    const job = queueJob(f.siteId, { type: status.startsWith('heal') ? 'self-heal' : 'site-edit', status });
+    assert.equal(installs.claimInstall(), undefined, `${status} holds the install`);
+    db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), job);
+  }
+  assert.equal(installs.claimInstall()?.id, installId);
+  db.prepare("UPDATE server_installs SET status='completed' WHERE id=?").run(installId);
+});
+
 // ---------- streams ----------
 class FakeChannel extends EventEmitter {
   constructor() { super(); this.stderr = new EventEmitter(); this.written = ''; this.closed = false; }

@@ -624,13 +624,14 @@ test('use case: a provider down for hours: three tries, then failed; one that as
 
 // ---- Template, reasons, deep link ------------------------------------------------------------------------------------
 test('template: every event has a title, a catalogue reason, the names the owner typed and the job link; unknown codes give the generic sentence', () => {
-  const base = { at: '2026-10-27T03:00:00Z', siteName: 'shop', serverName: 'srv', targetName: 'new-srv', jobId: 'job-0001-aaaa', version: '2.10.0', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4 };
+  const base = { at: '2026-10-27T03:00:00Z', siteName: 'shop', serverName: 'srv', targetName: 'new-srv', jobId: 'job-0001-aaaa', version: '2.10.0', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4, daysLeft: 5 };
   const expected = {
     'backup.failed': ['Backup failed', 'The backup did not finish. Open DockNest to see why.'], 'backup.succeeded': ['Backup finished', 'The backup finished.'], 'move.finished': ['Move finished', 'The site now runs on new-srv.'],
     'move.needs_you': ['Move waiting for you', 'The move needs your decision. Open DockNest to continue.'], 'server.unreachable': ['Server unreachable', 'The server has not answered. Open DockNest to check it.'], 'server.disk_low': ['Low disk space', '2.1 GB free, 95% used. Open DockNest to review.'],
     'restore_test.failed': ['Restore test failed', 'The restore test failed. Open DockNest to see why.'], 'restore_test.couldnt_run': ["Restore test couldn't run", 'The restore test could not run. Open DockNest to see why.'], 'restore_test.recovered': ['Restore test passed again', 'The restore test passed again.'],
     'restore_test.needs_you': ['Restore test needs you', 'A restore test could not clean up its test server. Open DockNest to check it.'], 'update.available': ['Update available', 'DockNest 2.10.0 is available. Open DockNest to update.'],
     'backup.copy_failed': ['Backup copy failed', 'The copy to the copy destination did not finish. DockNest retries automatically.'], 'backup.copy_recovered': ['Backup copy saved', 'The copy to the copy destination is saved now.'], 'backup.copy_gave_up': ['Backup copy stopped', 'DockNest stopped retrying the copy to the copy destination after 7 days. Open DockNest to retry it.'],
+    'certificate.expiring': ['Certificate expires soon', 'The certificate expires in 5 days. Renew it before visitors see a warning.'], 'certificate.renewal_failed': ['Certificate renewal failed', 'certbot could not renew the certificate. Check certbot on the server before it expires.'],
     'edit.rolled_back': ['Change undone', 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.'], 'edit.needs_you': ['Change needs you', 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.'],
     'self_heal.restarted': ['Container restarted', 'A container failed its health check and DockNest restarted it.'], 'self_heal.gave_up': ['Self-heal stopped', 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.'],
   };

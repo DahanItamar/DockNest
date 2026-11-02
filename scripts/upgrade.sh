@@ -198,11 +198,11 @@ floor_of() { grep -E '^ *\{ *version: *[0-9]+,' | grep -v 'compatible: true' | s
 schema_at() { git_ show "$1:src/migrations.js" 2>/dev/null | schema_of; }
 package_field() { git_ show "$1:package.json" | sed -n "s/^ *\"$2\": *\"\([^\"]*\)\".*/\1/p" | head -n 1; }
 in_data() { script=$1; shift; docker compose run --rm --no-deps -T --entrypoint /bin/sh worker -ec "$script" sh "$@"; }
-# Unfinished Safe Edits (docs/safe-edit.md): rows of site_edits without a result; 0 before migration 14 created the table.
+# Unfinished Safe Edits (docs/safe-edit.md): rows of site_edits without a result; 0 before migration 15 created the table.
 open_edits() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});const t=d.prepare("SELECT 1 FROM sqlite_master WHERE type=? AND name=?").get("table","site_edits");console.log(t?d.prepare("SELECT COUNT(*) AS n FROM site_edits WHERE result IS NULL").get().n:0);d.close()' 2>/dev/null | tail -n 1; }
-# Safe Edit (security review item 9): a release before migration 14 cannot see an unfinished edit and would never finish
+# Safe Edit (security review item 9): a release before migration 15 cannot see an unfinished edit and would never finish
 # or roll it back, so going back to one is refused until every edit has finished. Checked before and again after the hold.
-EDIT_SCHEMA=14
+EDIT_SCHEMA=15
 refuse_open_edits() {
   [ "${TARGET_SCHEMA:-0}" -lt "$EDIT_SCHEMA" ] && [ "${DB_SCHEMA:-0}" -ge "$EDIT_SCHEMA" ] || return 0
   count=$(open_edits)

@@ -17,7 +17,7 @@ const LONG='Night shift on-call rotation for the very long named European datace
 const state={servers:[{id:'fr',name:'Frankfurt-1',host:'fra.example.invalid',port:22,username:'root',status:'connected'}],sites:[{id:'s1',name:'cinderbean.com',serverId:'fr',config:{containers:[1,2]}}],jobs:[{id:'job-0001-aaaa',siteId:'s1',type:'backup',status:'failed',stage:'capture',createdAt:ago(36e5),details:{}}],backups:[],policies:[],audit:[],storage:{used:0,total:1e12},worker:{online:true},alertsAccess:true};
 const db={};
 function seed(kind='normal'){
- Object.assign(db,{connections:[],seq:1,needReauth:false,testError:null,calls:[],settings:{allowPrivateNetwork:false,operatorsManage:true},legacyChanged:false,role:'admin',access:true});
+ Object.assign(db,{connections:[],seq:1,needReauth:false,testError:null,calls:[],settings:{allowPrivateNetwork:false,operatorsManage:true,certificateDays:14},legacyChanged:false,role:'admin',access:true});
  if(kind==='empty')return;
  const c=(provider,name,values,extra={})=>db.connections.push({id:'c'+(db.seq++),provider,name,values,secretReadable:true,usedBy:[],createdAt:ago(9e8),updatedAt:ago(9e8),lastTest:null,lastTestAt:null,lastSend:null,lastSendAt:null,testError:null,sendError:null,editable:true,...extra});
  if(kind==='many'){for(let i=0;i<55;i++)c('telegram',`Ops bot ${String(i+1).padStart(2,'0')}`,{tokenSet:true,chatId:'-100'+i});return}
@@ -160,6 +160,18 @@ async function emptyAndList(scheme){
  await page.locator('.cx-settings').getByLabel('Password').fill('pw');await page.locator('.cx-settings').getByLabel('Authenticator code').fill('123456');await page.locator('.cx-settings').getByRole('button',{name:'Verify and continue'}).click();
  await page.waitForFunction(()=>document.querySelector('[role=switch][aria-labelledby="cx-operators"]').getAttribute('aria-checked')==='false');
  assert.ok(db.calls.some(c=>c[0]==='settings'&&c[1]==='{"operatorsManage":false}'));
+ // Certificate warning (2.14): 1 to 90 days; Save is off until a valid change, then sends only that setting
+ const days=page.getByLabel('Certificate warning'),save=page.locator('.cx-days-row').getByRole('button',{name:'Save'});
+ assert.equal(await days.inputValue(),'14');assert.equal(await save.isDisabled(),true);
+ await days.fill('0');await page.locator('.cx-settings').getByText('Enter 1 to 90.').waitFor();assert.equal(await save.isDisabled(),true);assert.equal(await days.getAttribute('aria-invalid'),'true');
+ assert.equal(await page.locator('.cx-days-error svg').count(),1,'the error line has the shared error icon');
+ await days.focus();assert.equal(await days.evaluate(el=>getComputedStyle(el).boxShadow),'none','no second ring on an invalid field in focus');
+ await days.fill('30');await page.waitForFunction(()=>!document.querySelector('.cx-days-row button').disabled);
+ const daysHeights=await page.locator('.cx-days-control').evaluate(el=>[...el.querySelectorAll('input,button')].map(x=>Math.round(x.getBoundingClientRect().height)));
+ assert.equal(daysHeights[0],daysHeights[1],'the days field and Save are the same height');
+ await save.click();await page.waitForFunction(()=>document.querySelector('.cx-days-row button').disabled&&document.querySelector('#cx-cert-days').value==='30');
+ assert.ok(db.calls.some(c=>c[0]==='settings'&&c[1]==='{"certificateDays":30}'));
+ await shot(page,`connections-settings-1440-${scheme}`);
  assert.deepEqual(offOrigin,[],'off-origin requests');
  await context.close();
 }
@@ -260,6 +272,11 @@ async function phone(scheme){
  const cells=await page.locator('tbody tr').first().locator('td').evaluateAll(t=>t.map(td=>getComputedStyle(td,'::before').content));
  assert.deepEqual(cells,['"Name"','"Provider"','"Used by"','"Last test"','"Actions"'],'each value keeps its label on a phone');
  await shot(page,`connections-390-${scheme}`);
+ // The certificate warning row stacks on a phone and still fits
+ const row=await page.locator('.cx-days-row').boundingBox(),control=await page.locator('.cx-days-control').boundingBox();
+ assert.ok(control.y>=row.y+20&&control.x+control.width<=390,'days and Save sit under the label on a phone');
+ await page.locator('.cx-days-row').scrollIntoViewIfNeeded();await shot(page,`connections-settings-390-${scheme}`);
+ await page.evaluate(()=>scrollTo(0,0));
  await page.getByRole('button',{name:'New connection'}).first().click();const d=dialog(page);await d.waitFor();await pickProvider(d,'WhatsApp');
  const r=await d.boundingBox();assert.ok(Math.abs(r.y+r.height-844)<=1&&Math.abs(r.width-390)<=1,'a bottom sheet');
  for(const bt of await d.locator('.modal-foot button').all())assert.ok((await bt.boundingBox()).height>=44,'44 px buttons');
