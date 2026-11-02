@@ -45,8 +45,10 @@ a service or renaming the project ("Remove it by hand"). Adding a service is all
 2. **Backup.** A normal, verified backup of the site.
 3. **Prepare.** Copies of the current files and the current image IDs are kept on the server; new images are pulled.
    Each previous image is held by a stopped placeholder container (`docknest-edit-hold-…`, never started, outside
-   the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. The site keeps
-   running during the pull.
+   the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. `docker
+   container prune` and `docker system prune` do remove these placeholders (they are stopped containers); avoid them
+   while a change runs. If they were removed and the old image is gone, a rollback fails closed: the change needs
+   attention and the site stays behind the maintenance page. The site keeps running during the pull.
 4. **Apply.** The maintenance page goes on, the files are written, and the services start with the new version.
 5. **Check health.** Every service that ran before runs, is healthy where it has a health check, still runs after 60
    seconds, and the site's health URL (if set) answers. Time limit: 2 minutes, 1 to 10 in Advanced.
@@ -109,6 +111,14 @@ DockNest refuses a change with one plain reason when it would:
 - remove a service;
 - use YAML that cannot be checked safely as text: an escaped or complex (`?`) key, a top-level `<<` merge or flow
   mapping that the file did not already have, or any new `include`, `extends` or `file` key.
+- add `&`, `*` or `!` at the start of a word (after a space, a bracket or a comma), anywhere in a Compose file,
+  including inside quotes: in YAML these can start an anchor, an alias or a tag, which DockNest does not try to
+  read. This also refuses a newly added shell `&&`, a `*` glob or a `!` after a space in a command; put such
+  commands in a script the container runs, or edit the file by hand. Ones the file already has stay allowed.
+- add characters outside plain ASCII to a Compose file (letters with accents, other scripts, emoji, invisible
+  characters): "The change adds characters that cannot be checked safely." Characters the file already has may stay.
+  Environment values typed in the Environment tab are not Compose text and may use any characters except line breaks,
+  so non-ASCII passwords work there.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."
 If it changes while the backup runs, the change stops before anything is written: "The files changed during the

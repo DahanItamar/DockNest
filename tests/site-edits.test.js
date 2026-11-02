@@ -550,13 +550,15 @@ test('apply failures: an unknown write state goes through edit-status; pre-write
 
 test('the data copy kept flag follows the journal: apply failed after the copy, then the rollback failed', async () => {
   const { siteId } = site();
-  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true });
-  answers['edit-rollback'] = () => ({ ok: false, code: 'ROLLBACK_FAILED', dataCopy: true });
+  // The helper reports the size it journalled at apply; the larger one sets the rollback's call limit.
+  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true, dataBytes: 9 * 1024 ** 3 });
+  answers['edit-rollback'] = () => ({ ok: false, code: 'ROLLBACK_FAILED', dataCopy: true, dataBytes: 1024 });
   const editId = await apply(siteId);
   await drive(30);
   const detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
   assert.equal(detail.state, 'needs_attention'); assert.equal(detail.dataCopyKept, true); assert.equal(detail.dataCopyNote, 'A safety copy of the data is kept on the server.');
   assert.equal(edit(editId).progress.dataRestored, undefined, 'nothing claims the data came back');
+  assert.equal(edit(editId).progress.dataBytes, 9 * 1024 ** 3, 'the larger of the review and apply sizes is kept');
 });
 
 test('a failed pull ends the edit before anything is written; the pre-change backup failing does too', async () => {

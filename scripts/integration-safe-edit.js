@@ -233,24 +233,42 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   }
 
   // ---------- the server becomes unreachable after the candidate is written: rolled back once it answers again ----------
+  // drive() awaits each job, so the SSH port is blocked by a concurrent watcher while edit-apply is still running. The
+  // candidate adds a service the web service waits for (healthy after about 25 s), which keeps `compose up` busy long
+  // enough; a lowered edit-apply limit makes the call end as unreachable, so the engine enters recovery.
   {
-    change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken'));
+    change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken')
+      .replace('    restart: unless-stopped\n', '    restart: unless-stopped\n    depends_on:\n      slowgate:\n        condition: service_healthy\n')
+      .replace('volumes:\n  data: {}\n', '  slowgate:\n    image: edit-app:1.0\n    command: ["sh","-c","sleep 25; touch /tmp/ready; exec python /app/app.py"]\n    healthcheck:\n      test: ["CMD","test","-f","/tmp/ready"]\n      interval: 2s\n      retries: 30\nvolumes:\n  data: {}\n'));
     ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
     const journalState = async () => { try { return JSON.parse(await sh(`cat /var/lib/docknest/edits/${editId}/journal.json`)).state; } catch { return null; } };
-    let blocked = false, unblocked = false;
-    row = await drive(editId, undefined, { minutes: 20, during: async current => {
-      if (!blocked && current.progress.applyStarted && ['candidate_written', 'applied'].includes(await journalState())) {
-        blocked = true; await sh('iptables -I INPUT -p tcp --dport 22 -j DROP');
+    const limit = se.editTiming.callSeconds['edit-apply'];
+    se.editTiming.callSeconds['edit-apply'] = 20;
+    let blocked = false, unblocked = false, watching = true;
+    const watcher = (async () => {
+      while (watching && !blocked) {
+        if (await journalState() === 'candidate_written') { await sh('iptables -I INPUT -p tcp --dport 22 -j DROP'); blocked = true; break; }
+        await sleep(250);
       }
-      if (blocked && !unblocked && current.progress.phase === 'recover' && (current.progress.attempts ?? 0) >= 1) {
-        unblocked = true; await sh('iptables -D INPUT -p tcp --dport 22 -j DROP');
-      }
-    } }).finally(() => sh('iptables -D INPUT -p tcp --dport 22 -j DROP 2>/dev/null || true'));
-    assert.ok(blocked && unblocked, 'SSH was blocked after the write and opened again');
+    })();
+    try {
+      row = await drive(editId, undefined, { minutes: 20, during: async current => {
+        if (blocked && !unblocked && current.progress.phase === 'recover' && (current.progress.attempts ?? 0) >= 1) {
+          unblocked = true; await sh('iptables -D INPUT -p tcp --dport 22 -j DROP');
+        }
+      } });
+    } finally {
+      watching = false; await watcher.catch(() => {});
+      se.editTiming.callSeconds['edit-apply'] = limit;
+      await sh('iptables -D INPUT -p tcp --dport 22 -j DROP 2>/dev/null || true');
+    }
+    assert.ok(blocked, 'SSH was blocked while edit-apply ran, after the candidate was written');
+    assert.ok(unblocked, 'SSH opened again after a failed edit-status retry');
     assert.equal(row.result, 'rolled_back', row.reason ?? '');
     assert.equal(row.reason, 'The server could not be reached during the change, so it was undone.');
     assert.equal(await inspect('editshop-web-1', '{{.Config.Image}}'), 'edit-app:1.1');
-    record('Safe Edit unreachable server: SSH blocked after the candidate was written; DockNest retried edit-status and rolled back once the server answered');
+    assert.equal((await sh("docker ps -a --filter label=com.docker.compose.project=editshop --filter label=com.docker.compose.service=slowgate -q")).trim(), '', 'the added service is removed');
+    record('Safe Edit unreachable server: SSH blocked while edit-apply ran after the write; the call ended as unreachable, DockNest retried edit-status and rolled back once the server answered');
   }
 
   // ---------- Docker Compose older than 2.24 is refused at review ----------

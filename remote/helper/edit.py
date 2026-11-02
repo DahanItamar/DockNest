@@ -105,6 +105,8 @@ EDIT_REASONS={
     'DATA_COPY_SPACE':'Not enough free disk space for the safety copy.',
     'DATA_TOO_LARGE':'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
     'DATA_UNREADABLE':'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+    'EXTRA_BYTES':'The change adds characters that cannot be checked safely. Use plain ASCII or edit by hand.',
+    'NODE_PROPERTY':'Compose text adds &, * or ! where an anchor, alias or tag could start. Change this line by hand.',
     'YAML_REFUSED':'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
     'DATA_NOT_LOCAL':'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
     'OWN_SITE':'This is DockNest itself. Change it with the DockNest upgrade, not Safe Edit.',
@@ -350,33 +352,87 @@ def edit_env_edits(req,files):
     return grouped
 
 # ---- Compose resolution (item 3) ----
+# Optional YAML node properties before a key: a tag (!!str), an anchor (&a) or an alias (*a). New ones are refused below;
+# the key patterns still see through the ones a file already has.
+EDIT_KEY_PROPS=r'(?:[!&*][^\s]*[ \t]+)*'
 def edit_text_includes(text):
-    match=re.search(r'(?m)^["\']?include["\']?[ \t]*:.*(?:\n(?:[ \t#].*|)$)*',text)
+    match=re.search(r'(?m)^'+EDIT_KEY_PROPS+r'["\']?include["\']?[ \t]*:.*(?:\n(?:[ \t#].*|)$)*',text)
     return match[0].strip() if match else None
-EDIT_FILE_VALUE=re.compile(r'(?m)(?:^|[\s{,\-])["\']?file["\']?[ \t]*:[ \t]*([^\n,}#]*)')
+EDIT_FILE_VALUE=re.compile(r'(?m)(?:^|[\s{,\-])'+EDIT_KEY_PROPS+r'["\']?file["\']?[ \t]*:[ \t]*([^\n,}#]*)')
 # Raw-text guards (security review B4): constructs a regex cannot read reliably are refused when the candidate adds
 # them, and so is any new include / extends / file key, in any quoting or position. Counted against the original
 # file, so what a site already has keeps working; the path checks below still validate what remains.
+EDIT_ESCAPED_KEY=re.compile(r'"(?:[^"\\\n]|\\.)*\\(?:[^"\\\n]|\\.)*"[ \t]*:')
 EDIT_RAW_PATTERNS={
-    'escaped-key':re.compile(r'"(?:[^"\\\n]|\\.)*\\(?:[^"\\\n]|\\.)*"[ \t]*:'),
     'complex-key':re.compile(r'(?m)^[ \t]*(?:-[ \t]+)?\?(?:[ \t]|$)'),
     'top-level-merge':re.compile(r"(?m)^[\"']?<<[\"']?[ \t]*:"),
     'top-level-flow':re.compile(r'(?m)\A(?:[ \t]*(?:#.*)?\n)*[ \t]*(?:---[ \t]*\n(?:[ \t]*(?:#.*)?\n)*)?\{'),
 }
-EDIT_REFERENCE_KEY=re.compile(r"(?im)(?:^[ \t]*(?:-[ \t]+)?(?:\?[ \t]+)?|[{,][ \t]*|\?[ \t]+)[\"']?(include|extends|file)[\"']?[ \t]*(?::|$)")
+# A mapping key include / extends / file (Compose keys are lower case): at the start of a line or list item, after { or
+# a comma in flow style, or as a ? complex key; quoted or not; with or without node properties. An environment key FILE
+# or a list item that is just the word "file" is not a key.
+EDIT_REFERENCE_KEY=re.compile(r"(?m)(?:(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*:|\?[ \t]+"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*$)")
+# Line breaks YAML honours but these line-based checks do not see (security review delta: bare CR, NEL, LS, PS).
+EDIT_HIDDEN_BREAKS=re.compile('\r(?!\n)|[\u0085\u2028\u2029]')
+# Quote-agnostic (security review re-check): YAML quoting is never parsed. Every token that could start an anchor (&),
+# an alias (*) or a tag (!) after whitespace or a flow indicator counts, inside quotes and block scalars too. A token the
+# candidate has more often than the original is refused, so new shell `&&`, `*` globs and `!` after a space are refused
+# as well (the guide says to put such commands in a script or edit by hand). Tokens the file already has stay allowed.
+EDIT_PROPERTY_TOKEN=re.compile(r'(?m)(?:^|[\s\[\]{},:])([&*!][^\s\[\]{},]*)')
+# An alias used as a mapping key, at the start of a line or list item or inside a flow mapping.
+EDIT_ALIAS_KEY=re.compile(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(\*\S+)[ \t]*:')
+def edit_extra_bytes(original,candidate):
+    """Fail-closed byte allow-list (final B4 guard): printable ASCII, tab, LF and the CR of a CRLF are always allowed; any
+    other byte value (all non-ASCII UTF-8 included) only as often as the original has it. True when the candidate adds one."""
+    def counts(text):
+        data=text.encode('utf-8');found={}
+        for i,b in enumerate(data):
+            if 0x20<=b<=0x7e or b in (0x09,0x0a) or (b==0x0d and data[i+1:i+2]==b'\n'):continue
+            found[b]=found.get(b,0)+1
+        return found
+    before=counts(original)
+    return any(n>before.get(b,0) for b,n in counts(candidate).items())
+def edit_invisible(text):
+    """Every format (Cf: BOM, zero-width, bidi) or control (C*) character except tab, newline and the CR of a CRLF, as
+    a sorted list: a candidate may only keep the ones its original has (a file that starts with a BOM keeps working)."""
+    import unicodedata
+    found=[]
+    for i,c in enumerate(text):
+        if c in '\t\n' or (c=='\r' and text[i+1:i+2]=='\n'):continue
+        if unicodedata.category(c).startswith('C'):found.append(c)
+    return sorted(found)
+def edit_yaml_properties(text):
+    """Every &, * or ! token after whitespace or a flow indicator, as a sorted list (quotes are not interpreted)."""
+    return sorted(EDIT_PROPERTY_TOKEN.findall(text))
+def edit_new(before,after):
+    """Items of `after` (a list) not in `before`, counting repeats."""
+    remaining=list(before);extra=[]
+    for item in after:
+        if item in remaining:remaining.remove(item)
+        else:extra.append(item)
+    return extra
+def edit_without_bom(text):return text[1:] if text.startswith('\ufeff') else text
 def edit_raw_problems(original,candidate):
     original=original or ''
+    if edit_extra_bytes(original,candidate):edit_refuse('YAML_REFUSED','bytes',EDIT_REASONS['EXTRA_BYTES'])
+    if EDIT_HIDDEN_BREAKS.search(candidate):edit_refuse('YAML_REFUSED','line-break')
+    if edit_new(edit_invisible(original),edit_invisible(candidate)):edit_refuse('YAML_REFUSED','invisible')
+    # A BOM the original already starts with must not hide the first key from the ^-anchored checks below: one leading
+    # U+FEFF is set aside on both sides (a BOM the candidate adds was refused above by the byte and invisible checks).
+    original,candidate=edit_without_bom(original),edit_without_bom(candidate)
+    # Escaped keys: the exact set must stay as it is (not only their number).
+    if sorted(EDIT_ESCAPED_KEY.findall(candidate))!=sorted(EDIT_ESCAPED_KEY.findall(original)):edit_refuse('YAML_REFUSED','escaped-key')
     for name,pattern in EDIT_RAW_PATTERNS.items():
         if len(pattern.findall(candidate))>len(pattern.findall(original)):edit_refuse('YAML_REFUSED',name)
-    before={};after={}
-    for token in EDIT_REFERENCE_KEY.findall(original):before[token.lower()]=before.get(token.lower(),0)+1
-    for token in EDIT_REFERENCE_KEY.findall(candidate):after[token.lower()]=after.get(token.lower(),0)+1
-    for token,count in after.items():
-        if count>before.get(token,0):edit_refuse('PATH_REFUSED',token)
+    if edit_new(EDIT_ALIAS_KEY.findall(original),EDIT_ALIAS_KEY.findall(candidate)):edit_refuse('YAML_REFUSED','alias-key')
+    if edit_new(edit_yaml_properties(original),edit_yaml_properties(candidate)):edit_refuse('YAML_REFUSED','node-property',EDIT_REASONS['NODE_PROPERTY'])
+    keys=lambda text:[a or b for a,b in EDIT_REFERENCE_KEY.findall(text)]
+    for token in edit_new(keys(original),keys(candidate)):edit_refuse('PATH_REFUSED',token)
 def edit_text_problems(original,candidate,inv,roots):
     """Before any Compose call: a candidate may not add an include block, nor a new `file:` reference (extends,
     secrets, configs) that leaves the site's folders or is interpolated, anchored or protected."""
     edit_raw_problems(original,candidate)
+    original,candidate=edit_without_bom(original or ''),edit_without_bom(candidate)
     if edit_text_includes(candidate) and edit_text_includes(candidate)!=edit_text_includes(original or ''):edit_refuse('PATH_REFUSED','include')
     before={v.strip() for v in EDIT_FILE_VALUE.findall(original or '')}
     for raw in EDIT_FILE_VALUE.findall(candidate):
@@ -748,13 +804,14 @@ def edit_project_resources(inv):
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):found[kind]=None
     return found
 def edit_holder_name(edit_id,service):
-    return 'docknest-edit-hold-%s-%s'%(edit_id[:8],re.sub(r'[^a-zA-Z0-9_.-]','-',str(service))[:40] or 's')
+    return 'docknest-edit-hold-%s-%s'%(edit_id,edit_sha(str(service).encode())[:10])
 def edit_hold_images(edit_id,journal,inv):
     """A created, never started container per journalled image ID: Docker never prunes an image a container uses.
     Outside the Compose project (its labels are overridden), so --remove-orphans and project listings never see it."""
     for service,item in (journal.get('images') or {}).items():
         name=edit_holder_name(edit_id,service)
-        if not item.get('id') or name in journal['holders']:continue
+        if not item.get('id'):edit_refuse('FAILED')  # an image DockNest cannot hold is never left unprotected
+        if name in journal['holders']:continue
         try:edit_docker('create','--name',name,'--label','docknest.edit.hold='+edit_id,'--label','com.docker.compose.project=','--label','com.docker.compose.service=','--network','none','--entrypoint','/docknest-edit-hold',item['id'],inv=inv)
         except subprocess.CalledProcessError:
             if edit_holder_image(name,inv)!=item['id']:raise
@@ -764,7 +821,7 @@ def edit_holder_image(name,inv):
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,OSError,IndexError):return None
 def edit_release_holders(edit_id,journal,inv):
     for name in list(journal.get('holders') or []):
-        try:edit_docker('rm','-f',name,inv=inv)
+        try:edit_docker('rm','-f','-v',name,inv=inv)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
 def edit_remove_temporaries(edit_id,journal):
     """Temporary files an interrupted atomic write left next to the site's files."""
@@ -832,6 +889,7 @@ def edit_data_size(sets,limit=EDIT_DATA_SCAN_LIMIT):
         while stack:
             current=stack.pop()
             try:entries=list(os.scandir(current))
+            except FileNotFoundError:continue
             except OSError:edit_refuse('DATA_UNREADABLE')
             for entry in entries:
                 count+=1
@@ -839,6 +897,7 @@ def edit_data_size(sets,limit=EDIT_DATA_SCAN_LIMIT):
                 path=posixpath.join(current,entry.name)
                 if edit_skip(path,s['exclude']):continue
                 try:st=entry.stat(follow_symlinks=False)
+                except FileNotFoundError:continue
                 except OSError:edit_refuse('DATA_UNREADABLE')
                 total+=st.st_size
                 if stat.S_ISDIR(st.st_mode):stack.append(path)
@@ -1387,6 +1446,13 @@ def edit_status(req,edit_id,site,roots,inv):
     emit(result={'ok':True,'journal':True,'files':files,'maintenance':on,'state':journal.get('state'),'dataCopy':(edit_dir(edit_id)/'data').is_dir()})
 EDIT_HANDLERS={'edit-load':edit_load,'edit-check':edit_check,'edit-prepare':edit_prepare,'edit-apply':edit_apply,'edit-poll':edit_poll,
     'edit-rollback':edit_rollback,'edit-finish':edit_finish,'edit-status':edit_status}
+def edit_copy_facts(edit_id):
+    """What a failed apply or rollback reports about the data safety copy: whether it is on disk and its journalled size."""
+    facts={'dataCopy':(edit_dir(edit_id)/'data').is_dir()}
+    try:size=(edit_journal(edit_id) or {}).get('dataBytes')
+    except Exception:size=None
+    if isinstance(size,int):facts['dataBytes']=size
+    return facts
 def edit_id_ok(req):return isinstance(req.get('editId'),str) and bool(EDIT_UUID.fullmatch(req['editId']))
 def edit_operation(req,watch=None):
     """Entry point for every edit-* op: validate, take the site lock, run, answer with one result line."""
@@ -1401,7 +1467,7 @@ def edit_operation(req,watch=None):
         EDIT_HANDLERS[op](req,edit_id,site,roots,inv)
     except EditRefused as refused:
         extra={}
-        if op in ('edit-rollback','edit-apply') and edit_id_ok(req):extra['dataCopy']=(edit_dir(req['editId'])/'data').is_dir()
+        if op in ('edit-rollback','edit-apply') and edit_id_ok(req):extra=edit_copy_facts(req['editId'])
         emit(result={'ok':False,'code':refused.code,'reason':refused.reason,**({'field':refused.field[:200]} if refused.field else {}),**extra})
     except Exception as error:
         # Never str(error): Docker output, paths and values stay on the server.
@@ -1409,7 +1475,7 @@ def edit_operation(req,watch=None):
         # Out of space while preparing (pulls) is DISK_FULL. Anywhere else (apply, rollback) it is a plain failure: the
         # candidate may be on disk, so the edit goes through edit-status and rollback, and the journal is kept.
         code='DISK_FULL' if op=='edit-prepare' and isinstance(error,OSError) and error.errno==errno.ENOSPC else 'ROLLBACK_FAILED' if op=='edit-rollback' else 'FAILED'
-        extra={'dataCopy':(edit_dir(req['editId'])/'data').is_dir()} if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
+        extra=edit_copy_facts(req['editId']) if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
         emit(result={'ok':False,'code':code,'reason':EDIT_REASONS[code],**extra})
     finally:
         if lock:lock.close()
