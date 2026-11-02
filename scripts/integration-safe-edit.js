@@ -85,7 +85,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   assert.doesNotMatch(await sh('ls /var/lib/docknest/edits 2>/dev/null || true'), new RegExp(editId), 'finish removes the journal');
   record('Safe Edit 1: an image tag upgrade takes a backup, pulls before the maintenance page, comes up healthy and keeps the old image ID until a prune');
 
-  // ---------- 2 + 9. image change whose health check fails, after it migrated its data: rolled back, data restore ----------
+  // ---------- 2 + 9. image change with a database migration on start, then failing health: data rolled back in place ----------
   const beforeText = await cat('/srv/editshop/compose.yaml'), beforeSha = await fileSha('/srv/editshop/compose.yaml'), beforeImage = await imageId('editshop-web-1');
   await run('exec', host, 'docker', 'exec', 'editshop-web-1', 'python', '-c', "import sqlite3;d=sqlite3.connect('/site/database.sqlite');d.execute('UPDATE records SET value=?',('before-edit',));d.commit()");
   change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:migrate'));
@@ -96,10 +96,11 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   assert.equal(await cat('/srv/editshop/compose.yaml'), beforeText);
   assert.equal(await imageId('editshop-web-1'), beforeImage, 'the previous image ID runs again');
   assert.equal(await inspect('editshop-web-1', '{{.State.Running}}'), 'true');
-  const restoreJob = db.prepare("SELECT status FROM jobs WHERE type='restore' AND site_id=? ORDER BY created_at DESC LIMIT 1").get(shop);
-  assert.equal(restoreJob?.status, 'completed', 'the pre-change backup was restored through the normal restore');
-  assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='restore.enqueue' AND actor=?").get('edit:' + editId));
-  record('Safe Edit 2/9: an image change that migrated its data and then failed its health check is rolled back (files byte-identical, old image ID running) and the pre-change backup is restored');
+  // The data came back in place from the safety copy: the value the failed version migrated is gone.
+  assert.equal(await run('exec', host, 'docker', 'exec', 'editshop-web-1', 'python', '-c', "import sqlite3;print(sqlite3.connect('/site/database.sqlite').execute('SELECT value FROM records').fetchone()[0])"), 'before-edit');
+  assert.ok(!db.prepare("SELECT 1 FROM jobs WHERE type='restore' AND site_id=?").get(shop), 'no isolated restore is used for the data rollback');
+  assert.doesNotMatch(await sh('ls /var/lib/docknest/edits 2>/dev/null || true'), new RegExp(editId), 'finish removed the journal and the safety copy');
+  record('Safe Edit 2/9: an image change that migrated its data on start and then failed its health check is rolled back in place: files byte-identical, old image ID running, data back from the safety copy, copy removed');
 
   // ---------- 3. an environment value that makes the app exit after 20 s: fails at stability ----------
   const crashCompose = 'services:\n  web:\n    image: edit-app:1.0\n    env_file: [app.env]\n    command: ["sh","-c","python /app/app.py & if [ \\"$$CRASH\\" = yes ]; then sleep 20; exit 1; fi; wait"]\n    ports:\n      - "127.0.0.1:8302:8080"\n';
@@ -203,7 +204,10 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   assert.equal(row.reason, 'The previous version could not be put back. The site stays behind the maintenance page.');
   const maintenanceDirectory = siteInfo(shop).site.config.maintenance.directory;
   assert.equal(await sh(`test -e '${maintenanceDirectory}/enabled' && echo on || echo off`), 'on', 'the maintenance page stays on');
-  record('Safe Edit 7: a rollback that fails (journal corrupted) leaves the site behind the maintenance page and the edit needs attention');
+  assert.equal(await sh(`test -d /var/lib/docknest/edits/${editId}/data && echo kept || echo gone`), 'kept', 'a failed rollback keeps the data safety copy');
+  const { detailOf } = await import('../src/site-edits/views.js');
+  assert.equal(detailOf(editId).dataCopyNote, 'A safety copy of the data is kept on the server.');
+  record('Safe Edit 7: a rollback that fails (journal corrupted) leaves the site behind the maintenance page and the edit needs attention; the data safety copy is kept and the edit says so');
   // Restore backup from needs-attention ends the edit; then put the site back for the next checks.
   await se.restoreSiteEditBackup(editId, userId);
   row = await drive(editId, current => current.result !== null, { minutes: 15 });

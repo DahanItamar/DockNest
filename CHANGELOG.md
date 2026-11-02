@@ -6,7 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
-- Safe Edit (beta): administrators can change a site's Compose file, environment values, published ports and image tag from DockNest. Saving takes a backup first, shows the maintenance page, applies the change and checks the site comes up. If it does not, DockNest puts the previous version back by itself; when the image changed it also restores the backup taken before the change, through the normal (isolated) restore. Environment values are write-only: never shown, stored or logged. See [docs/safe-edit-guide.md](docs/safe-edit-guide.md).
+- Safe Edit (beta): administrators can change a site's Compose file, environment values, published ports and image tag from DockNest. Saving takes a backup first, shows the maintenance page, applies the change and checks the site comes up. If it does not, DockNest puts the previous version back by itself. When the image changed, it also puts the data back in place from a safety copy it made on the server just before the change (the copy is removed afterwards). Environment values are write-only: never shown, stored or logged. See [docs/safe-edit-guide.md](docs/safe-edit-guide.md).
 - Two alert events: **Change undone** and **Change needs you**. Existing alert lines do not gain them.
 
 ### Changed

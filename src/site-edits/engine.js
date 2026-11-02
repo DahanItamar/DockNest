@@ -134,7 +134,6 @@ function advance(edit) {
   }
   if (phase === 'backup') { advanceBackup(edit, job); return; }
   if (phase === 'attention') { advanceAttention(edit); return; }
-  if (phase === 'data_restore_wait') { advanceDataRestore(edit); return; }
   if (job && job.status !== 'edit_waiting') return;
   // The deployment hold pauses work that has not touched the server yet; started changes always finish.
   if (phase === 'prepare' && !p.prepareStarted && deploymentHeld(db)) return;
@@ -175,11 +174,6 @@ function advanceAttention(edit) {
   const status = restoreJobState(edit.progress.restoreJobId);
   if (status === 'completed') { edit.progress.restoredBackup = true; conclude(edit, 'failed', { failedStep: edit.failed_step ?? 'roll_back', reason: SAY.restoredBackup }); }
   else if (status && !['queued', 'running'].includes(status)) save(edit, { restoreJobId: null, restoreFailed: true });
-}
-function advanceDataRestore(edit) {
-  const status = restoreJobState(edit.progress.restoreJobId);
-  if (status === 'completed') { moveTo(edit, 'rollback_health', { dataRestored: true, restoreJobId: null, windowStartedAt: clock(), nextPollAt: clock() }); return; }
-  if (status && !['queued', 'running'].includes(status)) { save(edit, { restoreJobId: null }); goAttention(edit, 'roll_back', SAY.dataRestoreFailed); }
 }
 
 // ---------- helper calls ----------
@@ -278,6 +272,8 @@ const RUNNERS = {
     finally { db.prepare("UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE id=?").run(job.id); }
     if (!failure && answer?.ok !== true) failure = { kind: 'remote', code: helperCode(answer?.code) };
     if (failure?.kind === 'unreachable') { moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'unreachable' }); return; }
+    // Not enough room for the data safety copy: refused before any write (the helper starts a stopped site again at finish).
+    if (failure?.code === 'DISK_FULL') { atomic(() => { setStep(edit.id, 'apply', 'failed', SAY.dataCopySpace); goFinish(edit, 'failed', { failedStep: 'apply', reason: SAY.dataCopySpace }); }); return; }
     if (failure) {
       // FILE_CHANGED: nothing of the candidate stays on disk (the helper restored the originals or never wrote), and a
       // hand edit made meanwhile must not be overwritten by a rollback: the edit ends, the maintenance page goes off.
@@ -290,7 +286,7 @@ const RUNNERS = {
       return;
     }
     const at = clock();
-    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at }); });
+    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at, dataCopy: answer.dataCopy === true, ...(Number.isSafeInteger(answer.dataBytes) ? { dataBytes: answer.dataBytes } : {}) }); });
   },
   check_health: (edit, ctx) => poll(edit, ctx, 'check_health'),
   rollback_health: (edit, ctx) => poll(edit, ctx, 'rollback_health'),
@@ -308,14 +304,8 @@ const RUNNERS = {
       goAttention(edit, 'roll_back', SAY.rollbackFailed); return;
     }
     const at = clock();
-    if (edit.data_rollback && edit.backup_id && !edit.progress.dataRestored) moveTo(edit, 'data_restore', { rolledBack: true });
-    else moveTo(edit, 'rollback_health', { rolledBack: true, windowStartedAt: at, helperStartedAt: at / 1000, nextPollAt: at });
-  },
-  async data_restore(edit) {
-    try {
-      const queued = await editTransport.enqueueRestore(edit.backup_id, { serverId: edit.server_id, mode: 'new-copy' }, 'edit:' + edit.id);
-      atomic(() => { moveTo(edit, 'data_restore_wait', { restoreJobId: queued.id }); setStep(edit.id, 'roll_back', 'running', 'Restoring data from the backup taken before the change.'); });
-    } catch { goAttention(edit, 'roll_back', SAY.dataRestoreFailed); }
+    // With data_rollback the helper also put the data sets back from its safety copy, in place (owner decision).
+    moveTo(edit, 'rollback_health', { rolledBack: true, dataRestored: !!(edit.data_rollback && edit.progress.dataCopy), windowStartedAt: at, helperStartedAt: at / 1000, nextPollAt: at });
   },
   async finish(edit, ctx) {
     setStep(edit.id, 'finish', 'running');
@@ -435,17 +425,21 @@ async function helperRead(server, request, { refusalIsAnswer = false } = {}) {
 }
 
 // Reasons a tab is not usable, by the helper's code. Unknown codes get a general sentence.
-const TAB_REASONS = Object.freeze({ AMBIGUOUS: 'Edit this in Compose.', NO_COMPOSE: 'This site has no Compose file to edit.', NO_ENV: 'This site has no environment file.', SERVICE_FROZEN: REASONS.SERVICE_FROZEN, COMPOSE_TOO_OLD: REASONS.COMPOSE_TOO_OLD, FILE_TOO_LARGE: REASONS.FILE_TOO_LARGE, IMAGE_FROM_ENV: 'This image is set in Environment. Edit it there.' });
+const TAB_REASONS = Object.freeze({ EDIT_IN_COMPOSE: 'Edit this in Compose.', AMBIGUOUS: 'Edit this in Compose.', NO_COMPOSE: 'This site has no Compose file to edit.', NO_ENV: 'This site has no environment file.', SERVICE_FROZEN: REASONS.SERVICE_FROZEN, COMPOSE_TOO_OLD: REASONS.COMPOSE_TOO_OLD, FILE_TOO_LARGE: REASONS.FILE_TOO_LARGE, IMAGE_FROM_ENV: 'This image is set in Environment. Edit it there.' });
 const str = (value, max = 512) => (typeof value === 'string' ? value.slice(0, max) : '');
+// Compose reports published ports as text ("8080"); a range or a ${VAR} is not one number.
+const portNumber = value => { const number = typeof value === 'string' && /^\d{1,5}$/.test(value) ? Number(value) : value; return Number.isInteger(number) && number >= 1 && number <= 65535 ? number : null; };
+// Where the guided Ports and Image tabs make their text edit: one line (1-based) of one of the site's Compose files.
+const location = value => (value && typeof value.file === 'string' && Number.isInteger(value.line) && value.line >= 1 ? { file: value.file, line: value.line } : null);
 function normalizeLoad(answer) {
   // A file the helper could not read (too large, not UTF-8, missing) comes with text and sha256 null; the Compose tab
   // then says why. Such a file cannot be part of a review.
   const files = (Array.isArray(answer?.files) ? answer.files : []).filter(file => typeof file?.path === 'string').map(file => ({ path: file.path, inode: Number.isFinite(file.inode) ? file.inode : null, sha256: /^[0-9a-f]{64}$/.test(file.sha256 ?? '') ? file.sha256 : null, text: typeof file.text === 'string' && /^[0-9a-f]{64}$/.test(file.sha256 ?? '') ? file.text : null }));
   const env = (Array.isArray(answer?.env) ? answer.env : []).filter(item => typeof item?.file === 'string').map(item => ({ file: item.file, keys: (Array.isArray(item.keys) ? item.keys : []).filter(key => typeof key === 'string' && ENV_KEY.test(key)).map(key => ({ key, set: true })) }));
-  const services = (Array.isArray(answer?.services) ? answer.services : []).filter(item => typeof item?.name === 'string').map(item => ({ name: str(item.name, 128), image: str(item.image), ports: (Array.isArray(item.ports) ? item.ports : []).map(port => ({ host: Number.isInteger(port?.host) ? port.host : null, container: Number.isInteger(port?.container) ? port.container : null, protocol: port?.protocol === 'udp' ? 'udp' : 'tcp', hostIp: str(port?.hostIp, 64) })), frozen: !!item.frozen, healthcheck: !!item.healthcheck }));
+  const services = (Array.isArray(answer?.services) ? answer.services : []).filter(item => typeof item?.name === 'string').map(item => ({ name: str(item.name, 128), image: str(item.image), ports: (Array.isArray(item.ports) ? item.ports : []).map(port => ({ host: portNumber(port?.host), container: portNumber(port?.container), protocol: port?.protocol === 'udp' ? 'udp' : 'tcp', hostIp: str(port?.hostIp, 64), at: location(port?.at), ...(helperCode(port?.reason) ? { reason: helperCode(port.reason) } : {}) })), frozen: !!item.frozen, healthcheck: !!item.healthcheck, imageAt: location(item.imageAt), imageReason: helperCode(item.imageReason), imageVariable: typeof item.imageVariable === 'string' && ENV_KEY.test(item.imageVariable) ? item.imageVariable : null }));
   const usable = Object.fromEntries(['compose', 'env', 'ports', 'image'].map(tab => [tab, !!answer?.usable?.[tab]]));
   const reasons = {};
-  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); reasons[tab] = { code: known ?? 'UNAVAILABLE', message: TAB_REASONS[known] ?? (known && Object.hasOwn(REASONS, known) ? REASONS[known] : 'Not available for this site.') }; }
+  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); { const variable = tab === 'image' && known === 'IMAGE_FROM_ENV' && typeof answer?.variables?.image === 'string' && ENV_KEY.test(answer.variables.image) ? answer.variables.image : null; reasons[tab] = { code: known ?? 'UNAVAILABLE', message: variable ? `Edit ${variable} in Environment.` : TAB_REASONS[known] ?? (known && Object.hasOwn(REASONS, known) ? REASONS[known] : 'Not available for this site.'), ...(variable ? { variable } : {}) }; } }
   return { files, env, services, usable, reasons, composeVersion: str(answer?.composeVersion, 32) || null };
 }
 
@@ -507,14 +501,16 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   const newPorts = (Array.isArray(verdict.newPorts) ? verdict.newPorts : []).filter(port => Number.isInteger(port?.host)).map(port => ({ host: port.host, allAddresses: !!port.allAddresses }));
   const imageChanged = !!verdict.imageChanged, reviewedModelSha256 = str(verdict.reviewedModelSha256, 64);
   if (!/^[0-9a-f]{64}$/.test(reviewedModelSha256)) throw httpError(422, 'COMPOSE_INVALID', REASONS.COMPOSE_INVALID);
+  const dataBytes = imageChanged && Number.isSafeInteger(verdict.dataBytes) && verdict.dataBytes >= 0 ? verdict.dataBytes : null;
   const tabs = tabsUsed({ files: changedFiles, env: envChanges, changed: [...changed, ...(containerChanges?.image ? ['container.image'] : []), ...(containerChanges?.ports ? ['container.ports'] : [])] });
   const healthChecks = loaded.services.some(service => service.healthcheck), healthUrl = !!ctx.site.config.healthUrl;
   const warnings = [];
   for (const port of newPorts) if (port.allAddresses) warnings.push({ code: 'PUBLIC_PORT', port: port.host, message: `Port ${port.host} is reachable from the internet.` });
   const secretKeys = [...new Set(changedFiles.flatMap(file => inlineSecretKeys(file.text)))];
   if (secretKeys.length) warnings.push({ code: 'INLINE_SECRETS', keys: secretKeys.slice(0, 20), message: 'Move secrets to Environment: they are safer there.' });
+  if (dataBytes !== null && dataBytes >= 1024 ** 3) warnings.push({ code: 'LARGE_DATA_COPY', bytes: dataBytes, message: 'The safety copy of the data is large, so the change takes longer and needs that much free disk space.' });
   if (!healthChecks && !healthUrl) warnings.push({ code: 'NO_HEALTH_CHECK', message: 'This site has no health check or health URL, so only "running and stable" counts.' });
-  const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
+  const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, dataBytes, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
   const diff = reviewDiff({ originals: loaded.files, files: changedFiles, env: envChanges.map(entry => ({ ...entry, existed: existing.get(entry.file).has(entry.key) })) });
   const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })) };
   const meta = { invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged }), imageChanged };
