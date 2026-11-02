@@ -59,8 +59,15 @@ LAUNCH_MIN_COMPOSE=(2,24)
 # Item 14: the BuildKit image of the launch's own builder, pinned by digest (v0.34.1, multi-arch index).
 LAUNCH_BUILDKIT_IMAGE='moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c'
 LAUNCH_BUILD_KEYS={'context','dockerfile','args','target','labels','platforms'}
+LAUNCH_SYNTAX=re.compile(r'(?:docker\.io/)?docker/dockerfile(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-f]{64})?')
+LAUNCH_RUN_FLAGS={'network':{'default','none'},'security':{'sandbox'}}
 LAUNCH_HOST_KEY_TYPES=('ssh-ed25519','ecdsa-sha2-nistp256','ecdsa-sha2-nistp384','ecdsa-sha2-nistp521','ssh-rsa')
-LAUNCH_METADATA=frozenset(ipaddress.ip_address(a) for a in ('169.254.169.254','fd00:ec2::254','100.100.100.200'))
+# Never fetched from, even with "Allow private address": the alert outbound policy's refused list (src/alerts/addresses.js):
+# unspecified, loopback, link-local and cloud metadata, special-use, documentation and benchmark, 6to4 relay, the Alibaba
+# metadata, Tailscale resolver and Azure host endpoints, multicast and reserved, AWS's IPv6 block, Teredo, ORCHID.
+LAUNCH_REFUSED_NETS=tuple(ipaddress.ip_network(n) for n in ('0.0.0.0/8','127.0.0.0/8','169.254.0.0/16','192.0.0.0/24','192.0.2.0/24','198.51.100.0/24','203.0.113.0/24','198.18.0.0/15','192.88.99.0/24',
+    '100.100.100.200/32','100.100.100.100/32','168.63.129.16/32','224.0.0.0/4','240.0.0.0/4','fd00:ec2::/32','2001::/32','2001:2::/48','2001:10::/28','2001:20::/28','2001:db8::/32','3fff::/20','::/128','::1/128','fe80::/10','ff00::/8'))
+LAUNCH_PRIVATE_NETS=tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','100.64.0.0/10','fc00::/7','fec0::/10'))
 LAUNCH_KINDS=('paths','keys','images','builders','containers','volumes','networks','nginx','certificates')
 LAUNCH_HEADER='# Managed by DockNest launch %s;'
 LAUNCH_REASONS={
@@ -96,6 +103,10 @@ LAUNCH_REASONS={
     'COMPOSE_TOO_LARGE':'The Compose file is larger than 256 KB.',
     'COMPOSE_INVALID':'Docker Compose could not read the Compose file.',
     'COMPOSE_INCLUDE_REFUSED':'The Compose file includes other Compose files, which DockNest cannot check.',
+    'COMPOSE_EXTENDS_REFUSED':'The Compose file uses extends, which DockNest cannot check. Write the settings out.',
+    'COMPOSE_FLOW_REFUSED':'Write the Compose file as YAML blocks, not as one JSON or flow mapping.',
+    'BUILD_IMAGE_REFUSED':'A service that is built must use an image name of its own (starting with the site name, no registry).',
+    'BIND_COVERS_SECRETS':'A service mounts the site folder, its .env or its Compose file with write access. Mount it read-only.',
     'COMPOSE_TOO_OLD':'Update Docker Compose to 2.24 or newer.',
     'COMPOSE_TOOL_MISSING':'The server needs Docker Compose 2.24 or newer. Install it, then try again.',
     'PATH_REFUSED':'The folder /srv/docknest on the server goes through a symbolic link.',
@@ -147,9 +158,21 @@ class LaunchRefused(Exception):
         super().__init__(code);self.code=code
 def launch_refuse(code):raise LaunchRefused(code)
 def launch_answer(result):emit(result={'ok':True,**result})
+LAUNCH_CHECK_STALE=15*60
+def launch_clean_checks():
+    """Check folders (they may hold a deploy key file for ls-remote) left by a helper that was killed before its finally
+    ran are removed by the next launch operation. A check takes at most a few minutes, so older ones are never in use."""
+    try:entries=list(os.scandir(LAUNCH_ROOT))
+    except OSError:return
+    for entry in entries:
+        try:
+            if entry.name.startswith('check-') and entry.is_dir(follow_symlinks=False) and time.time()-entry.stat(follow_symlinks=False).st_mtime>LAUNCH_CHECK_STALE:shutil.rmtree(entry.path,ignore_errors=True)
+        except OSError:pass
 def launch_entry(req,body):
     """Every launch operation runs through here: refusals and unexpected errors become {ok: false, code, reason}."""
-    try:body(req)
+    try:
+        launch_clean_checks()
+        body(req)
     except LaunchRefused as error:emit(result={'ok':False,'code':error.code,'reason':LAUNCH_REASONS.get(error.code,LAUNCH_REASONS['FAILED'])})
     except Exception as error:
         # Only the exception type leaves the helper: exception text may hold paths or command output.
@@ -191,29 +214,55 @@ def launch_kill_group(process):
             except OSError:pass
         try:process.wait(timeout=20);return
         except subprocess.TimeoutExpired:pass
-def launch_watch(argv,env,timeout,folder=None,limit=None,cwd=None):
+def launch_proc_start(pid):
+    """The kernel start time of a process (field 22 of /proc/<pid>/stat), so a recorded group is never confused with a
+    later process that reused the number. None where /proc is missing."""
+    try:return int(pathlib.Path('/proc/%d/stat'%pid).read_text().rsplit(')',1)[1].split()[19])
+    except (OSError,ValueError,IndexError):return None
+def launch_kill_recorded(journal):
+    """End process groups a step recorded and did not clear (worker restart, killed helper). Only a group whose leader
+    still has the recorded start time is signalled."""
+    killed=[]
+    for item in list(journal.get('children') or []):
+        pgid=item.get('pgid') if isinstance(item,dict) else None
+        if isinstance(pgid,int) and pgid>1 and item.get('start') is not None and launch_proc_start(pgid)==item.get('start'):
+            try:os.killpg(pgid,getattr(signal,'SIGKILL',signal.SIGTERM));killed.append(pgid)
+            except (OSError,AttributeError):pass
+    journal['children']=[]
+    return killed
+def launch_watch(argv,env,timeout,folder=None,limit=None,cwd=None,journal=None):
     """Run one argv in its own process group. The group is killed when the time limit passes, when DockNest stops the
-    step, or when `folder` grows beyond `limit` bytes (item 9). Waits on the process itself (no sleeping); the size is
-    read each time the wait times out. Returns (exit code, stdout bytes, lower-case output tail, why stopped)."""
+    step, or when `folder` grows beyond `limit` bytes (item 9), and always in finally (leftover ssh or build children).
+    Waits on the process itself (no sleeping); only a size watch wakes up every LAUNCH_WATCH_SECONDS. With `journal`
+    (d, journal) the group id is recorded while it runs, so teardown and launch-status can end it after a crash.
+    Returns (exit code, stdout bytes, lower-case output tail, why stopped)."""
     exe=argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0],path=LAUNCH_PATH)
     if exe is None:return 127,b'','',None
     with tempfile.TemporaryFile() as out,tempfile.TemporaryFile() as err:
         process=subprocess.Popen([exe]+list(argv[1:]),stdin=subprocess.DEVNULL,stdout=out,stderr=err,env=env,cwd=cwd,close_fds=True,start_new_session=True)
         LAUNCH_CHILDREN.add(process.pid);deadline=time.monotonic()+timeout;why=None
+        record={'pgid':process.pid,'start':launch_proc_start(process.pid)}
         try:
+            if journal is not None:journal[1].setdefault('children',[]).append(record);launch_save(*journal)
             while True:
-                try:code=process.wait(timeout=LAUNCH_WATCH_SECONDS);break
+                wait=LAUNCH_WATCH_SECONDS if folder and limit else max(0.1,deadline-time.monotonic())
+                try:code=process.wait(timeout=wait);break
                 except subprocess.TimeoutExpired:
                     if STOPPING:why='stopped'
                     elif time.monotonic()>deadline:why='timeout'
                     elif folder and limit and launch_tree_size(folder)>limit:why='size'
                     if why:launch_kill_group(process);code=-1;break
-        finally:LAUNCH_CHILDREN.discard(process.pid)
+        finally:
+            LAUNCH_CHILDREN.discard(process.pid)
+            if process.poll() is None:launch_kill_group(process)
+            try:os.killpg(process.pid,getattr(signal,'SIGKILL',signal.SIGTERM))
+            except (OSError,AttributeError):pass
+            if journal is not None and record in journal[1].get('children',[]):journal[1]['children'].remove(record);launch_save(*journal)
         out.seek(0);stdout=out.read(64*1024*1024)
         size=err.seek(0,2);err.seek(max(0,size-4000));tail=err.read().decode('utf-8','replace').lower()
     return code,stdout,tail,why
-def launch_exec(argv,timeout=120,env=None,cwd=None):
-    code,stdout,tail,why=launch_watch(argv,env if env is not None else launch_env(),timeout,cwd=cwd)
+def launch_exec(argv,timeout=120,env=None,cwd=None,journal=None):
+    code,stdout,tail,why=launch_watch(argv,env if env is not None else launch_env(),timeout,cwd=cwd,journal=journal)
     return code,stdout,tail
 def launch_docker_lines(*args):
     code,stdout,_=launch_exec(['docker',*args],60)
@@ -225,8 +274,10 @@ def launch_dir(lid):return LAUNCH_ROOT/lid
 def launch_journal(lid,slug=None,create=False):
     d=launch_dir(lid)
     if create:
-        LAUNCH_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
-        if os.name=='posix':os.chmod(d,0o700)
+        LAUNCH_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
+        if LAUNCH_ROOT.is_symlink() or d.is_symlink():launch_refuse('INVALID_REQUEST')
+        d.mkdir(exist_ok=True,mode=0o700)
+        if os.name=='posix':os.chmod(d,0o700,follow_symlinks=False) if os.chmod in os.supports_follow_symlinks else os.chmod(d,0o700)
     if d.is_symlink():launch_refuse('INVALID_REQUEST')
     file=d/'journal.json'
     journal=json.loads(file.read_text()) if file.is_file() else {}
@@ -263,14 +314,16 @@ def launch_ip_problem(ip,allow_private):
     inner=ip.ipv4_mapped if ip.version==6 and ip.ipv4_mapped else ip
     # NAT64 (an IPv6-only server behind DNS64) is judged by the IPv4 address it carries.
     if inner.version==6 and inner in ipaddress.ip_network('64:ff9b::/96'):inner=ipaddress.ip_address(int(inner)&0xffffffff)
-    embedded=[inner]
-    if inner.version==6:
-        if inner.sixtofour:embedded.append(inner.sixtofour)
-        if inner.teredo:embedded+=list(inner.teredo)
+    # 6to4 is judged by the IPv4 address it carries; Teredo (2001::/32) is refused outright below.
+    embedded=[inner.sixtofour] if inner.version==6 and inner.sixtofour else [inner]
+    private=False
     for value in embedded:
-        # Loopback, link-local (cloud metadata) and other special addresses are refused even for a self-hosted server.
-        if value in LAUNCH_METADATA or value.is_loopback or value.is_link_local or value.is_multicast or value.is_unspecified or value.is_reserved:return 'URL_METADATA'
-    if any(not value.is_global for value in embedded):return None if allow_private else 'URL_PRIVATE'
+        if any(value in net for net in LAUNCH_REFUSED_NETS if net.version==value.version):return 'URL_METADATA'
+        if any(value in net for net in LAUNCH_PRIVATE_NETS if net.version==value.version):private=True;continue
+        # Anything else that is not global unicast (2000::/3 for IPv6) is refused too.
+        if value.is_loopback or value.is_link_local or value.is_multicast or value.is_unspecified or value.is_reserved or not value.is_global:return 'URL_METADATA'
+        if value.version==6 and value not in ipaddress.ip_network('2000::/3'):return 'URL_METADATA'
+    if private:return None if allow_private else 'URL_PRIVATE'
     return None
 def launch_host_text(host):
     """A DNS name (lower-case LDH) or an IP literal; numeric spellings that are not plain IPs are refused."""
@@ -322,6 +375,9 @@ def launch_resolve(host,port,allow_private):
         if problem:launch_refuse(problem)
     return addresses[0]
 def launch_bracket(ip):return '[%s]'%ip.compressed if ip.version==6 else ip.compressed
+def launch_known_name(host,port):
+    """The known_hosts name (and HostKeyAlias): the bare host or address on port 22, else [host]:port (as #171 stores it)."""
+    return host if port==22 else '[%s]:%d'%(host,port)
 def launch_git_target(repo,allow_private):
     """What git actually connects to: the checked IP, with TLS and host keys still verified against the name."""
     ip=launch_resolve(repo['host'],repo['port'],allow_private)
@@ -329,8 +385,7 @@ def launch_git_target(repo,allow_private):
         resolve=None if repo['ipLiteral'] else '%s:%d:%s'%(repo['host'],repo['port'],launch_bracket(ip))
         host=launch_bracket(ipaddress.ip_address(repo['host'])) if repo['ipLiteral'] else repo['host']
         return {'kind':'https','url':'https://%s%s%s'%(host,'' if repo['port']==443 else ':%d'%repo['port'],repo['path']),'resolve':resolve,'alias':None,'ip':ip.compressed}
-    name=launch_bracket(ipaddress.ip_address(repo['host'])) if repo['ipLiteral'] else repo['host']
-    alias=name if repo['port']==22 else '[%s]:%d'%(name.strip('[]'),repo['port'])
+    alias=launch_known_name(repo['host'],repo['port'])
     if repo['form']=='scp':url='%s@%s:%s'%(repo['user'],launch_bracket(ip),repo['path'])
     else:url='ssh://%s@%s%s%s'%(repo['user'],launch_bracket(ip),'' if repo['port']==22 else ':%d'%repo['port'],repo['path'])
     return {'kind':'ssh','url':url,'resolve':None,'alias':alias,'ip':ip.compressed}
@@ -354,7 +409,9 @@ def launch_git_version():
     ok=version[:2]>=LAUNCH_GIT_NEW or (version[:2] in LAUNCH_GIT_FIXED and version[2]>=LAUNCH_GIT_FIXED[version[:2]])
     return '%d.%d.%d'%version,ok
 def launch_git_env(home,ssh=None):
-    pairs=['PATH='+LAUNCH_PATH,'HOME='+str(home),'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','LC_ALL=C']
+    # clone and ls-remote create or need no repository, so GIT_DIR stays unset (it would redirect clone's own .git);
+    # git runs in its private folder and never looks above it for one.
+    pairs=['PATH='+LAUNCH_PATH,'HOME='+str(home),'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_CEILING_DIRECTORIES=/','LC_ALL=C']
     if ssh:pairs+=['GIT_SSH_COMMAND='+ssh,'GIT_SSH_VARIANT=ssh']
     return pairs
 def launch_git_argv(home,target,ssh,tail):
@@ -364,14 +421,16 @@ def launch_git_argv(home,target,ssh,tail):
 def launch_ssh_command(known_hosts,key,alias):
     """Item 3. git runs GIT_SSH_COMMAND through sh, so every value is quoted."""
     return ' '.join(['ssh','-F','/dev/null','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','ProxyCommand=none','-o','ProxyJump=none','-o','StrictHostKeyChecking=yes',
-        '-o','UserKnownHostsFile='+shlex.quote(str(known_hosts)),'-o','HostKeyAlias='+shlex.quote(alias),'-o','CheckHostIP=no','-o','UpdateHostKeys=no','-i',shlex.quote(str(key))])
+        '-o','UserKnownHostsFile='+shlex.quote(str(known_hosts)),'-o','GlobalKnownHostsFile=/dev/null','-o','HostKeyAlias='+shlex.quote(alias),'-o','CheckHostIP=no','-o','UpdateHostKeys=no','-i',shlex.quote(str(key))])
 def launch_private_key(value):
     if not isinstance(value,str) or len(value)>16384:launch_refuse('KEY_INVALID')
     text=value.replace('\r\n','\n').strip()+'\n'
     if not re.fullmatch(r'-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+-----END OPENSSH PRIVATE KEY-----\n',text):launch_refuse('KEY_INVALID')
     return text
-def launch_host_key(value):
-    """(type, base64) from a pinned known_hosts line or a bare 'type base64' pair; the blob must name its own type."""
+def launch_host_key(value,name=None):
+    """(type, base64) from a pinned known_hosts line or a bare 'type base64' pair; the blob must name its own type.
+    With `name`, a line that names a host must name exactly that known_hosts name (a key pinned for another port or
+    host is never used)."""
     if not isinstance(value,str) or len(value)>16384 or any(c in value for c in '\r\n\0'):launch_refuse('HOST_KEY_INVALID')
     words=value.split()
     for i,word in enumerate(words[:-1]):
@@ -381,6 +440,7 @@ def launch_host_key(value):
             except ValueError:launch_refuse('HOST_KEY_INVALID')
             size=int.from_bytes(raw[:4],'big') if len(raw)>4 else 0
             if raw[4:4+size]!=word.encode():launch_refuse('HOST_KEY_INVALID')
+            if name is not None and i>0 and words[i-1]!=name:launch_refuse('HOST_KEY_MISMATCH')
             return word,blob
     launch_refuse('HOST_KEY_INVALID')
 def launch_with_key(folder,repo,target,key,action,journal=None):
@@ -392,7 +452,7 @@ def launch_with_key(folder,repo,target,key,action,journal=None):
         ssh=None
         if repo['kind']=='ssh':
             if not isinstance(key,dict):launch_refuse('KEY_REQUIRED')
-            private=launch_private_key(key.get('privateKey'));kind,blob=launch_host_key(key.get('hostKeyLine'))
+            private=launch_private_key(key.get('privateKey'));kind,blob=launch_host_key(key.get('hostKeyLine'),target['alias'])
             if shutil.which('ssh',path=LAUNCH_PATH) is None:launch_refuse('SSH_MISSING')
             tag=uuid.uuid4().hex[:12];key_file=pathlib.Path(folder)/('key-'+tag);known=pathlib.Path(folder)/('known-hosts-'+tag)
             for path in (key_file,known):
@@ -420,7 +480,7 @@ def launch_git_failure(tail,why):
 def launch_ls_remote(folder,repo,ref,target,key,journal=None):
     patterns=['refs/heads/'+ref,'refs/tags/'+ref,'refs/tags/'+ref+'^{}'] if ref else ['HEAD']
     def action(ssh):
-        code,stdout,tail,why=launch_watch(launch_git_argv(folder,target,ssh,['ls-remote','--',target['url'],*patterns]),{},120)
+        code,stdout,tail,why=launch_watch(launch_git_argv(folder,target,ssh,['ls-remote','--',target['url'],*patterns]),{},120,cwd=str(folder),journal=journal)
         if code!=0:launch_refuse(launch_git_failure(tail,why))
         found={}
         for line in stdout.decode('utf-8','replace').splitlines():
@@ -485,8 +545,15 @@ def launch_model(slug,files,project_dir,env_file):
     if not isinstance(model,dict) or not isinstance(model.get('services'),dict) or not model['services']:launch_refuse('COMPOSE_INVALID')
     return model
 def launch_compose_text_problem(data):
+    """Compose text DockNest can judge from the resolved model alone: no include, no extends (both pull in other files
+    or services the model hides) and no JSON or flow-style document. Keys are matched in block and flow position."""
     if len(data)>LAUNCH_COMPOSE_LIMIT:return 'COMPOSE_TOO_LARGE'
-    if re.search(rb'(?m)^["\']?include["\']?[ \t]*:',data):return 'COMPOSE_INCLUDE_REFUSED'
+    text=data.decode('utf-8','replace').lstrip('\ufeff')
+    key=r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(?:[!&*][^\s]*[ \t]+)*["\']?%s["\']?[ \t]*:'
+    if re.search(key%'include',text):return 'COMPOSE_INCLUDE_REFUSED'
+    if re.search(key%'extends',text):return 'COMPOSE_EXTENDS_REFUSED'
+    first=next((line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith('#') and line.strip()!='---'),'')
+    if first.startswith(('{','[')):return 'COMPOSE_FLOW_REFUSED'
     return None
 def launch_build_problems(model,repo_root,slug):
     """Build allow-list (threat model "Build escape") and the Dockerfile scan (item 1)."""
@@ -508,21 +575,35 @@ def launch_build_problems(model,repo_root,slug):
         if not launch_inside(dockerfile,repo_root) or not os.path.isfile(dockerfile):refuse('BUILD_SETTING_REFUSED','dockerfile');continue
         problem=launch_dockerfile_problem(dockerfile)
         if problem:refuse(problem,'dockerfile');continue
-        image=service.get('image') or '%s-%s'%(slug,name)
-        if not isinstance(image,str) or not LAUNCH_IMAGE.fullmatch(image):refuse('BUILD_SETTING_REFUSED','image')
+        if service.get('image') is not None and not launch_image_ours(service.get('image'),slug):refuse('BUILD_IMAGE_REFUSED','image')
     return refusals
+def launch_image_ours(image,slug):
+    """A built image may only carry a name in the launch's own namespace (<slug>-x, <slug>_x or <slug>/x, an optional tag,
+    no registry host, no digest), so a build can never replace a shared tag such as postgres:16 used by other sites."""
+    if not isinstance(image,str) or '@' in image or not LAUNCH_IMAGE.fullmatch(image):return False
+    name,tag=image,''
+    if ':' in image.rsplit('/',1)[-1]:name,_,tag=image.rpartition(':')
+    if tag and not re.fullmatch(r'[a-z0-9_][a-z0-9_.-]{0,127}',tag):return False
+    if ':' in name or ('/' in name and ('.' in name.split('/')[0] or name.split('/')[0]=='localhost')):return False
+    return re.fullmatch(re.escape(slug)+r'[-_/][a-z0-9][a-z0-9._/-]*',name) is not None
 def launch_dockerfile_problem(path):
     try:
         with open(path,'rb') as handle:data=handle.read(LAUNCH_DOCKERFILE_LIMIT+1)
     except OSError:return 'DOCKERFILE_MISSING'
     if len(data)>LAUNCH_DOCKERFILE_LIMIT:return 'DOCKERFILE_REFUSED'
-    text=data.decode('utf-8','replace')
-    for line in text.lstrip('\ufeff').splitlines():
-        match=re.fullmatch(r'\s*#\s*([A-Za-z]+)\s*=\s*(.*?)\s*',line)
-        if not match:break
-        if match[1].lower()=='syntax' and not re.fullmatch(r'(?:docker\.io/)?docker/dockerfile(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-f]{64})?',match[2]):return 'SYNTAX_REFUSED'
+    text=data.decode('utf-8','replace').lstrip('\ufeff')
+    # Every way BuildKit picks a frontend: '#' and '//' syntax directives and a JSON {"syntax": ...} document. Any syntax
+    # value anywhere in the file must name docker/dockerfile; a JSON or array document is never built.
+    if text.lstrip().startswith(('{','[')):return 'SYNTAX_REFUSED'
+    for match in re.finditer(r'(?im)^[ \t]*(?:#|//)[ \t]*syntax[ \t]*=[ \t]*(\S*)',text):
+        if not LAUNCH_SYNTAX.fullmatch(match[1]):return 'SYNTAX_REFUSED'
+    for match in re.finditer(r'(?i)["\']syntax["\'][ \t]*:[ \t]*["\']([^"\']*)',text):
+        if not LAUNCH_SYNTAX.fullmatch(match[1]):return 'SYNTAX_REFUSED'
+    # RUN --network and --security: only the values that grant nothing (allow-list), never a variable.
     joined=re.sub(r'[\\`][ \t]*\r?\n',' ',text)
-    if re.search(r'--network\s*=\s*["\']?host\b',joined,re.I) or re.search(r'--security\s*=\s*["\']?insecure\b',joined,re.I):return 'DOCKERFILE_REFUSED'
+    for match in re.finditer(r'(?i)--(network|security)(?:[ \t]*=[ \t]*|[ \t]+)(["\']?)([^\s"\']*)\2',joined):
+        value=match[3]
+        if '$' in value or value.lower() not in LAUNCH_RUN_FLAGS[match[1].lower()]:return 'DOCKERFILE_REFUSED'
     return None
 def launch_runtime_gate(model,site):
     """The Safe Edit privilege gate (remote/helper/edit.py, 2.15) with no "before": nothing the site gets may add host
@@ -542,8 +623,20 @@ def launch_runtime_gate(model,site):
         if not isinstance(code,str):raise
         field=getattr(error,'field',None)
         service=field.split('.')[1] if isinstance(field,str) and field.startswith('services.') and field.count('.')>=1 else None
-        return [{'code':code,'service':service,'field':field if isinstance(field,str) else None}]
+        # Only the service and the setting name leave the helper (never a path or value the gate may have named).
+        field='.'.join(field.split('.')[:3])[:120] if isinstance(field,str) else None
+        return [{'code':code[:40],'service':service[:64] if service else None,'field':field}]
     return []
+def launch_secret_bind_problems(model,protected):
+    """Read-write binds that cover the site's .env or Compose file (a bind of the site root or the repository root
+    included) are refused; read-only binds stay allowed."""
+    refusals=[]
+    for name,service in model['services'].items():
+        for mount in service.get('volumes') or []:
+            if not isinstance(mount,dict) or mount.get('type')!='bind' or mount.get('read_only') or not isinstance(mount.get('source'),str):continue
+            if any(launch_inside(path,mount['source']) for path in protected):
+                refusals.append({'code':'BIND_COVERS_SECRETS','service':name,'field':'services.%s.volumes'%name});break
+    return refusals
 def launch_port_problems(model,web_service=None):
     refusals=[]
     for name,service in model['services'].items():
@@ -581,9 +674,10 @@ def launch_collisions(model,slug,lid):
         for value in values:
             if value in existing[kind] and value not in own[kind]:refusals.append({'code':'NAME_COLLISION','service':None,'field':'%s.%s'%(kind,value)})
     return refusals
-def launch_checks(model,lid,slug,site,repo_root,web_service=None):
+def launch_checks(model,lid,slug,site,repo_root,web_service=None,protected=()):
     # The port rule needs the web service (its ports are replaced by the loopback port): always at start, at fetch when given.
     refusals=launch_build_problems(model,repo_root,slug)+(launch_port_problems(model,web_service) if web_service else [])+launch_env_file_problems(model,site)
+    refusals+=launch_secret_bind_problems(model,protected)
     refusals+=launch_runtime_gate(model,site)
     refusals+=launch_collisions(model,slug,lid)
     return refusals
@@ -632,7 +726,7 @@ def launch_server_blocks(text,skip=None):
                 stack.append(head)
                 # An http server block (nginx -T prints each included file at its own top level); stream and mail
                 # servers have no names.
-                if head=='server' and not set(stack[:-1])&{'server','stream','mail','upstream'}:current={'names':[],'default':False};blocks.append(current)
+                if head=='server' and not set(stack[:-1])&{'server','stream','mail','upstream'}:current={'names':[],'default':False,'listens':[]};blocks.append(current)
                 words=[]
             elif token=='}':
                 if stack and stack.pop()=='server':current=None
@@ -640,7 +734,9 @@ def launch_server_blocks(text,skip=None):
             elif token==';':
                 if current is not None and words and stack and stack[-1]=='server':
                     if words[0]=='server_name':current['names']+=words[1:]
-                    elif words[0]=='listen' and 'default_server' in words[1:]:current['default']=True
+                    elif words[0]=='listen':
+                        current['listens'].append(words[1] if len(words)>1 else '')
+                        if 'default_server' in words[1:]:current['default']=True
                 words=[]
             else:words.append(token)
     return blocks
@@ -654,9 +750,18 @@ def launch_name_matches(name,host):
     if n.startswith('.'):return host==n[1:] or host.endswith(n)
     if n.endswith('.*'):return host.startswith(n[:-1])
     return n==host
-def launch_nginx_conflicts(names,skip=None):
+def launch_ip_listens(blocks):
+    """Server blocks that listen on one address for port 80 or 443: nginx picks the address before the name, so such a
+    block may answer for this domain on that address. Reported as a warning in Check."""
     found=[]
-    for block in launch_server_blocks(launch_nginx_dump(),skip):
+    for block in blocks:
+        for value in block.get('listens') or []:
+            match=re.fullmatch(r'(\d{1,3}(?:\.\d{1,3}){3}|\[[0-9A-Fa-f:.]+\]):(80|443)',value)
+            if match and match[1] not in ('0.0.0.0','[::]') and value not in found:found.append(value)
+    return found[:20]
+def launch_nginx_conflicts(names,skip=None,blocks=None):
+    found=[]
+    for block in blocks if blocks is not None else launch_server_blocks(launch_nginx_dump(),skip):
         for name in block['names']:
             if any(launch_name_matches(name,host) for host in names):
                 kind='regex' if name.startswith('~') else 'wildcard' if '*' in name or name.startswith('.') else 'exact'
@@ -691,7 +796,10 @@ def launch_write_nginx(d,journal,lid,slug,names,port,tls=None):
     if not acme.exists():launch_record(d,journal,'paths',str(acme));acme.mkdir(parents=True,mode=0o755)
     previous=path.read_text() if path.exists() else None
     temporary=path.with_name('.'+path.name+'.docknest-tmp')
-    temporary.write_text(launch_nginx_conf(lid,names,port,str(acme),tls));os.chmod(temporary,0o644);os.replace(temporary,path)
+    if temporary.is_symlink() or temporary.exists():temporary.unlink()
+    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o644)
+    with os.fdopen(fd,'w') as output:output.write(launch_nginx_conf(lid,names,port,str(acme),tls))
+    os.replace(temporary,path)
     if not launch_nginx_reload():
         if previous is None:path.unlink(missing_ok=True)
         else:path.write_text(previous)
@@ -708,11 +816,13 @@ def launch_lineages(root=None):
     try:names=sorted(e.name for e in os.scandir(live) if e.is_dir() and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',e.name))[:500]
     except OSError:return found
     for name in names:
-        domains=[]
+        # Without a certificate decoder (or an unreadable certificate) the lineage's names are unknown: None, which
+        # counts as covering the domain (fail closed).
+        domains=None
         try:
-            if decode:domains=[str(v).lower() for kind,v in decode(str(live/name/'cert.pem')).get('subjectAltName',()) if kind=='DNS']
-        except Exception:pass
-        found.append({'name':name,'domains':domains[:100]})
+            if decode:domains=[str(v).lower() for kind,v in decode(str(live/name/'cert.pem')).get('subjectAltName',()) if kind=='DNS'][:100]
+        except Exception:domains=None
+        found.append({'name':name,'domains':domains})
     return found
 def launch_covers(domain,host):
     domain=domain.lower().rstrip('.')
@@ -720,7 +830,7 @@ def launch_covers(domain,host):
     return domain==host
 def launch_lineage_conflicts(names,cert_name,own=()):
     hosts=list(dict.fromkeys(names+['www.'+names[0]]))
-    return [{'name':item['name'],'domains':item['domains'][:10]} for item in launch_lineages() if item['name'] not in own and (item['name']==cert_name or any(launch_covers(d,h) for d in item['domains'] for h in hosts))][:20]
+    return [{'name':item['name'],'domains':(item['domains'] or [])[:10]} for item in launch_lineages() if item['name'] not in own and (item['name']==cert_name or item['domains'] is None or any(launch_covers(d,h) for d in item['domains'] for h in hosts))][:20]
 def launch_dns(host):
     answers={'A':[],'AAAA':[]}
     try:
@@ -755,8 +865,7 @@ def launch_host_key_op(req):
             except LaunchRefused:continue
     kind=next((k for k in LAUNCH_HOST_KEY_TYPES if k in keys),None)
     if kind is None:launch_refuse('HOST_KEY_UNAVAILABLE')
-    shown=launch_bracket(ipaddress.ip_address(name)) if literal else name
-    alias=shown if port==22 else '[%s]:%d'%(shown.strip('[]'),port)
+    alias=launch_known_name(name,port)
     digest=__import__('base64').b64encode(hashlib.sha256(__import__('base64').b64decode(keys[kind])).digest()).decode().rstrip('=')
     launch_answer({'hostKeyLine':'%s %s %s'%(alias,kind,keys[kind]),'sha256':'SHA256:'+digest,'keyType':kind})
 def launch_facts_op(req):
@@ -789,9 +898,12 @@ def launch_facts_op(req):
         try:project=launch_docker_lines('ps','-aq','--filter','label=com.docker.compose.project='+slug)
         except ValueError:project=[]
     check('project',not project,'PROJECT_EXISTS')
-    conflicts=[];lineages=[]
+    conflicts=[];lineages=[];warnings=[]
     if nginx:
-        try:conflicts=launch_nginx_conflicts(list(dict.fromkeys(names+['www.'+domain])));check('nginxDomain',not conflicts,'NGINX_DOMAIN_SERVED')
+        try:
+            blocks=launch_server_blocks(launch_nginx_dump())
+            conflicts=launch_nginx_conflicts(list(dict.fromkeys(names+['www.'+domain])),blocks=blocks);check('nginxDomain',not conflicts,'NGINX_DOMAIN_SERVED')
+            warnings+=[{'code':'NGINX_IP_LISTEN','listen':value} for value in launch_ip_listens(blocks)]
         except LaunchRefused as error:check('nginxDomain',False,error.code)
     lineages=launch_lineage_conflicts(names,'docknest-'+slug)
     check('certLineage',not lineages,'CERT_LINEAGE_EXISTS')
@@ -799,7 +911,7 @@ def launch_facts_op(req):
         'versions':{'docker':docker_version,'compose':compose_text,'git':git_text,'gitMinimum':'%d.%d.%d'%LAUNCH_GIT_MIN,'buildx':buildx},
         'os':osr,'packageManager':manager,'freeBytes':free,'usedPorts':sorted(int(p) for p in ports),
         'ports':{'80':None if 80 not in ports else ('nginx' if nginx_running else 'other'),'443':None if 443 not in ports else ('nginx' if nginx_running else 'other')},
-        'nginxDomains':conflicts,'certLineages':lineages,'dnsAnswers':launch_dns(domain),'serverIps':host_addresses(),'checks':checks}
+        'nginxDomains':conflicts,'certLineages':lineages,'dnsAnswers':launch_dns(domain),'serverIps':host_addresses(),'checks':checks,'warnings':warnings}
     if req.get('source')=='git':
         check('git',git_text,'GIT_MISSING','git')
         if git_text:check('gitVersion',git_ok,'GIT_TOO_OLD')
@@ -816,21 +928,29 @@ def launch_facts_op(req):
             finally:
                 if folder is not None:shutil.rmtree(folder,ignore_errors=True)
     elif req.get('source')=='compose' and isinstance(req.get('composeText'),str) and compose_ok:
-        facts['services'],code=launch_paste_services(slug,req['composeText'])
+        web=req.get('webService') if isinstance(req.get('webService'),str) else None
+        services,code,gate,name=launch_paste_services(lid,slug,req['composeText'],web)
+        facts['services']=services
+        if gate is not None:facts['gate']=gate;facts['composeName']=name
         check('compose-file',code is None,code)
     launch_answer(facts)
-def launch_paste_services(slug,text):
-    """Services and ports of a pasted Compose file, read in a private folder that is removed right after."""
+def launch_paste_services(lid,slug,text,web=None):
+    """Services, ports, the gate verdict and the top-level name of a pasted Compose file, read in a private folder that
+    is removed right after (the folder stands in for the site folder). (services, refusal code, gate, composeName)."""
     data=text.encode('utf-8')
     problem=launch_compose_text_problem(data)
-    if problem:return [],problem
+    if problem:return [],problem,None,None
     LAUNCH_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
     folder=LAUNCH_ROOT/('check-'+uuid.uuid4().hex);folder.mkdir(mode=0o700)
     try:
         compose=folder/'compose.yaml';env=folder/'.env'
         launch_private_write(compose,data);launch_private_write(env,b'')
-        try:return launch_services(launch_model(slug,[compose],folder,env)),None
-        except LaunchRefused as error:return [],error.code
+        try:model=launch_model(slug,[compose],folder,env)
+        except LaunchRefused as error:return [],error.code,None,None
+        try:refusals=launch_checks(model,lid,slug,str(folder),str(folder),web,(str(compose),str(env)))
+        except LaunchRefused as error:refusals=[{'code':error.code,'service':None,'field':None}]
+        name=model.get('name') if isinstance(model.get('name'),str) and model.get('name')!=slug else None
+        return launch_services(model),None,{'ok':not refusals,'refusals':refusals[:50]},name
     finally:shutil.rmtree(folder,ignore_errors=True)
 def launch_fetch_op(req):
     lid,slug=launch_ids(req);launch_root_user()
@@ -863,10 +983,10 @@ def launch_fetch_op(req):
             site.mkdir(mode=0o755)
             argv_tail=['clone','--depth','1','--single-branch','--no-recurse-submodules']+(['--branch',ref] if ref else [])+['--',target['url'],str(repo_root)]
             def clone(ssh):
-                code,_,tail,why=launch_watch(launch_git_argv(d,target,ssh,argv_tail),{},LAUNCH_CLONE_SECONDS,folder=str(site),limit=LAUNCH_CLONE_LIMIT)
+                code,_,tail,why=launch_watch(launch_git_argv(d,target,ssh,argv_tail),{},LAUNCH_CLONE_SECONDS,folder=str(site),limit=LAUNCH_CLONE_LIMIT,cwd=str(d),journal=(d,journal))
                 if code!=0:launch_refuse(launch_git_failure(tail,why))
             launch_with_key(d,repo,target,req.get('deployKey'),clone,(d,journal))
-            code,stdout,_=launch_exec(['env','-i',*launch_git_env(d),'git','-c','core.hooksPath=/dev/null','-C',str(repo_root),'rev-parse','HEAD'],30,env={})
+            code,stdout,_=launch_exec(['env','-i',*launch_git_env(d),'GIT_DIR='+str(repo_root/'.git'),'git','-c','core.hooksPath=/dev/null','-C',str(repo_root),'rev-parse','HEAD'],30,env={},cwd=str(repo_root))
             commit=stdout.decode('utf-8','replace').strip()
             if code!=0 or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',commit):launch_refuse('FETCH_FAILED')
             journal['commit']=commit;launch_save(d,journal)
@@ -894,7 +1014,7 @@ def launch_fetch_op(req):
         launch_private_write(env_file,''.join('%s=%s\n'%(k,launch_env_quote(v)) for k,v in env.items()).encode('utf-8'))
         project_dir=pathlib.Path(compose).parent
         model=launch_model(slug,[compose],project_dir,env_file)
-        refusals=launch_checks(model,lid,slug,str(site),str(repo_root),req.get('webService') if isinstance(req.get('webService'),str) else None)
+        refusals=launch_checks(model,lid,slug,str(site),str(repo_root),req.get('webService') if isinstance(req.get('webService'),str) else None,(str(compose),str(env_file)))
         journal['files']={'compose':str(compose),'projectDir':str(project_dir),'repoRoot':str(repo_root),'envFile':str(env_file)}
         journal['phase']='fetched';launch_save(d,journal)
         result={'commit':commit,'services':launch_services(model),'composeName':model.get('name') if isinstance(model.get('name'),str) and model.get('name')!=slug else None,'gate':{'ok':not refusals,'refusals':refusals[:50]}}
@@ -937,10 +1057,12 @@ def launch_build_op(req):
         journal['phase']='building';launch_record(d,journal,'builders',builder)
         for image in images:launch_record(d,journal,'images',image)
         try:
-            code,_,_=launch_exec(['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+LAUNCH_BUILDKIT_IMAGE,'--bootstrap'],600)
+            # Explicit buildkitd flags replace buildx's default --allow-insecure-entitlement=network.host for this driver,
+            # so the builder grants no entitlement at all.
+            code,_,_=launch_exec(['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+LAUNCH_BUILDKIT_IMAGE,'--buildkitd-flags=--oci-worker-gc','--bootstrap'],600,journal=(d,journal))
             if code!=0:launch_refuse('BUILD_FAILED')
             argv=launch_compose_base(slug,[files['compose'],override],files['projectDir'],files['envFile'])+['build','--builder',builder]
-            code,_,tail,why=launch_watch(argv,launch_env(),LAUNCH_BUILD_SECONDS)
+            code,_,tail,why=launch_watch(argv,launch_env(),LAUNCH_BUILD_SECONDS,journal=(d,journal))
             if why=='timeout':launch_refuse('BUILD_TIMEOUT')
             if code!=0:launch_refuse('IMAGE_NO_ARCH' if 'no match for platform' in tail or 'exec format error' in tail else 'BUILD_FAILED')
         finally:launch_exec(['docker','buildx','rm',builder],120)
@@ -971,7 +1093,7 @@ def launch_start_op(req):
         model=launch_model(slug,[files['compose']],files['projectDir'],files['envFile'])
         if not isinstance(web,str) or web not in model['services']:launch_refuse('WEB_SERVICE_INVALID')
         # Binds are resolved again at start (item 4): the checks run on the files as they are now.
-        refusals=launch_checks(model,lid,slug,str(site),files['repoRoot'],web)
+        refusals=launch_checks(model,lid,slug,str(site),files['repoRoot'],web,(files['compose'],files['envFile']))
         if refusals:emit(result={'ok':False,'code':'GATE_REFUSED','reason':LAUNCH_REASONS['GATE_REFUSED'],'gate':{'ok':False,'refusals':refusals[:50]}});return
         own=launch_docker_lines('ps','-aq','--filter','label=docknest.launch='+lid)
         if loopback in listening_ports() and not own:launch_refuse('PORT_IN_USE')
@@ -983,13 +1105,13 @@ def launch_start_op(req):
             for name in names[kind]:launch_record(d,journal,kind,name)
         journal['web']={'service':web,'port':web_port,'loopbackPort':loopback};launch_save(d,journal)
         argv=launch_compose_base(slug,[files['compose'],override],files['projectDir'],files['envFile'])+['up','-d','--no-build']
-        code,_,tail,why=launch_watch(argv,launch_env(),LAUNCH_UP_SECONDS)
+        code,_,tail,why=launch_watch(argv,launch_env(),LAUNCH_UP_SECONDS,journal=(d,journal))
         if code!=0:
             if 'no matching manifest' in tail or 'no match for platform' in tail:launch_refuse('IMAGE_NO_ARCH')
             if 'port is already allocated' in tail or 'address already in use' in tail:launch_refuse('PORT_IN_USE')
             launch_refuse('START_FAILED')
         journal['phase']='started';launch_save(d,journal)
-        launch_answer({'containers':launch_docker_lines('ps','-aq','--no-trunc','--filter','label=docknest.launch='+lid)})
+        launch_answer({'containers':launch_docker_lines('ps','-aq','--no-trunc','--filter','label=docknest.launch='+lid),'containerNames':names['containers'],'composeFiles':[files['compose'],str(override)]})
     finally:
         if lock:lock.close()
 def launch_started_at(text):
@@ -1047,6 +1169,8 @@ def launch_certificate_op(req):
         d,journal=launch_existing(lid,slug)
         web=journal.get('domain') or {}
         if not journal['created']['nginx'] or not isinstance(web.get('loopbackPort'),int):launch_refuse('NO_WEB')
+        # The names nginx serves (journalled by launch-web) are the names certbot asks for.
+        if isinstance(web.get('names'),list) and web['names'] and all(isinstance(n,str) and LAUNCH_DOMAIN.fullmatch(n) for n in web['names']):names=web['names']
         def state(value,code=None):launch_answer({'state':value,'certName':cert_name,**({'code':code,'reason':LAUNCH_REASONS[code]} if code else {})})
         if not shutil.which('certbot',path=LAUNCH_PATH):return state('failed','CERTBOT_MISSING')
         own=[c['name'] for c in journal['created']['certificates']]
@@ -1066,7 +1190,7 @@ def launch_certificate_op(req):
             failure=launch_certbot_failure(tail)
             return state('dns_waiting' if failure=='DNS_WAITING' else 'failed',failure)
         live=LETSENCRYPT/'live'/cert_name
-        launch_write_nginx(d,journal,lid,slug,web.get('names') or names,web['loopbackPort'],{'cert':str(live/'fullchain.pem'),'key':str(live/'privkey.pem')})
+        launch_write_nginx(d,journal,lid,slug,names,web['loopbackPort'],{'cert':str(live/'fullchain.pem'),'key':str(live/'privkey.pem')})
         journal['phase']='certificate';launch_save(d,journal)
         state('issued')
     finally:
@@ -1114,11 +1238,13 @@ def launch_teardown_op(req):
     try:
         d,journal=launch_journal(lid,slug);created=journal['created'];label='label=docknest.launch='+lid
         removed=[];left=[]
+        for pgid in launch_kill_recorded(journal):removed.append({'kind':'process-group','name':str(pgid)})
+        launch_save(d,journal)
         def attempt(kind,name,argv):
             code=launch_exec(argv,300)[0]
             (removed if code==0 else left).append({'kind':kind,'name':name})
         ids=launch_docker_lines('ps','-aq','--filter',label)
-        if ids:attempt('containers',str(len(ids)),['docker','rm','-f',*ids])
+        if ids:attempt('containers',str(len(ids)),['docker','rm','-f','-v',*ids])
         for builder in created['builders']:
             if launch_exec(['docker','buildx','inspect',builder],60)[0]==0:attempt('builder',builder,['docker','buildx','rm',builder])
         for path in created['nginx']:
@@ -1156,8 +1282,18 @@ def launch_status_op(req):
     d=launch_dir(lid)
     if not (d/'journal.json').is_file():return launch_answer({'journal':False,'present':[],'phase':None})
     d,journal=launch_journal(lid,slug)
+    # While no step holds the launch lock, process groups a killed step recorded are ended (recovery after a restart).
+    busy=False;killed=[]
+    try:lock=launch_lock()
+    except LaunchRefused:lock=None;busy=True
+    try:
+        if not busy and journal.get('children'):killed=launch_kill_recorded(journal);launch_save(d,journal)
+    finally:
+        if lock:lock.close()
     summary={kind:len(values) for kind,values in journal['created'].items()}
-    launch_answer({'journal':True,'phase':journal.get('phase'),'commit':journal.get('commit'),'counts':summary,'present':launch_present(lid,journal)})
+    phase=journal.get('phase')
+    launch_answer({'journal':True,'phase':phase,'commit':journal.get('commit'),'counts':summary,'present':launch_present(lid,journal),'busy':busy,'killed':len(killed),
+        'resumable':not busy and phase in ('fetched','built','started','web','certificate') and isinstance(journal.get('files'),dict)})
 LAUNCH_HOST_KEY_CODES={'URL_PRIVATE':'PRIVATE_ADDRESS','URL_METADATA':'REFUSED_ADDRESS','URL_REFUSED':'REFUSED_ADDRESS','HOST_KEY_UNAVAILABLE':'CONNECT_FAILED','SSH_MISSING':'CONNECT_FAILED'}
 def launch_host_key_mapped(req):
     """launch-host-key answers with the backend's codes: PRIVATE_ADDRESS, REFUSED_ADDRESS, DNS_FAILED, CONNECT_FAILED."""
