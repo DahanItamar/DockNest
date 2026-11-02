@@ -282,7 +282,10 @@ export const migrations = [
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
   { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
-  // Safe Edit (docs/safe-edit.md): new tables, indexes and triggers only, so 2.14 code ignores them. 13 is 2.14.0's.
+  // Reserved for 2.14.0's migration (built in parallel): a no-op so versions stay contiguous. The 2.14 merge replaces
+  // this line with the real migration 13; only pre-release databases ever ran the placeholder.
+  { version: 13, name: 'reserved-2.14', compatible: true, up: () => {} },
+  // Safe Edit (docs/safe-edit.md): new tables, indexes and triggers only, so 2.14 code ignores them.
   { version: 14, name: 'safe-edits', compatible: true, up: db => db.exec(safeEditsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;

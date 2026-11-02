@@ -295,8 +295,11 @@ test('a change that comes up: backup, prepare, apply, check health (polls), fini
   assert.deepEqual(steps(editId), { backup: 'done', prepare: 'done', apply: 'done', check_health: 'done', roll_back: 'skipped', finish: 'done' });
   assert.deepEqual(ops().filter(op => op.startsWith('edit-')), ['edit-load', 'edit-check', 'edit-prepare', 'edit-apply', 'edit-poll', 'edit-poll', 'edit-poll', 'edit-finish']);
   // prepare and apply got the candidate (and its reviewed model) over stdin; later steps never did.
-  for (const op of ['edit-prepare', 'edit-apply']) { const call = calls.find(item => item.operation === op); assert.equal(call.env[0].value, SECRET); assert.equal(call.reviewedModelSha256, 'c'.repeat(64)); }
-  for (const call of calls.filter(item => ['edit-poll', 'edit-finish'].includes(item.operation))) { assert.equal(call.env, undefined); assert.equal(call.files, undefined); }
+  const prepare = calls.find(item => item.operation === 'edit-prepare'), applyCall = calls.find(item => item.operation === 'edit-apply');
+  assert.equal(prepare.env[0].value, SECRET); assert.equal(prepare.reviewedModelSha256, 'c'.repeat(64));
+  // apply takes the candidate from the server's journal: only the reviewed model's hash travels.
+  assert.equal(applyCall.reviewedModelSha256, 'c'.repeat(64)); assert.equal(applyCall.sshPort, 22);
+  for (const call of calls.filter(item => ['edit-apply', 'edit-poll', 'edit-finish'].includes(item.operation))) { assert.equal(call.env, undefined); assert.equal(call.files, undefined); }
   assert.deepEqual(calls.find(item => item.operation === 'edit-poll').services, ['web', 'db']);
   // The backup was a normal backup by `edit:<id>`; every payload is wiped and no value is anywhere in SQLite.
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='backup.enqueue' AND actor=?").get('edit:' + editId));
@@ -561,4 +564,58 @@ test('alert events: edit.rolled_back and edit.needs_you name the site only; exis
   // A line stores its own event list, so lines saved before 2.15 keep exactly the events they had.
   const web = new URL('../web/map/alerts-client.js', import.meta.url);
   assert.ok(web);
+});
+
+// ---------- the helper's own answers (remote/helper/edit.py: every refusal is a result with ok: false) ----------
+test('helper results with ok: false: load refusals are 422, a busy site lock is 409 at review and a retry in steps', async () => {
+  const { siteId } = site();
+  answers['edit-load'] = () => ({ ok: false, code: 'NOT_COMPOSE', reason: 'helper text /etc/x' });
+  const refused = await json(await admin('GET', `/sites/${siteId}/edit`));
+  assert.equal(refused.status, 422); assert.equal(refused.body.code, 'NOT_COMPOSE'); assert.doesNotMatch(refused.body.error, /etc/);
+  answers['edit-load'] = () => ({ ok: false, code: 'SITE_BUSY' });
+  assert.equal((await json(await admin('GET', `/sites/${siteId}/edit`))).status, 409);
+  delete answers['edit-load'];
+  answers['edit-check'] = () => ({ ok: false, code: 'SITE_BUSY' });
+  assert.equal((await review(siteId)).status, 409);
+  answers['edit-check'] = () => ({ ok: false, code: 'SYMLINK_REFUSED', field: 'services.web.volumes' });
+  assert.equal((await review(siteId)).body.code, 'SYMLINK_REFUSED');
+  delete answers['edit-check'];
+  // A file the helper could not read comes with text null: it shows, but cannot be reviewed.
+  answers['edit-load'] = () => ({ ...loadAnswer(), files: [{ path: '/srv/shop/compose.yaml', inode: null, sha256: null, text: null }], reasons: { compose: 'FILE_TOO_LARGE' }, usable: { compose: false, env: true, ports: false, image: false } });
+  const big = await json(await admin('GET', `/sites/${siteId}/edit`));
+  assert.equal(big.body.files[0].text, null); assert.deepEqual(big.body.reasons.compose, { code: 'FILE_TOO_LARGE', message: 'This file is larger than 256 KB.' });
+  assert.equal((await review(siteId)).body.code, 'FILE_CHANGED');
+  delete answers['edit-load'];
+  // Steps: a busy lock waits and runs again; it never rolls back or fails the edit.
+  let busy = 2;
+  answers['edit-apply'] = () => (busy-- > 0 ? { ok: false, code: 'SITE_BUSY' } : { ok: true, startedAt: now / 1000 });
+  const editId = await apply(siteId);
+  for (let index = 0; index < 6; index++) { await drive(6); now += 200_000; }
+  await drive(30);
+  assert.equal(edit(editId).result, 'applied', JSON.stringify(edit(editId)));
+  assert.equal(ops().filter(op => op === 'edit-apply').length, 3); assert.ok(!ops().includes('edit-rollback'));
+});
+
+test('a single-container site: environment file "container" and containerChanges for ports and image', async () => {
+  const { siteId } = site('solo');
+  db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ containers: ['solo'], healthUrl: '' }), siteId);
+  answers.discover = () => ({ containers: [{ name: 'solo', labels: {} }] });
+  answers['edit-load'] = () => ({ ok: true, files: [], env: [{ file: 'container', keys: ['MODE'] }], services: [{ name: 'solo', image: 'shop:1.0', ports: [], frozen: false, healthcheck: true }], usable: { compose: false, env: true, ports: true, image: true }, reasons: { compose: 'NOT_COMPOSE' } });
+  answers['edit-check'] = () => verdict({ changed: [], hashes: [] });
+  const loaded = await json(await admin('GET', `/sites/${siteId}/edit`));
+  assert.equal(loaded.body.kind, 'container'); assert.equal(loaded.body.reasons.compose.code, 'NOT_COMPOSE');
+  const roots = calls.find(call => call.operation === 'edit-load').allowedRoots;
+  assert.deepEqual(roots, [`/var/lib/docker-backup-manager/maintenance/${siteId}`]);
+  assert.deepEqual(calls.find(call => call.operation === 'edit-load').invocation, { container: 'solo' });
+  const reviewed = await review(siteId, { env: [{ file: 'container', key: 'MODE', value: SECRET }], containerChanges: { image: 'shop:1.1', ports: [{ host: 8090, container: 80 }] } });
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.deepEqual(reviewed.body.summary.tabs.sort(), ['env', 'image', 'ports']);
+  assert.deepEqual(calls.find(call => call.operation === 'edit-check').containerChanges, { image: 'shop:1.1', ports: [{ host: 8090, container: 80 }] });
+  const applied = await json(await admin('POST', `/sites/${siteId}/edit/apply`, { token: reviewed.body.token }));
+  await drive(30);
+  assert.equal(edit(applied.body.edit.id).result, 'applied');
+  assert.deepEqual(calls.find(call => call.operation === 'edit-prepare').containerChanges, { image: 'shop:1.1', ports: [{ host: 8090, container: 80 }] });
+  // containerChanges on a Compose site are refused: its ports and image change in the Compose file.
+  const compose = site('compose');
+  assert.equal((await review(compose.siteId, { containerChanges: { image: 'x:1' } })).body.code, 'NOT_EDITABLE');
 });

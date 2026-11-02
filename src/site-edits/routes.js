@@ -22,7 +22,9 @@ const absolute = z.string().min(2).max(4096).regex(/^\/[^\0\r\n]*$/);
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
 const reviewSchema = z.object({
   files: z.array(z.object({ path: absolute, sha256: hex64, text: z.string().max(LIMITS.fileBytes) }).strict()).max(LIMITS.files).optional(),
-  env: z.array(z.object({ file: absolute, key: z.string().min(1).max(128), value: z.string().max(LIMITS.valueBytes).optional(), remove: z.literal(true).optional() }).strict().refine(entry => (entry.value === undefined) !== (entry.remove === undefined), 'Give a value or remove: true.')).max(LIMITS.envKeys).optional(),
+  // A single-container site's environment is the file "container" (remote/helper/edit.py).
+  env: z.array(z.object({ file: z.union([absolute, z.literal('container')]), key: z.string().min(1).max(128), value: z.string().max(LIMITS.valueBytes).optional(), remove: z.literal(true).optional() }).strict().refine(entry => (entry.value === undefined) !== (entry.remove === undefined), 'Give a value or remove: true.')).max(LIMITS.envKeys).optional(),
+  containerChanges: z.object({ image: z.string().min(1).max(512).regex(/^[^\s\0]+$/).optional(), ports: z.array(z.object({ host: z.number().int().min(1).max(65535), container: z.number().int().min(1).max(65535), protocol: z.enum(['tcp', 'udp']).optional(), hostIp: z.string().max(64).optional() }).strict()).max(50).optional() }).strict().optional(),
 }).strict();
 const applySchema = z.object({ token: z.string().min(1).max(128), timeLimitSeconds: z.number().int().min(LIMITS.timeLimit.min).max(LIMITS.timeLimit.max).optional() }).strict();
 

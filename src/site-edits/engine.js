@@ -97,7 +97,7 @@ function ensureJob(edit, phase, before = null) {
     before?.();
     if (activeJob(edit.id)) return null;
     const previous = edit.job_id ? db.prepare('SELECT details FROM jobs WHERE id=?').get(edit.job_id) : null, from = parseJson(previous?.details, {});
-    const payload = ['prepare', 'apply'].includes(phase) && typeof from.payload === 'string' ? from.payload : undefined;
+    const payload = phase === 'prepare' && typeof from.payload === 'string' ? from.payload : undefined;
     const details = { editId: edit.id, step: phase, targetServerId: edit.server_id, invocation: from.invocation, allowedRoots: from.allowedRoots, services: from.services, ...(payload ? { payload } : {}) };
     db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-edit','edit_queued',?,?,?)").run(jobId, edit.site_id, phase, iso(clock()), JSON.stringify(details));
     if (edit.job_id) db.prepare("UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE id=? AND json_type(details,'$.payload')='text'").run(edit.job_id);
@@ -200,7 +200,7 @@ function context(edit, details) {
   const invocation = details?.invocation, roots = details?.allowedRoots;
   if (!server || !invocation || !Array.isArray(roots)) return null;
   // `config`: the site's saved configuration with its maintenance settings (no secrets), for the helper's maintenance page.
-  return { server, base: { editId: edit.id, siteId: edit.site_id, invocation, allowedRoots: roots, config: siteInfo(edit.site_id).site.config }, services: details.services ?? [] };
+  return { server, base: { editId: edit.id, siteId: edit.site_id, invocation, allowedRoots: roots, config: siteInfo(edit.site_id).site.config, sshPort: server.port }, services: details.services ?? [] };
 }
 // Before anything is written the site's recorded invocation must still be the one reviewed.
 const invocationUnchanged = (edit, ctx) => { const stored = storedInvocation(edit.site_id); return !!stored && invocationHash(stored) === edit.progress.invocationSha && JSON.stringify(helperInvocation(stored)) === JSON.stringify(ctx.base.invocation); };
@@ -237,6 +237,8 @@ export async function executeSiteEditJob(job) {
   else db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='edit_running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', iso(clock()), error, job.id);
 }
 
+// The helper's site lock was held by another DockNest task: nothing happened, the step simply runs again later.
+const busyRetry = (edit, onGiveUp) => { retryLater(edit, onGiveUp); };
 const failReason = (code, fallback) => (code === 'FILE_CHANGED' ? SAY.filesChangedDuringBackup : Object.hasOwn(REASONS, code) && !REVIEW_CODES.includes(code) ? REASONS[code] : code && REVIEW_CODES.includes(code) ? `${REASONS[code]} Nothing was changed.` : fallback);
 const RUNNERS = {
   async prepare(edit, ctx, details) {
@@ -244,14 +246,15 @@ const RUNNERS = {
     if (!candidate || !invocationUnchanged(edit, ctx)) { conclude(edit, 'failed', { failedStep: 'prepare', reason: candidate ? 'The site\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
     atomic(() => { save(edit, { prepareStarted: true }); setStep(edit.id, 'prepare', 'running'); });
     let answer;
-    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-prepare', files: candidate.files, env: candidate.env, reviewedModelSha256: candidate.reviewedModelSha256 }); }
+    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-prepare', files: candidate.files, env: candidate.env, ...(candidate.containerChanges ? { containerChanges: candidate.containerChanges } : {}), reviewedModelSha256: candidate.reviewedModelSha256 }); }
     catch (error) {
       const failure = classify(error), reason = failure.kind === 'unreachable' ? SAY.unreachableNothing : failReason(failure.code, SAY.applyFailed + ' Nothing was changed.');
       atomic(() => { setStep(edit.id, 'prepare', 'failed', reason); goFinish(edit, 'failed', { failedStep: 'prepare', reason }); });
       return;
     }
     if (answer?.ok !== true) {
-      const reason = failReason(helperCode(answer?.code), SAY.applyFailed + ' Nothing was changed.');
+      const code = helperCode(answer?.code), reason = failReason(code, SAY.applyFailed + ' Nothing was changed.');
+      if (code === 'SITE_BUSY') { busyRetry(edit, () => atomic(() => { setStep(edit.id, 'prepare', 'failed', REASONS.SITE_BUSY); goFinish(edit, 'failed', { failedStep: 'prepare', reason: REASONS.SITE_BUSY + ' Nothing was changed.' }); })); return; }
       atomic(() => { setStep(edit.id, 'prepare', 'failed', reason); goFinish(edit, 'failed', { failedStep: 'prepare', reason }); });
       return;
     }
@@ -259,16 +262,18 @@ const RUNNERS = {
     atomic(() => {
       setStep(edit.id, 'prepare', 'done', pulled ? `${pulled} new image${pulled === 1 ? '' : 's'} pulled` : null);
       const fresh = loadEdit(edit.id);
-      if (fresh.cancel_requested) goFinish(fresh, 'cancelled', { reason: SAY.cancelled }); else moveTo(fresh, 'apply');
+      // The candidate now lives in the server's journal; apply needs only the reviewed model's hash, so the sealed payload
+      // is not passed on (ensureJob gives it to prepare only).
+      if (fresh.cancel_requested) goFinish(fresh, 'cancelled', { reason: SAY.cancelled }); else moveTo(fresh, 'apply', { reviewedModelSha256: candidate.reviewedModelSha256 });
     });
   },
   async apply(edit, ctx, details, job) {
-    const candidate = openPayload(details.payload);
-    if (!candidate || !invocationUnchanged(edit, ctx)) { goFinish(edit, 'failed', { failedStep: 'apply', reason: candidate ? 'The site\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
+    const reviewed = edit.progress.reviewedModelSha256;
+    if (!reviewed || !invocationUnchanged(edit, ctx)) { goFinish(edit, 'failed', { failedStep: 'apply', reason: reviewed ? 'The site\'s Compose setup changed after the review. Nothing was changed.' : SAY.applyFailed + ' Nothing was changed.' }); return; }
     // Journalled before the first write: from here on, an unknown outcome is decided by edit-status, never guessed.
     atomic(() => { save(edit, { applyStarted: true }); setStep(edit.id, 'apply', 'running'); });
     let answer, failure = null;
-    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-apply', files: candidate.files, env: candidate.env, reviewedModelSha256: candidate.reviewedModelSha256 }); }
+    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-apply', reviewedModelSha256: reviewed }); }
     catch (error) { failure = classify(error); }
     finally { db.prepare("UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE id=?").run(job.id); }
     if (!failure && answer?.ok !== true) failure = { kind: 'remote', code: helperCode(answer?.code) };
@@ -276,6 +281,9 @@ const RUNNERS = {
     if (failure) {
       // FILE_CHANGED: nothing of the candidate stays on disk (the helper restored the originals or never wrote), and a
       // hand edit made meanwhile must not be overwritten by a rollback: the edit ends, the maintenance page goes off.
+      // The lock was busy or the journal is not prepared: the helper did nothing at all.
+      if (failure.code === 'SITE_BUSY') { busyRetry(edit, () => moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'unreachable' })); return; }
+      if (failure.code === 'NO_JOURNAL') { atomic(() => { setStep(edit.id, 'apply', 'failed', REASONS.NO_JOURNAL); goFinish(edit, 'failed', { failedStep: 'apply', reason: REASONS.NO_JOURNAL + ' Nothing was changed.' }); }); return; }
       if (failure.code === 'FILE_CHANGED') { atomic(() => { setStep(edit.id, 'apply', 'failed', SAY.filesChangedDuringBackup); goFinish(edit, 'failed', { failedStep: 'apply', reason: SAY.filesChangedDuringBackup }); }); return; }
       const reason = failReason(failure.code, SAY.applyFailed);
       atomic(() => { setStep(edit.id, 'apply', 'failed', reason); goRollBack(edit, reason, 'apply'); });
@@ -295,7 +303,10 @@ const RUNNERS = {
       retryLater(edit, () => goAttention(edit, 'roll_back', `${SAY.unreachable} ${SAY.rollbackFailed}`));
       return;
     }
-    if (answer?.ok !== true) { goAttention(edit, 'roll_back', SAY.rollbackFailed); return; }
+    if (answer?.ok !== true) {
+      if (helperCode(answer?.code) === 'SITE_BUSY') { busyRetry(edit, () => goAttention(edit, 'roll_back', SAY.rollbackFailed)); return; }
+      goAttention(edit, 'roll_back', SAY.rollbackFailed); return;
+    }
     const at = clock();
     if (edit.data_rollback && edit.backup_id && !edit.progress.dataRestored) moveTo(edit, 'data_restore', { rolledBack: true });
     else moveTo(edit, 'rollback_health', { rolledBack: true, windowStartedAt: at, helperStartedAt: at / 1000, nextPollAt: at });
@@ -332,6 +343,7 @@ const RUNNERS = {
     let status;
     try { status = await call(ctx.server, { ...ctx.base, operation: 'edit-status' }); }
     catch { retryLater(edit, () => goAttention(edit, 'recover', `${SAY.unreachable} DockNest could not check whether the change was written.`)); return; }
+    if (status?.ok === false || !['original', 'none', 'candidate', 'mixed'].includes(status?.files)) { retryLater(edit, () => goAttention(edit, 'recover', 'DockNest could not check whether the change was written.')); return; }
     const step = p.interrupted === 'prepare' ? 'prepare' : 'apply';
     if (status?.files === 'original' || status?.files === 'none') {
       const reason = why === 'unreachable' ? SAY.unreachableNothing : SAY.restartedNothing;
@@ -350,7 +362,9 @@ async function poll(edit, ctx, phase) {
   const healthUrl = siteInfo(edit.site_id).site.config.healthUrl || undefined;
   let answer;
   try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-poll', services: ctx.services, ...(healthUrl ? { healthUrl } : {}), windowStartedAt: p.helperStartedAt, timeLimitSeconds: edit.time_limit_seconds, final }); }
-  catch { answer = final ? { state: 'unhealthy', unreachable: true } : null; }
+  catch { answer = null; }
+  if (answer?.ok === false || (answer && !['waiting', 'healthy', 'unhealthy'].includes(answer.state))) answer = null;
+  if (!answer && final) answer = { state: 'unhealthy', unreachable: true };
   if (answer?.state === 'healthy') {
     const seconds = Number.isInteger(answer.healthSeconds) && answer.healthSeconds >= 0 ? answer.healthSeconds : Math.round(elapsed / 1000);
     atomic(() => {
@@ -399,29 +413,39 @@ async function editContext(siteId) {
   try { resolved = await resolveInvocation(site, server, target => call(target, { operation: 'discover' })); }
   catch (error) { if (error.status) throw error; throw unreachableError(); }
   if (resolved.problem) throw httpError(422, 'NOT_EDITABLE', resolved.problem);
-  const roots = allowedRoots(site.config, resolved);
-  return { site, server, resolved, base: { editId: id(), siteId: site.id, invocation: helperInvocation(resolved), allowedRoots: roots, config: siteInfo(site.id).site.config }, roots };
+  const config = siteInfo(site.id).site.config, found = allowedRoots(site.config, resolved);
+  // The helper needs at least one site folder. A single container without saved files gets its own maintenance folder,
+  // which only DockNest writes; Compose sites always have their project folder.
+  const roots = found.length ? found : [config.maintenance.directory];
+  return { site, server, resolved, base: { editId: id(), siteId: site.id, invocation: helperInvocation(resolved), allowedRoots: roots, config, sshPort: server.port }, roots };
 }
-async function helperRead(server, request) {
-  try { return await call(server, request); }
+// A read-only op (load, check). A busy site lock is 409; any other refusal is one fixed reason with its code.
+const refusal = code => (code === 'SITE_BUSY' ? httpError(409, 'SITE_BUSY', REASONS.SITE_BUSY) : httpError(422, code ?? 'NOT_EDITABLE', reasonFor(code, REASONS.NOT_EDITABLE)));
+async function helperRead(server, request, { refusalIsAnswer = false } = {}) {
+  let answer;
+  try { answer = await call(server, request); }
   catch (error) {
     const failure = classify(error);
-    if (failure.kind === 'remote' && failure.code) throw httpError(422, failure.code, reasonFor(failure.code, REASONS.NOT_EDITABLE));
-    if (failure.kind === 'remote') throw httpError(422, 'NOT_EDITABLE', REASONS.NOT_EDITABLE);
+    if (failure.kind === 'remote') throw refusal(failure.code);
     throw unreachableError();
   }
+  // The helper answers every refusal as a result with ok: false (remote/helper/edit.py); edit-check's are the caller's.
+  if (answer?.ok === false && !refusalIsAnswer) throw refusal(helperCode(answer.code));
+  return answer;
 }
 
 // Reasons a tab is not usable, by the helper's code. Unknown codes get a general sentence.
 const TAB_REASONS = Object.freeze({ AMBIGUOUS: 'Edit this in Compose.', NO_COMPOSE: 'This site has no Compose file to edit.', NO_ENV: 'This site has no environment file.', SERVICE_FROZEN: REASONS.SERVICE_FROZEN, COMPOSE_TOO_OLD: REASONS.COMPOSE_TOO_OLD, FILE_TOO_LARGE: REASONS.FILE_TOO_LARGE, IMAGE_FROM_ENV: 'This image is set in Environment. Edit it there.' });
 const str = (value, max = 512) => (typeof value === 'string' ? value.slice(0, max) : '');
 function normalizeLoad(answer) {
-  const files = (Array.isArray(answer?.files) ? answer.files : []).filter(file => typeof file?.path === 'string' && typeof file.text === 'string' && /^[0-9a-f]{64}$/.test(file.sha256 ?? '')).map(file => ({ path: file.path, inode: Number.isFinite(file.inode) ? file.inode : null, sha256: file.sha256, text: file.text }));
+  // A file the helper could not read (too large, not UTF-8, missing) comes with text and sha256 null; the Compose tab
+  // then says why. Such a file cannot be part of a review.
+  const files = (Array.isArray(answer?.files) ? answer.files : []).filter(file => typeof file?.path === 'string').map(file => ({ path: file.path, inode: Number.isFinite(file.inode) ? file.inode : null, sha256: /^[0-9a-f]{64}$/.test(file.sha256 ?? '') ? file.sha256 : null, text: typeof file.text === 'string' && /^[0-9a-f]{64}$/.test(file.sha256 ?? '') ? file.text : null }));
   const env = (Array.isArray(answer?.env) ? answer.env : []).filter(item => typeof item?.file === 'string').map(item => ({ file: item.file, keys: (Array.isArray(item.keys) ? item.keys : []).filter(key => typeof key === 'string' && ENV_KEY.test(key)).map(key => ({ key, set: true })) }));
   const services = (Array.isArray(answer?.services) ? answer.services : []).filter(item => typeof item?.name === 'string').map(item => ({ name: str(item.name, 128), image: str(item.image), ports: (Array.isArray(item.ports) ? item.ports : []).map(port => ({ host: Number.isInteger(port?.host) ? port.host : null, container: Number.isInteger(port?.container) ? port.container : null, protocol: port?.protocol === 'udp' ? 'udp' : 'tcp', hostIp: str(port?.hostIp, 64) })), frozen: !!item.frozen, healthcheck: !!item.healthcheck }));
   const usable = Object.fromEntries(['compose', 'env', 'ports', 'image'].map(tab => [tab, !!answer?.usable?.[tab]]));
   const reasons = {};
-  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); reasons[tab] = { code: known ?? 'UNAVAILABLE', message: TAB_REASONS[known] ?? 'Not available for this site.' }; }
+  for (const [tab, code] of Object.entries(answer?.reasons ?? {})) if (['compose', 'env', 'ports', 'image'].includes(tab)) { const known = helperCode(code); reasons[tab] = { code: known ?? 'UNAVAILABLE', message: TAB_REASONS[known] ?? (known && Object.hasOwn(REASONS, known) ? REASONS[known] : 'Not available for this site.') }; }
   return { files, env, services, usable, reasons, composeVersion: str(answer?.composeVersion, 32) || null };
 }
 
@@ -451,7 +475,7 @@ export function checkEnvEntries(env) {
 // POST /api/sites/:id/edit/review: the gate runs on the server; the answer is the diff (values masked), a summary,
 // warnings and a one-use token. Nothing is stored.
 export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
-  const files = body.files ?? [], env = body.env ?? [];
+  const files = body.files ?? [], env = body.env ?? [], containerChanges = body.containerChanges ?? null;
   checkEnvEntries(env);
   const ctx = await editContext(siteId);
   const loaded = normalizeLoad(await helperRead(ctx.server, { ...ctx.base, operation: 'edit-load' }));
@@ -459,17 +483,20 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   for (const file of files) {
     const original = byPath.get(file.path);
     if (!original || envFiles.has(file.path)) throw refuse('PATH_REFUSED', 'files', 'Only the site\'s own Compose files can be edited here.');
-    if (original.sha256 !== file.sha256) throw refuse('FILE_CHANGED', 'files');
+    if (!original.sha256 || original.sha256 !== file.sha256) throw refuse('FILE_CHANGED', 'files');
   }
   const changedFiles = files.filter(file => byPath.get(file.path).text !== file.text);
   const existing = new Map(loaded.env.map(item => [item.file, new Set(item.keys.map(key => key.key))]));
   for (const entry of env) if (!existing.has(entry.file)) throw refuse('PATH_REFUSED', 'env', 'Only the site\'s own environment files can be edited here.');
   const envChanges = env.filter(entry => !entry.remove || existing.get(entry.file).has(entry.key));
-  if (!changedFiles.length && !envChanges.length) throw httpError(422, 'NO_CHANGES', 'Nothing changed.');
-  const request = { ...ctx.base, operation: 'edit-check', files: changedFiles.map(({ path, sha256, text }) => ({ path, sha256, text })), env: envChanges.map(entry => (entry.remove ? { file: entry.file, key: entry.key, remove: true } : { file: entry.file, key: entry.key, value: entry.value })) };
-  const answer = await helperRead(ctx.server, request);
+  // Ports and image of a single-container site travel as containerChanges (there is no Compose text to edit).
+  if (containerChanges && ctx.resolved.kind !== 'container') throw refuse('NOT_EDITABLE', 'containerChanges', 'Ports and image of a Compose site change in its Compose file.');
+  if (!changedFiles.length && !envChanges.length && !containerChanges) throw httpError(422, 'NO_CHANGES', 'Nothing changed.');
+  const request = { ...ctx.base, operation: 'edit-check', files: changedFiles.map(({ path, sha256, text }) => ({ path, sha256, text })), env: envChanges.map(entry => (entry.remove ? { file: entry.file, key: entry.key, remove: true } : { file: entry.file, key: entry.key, value: entry.value })), ...(containerChanges ? { containerChanges } : {}) };
+  const answer = await helperRead(ctx.server, request, { refusalIsAnswer: true });
   if (answer?.ok !== true) {
     const code = helperCode(answer?.code), known = code && REVIEW_CODES.includes(code) ? code : 'COMPOSE_INVALID';
+    if (code === 'SITE_BUSY') throw refusal(code);
     throw httpError(422, known, REASONS[known], typeof answer?.field === 'string' && FIELD.test(answer.field) ? { field: answer.field } : {});
   }
   const verdict = answer.verdict ?? {};
@@ -480,7 +507,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   const newPorts = (Array.isArray(verdict.newPorts) ? verdict.newPorts : []).filter(port => Number.isInteger(port?.host)).map(port => ({ host: port.host, allAddresses: !!port.allAddresses }));
   const imageChanged = !!verdict.imageChanged, reviewedModelSha256 = str(verdict.reviewedModelSha256, 64);
   if (!/^[0-9a-f]{64}$/.test(reviewedModelSha256)) throw httpError(422, 'COMPOSE_INVALID', REASONS.COMPOSE_INVALID);
-  const tabs = tabsUsed({ files: changedFiles, env: envChanges, changed });
+  const tabs = tabsUsed({ files: changedFiles, env: envChanges, changed: [...changed, ...(containerChanges?.image ? ['container.image'] : []), ...(containerChanges?.ports ? ['container.ports'] : [])] });
   const healthChecks = loaded.services.some(service => service.healthcheck), healthUrl = !!ctx.site.config.healthUrl;
   const warnings = [];
   for (const port of newPorts) if (port.allAddresses) warnings.push({ code: 'PUBLIC_PORT', port: port.host, message: `Port ${port.host} is reachable from the internet.` });
@@ -489,7 +516,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   if (!healthChecks && !healthUrl) warnings.push({ code: 'NO_HEALTH_CHECK', message: 'This site has no health check or health URL, so only "running and stable" counts.' });
   const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
   const diff = reviewDiff({ originals: loaded.files, files: changedFiles, env: envChanges.map(entry => ({ ...entry, existed: existing.get(entry.file).has(entry.key) })) });
-  const candidate = { files: request.files, env: request.env, reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })) };
+  const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })) };
   const meta = { invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged }), imageChanged };
   const { token, expiresAt } = issueToken({ userId, sessionHash, siteId, hashes, candidate, meta });
   return { token, expiresAt: iso(expiresAt), diff, summary, warnings };

@@ -50,11 +50,23 @@ export const REASONS = Object.freeze({
   DISK_FULL: 'The server does not have enough free disk space. Nothing was changed.',
   ROLLBACK_FAILED: 'The previous version could not be put back.',
   NOT_EDITABLE: 'This site cannot be edited here.',
+  // Codes the helper (remote/helper/edit.py) adds to the contract list.
+  UNKNOWN_SETTING: 'This change uses a Compose setting DockNest cannot check. Change it by hand.',
+  SYMLINK_REFUSED: 'A folder this change mounts goes through a symbolic link.',
+  NO_ENV_FILE: 'This site has no environment file.',
+  NOT_COMPOSE: 'This site is a single container, so it has no Compose file.',
+  UNSUPPORTED_CONTAINER: 'This container uses settings DockNest cannot recreate. Change it by hand.',
+  SITE_BUSY: 'Another DockNest task is working on this site. Try again in a minute.',
+  INVALID_REQUEST: 'The server did not accept this change.',
+  NO_JOURNAL: 'This change was not prepared on the server.',
+  MAINTENANCE_FAILED: 'The maintenance page could not be switched.',
+  APPLY_FAILED: 'Docker could not start the changed site.',
+  FAILED: 'Safe Edit could not run on the server.',
 });
-export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE']);
+export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST']);
 export const FIELD = /^[A-Za-z0-9_.\-[\]]{1,200}$/;
 export const reasonFor = (code, fallback = 'The change could not be checked. Try again.') => (Object.hasOwn(REASONS, code) ? REASONS[code] : fallback);
-export const helperCode = value => (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(value) ? value : null);
+export const helperCode = value => (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(value) ? (value === 'FILE_CHANGED_APPLY' ? 'FILE_CHANGED' : value) : null);
 
 // Step and outcome sentences (one plain line, <= 300 characters, never a value or path).
 export const SAY = Object.freeze({

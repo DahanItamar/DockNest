@@ -10,10 +10,9 @@ import { randomUUID } from 'node:crypto';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function runSafeEditScenario({ run, until, hosts, servers, db, record }) {
-  const { claimJob, executeJob } = await import('../src/engine.js');
+  const { claimJob, executeJob, siteInfo } = await import('../src/engine.js');
   const se = await import('../src/site-edits/engine.js');
   const { remote } = await import('../src/ssh.js');
-  const { open } = await import('../src/crypto.js');
   const host = hosts[0], server = servers[0];
   const sh = script => run('exec', host, 'sh', '-c', script);
   const write = async (path, text) => { await sh(`mkdir -p "$(dirname '${path}')" && cat > '${path}' <<'DOCKNEST_EOF'\n${text}DOCKNEST_EOF`); };
@@ -139,7 +138,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   await refusedReview(shop, await editCompose(shop, 'compose.yaml', text => text.replace('      - data:/site\n', '      - data:/site\n      - /srv/editshop/link:/linked\n')), 'PATH_REFUSED');
   // Environment cannot steer Compose (refused by DockNest before the server is asked).
   loaded = await view(crash);
-  for (const entry of [{ key: 'COMPOSE_FILE', value: '/etc/x.yaml' }, { key: 'GOOD', value: 'a\nCOMPOSE_FILE=/etc/x.yaml' }, { key: 'DOCKER_HOST', value: 'tcp://1.2.3.4:2375' }]) {
+  for (const entry of [{ key: 'COMPOSE_FILE', value: '/etc/x.yaml' }, { key: 'GOOD', value: 'a\nCOMPOSE_FILE=/etc/x.yaml' }, { key: 'DOCKER_HOST', value: 'tcp://192.0.2.1:2375' }]) {
     await refusedReview(crash, { env: [{ file: appEnv.file, ...entry }] }, 'ENV_REFUSED');
   }
   assert.equal(await fileSha('/srv/editshop/compose.yaml'), shopSha, 'no refused candidate ever reached the real files');
@@ -163,16 +162,16 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   // ---------- 6. the worker is killed during apply: the next worker rolls back ----------
   change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken'));
   ({ editId } = await applyChange(shop, change));
-  // Run up to the apply job, then do what that job does and stop as a killed worker would (job left edit_running).
+  // Run up to the apply job, then do what that job does (edit-apply takes the candidate from the journal) and stop as a killed worker would (job left edit_running).
   for (;;) {
     se.tickSiteEdits();
     const job = claimJob();
     if (!job) { await sleep(1000); continue; }
     const details = JSON.parse(job.details);
     if (job.type !== 'site-edit' || details.step !== 'apply') { await executeJob(job); continue; }
-    const candidate = JSON.parse(open(details.payload)), current = se.loadEdit(editId);
+    const current = se.loadEdit(editId);
     db.prepare('UPDATE site_edits SET progress=? WHERE id=?').run(JSON.stringify({ ...current.progress, applyStarted: true }), editId);
-    await remote(server, { operation: 'edit-apply', editId, siteId: shop, invocation: details.invocation, allowedRoots: details.allowedRoots, config: JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(shop).config), files: candidate.files, env: candidate.env, reviewedModelSha256: candidate.reviewedModelSha256 }).catch(() => {});
+    await remote(server, { operation: 'edit-apply', editId, siteId: shop, invocation: details.invocation, allowedRoots: details.allowedRoots, config: siteInfo(shop).site.config, sshPort: server.port, reviewedModelSha256: current.progress.reviewedModelSha256 }).catch(() => {});
     break;
   }
   se.recoverInterruptedSiteEdits();
@@ -202,8 +201,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!corrupted && current.progress.phase === 'check_health') { corrupted = true; await sh(`for f in $(find /var/lib/docknest/edits/${editId} -type f); do printf 'corrupted' > "$f"; done`); } } });
   assert.equal(row.state, 'needs_attention', JSON.stringify(row));
   assert.equal(row.reason, 'The previous version could not be put back. The site stays behind the maintenance page.');
-  const siteConfig = JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(shop).config);
-  const maintenanceDirectory = siteConfig.maintenance?.directory ?? `/var/lib/docker-backup-manager/maintenance/${shop}`;
+  const maintenanceDirectory = siteInfo(shop).site.config.maintenance.directory;
   assert.equal(await sh(`test -e '${maintenanceDirectory}/enabled' && echo on || echo off`), 'on', 'the maintenance page stays on');
   record('Safe Edit 7: a rollback that fails (journal corrupted) leaves the site behind the maintenance page and the edit needs attention');
   // Restore backup from needs-attention ends the edit; then put the site back for the next checks.
