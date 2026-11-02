@@ -1,6 +1,6 @@
 # Safe Edit for sites (ADR, issue #149)
 
-Status: proposed design for 2.15.0 "Safe changes", awaiting owner approval. Date: 2026-11-02. No code yet.
+Status: accepted for 2.15.0 "Safe changes". Owner approval 2026-11-02; every owner question is decided below. Date: 2026-11-02.
 Builds on [moving-sites.md](moving-sites.md) (journals, Compose allow-list, step machine), [restore-tests.md](restore-tests.md)
 ("passed" checks, ticked waits) and [security.md](security.md).
 
@@ -37,7 +37,7 @@ ships with the "beta" label, like moves and restore tests did.
 | Gate | An allow-list first (the move lists: an unknown key is refused), then the candidate is resolved on the server and compared with the current model; anything that adds privilege is refused, and services that already have host access are frozen (Security review changes, items 1-4). Decided (lead). |
 | Order | Validate, backup, pull, maintenance on, write, gate again on the real files, `compose up -d --no-build --pull never`, health check, maintenance off. The pull happens before the maintenance page, so downtime is only the restart. Decided (lead). |
 | Healthy | The restore test rules: every service that ran before runs, is Docker-healthy where it has a health check, still runs after 60 seconds, and the site's health URL (if set) answers 200-399 from the server. Time limit 2 minutes by default, 1-10 in Advanced. Decided (lead). |
-| Rollback | Automatic on any failure after the first write: original files back (byte for byte, owner and mode), previous image IDs pinned, `compose up`, health check again. Data rollback: see owner question 1. |
+| Rollback | Automatic on any failure after the first write: original files back (byte for byte, owner and mode), previous image IDs pinned, `compose up`, health check again. Data volumes are restored from the pre-change backup only when an image changed (owner decision 1). |
 | Rollback fails | The site stays behind the maintenance page, the edit becomes `needs_attention`, `edit.needs_you` alerts, and **Restore backup** offers the pre-change backup through the normal restore. Decided (lead). |
 | Locks | A Safe Edit is a site job (`site-edit`, statuses `edit_queued`/`edit_running`): no backup, restore, move or other edit of the site runs at the same time; refused during an unfinished move and a deployment hold. Self-heal is paused for the site while it runs. Decided (lead). |
 | Audit | `site.edit.requested`, `site.edit.applied`, `site.edit.rolled_back`, `site.edit.needs_attention`, with changed field names and file hashes only, never values. Decided (lead). |
@@ -105,7 +105,7 @@ lock and stop when stdin closes:
 | `edit-prepare` | prepare | Journal `/var/lib/docknest/edits/<editId>/` (root 0700): original files, owners, modes, hashes, current image IDs per service; pulls new images (`docker compose pull` of changed services only, time limit 15 minutes). |
 | `edit-apply` | apply | Maintenance on (existing), re-check inode/hash, atomic writes, gate again on the real files, `docker compose up -d --no-build --pull never` (single containers: recreate from inspect with a 0600 `--env-file`). |
 | `edit-poll` | check_health | Running, health, stability, health URL. `final: true` at the end of the window. |
-| `edit-rollback` | roll_back | Originals back, services pinned to the image IDs held by the protective `docknest-edit/<editId>` tags, `compose up -d --no-build --pull never --remove-orphans`, health check, then optionally the data restore (owner question 1). Idempotent. |
+| `edit-rollback` | roll_back | Originals back, services pinned to the image IDs held by the protective `docknest-edit/<editId>` tags, `compose up -d --no-build --pull never --remove-orphans`, health check, then the data restore when an image changed (owner decision 1). Idempotent. |
 | `edit-finish` | finish | Maintenance off, journal removed. |
 | `edit-status` | recovery | What the journal holds and whether files match original or candidate. |
 
@@ -223,16 +223,19 @@ The security review (2026-11-02) tightened the design. Where this section and th
 - Adding a Redis service to an existing project; removing a service: refused.
 - DockNest's own site (self-backup host): refused, it would stop the dashboard.
 
-## Owner questions
+## Owner questions (decided 2026-11-02, all recommendations accepted)
 
 1. **Data rollback.** When a change fails after the new version ran, should rollback also restore data volumes from the
    pre-change backup? The site is behind the maintenance page during the change, so no visitor writes are lost.
    Recommendation: automatic only when an image changed (new versions run database migrations), never for env or port
    changes; shown in Review as "Data rollback: Yes".
+   **Decided:** data rollback only when an image changed.
 2. **Maintenance page.** Show the maintenance page during every change, or only when an image changes? Recommendation:
    every change, it is a few seconds and keeps data rollback safe.
+   **Decided:** the maintenance page for every change.
 3. **Operators.** Should operators be able to change environment values and image tags (not Compose text)?
    Recommendation: no for 2.15, admins only; revisit with an "Operators can edit sites" switch later.
+   **Decided:** administrators only.
 
 ## Roles used
 

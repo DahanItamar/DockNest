@@ -1,6 +1,6 @@
 # Self-heal for unhealthy containers (ADR, issue #150)
 
-Status: proposed design for 2.15.0 "Safe changes", awaiting owner approval. Date: 2026-11-02. No code yet.
+Status: accepted for 2.15.0 "Safe changes". Owner approval 2026-11-02; every owner question is decided below. Date: 2026-11-02.
 Builds on [remote-helper.md](remote-helper.md), [alert-channels.md](alert-channels.md) and [security.md](security.md).
 
 When Docker marks a container of a site unhealthy, DockNest restarts it, up to a set number of times in a time window,
@@ -64,7 +64,7 @@ in the UI ("Works while DockNest is running") and docs. C stays possible later a
 | Restart | A short job `self-heal` (statuses `heal_queued`/`heal_running`, never claimed by older releases), sorted first in `claimJob` (it is seconds). The helper re-reads the container's health right before acting and restarts only if it is still `unhealthy` (`docker restart --time 30 <name>`). Decided (lead). |
 | Recovered | The next `healthy` event for that container closes the episode (`recovered`). |
 | Limit reached | Further unhealthy events in the window are recorded as `limit_reached`, no restart, alert `self_heal.gave_up` once per window. |
-| Alerts | New events `self_heal.restarted` and `self_heal.gave_up` (site events). Which ones are sent: owner question 2. |
+| Alerts | New events `self_heal.restarted` and `self_heal.gave_up` (site events). Sent: the first restart in a window and `gave_up` (owner decision 2); every restart stays in the history. |
 | Audit | `self_heal.enabled`, `self_heal.disabled`, `self_heal.changed` (actor), `self_heal.restarted`, `self_heal.gave_up` (actor `self-heal`). |
 | Schema | Migration `self-heal`, next free number at merge (currently 14), `compatible: true`, new tables only. |
 
@@ -176,13 +176,16 @@ simply never runs. Existing alert lines do not gain the new events.
 - Two sites on one server opt in: one stream for both.
 - Laptop-hosted DockNest that sleeps at night: healing pauses, docs say so.
 
-## Owner questions
+## Owner questions (decided 2026-11-02, all recommendations accepted)
 
 1. **Heal while DockNest is down.** Offer the on-server listener (option C) as an optional add-on later?
    Recommendation: not now. Ship B, see how often it matters; Docker's restart policy covers crashes meanwhile.
+   **Decided:** not now; option B only, no on-server listener.
 2. **Which restarts alert.** Every restart, or only the first in a window plus "gave up"? Recommendation: first restart
    in a window and "gave up"; all restarts stay in the history.
+   **Decided:** first restart in a window plus "gave up".
 3. **Defaults.** 3 restarts per hour, 60 seconds apart? Recommendation: yes.
+   **Decided:** 3 restarts per hour, at least 60 seconds apart.
 
 ## Roles used
 
