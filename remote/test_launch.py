@@ -124,7 +124,18 @@ class Host:
 
 def gate_ok(current,candidate,roots,current_env,candidate_env):return []
 
+# The exact hardening of every git call (owner decision: git 2.37+, CVE classes closed by configuration).
+GIT_CONFIG=['-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','protocol.file.allow=never','-c','protocol.ext.allow=never',
+    '-c','http.followRedirects=false','-c','submodule.recurse=false','-c','transfer.bundleURI=false','-c','core.hooksPath=/dev/null','-c','core.symlinks=false']
+def GIT_ENV(folder):
+    return ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME='+str(pathlib.Path(folder)/'git-home'),'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_CEILING_DIRECTORIES=/','LC_ALL=C']
+
 class UrlTests(unittest.TestCase):
+    def test_git_never_runs_against_a_local_path(self):
+        for url in ('/srv/repo','file:///srv/repo','./repo','ext::sh','-oX'):
+            with self.assertRaises(helper.LaunchRefused,msg=url):helper.launch_git_argv('/h',{'url':url},None,['clone'])
+        for url in ('https://h.example/x','ssh://git@8.8.8.8:2222/x','git@8.8.8.8:o/r','git@[2606:4700::1]:o/r'):
+            self.assertEqual(helper.launch_git_argv('/h',{'url':url},None,['x'])[-1],'x')
     def test_accepted_forms(self):
         cases={'https://github.com/o/r.git':('https','github.com',443,None),'https://git.example.com:8443/o/r':('https','git.example.com',8443,None),
             'git@github.com:o/r.git':('ssh','github.com',22,'git'),'ssh://git@host.example:2222/o/r.git':('ssh','host.example',2222,'git'),
@@ -181,11 +192,10 @@ class UrlTests(unittest.TestCase):
         for ref in ('-x','a..b','x.lock','/x','x/','.hidden','a b','HEAD@{1}'):
             with self.assertRaises(helper.LaunchRefused,msg=ref):helper.launch_ref(ref)
     def test_git_minimum_version(self):
-        for version,ok in (('2.36.6',False),('2.39.5',False),('2.43.0',False),('2.43.7',True),('2.47.2',False),('2.47.3',True),('2.50.0',False),('2.50.1',True),('2.51.0',True),('3.0.0',True)):
+        for version,ok in (('2.30.2',False),('2.36.6',False),('2.37.0',True),('2.39.5',True),('2.43.0',True),('2.51.0',True),('3.0.0',True)):
             host=Host(self,git_version=version)
             with patch('helper.launch_watch',side_effect=host.watch):self.assertEqual(helper.launch_git_version(),(version,ok),version)
-        self.assertEqual(helper.LAUNCH_GIT_MIN,(2,43,7))
-        self.assertGreaterEqual(helper.LAUNCH_GIT_MIN,(2,37,0))
+        self.assertEqual(helper.LAUNCH_GIT_MIN,(2,37,0))
 
 class FetchTests(unittest.TestCase):
     def git_req(self,url='https://git.example.com:8443/o/r.git',**extra):
@@ -196,14 +206,17 @@ class FetchTests(unittest.TestCase):
         self.assertTrue(result['ok'],result)
         clone=host.argvs('clone')[0];journal=str(host.launches/LID)
         self.assertEqual(clone['env'],{})
-        self.assertEqual(clone['argv'],['env','-i','PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME='+journal,'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_CEILING_DIRECTORIES=/','LC_ALL=C',
-            'git','-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','http.followRedirects=false','-c','submodule.recurse=false','-c','core.hooksPath=/dev/null',
+        self.assertEqual(clone['argv'],['env','-i',*GIT_ENV(journal),'git',*GIT_CONFIG,
             '-c','http.curloptResolve=git.example.com:8443:8.8.8.8','clone','--depth','1','--single-branch','--no-recurse-submodules','--branch','main','--','https://git.example.com:8443/o/r.git',str(host.site()/'app')])
         self.assertEqual((clone['timeout'],clone['limit'],clone['folder'],clone['cwd'],clone['journal']),(600,2*1024**3,str(host.site()),journal,True))
         self.assertNotIn('GIT_DIR=',' '.join(clone['argv']),'clone creates its own repository')
         self.assertFalse(any('proxy' in part.lower() for part in clone['argv']))
         self.assertEqual(result['commit'],SHA)
         self.assertEqual(host.journal()['commit'],SHA)
+        rev=host.argvs('rev-parse')[0];repo=str(host.site()/'app')
+        self.assertEqual(rev['argv'],['env','-i',*GIT_ENV(journal),'GIT_DIR='+repo+os.sep+'.git','git',*GIT_CONFIG,'-C',repo,'rev-parse','HEAD'])
+        self.assertEqual((rev['env'],rev['cwd']),({},repo))
+        self.assertEqual(list((host.launches/LID/'git-home').iterdir()),[],'HOME stays empty')
         self.assertFalse((host.site()/'app'/'.git').exists(),'.git is removed after the commit is recorded')
     def test_compose_runs_with_explicit_project_files_and_env_file(self):
         host=Host(self,gate=gate_ok);host.run('launch-fetch',**self.git_req())
@@ -401,7 +414,7 @@ class BuildTests(unittest.TestCase):
         build=[c for c in host.calls if c['argv'][:2]==['docker','compose'] and 'build' in c['argv']][0]
         self.assertEqual(build['argv'][-3:],['build','--builder',builder]);self.assertEqual(build['timeout'],1800)
         self.assertIn('--env-file',build['argv'])
-        override=(host.launches/LID/'compose.build.yaml').read_text()
+        override=(host.site()/'compose.docknest-build.yaml').read_text()
         self.assertIn('docknest.launch: "%s"'%LID,override);self.assertIn('image: "shop-web"',override)
         self.assertEqual(host.argvs('rm')[-1]['argv'],['docker','buildx','rm',builder])
     def test_failed_or_slow_build_still_removes_the_builder(self):
@@ -429,7 +442,7 @@ class StartPollTests(unittest.TestCase):
         result=host.run('launch-start',webService='web',webPort=80,loopbackPort=18080)
         self.assertTrue(result['ok'],result)
         self.assertEqual(seen,[{'containers':['shop-web-1','shop-db-1'],'volumes':['shop_db'],'networks':['shop_default']}])
-        override=(host.launches/LID/'compose.launch.yaml').read_text()
+        override=(host.site()/'compose.docknest.yaml').read_text()
         self.assertIn('  "web":\n    labels:\n      docknest.launch: "%s"\n    ports: !override\n      - "127.0.0.1:18080:80"\n'%LID,override)
         self.assertIn('volumes:\n  "db":\n    labels:\n      docknest.launch: "%s"'%LID,override)
         self.assertIn('networks:\n  "default":\n    labels:',override)
@@ -607,14 +620,14 @@ class TeardownTests(unittest.TestCase):
 
 class FactsTests(unittest.TestCase):
     def test_facts_for_a_server_without_docker(self):
-        host=Host(self,tools={'nginx'},git_version='2.39.5')
+        host=Host(self,tools={'nginx'},git_version='2.36.6')
         result=host.run('launch-facts',source='git',domain='shop.example.com',repo={'url':'https://github.com/o/r.git'})
         checks={c['id']:c for c in result['checks']}
         self.assertEqual((checks['docker']['ok'],checks['docker']['code'],checks['docker']['install']),(False,'DOCKER_MISSING','docker'))
         self.assertEqual(checks['compose']['code'],'COMPOSE_TOOL_MISSING')
         self.assertEqual(checks['gitVersion']['code'],'GIT_TOO_OLD')
         self.assertEqual(checks['certbot']['install'],'certbot')
-        self.assertFalse(result['tools']['docker']);self.assertEqual(result['versions']['gitMinimum'],'2.43.7')
+        self.assertFalse(result['tools']['docker']);self.assertEqual(result['versions']['gitMinimum'],'2.37.0')
         self.assertEqual(result['usedPorts'],[])
         self.assertEqual(Host(self,ports=[443,22,80]).run('launch-facts',source='compose',domain='shop.example.com')['usedPorts'],[22,80,443])
     def test_facts_with_ls_remote_and_a_wildcard_vhost(self):
@@ -624,8 +637,9 @@ class FactsTests(unittest.TestCase):
         checks={c['id']:c for c in result['checks']}
         self.assertEqual(checks['nginxDomain']['code'],'NGINX_DOMAIN_SERVED');self.assertTrue(checks['repo']['ok'])
         self.assertEqual(result['nginxDomains'],[{'name':'*.example.com','kind':'wildcard'}])
-        ls=host.argvs('ls-remote')[0]['argv']
-        self.assertEqual(ls[ls.index('ls-remote'):],['ls-remote','--','https://github.com/o/r.git','refs/heads/main','refs/tags/main','refs/tags/main^{}'])
+        call=host.argvs('ls-remote')[0];ls=call['argv'];check=call['cwd']
+        self.assertEqual(ls,['env','-i',*GIT_ENV(check),'git',*GIT_CONFIG,'-c','http.curloptResolve=github.com:443:8.8.8.8','ls-remote','--','https://github.com/o/r.git','refs/heads/main','refs/tags/main','refs/tags/main^{}'])
+        self.assertEqual(call['env'],{});self.assertTrue(pathlib.PurePath(check).name.startswith('check-'))
         self.assertEqual([p.name for p in host.launches.iterdir()],[],'the check folder is removed')
     def test_facts_reports_a_private_repo_without_failing(self):
         host=Host(self,dns=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('192.168.1.20',443))])
@@ -722,7 +736,7 @@ class ReviewTests(unittest.TestCase):
         host=Host(self).start_journal(children=[{'pgid':4242,'start':77}],created={'paths':[]})
         with patch('helper.launch_proc_start',return_value=77),patch('helper.os.killpg',side_effect=lambda pid,sig:killed.append(pid),create=True):
             result=host.run('launch-status')
-        self.assertEqual((killed,result['killed'],result['resumable']),([4242],1,False))
+        self.assertEqual((killed,result['killed'],result['resumable']),([4242],1,False),'a cut-off step is never resumed')
         self.assertEqual(host.journal()['children'],[])
         host=Host(self).start_journal(children=[{'pgid':4242,'start':77}])
         with patch('helper.launch_proc_start',return_value=99),patch('helper.os.killpg',side_effect=lambda pid,sig:killed.append(pid),create=True):
@@ -737,9 +751,9 @@ class ReviewTests(unittest.TestCase):
         host=Host(self,gate=gate_ok);host.run('launch-fetch',source='compose',composeText='x: 1\n')
         result=host.run('launch-start',webService='web',webPort=80,loopbackPort=18080)
         self.assertEqual(result['containerNames'],['shop-web-1','shop-db-1'])
-        self.assertEqual(result['composeFiles'],[str(host.site()/'app'/'compose.yaml'),str(host.launches/LID/'compose.launch.yaml')])
+        self.assertEqual(result['composeFiles'],[str(host.site()/'app'/'compose.yaml'),str(host.site()/'compose.docknest.yaml')])
         host.existing={'own_containers':[],'own_volumes':[],'own_networks':[]}
-        self.assertTrue(host.run('launch-status')['resumable'])
+        self.assertEqual(host.run('launch-status')['resumable'],['check_health','web'])
     def test_facts_paste_gate_and_ip_listen_warning(self):
         host=Host(self,gate=gate_ok,nginx_dump=dump('server { listen 192.0.2.10:80; server_name other.example.com; }','server { listen 80; listen [::]:443 ssl; }'),model=lambda h:{**default_model(h.root),'name':'wp'})
         result=host.run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
