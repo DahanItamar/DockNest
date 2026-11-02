@@ -350,29 +350,70 @@ def edit_env_edits(req,files):
     return grouped
 
 # ---- Compose resolution (item 3) ----
+# Optional YAML node properties before a key: a tag (!!str), an anchor (&a) or an alias (*a). New ones are refused below;
+# the key patterns still see through the ones a file already has.
+EDIT_KEY_PROPS=r'(?:[!&*][^\s]*[ \t]+)*'
 def edit_text_includes(text):
-    match=re.search(r'(?m)^["\']?include["\']?[ \t]*:.*(?:\n(?:[ \t#].*|)$)*',text)
+    match=re.search(r'(?m)^'+EDIT_KEY_PROPS+r'["\']?include["\']?[ \t]*:.*(?:\n(?:[ \t#].*|)$)*',text)
     return match[0].strip() if match else None
-EDIT_FILE_VALUE=re.compile(r'(?m)(?:^|[\s{,\-])["\']?file["\']?[ \t]*:[ \t]*([^\n,}#]*)')
+EDIT_FILE_VALUE=re.compile(r'(?m)(?:^|[\s{,\-])'+EDIT_KEY_PROPS+r'["\']?file["\']?[ \t]*:[ \t]*([^\n,}#]*)')
 # Raw-text guards (security review B4): constructs a regex cannot read reliably are refused when the candidate adds
 # them, and so is any new include / extends / file key, in any quoting or position. Counted against the original
 # file, so what a site already has keeps working; the path checks below still validate what remains.
+EDIT_ESCAPED_KEY=re.compile(r'"(?:[^"\\\n]|\\.)*\\(?:[^"\\\n]|\\.)*"[ \t]*:')
 EDIT_RAW_PATTERNS={
-    'escaped-key':re.compile(r'"(?:[^"\\\n]|\\.)*\\(?:[^"\\\n]|\\.)*"[ \t]*:'),
     'complex-key':re.compile(r'(?m)^[ \t]*(?:-[ \t]+)?\?(?:[ \t]|$)'),
     'top-level-merge':re.compile(r"(?m)^[\"']?<<[\"']?[ \t]*:"),
     'top-level-flow':re.compile(r'(?m)\A(?:[ \t]*(?:#.*)?\n)*[ \t]*(?:---[ \t]*\n(?:[ \t]*(?:#.*)?\n)*)?\{'),
 }
-EDIT_REFERENCE_KEY=re.compile(r"(?im)(?:^[ \t]*(?:-[ \t]+)?(?:\?[ \t]+)?|[{,][ \t]*|\?[ \t]+)[\"']?(include|extends|file)[\"']?[ \t]*(?::|$)")
+# A mapping key include / extends / file (Compose keys are lower case): at the start of a line or list item, after { or
+# a comma in flow style, or as a ? complex key; quoted or not; with or without node properties. An environment key FILE
+# or a list item that is just the word "file" is not a key.
+EDIT_REFERENCE_KEY=re.compile(r"(?m)(?:(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*:|\?[ \t]+"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*$)")
+# Line breaks YAML honours but these line-based checks do not see (security review delta: bare CR, NEL, LS, PS).
+EDIT_HIDDEN_BREAKS=re.compile('\r(?!\n)|[\u0085\u2028\u2029]')
+def edit_yaml_properties(text):
+    """Every tag (!x), anchor (&x) and alias (*x) token outside quoted scalars and comments, as a sorted list. A quote that
+    does not close on its line makes the rest of the text count, so unsure input counts more, never less."""
+    found=[];quote=None;i=0;n=len(text);previous='\n'
+    while i<n:
+        c=text[i]
+        if quote:
+            if c=='\\' and quote=='"':i+=2;continue
+            if c==quote:
+                if quote=="'" and i+1<n and text[i+1]=="'":i+=2;continue
+                quote=None
+            elif c=='\n' and quote=="'":pass
+            previous=c;i+=1;continue
+        if c in '"\'' and previous in ' \t\n[{,:-?':quote=c;previous=c;i+=1;continue
+        if c=='#' and previous in ' \t\n':
+            while i<n and text[i]!='\n':i+=1
+            continue
+        if c in '!&*' and previous in ' \t\n[{,:-?':
+            j=i+1
+            while j<n and not text[j].isspace() and text[j] not in ',[]{}':j+=1
+            token=text[i:j]
+            if c!='*' or len(token)>1:found.append(token)
+            previous=text[j-1];i=j;continue
+        previous=c;i+=1
+    return sorted(found)
+def edit_new(before,after):
+    """Items of `after` (a list) not in `before`, counting repeats."""
+    remaining=list(before);extra=[]
+    for item in after:
+        if item in remaining:remaining.remove(item)
+        else:extra.append(item)
+    return extra
 def edit_raw_problems(original,candidate):
     original=original or ''
+    if EDIT_HIDDEN_BREAKS.search(candidate):edit_refuse('YAML_REFUSED','line-break')
+    # Escaped keys: the exact set must stay as it is (not only their number).
+    if sorted(EDIT_ESCAPED_KEY.findall(candidate))!=sorted(EDIT_ESCAPED_KEY.findall(original)):edit_refuse('YAML_REFUSED','escaped-key')
     for name,pattern in EDIT_RAW_PATTERNS.items():
         if len(pattern.findall(candidate))>len(pattern.findall(original)):edit_refuse('YAML_REFUSED',name)
-    before={};after={}
-    for token in EDIT_REFERENCE_KEY.findall(original):before[token.lower()]=before.get(token.lower(),0)+1
-    for token in EDIT_REFERENCE_KEY.findall(candidate):after[token.lower()]=after.get(token.lower(),0)+1
-    for token,count in after.items():
-        if count>before.get(token,0):edit_refuse('PATH_REFUSED',token)
+    if edit_new(edit_yaml_properties(original),edit_yaml_properties(candidate)):edit_refuse('YAML_REFUSED','node-property')
+    keys=lambda text:[a or b for a,b in EDIT_REFERENCE_KEY.findall(text)]
+    for token in edit_new(keys(original),keys(candidate)):edit_refuse('PATH_REFUSED',token)
 def edit_text_problems(original,candidate,inv,roots):
     """Before any Compose call: a candidate may not add an include block, nor a new `file:` reference (extends,
     secrets, configs) that leaves the site's folders or is interpolated, anchored or protected."""
@@ -748,13 +789,14 @@ def edit_project_resources(inv):
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):found[kind]=None
     return found
 def edit_holder_name(edit_id,service):
-    return 'docknest-edit-hold-%s-%s'%(edit_id[:8],re.sub(r'[^a-zA-Z0-9_.-]','-',str(service))[:40] or 's')
+    return 'docknest-edit-hold-%s-%s'%(edit_id,edit_sha(str(service).encode())[:10])
 def edit_hold_images(edit_id,journal,inv):
     """A created, never started container per journalled image ID: Docker never prunes an image a container uses.
     Outside the Compose project (its labels are overridden), so --remove-orphans and project listings never see it."""
     for service,item in (journal.get('images') or {}).items():
         name=edit_holder_name(edit_id,service)
-        if not item.get('id') or name in journal['holders']:continue
+        if not item.get('id'):edit_refuse('FAILED')  # an image DockNest cannot hold is never left unprotected
+        if name in journal['holders']:continue
         try:edit_docker('create','--name',name,'--label','docknest.edit.hold='+edit_id,'--label','com.docker.compose.project=','--label','com.docker.compose.service=','--network','none','--entrypoint','/docknest-edit-hold',item['id'],inv=inv)
         except subprocess.CalledProcessError:
             if edit_holder_image(name,inv)!=item['id']:raise
@@ -764,7 +806,7 @@ def edit_holder_image(name,inv):
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,OSError,IndexError):return None
 def edit_release_holders(edit_id,journal,inv):
     for name in list(journal.get('holders') or []):
-        try:edit_docker('rm','-f',name,inv=inv)
+        try:edit_docker('rm','-f','-v',name,inv=inv)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
 def edit_remove_temporaries(edit_id,journal):
     """Temporary files an interrupted atomic write left next to the site's files."""
@@ -832,6 +874,7 @@ def edit_data_size(sets,limit=EDIT_DATA_SCAN_LIMIT):
         while stack:
             current=stack.pop()
             try:entries=list(os.scandir(current))
+            except FileNotFoundError:continue
             except OSError:edit_refuse('DATA_UNREADABLE')
             for entry in entries:
                 count+=1
@@ -839,6 +882,7 @@ def edit_data_size(sets,limit=EDIT_DATA_SCAN_LIMIT):
                 path=posixpath.join(current,entry.name)
                 if edit_skip(path,s['exclude']):continue
                 try:st=entry.stat(follow_symlinks=False)
+                except FileNotFoundError:continue
                 except OSError:edit_refuse('DATA_UNREADABLE')
                 total+=st.st_size
                 if stat.S_ISDIR(st.st_mode):stack.append(path)
@@ -1387,6 +1431,13 @@ def edit_status(req,edit_id,site,roots,inv):
     emit(result={'ok':True,'journal':True,'files':files,'maintenance':on,'state':journal.get('state'),'dataCopy':(edit_dir(edit_id)/'data').is_dir()})
 EDIT_HANDLERS={'edit-load':edit_load,'edit-check':edit_check,'edit-prepare':edit_prepare,'edit-apply':edit_apply,'edit-poll':edit_poll,
     'edit-rollback':edit_rollback,'edit-finish':edit_finish,'edit-status':edit_status}
+def edit_copy_facts(edit_id):
+    """What a failed apply or rollback reports about the data safety copy: whether it is on disk and its journalled size."""
+    facts={'dataCopy':(edit_dir(edit_id)/'data').is_dir()}
+    try:size=(edit_journal(edit_id) or {}).get('dataBytes')
+    except Exception:size=None
+    if isinstance(size,int):facts['dataBytes']=size
+    return facts
 def edit_id_ok(req):return isinstance(req.get('editId'),str) and bool(EDIT_UUID.fullmatch(req['editId']))
 def edit_operation(req,watch=None):
     """Entry point for every edit-* op: validate, take the site lock, run, answer with one result line."""
@@ -1401,7 +1452,7 @@ def edit_operation(req,watch=None):
         EDIT_HANDLERS[op](req,edit_id,site,roots,inv)
     except EditRefused as refused:
         extra={}
-        if op in ('edit-rollback','edit-apply') and edit_id_ok(req):extra['dataCopy']=(edit_dir(req['editId'])/'data').is_dir()
+        if op in ('edit-rollback','edit-apply') and edit_id_ok(req):extra=edit_copy_facts(req['editId'])
         emit(result={'ok':False,'code':refused.code,'reason':refused.reason,**({'field':refused.field[:200]} if refused.field else {}),**extra})
     except Exception as error:
         # Never str(error): Docker output, paths and values stay on the server.
@@ -1409,7 +1460,7 @@ def edit_operation(req,watch=None):
         # Out of space while preparing (pulls) is DISK_FULL. Anywhere else (apply, rollback) it is a plain failure: the
         # candidate may be on disk, so the edit goes through edit-status and rollback, and the journal is kept.
         code='DISK_FULL' if op=='edit-prepare' and isinstance(error,OSError) and error.errno==errno.ENOSPC else 'ROLLBACK_FAILED' if op=='edit-rollback' else 'FAILED'
-        extra={'dataCopy':(edit_dir(req['editId'])/'data').is_dir()} if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
+        extra=edit_copy_facts(req['editId']) if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
         emit(result={'ok':False,'code':code,'reason':EDIT_REASONS[code],**extra})
     finally:
         if lock:lock.close()

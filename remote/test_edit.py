@@ -586,6 +586,13 @@ class ReviewFixes(EditCase):
         with patch('helper.EDIT_COPY_MAX_SECONDS',0):self.refused(self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[]),'DATA_TOO_LARGE')
         with patch('helper.EDIT_DATA_SCAN_LIMIT',1),patch('helper.edit_data_size.__defaults__',(1,)):
             self.refused(self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[]),'DATA_TOO_LARGE')
+    def test_vanished_files_are_skipped_while_measuring(self):
+        self.seed();real=os.scandir;target=self.root+'/data/uploads'
+        def scan(path='.'):
+            if str(path).replace('\\','/')==target:raise FileNotFoundError(2,'gone')
+            return real(path)
+        with patch('helper.os.scandir',side_effect=scan):result=self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[])
+        self.assertTrue(result['ok'],result)
     def test_unreadable_data_fails_closed(self):
         self.seed();real=os.scandir;target=self.root+'/data/uploads'
         def scan(path='.'):
@@ -629,19 +636,58 @@ class ReviewFixes(EditCase):
         self.assertEqual(helper.EDIT_RAW_PATTERNS['top-level-flow'].findall(flow)!=[],True)
         with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,flow)
         self.assertEqual(refused.exception.code,'YAML_REFUSED')
-        for text,token in [(yaml_doc+'  api:\n    extends:\n      file: ./common.yaml\n      service: base\n','extends'),(yaml_doc+'secrets:\n  s:\n    "file": ./s.txt\n','file'),(yaml_doc+"x-a: {'include': [/x]}\n",'include'),(yaml_doc+'x-b:\n  - INCLUDE: [/x]\n','include')]:
+        for text,token in [(yaml_doc+'  api:\n    extends:\n      file: ./common.yaml\n      service: base\n','extends'),(yaml_doc+'secrets:\n  s:\n    "file": ./s.txt\n','file'),(yaml_doc+"x-a: {'include': [/x]}\n",'include'),(yaml_doc+'x-b:\n  - include: [/x]\n','include')]:
             with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,text)
             self.assertEqual((refused.exception.code,refused.exception.field),('PATH_REFUSED',token),text)
         existing=yaml_doc+'  api:\n    extends:\n      file: ./common.yaml\n      service: base\n'
         helper.edit_raw_problems(existing,existing.replace('shop:1.0','shop:1.1'))  # what the site already has stays allowed
+        # Not keys, so not refused: an environment key FILE, a list item that is just the word file, CRLF line ends.
+        helper.edit_raw_problems(yaml_doc,yaml_doc+'    environment:\n      FILE: /data/x\n      INCLUDE: yes\n    command:\n      - file\n      - include\n')
+        helper.edit_raw_problems(yaml_doc.replace('\n','\r\n'),yaml_doc.replace('\n','\r\n').replace('shop:1.0','shop:1.1'))
+    def test_review_delta_bypasses_are_refused(self):
+        yaml_doc='services:\n  web:\n    image: nginx:1\n'
+        bypasses={
+            'tag':yaml_doc+'!!str include: [other.yaml]\n',
+            'anchor':yaml_doc+'&a include: [other.yaml]\n',
+            'alias-key':yaml_doc+'x-k: &k include\n*k : [other.yaml]\n',
+            'bare-cr':yaml_doc.replace('image: nginx:1\n','image: nginx:1\rinclude: [other.yaml]\n'),
+            'line-separator':yaml_doc.replace('image: nginx:1\n','image: nginx:1\u2028include: [other.yaml]\n'),
+            'next-line':yaml_doc.replace('image: nginx:1\n','image: nginx:1\u0085include: [other.yaml]\n'),
+            'paragraph-separator':yaml_doc.replace('image: nginx:1\n','image: nginx:1\u2029include: [other.yaml]\n'),
+            'tagged-file':yaml_doc+'secrets:\n  s:\n    !!str file: /etc/shadow\n',
+            'anchored-file':yaml_doc+'secrets:\n  s:\n    &f file: /etc/shadow\n',
+            'escaped-key-swap':'services:\n  "w\\u0065b":\n    image: nginx:1\n',
+        }
+        original={'escaped-key-swap':'services:\n  "w\\u0065x":\n    image: nginx:1\n'}
+        for name,text in bypasses.items():
+            with self.assertRaises(helper.EditRefused,msg=name) as refused:helper.edit_raw_problems(original.get(name,yaml_doc),text)
+            self.assertIn(refused.exception.code,('YAML_REFUSED','PATH_REFUSED'),name)
+        # Node properties a file already has stay allowed; a new one is refused, outside quotes only.
+        anchored=yaml_doc+'x-common: &common\n  restart: always\n  labels:\n    x: "*not-an-alias &not-an-anchor"\n'
+        helper.edit_raw_problems(anchored,anchored.replace('nginx:1','nginx:2'))
+        with self.assertRaises(helper.EditRefused):helper.edit_raw_problems(anchored,anchored+'x-two: &two {}\n')
+    @unittest.skipUnless(shutil.which('docker') and subprocess.run(['docker','compose','version'],capture_output=True).returncode==0,'docker compose not available')
+    def test_bypasses_against_real_docker_compose(self):
+        """With real Compose: each bypass really is read as an include (so the guard matters), and the guard refuses it."""
+        folder=pathlib.Path(tempfile.mkdtemp(prefix='edit-compose-'))
+        try:
+            (folder/'other.yaml').write_text('services:\n  sneaky:\n    image: alpine:3\n')
+            for name,text in {'tag':'services:\n  web:\n    image: nginx:1\n!!str include: [other.yaml]\n','anchor':'services:\n  web:\n    image: nginx:1\n&a include: [other.yaml]\n'}.items():
+                (folder/'compose.yaml').write_text(text)
+                out=subprocess.run(['docker','compose','-f',str(folder/'compose.yaml'),'config','--services'],capture_output=True,text=True,cwd=str(folder))
+                if out.returncode==0:self.assertIn('sneaky',out.stdout,name+': Compose reads it as an include')
+                with self.assertRaises(helper.EditRefused,msg=name):helper.edit_raw_problems('services:\n  web:\n    image: nginx:1\n',text)
+        finally:shutil.rmtree(folder,ignore_errors=True)
     # B6 + follow-ups
     def test_holder_containers_keep_the_image_ids_and_finish_removes_them(self):
         digest,_=self.prepare()
-        holders=self.journal()['holders'];self.assertIn('docknest-edit-hold-%s-web'%EDIT[:8],holders)
+        holders=self.journal()['holders'];self.assertIn(helper.edit_holder_name(EDIT,'web'),holders);self.assertTrue(helper.edit_holder_name(EDIT,'web').startswith('docknest-edit-hold-'+EDIT+'-'))
+        self.assertNotEqual(helper.edit_holder_name(EDIT,'a'*40+'x'),helper.edit_holder_name(EDIT,'a'*40+'y'),'no collision from a cut name')
         create=[c['args'] for c in self.fake.calls if c['args'][1:2]==['create']][0]
         self.assertIn('com.docker.compose.project=',create,'outside the Compose project');self.assertNotIn('start',[c['args'][1] for c in self.fake.calls])
         self.assertTrue(self.run_op('edit-prepare',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[{'file':self.envfile,'key':'DB_PASSWORD','value':SECRET}],reviewedModelSha256=digest)['ok'],'idempotent')
         self.assertTrue(self.run_op('edit-finish')['ok']);self.assertEqual(self.fake.holders,{})
+        removals=[c['args'] for c in self.fake.calls if c['args'][1:4]==['rm','-f','-v']];self.assertEqual(len(removals),len(holders),'holders removed with their anonymous volumes')
     def test_a_new_service_alone_takes_no_data_copy(self):
         services=self.edited(**{'cache.image':'redis:7'})
         check=self.run_op('edit-check',files=self.candidate(services),env=[]);self.assertTrue(check['ok'],check);self.assertFalse(check['verdict']['imageChanged'])
