@@ -5,7 +5,7 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     VERSION, diagnostic, inspect)
-# Mutable state lives in common and is never copied by import: PROBE_POLICY_FALLBACKS
+# Mutable state lives in common and is never copied by import: PEER_CERTIFICATES, PROBE_POLICY_FALLBACKS
 # </build:header>
 def pinned_socket(addresses,port,timeout):
     """Connects only to addresses validated earlier, so a second DNS answer cannot redirect the probe."""
@@ -22,7 +22,8 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
     def connect(self):
         sock=pinned_socket(self.addresses,self.port,self.timeout)
         try:self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
-        except Exception:sock.close();raise
+        except Exception as error:note_peer_certificate(self.host,error=error);sock.close();raise
+        note_peer_certificate(self.host,self.sock)
 class OriginHTTPSConnection(PinnedHTTPSConnection):
     def __init__(self,host,port,**kw):super().__init__(host,port,['127.0.0.1'],**kw)
 
@@ -189,3 +190,78 @@ def health(containers,url=None,domains=(),fallback=False):
             policy_fallback('health')
         except Exception:return False
     return True
+
+# ---- Certificates (docs/alerts.md, "Certificates") ----
+# Read only while an operation DockNest already runs is on this server: the certificate an HTTPS probe of this run just
+# verified, and the certbot certificates in /etc/letsencrypt/live with the outcome of certbot's latest renewal runs.
+# Only dates, DNS names, the serial and certbot certificate names leave the server: never keys, file contents or log
+# text. Nothing here can fail the operation it rides on.
+LETSENCRYPT=pathlib.Path('/etc/letsencrypt');LETSENCRYPT_LOGS=pathlib.Path('/var/log/letsencrypt')
+CERT_LIMIT=25;CERT_LOG_TAIL=512*1024;CERT_LOG_FILES=5
+CERT_NAME=re.compile(r'(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+')
+LINEAGE=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+RENEW_FAILED=re.compile(r'Failed to renew certificate (\S+) with error')
+RENEW_RESULT=re.compile(r'/live/([^/\s]+)/fullchain\.pem \((success|failure)\)')
+def certificate_fact(cert,source,name):
+    """{source, name, notAfter (epoch seconds), domains, serial?} from a decoded certificate, or None."""
+    if not isinstance(cert,dict) or not cert.get('notAfter'):return None
+    try:not_after=int(ssl.cert_time_to_seconds(cert['notAfter']))
+    except (ValueError,OverflowError,TypeError):return None
+    domains=[]
+    for kind,value in cert.get('subjectAltName',()) or ():
+        value=str(value).lower().rstrip('.')
+        if kind=='DNS' and CERT_NAME.fullmatch(value) and value not in domains:domains.append(value)
+    serial=str(cert.get('serialNumber',''))
+    return {'source':source,'name':name,'notAfter':not_after,'domains':domains[:50],**({'serial':serial.upper()} if re.fullmatch(r'[0-9A-Fa-f]{1,64}',serial) else {})}
+def note_peer_certificate(host,sock=None,error=None):
+    """Called by every HTTPS probe connection. A verified handshake records its certificate's dates; a handshake refused
+    because the certificate has expired (OpenSSL verify code 10) records that. Other failures record nothing."""
+    try:
+        name=str(host).lower().rstrip('.')
+        if error is not None:
+            if getattr(error,'verify_code',None)==10 and len(PEER_CERTIFICATES)<CERT_LIMIT:PEER_CERTIFICATES[name]={'source':'tls','name':name,'expired':True}
+            return
+        fact=certificate_fact(sock.getpeercert(),'tls',name)
+        if fact and (name in PEER_CERTIFICATES or len(PEER_CERTIFICATES)<CERT_LIMIT):PEER_CERTIFICATES[name]=fact
+    except Exception:pass
+def renewal_outcomes(logs=None):
+    """{certificate name: 'ok' | 'failed'} from certbot's newest logs (the last 512 KB of up to five), newest first.
+    A run that renewed nothing ("not yet due") says nothing, so the newest run that tried decides."""
+    directory=pathlib.Path(logs or LETSENCRYPT_LOGS);outcomes={}
+    for index in range(CERT_LOG_FILES):
+        path=directory/('letsencrypt.log'+('.%d'%index if index else ''))
+        try:
+            if not path.is_file():continue
+            with open(path,'rb') as handle:
+                size=handle.seek(0,2);handle.seek(max(0,size-CERT_LOG_TAIL));text=handle.read(CERT_LOG_TAIL).decode('utf-8','replace')
+        except OSError:continue
+        found={}
+        for line in text.splitlines():
+            failed=RENEW_FAILED.search(line);result=None if failed else RENEW_RESULT.search(line);match=failed or result
+            if match and LINEAGE.fullmatch(match.group(1)):found[match.group(1)]='failed' if failed or result.group(2)=='failure' else 'ok'
+        for name,state in found.items():outcomes.setdefault(name,state)
+    return outcomes
+def certbot_certificates(root=None,logs=None):
+    """The certbot certificates on this server, read from the public certificate files only (never a key)."""
+    root=pathlib.Path(root or LETSENCRYPT);live=root/'live'
+    decode=getattr(getattr(ssl,'_ssl',None),'_test_decode_cert',None)
+    try:
+        if decode is None or not live.is_dir():return []
+        names=sorted(entry.name for entry in os.scandir(live) if entry.is_dir() and LINEAGE.fullmatch(entry.name))[:CERT_LIMIT]
+    except OSError:return []
+    renewal=renewal_outcomes(logs) if names else {};facts=[]
+    for name in names:
+        path=live/name/'cert.pem'
+        try:
+            if not path.is_file() or path.stat().st_size>65536:continue
+            fact=certificate_fact(decode(str(path)),'certbot',name)
+        except Exception:continue
+        if not fact:continue
+        fact['renews']=(root/'renewal'/(name+'.conf')).is_file()
+        if name in renewal:fact['renewal']=renewal[name]
+        facts.append(fact)
+    return facts
+def certificate_facts():
+    """What an operation's result carries: this run's probe certificates, then the certbot certificates."""
+    try:return list(PEER_CERTIFICATES.values())[:CERT_LIMIT]+certbot_certificates()
+    except Exception:return []
