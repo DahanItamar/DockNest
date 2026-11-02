@@ -78,14 +78,23 @@ export function deployKeyView(row) {
 export const listDeployKeys = () => db.prepare('SELECT * FROM deploy_keys ORDER BY created_at,id').all().map(deployKeyView);
 const activeUse = keyId => db.prepare("SELECT 1 FROM site_launches WHERE deploy_key_id=? AND state IN ('queued','running','needs_attention')").get(keyId);
 
-// POST /api/deploy-keys. Without `hostKeySha256` it only reads the Git host key and answers 409 HOST_KEY_CONFIRM with its
-// fingerprint, creating nothing. With it, the key is read again and must still match; then the pair is generated.
-export async function createDeployKey({ name, gitHost: rawHost, serverId, allowPrivate = false, hostKeySha256 }, actor) {
+// POST /api/deploy-keys/host-key: reads the Git host key from the server's network view and answers its SHA-256 for the
+// administrator to compare with the one the Git host publishes. Stores nothing.
+export async function previewHostKey({ gitHost: rawHost, serverId, allowPrivate = false }) {
   const gitHost = parseGitHost(rawHost, { allowPrivate });
   const server = serverRow(serverId);
   if (!server) throw httpError(404, 'NOT_FOUND', 'Server not found.');
   const hostKey = await readHostKey(server, gitHost, allowPrivate);
-  confirmHostKey(hostKey, hostKeySha256, gitHost.text);
+  return { gitHost: gitHost.text, fingerprint: hostKey.sha256, type: hostKey.type };
+}
+// POST /api/deploy-keys { ..., fingerprint }: the host key is read again and must still be the one the administrator
+// confirmed (`fingerprint`, from /host-key); only then is the pair generated and stored.
+export async function createDeployKey({ name, gitHost: rawHost, serverId, allowPrivate = false, fingerprint }, actor) {
+  const gitHost = parseGitHost(rawHost, { allowPrivate });
+  const server = serverRow(serverId);
+  if (!server) throw httpError(404, 'NOT_FOUND', 'Server not found.');
+  const hostKey = await readHostKey(server, gitHost, allowPrivate);
+  confirmHostKey(hostKey, fingerprint, gitHost.text);
   const keyId = id(), at = now(), pair = generateDeployKey(`docknest-${keyId.slice(0, 8)}`);
   db.prepare('INSERT INTO deploy_keys(id,name,git_host,host_key_line,host_key_sha256,public_key,fingerprint,sealed_private_key,pinned_from_server_id,pinned_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(keyId, name, gitHost.text, hostKey.line, hostKey.sha256, pair.publicKey, pair.fingerprint, seal(pair.privateKey), server.id, at, actor, at);
@@ -93,22 +102,27 @@ export async function createDeployKey({ name, gitHost: rawHost, serverId, allowP
   return { key: deployKeyView(db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId)) };
 }
 function confirmHostKey(hostKey, confirmed, host) {
-  const answer = { hostKey: { sha256: hostKey.sha256, type: hostKey.type } };
-  if (confirmed === undefined || confirmed === null || confirmed === '') throw httpError(409, 'HOST_KEY_CONFIRM', `Compare this fingerprint with the one ${host} publishes, then confirm it.`, answer);
-  if (normaliseSha(confirmed) !== hostKey.sha256) throw httpError(409, 'HOST_KEY_CHANGED', `The SSH key of ${host} is not the one you confirmed. Check the fingerprint again.`, answer);
+  if (normaliseSha(confirmed) !== hostKey.sha256) throw httpError(409, 'HOST_KEY_CHANGED', `The SSH key of ${host} is not the one you confirmed. Check the fingerprint again.`, { hostKey: { fingerprint: hostKey.sha256, type: hostKey.type } });
 }
-
-// POST /api/deploy-keys/:id/pin: read the Git host key again (from the same or another server) and pin it after the
-// administrator confirms it. Used after the Git host rotated its key and before using the key from another server.
-export async function repinDeployKey(keyId, { serverId, allowPrivate = false, hostKeySha256 }, actor) {
-  const row = db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId);
-  if (!row) throw httpError(404, 'NOT_FOUND', 'Deploy key not found.');
+const keyRow = keyId => { const row = db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId); if (!row) throw httpError(404, 'NOT_FOUND', 'Deploy key not found.'); return row; };
+// POST /api/deploy-keys/:id/host-key { serverId }: the Git host key as `serverId` sees it now, and the pinned one.
+export async function keyHostKey(keyId, { serverId, allowPrivate = false }) {
+  const row = keyRow(keyId), server = serverRow(serverId);
+  if (!server) throw httpError(404, 'NOT_FOUND', 'Server not found.');
+  const hostKey = await readHostKey(server, parseGitHost(row.git_host, { allowPrivate }), allowPrivate);
+  return { fingerprint: hostKey.sha256, type: hostKey.type, changed: hostKey.sha256 !== row.host_key_sha256, previous: { fingerprint: row.host_key_sha256, serverId: row.pinned_from_server_id, serverName: row.pinned_from_server_id ? serverRow(row.pinned_from_server_id)?.name ?? null : null, pinnedAt: row.pinned_at } };
+}
+// POST /api/deploy-keys/:id/repin { serverId, fingerprint }: read the Git host key again (from the same or another server)
+// and pin it when it is the one the administrator confirmed. Used after the Git host rotated its key and before using
+// the key from another server (item 17).
+export async function repinDeployKey(keyId, { serverId, allowPrivate = false, fingerprint }, actor) {
+  const row = keyRow(keyId);
   const server = serverRow(serverId);
   if (!server) throw httpError(404, 'NOT_FOUND', 'Server not found.');
   if (activeUse(keyId)) throw httpError(409, 'KEY_IN_USE', 'A launch is using this deploy key. Pin its host key again when the launch has finished.');
   const gitHost = parseGitHost(row.git_host, { allowPrivate });
   const hostKey = await readHostKey(server, gitHost, allowPrivate);
-  confirmHostKey(hostKey, hostKeySha256, gitHost.text);
+  confirmHostKey(hostKey, fingerprint, gitHost.text);
   transaction(() => {
     if (activeUse(keyId)) throw httpError(409, 'KEY_IN_USE', 'A launch is using this deploy key. Pin its host key again when the launch has finished.');
     db.prepare('UPDATE deploy_keys SET host_key_line=?,host_key_sha256=?,pinned_from_server_id=?,pinned_at=? WHERE id=?').run(hostKey.line, hostKey.sha256, server.id, now(), keyId);
@@ -143,8 +157,11 @@ export const deployKeyRow = keyId => db.prepare('SELECT id,name,git_host,pinned_
 
 // ---------- API: /api/deploy-keys ----------
 const uuid = z.uuid();
-const createBody = z.object({ name: z.string().trim().min(1).max(80), gitHost: z.string().min(1).max(262), serverId: uuid, allowPrivate: z.boolean().default(false), hostKeySha256: z.string().max(80).optional() }).strict();
-const pinBody = z.object({ serverId: uuid, allowPrivate: z.boolean().default(false), hostKeySha256: z.string().max(80).optional() }).strict();
+const fingerprint = z.string().min(1).max(80);
+const createBody = z.object({ name: z.string().trim().min(1).max(80), gitHost: z.string().min(1).max(262), serverId: uuid, allowPrivate: z.boolean().default(false), fingerprint }).strict();
+const hostKeyBody = z.object({ gitHost: z.string().min(1).max(262), serverId: uuid, allowPrivate: z.boolean().default(false) }).strict();
+const keyHostBody = z.object({ serverId: uuid, allowPrivate: z.boolean().default(false) }).strict();
+const repinBody = z.object({ serverId: uuid, allowPrivate: z.boolean().default(false), fingerprint }).strict();
 const handle = fn => async (req, res, next) => {
   try { await fn(req, res); }
   catch (error) {
@@ -161,6 +178,9 @@ deployKeyRoutes.get('/:id', handle(async (req, res) => {
   if (!key) throw httpError(404, 'NOT_FOUND', 'Deploy key not found.');
   res.json({ key });
 }));
+// Reading a host key changes nothing, so it needs no re-verification; it is rate limited with the key changes.
+deployKeyRoutes.post('/host-key', rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(await previewHostKey(hostKeyBody.parse(req.body)))));
 deployKeyRoutes.post('/', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.status(201).json(await createDeployKey(createBody.parse(req.body), req.user.id))));
-deployKeyRoutes.post('/:id/pin', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(await repinDeployKey(uuid.parse(req.params.id), pinBody.parse(req.body), req.user.id))));
+deployKeyRoutes.post('/:id/host-key', rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(await keyHostKey(uuid.parse(req.params.id), keyHostBody.parse(req.body)))));
+deployKeyRoutes.post('/:id/repin', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(await repinDeployKey(uuid.parse(req.params.id), repinBody.parse(req.body), req.user.id))));
 deployKeyRoutes.delete('/:id', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(deleteDeployKey(uuid.parse(req.params.id), req.user.id))));

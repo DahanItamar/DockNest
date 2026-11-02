@@ -181,14 +181,18 @@ export async function checkLaunch(serverId, body) {
   if (db.prepare("SELECT 1 FROM site_launches WHERE server_id=? AND slug=? AND state NOT IN ('failed','cancelled','removed')").get(serverId, input.slug)) checks.push({ id: 'slug', ok: false, code: 'SLUG_EXISTS', text: `A launch for ${input.domain} already exists on ${server.name}.` });
   if (launchActive(serverId)) checks.push({ id: 'launch', ok: false, code: 'LAUNCH_RUNNING', text: `Another launch is running on ${server.name}. Wait for it to finish.` });
   const gate = gateOf(facts);
+  const shown = (refused(facts) ? [{ id: 'server', ok: false, code: cleanCode(facts.code), text: refusalText(facts, input.domain) }, ...checks] : checks)
+    .map(item => ({ ...item, title: CHECK_TITLES[item.id] ?? item.id, status: item.ok ? 'ok' : 'block', value: item.text }));
+  const services = servicesOf(facts);
   return {
+    blockers: shown.filter(item => !item.ok).map(item => item.text), warnings: [], builds: services.some(service => service.build),
     ok: !refused(facts) && checks.every(item => item.ok) && gate.ok, slug: input.slug, folder: `${SITE_ROOT}/${input.slug}`, domain: input.domain, www: `www.${input.domain}`,
-    checks: refused(facts) ? [{ id: 'server', ok: false, code: cleanCode(facts.code), text: refusalText(facts, input.domain) }, ...checks] : checks,
-    gate, services: servicesOf(facts), composeName: typeof facts?.composeName === 'string' ? facts.composeName.slice(0, 63) : null,
+    checks: shown, gate, services, composeName: typeof facts?.composeName === 'string' ? facts.composeName.slice(0, 63) : null,
     refHead: typeof facts?.refHead === 'string' && /^[0-9a-f]{40,64}$/.test(facts.refHead) ? facts.refHead : null,
     dns: dnsView(facts, input.domain), testServers: testServerChoices(serverId),
   };
 }
+const CHECK_TITLES = { server: 'Server', docker: 'Docker', compose: 'Docker Compose', git: 'Git', nginx: 'nginx', certbot: 'certbot', buildx: 'Builds', space: 'Free space', ports: 'Ports 80 and 443', dns: 'DNS', domain: 'Domain', certificate: 'Certificate', repository: 'Repository', slug: 'Site folder', launch: 'Another launch' };
 function gateOf(answer) {
   const gate = answer?.gate;
   if (!gate || typeof gate !== 'object') return { ok: true, refusals: [] };
@@ -299,6 +303,23 @@ export function retryLaunch(launchId, actor) {
 }
 
 // ---------- views ----------
+function statusLine(launch, steps, serverName) {
+  const running = steps.find(step => step.state === 'launch_running' || step.state === 'launch_queued');
+  switch (launch.state) {
+    case 'queued': return `Waiting to start on ${serverName}.`;
+    case 'running':
+      if (launch.options.removing) return `Removing what the launch made on ${serverName}.`;
+      if (running?.step === 'teardown') return `Something went wrong, so DockNest is removing what the launch made. ${launch.reason ?? ''}`.trim();
+      return running ? `${LABELS[running.step]}: working on ${serverName}.` : `Launching ${launch.domain} on ${serverName}.`;
+    case 'waiting_dns': return `${launch.domain} works on HTTP. Add the DNS record, then press Check again for the certificate.`;
+    case 'done': return launch.options.removing ? `Removing what the launch made on ${serverName}.` : `${launch.domain} is live and backed up.`;
+    case 'failed': return `The launch stopped and ${serverName} is as it was. ${launch.reason ?? ''}`.trim();
+    case 'cancelled': return `Cancelled. ${serverName} is as it was.`;
+    case 'removed': return `Removed. The site is archived; its backups are kept.`;
+    case 'needs_attention': return `DockNest could not remove everything the launch made on ${serverName}. Check the server, then press Try again.`;
+    default: return '';
+  }
+}
 const PUBLIC_RESULT = ['services', 'commit', 'state', 'certName', 'left', 'removed'];
 export function launchView(launchId) {
   const launch = launchFor(launchId), steps = loadSteps(launchId), server = serverRow(launch.server_id), at = launchTransport.now();
@@ -308,7 +329,13 @@ export function launchView(launchId) {
     domain: launch.domain, source: launch.source, repo: launch.source === 'git' ? { url: launch.repo_url, ref: launch.ref, composePath: launch.compose_path, commit: launch.commit_sha } : null,
     deployKeyId: launch.deploy_key_id, webService: launch.web_service, webPort: launch.web_port, loopbackPort: launch.loopback_port,
     state: launch.state, failedStep: launch.failed_step, reason: launch.reason, removing: !!launch.options.removing, cancelRequested: launch.cancel_requested,
-    envKeys: launch.options.envKeys ?? [], dns: { records: launch.options.dns ?? [] },
+    envKeys: launch.options.envKeys ?? [],
+    // The UI shows one record ({type,name,value}); `records` also lists AAAA when the server has IPv6.
+    dns: (records => (records.length ? { ...records[0], records } : null))(launch.options.dns ?? []),
+    progress: Math.round(steps.filter(step => STEP_ORDER.includes(step.step) && ['done', 'skipped'].includes(step.state)).length / STEP_ORDER.length * 100),
+    statusLine: statusLine(launch, steps, server?.name ?? 'the server'),
+    certificate: certificate ? { state: certificate.state === 'done' ? 'issued' : certificate.state === 'waiting' ? 'waiting_dns' : certificate.state === 'failed' ? 'failed' : ['launch_queued', 'launch_running'].includes(certificate.state) ? 'running' : 'pending', reason: certificate.state === 'failed' || certificate.state === 'waiting' ? certificate.detail : null } : null,
+    backups: launch.site_id ? (policy => ({ firstBackup: steps.find(step => step.step === 'first_backup')?.state ?? null, schedule: policy?.schedule ?? null, timezone: policy?.timezone ?? null, nextRun: policy?.next_run ?? null }))(db.prepare('SELECT schedule,timezone,next_run FROM policies WHERE site_id=?').get(launch.site_id)) : null,
     restoreTests: launch.site_id ? (row => row ? { enabled: row.enabled === 1, serverId: row.server_id, reason: row.skip_reason } : null)(db.prepare('SELECT enabled,server_id,skip_reason FROM restore_test_settings WHERE site_id=?').get(launch.site_id)) : null,
     steps: steps.map(step => ({ step: step.step, label: LABELS[step.step], state: step.state === 'launch_queued' ? 'queued' : step.state === 'launch_running' ? 'running' : step.state, startedAt: step.started_at, finishedAt: step.finished_at, detail: step.detail, result: Object.fromEntries(Object.entries(step.result).filter(([key]) => PUBLIC_RESULT.includes(key))) })),
     actions: {
@@ -319,6 +346,11 @@ export function launchView(launchId) {
     },
     removeUntil: launch.remove_until, createdAt: launch.created_at, startedAt: launch.started_at, finishedAt: launch.finished_at,
   };
+}
+// The launch of a site, for /api/state (Remove launch on the site page): only while it is live or waiting for DNS.
+export function launchOfSite(siteId) {
+  const row = db.prepare("SELECT id,finished_at,started_at,remove_until FROM site_launches WHERE site_id=? AND state IN ('running','waiting_dns','done') ORDER BY created_at DESC LIMIT 1").get(siteId);
+  return row ? { id: row.id, launchedAt: row.finished_at ?? row.started_at, removeUntil: row.remove_until } : null;
 }
 export const listLaunches = serverId => db.prepare(`SELECT id FROM site_launches WHERE ${serverId ? 'server_id=? AND ' : ''}(state IN ('queued','running','waiting_dns','needs_attention') OR (state='done' AND remove_until>?)) ORDER BY created_at DESC LIMIT 50`).all(...(serverId ? [serverId, now()] : [now()])).map(row => launchView(row.id));
 
