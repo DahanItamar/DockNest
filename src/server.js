@@ -39,6 +39,7 @@ import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-s
 import { backupCopyViews } from './backup-copies.js';
 import { retryCopy, packagePath } from './artifact-journal.js';
 import { incrementalRoutes } from './incremental-routes.js';
+import { serverCleanupRoutes } from './server-cleanup.js';
 import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 import { hardeningView } from './hardening.js';
 await clearInterruptedExports();
@@ -76,6 +77,7 @@ app.use('/api/connections', connectionRoutes);
 app.use('/api', restoreTestRoutes);
 app.use('/api', storageReportRoutes);
 app.use('/api', incrementalRoutes);
+app.use('/api', serverCleanupRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();

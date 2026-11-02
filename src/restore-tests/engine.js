@@ -18,6 +18,7 @@ import { recordTestVerification, recordVerification } from '../recovery-evidence
 import { secretValue } from '../moves/state.js';
 import { validateLimits, cpuProblem } from './limits.js';
 import { heldBy } from './hold.js';
+import { cleanupHeld } from '../cleanup-hold.js';
 
 export const STEPS = Object.freeze(['check_space', 'copy_backup', 'restore_copy', 'start_containers', 'check_health', 'clean_up']);
 export const LABELS = Object.freeze({ check_space: 'Check space', copy_backup: 'Copy backup', restore_copy: 'Restore copy', start_containers: 'Start containers', check_health: 'Check health', clean_up: 'Clean up' });
@@ -193,6 +194,7 @@ function advance(test) {
       if (deploymentHeld(db)) return;
       const holder = heldBy(test.server_id);
       if (holder && holder !== test.id) return;
+      if (cleanupHeld(test.server_id)) return;  // a server cleanup runs there; start after it (src/cleanup-hold.js)
       if (backupDueOn(test.server_id, clock() + test.limits.timeLimitMinutes * 60000)) return;
       ensureJob(test, 'check_space');
       return;
