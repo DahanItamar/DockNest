@@ -103,6 +103,9 @@ EDIT_REASONS={
     'PULL_FAILED':'The new image could not be downloaded.',
     'DISK_FULL':'The server is too low on disk space.',
     'DATA_COPY_SPACE':'Not enough free disk space for the safety copy.',
+    'DATA_TOO_LARGE':'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
+    'DATA_UNREADABLE':'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+    'YAML_REFUSED':'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
     'DATA_NOT_LOCAL':'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
     'OWN_SITE':'This is DockNest itself. Change it with the DockNest upgrade, not Safe Edit.',
     'NO_JOURNAL':'This change was not prepared on the server.',
@@ -351,9 +354,29 @@ def edit_text_includes(text):
     match=re.search(r'(?m)^["\']?include["\']?[ \t]*:.*(?:\n(?:[ \t#].*|)$)*',text)
     return match[0].strip() if match else None
 EDIT_FILE_VALUE=re.compile(r'(?m)(?:^|[\s{,\-])["\']?file["\']?[ \t]*:[ \t]*([^\n,}#]*)')
+# Raw-text guards (security review B4): constructs a regex cannot read reliably are refused when the candidate adds
+# them, and so is any new include / extends / file key, in any quoting or position. Counted against the original
+# file, so what a site already has keeps working; the path checks below still validate what remains.
+EDIT_RAW_PATTERNS={
+    'escaped-key':re.compile(r'"(?:[^"\\\n]|\\.)*\\(?:[^"\\\n]|\\.)*"[ \t]*:'),
+    'complex-key':re.compile(r'(?m)^[ \t]*(?:-[ \t]+)?\?(?:[ \t]|$)'),
+    'top-level-merge':re.compile(r"(?m)^[\"']?<<[\"']?[ \t]*:"),
+    'top-level-flow':re.compile(r'(?m)\A(?:[ \t]*(?:#.*)?\n)*[ \t]*(?:---[ \t]*\n(?:[ \t]*(?:#.*)?\n)*)?\{'),
+}
+EDIT_REFERENCE_KEY=re.compile(r"(?im)(?:^[ \t]*(?:-[ \t]+)?(?:\?[ \t]+)?|[{,][ \t]*|\?[ \t]+)[\"']?(include|extends|file)[\"']?[ \t]*(?::|$)")
+def edit_raw_problems(original,candidate):
+    original=original or ''
+    for name,pattern in EDIT_RAW_PATTERNS.items():
+        if len(pattern.findall(candidate))>len(pattern.findall(original)):edit_refuse('YAML_REFUSED',name)
+    before={};after={}
+    for token in EDIT_REFERENCE_KEY.findall(original):before[token.lower()]=before.get(token.lower(),0)+1
+    for token in EDIT_REFERENCE_KEY.findall(candidate):after[token.lower()]=after.get(token.lower(),0)+1
+    for token,count in after.items():
+        if count>before.get(token,0):edit_refuse('PATH_REFUSED',token)
 def edit_text_problems(original,candidate,inv,roots):
     """Before any Compose call: a candidate may not add an include block, nor a new `file:` reference (extends,
     secrets, configs) that leaves the site's folders or is interpolated, anchored or protected."""
+    edit_raw_problems(original,candidate)
     if edit_text_includes(candidate) and edit_text_includes(candidate)!=edit_text_includes(original or ''):edit_refuse('PATH_REFUSED','include')
     before={v.strip() for v in EDIT_FILE_VALUE.findall(original or '')}
     for raw in EDIT_FILE_VALUE.findall(candidate):
@@ -535,6 +558,9 @@ def edit_changes(current,candidate):
     return changed[:200]
 def edit_image_services(current,candidate):
     return sorted(n for n,s in candidate['services'].items() if s.get('image') and s.get('image')!=(current['services'].get(n) or {}).get('image'))
+def edit_existing_image_changes(current,candidate):
+    """Services that ran before and get another image: only these make a data safety copy (a new service has no data)."""
+    return [n for n in edit_image_services(current,candidate) if n in (current.get('services') or {})]
 def edit_digest(key,kind,model,env_digests,before):
     canonical=json.dumps({'kind':kind,'model':model,'envFiles':env_digests,'before':before},sort_keys=True,separators=(',',':'))
     return edit_keyed(key,canonical.encode())
@@ -700,7 +726,7 @@ def edit_compose_check(req,inv,roots,key,keep=False):
         digest=edit_digest(key,'compose',candidate,candidate_env,before)
         hashes=[{'path':p,'before':originals[p][1]['sha256'],'after':edit_sha(compose[p])} for p in compose]
         hashes+=[{'path':p,'before':edit_keyed(key,originals[p][0]),'after':edit_keyed(key,env[p]),'keyed':True} for p in env]
-        verdict={'changed':edit_changes(current,candidate),'envChanged':changes,'imageChanged':bool(edit_image_services(current,candidate)),
+        verdict={'changed':edit_changes(current,candidate),'envChanged':changes,'imageChanged':bool(edit_existing_image_changes(current,candidate)),
             'newPorts':new_ports,'hashes':hashes,'frozen':frozen,'reviewedModelSha256':digest}
         context={'currentFirst':current_first,'folder':folder,'files':files,'envs':envs,'compose':compose,'env':env,'originals':originals,'current':current,'candidate':candidate,'currentEnv':current_env}
         return verdict,context
@@ -721,6 +747,31 @@ def edit_project_resources(inv):
         try:found[kind]=sorted(edit_docker(kind,'ls','-q','--filter','label=com.docker.compose.project='+inv['project'],inv=inv).decode().split())
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):found[kind]=None
     return found
+def edit_holder_name(edit_id,service):
+    return 'docknest-edit-hold-%s-%s'%(edit_id[:8],re.sub(r'[^a-zA-Z0-9_.-]','-',str(service))[:40] or 's')
+def edit_hold_images(edit_id,journal,inv):
+    """A created, never started container per journalled image ID: Docker never prunes an image a container uses.
+    Outside the Compose project (its labels are overridden), so --remove-orphans and project listings never see it."""
+    for service,item in (journal.get('images') or {}).items():
+        name=edit_holder_name(edit_id,service)
+        if not item.get('id') or name in journal['holders']:continue
+        try:edit_docker('create','--name',name,'--label','docknest.edit.hold='+edit_id,'--label','com.docker.compose.project=','--label','com.docker.compose.service=','--network','none','--entrypoint','/docknest-edit-hold',item['id'],inv=inv)
+        except subprocess.CalledProcessError:
+            if edit_holder_image(name,inv)!=item['id']:raise
+        journal['holders'].append(name);edit_save(edit_id,journal)
+def edit_holder_image(name,inv):
+    try:return json.loads(edit_docker('inspect','--type','container',name,inv=inv))[0].get('Image')
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,OSError,IndexError):return None
+def edit_release_holders(edit_id,journal,inv):
+    for name in list(journal.get('holders') or []):
+        try:edit_docker('rm','-f',name,inv=inv)
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
+def edit_remove_temporaries(edit_id,journal):
+    """Temporary files an interrupted atomic write left next to the site's files."""
+    for record in journal.get('files') or []:
+        folder,name=posixpath.split(record['path'])
+        try:os.unlink(posixpath.join(folder,'.%s.docknest-%s.tmp'%(name,edit_id[:8])))
+        except OSError:pass
 def edit_tag(edit_id,service):
     name=service if re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',service or '') else 's'+edit_sha(str(service).encode())[:12]
     return 'docknest-edit/%s:%s'%(edit_id,name)
@@ -735,7 +786,14 @@ def edit_disk_low():
 # Data sets: every mount of the site's containers that a backup copies and a container can write: named volumes of the
 # local driver (by their Mountpoint) and bind folders. Not: files (Compose and configuration files come back through the
 # file journal), read-only mounts, tmpfs, protected paths, and the paths the site excludes from its backups.
-EDIT_DATA_SCAN_LIMIT=200000
+EDIT_DATA_SCAN_LIMIT=1000000
+# Time budget of a copy (and of a restore, 1.5x): DockNest's call limits for edit-apply and edit-rollback are scaled from
+# the measured size with the same throughput (src/site-edits/state.js COPY), so a larger copy is refused at review.
+EDIT_COPY_BYTES_PER_SECOND=20*1024*1024
+EDIT_COPY_MAX_SECONDS=3*3600
+def edit_stopping():return bool(globals().get('STOPPING'))
+def edit_is_root():return os.name=='posix' and os.geteuid()==0
+def edit_chown(path,uid,gid):os.chown(path,uid,gid,follow_symlinks=False)
 def edit_inspect_containers(ids,inv):
     if not ids:return []
     try:return json.loads(edit_docker('inspect',*ids,inv=inv))
@@ -759,8 +817,10 @@ def edit_data_sets(cfg,containers):
     for path,entry in sorted(found.items()):
         if not entry['rw'] or path in PROTECTED_PATHS:continue
         if entry['kind']=='bind' and (os.path.islink(path) or not os.path.isdir(path) or edit_path_refused(path) or protected_lexical(path)):continue
-        if any(within(path,item) for item in excluded):continue
-        sets.append({'kind':entry['kind'],'name':entry['name'],'path':path,'exclude':[item for item in excluded if within(item,path) and item!=path]})
+        if any(within(path,item) for item in excluded) or within(path,str(EDITS_ROOT)):continue
+        exclude=[item for item in excluded if within(item,path) and item!=path]
+        if within(str(EDITS_ROOT),path):exclude.append(str(EDITS_ROOT))  # never copy the journal into itself
+        sets.append({'kind':entry['kind'],'name':entry['name'],'path':path,'exclude':exclude})
     # A data set inside another one is part of the outer copy.
     return [s for s in sets if not any(o is not s and within(s['path'],o['path']) for o in sets)]
 def edit_skip(path,exclude):return any(within(path,item) for item in exclude)
@@ -772,22 +832,22 @@ def edit_data_size(sets,limit=EDIT_DATA_SCAN_LIMIT):
         while stack:
             current=stack.pop()
             try:entries=list(os.scandir(current))
-            except OSError:continue
+            except OSError:edit_refuse('DATA_UNREADABLE')
             for entry in entries:
                 count+=1
                 if count>limit:return None
                 path=posixpath.join(current,entry.name)
                 if edit_skip(path,s['exclude']):continue
                 try:st=entry.stat(follow_symlinks=False)
-                except OSError:continue
+                except OSError:edit_refuse('DATA_UNREADABLE')
                 total+=st.st_size
                 if stat.S_ISDIR(st.st_mode):stack.append(path)
     return total
 def edit_copy_meta(st,target):
     """Owner, mode, times and extended attributes (POSIX ACLs live there) of one entry; a link's own owner only."""
     link=stat.S_ISLNK(st.st_mode)
-    if os.name=='posix' and os.geteuid()==0:
-        try:os.chown(target,st.st_uid,st.st_gid,follow_symlinks=False)
+    if edit_is_root():
+        try:edit_chown(target,st.st_uid,st.st_gid)
         except (OSError,NotImplementedError):pass
     if not link:os.chmod(target,stat.S_IMODE(st.st_mode))
     try:
@@ -822,6 +882,7 @@ def edit_copy_entry(source,target,st):
 def edit_copy_tree(source,target,exclude=()):
     """Copies the contents of `source` into the existing folder `target`; symbolic links stay links (never followed)."""
     for entry in sorted(os.scandir(source),key=lambda e:e.name):
+        if edit_stopping():edit_refuse('FAILED')  # DockNest stopped waiting: stop between entries, markers stay true
         path=posixpath.join(source,entry.name)
         if edit_skip(path,exclude):continue
         st=entry.stat(follow_symlinks=False);dest=posixpath.join(target,entry.name)
@@ -831,6 +892,7 @@ def edit_copy_tree(source,target,exclude=()):
 def edit_clear(path,exclude=()):
     """Removes everything inside `path` except the excluded paths (and the folders that lead to them)."""
     for entry in list(os.scandir(path)):
+        if edit_stopping():edit_refuse('FAILED')
         child=posixpath.join(path,entry.name)
         if edit_skip(child,exclude):continue
         if entry.is_dir(follow_symlinks=False):
@@ -843,6 +905,7 @@ def edit_snapshot(edit_id,journal,sets):
     for index,s in enumerate(sets):
         record=journal['data'][index]
         if record.get('state') in ('saved','restored'):continue
+        record['state']='copying';edit_save(edit_id,journal)
         target=base/str(index)
         if target.exists():shutil.rmtree(target)
         target.mkdir(mode=0o700)
@@ -850,7 +913,7 @@ def edit_snapshot(edit_id,journal,sets):
             edit_copy_tree(s['path'],target.as_posix(),s['exclude'])
             root=os.stat(s['path'],follow_symlinks=False);record['root']={'uid':root.st_uid,'gid':root.st_gid,'mode':stat.S_IMODE(root.st_mode)}
         except OSError as error:
-            if error.errno==errno.ENOSPC:edit_refuse('DISK_FULL',reason=EDIT_REASONS['DATA_COPY_SPACE'])
+            if error.errno==errno.ENOSPC:edit_refuse('DATA_COPY_SPACE')
             raise
         record['state']='saved';edit_save(edit_id,journal)
 def edit_restore_data(edit_id,journal):
@@ -858,12 +921,14 @@ def edit_restore_data(edit_id,journal):
     base=edit_dir(edit_id)/'data'
     for index,record in enumerate(journal.get('data') or []):
         if record.get('state')=='restored':continue
-        if record.get('state')!='saved' or not (base/str(index)).is_dir():edit_refuse('ROLLBACK_FAILED')
+        # 'restoring' is written before the live folder is cleared, so a run stopped midway is finished by the next one.
+        if record.get('state') not in ('saved','restoring') or not (base/str(index)).is_dir():edit_refuse('ROLLBACK_FAILED')
         path=record['path']
         if os.path.islink(path) or not os.path.isdir(path):edit_refuse('ROLLBACK_FAILED')
+        record['state']='restoring';edit_save(edit_id,journal)
         edit_clear(path,record['exclude']);edit_copy_tree((base/str(index)).as_posix(),path)
         root=record.get('root') or {}
-        if os.name=='posix' and os.geteuid()==0 and 'uid' in root:os.chown(path,root['uid'],root['gid'])
+        if edit_is_root() and 'uid' in root:edit_chown(path,root['uid'],root['gid'])
         if 'mode' in root:os.chmod(path,root['mode'])
         record['state']='restored';edit_save(edit_id,journal)
 def edit_take_data_copy(edit_id,journal,cfg,containers,stop):
@@ -871,9 +936,10 @@ def edit_take_data_copy(edit_id,journal,cfg,containers,stop):
     sets=edit_data_sets(cfg,containers)
     if 'data' not in journal:
         size=edit_data_size(sets,limit=10**9) or 0
+        if size>EDIT_COPY_BYTES_PER_SECOND*EDIT_COPY_MAX_SECONDS:edit_refuse('DATA_TOO_LARGE')
         try:free=shutil.disk_usage(str(edit_dir(edit_id))).free
         except OSError:free=0
-        if free<size*1.2:edit_refuse('DISK_FULL',reason=EDIT_REASONS['DATA_COPY_SPACE'])
+        if free<size*1.2:edit_refuse('DATA_COPY_SPACE')
         journal['data']=[{'kind':s['kind'],'name':s['name'],'path':s['path'],'exclude':s['exclude'],'state':'pending'} for s in sets];journal['dataBytes']=size
     journal['servicesStopped']=True;edit_save(edit_id,journal)
     stop()
@@ -1048,7 +1114,10 @@ def edit_check(req,edit_id,site,roots,inv):
     edit_refuse_own_site(containers)
     verdict,_=edit_container_check(req,inv,key) if 'container' in inv else edit_compose_check(req,inv,roots,key)
     # An image change rolls data back in place: every data set must be copyable (local volumes), and Review shows the size.
-    if verdict.get('imageChanged'):verdict['dataBytes']=edit_data_size(edit_data_sets(req.get('config') if isinstance(req.get('config'),dict) else {},containers))
+    if verdict.get('imageChanged'):
+        size=edit_data_size(edit_data_sets(req.get('config') if isinstance(req.get('config'),dict) else {},containers))
+        if size is None or size>EDIT_COPY_BYTES_PER_SECOND*EDIT_COPY_MAX_SECONDS:edit_refuse('DATA_TOO_LARGE')
+        verdict['dataBytes']=size
     emit(result={'ok':True,'verdict':verdict})
 def edit_store_file(d,index,kind,data):
     folder=d/kind;folder.mkdir(mode=0o700,exist_ok=True)
@@ -1068,7 +1137,7 @@ def edit_prepare(req,edit_id,site,roots,inv):
             try:
                 edit_root();d.mkdir(mode=0o700,exist_ok=True)
                 journal={'version':1,'editId':edit_id,'siteId':site,'kind':'container' if container else 'compose','state':'prepared','reviewedModelSha256':reviewed,
-                    'invocation':inv,'restoreData':False,'createdAt':time.time(),'dataCopy':bool(verdict.get('imageChanged'))}
+                    'invocation':inv,'restoreData':False,'createdAt':time.time(),'dataCopy':bool(verdict.get('imageChanged')),'holders':[]}
                 if container:
                     journal['container']={'id':context['container']['Id'],'name':inv['container'],'plan':context['plan'],'candidate':context['candidate'],'envBefore':context['envBefore'],'renamed':'%s-docknest-%s'%(inv['container'],edit_id[:8])}
                     edit_store_file(d,0,'candidates',('\n'.join(context['env'])+'\n').encode())
@@ -1091,6 +1160,7 @@ def edit_prepare(req,edit_id,site,roots,inv):
                 for service,item in journal['images'].items():
                     if item.get('id'):edit_docker('tag',item['id'],edit_tag(edit_id,service),inv=inv)
                 edit_save(edit_id,journal)
+                edit_hold_images(edit_id,journal,inv)
             except OSError as error:
                 if error.errno==errno.ENOSPC:edit_refuse('DISK_FULL')
                 raise
@@ -1223,10 +1293,11 @@ def edit_poll(req,edit_id,site,roots,inv):
     answer('waiting')
 def edit_rollback(req,edit_id,site,roots,inv):
     journal=edit_journal(edit_id)
-    if not journal:emit(result={'ok':True,'journal':False,'leftovers':0});return
+    if not journal:emit(result={'ok':True,'journal':False,'leftovers':0,'dataCopy':False,'dataRestored':False});return
     if journal.get('invocation')!=inv:edit_refuse('INVALID_REQUEST')
     if isinstance(req.get('restoreData'),bool):journal['restoreData']=req['restoreData']
     journal['rollbackStartedAt']=time.time();edit_save(edit_id,journal)
+    edit_remove_temporaries(edit_id,journal)
     leftovers=0
     try:
         if journal['kind']=='container':edit_rollback_container(edit_id,journal,inv)
@@ -1256,7 +1327,8 @@ def edit_rollback(req,edit_id,site,roots,inv):
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,KeyError,ValueError):edit_refuse('ROLLBACK_FAILED')
     if journal.get('state') in ('candidate_written','applied','rolled_back'):journal['state']='rolled_back'
     journal['rolledBackAt']=time.time();edit_save(edit_id,journal)
-    emit(result={'ok':True,'journal':True,'leftovers':leftovers})
+    restored=bool(journal.get('data')) and all(r.get('state')=='restored' for r in journal['data'])
+    emit(result={'ok':True,'journal':True,'leftovers':leftovers,'dataCopy':(edit_dir(edit_id)/'data').is_dir(),'dataRestored':restored})
 def edit_container_id(name,inv):
     try:return json.loads(edit_docker('inspect','--type','container',name,inv=inv))[0].get('Id')
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,OSError,IndexError):return None
@@ -1280,7 +1352,9 @@ def edit_finish(req,edit_id,site,roots,inv):
             if journal['kind']=='container':edit_docker('start',journal['container']['id'],inv=inv)
             else:edit_compose(inv,['up','-d','--no-build','--pull','never'],timeout=900)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):edit_refuse('APPLY_FAILED')
-    if journal.get('maintenanceOn') and not journal.get('maintenanceBefore'):
+    edit_remove_temporaries(edit_id,journal)
+    # After Restore backup the owner checks the site first: clean up, but leave the maintenance page on.
+    if journal.get('maintenanceOn') and not journal.get('maintenanceBefore') and req.get('keepMaintenance') is not True:
         running=[c['id'] for c in edit_project_containers(inv) if (c.get('State') or {}).get('Running')] if 'container' not in inv else [x for x in [edit_container_id(inv['container'],inv)] if x]
         edit_maintenance(cfg,False,running)
     if journal['kind']=='container':
@@ -1288,6 +1362,7 @@ def edit_finish(req,edit_id,site,roots,inv):
         if renamed==info['id'] and named and named!=info['id']:
             try:edit_docker('rm',info['id'],inv=inv)
             except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
+    edit_release_holders(edit_id,journal,inv)
     for service in (journal.get('images') or {}):
         try:edit_docker('image','rm','--no-prune',edit_tag(edit_id,service),inv=inv)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
@@ -1298,7 +1373,7 @@ def edit_finish(req,edit_id,site,roots,inv):
 def edit_status(req,edit_id,site,roots,inv):
     journal=edit_journal(edit_id);cfg=req.get('config') if isinstance(req.get('config'),dict) else {}
     on=edit_maintenance_on_now(cfg)
-    if not journal:emit(result={'ok':True,'journal':False,'files':'none','maintenance':on,'state':None});return
+    if not journal:emit(result={'ok':True,'journal':False,'files':'none','maintenance':on,'state':None,'dataCopy':False});return
     if journal['kind']=='container':
         info=journal['container'];named=edit_container_id(info['name'],inv)
         files='original' if named==info['id'] else 'candidate' if named else 'mixed'
@@ -1312,6 +1387,7 @@ def edit_status(req,edit_id,site,roots,inv):
     emit(result={'ok':True,'journal':True,'files':files,'maintenance':on,'state':journal.get('state'),'dataCopy':(edit_dir(edit_id)/'data').is_dir()})
 EDIT_HANDLERS={'edit-load':edit_load,'edit-check':edit_check,'edit-prepare':edit_prepare,'edit-apply':edit_apply,'edit-poll':edit_poll,
     'edit-rollback':edit_rollback,'edit-finish':edit_finish,'edit-status':edit_status}
+def edit_id_ok(req):return isinstance(req.get('editId'),str) and bool(EDIT_UUID.fullmatch(req['editId']))
 def edit_operation(req,watch=None):
     """Entry point for every edit-* op: validate, take the site lock, run, answer with one result line."""
     global SNAPSHOT_FILTER
@@ -1324,11 +1400,16 @@ def edit_operation(req,watch=None):
             watch()
         EDIT_HANDLERS[op](req,edit_id,site,roots,inv)
     except EditRefused as refused:
-        emit(result={'ok':False,'code':refused.code,'reason':refused.reason,**({'field':refused.field[:200]} if refused.field else {})})
+        extra={}
+        if op in ('edit-rollback','edit-apply') and edit_id_ok(req):extra['dataCopy']=(edit_dir(req['editId'])/'data').is_dir()
+        emit(result={'ok':False,'code':refused.code,'reason':refused.reason,**({'field':refused.field[:200]} if refused.field else {}),**extra})
     except Exception as error:
         # Never str(error): Docker output, paths and values stay on the server.
         diagnostic(phase='edit-failure',exceptionType=type(error).__name__)
-        code='DISK_FULL' if isinstance(error,OSError) and error.errno==errno.ENOSPC else 'ROLLBACK_FAILED' if op=='edit-rollback' else 'FAILED'
-        emit(result={'ok':False,'code':code,'reason':EDIT_REASONS[code]})
+        # Out of space while preparing (pulls) is DISK_FULL. Anywhere else (apply, rollback) it is a plain failure: the
+        # candidate may be on disk, so the edit goes through edit-status and rollback, and the journal is kept.
+        code='DISK_FULL' if op=='edit-prepare' and isinstance(error,OSError) and error.errno==errno.ENOSPC else 'ROLLBACK_FAILED' if op=='edit-rollback' else 'FAILED'
+        extra={'dataCopy':(edit_dir(req['editId'])/'data').is_dir()} if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
+        emit(result={'ok':False,'code':code,'reason':EDIT_REASONS[code],**extra})
     finally:
         if lock:lock.close()
