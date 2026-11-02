@@ -30,6 +30,10 @@ export function stateFor(phase, outcome = null, started = true) {
 // Cancel is accepted only before `apply` starts; afterwards rollback is the undo.
 export const cancellable = edit => edit.result === null && !edit.progress?.applyStarted && ['backup', 'prepare'].includes(edit.progress?.phase ?? 'backup');
 
+// The data safety copy's time budget, the same as the helper's (remote/helper/edit.py EDIT_COPY_*): a call limit is the
+// step's base plus the reviewed data size over a conservative throughput (restores 1.5x), capped.
+export const COPY = Object.freeze({ bytesPerSecond: 20 * 1024 * 1024, maxSeconds: 3 * 3600, restoreFactor: 1.5 });
+export const copySeconds = (base, bytes, factor = 1) => Math.round(base + Math.min(COPY.maxSeconds * factor, Number.isSafeInteger(bytes) && bytes > 0 ? (bytes / COPY.bytesPerSecond) * factor : 0));
 export const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const ENV_REFUSED_PREFIX = /^(COMPOSE_|DOCKER_|BUILDKIT_)/i;
 export const LIMITS = Object.freeze({ fileBytes: 256 * 1024, files: 10, envKeys: 200, valueBytes: 8 * 1024, editsPerHour: 10, tokenMs: 15 * 60_000, timeLimit: { min: 60, max: 600, default: 120 } });
@@ -64,8 +68,12 @@ export const REASONS = Object.freeze({
   FAILED: 'Safe Edit could not run on the server.',
   DATA_NOT_LOCAL: 'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
   OWN_SITE: 'This is DockNest itself. Update it with the DockNest upgrade, not Safe Edit.',
+  DATA_TOO_LARGE: 'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
+  DATA_UNREADABLE: 'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+  YAML_REFUSED: 'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
+  DATA_COPY_SPACE: 'Not enough free disk space for the safety copy. Nothing was changed.',
 });
-export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST', 'DATA_NOT_LOCAL', 'OWN_SITE']);
+export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST', 'DATA_NOT_LOCAL', 'OWN_SITE', 'DATA_TOO_LARGE', 'DATA_UNREADABLE', 'YAML_REFUSED']);
 export const FIELD = /^[A-Za-z0-9_.\-[\]]{1,200}$/;
 export const reasonFor = (code, fallback = 'The change could not be checked. Try again.') => (Object.hasOwn(REASONS, code) ? REASONS[code] : fallback);
 export const helperCode = value => (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(value) ? (value === 'FILE_CHANGED_APPLY' ? 'FILE_CHANGED' : value) : null);
@@ -85,6 +93,7 @@ export const SAY = Object.freeze({
   rollbackFailed: 'The previous version could not be put back. The site stays behind the maintenance page.',
   dataCopySpace: 'Not enough free disk space for the safety copy. Nothing was changed.',
   dataCopyKept: 'A safety copy of the data is kept on the server.',
+  applyFailedUndone: 'The change could not be applied, so it was undone.',
   finishFailed: 'The maintenance page could not be turned off.',
   cancelled: 'The change was cancelled before anything was written.',
   restoredBackup: 'The backup from before the change was restored through the normal restore. Check the site, then turn off its maintenance page.',

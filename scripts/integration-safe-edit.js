@@ -103,17 +103,18 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   record('Safe Edit 2/9: an image change that migrated its data on start and then failed its health check is rolled back in place: files byte-identical, old image ID running, data back from the safety copy, copy removed');
 
   // ---------- 3. an environment value that makes the app exit after 20 s: fails at stability ----------
-  const crashCompose = 'services:\n  web:\n    image: edit-app:1.0\n    env_file: [app.env]\n    command: ["sh","-c","python /app/app.py & if [ \\"$$CRASH\\" = yes ]; then sleep 20; exit 1; fi; wait"]\n    ports:\n      - "127.0.0.1:8302:8080"\n';
-  const crash = await composeSite('editcrash', { '/srv/editcrash/compose.yaml': crashCompose, '/srv/editcrash/app.env': '# app settings\nCRASH=no\nexport GREETING="hello # not a comment"\n' });
+  // The project's .env feeds ${CRASH}; a service env_file is not editable in 2.15.
+  const crashCompose = 'services:\n  web:\n    image: edit-app:1.0\n    environment:\n      CRASH: ${CRASH}\n    command: ["sh","-c","python /app/app.py & if [ \\"$CRASH\\" = yes ]; then sleep 20; exit 1; fi; wait"]\n    ports:\n      - "127.0.0.1:8302:8080"\n';
+  const crash = await composeSite('editcrash', { '/srv/editcrash/compose.yaml': crashCompose, '/srv/editcrash/.env': '# app settings\nCRASH=no\nexport GREETING="hello # not a comment"\n' });
   loaded = await view(crash);
-  const appEnv = loaded.env.find(item => item.file.endsWith('app.env'));
+  const appEnv = loaded.env.find(item => item.file.endsWith('/editcrash/.env'));
   assert.ok(appEnv?.keys.some(key => key.key === 'CRASH'));
   assert.doesNotMatch(JSON.stringify(loaded), /CRASH=no|hello # not/, 'values never leave the server');
-  const envBefore = await cat('/srv/editcrash/app.env');
+  const envBefore = await cat('/srv/editcrash/.env');
   ({ editId } = await applyChange(crash, { env: [{ file: appEnv.file, key: 'CRASH', value: 'yes' }] }, { timeLimitSeconds: 120 }));
   row = await drive(editId, undefined, { minutes: 15 });
   assert.equal(row.result, 'rolled_back', row.reason ?? ''); assert.equal(row.data_rollback, false);
-  assert.equal(await cat('/srv/editcrash/app.env'), envBefore, 'comments, export lines and quoting come back byte for byte');
+  assert.equal(await cat('/srv/editcrash/.env'), envBefore, 'comments, export lines and quoting come back byte for byte');
   assert.doesNotMatch(JSON.stringify(db.prepare('SELECT * FROM site_edits WHERE id=?').get(editId)) + JSON.stringify(db.prepare('SELECT * FROM site_edit_steps WHERE edit_id=?').all(editId)), /CRASH=yes|"yes"/);
   record('Safe Edit 3: an environment change that makes the app exit after 20 s fails the stability check and is rolled back without a data restore');
 
@@ -188,11 +189,13 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken'));
   change.files[0].text = change.files[0].text.replace('volumes:\n  data: {}\n', '  cache:\n    image: edit-app:1.0\nvolumes:\n  data: {}\n');
   ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
-  let pruned = false;
-  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!pruned && current.progress.applyStarted) { pruned = true; await sh('docker image prune -af >/dev/null 2>&1 || true'); } } });
+  let pruned = false, held = '';
+  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!pruned && current.progress.applyStarted) { pruned = true; held = await sh(`docker ps -a --filter label=docknest.edit.hold=${editId} --format '{{.Names}} {{.State}}'`); await sh('docker image prune -af >/dev/null 2>&1 || true'); } } });
+  assert.match(held, new RegExp(`docknest-edit-hold-${editId.slice(0, 8)}-web created`), 'a created, never started holder container keeps the old image ID');
   assert.equal(row.result, 'rolled_back', row.reason ?? '');
   assert.equal(await inspect('editshop-web-1', '{{.Config.Image}}'), 'edit-app:1.1', 'rolled back without pulling (the tag exists only locally)');
   assert.equal((await sh("docker ps -a --filter label=com.docker.compose.project=editshop --filter label=com.docker.compose.service=cache -q")).trim(), '', 'the service the candidate added is removed');
+  assert.equal((await sh(`docker ps -aq --filter label=docknest.edit.hold=${editId}`)).trim(), '', 'finish removes the holder containers');
   record('Safe Edit 16: rollback never pulls (pull_policy: always, local-only tag), survives docker image prune -a between prepare and rollback, and removes the service the candidate added');
 
   // ---------- 7. the rollback itself fails: needs attention, the maintenance page stays ----------
@@ -214,6 +217,71 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   assert.equal(row.result, 'failed'); assert.match(row.reason, /backup from before the change was restored/);
   await write('/srv/editshop/compose.yaml', webCompose('edit-app:1.1'));
   await sh('cd /srv/editshop && docker compose -p editshop -f /srv/editshop/compose.yaml --project-directory /srv/editshop up -d --pull never --remove-orphans');
+
+  // ---------- busy site: a queued backup refuses Apply; an unfinished edit refuses a backup ----------
+  {
+    const { enqueueBackup } = await import('../src/engine.js');
+    const review = await reviewed(shop, await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:1.0')));
+    const queued = enqueueBackup(shop, 'qa');
+    assert.throws(() => se.applySiteEdit(shop, { token: review.token }, who), error => error.code === 'SITE_BUSY' && error.status === 409);
+    db.prepare("UPDATE jobs SET status='completed',stage='cancelled',finished_at=? WHERE id=? AND status='queued'").run(new Date().toISOString(), queued.id);
+    const busyEdit = se.applySiteEdit(shop, { token: review.token }, who).edit.id;
+    assert.throws(() => enqueueBackup(shop, 'qa'), error => error.code === 'SITE_EDITING' && error.status === 409);
+    se.cancelSiteEdit(busyEdit, userId);
+    assert.equal(se.loadEdit(busyEdit).result, 'cancelled');
+    record('Safe Edit busy site: a queued backup refuses Apply (409 SITE_BUSY) and an unfinished edit refuses a backup (409 SITE_EDITING)');
+  }
+
+  // ---------- the server becomes unreachable after the candidate is written: rolled back once it answers again ----------
+  // drive() awaits each job, so the SSH port is blocked by a concurrent watcher while edit-apply is still running. The
+  // candidate adds a service the web service waits for (healthy after about 25 s), which keeps `compose up` busy long
+  // enough; a lowered edit-apply limit makes the call end as unreachable, so the engine enters recovery.
+  {
+    change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken')
+      .replace('    restart: unless-stopped\n', '    restart: unless-stopped\n    depends_on:\n      slowgate:\n        condition: service_healthy\n')
+      .replace('volumes:\n  data: {}\n', '  slowgate:\n    image: edit-app:1.0\n    command: ["sh","-c","sleep 25; touch /tmp/ready; exec python /app/app.py"]\n    healthcheck:\n      test: ["CMD","test","-f","/tmp/ready"]\n      interval: 2s\n      retries: 30\nvolumes:\n  data: {}\n'));
+    ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
+    const journalState = async () => { try { return JSON.parse(await sh(`cat /var/lib/docknest/edits/${editId}/journal.json`)).state; } catch { return null; } };
+    const limit = se.editTiming.callSeconds['edit-apply'];
+    se.editTiming.callSeconds['edit-apply'] = 20;
+    let blocked = false, unblocked = false, watching = true;
+    const watcher = (async () => {
+      while (watching && !blocked) {
+        if (await journalState() === 'candidate_written') { await sh('iptables -I INPUT -p tcp --dport 22 -j DROP'); blocked = true; break; }
+        await sleep(250);
+      }
+    })();
+    try {
+      row = await drive(editId, undefined, { minutes: 20, during: async current => {
+        if (blocked && !unblocked && current.progress.phase === 'recover' && (current.progress.attempts ?? 0) >= 1) {
+          unblocked = true; await sh('iptables -D INPUT -p tcp --dport 22 -j DROP');
+        }
+      } });
+    } finally {
+      watching = false; await watcher.catch(() => {});
+      se.editTiming.callSeconds['edit-apply'] = limit;
+      await sh('iptables -D INPUT -p tcp --dport 22 -j DROP 2>/dev/null || true');
+    }
+    assert.ok(blocked, 'SSH was blocked while edit-apply ran, after the candidate was written');
+    assert.ok(unblocked, 'SSH opened again after a failed edit-status retry');
+    assert.equal(row.result, 'rolled_back', row.reason ?? '');
+    assert.equal(row.reason, 'The server could not be reached during the change, so it was undone.');
+    assert.equal(await inspect('editshop-web-1', '{{.Config.Image}}'), 'edit-app:1.1');
+    assert.equal((await sh("docker ps -a --filter label=com.docker.compose.project=editshop --filter label=com.docker.compose.service=slowgate -q")).trim(), '', 'the added service is removed');
+    record('Safe Edit unreachable server: SSH blocked while edit-apply ran after the write; the call ended as unreachable, DockNest retried edit-status and rolled back once the server answered');
+  }
+
+  // ---------- Docker Compose older than 2.24 is refused at review ----------
+  {
+    const shim = '#!/bin/sh\nfor p in /usr/local/libexec/docker/cli-plugins /usr/libexec/docker/cli-plugins /usr/local/lib/docker/cli-plugins /usr/lib/docker/cli-plugins; do [ -x "$p/docker-compose" ] && real="$p/docker-compose" && break; done\ncase "$*" in *version*--short*) echo 2.20.3; exit 0 ;; esac\nexec "$real" "$@"\n';
+    await write('/root/.docker/cli-plugins/docker-compose', shim);
+    await sh('chmod 755 /root/.docker/cli-plugins/docker-compose');
+    try {
+      assert.equal((await sh('HOME=/root docker compose version --short')).trim(), '2.20.3', 'the shim answers for Compose');
+      await refusedReview(shop, await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:1.0')), 'COMPOSE_TOO_OLD');
+    } finally { await sh('rm -f /root/.docker/cli-plugins/docker-compose'); }
+    record('Safe Edit old Compose: Docker Compose 2.20 is refused at review with "Update Docker Compose to 2.24 or newer."');
+  }
 
   // ---------- 8. a single-container site: environment and port change by recreate ----------
   await run('exec', host, 'docker', 'run', '-d', '--name', 'editsolo', '-e', 'MODE=one', '-p', '127.0.0.1:8303:8080', 'edit-app:1.0');

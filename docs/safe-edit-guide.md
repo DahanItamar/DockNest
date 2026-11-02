@@ -44,7 +44,11 @@ a service or renaming the project ("Remove it by hand"). Adding a service is all
    the site has neither a health check nor a health URL (then only "running and stable" counts).
 2. **Backup.** A normal, verified backup of the site.
 3. **Prepare.** Copies of the current files and the current image IDs are kept on the server; new images are pulled.
-   The site keeps running during the pull.
+   Each previous image is held by a stopped placeholder container (`docknest-edit-hold-…`, never started, outside
+   the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. `docker
+   container prune` and `docker system prune` do remove these placeholders (they are stopped containers); avoid them
+   while a change runs. If they were removed and the old image is gone, a rollback fails closed: the change needs
+   attention and the site stays behind the maintenance page. The site keeps running during the pull.
 4. **Apply.** The maintenance page goes on, the files are written, and the services start with the new version.
 5. **Check health.** Every service that ran before runs, is healthy where it has a health check, still runs after 60
    seconds, and the site's health URL (if set) answers. Time limit: 2 minutes, 1 to 10 in Advanced.
@@ -64,10 +68,12 @@ If the rollback itself fails, the site stays behind the maintenance page and the
 
 - **Try again** runs the rollback once more.
 - **Restore backup** restores the backup taken before the change through DockNest's normal restore, as a separate
-  copy next to the site (it does not overwrite the live site). The maintenance page
-  stays on until you have checked the site and turned it off.
+  copy next to the site (it does not overwrite the live site). Once that restore has succeeded, DockNest removes the
+  change's journal, data safety copy and placeholder containers. The maintenance page stays on until you have checked
+  the site and turned it off.
 
-While a change runs or needs attention, the site's backups, restores, moves and maintenance actions wait.
+While a change runs or needs attention, the site's manual backups, restores, moves and maintenance actions are refused,
+and scheduled backups are skipped until it ends.
 
 ## The data safety copy
 
@@ -86,7 +92,8 @@ new image, DockNest also keeps the data:
 - The copy is deleted after a change that comes up and after a rollback that works. If the rollback fails, the copy is
   kept and the change says "A safety copy of the data is kept on the server."
 - Data on a volume of another driver (for example NFS) cannot be copied, so an image change on such a site is refused.
-  Environment and port changes never take a copy.
+  So is one whose data cannot all be read, or is too large to copy within the time limit (3 hours at a conservative
+  20 MB/s, about 210 GB). Environment and port changes, and adding a new service, never take a copy.
 
 ## Refused changes
 
@@ -101,7 +108,17 @@ DockNest refuses a change with one plain reason when it would:
 - set an environment key starting with `COMPOSE_`, `DOCKER_` or `BUILDKIT_`, or a value with a line break;
 - give a new image, command or environment to a service that already has host access ("Change it by hand");
 - publish a port already in use on the server, or port 22 / the SSH port;
-- remove a service.
+- remove a service;
+- use YAML that cannot be checked safely as text: an escaped or complex (`?`) key, a top-level `<<` merge or flow
+  mapping that the file did not already have, or any new `include`, `extends` or `file` key.
+- add `&`, `*` or `!` at the start of a word (after a space, a bracket or a comma), anywhere in a Compose file,
+  including inside quotes: in YAML these can start an anchor, an alias or a tag, which DockNest does not try to
+  read. This also refuses a newly added shell `&&`, a `*` glob or a `!` after a space in a command; put such
+  commands in a script the container runs, or edit the file by hand. Ones the file already has stay allowed.
+- add characters outside plain ASCII to a Compose file (letters with accents, other scripts, emoji, invisible
+  characters): "The change adds characters that cannot be checked safely." Characters the file already has may stay.
+  Environment values typed in the Environment tab are not Compose text and may use any characters except line breaks,
+  so non-ASCII passwords work there.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."
 If it changes while the backup runs, the change stops before anything is written: "The files changed during the

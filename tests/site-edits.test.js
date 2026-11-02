@@ -116,6 +116,7 @@ const everything = () => JSON.stringify(['site_edits', 'site_edit_steps', 'jobs'
 // Each test starts with no unfinished work from the one before (edits of every site are ticked together).
 test.beforeEach(() => {
   answers = {}; calls = []; restores = []; now += 3600_000 * 2;
+  db.prepare("DELETE FROM rate_limits WHERE key LIKE 'site-edit-review:%'").run(); // the per-client review limit is tested by its own case
   db.prepare("UPDATE site_edits SET result='cancelled',state='cancelled' WHERE result IS NULL").run();
   db.prepare("UPDATE jobs SET status='completed' WHERE status IN ('queued','running','edit_queued','edit_running','edit_waiting')").run();
 });
@@ -319,6 +320,7 @@ test('a change that comes up: backup, prepare, apply, check health (polls), fini
 test('health check fails after an image change: files and data rolled back in place from the safety copy', async () => {
   const { siteId } = site();
   answers['edit-apply'] = () => ({ ok: true, startedAt: now / 1000, dataCopy: true, dataBytes: 5 * 1024 ** 2 });
+  answers['edit-rollback'] = () => ({ ok: true, journal: true, leftovers: 0, dataCopy: true, dataRestored: true });
   let window = 0;
   answers['edit-poll'] = request => (calls.filter(call => call.operation === 'edit-rollback').length ? { state: 'healthy', healthSeconds: 61 } : request.final ? (window++, { state: 'waiting' }) : { state: 'waiting' });
   const editId = await apply(siteId);
@@ -393,9 +395,14 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   assert.equal((await json(await admin('POST', `/site-edits/${second}/retry`, {}))).body.code, 'RESTORE_RUNNING');
   await drive(4);
   row = edit(second);
+  await drive(10);
+  row = edit(second);
   assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The backup from before the change was restored through the normal restore. Check the site, then turn off its maintenance page.');
+  // Once the restore succeeded, finish cleaned up the journal, copy, holders and tags but left the maintenance page on.
+  const cleanup = calls.filter(call => call.operation === 'edit-finish').at(-1);
+  assert.equal(cleanup.keepMaintenance, true);
   const after = (await json(await admin('GET', `/site-edits/${second}`))).body;
-  assert.equal(after.maintenance, 'on'); assert.equal(after.dataCopyKept, true, 'finish never ran: the safety copy stays');
+  assert.equal(after.maintenance, 'on'); assert.equal(after.dataCopyKept, false, 'the copy was removed after the restore succeeded');
 });
 
 // What a worker killed inside edit-apply leaves: the apply job edit_running, applyStarted journalled, the step running.
@@ -474,7 +481,7 @@ test('the files change during the backup: refused at apply, nothing rolled back 
 
 test('not enough disk space for the data safety copy: refused at apply before any write, no rollback', async () => {
   const { siteId } = site();
-  answers['edit-apply'] = () => ({ ok: false, code: 'DISK_FULL', reason: 'Not enough free disk space for the safety copy.' });
+  answers['edit-apply'] = () => ({ ok: false, code: 'DATA_COPY_SPACE', reason: 'Not enough free disk space for the safety copy.', dataCopy: false });
   const editId = await apply(siteId);
   await drive(20);
   const row = edit(editId);
@@ -505,6 +512,53 @@ test('load: guided-tab locations, ports as numbers, IMAGE_FROM_ENV with its vari
   assert.deepEqual(loaded.reasons.image, { code: 'IMAGE_FROM_ENV', message: 'Edit TAG in Environment.', variable: 'TAG' });
   answers['edit-load'] = () => ({ ...loadAnswer(), usable: { compose: true, env: true, ports: false, image: true }, reasons: { ports: 'EDIT_IN_COMPOSE' } });
   assert.deepEqual((await json(await admin('GET', `/sites/${siteId}/edit`))).body.reasons.ports, { code: 'EDIT_IN_COMPOSE', message: 'Edit this in Compose.' });
+});
+
+test('apply failures: an unknown write state goes through edit-status; pre-write refusals end as failed; APPLY_FAILED rolls back', async () => {
+  const { siteId } = site();
+  // FAILED (for example out of space after the candidate was written): never straight to finish, the journal decides.
+  answers['edit-apply'] = () => ({ ok: false, code: 'FAILED', dataCopy: true });
+  answers['edit-status'] = () => ({ ok: true, journal: true, files: 'candidate', maintenance: true, dataCopy: true });
+  answers['edit-poll'] = () => ({ state: 'healthy' });
+  let editId = await apply(siteId);
+  await drive(30);
+  let row = edit(editId);
+  assert.equal(row.result, 'rolled_back', JSON.stringify(row)); assert.equal(row.reason, 'The change could not be applied, so it was undone.');
+  assert.deepEqual(ops().filter(op => ['edit-apply', 'edit-status', 'edit-rollback', 'edit-finish'].includes(op)), ['edit-apply', 'edit-status', 'edit-rollback', 'edit-finish']);
+  // The same with nothing written: finish only.
+  calls = []; now += 3600_000;
+  answers['edit-status'] = () => ({ ok: true, journal: true, files: 'original', maintenance: true, dataCopy: false });
+  editId = await apply(siteId);
+  await drive(30);
+  row = edit(editId);
+  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The change could not be applied. Nothing was changed.'); assert.ok(!ops().includes('edit-rollback'));
+  for (const code of ['MAINTENANCE_FAILED', 'INVALID_REQUEST']) {
+    calls = []; now += 3600_000;
+    answers['edit-apply'] = () => ({ ok: false, code });
+    editId = await apply(siteId);
+    await drive(30);
+    row = edit(editId);
+    assert.equal(row.result, 'failed', code); assert.ok(!ops().includes('edit-rollback'), code); assert.ok(!ops().includes('edit-status'), code);
+  }
+  calls = []; now += 3600_000;
+  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true });
+  answers['edit-rollback'] = () => ({ ok: true, dataCopy: true, dataRestored: true });
+  editId = await apply(siteId);
+  await drive(30);
+  assert.equal(edit(editId).result, 'rolled_back'); assert.equal(edit(editId).reason, 'Docker could not start the changed site.');
+});
+
+test('the data copy kept flag follows the journal: apply failed after the copy, then the rollback failed', async () => {
+  const { siteId } = site();
+  // The helper reports the size it journalled at apply; the larger one sets the rollback's call limit.
+  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true, dataBytes: 9 * 1024 ** 3 });
+  answers['edit-rollback'] = () => ({ ok: false, code: 'ROLLBACK_FAILED', dataCopy: true, dataBytes: 1024 });
+  const editId = await apply(siteId);
+  await drive(30);
+  const detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
+  assert.equal(detail.state, 'needs_attention'); assert.equal(detail.dataCopyKept, true); assert.equal(detail.dataCopyNote, 'A safety copy of the data is kept on the server.');
+  assert.equal(edit(editId).progress.dataRestored, undefined, 'nothing claims the data came back');
+  assert.equal(edit(editId).progress.dataBytes, 9 * 1024 ** 3, 'the larger of the review and apply sizes is kept');
 });
 
 test('a failed pull ends the edit before anything is written; the pre-change backup failing does too', async () => {

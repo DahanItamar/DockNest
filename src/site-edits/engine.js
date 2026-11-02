@@ -9,12 +9,13 @@
 //   which is wiped to {} when the apply step ends and when the edit ends.
 // - Reasons are fixed sentences chosen by code (state.js); helper text, Docker output and values never pass through.
 // - An unfinished edit holds the site (partial unique index; requireNotEditing in src/engine.js), also while it needs
-//   attention. Data rollback (owner decision): only when an image changed, by the normal restore of the pre-change backup.
+//   attention. Data rollback (owner decision): only when an existing service's image changed, in place from the safety
+//   copy edit-apply takes on the server (remote/helper/edit.py); Restore backup in needs_attention is the normal restore.
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { seal, open } from '../crypto.js';
 import { transport, siteInfo, enqueueBackup, enqueueRestore, jobRunners, movingSite, busySite, editingSite } from '../engine.js';
-import { STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES, REASONS, SAY, FIELD, ENV_KEY, ENV_REFUSED_PREFIX, stateFor, cancellable, reasonFor, helperCode, changesRecord, tabsUsed } from './state.js';
+import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES, REASONS, SAY, FIELD, ENV_KEY, ENV_REFUSED_PREFIX, stateFor, cancellable, reasonFor, helperCode, changesRecord, tabsUsed } from './state.js';
 import { resolveInvocation, storedInvocation, allowedRoots, invocationHash, helperInvocation } from './invocation.js';
 import { issueToken, takeToken } from './tokens.js';
 import { reviewDiff, inlineSecretKeys } from './diff.js';
@@ -172,19 +173,23 @@ function advanceBackup(edit, job) {
 function restoreJobState(jobId) { return jobId ? db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId)?.status ?? 'failed' : null; }
 function advanceAttention(edit) {
   const status = restoreJobState(edit.progress.restoreJobId);
-  if (status === 'completed') { edit.progress.restoredBackup = true; conclude(edit, 'failed', { failedStep: edit.failed_step ?? 'roll_back', reason: SAY.restoredBackup }); }
+  if (status === 'completed') { atomic(() => { goFinish(edit, 'failed', { failedStep: edit.failed_step ?? 'roll_back', reason: SAY.restoredBackup }); save(edit, { restoredBackup: true, keepMaintenance: true }); }); return; }
   else if (status && !['queued', 'running'].includes(status)) save(edit, { restoreJobId: null, restoreFailed: true });
 }
 
 // ---------- helper calls ----------
 // Every op holds the per-site lock on the server and stops when its stdin closes; a call that takes longer than its
 // limit is stopped (stdin closes) and counts as an unknown outcome.
-async function call(server, request) {
-  const controller = new AbortController(), seconds = editTiming.callSeconds[request.operation] ?? 120;
+async function call(server, request, limitSeconds = null) {
+  const controller = new AbortController(), seconds = limitSeconds ?? editTiming.callSeconds[request.operation] ?? 120;
   const timer = setTimeout(() => controller.abort(), seconds * 1000 * editTiming.scale);
   try { return await editTransport.remote(server, { ...request, watchStdin: true }, { keepStdinOpen: true, signal: controller.signal }); }
   finally { clearTimeout(timer); }
 }
+// edit-apply copies the data and edit-rollback puts it back: their limits grow with the reviewed data size (state.js COPY).
+const largerBytes = (edit, bytes) => (Number.isSafeInteger(bytes) && bytes > (edit.progress.dataBytes ?? -1) ? { dataBytes: bytes } : {});
+const applySeconds = edit => copySeconds(editTiming.callSeconds['edit-apply'], edit.progress.dataBytes, 1);
+const rollbackSeconds = edit => copySeconds(editTiming.callSeconds['edit-rollback'], edit.progress.dataBytes, COPY.restoreFactor);
 // remote: the helper answered with an error (and maybe a fixed code); unreachable: SSH, a time limit or no answer.
 const classify = error => (error?.remoteReported ? { kind: 'remote', code: helperCode(error.helperCode) } : { kind: 'unreachable', code: null });
 const openPayload = sealed => { if (typeof sealed !== 'string') return null; try { return JSON.parse(open(sealed)); } catch { return null; } };
@@ -267,51 +272,57 @@ const RUNNERS = {
     // Journalled before the first write: from here on, an unknown outcome is decided by edit-status, never guessed.
     atomic(() => { save(edit, { applyStarted: true }); setStep(edit.id, 'apply', 'running'); });
     let answer, failure = null;
-    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-apply', reviewedModelSha256: reviewed }); }
+    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-apply', reviewedModelSha256: reviewed }, applySeconds(edit)); }
     catch (error) { failure = classify(error); }
     finally { db.prepare("UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE id=?").run(job.id); }
     if (!failure && answer?.ok !== true) failure = { kind: 'remote', code: helperCode(answer?.code) };
     if (failure?.kind === 'unreachable') { moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'unreachable' }); return; }
-    // Not enough room for the data safety copy: refused before any write (the helper starts a stopped site again at finish).
-    if (failure?.code === 'DISK_FULL') { atomic(() => { setStep(edit.id, 'apply', 'failed', SAY.dataCopySpace); goFinish(edit, 'failed', { failedStep: 'apply', reason: SAY.dataCopySpace }); }); return; }
+    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy, ...largerBytes(edit, answer.dataBytes) });
     if (failure) {
+      // Refused before anything was written (the helper says so by code): the edit ends, finish takes the maintenance page
+      // down and starts a site the safety copy stopped. DATA_COPY_SPACE is only ever raised while the journal is prepared.
+      const before = { DATA_COPY_SPACE: SAY.dataCopySpace, MAINTENANCE_FAILED: REASONS.MAINTENANCE_FAILED + ' Nothing was changed.', INVALID_REQUEST: REASONS.INVALID_REQUEST + ' Nothing was changed.', DATA_TOO_LARGE: REASONS.DATA_TOO_LARGE, DATA_UNREADABLE: REASONS.DATA_UNREADABLE, DATA_NOT_LOCAL: REASONS.DATA_NOT_LOCAL };
+      if (before[failure.code]) { const reason = before[failure.code]; atomic(() => { setStep(edit.id, 'apply', 'failed', reason); goFinish(edit, 'failed', { failedStep: 'apply', reason }); }); return; }
       // FILE_CHANGED: nothing of the candidate stays on disk (the helper restored the originals or never wrote), and a
       // hand edit made meanwhile must not be overwritten by a rollback: the edit ends, the maintenance page goes off.
       // The lock was busy or the journal is not prepared: the helper did nothing at all.
       if (failure.code === 'SITE_BUSY') { busyRetry(edit, () => moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'unreachable' })); return; }
       if (failure.code === 'NO_JOURNAL') { atomic(() => { setStep(edit.id, 'apply', 'failed', REASONS.NO_JOURNAL); goFinish(edit, 'failed', { failedStep: 'apply', reason: REASONS.NO_JOURNAL + ' Nothing was changed.' }); }); return; }
       if (failure.code === 'FILE_CHANGED') { atomic(() => { setStep(edit.id, 'apply', 'failed', SAY.filesChangedDuringBackup); goFinish(edit, 'failed', { failedStep: 'apply', reason: SAY.filesChangedDuringBackup }); }); return; }
-      const reason = failReason(failure.code, SAY.applyFailed);
-      atomic(() => { setStep(edit.id, 'apply', 'failed', reason); goRollBack(edit, reason, 'apply'); });
+      // Docker could not start the written candidate: roll back. Anything else (FAILED, out of space mid-write, an unknown
+      // code) leaves the write state unknown: edit-status decides, so the journal is never dropped while it is needed.
+      if (failure.code === 'APPLY_FAILED') { const reason = REASONS.APPLY_FAILED; atomic(() => { setStep(edit.id, 'apply', 'failed', reason); goRollBack(edit, reason, 'apply'); }); return; }
+      moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'failed' });
       return;
     }
     const at = clock();
-    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at, dataCopy: answer.dataCopy === true, ...(Number.isSafeInteger(answer.dataBytes) ? { dataBytes: answer.dataBytes } : {}) }); });
+    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at, dataCopy: answer.dataCopy === true, ...largerBytes(edit, answer.dataBytes) }); });
   },
   check_health: (edit, ctx) => poll(edit, ctx, 'check_health'),
   rollback_health: (edit, ctx) => poll(edit, ctx, 'rollback_health'),
   async roll_back(edit, ctx) {
     setStep(edit.id, 'roll_back', 'running');
     let answer;
-    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-rollback', restoreData: edit.data_rollback }); }
+    try { answer = await call(ctx.server, { ...ctx.base, operation: 'edit-rollback', restoreData: edit.data_rollback }, rollbackSeconds(edit)); }
     catch (error) {
       if (classify(error).kind === 'remote') { goAttention(edit, 'roll_back', SAY.rollbackFailed); return; }
       retryLater(edit, () => goAttention(edit, 'roll_back', `${SAY.unreachable} ${SAY.rollbackFailed}`));
       return;
     }
+    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy, ...largerBytes(edit, answer.dataBytes) });
     if (answer?.ok !== true) {
       if (helperCode(answer?.code) === 'SITE_BUSY') { busyRetry(edit, () => goAttention(edit, 'roll_back', SAY.rollbackFailed)); return; }
       goAttention(edit, 'roll_back', SAY.rollbackFailed); return;
     }
     const at = clock();
     // With data_rollback the helper also put the data sets back from its safety copy, in place (owner decision).
-    moveTo(edit, 'rollback_health', { rolledBack: true, dataRestored: !!(edit.data_rollback && edit.progress.dataCopy), windowStartedAt: at, helperStartedAt: at / 1000, nextPollAt: at });
+    moveTo(edit, 'rollback_health', { rolledBack: true, dataRestored: answer.dataRestored === true, windowStartedAt: at, helperStartedAt: at / 1000, nextPollAt: at });
   },
   async finish(edit, ctx) {
     setStep(edit.id, 'finish', 'running');
     const p = edit.progress;
     try {
-      const answer = await call(ctx.server, { ...ctx.base, operation: 'edit-finish' });
+      const answer = await call(ctx.server, { ...ctx.base, operation: 'edit-finish', ...(p.keepMaintenance ? { keepMaintenance: true } : {}) });
       if (answer?.ok === false) throw Object.assign(new Error('finish'), { remoteReported: true });
     } catch {
       retryLater(edit, () => {
@@ -322,6 +333,7 @@ const RUNNERS = {
       return;
     }
     atomic(() => {
+      save(edit, { dataCopy: false });
       setStep(edit.id, 'finish', 'done');
       if (p.outcome === 'rolled_back') setStep(edit.id, 'roll_back', 'done', p.dataRestored ? 'Previous version and data back.' : 'Previous version back.');
       conclude(edit, p.outcome, { failedStep: p.failedStep, reason: p.reasonPending });
@@ -329,18 +341,19 @@ const RUNNERS = {
   },
   // After a restart or an unreachable server during prepare/apply: the journal on the server decides.
   async recover(edit, ctx) {
-    const p = edit.progress, why = p.recoverWhy === 'unreachable' ? 'unreachable' : 'restart';
+    const p = edit.progress, why = ['unreachable', 'failed'].includes(p.recoverWhy) ? p.recoverWhy : 'restart';
     let status;
     try { status = await call(ctx.server, { ...ctx.base, operation: 'edit-status' }); }
     catch { retryLater(edit, () => goAttention(edit, 'recover', `${SAY.unreachable} DockNest could not check whether the change was written.`)); return; }
+    if (typeof status?.dataCopy === 'boolean') save(edit, { dataCopy: status.dataCopy });
     if (status?.ok === false || !['original', 'none', 'candidate', 'mixed'].includes(status?.files)) { retryLater(edit, () => goAttention(edit, 'recover', 'DockNest could not check whether the change was written.')); return; }
     const step = p.interrupted === 'prepare' ? 'prepare' : 'apply';
     if (status?.files === 'original' || status?.files === 'none') {
-      const reason = why === 'unreachable' ? SAY.unreachableNothing : SAY.restartedNothing;
+      const reason = why === 'unreachable' ? SAY.unreachableNothing : why === 'failed' ? SAY.applyFailed + ' Nothing was changed.' : SAY.restartedNothing;
       atomic(() => { setStep(edit.id, step, 'failed', reason); goFinish(edit, 'failed', { failedStep: step, reason }); });
       return;
     }
-    const reason = why === 'unreachable' ? SAY.unreachableUndone : SAY.restartedUndone;
+    const reason = why === 'unreachable' ? SAY.unreachableUndone : why === 'failed' ? SAY.applyFailedUndone : SAY.restartedUndone;
     atomic(() => { setStep(edit.id, step, 'failed', reason); goRollBack(edit, reason, step); });
   },
 };
@@ -513,7 +526,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, dataBytes, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
   const diff = reviewDiff({ originals: loaded.files, files: changedFiles, env: envChanges.map(entry => ({ ...entry, existed: existing.get(entry.file).has(entry.key) })) });
   const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })) };
-  const meta = { invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged }), imageChanged };
+  const meta = { dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged }), imageChanged };
   const { token, expiresAt } = issueToken({ userId, sessionHash, siteId, hashes, candidate, meta });
   return { token, expiresAt: iso(expiresAt), diff, summary, warnings };
 }
@@ -535,7 +548,7 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
       const stored = storedInvocation(siteId);
       if (!stored || invocationHash(stored) !== meta.invocationSha) throw httpError(409, 'REVIEW_EXPIRED', 'The site\'s Compose setup changed. Review the change again.');
       db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,changes,progress,time_limit_seconds,data_rollback,created_by,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)")
-        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
+        .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
       for (const step of STEPS) db.prepare("INSERT INTO site_edit_steps(edit_id,step,state) VALUES(?,?,'pending')").run(editId, step);
       const details = { editId, step: 'backup', targetServerId: site.server_id, invocation: meta.invocation, allowedRoots: meta.allowedRoots, services: meta.services, payload: seal(JSON.stringify(candidate)) };
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-edit','edit_waiting','backup',?,?)").run(jobId, siteId, at, JSON.stringify(details));
