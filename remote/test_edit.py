@@ -41,7 +41,7 @@ class FakeDocker:
     def __init__(self,base):
         self.base=base;self.calls=[];self.version=b'2.29.1\n';self.pull_fail=False;self.up_fail=False
         self.containers=[];self.volumes=['shop_data'];self.networks=['shop_default'];self.tags={};self.created=[]
-        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[];self.holders={}
+        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[];self.holders={};self.missing={'shop:2.0','ghost:5.1'};self.pulled=[]
     def __call__(self,args,timeout=120,env=None):
         self.calls.append({'args':list(args),'env':dict(env or {})})
         if args[:2]!=['docker','compose'] or args[2:4]==['version','--short']:return self.docker(args[1:])
@@ -50,6 +50,7 @@ class FakeDocker:
         if tail[0]=='config':return self.config(args)
         if tail[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,args[:2])
+            self.pulled.append(list(tail[2:]));self.missing-={'shop:2.0'}
             return b''
         if tail[0]=='stop':self.stops.append(list(args));return b''
         if tail[0]=='up':
@@ -90,7 +91,9 @@ class FakeDocker:
                 return json.dumps(found[-1:]).encode()
             return json.dumps([c for c in self.containers if c['Id'] in args[1:]]).encode()
         if args[:2]==['image','inspect']:
-            if args[2:4]==['--format','{{.Id}}']:return b'sha256:'+b'1'*64+b'\n'
+            if args[2:4]==['--format','{{.Id}}']:
+                if args[4] in self.missing:raise subprocess.CalledProcessError(1,['docker','image','inspect'])
+                return b'sha256:'+b'1'*64+b'\n'
             return json.dumps([{'Config':{'Env':['PATH=/usr/bin'],'Labels':{'img':'1'},'Cmd':['run'],'Entrypoint':None,'WorkingDir':'/app','User':'','Healthcheck':None}}]).encode()
         if args[0]=='tag':self.tags[args[2]]=args[1];return b''
         if args[0] in ('volume','network') and args[1]=='ls':return '\n'.join(self.volumes if args[0]=='volume' else self.networks).encode()
@@ -99,6 +102,7 @@ class FakeDocker:
         if args[:2]==['image','rm']:self.tags.pop(args[-1],None);return b''
         if args[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,['docker','pull'])
+            self.pulled.append([args[1]]);self.missing.discard(args[1])
             return b''
         if args[0]=='stop':self.stops.append(list(args));return b''
         if args[0]=='rename':
@@ -437,7 +441,7 @@ class Lifecycle(EditCase):
         self.assertFalse(any('up' in c['args'] for c in self.fake.calls))
     def test_prepare_is_idempotent_and_pull_failure_is_fixed(self):
         digest,_=self.prepare();self.prepare()
-        self.fake.pull_fail=True
+        self.fake.pull_fail=True;self.fake.missing.add('shop:2.0')  # removed again (pruned) before the retry
         files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
         with patch('helper.edit_disk_low',return_value=False):
             self.refused(self.run_op('edit-prepare',files=files,env=[{'file':self.envfile,'key':'DB_PASSWORD','value':SECRET}],reviewedModelSha256=digest),'PULL_FAILED')
@@ -748,6 +752,38 @@ class ReviewFixes(EditCase):
         for s in sets:self.assertTrue(str(helper.EDITS_ROOT) in s['exclude'] or not helper.within(str(helper.EDITS_ROOT),s['path']))
         self.assertFalse([s for s in sets if s['path']==str(helper.EDITS_ROOT)])
 
+
+class LocalImages(EditCase):
+    """A locally built or loaded image is used as it is; only missing images are pulled (CI run 41530805244)."""
+    prepare=Lifecycle.prepare;journal=Lifecycle.journal
+    def test_an_image_already_on_the_server_is_not_pulled(self):
+        self.fake.missing=set()
+        digest,result=self.prepare()
+        self.assertEqual(result['pulled'],[]);self.assertEqual(self.fake.pulled,[],'no pull for a local image')
+        self.assertTrue(self.run_op('edit-apply',reviewedModelSha256=digest)['ok'])
+    def test_a_missing_image_is_pulled(self):
+        digest,result=self.prepare()
+        self.assertEqual(result['pulled'],['web']);self.assertEqual(self.fake.pulled,[['web']])
+    def test_a_failed_pull_of_a_present_image_continues(self):
+        # The pull fails (registry down), but the image is on the server after all: prepare goes on.
+        self.fake.pull_fail=True
+        real=self.fake.docker;state={'checks':0}
+        def docker(args):
+            if args[:3]==['image','inspect','--format'] and args[4]=='shop:2.0':
+                state['checks']+=1
+                if state['checks']==1:raise subprocess.CalledProcessError(1,['docker','image','inspect'])
+                return b'sha256:'+b'2'*64+b'\n'
+            return real(args)
+        self.fake.docker=docker
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}));env=[]
+        check=self.run_op('edit-check',files=files,env=env);self.assertTrue(check['ok'],check)
+        result=self.run_op('edit-prepare',files=files,env=env,reviewedModelSha256=check['verdict']['reviewedModelSha256'])
+        self.assertTrue(result['ok'],result)
+    def test_a_failed_pull_of_a_missing_image_fails_closed(self):
+        self.fake.pull_fail=True
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
+        check=self.run_op('edit-check',files=files,env=[]);self.assertTrue(check['ok'],check)
+        self.refused(self.run_op('edit-prepare',files=files,env=[],reviewedModelSha256=check['verdict']['reviewedModelSha256']),'PULL_FAILED')
 
 class Poll(EditCase):
     def poll(self,**extra):

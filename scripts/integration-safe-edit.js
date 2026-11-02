@@ -202,11 +202,13 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:broken'));
   ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
   let corrupted = false;
-  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!corrupted && current.progress.phase === 'check_health') { corrupted = true; await sh(`for f in $(find /var/lib/docknest/edits/${editId} -type f); do printf 'corrupted' > "$f"; done`); } } });
+  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!corrupted && current.progress.phase === 'check_health') { corrupted = true; await sh(`for f in $(find /var/lib/docknest/edits/${editId} -type f ! -name journal.json); do printf 'corrupted' > "$f"; done`); } } });
   assert.equal(row.state, 'needs_attention', JSON.stringify(row));
   assert.equal(row.reason, 'The previous version could not be put back. The site stays behind the maintenance page.');
-  const maintenanceDirectory = siteInfo(shop).site.config.maintenance.directory;
-  assert.equal(await sh(`test -e '${maintenanceDirectory}/enabled' && echo on || echo off`), 'on', 'the maintenance page stays on');
+  // These fixture sites have no maintenance proxy set up (the helper warns and skips the page), so the check is on
+  // DockNest's own record: the journal keeps maintenanceOn and finish, which would take the page down, never ran.
+  assert.equal(JSON.parse(await sh(`cat /var/lib/docknest/edits/${editId}/journal.json`)).maintenanceOn, true, 'the edit still holds the maintenance page');
+  assert.equal((await import('../src/site-edits/views.js')).detailOf(editId).maintenance, 'on');
   assert.equal(await sh(`test -d /var/lib/docknest/edits/${editId}/data && echo kept || echo gone`), 'kept', 'a failed rollback keeps the data safety copy');
   const { detailOf } = await import('../src/site-edits/views.js');
   assert.equal(detailOf(editId).dataCopyNote, 'A safety copy of the data is kept on the server.');

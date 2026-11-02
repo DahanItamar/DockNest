@@ -829,6 +829,11 @@ def edit_remove_temporaries(edit_id,journal):
         folder,name=posixpath.split(record['path'])
         try:os.unlink(posixpath.join(folder,'.%s.docknest-%s.tmp'%(name,edit_id[:8])))
         except OSError:pass
+def edit_image_present(ref,inv):
+    """True when the image reference (tag or digest) is already on the server."""
+    if not isinstance(ref,str) or not ref:return False
+    try:edit_docker('image','inspect','--format','{{.Id}}',ref,inv=inv);return True
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):return False
 def edit_tag(edit_id,service):
     name=service if re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',service or '') else 's'+edit_sha(str(service).encode())[:12]
     return 'docknest-edit/%s:%s'%(edit_id,name)
@@ -1223,16 +1228,20 @@ def edit_prepare(req,edit_id,site,roots,inv):
             except OSError as error:
                 if error.errno==errno.ENOSPC:edit_refuse('DISK_FULL')
                 raise
-        journal=edit_journal(edit_id);pulled=[]
+        journal=edit_journal(edit_id)
+        # Only images that are not on the server yet are pulled: locally built or loaded images are used as they are, and
+        # apply always runs with --pull never. A failed pull fails closed only when the image is still missing.
+        if container:
+            wanted={inv['container']:context['candidate']['imageRef']} if context['candidate']['imageRef']!=context['plan']['imageRef'] else {}
+        else:
+            wanted={name:(context['candidate']['services'].get(name) or {}).get('image') for name in journal['changedServices']}
+        missing=[name for name,ref in wanted.items() if not edit_image_present(ref,inv)]
         try:
-            if container:
-                if context['candidate']['imageRef']!=context['plan']['imageRef']:
-                    edit_docker('pull',context['candidate']['imageRef'],timeout=EDIT_PULL_SECONDS,inv=inv);pulled=[inv['container']]
-            elif journal['changedServices']:
-                edit_compose(inv,['pull','--quiet',*journal['changedServices']],context['files'],context['envs'],timeout=EDIT_PULL_SECONDS);pulled=list(journal['changedServices'])
+            if container and missing:edit_docker('pull',wanted[inv['container']],timeout=EDIT_PULL_SECONDS,inv=inv)
+            elif missing:edit_compose(inv,['pull','--quiet',*missing],context['files'],context['envs'],timeout=EDIT_PULL_SECONDS)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):
-            edit_refuse('DISK_FULL' if edit_disk_low() else 'PULL_FAILED')
-        emit(result={'ok':True,'pulled':pulled})
+            if any(not edit_image_present(wanted[name],inv) for name in missing):edit_refuse('DISK_FULL' if edit_disk_low() else 'PULL_FAILED')
+        emit(result={'ok':True,'pulled':missing})
     finally:
         if not container:shutil.rmtree(context['folder'],ignore_errors=True)
 def edit_restore_files(edit_id,journal):
