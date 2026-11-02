@@ -136,9 +136,11 @@ async function layoutOk(page){
  assert.ok(!r.sideways,'sideways scroll');assert.ok(r.hs?.length<=1,'footer buttons differ in height: '+r.hs);assert.ok(r.lines!==false,'a footer button wraps');
 }
 const COMPOSE='services:\n  web:\n    image: demo/shop:1.5\n    ports:\n      - "8080:8080"\n  db:\n    image: postgres:16\n';
+async function tickShutdown(page){await dialog(page).getByLabel(/I verified that a normal stop cleanly closes/).check()}
 async function fillCompose(page,domain='shop2.example.com'){
  await page.getByRole('textbox',{name:'Compose file'}).fill(COMPOSE);
  await page.getByLabel('Domain').fill(domain);
+ await tickShutdown(page);
 }
 async function toCheck(page){await page.getByRole('button',{name:'Check',exact:true}).click();await page.getByRole('heading',{name:/Ready to launch|Cannot launch yet/}).waitFor()}
 async function reauth(page){
@@ -199,7 +201,7 @@ try{
    await page.getByRole('heading',{name:'Launching shop2.example.com'}).waitFor();
    assert.equal(mock.reauths,1);
    assert.deepEqual(mock.launches[0].env,{SECRET_KEY:'s3cret'});
-   assert.equal(mock.launches[0].webService,'web');assert.equal(mock.launches[0].testServerId,'b');
+   assert.equal(mock.launches[0].webService,'web');assert.equal(mock.launches[0].testServerId,'b');assert.equal(mock.launches[0].cleanShutdownConfirmed,true);
    assert.equal('trustConfirmed' in mock.launches[0],false);
    await d.getByText('Building the image…').waitFor();
    await d.getByRole('progressbar').waitFor();
@@ -236,6 +238,8 @@ try{
    await page.getByLabel('Compose file').fill('deploy/compose.yaml');
    await page.getByLabel('Deploy key').selectOption({label:'Shop deploy key'});
    await page.getByLabel('Domain').fill('shop2.example.com');
+   assert.equal(await page.getByRole('button',{name:'Check',exact:true}).isDisabled(),true,'Check waits for the clean-shutdown confirmation');
+   await tickShutdown(page);
    // The same two included rows as on the Compose tab
    await d.getByText('Backups',{exact:true}).waitFor();await d.getByText('Daily',{exact:true}).waitFor();await d.getByText('Restore tests',{exact:true}).waitFor();
    if(width>=768){ // board 06: two columns, two rows

@@ -10,7 +10,7 @@ import './launch.css';
 // Launch a new site from the Map (docs/launch-site.md). The Map's "New site" opens this flow on a server:
 // source (Compose file or Git repository), check, trust warning with a fresh sign-in check, then a timeline.
 // The check, the launch and each refresh are plain requests; the timeline refreshes only while a launch is running.
-const EMPTY={tab:'compose',compose:'',env:[],service:'',domain:'',repo:'',ref:'main',composePath:'compose.yaml',keyId:'',allowPrivate:false};
+const EMPTY={tab:'compose',compose:'',env:[],service:'',domain:'',repo:'',ref:'main',composePath:'compose.yaml',keyId:'',allowPrivate:false,shutdown:false};
 
 const Facts=({rows})=><dl className="def-list">{rows.filter(Boolean).map(([k,v])=><div className="def-row ln-fact" key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
 // Neutral value text, only the icon carries the colour.
@@ -28,7 +28,7 @@ function Source({server,form,set,keys,narrow,err,privateHint,onCancel,onCheck}){
  const git=form.tab==='git',names=useMemo(()=>serviceNames(form.compose),[form.compose]);
  const [adding,setAdding]=useState(false),[nk,setNk]=useState(''),[nv,setNv]=useState('');
  const keyErr=nk&&(!ENV_KEY.test(nk)?'Use letters, numbers and underscores.':ENV_REFUSED.test(nk)?'This name is reserved.':form.env.some(r=>r.key===nk)?'This name is already added.':'');
- const ready=domainOk(form.domain)&&(git?form.repo.trim().length>0&&form.composePath.trim().length>0:form.compose.trim().length>0);
+ const ready=form.shutdown&&domainOk(form.domain)&&(git?form.repo.trim().length>0&&form.composePath.trim().length>0:form.compose.trim().length>0);
  const field=(text,key,extra={})=><label className="map-field">{text}<input type="text" autoComplete="off" spellCheck={false} value={form[key]} onChange={e=>set({[key]:e.target.value})} {...extra}/></label>;
  const selectField=(text,key,items,extra={})=><label className="map-field">{text}<select value={form[key]} onChange={e=>set({[key]:e.target.value})} {...extra}>{items.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></label>;
  const keyItems=[['','No key (public)'],...keys.map(k=>[k.id,k.name])];
@@ -63,6 +63,7 @@ function Source({server,form,set,keys,narrow,err,privateHint,onCancel,onCheck}){
    </div>
   </>}
   <div><h3>Included</h3><Facts rows={[['Backups','Daily'],['Restore tests','Weekly'],['Certificate',"Let's Encrypt"]]}/></div>
+  <label className="check"><input type="checkbox" checked={form.shutdown} onChange={e=>set({shutdown:e.target.checked})}/> I verified that a normal stop cleanly closes the application and database writers.</label>
  </Sheet>;
 }
 
@@ -80,10 +81,10 @@ function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onC
  const rows=loading?['Docker','Compose','nginx','Certbot','DNS'].map((t,i)=>[t,<State state={i===0?'running':'queued'}>{i===0?'Checking':'Waiting'}</State>]):checkRows(result).map(c=>[c.title,<State state={c.state}>{c.value}</State>]);
  const blockers=blockersOf(result),svc=services.find(x=>x.name===pick.service)||services[0],ports=svc?.ports||[];
  const go=()=>{setBusy(true);setErr('');return guard.run(async()=>{
-   const body={...bodyOf(form),...(services.length>1&&svc?{webService:svc.name}:{}),...(pick.port?{webPort:Number(pick.port)}:{}),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(tests.length?{testServerId:pick.test||null}:{}),...(trust?{trustConfirmed:true}:{})};
+   const body={...bodyOf(form),...(services.length>1&&svc?{webService:svc.name}:{}),...(pick.port?{webPort:Number(pick.port)}:{}),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(tests.length?{testServerId:pick.test||null}:{}),cleanShutdownConfirmed:true,...(trust?{trustConfirmed:true}:{})};
    const r=await client.start(server.id,body);onLaunched(r?.launch?.id);
   },e=>setErr(friendlyLaunch(e))).finally(()=>setBusy(false))};
- return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting} onClick={go}>Launch</button></>}>
+ return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting||!form.shutdown} onClick={go}>Launch</button></>}>
   {blocked&&<AlertPanel variant="error" action={<div className="rp-actions">{installs.map((c,i)=><button key={c.install.package} type="button" className={i===0?'primary':undefined} onClick={()=>onInstall(c)}>Install {PACKAGE_NAME[c.install.package]}</button>)}{installs.some(c=>c.install.command)?<button type="button" onClick={()=>onCommand(installs.find(c=>c.install.command))}>Show command</button>:null}{!installs.length&&<button type="button" onClick={onAgain}>Check again</button>}</div>}>{blockers.join(' ')||'Something must be fixed before this site can launch.'}</AlertPanel>}
   <Facts rows={rows}/>
   {!loading&&!blocked&&(services.length>1||tests.length>0)&&<div className="ln-grid">
