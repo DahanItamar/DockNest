@@ -1,4 +1,4 @@
-# helper/install.py: Fixed-argv package installation (nginx, Docker, Compose, certbot).
+# helper/install.py: Fixed-argv package installation (nginx, Docker, Compose, certbot, Git).
 # <build:header>
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
@@ -12,12 +12,12 @@ from .move import (
 # scripts are downloaded, no config files are edited and nothing is removed (apt runs with --no-remove). DockNest sends
 # only a package NAME; the argv below is fixed here and runs without a shell. Failures raise InstallError with a short
 # CODE; src/install-plan.js turns each known code into a fixed sentence. Raw exception text and tool output never leave.
-INSTALL_PLAN_JSON=r'''{"apt":{"nginx":["nginx"],"certbot":["certbot","python3-certbot-nginx"],"docker":["docker.io"],"compose":["docker-compose-v2"]},"dnf":{"nginx":["nginx"],"certbot":["certbot","python3-certbot-nginx"],"docker":["moby-engine"],"compose":[]}}'''
+INSTALL_PLAN_JSON=r'''{"apt":{"nginx":["nginx"],"certbot":["certbot","python3-certbot-nginx"],"docker":["docker.io"],"compose":["docker-compose-v2"],"git":["git"]},"dnf":{"nginx":["nginx"],"certbot":["certbot","python3-certbot-nginx"],"docker":["moby-engine"],"compose":[],"git":["git"]}}'''
 INSTALL_PLAN=json.loads(INSTALL_PLAN_JSON)
-INSTALL_NAMES={'nginx':'nginx','docker':'Docker','compose':'Docker Compose','certbot':'certbot'}
+INSTALL_NAMES={'nginx':'nginx','docker':'Docker','compose':'Docker Compose','certbot':'certbot','git':'Git'}
 # Packages from any source that mean the tool is already on the server. Never install over them.
-INSTALL_PRESENT={'nginx':['nginx','nginx-core','nginx-full','nginx-light','nginx-extras'],'docker':['docker.io','docker-ce','docker-ce-cli','containerd.io','moby-engine','docker-engine','podman-docker'],'compose':['docker-compose-v2','docker-compose-plugin','docker-compose'],'certbot':['certbot']}
-INSTALL_VERIFY={'nginx':[['nginx','-v'],['nginx','-t']],'docker':[['docker','version','--format','{{.Server.Version}}']],'compose':[['docker','compose','version']],'certbot':[['certbot','--version']]}
+INSTALL_PRESENT={'nginx':['nginx','nginx-core','nginx-full','nginx-light','nginx-extras'],'docker':['docker.io','docker-ce','docker-ce-cli','containerd.io','moby-engine','docker-engine','podman-docker'],'compose':['docker-compose-v2','docker-compose-plugin','docker-compose'],'certbot':['certbot'],'git':['git','git-core']}
+INSTALL_VERIFY={'nginx':[['nginx','-v'],['nginx','-t']],'docker':[['docker','version','--format','{{.Server.Version}}']],'compose':[['docker','compose','version']],'certbot':[['certbot','--version']],'git':[['git','--version']]}
 INSTALL_SERVICES={'nginx':'nginx','docker':'docker'}
 INSTALL_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 INSTALL_UPDATE_TIMEOUT=300
@@ -55,7 +55,7 @@ def install_supported(manager,os_id,version_id,name):
         return True
     if manager=='dnf':
         if os_id not in ('fedora','rhel','rocky','almalinux'):return False
-        return name=='nginx' or (os_id=='fedora' and name in ('certbot','docker'))
+        return name in ('nginx','git') or (os_id=='fedora' and name in ('certbot','docker'))
     return False
 def package_known(manager,package):
     """True when the package manager says this package is installed (any source)."""
