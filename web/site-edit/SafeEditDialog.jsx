@@ -18,7 +18,7 @@ const envKey=(file,key)=>file+'\n'+key;
 
 // Safe Edit for one site: Compose, Environment, Ports and Image, then Review, Apply and the timeline.
 // `initialEditId` opens an existing edit (from the history list) straight on its timeline.
-export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
+export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit=true}){
  const client=useMemo(()=>createSafeEditClient(api),[api]),guard=useGuard(client),narrow=useNarrow();
  const [stage,setStage]=useState(initialEditId?'progress':'loading');
  const [view,setView]=useState(null),[texts,setTexts]=useState({}),[file,setFile]=useState('');
@@ -26,6 +26,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
  const [ports,setPorts]=useState([]),[images,setImages]=useState([]),[editing,setEditing]=useState({});
  const [tab,setTab]=useState('Compose'),[problem,setProblem]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [review,setReview]=useState(null),[editId,setEditId]=useState(initialEditId||null),[edit,setEdit]=useState(null);
+ const [pollStopped,setPollStopped]=useState(false);
  const seq=useRef(0),done=useRef(false);
 
  const load=useCallback(()=>{
@@ -34,6 +35,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
   return guard.run(async()=>{
    const v=await client.load(site.id);
    if(mine!==seq.current)return;
+   if(v.active?.id){setEdit(null);done.current=false;setPollStopped(false);setEditId(v.active.id);setStage('progress');return}
    const files=(v.files||[]).filter(f=>typeof f.text==='string');
    setView(v);
    setTexts(Object.fromEntries(files.map(f=>[f.path,f.text])));setFile(files[0]?.path||'');
@@ -42,7 +44,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
    for(const s of v.services||[]){
     // The server's file and line win; the UI's own locator is the fallback.
     const own=v.kind==='compose'?locate(files,s):{image:null,ports:s.ports.map(()=>null)};
-    s.ports.forEach((p,i)=>rowsP.push({service:s.name,container:p.container,host:p.host,protocol:p.protocol,hostIp:p.hostIp,frozen:s.frozen||!!p.reason,loc:p.host==null?null:v.kind==='container'?{}:(p.at||own.ports[i]),value:p.host==null?'':String(p.host),applied:p.host==null?'':String(p.host),stale:false}));
+    s.ports.forEach((p,i)=>rowsP.push({service:s.name,reason:p.reason,container:p.container,host:p.host,protocol:p.protocol,hostIp:p.hostIp,frozen:s.frozen||!!p.reason,loc:p.host==null?null:v.kind==='container'?{}:(p.at||own.ports[i]),value:p.host==null?'':String(p.host),applied:p.host==null?'':String(p.host),stale:false}));
     rowsI.push({service:s.name,image:s.image,frozen:s.frozen,reason:s.imageReason,variable:s.imageVariable,loc:s.imageReason?null:v.kind==='container'?{}:(s.imageAt||own.image),value:s.image,applied:s.image,stale:false});
    }
    setPorts(rowsP);setImages(rowsI);
@@ -53,9 +55,9 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
  useEffect(()=>{if(!initialEditId)load()},[]);// eslint-disable-line
 
  // Progress follows the existing restore-test pattern: refresh every 3 s, only while the edit is active.
- const refresh=useCallback(async()=>{try{setEdit(await client.get(editId));setError('')}catch(e){setError(friendlyError(e))}},[client,editId]);
+ const refresh=useCallback(async()=>{try{setEdit(await client.get(editId));setError('')}catch(e){setError(friendlyError(e));if(e.status>=400&&e.status<500)setPollStopped(true)}},[client,editId]);
  useEffect(()=>{if(stage==='progress'&&editId)refresh()},[stage,editId,refresh]);
- const active=stage==='progress'&&(!edit||ACTIVE.has(edit.state));
+ const active=stage==='progress'&&!pollStopped&&(!edit||ACTIVE.has(edit.state));
  useEffect(()=>{if(!active)return;const t=setInterval(refresh,3000);return()=>clearInterval(t)},[active,refresh]);
  useEffect(()=>{if(stage==='progress'&&edit&&!ACTIVE.has(edit.state)&&!done.current){done.current=true;onChanged?.()}},[stage,edit]);// eslint-disable-line
 
@@ -81,17 +83,20 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
    const r=await client.review(site.id,{...(changedFiles.length?{files:changedFiles.map(f=>({path:f.path,sha256:f.sha256,text:texts[f.path]}))}:{}),...(envChanges.length?{env:envChanges}:{}),...(containerChanges?{containerChanges}:{})});
    setReview(r);setStage('review');
   },e=>{
-   if(e.status===422||e.status===409){if(!isContainer)setTab('Compose');setProblem(e.code==='FILE_CHANGED'?{kind:'conflict',text:'This file changed on the server.'}:{kind:'blocked',text:e.message||'This change cannot be applied.'})}
-   else setError(friendlyError(e));
+   if(e.status===422){
+    const f=String(e.field||'');
+    if(!isContainer)setTab(t=>f.startsWith('env')?'Environment':f.startsWith('files')||e.code==='FILE_CHANGED'?'Compose':t);
+    setProblem(e.code==='FILE_CHANGED'?{kind:'conflict',text:'This file changed on the server.'}:{kind:'blocked',text:e.message||'This change cannot be applied.'});
+   }else setError(friendlyError(e));
   });
   setBusy(false);
  }
  async function apply(){
   setBusy(true);setError('');
-  await guard.run(async()=>{const r=await client.apply(site.id,review.token);setEdit(null);done.current=false;setEditId(r.edit.id);setStage('progress')},e=>setError(friendlyError(e)));
+  await guard.run(async()=>{const r=await client.apply(site.id,review.token);setEdit(null);done.current=false;setPollStopped(false);setEditId(r.edit.id);setStage('progress')},e=>{if(e.code==='REVIEW_EXPIRED'){setReview(null);setStage('edit');setError(friendlyError(e))}else setError(friendlyError(e))});
   setBusy(false);
  }
- async function act(fn){setBusy(true);setError('');try{await fn();await refresh()}catch(e){setError(friendlyError(e))}setBusy(false)}
+ async function act(fn){setBusy(true);setError('');await guard.run(async()=>{await fn();await refresh()},e=>setError(friendlyError(e)));setBusy(false)}
 
  // Guided edits write the same text a person would type in Compose.
  function changePort(i,value){
@@ -163,7 +168,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
    const cell=p.host==null?'Not published':on?input:<>{p.applied}{pencil}</>;
    return {key:id,cells:[<code>{p.service}</code>,String(p.container),<span className="se-cell">{cell}</span>],label:<><code>{p.service}</code> {p.container}</>,value:cell};
   });
-  const stuck=ports.some(p=>p.host!=null&&!p.loc&&!isContainer||p.stale);
+  const stuck=ports.some(p=>p.host!=null&&((!p.loc&&!isContainer)||p.stale||!!p.reason));
   return <>
    {tabNote('Ports')}
    {rows.length>0?<Rows narrow={narrow} headers={['Service','Container port','Host port']} columns={[null,'150px','170px']} numeric={[1,2]} rows={rows}/>:<p className="map-caption">This site publishes no ports.</p>}
@@ -221,14 +226,14 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
   <p className="map-status" role="status">{STATUS_LINE[stepNow]||STATUS_LINE.apply}</p>
   <Timeline edit={edit}/>
   <p className="map-caption">You can leave this page.</p>
-  {fail}
+  {fail}{guard.prompt}
  </Shell>;
  if(outcome==='done')return <Shell onClose={onClose} title={site.name} actions={<Foot b="Close" onB={onClose}/>}><Note kind="ok" icon={CheckCircle2} role="status">Change applied</Note><Timeline edit={edit}/></Shell>;
  if(outcome==='attention')return <Shell onClose={onClose} title="Needs your attention" actions={<Foot a="Close" onA={onClose}/>}>
   <AlertPanel variant="error" action={(acts.retry||acts.restoreBackup)&&<div className="rp-actions">{acts.retry&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.retryRollback(edit.id))}>Try again</button>}{acts.restoreBackup&&<button type="button" disabled={busy} onClick={()=>act(()=>client.restoreBackup(edit.id))}>Restore backup</button>}</div>}>{edit.reason||'Rollback failed. The maintenance page is on.'}{edit.dataCopyNote&&<small className="se-note">{edit.dataCopyNote}</small>}</AlertPanel>
   {edit.restore&&<AlertPanel variant="info">{edit.restore.running?'Restoring the backup. Follow it in Jobs.':'The restore was started. Follow it in Jobs.'}</AlertPanel>}
-  <Timeline edit={edit}/>{fail}
+  <Timeline edit={edit}/>{fail}{guard.prompt}
  </Shell>;
  const words={rolled:['Rolled back','The change did not work. The previous version runs again.'],failed:['Change stopped','Nothing was changed.'],cancelled:['Cancelled','Nothing was changed.']}[outcome]||['Change stopped','Nothing was changed.'];
- return <Shell onClose={onClose} title={words[0]} actions={<Foot a="Close" onA={onClose} b="Edit again" onB={again}/>}><AlertPanel variant="error">{edit.reason||words[1]}</AlertPanel><Timeline edit={edit}/></Shell>;
+ return <Shell onClose={onClose} title={words[0]} actions={<Foot a="Close" onA={onClose} b={canEdit?'Edit again':undefined} onB={again}/>}><AlertPanel variant="error">{edit.reason||words[1]}</AlertPanel><Timeline edit={edit}/></Shell>;
 }

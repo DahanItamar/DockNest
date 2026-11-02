@@ -62,11 +62,11 @@ const stepsOf=(phase)=>{
  return [S('backup','done',0,48),S('apply','done',1,12),S('check_health','failed',2,120,'No answer from the health check'),S('roll_back','failed',4,31,'The old version did not start'),S('finish','skipped')];
 };
 const editFor=phase=>({id:'e1',siteId:sites[0].id,state:phase==='running'?'running':phase==='attention'?'needs_attention':'done',result:phase==='done'?'applied':phase==='rolled'?'rolled_back':null,
- reason:phase==='rolled'?'No healthy answer in 2 minutes. The previous version runs again.':phase==='attention'?'Rollback failed. The maintenance page is on.':null,backupId:'demo-recovery-0',steps:stepsOf(phase),dataCopyNote:phase==='attention'?'A copy of the data is kept on the server.':null,restore:phase==='attention'&&mock.restored?{jobId:'j1',running:true}:null,actions:{cancel:phase==='running'&&false,retry:phase==='attention',restoreBackup:phase==='attention'&&!mock.restored}});
+ reason:phase==='rolled'?'No healthy answer in 2 minutes. The previous version runs again.':phase==='attention'?'Rollback failed. The maintenance page is on.':null,backupId:'demo-recovery-0',steps:stepsOf(phase),dataCopyNote:phase==='attention'?'A copy of the data is kept on the server.':null,restore:phase==='attention'&&mock.restored?{jobId:'j1',running:true}:null,actions:{cancel:phase==='running'&&!!mock.cancelable&&!mock.operator,retry:phase==='attention'&&!mock.operator,restoreBackup:phase==='attention'&&!mock.restored&&!mock.operator}});
 
 let mock;
 function freshMock(){
- mock={reviewMode:'ok',phase:'running',needReauth:false,reverified:false,loadReauth:false,loadFail:false,hold:null,view:viewFor(),requests:[],loads:0,retries:0,cancels:0,restored:0,dataRollback:false,
+ mock={reviewMode:'ok',phase:'running',needReauth:false,reverified:false,loadReauth:false,loadFail:false,hold:null,view:viewFor(),requests:[],loads:0,retries:0,cancels:0,restored:0,polls:0,dataRollback:false,
   history:[{id:'e1',state:'done',result:'applied',createdAt:ago(180),changed:['services.web.image'],env:{added:[],replaced:[],removed:[]}},{id:'e2',state:'done',result:'rolled_back',createdAt:ago(60*30),changed:['services.web.ports'],env:{added:[],replaced:['SECRET_KEY'],removed:[]}}]};
 }
 freshMock();
@@ -76,6 +76,7 @@ let browser;const errors=[];
 async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
  const context=await browser.newContext({viewport:{width,height:width<500?844:800},reducedMotion:'reduce',colorScheme:scheme});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
+ await context.addInitScript(()=>{const si=window.setInterval,ci=window.clearInterval;window.__iv=new Set();window.setInterval=(f,t,...a)=>{const id=si(f,t,...a);if(t===3000)window.__iv.add(id);return id};window.clearInterval=id=>{window.__iv.delete(id);return ci(id)}});
  const page=await context.newPage(),offOrigin=[];
  page.on('pageerror',e=>errors.push(e.message));
  context.on('request',req=>{const u=new URL(req.url());if(!['data:','blob:'].includes(u.protocol)&&u.origin!==origin)offOrigin.push(u.href)});
@@ -88,6 +89,9 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
    mock.requests.push({kind:m[2],body});
    if(m[2]==='review'){
     if(mock.reviewMode==='dataNotLocal')return json(route,{code:'DATA_NOT_LOCAL',error:'This site keeps its data outside the server. Change the image by hand.'},422);
+    if(mock.reviewMode==='rate')return json(route,{code:'RATE_LIMITED',error:'raw'},429);
+    if(mock.reviewMode==='busy')return json(route,{code:'SITE_BUSY',error:'raw'},409);
+    if(mock.reviewMode==='unreachable')return json(route,{code:'SERVER_UNREACHABLE',error:'The server could not be reached. Try again.'},502);
     if(mock.reviewMode==='blocked')return json(route,{code:'PRIVILEGE_ADDED',error:'This change adds privileged mode. Edit it by hand.'},422);
     if(mock.reviewMode==='conflict')return json(route,{code:'FILE_CHANGED',error:'This file changed on the server. Reload it.'},422);
     return json(route,{token:'tok-1',diff:DIFF,summary:{health:'url',dataRollback:mock.dataRollback,dataBytes:mock.dataRollback?1288490188:null},warnings:[{code:'PUBLIC_PORT',port:9090,message:'Port 9090 is reachable from the internet.'},...(mock.dataRollback?[{code:'LARGE_DATA_COPY',bytes:1288490188,message:'The safety copy of the data is large.'}]:[])]});
@@ -103,10 +107,11 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
    if(mock.loadReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
    return json(route,mock.view);
   }
+  if(/^\/api\/site-edits\/e1\/(cancel|retry|restore-backup)$/.test(endpoint)&&mock.actionReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
   if(endpoint==='/api/site-edits/e1/cancel'){mock.cancels++;return json(route,{ok:true},202)}
   if(endpoint==='/api/site-edits/e1/restore-backup'){mock.restored++;return json(route,{ok:true},202)}
   if(endpoint==='/api/site-edits/e1/retry'){mock.retries++;mock.phase='done';return json(route,{ok:true},202)}
-  if((m=endpoint.match(/^\/api\/site-edits\/([^/]+)$/)))return json(route,editFor(mock.phase));
+  if((m=endpoint.match(/^\/api\/site-edits\/([^/]+)$/))){mock.polls++;return mock.phase==='gone'?json(route,{error:'Safe Edit not found.',code:'NOT_FOUND'},404):json(route,editFor(mock.phase))}
   if(endpoint.match(/^\/api\/sites\/([^/]+)\/edits$/))return json(route,{items:mock.history,nextCursor:null});
   const out=endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?state():endpoint==='/api/version'?{version:'0.0.0'}:endpoint==='/api/updates/progress'?{active:false,state:'idle'}
    :endpoint==='/api/storage-targets'?{activeTargetId:'t1',targets:[{id:'t1',name:'Backup vault',kind:'sftp',host:'198.51.100.50',status:'connected',capacity_bytes:512*1024**3,trackedBytes:24*1024**3}]}
@@ -119,9 +124,9 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:start,exact:true}).click();
  return {context,page,offOrigin};
 }
-const shot=async(page,n,slug,width,scheme)=>{if(shots){await page.mouse.move(2,2);await page.waitForTimeout(250);await page.screenshot({path:path.join(shots,`${n}-safe-edit-${slug}-${width>500?'desktop':'phone'}-${scheme}.png`)})}};
+const shot=async(page,n,slug,width,scheme)=>{if(shots){await page.mouse.move(2,2);await page.waitForFunction(()=>document.getAnimations().length===0);await page.screenshot({path:path.join(shots,`${n}-safe-edit-${slug}-${width>500?'desktop':'phone'}-${scheme}.png`)})}};
 const dlg=page=>page.locator('dialog[open].dialog-edge');
-const settle=page=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(r,60)))));
+const settle=page=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
 
 // Layout rules every state must keep.
 async function layout(page,label){
@@ -299,7 +304,7 @@ async function existingDialogUnchanged(scheme){
 }
 
 async function roles(){
- freshMock();
+ freshMock();mock.operator=true;mock.phase='rolled';
  // Operators: no Edit action, history is read-only.
  let {context,page}=await open({role:'operator',width:1280});
  await openSite(page,1280);
@@ -307,8 +312,12 @@ async function roles(){
  await page.getByRole('button',{name:'Edit history'}).click();
  const d=page.locator('dialog[open]');await d.getByText('Rolled back').waitFor();
  assert.equal(await d.getByRole('button',{name:/^Edit /}).count(),0);
- await d.getByRole('button',{name:'Open edit from 3 hours ago'}).click().catch(()=>{});
+ await d.getByRole('button',{name:'Open edit from 3 hours ago'}).click();
+ await d.getByText('No healthy answer in 2 minutes. The previous version runs again.').waitFor();
+ assert.equal(await d.getByRole('button',{name:'Edit again'}).count(),0,'operators cannot start a new edit from a finished one');
+ assert.equal(await d.getByRole('button',{name:/Try again|Restore backup|Cancel/}).count(),0);
  await context.close();
+ mock.operator=false;
  // Static sites: nothing to edit.
  ({context,page}=await open({width:1280}));
  await page.locator('.map-site',{hasText:'Landing Page'}).first().click();
@@ -407,6 +416,67 @@ async function roles(){
   const t=await dlg(page).locator('textarea').inputValue();
   assert.equal(t.split(NL)[lineOf('9090:9090')-1].includes('9091:9090'),true);assert.equal((t.match(/9090:9090/g)||[]).length,1,'only the reported line changed');
   await context.close();}
+ // Follow-ups: re-verification on the actions, expired review, retryable review errors, an edit already running, polling.
+ for(const kind of ['retry','restore','cancel']){
+  freshMock();mock.actionReauth=true;mock.phase=kind==='cancel'?'running':'attention';mock.cancelable=true;
+  ({context,page}=await open({width:1280}));
+  await openSite(page,1280);await page.getByRole('button',{name:'Edit history'}).click();
+  await page.locator('dialog[open]').getByRole('button',{name:'Open edit from 3 hours ago'}).click();
+  const d=page.locator('dialog[open].dialog-edge');
+  await d.getByRole('button',{name:{retry:'Try again',restore:'Restore backup',cancel:'Cancel'}[kind],exact:true}).click();
+  await d.getByText('Please confirm it is you').waitFor();
+  assert.equal(mock.retries+mock.restored+mock.cancels,0,'nothing ran before the check');
+  await d.getByLabel('Password').fill('pw');await d.getByLabel('Authenticator code').fill('123456');
+  await d.getByRole('button',{name:'Verify and continue'}).click();
+  await d.getByText('Please confirm it is you').waitFor({state:'detached'});
+  assert.equal(mock.retries+mock.restored+mock.cancels,1,kind+' ran once after the check');
+  await context.close();
+ }
+ // The review expired: back to the editor with a plain sentence.
+ freshMock();mock.applyError='REVIEW_EXPIRED';
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+ await dlg(page).getByRole('button',{name:'Apply',exact:true}).click();
+ await dlg(page).getByText('This review expired. Review the change again.').waitFor();
+ await dlg(page).getByRole('button',{name:'Review',exact:true}).waitFor();
+ await context.close();
+ // Rate limit, busy site and an unreachable server at Review are retryable notes, not the blocked panel.
+ for(const [mode,text] of [['rate','Too many changes for this site. Try again later.'],['busy','This site is busy right now. Try again soon.'],['unreachable','The server could not be reached. Try again.']]){
+  freshMock();mock.reviewMode=mode;
+  ({context,page}=await open({width:1280}));
+  await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+  await dlg(page).getByText(text).waitFor();
+  assert.equal(await dlg(page).locator('.alert-error').count(),0,mode+': no blocked panel');
+  assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),false,mode+': Review can be pressed again');
+  await context.close();
+ }
+ // A change already running opens its timeline instead of the editor.
+ freshMock();mock.phase='running';mock.view=viewFor({active:{id:'e1',state:'running'}});
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);
+ await dlg(page).getByText('Applying the change…').waitFor();
+ assert.equal(await dlg(page).locator('textarea').count(),0);
+ // Polling lives only while the dialog is open and the edit is active.
+ assert.equal(await page.evaluate(()=>window.__iv.size),1);
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ assert.equal(await page.evaluate(()=>window.__iv.size),0,'polling stops when the dialog closes');
+ await context.close();
+ // A 404 on the edit stops polling and shows the error.
+ freshMock();mock.phase='gone';mock.view=viewFor({active:{id:'e1',state:'running'}});
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);
+ await dlg(page).getByText('Safe Edit not found.').waitFor();
+ assert.equal(await page.evaluate(()=>window.__iv.size),0,'polling stops after a 404');
+ await context.close();
+ // Leading zeros are not ports.
+ freshMock();
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);
+ await dlg(page).getByRole('tab',{name:'Ports'}).click();await dlg(page).getByRole('button',{name:'Edit host port for web 9090'}).click();
+ await dlg(page).getByLabel('Host port for web 9090').fill('09091');
+ assert.equal(await dlg(page).getByLabel('Host port for web 9090').getAttribute('aria-invalid'),'true');
+ assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),true);
+ await context.close();
  // Busy site: the 409 sentence is shown at Apply.
  freshMock();mock.applyError='SITE_BUSY';
  ({context,page}=await open({width:1280}));

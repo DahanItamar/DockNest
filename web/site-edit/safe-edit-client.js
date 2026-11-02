@@ -32,7 +32,8 @@ const FRIENDLY={
  SITE_BUSY:'This site is busy right now. Try again soon.',
  MOVE_RUNNING:'This site is being moved. Wait for the move to finish.',
  EDIT_RUNNING:'Another change to this site is still running.',
- TOKEN_EXPIRED:'The review expired. Review the change again.'
+ REVIEW_EXPIRED:'This review expired. Review the change again.',
+ RATE_LIMITED:'Too many changes for this site. Try again later.'
 };
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
 
@@ -89,12 +90,17 @@ export function locate(files,service){
  if(found.length!==1)return {image:null,ports:service.ports.map(()=>null)};
  const {file,lines,block}=found[0];
  const inBlock=i=>i>block.start&&i<block.stop;
- const imageLines=lines.map((l,i)=>inBlock(i)&&/^\s+image:\s*\S/.test(l)?i:-1).filter(i=>i>=0);
+ const kids=lines.map((l,i)=>inBlock(i)&&!blank(l)?i:-1).filter(i=>i>=0),child=kids.length?indent(lines[kids[0]]):-1;
+ const imageLines=kids.filter(i=>indent(lines[i])===child&&/^\s*image:\s*\S/.test(lines[i]));
  const image=imageLines.length===1&&!/\$\{?[A-Za-z_]/.test(lines[imageLines[0]])?{file,line:imageLines[0]+1}:null;
+ // Only list items under the service's own `ports:` key count.
+ const portKeys=kids.filter(i=>indent(lines[i])===child&&/^\s*ports:\s*(#.*)?$/.test(lines[i]));
+ const items=new Set();
+ if(portKeys.length===1){for(let i=portKeys[0]+1;i<block.stop;i++){if(blank(lines[i]))continue;if(indent(lines[i])<=child)break;if(/^\s*-/.test(lines[i]))items.add(i)}}
  const ports=service.ports.map(p=>{
   if(p.host==null)return null;
   const re=new RegExp('(^|[^\\d])'+esc(p.host)+':'+esc(p.container)+'(?!\\d)');
-  const hits=lines.map((l,i)=>inBlock(i)&&/^\s*-/.test(l)&&re.test(l)&&!/\$\{?[A-Za-z_]/.test(l)?i:-1).filter(i=>i>=0);
+  const hits=[...items].filter(i=>re.test(lines[i])&&!/\$\{?[A-Za-z_]/.test(lines[i]));
   return hits.length===1?{file,line:hits[0]+1}:null;
  });
  return {image,ports};
@@ -113,5 +119,5 @@ export function setImage(text,line,from,to){
  lines[line-1]=m[1]+to+m[3];
  return lines.join('\n');
 }
-export const validPort=v=>/^\d{1,5}$/.test(String(v))&&Number(v)>=1&&Number(v)<=65535;
+export const validPort=v=>/^[1-9]\d{0,4}$/.test(String(v))&&Number(v)<=65535;
 export const validKey=k=>/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)&&!/^(COMPOSE_|DOCKER_|BUILDKIT_)/.test(k);
