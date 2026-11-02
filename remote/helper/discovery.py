@@ -150,10 +150,11 @@ def tmpfs_argument(destination,options):return destination+':'+options if option
 # environment values, labels, commands or mount sources other than the Docker socket flag.
 HARDENING_FORMAT=1
 # A bind of the socket itself, of a folder that holds it, or onto the path clients use, gives the container the engine.
-SOCKET_FOLDERS=('/','/var','/run','/var/run')
+SOCKET_FOLDERS=('/','/var','/run','/var/run','/run/podman')
+USER_RUN=re.compile(r'/run/user/[0-9]+(?:/(?:docker|podman)\.sock)?')
 def engine_socket(source,destination):
     source=str(source or '').rstrip('/') or '/';destination=str(destination or '').rstrip('/')
-    return source.endswith(('/docker.sock','/podman.sock')) or source in SOCKET_FOLDERS or source.startswith('/run/user/') or destination=='/var/run/docker.sock'
+    return source.endswith(('/docker.sock','/podman.sock')) or source in SOCKET_FOLDERS or bool(USER_RUN.fullmatch(source)) or destination=='/var/run/docker.sock'
 def engine_rootless():
     """rootless, userns or none for the Docker engine; None when it cannot be read."""
     try:options=json.loads(run(['docker','info','--format','{{json .SecurityOptions}}'],timeout=15) or b'null') or []
@@ -171,7 +172,7 @@ def root_user(user):
     name=(user or '').split(':',1)[0].strip()
     return name in ('','root','0')
 def loopback(address):
-    address=address.strip('[]')
+    address=address.strip('[]').split('%',1)[0]
     if address=='localhost':return True
     try:return ipaddress.ip_address(address).is_loopback
     except ValueError:return False
@@ -183,7 +184,7 @@ def container_hardening_facts(c,engine=None):
         for internal,values in source.items():
             for binding in values or []:
                 if not isinstance(binding,dict):continue
-                address=binding.get('HostIp') or '';port=str(binding.get('HostPort') or '')
+                address=(binding.get('HostIp') or '').split('%',1)[0];port=str(binding.get('HostPort') or '')
                 if not loopback(address):bindings[(address or '0.0.0.0')+':'+(port or '?')+'->'+str(internal)]=True
     # Database ports first, so a long list never drops the finding that matters most.
     ports=sorted(bindings,key=lambda value:(not bool(DATABASE_PORTS & set(re.findall(r'[0-9]+',value.split(':')[-1]))),value))[:64]

@@ -90,8 +90,8 @@ def main(req):
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
         # Do not expose environment secrets to dashboard.
-        routes=nginx_sites();hardening=hardening_report(cs) or [None]*len(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,hardening)],'certificates':certbot_certificates()})
+        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates()})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

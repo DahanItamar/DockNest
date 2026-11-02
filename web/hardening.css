@@ -14,7 +14,12 @@ dialog.hd-dialog::-webkit-scrollbar{display:none}
 .hd-dialog code{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-primary)}
 .hd-fix-inline{display:none}
 @media(max-width:767px){
+ .hd-dialog .hd-table .table-wrap{overflow-x:visible}
+ .hd-dialog .hd-table .data-table{min-width:0}
+ .hd-dialog .hd-table td{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
  .hd-table th:nth-child(3),.hd-table td:nth-child(3){display:none}
  .hd-fix-inline{display:block;color:var(--text-muted);margin-top:2px}
- .hd-table td:first-child{width:62%}
+ .hd-table col:nth-child(1){width:66% !important}
+ .hd-table col:nth-child(2){width:34% !important}
+ .hd-table col:nth-child(3){display:none}
 }

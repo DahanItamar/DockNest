@@ -212,3 +212,16 @@ test('a backup records the facts the helper returns beside the manifest, and a b
   assert.equal((await run()).status, 'completed', 'damaged facts never fail the backup');
   assert.deepEqual(hardeningView('backed-up'), first);
 });
+
+test('findings are sorted high, medium, low so the first ones shown matter most', () => {
+  const view = gradeHardening([safe({ noNewPrivileges: false, rootUser: true, extraCapabilities: ['SYS_ADMIN'], publicPorts: ['0.0.0.0:8080->80/tcp'], memoryLimit: false })], at);
+  const order = { high: 0, medium: 1, low: 2 }, ranks = view.findings.map(item => item.severity);
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => order[a] - order[b]));
+  assert.equal(ranks[0], 'high'); assert.equal(ranks.at(-1), 'low');
+});
+
+test('a scoped IPv6 host address does not reject the record', () => {
+  const view = gradeHardening([safe({ publicPorts: ['fe80::1%eth0:8080->80/tcp'] })], at);
+  assert.notEqual(view.grade, null);
+  assert.ok(ids(view).includes('public-ports'));
+});

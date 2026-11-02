@@ -74,6 +74,7 @@ for(const [theme,width] of [['light',1440],['dark',1440],['light',390],['dark',3
  assert.equal(await dialog.locator('tbody .status-failed').count(),2,'severity is the StatusLabel state');
  assert.equal(await dialog.locator('tbody .status-needs-review').count(),2);
  const fixes=await dialog.evaluate(el=>{const th=[...el.querySelectorAll('th')][2],td=el.querySelector('tbody td:nth-child(3)'),inline=el.querySelector('.hd-fix-inline');return {th:getComputedStyle(th).display,td:getComputedStyle(td).display,inline:getComputedStyle(inline).display};});
+ if(phone)assert.equal(await dialog.locator('.hd-table .table-wrap').evaluate(e=>e.scrollWidth<=e.clientWidth),true,'the table does not scroll sideways on a phone');
  if(phone){assert.deepEqual(fixes,{th:'none',td:'none',inline:'block'},'Fix moves under the finding on a phone');}
  else{assert.notEqual(fixes.td,'none');assert.equal(fixes.inline,'none');}
  await noOverflow(page);await shot(page,'dialog-f',theme,width);

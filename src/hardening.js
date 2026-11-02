@@ -11,7 +11,7 @@ const SEVERITY_RANK = { high: 3, medium: 2, low: 1 };
 // Capabilities that give a container near-host power: adding one is a high finding, any other extra one is medium.
 const POWERFUL_CAPABILITIES = new Set(['ALL', 'SYS_ADMIN', 'SYS_MODULE', 'SYS_PTRACE', 'SYS_RAWIO', 'DAC_READ_SEARCH', 'BPF', 'PERFMON', 'SYS_BOOT']);
 export const MAX_CONTAINERS = 30, MAX_PORTS = 64, MAX_CAPABILITIES = 40;
-const PORT_ENTRY = /^([0-9a-fA-F.:[\]]{1,45}|localhost):([0-9]{1,5}(?:-[0-9]{1,5})?|\?)->([0-9]{1,5}(?:-[0-9]{1,5})?)\/(?:tcp|udp|sctp)$/;
+const PORT_ENTRY = /^([0-9a-fA-F.:[\]]{1,45}(?:%[A-Za-z0-9_.-]{1,16})?|localhost):([0-9]{1,5}(?:-[0-9]{1,5})?|\?)->([0-9]{1,5}(?:-[0-9]{1,5})?)\/(?:tcp|udp|sctp)$/;
 const CAPABILITY = /^[A-Z][A-Z0-9_]{1,31}$/;
 const DATABASE_PORTS = [3306, 5432, 6379, 27017, 1433], WEB_PORTS = ['80', '443'];
 const covers = (spec, port) => { const [low, high = low] = spec.split('-').map(Number); return port >= low && port <= high; };
@@ -81,6 +81,7 @@ export function gradeHardening(containers, checkedAt = null) {
   const count = severity => findings.filter(item => item.severity === severity).length;
   const fatal = findings.some(item => item.id === 'privileged' || item.id === 'docker-socket');
   const grade = fatal ? 'F' : count('high') || count('medium') >= 2 ? 'D' : count('medium') === 1 ? 'C' : count('low') >= 2 ? 'B' : 'A';
+  findings.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]); // stable: high, medium, low, check order within
   return { grade, checkedAt, passed: CHECKS.length - findings.length, total: CHECKS.length, findings };
 }
 

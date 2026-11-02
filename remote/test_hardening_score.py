@@ -108,6 +108,17 @@ class HardeningFactTests(unittest.TestCase):
         facts = container_hardening_facts(container(HostConfig__PortBindings=many, NetworkSettings={'Ports': {}}))
         self.assertEqual(len(facts['publicPorts']), 64); self.assertEqual(facts['publicPorts'][0], '0.0.0.0:5432->5432/tcp')
 
+    def test_user_run_folders_flag_only_the_engine_socket(self):
+        from helper import engine_socket
+        for source in ['/run/user/1000', '/run/user/1000/docker.sock', '/run/user/0/podman.sock', '/run/podman', '/run/podman/podman.sock']:
+            self.assertTrue(engine_socket(source, '/x'), source)
+        for source in ['/run/user/1000/pulse', '/run/user/1000/pulse/native', '/run/user/abc', '/run/users/1000', '/run/userdata']:
+            self.assertFalse(engine_socket(source, '/x'), source)
+
+    def test_scoped_ipv6_host_address_is_loopback_checked_without_its_zone(self):
+        scoped = container(HostConfig__PortBindings={'80/tcp': [{'HostIp': '::1%lo', 'HostPort': '80'}, {'HostIp': 'fe80::1%eth0', 'HostPort': '8080'}]}, NetworkSettings={'Ports': {}})
+        self.assertEqual(container_hardening_facts(scoped)['publicPorts'], ['fe80::1:8080->80/tcp'])
+
     def test_report_never_fails_the_scan(self):
         with patch('helper.run', return_value=b'[]'):
             self.assertEqual(hardening_report([]), [])
