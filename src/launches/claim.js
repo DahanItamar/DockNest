@@ -33,6 +33,10 @@ export function claimLaunch(at = new Date().toISOString()) {
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
+// A launch stays `running` from its first claimed step until it is done, waiting for DNS, or its teardown has finished
+// (then failed or cancelled); a teardown that fails leaves it in needs_attention. The engine never ends a launch while
+// its teardown is queued or running, so the hold (src/launches/hold.js) covers the whole teardown. Remove launch tears
+// down a done launch; its running teardown step holds the server the same way.
 // Worker start: a step that was running belonged to a worker that stopped. It is marked failed (never resumed blindly);
 // the launch engine then asks the server (`launch-status`) what is left and resumes or tears down (src/launches/engine.js).
 // The launch keeps holding its server meanwhile.

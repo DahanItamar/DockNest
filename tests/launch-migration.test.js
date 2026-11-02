@@ -157,4 +157,14 @@ test('the rebuild refuses, changing nothing, when an install row lost its server
     assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
     assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='site_launches'").get(), undefined, 'nothing of migration 17 is left');
   });
+  // A view or a trigger on another table that names server_installs would break on the rename: refused, nothing changed.
+  for (const sql of ['CREATE VIEW install_view AS SELECT id,package FROM server_installs', "CREATE TRIGGER server_note AFTER INSERT ON servers BEGIN INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES(NEW.id,NEW.id,'nginx','queued','queued','[]','x','x'); END"]) {
+    await withDatabase(14, async (db, file) => {
+      db.exec(sql);
+      const before = schema(db);
+      assert.throws(() => migrate(db, { file, list: migrations.slice(0, 17), log: quiet }), /server_installs is used by (view install_view|trigger server_note)/);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+      assert.deepEqual(schema(db), before);
+    });
+  }
 });
