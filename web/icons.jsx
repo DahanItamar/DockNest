@@ -3,3 +3,4 @@ export {IconFolder as Folder,IconLink as Link,IconDatabaseMinus as DatabaseMinus
 export {IconFilter as Filter, IconBrandGithub as BrandGithub} from '@tabler/icons-react';
 export {IconHome as Home,IconArrowLeft as ArrowLeft,IconLogin as LogIn} from '@tabler/icons-react';
 export {IconEye as Eye,IconEyeOff as EyeOff} from '@tabler/icons-react';
+export {IconPencil as Pencil} from '@tabler/icons-react';
