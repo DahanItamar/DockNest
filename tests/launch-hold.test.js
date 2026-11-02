@@ -152,3 +152,22 @@ test('a started restore test or an active move keeps claimLaunch away from that 
   db.prepare("UPDATE site_moves SET state='failed' WHERE id=?").run(moveId);
   assert.ok(claimLaunch());
 });
+
+// Rollback safety (docs/upgrading.md, "Launching sites in 2.16"): the install readers of 2.14 and 2.15 are the ones in
+// src/installs.js minus the launch hold clauses, so this is what an older release does with git rows: it lists them and,
+// for one still queued, its helper answers UNKNOWN_PACKAGE and the job fails with a fixed sentence. Nothing is installed.
+test('git install rows are read like any install, and a queued one fails plainly on a helper without git', async () => {
+  reset();
+  const { transport } = await import('../src/engine.js');
+  const { findInstall, executeInstall } = await import('../src/installs.js');
+  const server = serverRow('rollback-srv'), done = randomUUID(), queued = randomUUID();
+  db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at,finished_at) VALUES(?,?,'git','completed','completed','[{\"name\":\"Installing Git\",\"status\":\"done\"}]','admin',?,?)").run(done, server, at(), at());
+  db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES(?,?,'git','queued','queued','[{\"name\":\"Connected\",\"status\":\"queued\"}]','admin',?)").run(queued, server, at());
+  assert.deepEqual(findInstall(done).details, { serverId: server, package: 'git', steps: [{ name: 'Installing Git', status: 'done' }] });
+  const original = transport.remote;
+  transport.remote = async () => { throw Object.assign(new Error('UNKNOWN_PACKAGE'), { remoteReported: true }); };
+  try { const job = claimInstall(); assert.equal(job.id, queued); await executeInstall(job); }
+  finally { transport.remote = original; }
+  const row = findInstall(queued);
+  assert.equal(row.status, 'failed'); assert.equal(row.error, 'DockNest cannot install that.');
+});

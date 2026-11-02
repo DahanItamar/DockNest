@@ -97,3 +97,64 @@ test('launch constraints: one queued or running launch per server, one live slug
   db.prepare("DELETE FROM deploy_keys WHERE id='k'").run();
   assert.equal(db.prepare("SELECT deploy_key_id FROM site_launches WHERE id='b'").get().deploy_key_id, null, 'deleting a key leaves the launch history');
 }));
+
+// ---- server_installs rebuild hardening (upgrade notes in docs/upgrading.md, "Launching sites in 2.16") ----
+const tableShape = (db, table) => ({
+  columns: db.prepare('SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info(?)').all(table).map(row => ({ ...row })),
+  foreignKeys: db.prepare('SELECT id,seq,"table","from","to",on_update,on_delete,"match" FROM pragma_foreign_key_list(?)').all(table).map(row => ({ ...row })),
+  indexes: db.prepare("SELECT name,\"unique\",origin,partial FROM pragma_index_list(?) ORDER BY name").all(table).map(row => ({ ...row, columns: db.prepare('SELECT name FROM pragma_index_info(?)').all(row.name).map(item => item.name) })),
+  triggers: db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=?").all(table).map(row => row.name),
+});
+const allRows = (db, tables) => Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all().map(row => ({ ...row })).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
+const T = '2026-10-30T10:00:00.000Z', HEX = ch => ch.repeat(64);
+
+test('a 2.14.0-shaped database with rows across its tables migrates to 17 with every row, value and install link intact', () => withDatabase(14, async (db, file) => {
+  const run = (sql, ...values) => db.prepare(sql).run(...values);
+  run("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES('u','admin@example.invalid','h','t','[]',1,?,'Admin','admin')", T);
+  run("INSERT INTO servers(id,name,host,port,username,private_key,host_key,capabilities,status,created_at) VALUES('s1','web-1','198.51.100.7',22,'root','sealed',?,'{\"cpus\":2}','ok',?),('s2','web-2','198.51.100.8',2222,'docknest','sealed',?,NULL,'unchecked',?)", HEX('a'), T, HEX('b'), T);
+  run("INSERT INTO sites VALUES('site1','s1','Shop',?,?),('site2','s2','Blog','{\"kind\":\"static\"}',?)", JSON.stringify({ kind: 'docker', containers: ['shop-app-1'], domains: ['shop.example.com'] }), T, T);
+  run("INSERT INTO policies(site_id,enabled,schedule,timezone,retention,next_run) VALUES('site1',1,'0 3 * * *','Asia/Jerusalem',14,?),('site2',0,'0 2 * * *','UTC',7,NULL)", T);
+  run("INSERT INTO jobs(id,site_id,type,status,stage,created_at,started_at,finished_at,error,details) VALUES('j1','site1','backup','completed','completed',?,?,?,NULL,'{}'),('j2','site2','backup','failed','failed',?,?,?,'The server connection failed.','{\"failure\":{\"code\":\"x\"}}')", T, T, T, T, T, T);
+  run("INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,pinned,verified,created_at) VALUES('b1','site1','j1',?,'sftp:t:/x.enc',123456,?,'{}',1,1,?)", T, HEX('c'), T);
+  run("INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES('m1','site1','s1','s2','cleaned','{}','{}','h','u',?,?)", T, T);
+  run("INSERT INTO site_move_steps(move_id,step,attempt,state) VALUES('m1','preflight',1,'done')");
+  run("INSERT INTO restore_tests(id,site_id,backup_id,backup_captured_at,server_id,trigger,result,limits,cleanup,created_by,created_at,started_at,finished_at) VALUES('rt1','site1','b1',?,'s2','manual','passed','{}','done','u',?,?,?)", T, T, T, T);
+  run("INSERT INTO site_certificates(site_id,source,name,checked_at) VALUES('site1','certbot','shop.example.com',?)", T);
+  run("INSERT INTO site_hardening(site_id,checked_at,facts) VALUES('site1',?,'{}')", T);
+  run("INSERT INTO settings VALUES('maintenance','{\"title\":\"Back soon\"}')");
+  run("INSERT INTO settings VALUES('shared_password_hash','h')"); // a real 2.14 start already wrote it (repeatable baseline)
+  const installs = [['i1', 's1', 'nginx', 'completed', 'completed', '[{"name":"Connected","status":"done"}]', 'u', null, T, T, T], ['i2', 's1', 'certbot', 'failed', 'failed', '[]', 'u', 'Installing certbot failed. Nothing else was changed by DockNest.', T, T, T], ['i3', 's2', 'docker', 'queued', 'queued', '[]', 'u', null, T, null, null], ['i4', 's2', 'compose', 'running', 'install', '[]', 'u', null, T, T, null]];
+  for (const row of installs) run('INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', ...row);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name);
+  const before = allRows(db, tables), shapeBefore = tableShape(db, 'server_installs');
+  assert.ok(Object.values(before).filter(rows => rows.length).length >= 12, 'the fixture has rows in most tables');
+  migrate(db, { file, list: migrations.slice(0, 17), log: quiet });
+  assert.deepEqual(allRows(db, tables), before, 'no row of any 2.14 table changes, server_installs included (ids and every value)');
+  assert.deepEqual(tableShape(db, 'server_installs'), shapeBefore, 'same columns, foreign key (servers, ON DELETE CASCADE), indexes and triggers');
+  assert.equal(shapeBefore.foreignKeys[0].on_delete, 'CASCADE');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  // The kept foreign key still works: an install for an unknown server is refused, and git is now accepted.
+  assert.throws(() => run("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('x','missing','git','queued','queued','[]','u','x')"), /FOREIGN KEY constraint failed/);
+  run("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('g','s1','git','queued','queued','[]','u','x')");
+}));
+
+test('the rebuild refuses, changing nothing, when an install row lost its server or another table references server_installs', async () => {
+  await withDatabase(14, async (db, file) => {
+    db.exec("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('s','n','h',22,'root','k','f','x')");
+    db.exec('PRAGMA foreign_keys=OFF');
+    db.exec("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('orphan','gone','nginx','completed','completed','[]','u','x')");
+    db.exec('PRAGMA foreign_keys=ON');
+    const before = schema(db);
+    assert.throws(() => migrate(db, { file, list: migrations.slice(0, 17), log: quiet }), /server_installs has rows whose server no longer exists/);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14, 'the schema stays at 14');
+    assert.deepEqual(schema(db), before);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM server_installs WHERE id='orphan'").get().n, 1, 'the row is not dropped');
+  });
+  await withDatabase(14, async (db, file) => {
+    db.exec('CREATE TABLE install_notes (install_id TEXT REFERENCES server_installs(id))');
+    assert.throws(() => migrate(db, { file, list: migrations.slice(0, 17), log: quiet }), /server_installs is referenced by install_notes/);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+    assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='site_launches'").get(), undefined, 'nothing of migration 17 is left');
+  });
+});
