@@ -226,7 +226,7 @@ class Gate(EditCase):
             ('web.devices',['/dev/sda:/dev/sda'],'PRIVILEGE_ADDED'),('web.security_opt',['seccomp:unconfined'],'PRIVILEGE_ADDED'),
             ('web.gpus','all','PRIVILEGE_ADDED'),('web.runtime','nvidia','PRIVILEGE_ADDED'),('web.group_add',['docker'],'PRIVILEGE_ADDED'),
             ('web.labels',{'app':'shop','docknest.site':'other'},'PRIVILEGE_ADDED'),('web.labels',{'app':'shop','com.docker.compose.project':'x'},'PRIVILEGE_ADDED'),
-            ('web.logging',{'driver':'syslog','options':{'syslog-address':'udp://1.2.3.4:514'}},'PRIVILEGE_ADDED'),
+            ('web.logging',{'driver':'syslog','options':{'syslog-address':'udp://192.0.2.4:514'}},'PRIVILEGE_ADDED'),
             ('web.build',{'context':'.'},'PRIVILEGE_ADDED'),('web.mac_address','02:42:ac:11:00:02','UNKNOWN_SETTING'),
             ('web.deploy',{'resources':{'reservations':{'devices':[{'capabilities':['gpu']}]}}},'PRIVILEGE_ADDED')]
         for path,value,code in cases:
