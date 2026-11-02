@@ -73,7 +73,7 @@ const USER = /^[a-z_][a-z0-9_-]{0,31}$/;
 export function parseRepoUrl(text, { allowPrivate = false } = {}) {
   const raw = String(text ?? '').trim();
   const bad = () => refuse('INVALID_REPOSITORY', 'Enter an https:// address or an SSH address (git@host:owner/repo.git).', 'repo.url');
-  if (!raw || raw.length > 512 || CONTROL.test(raw) || raw.startsWith('-')) bad();
+  if (!raw || raw.length > 512 || CONTROL.test(raw) || raw.startsWith('-') || /[\/:]\.\.?(?=[\/]|$)/.test(raw) || /\/\.\.?(?=\/|$)/.test(raw)) bad();
   let kind, host, port, path, user = null;
   const scp = /^([a-z_][a-z0-9_-]{0,31})@([^:/\[\]]+|\[[0-9a-fA-F:.]+\]):(?!\/)(.+)$/.exec(raw);
   if (scp) { kind = 'ssh'; user = scp[1]; host = scp[2].replace(/^\[|\]$/g, ''); port = 22; path = scp[3]; }
