@@ -1,0 +1,42 @@
+/* 2.15 self-heal sheet. Tokens only; switch row, setting rows, alert panels, status labels and data tables come from the system. */
+.map-root .map-dialog-head{flex:none;padding:24px 24px 8px;background:var(--surface)}
+.map-root .map-dialog-head h2{margin:0}
+
+/* Dialog edge: 1px line in dark only (the token is transparent in light). Applied through this class, never to existing dialogs. */
+.rebrand-page dialog.dialog-edge,dialog.dialog-edge{border:1px solid var(--dialog-edge)}
+
+/* Header and footer stay put; only the body scrolls, with no visible scrollbar. */
+.map-root dialog.sh-sheet .map-dialog-body{padding-top:8px;scrollbar-width:none;overscroll-behavior:contain}
+.map-root dialog.sh-sheet .map-dialog-body::-webkit-scrollbar{display:none}
+.map-root dialog.sh-sheet .map-dialog-body>*{flex:none}
+.sh-load{min-height:var(--control-height);display:flex;align-items:center}
+
+.sh-switch{border-top:0}
+.sh-limit{padding-top:0}
+.sh-limit-control{flex:0 1 auto}
+.sh-limit-control .sh-count{width:76px;height:var(--control-height);min-height:var(--control-height)}
+.sh-limit-control .sh-window{width:132px;height:var(--control-height);min-height:var(--control-height)}
+.sh-count[aria-invalid=true]{border-color:var(--error)}
+
+/* A disabled switch keeps its transparent hit area: the generic disabled-button fill must not draw a disc behind it. */
+.map-root dialog.sh-sheet button[role=switch]:disabled,.map-root dialog.sh-sheet button[role=switch]:disabled:hover{background:var(--transparent);border:0;opacity:1;cursor:not-allowed}
+.map-root dialog.sh-sheet button[role=switch]:disabled::before{opacity:.6}
+.map-root dialog.sh-sheet button[role=switch]:not(:focus-visible)::before{outline:0}
+
+.sh-history h3{margin:0 0 8px}
+.rebrand-page .empty.sh-empty,.empty.sh-empty{padding:20px 24px;min-height:0}
+.sh-rows{padding:0 16px}
+.sh-row{min-height:var(--row-height);box-sizing:border-box;align-items:center}
+.sh-rows .sh-row dt{color:var(--text-primary);font-size:var(--fs-body)}
+.sh-rows .sh-row dd{display:flex;align-items:center;justify-content:flex-end;gap:4px}
+
+@media(max-width:599px){
+ .sh-limit-control{flex:none}
+ .sh-limit-control .sh-count{width:76px}
+ .sh-limit-control .sh-window{width:132px}
+}
+
+.sh-watched{margin:-8px 0 0;color:var(--text-secondary)}
+.sh-reason{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);font-weight:400}
+.sh-more{display:flex;justify-content:flex-start;margin-top:12px}
+.map-root .sh-more button{width:auto;white-space:nowrap}
