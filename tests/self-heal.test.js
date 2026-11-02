@@ -187,7 +187,10 @@ test('restart outcomes: failure counts and alerts as restarted, refusals are ski
   now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'recreated' }); const recreatedAt = clock(); unhealthy(f); await work();
   now += 61_000; restartAnswer = () => { throw new Error('connect ECONNREFUSED 192.0.2.10:22'); }; unhealthy(f); await work();
   now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'something-new' }); unhealthy(f); await work();
-  assert.deepEqual(history(f.siteId).filter(item => !item.endsWith(':unhealthy')), ['shop-web-1:restart_failed:exit_1', 'shop-web-1:restarted', 'shop-web-1:skipped:not_unhealthy', 'shop-web-1:skipped:recreated', 'shop-web-1:skipped:unreachable', 'shop-web-1:skipped:unavailable']);
+  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'busy' }); unhealthy(f); await work();
+  const asked = jobsOf(f.siteId).length; heal.tickSelfHeal(); await work();
+  assert.equal(jobsOf(f.siteId).length, asked, 'a server-side refusal is not re-asked every tick');
+  assert.deepEqual(history(f.siteId).filter(item => !item.endsWith(':unhealthy')), ['shop-web-1:restart_failed:exit_1', 'shop-web-1:restarted', 'shop-web-1:skipped:not_unhealthy', 'shop-web-1:skipped:recreated', 'shop-web-1:skipped:unreachable', 'shop-web-1:skipped:unavailable', 'shop-web-1:skipped:locked']);
   const outbox = db.prepare('SELECT event,message FROM alert_outbox ORDER BY created_at,rowid').all().map(row => `${row.event}|${row.message}`);
   assert.deepEqual(outbox, [
     `self_heal.restarted|Self-heal could not restart a container of outcomes on Ashburn-1 at ${failedAt}. Open DockNest to see why.`,

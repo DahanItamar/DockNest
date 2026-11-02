@@ -220,7 +220,10 @@ export async function executeHealJob(job) {
       if (first) alert('self_heal.restarted', site.id, { at: row.at, jobId: job.id, code: failed ? 'failed' : undefined }, `occ:self-heal:${row.id}`);
       return;
     }
-    const reason = outcome === 'refused' && RESULT_CODES.has(result?.code) ? result.code : 'unavailable';
+    // The helper's own lock and maintenance checks are stored apart from the database-side waits, so they are not retried
+    // every tick (see TRANSIENT).
+    const SERVER_SIDE = { busy: 'locked', maintenance: 'maintenance_flag' };
+    const reason = outcome === 'refused' && RESULT_CODES.has(result?.code) ? SERVER_SIDE[result.code] ?? result.code : 'unavailable';
     if (!finishHeal(job.id, 'completed', 'skipped', { ...details, outcome: 'skipped', reason })) return;
     record({ ...base, kind: 'skipped', reason });
     if (reason === 'recreated') gaveUp(site.id, container, 'recreated', nowMs);

@@ -25,7 +25,9 @@ export function backoffMs(attempt, random = Math.random) {
 
 // Reasons a restart waits. While one of these holds, the unhealthy event stays open and the restart happens once it
 // clears, if the container is still unhealthy then (the helper re-checks).
-export const TRANSIENT = new Set(['site_busy', 'work_queued', 'moving', 'maintenance', 'settling', 'deployment_hold', 'busy']);
+// The server-side refusals (`locked`, `maintenance_flag`) are not in this set: re-asking the server every tick would
+// only repeat them; the next health event or reconnect snapshot opens a new episode.
+export const TRANSIENT = new Set(['site_busy', 'work_queued', 'moving', 'maintenance', 'settling', 'deployment_hold']);
 export const REASONS = Object.freeze({
   site_busy: 'DockNest was working on this site.',
   work_queued: 'A backup or change for this site was waiting, so the restart stepped aside.',
@@ -33,7 +35,8 @@ export const REASONS = Object.freeze({
   maintenance: 'The site was in maintenance.',
   settling: 'DockNest work on this site had just finished; containers get 2 minutes to start.',
   deployment_hold: 'DockNest was being updated.',
-  busy: 'Another DockNest step held the site lock on the server.',
+  locked: 'Another DockNest step held the site lock on the server.',
+  maintenance_flag: 'The site was in maintenance on the server.',
   not_unhealthy: 'The container was no longer unhealthy.',
   not_running: 'The container was not running.',
   labels: 'The container is no longer the one this site watches.',
