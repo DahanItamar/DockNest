@@ -76,11 +76,11 @@ function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onC
  const guard=useGuard(client,{verifyLabel:'Verify'}),[busy,setBusy]=useState(false),[err,setErr]=useState('');
  const services=result?.services||[],tests=result?.testServers||[];
  const [pick,setPick]=useState({service:services.find(x=>x.name===form.service)?.name||'',port:'',test:tests[0]?.id||''});
- const blocked=!loading&&!result?.ok,installs=installChecks(result||{}),git=form.tab==='git';
+ const blocked=!loading&&!result?.ok,installs=installChecks(result||{}),git=form.tab==='git',trust=git||!!result?.builds;
  const rows=loading?['Docker','Compose','nginx','Certbot','DNS'].map((t,i)=>[t,<State state={i===0?'running':'queued'}>{i===0?'Checking':'Waiting'}</State>]):checkRows(result).map(c=>[c.title,<State state={c.state}>{c.value}</State>]);
  const blockers=blockersOf(result),svc=services.find(x=>x.name===pick.service)||services[0],ports=svc?.ports||[];
  const go=()=>{setBusy(true);setErr('');return guard.run(async()=>{
-   const body={...bodyOf(form),...(services.length>1&&svc?{webService:svc.name}:{}),...(pick.port?{webPort:Number(pick.port)}:{}),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(tests.length?{testServerId:pick.test||null}:{}),...(git?{trustConfirmed:true}:{})};
+   const body={...bodyOf(form),...(services.length>1&&svc?{webService:svc.name}:{}),...(pick.port?{webPort:Number(pick.port)}:{}),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(tests.length?{testServerId:pick.test||null}:{}),...(trust?{trustConfirmed:true}:{})};
    const r=await client.start(server.id,body);onLaunched(r?.launch?.id);
   },e=>setErr(friendlyLaunch(e))).finally(()=>setBusy(false))};
  return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting} onClick={go}>Launch</button></>}>
@@ -91,7 +91,8 @@ function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onC
    {services.length>1&&ports.length>1&&<label className="map-field">Web port<select value={pick.port||ports[0]} onChange={e=>setPick({...pick,port:e.target.value})}>{ports.map(p=><option key={p} value={p}>{p}</option>)}</select></label>}
    {tests.length>0&&<label className="map-field">Restore test server<select value={pick.test} onChange={e=>setPick({...pick,test:e.target.value})}>{tests.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}<option value="">No restore tests</option></select></label>}
   </div>}
-  {!loading&&git&&<AlertPanel variant="warning">This builds and runs code from the repository on {server.name}. Only use repositories you trust.</AlertPanel>}
+  {!loading&&(result?.warnings||[]).map((w,i)=><AlertPanel key={i} variant="warning">{typeof w==='string'?w:w?.text}</AlertPanel>)}
+  {!loading&&trust&&<AlertPanel variant="warning">This builds and runs code from the repository on {server.name}. Only use repositories you trust.</AlertPanel>}
   {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}
   {guard.prompt}
  </Sheet>;
@@ -125,18 +126,19 @@ export function LaunchProgress({server,client,launchId,onClose,onBack}){
  const state=l?.state,acts=l?.actions||{},domain=l?.domain||'',steps=stepsOf(l),now=Date.now();
  const finish=()=>onClose(settled(l));
  async function act(fn){setBusy(true);setErr('');try{await fn();setTick(n=>n+1)}catch(e){setErr(friendlyLaunch(e))}setBusy(false)}
- const records=l?.dns?.records||[];
+ const records=l?.dns?(l.dns.records?.length?l.dns.records:[l.dns]):[];
  async function copy(){try{await navigator.clipboard.writeText(records.map(d=>`${d.type} ${d.name} ${d.value}`).join('\n'));setCopied(true)}catch{setCopied(false)}}
  const errNote=err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>;
  const open=https=>()=>window.open((https?'https://':'http://')+domain,'_blank','noopener');
  const included=[['Backups','Daily'],['Restore tests',restoreText(l)]];
  const cert=(l?.steps||[]).find(x=>x.step==='certificate'),busyNow=busyLaunch(l);
- if(l&&!busyNow&&state==='done'&&cert?.state==='failed')return <Sheet className="ln-dialog" title={`${domain} is live`} labelId="ln-done-title" onClose={finish} actions={<><button type="button" onClick={finish}>Close</button><button type="button" className="primary" onClick={open(false)}>Open site</button></>}>
-  <AlertPanel variant="error" title="Certificate failed" action={acts.checkDns&&<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.checkDns(launchId))}>Try again</button></div>}>{cert.detail||'The certificate was refused.'} The site runs on HTTP.</AlertPanel>
+ if(l&&!busyNow&&state==='done'&&(l.certificate?.state==='failed'||cert?.state==='failed'))return <Sheet className="ln-dialog" title={`${domain} is live`} labelId="ln-done-title" onClose={finish} actions={<><button type="button" onClick={finish}>Close</button><button type="button" className="primary" onClick={open(false)}>Open site</button></>}>
+  <AlertPanel variant="error" title="Certificate failed" action={acts.checkDns&&<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.checkDns(launchId))}>Try again</button></div>}>{l.certificate?.reason||cert?.detail||'The certificate was refused.'} The site runs on HTTP.</AlertPanel>
   <Facts rows={[['Domain',<a href={'http://'+domain} target="_blank" rel="noreferrer">{'http://'+domain}</a>],...included]}/>
   {errNote}
  </Sheet>;
  if(l&&!busyNow&&state==='done')return <Sheet className="ln-dialog" title={`${domain} is live`} labelId="ln-done-title" onClose={finish} actions={<><button type="button" onClick={finish}>Close</button><button type="button" className="primary" onClick={open(true)}>Open site</button></>}>
+  {(l.steps||[]).find(x=>x.step==='maintenance'&&x.state==='failed')&&<AlertPanel variant="warning" title="Maintenance page">{(l.steps||[]).find(x=>x.step==='maintenance').detail||'The maintenance page was not set up.'} Set it up from the site.</AlertPanel>}
   <Note kind="ok" icon={IconCircleCheck} role="status">Launched. Backups{l.restoreTests?.enabled?' and restore tests are':' are'} on.</Note>
   <Facts rows={[['Domain',<a href={'https://'+domain} target="_blank" rel="noreferrer">{'https://'+domain}</a>],...included,['Certificate',"Let's Encrypt"]]}/>
   {l.restoreTests?.enabled?null:<p className="map-caption">{l.restoreTests?.reason||'Add a test server to turn on restore tests.'}</p>}
@@ -158,7 +160,7 @@ export function LaunchProgress({server,client,launchId,onClose,onBack}){
  if(l&&state==='removed')return <Sheet className="ln-dialog" title="Launch removed" labelId="ln-removed-title" onClose={finish} actions={<button type="button" className="primary" onClick={finish}>Close</button>}>
   <Note kind="ok" icon={IconCircleCheck} role="status">{domain} is removed from {server.name}. Backups stay.</Note>
  </Sheet>;
- const pct=Math.round(100*steps.filter(s=>s.state==='done').length/Math.max(1,steps.length));
+ const pct=Math.round(Math.min(100,Math.max(0,l?.progress??100*steps.filter(s=>s.state==='done').length/Math.max(1,steps.length))));
  return <Sheet className="ln-dialog" title={l?.removing?`Removing ${domain}`:domain?`Launching ${domain}`:'Launching'} labelId="ln-run-title" onClose={finish} actions={<>{acts.cancel&&<button type="button" disabled={busy} onClick={()=>act(()=>client.cancel(launchId))}>Cancel</button>}<button type="button" className="primary" onClick={finish}>Close</button></>}>
   <div className="map-bar" role="progressbar" aria-label="Launch progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>
   <p className="map-status" role="status">{statusLine(l)}</p>
@@ -194,11 +196,11 @@ export function LaunchFlow({server,api,narrow,onClose}){
 // The Remove launch offer on a launched site's details (docs/launch-site.md, "After launch"): 24 hours after the launch.
 export function LaunchOffer({launch,onRemove}){
  return <section className="hd-section">
-  <span className="t-caption">Launched {agoText(launch.finishedAt||launch.createdAt)}. Removable until {untilText(launch.removeUntil)}.</span>
+  <span className="t-caption">Launched {agoText(launch.launchedAt)}. Removable until {untilText(launch.removeUntil)}.</span>
   <div><button type="button" onClick={onRemove}>Remove launch</button></div>
  </section>;
 }
-export const offerOpen=launch=>!!launch?.actions?.remove;
+export const offerOpen=launch=>!!launch?.id&&Date.parse(launch.removeUntil)>Date.now();
 
 // Confirm, with the fresh sign-in check the server asks for, then follow the removal like a launch.
 export function RemoveLaunchDialog({launch,server,api,onClose}){
@@ -211,4 +213,10 @@ export function RemoveLaunchDialog({launch,server,api,onClose}){
   {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}
   {guard.prompt}
  </Sheet>;
+}
+
+// Reopen a launch that is still going (from the server's details): the same timeline as right after Launch.
+export function OpenLaunch({server,api,launchId,onClose}){
+ const client=useMemo(()=>createLaunchClient(api),[api]);
+ return <LaunchProgress server={server} client={client} launchId={launchId} onClose={onClose} onBack={()=>onClose(false)}/>;
 }

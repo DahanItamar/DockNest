@@ -1,17 +1,17 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {formatBytes} from '../../shared/format-bytes.js';
-import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck} from '@tabler/icons-react';
+import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
-import {createLaunchClient} from './launch-client.js';
+import {createLaunchClient,stateText} from './launch-client.js';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
-import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,offerOpen} from './LaunchFlow.jsx';
+import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './LaunchFlow.jsx';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
@@ -145,11 +145,15 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const [moves,setMoves]=useState([]);
  const loadMoves=useCallback(()=>{if(canMove)client.list().then(r=>setMoves(Array.isArray(r?.moves)?r.moves:[])).catch(()=>{})},[client,canMove]);
  useEffect(()=>{loadMoves();const t=setInterval(loadMoves,15000);return()=>clearInterval(t)},[loadMoves]);
- const [launches,setLaunches]=useState([]);
- const loadLaunches=useCallback(()=>{if(canMove&&api)createLaunchClient(api).list().then(r=>setLaunches(Array.isArray(r?.launches)?r.launches:[])).catch(()=>{})},[api,canMove]);
- useEffect(()=>{loadLaunches()},[loadLaunches]);
- const launchOf=useMemo(()=>Object.fromEntries(launches.filter(x=>x.siteId).map(x=>[x.siteId,x])),[launches]);
- function closeFlow(finished){loadLaunches();setFlow(null);if(finished){setEdit(null);setPositions({});H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
+ // Launches that are still going on the server whose details are open (event-driven: read when the panel opens and when a launch dialog closes).
+ const [running,setRunning]=useState({id:null,list:[]}),[runTick,setRunTick]=useState(0);
+ useEffect(()=>{
+  if(panel?.kind!=='server'||!canMove||!api){setRunning({id:null,list:[]});return}
+  let live=true;
+  createLaunchClient(api).forServer(panel.id).then(r=>{if(live)setRunning({id:panel.id,list:(Array.isArray(r?.launches)?r.launches:[]).filter(x=>x.state!=='done')})}).catch(()=>{});
+  return()=>{live=false};
+ },[panel?.kind,panel?.id,canMove,api,runTick]);
+ function closeFlow(finished){setRunTick(n=>n+1);setFlow(null);if(finished){setEdit(null);setPositions({});H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
@@ -360,7 +364,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='launch'&&byId.servers[flow.serverId]&&<LaunchFlow server={byId.servers[flow.serverId]} api={api} narrow={narrow} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
-  {flow?.kind==='remove-launch'&&byId.sites[flow.siteId]&&launchOf[flow.siteId]&&<RemoveLaunchDialog launch={launchOf[flow.siteId]} server={byId.servers[byId.sites[flow.siteId].serverId]} api={api} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
+  {flow?.kind==='launch-open'&&byId.servers[flow.serverId]&&<OpenLaunch server={byId.servers[flow.serverId]} api={api} launchId={flow.launchId} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
+  {flow?.kind==='remove-launch'&&byId.sites[flow.siteId]&&byId.sites[flow.siteId].launch&&<RemoveLaunchDialog launch={byId.sites[flow.siteId].launch} server={byId.servers[byId.sites[flow.siteId].serverId]} api={api} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
   {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
   {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
@@ -386,7 +391,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
-    {canMove&&offerOpen(launchOf[s.id])&&<LaunchOffer launch={launchOf[s.id]} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
+    {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>
@@ -399,6 +404,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
     <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Sites',String(mine)]]}/>
+    {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
     {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add a site found here</button>}
     {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
@@ -539,6 +545,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  </section>;
 }
 
+const LaunchRow=({item,onOpen})=><li><button type="button" className="map-row" onClick={onOpen}><IconRocket size={24} stroke={1.5} aria-hidden="true"/><span><b className="map-name">{item.domain}</b><span className="map-caption">{stateText(item)}</span></span></button></li>;
 function AddServerPanel({server,sites,api,narrow,onClose,onPick,onDragItem,onNewSite}){
  const found=useDiscovery(api,server,sites);
  return <SidePanel narrow={narrow} labelId="map-panel-title" title={'Add to '+server.name} onClose={onClose} footer={<DiscoverFooter found={found}/>}><AddToServer found={found} onPick={onPick} onDragItem={onDragItem} onNewSite={onNewSite}/></SidePanel>;

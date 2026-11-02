@@ -7,8 +7,8 @@ export function createLaunchClient(api){
   // Needs a fresh sign-in check (REAUTH_REQUIRED). Answers 202 {launch:{id}}.
   start:(serverId,body)=>api('/servers/'+id(serverId)+'/launch',body),
   get:launchId=>api('/launches/'+id(launchId)),
-  // Open launches (running, waiting for DNS, needing attention, or done within the 24 hours Remove launch is offered).
-  list:()=>api('/launches'),
+  // Open launches of one server: running, waiting for DNS, needing attention, or done within the 24 hours Remove launch is offered.
+  forServer:serverId=>api('/servers/'+id(serverId)+'/launch'),
   cancel:launchId=>api('/launches/'+id(launchId)+'/cancel',{}),
   // Runs the certificate step again once the domain points here (also the "Try again" of a failed certificate).
   checkDns:launchId=>api('/launches/'+id(launchId)+'/check-dns',{}),
@@ -30,22 +30,22 @@ export function createLaunchClient(api){
 export const LAUNCH_STOP=new Set(['waiting_dns','done','failed','cancelled','removed','needs_attention']);
 export const busyLaunch=l=>!!l&&((l.steps||[]).some(s=>['queued','running'].includes(s.state))||!!l.removing)&&!['failed','cancelled','removed','needs_attention'].includes(l.state);
 export const settled=l=>!!l&&LAUNCH_STOP.has(l.state)&&!busyLaunch(l);
-export const STEP_LABEL={check:'Check',fetch:'Fetch source',build:'Build',start:'Start',check_health:'Health check',web:'nginx',certificate:'Certificate',save:'Save site',first_backup:'First backup',teardown:'Clean up'};
+export const STEP_LABEL={check:'Check',fetch:'Fetch source',build:'Build',start:'Start',check_health:'Health check',web:'nginx',certificate:'Certificate',save:'Save site',first_backup:'First backup',maintenance:'Maintenance page',teardown:'Clean up'};
 export const LAUNCH_STEPS=Object.entries(STEP_LABEL).filter(([k])=>k!=='teardown');
-export const STATUS_LINE={check:'Checking the server…',fetch:'Fetching the source…',build:'Building the image…',start:'Starting the containers…',check_health:'Waiting for the site to answer…',web:'Setting up nginx…',certificate:'Getting the certificate…',save:'Saving the site…',first_backup:'Running the first backup…',teardown:'Cleaning up…'};
+const STATUS_LINE_UNUSED={check:'Checking the server…',fetch:'Fetching the source…',build:'Building the image…',start:'Starting the containers…',check_health:'Waiting for the site to answer…',web:'Setting up nginx…',certificate:'Getting the certificate…',save:'Saving the site…',first_backup:'Running the first backup…',teardown:'Cleaning up…'};
 // The sentence under the progress bar: the step that is running now.
-export const statusLine=l=>{const s=(l?.steps||[]).find(x=>['running','queued'].includes(x.state))||(l?.steps||[]).find(x=>x.state==='waiting');return l?.removing?'Removing the launch…':STATUS_LINE[s?.step]||'Starting…'};
-// Check rows: a name for each check id the server answers with.
-export const CHECK_LABEL={docker:'Docker',compose:'Compose',nginx:'nginx',certbot:'Certbot',disk:'Disk space',siteFolder:'Site folder',project:'Compose project',nginxDomain:'Domain in nginx',certLineage:'Certificate',git:'Git',gitVersion:'Git version',repo:'Repository','compose-file':'Compose file',slug:'Launch',launch:'Launch',server:'Server'};
+export const statusLine=l=>l?.statusLine||'Starting…';
+// Check rows as the engine answers them: {title, status: ok|block, value}. A failing row says "Needs fixing"; its own
+// sentence is in the panel above.
 export function checkRows(result){
- const rows=(result?.checks||[]).map(c=>({id:c.id,title:CHECK_LABEL[c.id]||c.id,state:c.ok?'success':'failed',value:c.ok?(c.text&&c.text.length<=24?c.text:'Fine'):'Needs fixing'}));
+ const rows=(result?.checks||[]).map(c=>({id:c.id,title:c.title||c.id,state:c.status==='ok'?'success':'failed',value:c.status==='ok'?(c.value&&c.value.length<=24?c.value:'Fine'):'Needs fixing'}));
  if(result?.dns)rows.push({id:'dns',title:'DNS',state:result.dns.pointsHere?'success':'needs-review',value:result.dns.pointsHere?'Points here':'Not yet'});
  return rows;
 }
-// Why a check cannot go on: the failing checks' own sentences, then the Compose gate's refusals.
+// Why a check cannot go on: the engine's blockers, then the Compose gate's refusals.
 const GATE_TEXT={NO_WEB:'No service serves the website. Choose the web service.',WEB_SERVICE_INVALID:'The web service was not found in this Compose file.',BUILD_SETTING_REFUSED:'A build setting in this Compose file is not allowed.',ENV_FILE_REFUSED:'An env_file in this Compose file is not allowed.',PATH_REFUSED:'A path in this Compose file leaves the site folder.',SYNTAX_REFUSED:'This Compose file uses something DockNest does not allow.'};
 export function blockersOf(result){
- const out=(result?.checks||[]).filter(c=>!c.ok&&c.text).map(c=>c.text);
+ const out=[...(result?.blockers||[])].filter(Boolean);
  for(const r of result?.gate?.refusals||[])out.push((GATE_TEXT[r.code]||'The Compose file asks for something DockNest does not allow')+(r.service?` (${r.service})`:''));
  return out;
 }
@@ -99,3 +99,5 @@ export function untilText(v,now=Date.now()){
  const day=new Date(d).setHours(0,0,0,0),today=new Date(now).setHours(0,0,0,0),time=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
  return day===today?'today '+time:day===today+864e5?'tomorrow '+time:d.toLocaleDateString([],{day:'numeric',month:'short'})+' '+time;
 }
+// One line for a launch in a list.
+export const stateText=l=>l.removing?'Removing':({queued:'Launching',running:'Launching',waiting_dns:'Waiting for DNS',needs_attention:'Needs your attention',done:'Live'}[l.state]||'Launch');

@@ -16,7 +16,7 @@ const state={
   {id:'b',name:'Content host',host:'b.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:60*1024**3}}
  ],
  sites:[{id:'s1',name:'blog.example.com',serverId:'b',config:{containers:['blog'],domains:['blog.example.com']}},
-  {id:'s2',name:'shop2.example.com',serverId:'b',config:{containers:['web'],domains:['shop2.example.com']}}],
+  {id:'s2',name:'shop2.example.com',serverId:'b',config:{containers:['web'],domains:['shop2.example.com']},launch:{id:'l9',launchedAt:ago(3*3600),removeUntil:ahead(21*3600)}}],
  jobs:[],backups:[],policies:[],audit:[],storage:{used:0,total:1e12},worker:{online:true}
 };
 const PUB='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ7vQ2mK4nT0xS9fHq3Lw8bYzR1uE6cVdPaGhN5oXtZk docknest-shop-deploy-key',FP='SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU',FP2='SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s';
@@ -24,28 +24,31 @@ const KEYS=[
  {id:'11111111-1111-4111-8111-111111111111',name:'Shop deploy key',gitHost:'github.com',publicKey:PUB,fingerprint:'SHA256:keykeykeykey',hostKey:{sha256:FP,type:'ssh-ed25519'},pinnedFromServerId:'a',pinnedFromServerName:'Commerce host',pinnedAt:ago(3*86400),createdAt:ago(3*86400)},
  {id:'22222222-2222-4222-8222-222222222222',name:'Docs repo key',gitHost:'gitlab.com',publicKey:PUB,fingerprint:'SHA256:keykeykeykey',hostKey:{sha256:FP,type:'ssh-ed25519'},pinnedFromServerId:'b',pinnedFromServerName:'Content host',pinnedAt:ago(14*86400),createdAt:ago(14*86400)}];
 // Steps as the engine answers them: states queued, running, waiting, done, failed, skipped, pending.
-const ORDER=['check','fetch','build','start','check_health','web','certificate','save','first_backup'];
+const ORDER=['check','fetch','build','start','check_health','web','certificate','save','first_backup','maintenance'];
 const steps=({done=0,running=-1,failed=-1,waiting=-1,teardown=null}={})=>[...ORDER.map((step,i)=>({step,state:i<done?'done':i===failed?'failed':i===running?'running':i===waiting?'waiting':'pending',startedAt:i<done||i===running||i===failed||i===waiting?ago(300-i*30):null,finishedAt:i<done||i===failed?ago(290-i*30):null,detail:null,result:{}})),{step:'teardown',state:teardown||'pending',startedAt:teardown?ago(60):null,finishedAt:teardown==='failed'?ago(30):null,detail:teardown==='failed'?'The nginx file could not be removed':null,result:{}}];
 let mock,browser;const errors=[];
 const reset=()=>{mock={checkMode:'ok',checks:[],launches:[],reauths:0,needReauth:false,launch:null,next:null,dnsCalls:0,retries:0,removes:0,cancels:0,installs:[],keys:KEYS.map(k=>({...k})),keyCalls:[],created:[],pins:[],hostFp:FP,movedPin:false,listOpen:true}};
 reset();
-const okChecks=[{id:'docker',ok:true,text:'28.1'},{id:'compose',ok:true,text:'2.29'},{id:'nginx',ok:true,text:'1.26'},{id:'certbot',ok:true,text:''},{id:'disk',ok:true,text:''}];
+const ck=(id,title,ok,text,extra={})=>({id,title,ok,status:ok?'ok':'block',value:text,text,...extra});
+const okChecks=[ck('docker','Docker',true,'28.1'),ck('compose','Docker Compose',true,'2.29'),ck('nginx','nginx',true,'1.26'),ck('certbot','certbot',true,''),ck('space','Free space',true,'')];
 function checkResult(body){
- const base={slug:'shop2-example-com',folder:'/srv/docknest/shop2-example-com',domain:body.domain,www:'www.'+body.domain,gate:{ok:true,refusals:[]},services:[{name:'web',ports:[8080],build:false},{name:'db',ports:[],build:false}],composeName:null,refHead:null,dns:{records:[{type:'A',name:body.domain,value:'192.0.2.10'}],answers:{A:[],AAAA:[]},pointsHere:true},testServers:[{id:'b',name:'Content host'}]};
- if(mock.checkMode==='nginx')return {...base,ok:false,checks:[okChecks[0],okChecks[1],{id:'nginx',ok:false,code:'NGINX_MISSING',text:'nginx is missing. Install it to continue.',install:{package:'nginx'}},{id:'git',ok:false,code:'GIT_MISSING',text:'Git is missing.',install:{package:'git'}}]};
- if(mock.checkMode==='refusal')return {...base,ok:false,checks:[...okChecks,{id:'nginxDomain',ok:false,code:'NGINX_DOMAIN_SERVED',text:'nginx on this server already serves '+body.domain+'. DockNest never takes over another site.'}],gate:{ok:false,refusals:[{code:'BUILD_SETTING_REFUSED',service:'web',field:null}]},dns:{...base.dns,pointsHere:false}};
- return {...base,ok:true,checks:okChecks};
+ const base={slug:'shop2-example-com',folder:'/srv/docknest/shop2-example-com',domain:body.domain,www:'www.'+body.domain,gate:{ok:true,refusals:[]},services:[{name:'web',ports:[8080],build:false},{name:'db',ports:[],build:false}],composeName:null,refHead:null,blockers:[],warnings:[],builds:false,dns:{records:[{type:'A',name:body.domain,value:'192.0.2.10'}],answers:{A:[],AAAA:[]},pointsHere:true},testServers:[{id:'b',name:'Content host'}]};
+ if(mock.checkMode==='nginx'){const bad=[ck('nginx','nginx',false,'nginx is missing. Install it to continue.',{code:'NGINX_MISSING',install:{package:'nginx'}}),ck('git','Git',false,'Git is missing.',{code:'GIT_MISSING',install:{package:'git'}})];return {...base,ok:false,checks:[okChecks[0],okChecks[1],...bad],blockers:bad.map(x=>x.text)}}
+ if(mock.checkMode==='refusal'){const bad=ck('domain','Domain',false,'nginx on this server already serves '+body.domain+'. DockNest never takes over another site.',{code:'NGINX_DOMAIN_SERVED'});return {...base,ok:false,checks:[...okChecks,bad],blockers:[bad.text],gate:{ok:false,refusals:[{code:'BUILD_SETTING_REFUSED',service:'web',field:null}]},dns:{...base.dns,pointsHere:false}}}
+ return {...base,ok:true,checks:okChecks,builds:body.source==='git',warnings:mock.warn?['The image is large.']:[]};
 }
-const view=extra=>({id:'l1',serverId:'a',serverName:'Commerce host',siteId:null,slug:'shop2-example-com',domain:'shop2.example.com',source:'compose',repo:null,state:'running',failedStep:null,reason:null,removing:false,cancelRequested:false,envKeys:[],dns:{records:[]},restoreTests:null,steps:steps({done:1,running:2}),actions:{cancel:false,checkDns:false,remove:false,retry:false},removeUntil:null,createdAt:ago(600),startedAt:ago(590),finishedAt:null,...extra});
+const view=extra=>{const v={id:'l1',serverId:'a',serverName:'Commerce host',siteId:null,slug:'shop2-example-com',domain:'shop2.example.com',source:'compose',repo:null,state:'running',failedStep:null,reason:null,removing:false,cancelRequested:false,envKeys:[],dns:null,progress:0,statusLine:'Checking the server…',certificate:null,backups:null,restoreTests:null,steps:steps({done:1,running:2}),actions:{cancel:false,checkDns:false,remove:false,retry:false},removeUntil:null,createdAt:ago(600),startedAt:ago(590),finishedAt:null,...extra};v.progress=extra.progress??Math.round(v.steps.filter(x=>ORDER.includes(x.step)&&x.state==='done').length/ORDER.length*100);return v};
+const dnsOf=records=>({...records[0],records});
 const LAUNCH_STATES={
- running:()=>view({steps:steps({done:2,running:2}),actions:{cancel:false}}),
+ running:()=>view({steps:steps({done:2,running:2}),statusLine:'Building the image…',actions:{cancel:false}}),
  cancelable:()=>view({state:'queued',steps:steps({done:1,running:1}),actions:{cancel:true}}),
- waiting_dns:()=>view({state:'waiting_dns',siteId:'s9',steps:steps({done:6,waiting:6}).map(s=>s.step==='save'||s.step==='first_backup'?{...s,state:'done'}:s),dns:{records:[{type:'A',name:'shop2.example.com',value:'192.0.2.10'},{type:'AAAA',name:'shop2.example.com',value:'2001:db8::10'}]},restoreTests:{enabled:true,serverId:'b',reason:null},actions:{checkDns:true,remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
- done:()=>view({state:'done',siteId:'s9',steps:steps({done:9}),restoreTests:{enabled:true,serverId:'b',reason:null},actions:{remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
+ waiting_dns:()=>view({state:'waiting_dns',siteId:'s9',steps:steps({done:6,waiting:6}).map(s=>s.step==='save'||s.step==='first_backup'?{...s,state:'done'}:s),dns:dnsOf([{type:'A',name:'shop2.example.com',value:'192.0.2.10'},{type:'AAAA',name:'shop2.example.com',value:'2001:db8::10'}]),certificate:{state:'waiting_dns',reason:null},backups:{firstBackup:'done',schedule:'0 2 * * *',timezone:'UTC',nextRun:null},restoreTests:{enabled:true,serverId:'b',reason:null},actions:{checkDns:true,remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
+ done:()=>view({state:'done',siteId:'s9',steps:steps({done:9}),certificate:{state:'issued',reason:null},backups:{firstBackup:'done',schedule:'0 2 * * *',timezone:'UTC',nextRun:null},restoreTests:{enabled:true,serverId:'b',reason:null},actions:{remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
  failed:()=>view({state:'failed',failedStep:'build',reason:'The image did not build. Everything was removed.',steps:steps({done:2,failed:2}).map(s=>s.step==='teardown'?{...s,state:'done'}:s),finishedAt:ago(100)}),
  attention:()=>view({state:'needs_attention',failedStep:'check_health',reason:'Cleanup did not finish. Commerce host stays on hold.',steps:steps({done:4,failed:4,teardown:'failed'}),actions:{retry:true}}),
- cert:()=>view({state:'done',siteId:'s9',steps:steps({done:9}).map(s=>s.step==='certificate'?{...s,state:'failed',detail:"Let's Encrypt refused it: too many requests."}:s),restoreTests:{enabled:true,serverId:'b',reason:null},actions:{checkDns:true,remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
+ cert:()=>view({state:'done',siteId:'s9',certificate:{state:'failed',reason:"Let's Encrypt refused it: too many requests."},steps:steps({done:9}).map(s=>s.step==='certificate'?{...s,state:'failed',detail:"Let's Encrypt refused it: too many requests."}:s),restoreTests:{enabled:true,serverId:'b',reason:null},actions:{checkDns:true,remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
  removing:()=>view({state:'done',removing:true,steps:steps({done:9,teardown:'running'})}),
+ maintenanceFailed:()=>view({state:'done',siteId:'s9',steps:steps({done:9}).map(s=>s.step==='maintenance'?{...s,state:'failed',detail:'nginx could not load the maintenance page.'}:s),certificate:{state:'issued',reason:null},backups:{firstBackup:'done',schedule:'0 2 * * *',timezone:'UTC',nextRun:null},restoreTests:{enabled:true,serverId:'b',reason:null},actions:{remove:true},removeUntil:ahead(23*3600),finishedAt:ago(120)}),
  removed:()=>view({state:'removed',steps:steps({done:9,teardown:'done'})})
 };
 async function open({width=1440,height=900,scheme='light'}={}){
@@ -68,20 +71,22 @@ async function open({width=1440,height=900,scheme='light'}={}){
   if(endpoint==='/api/alerts')return json({role:'admin',providers:[],connections:[],nodes:[],rules:[],events:[],sourceKinds:[],limits:{},settings:{}});
   if(endpoint==='/api/connections/providers')return json({providers:[{id:'telegram',label:'Telegram',icon:'brand-telegram',fields:[]}]});
   if(endpoint==='/api/connections')return json({role:'admin',settings:{certificateDays:14},connections:[]});
-  // Deploy keys, as src/launches/deploy-keys.js: every write needs the recent sign-in check; without hostKeySha256 a
-  // create or pin only reads the host key and answers 409 HOST_KEY_CONFIRM.
+  // Deploy keys, as src/launches/deploy-keys.js: reading a host key needs no re-verification and stores nothing; create,
+  // repin and delete need it; create and repin carry the confirmed fingerprint (409 HOST_KEY_CHANGED when it moved).
   if(endpoint==='/api/deploy-keys'&&m==='GET')return json({keys:mock.keys});
-  let mm=endpoint.match(/^\/api\/deploy-keys(?:\/([^/]+))?(?:\/(pin))?$/);
+  if(endpoint==='/api/deploy-keys/host-key'){mock.keyCalls.push(['host-key',body]);return json({gitHost:body.gitHost,fingerprint:FP,type:'ssh-ed25519'})}
+  let mm=endpoint.match(/^\/api\/deploy-keys\/([^/]+)\/host-key$/);
+  if(mm){const k=mock.keys.find(x=>x.id===mm[1]);mock.keyCalls.push(['key-host-key',body]);return json({fingerprint:mock.hostFp,type:'ssh-ed25519',changed:mock.hostFp!==k.hostKey.sha256,previous:{fingerprint:k.hostKey.sha256,serverId:k.pinnedFromServerId,serverName:k.pinnedFromServerName,pinnedAt:k.pinnedAt}})}
+  mm=endpoint.match(/^\/api\/deploy-keys(?:\/([^/]+))?(?:\/(repin))?$/);
   if(mm&&m!=='GET'){
    if(mock.needReauth)return reauth();
    if(m==='DELETE'){mock.keys=mock.keys.filter(x=>x.id!==mm[1]);return json({deleted:true})}
-   mock.keyCalls.push([mm[2]||'create',body]);
-   if(!body.hostKeySha256)return json({error:'Compare this fingerprint with the one '+(body.gitHost||'the Git host')+' publishes, then confirm it.',code:'HOST_KEY_CONFIRM',hostKey:{sha256:mm[2]?mock.hostFp:FP,type:'ssh-ed25519'}},409);
-   if(body.hostKeySha256!==(mm[2]?mock.hostFp:FP))return json({error:'The SSH key is not the one you confirmed.',code:'HOST_KEY_CHANGED',hostKey:{sha256:mm[2]?mock.hostFp:FP,type:'ssh-ed25519'}},409);
-   if(mm[2]){mock.pins.push([mm[1],body]);const k=mock.keys.find(x=>x.id===mm[1]);const previous={serverId:k.pinnedFromServerId,serverName:k.pinnedFromServerName};Object.assign(k,{hostKey:{sha256:body.hostKeySha256,type:'ssh-ed25519'},pinnedFromServerId:body.serverId,pinnedFromServerName:state.servers.find(s=>s.id===body.serverId)?.name});return json({key:k,...(mock.movedPin&&previous.serverId!==body.serverId?{replacedPin:{...previous,text:'Launches on '+previous.serverName+' with this key now need the Git host key confirmed from there.'}}:{})})}
+   const now=mm[2]?mock.hostFp:FP;
+   if(body.fingerprint!==now)return json({error:'The SSH key is not the one you confirmed.',code:'HOST_KEY_CHANGED',hostKey:{fingerprint:now,type:'ssh-ed25519'}},409);
+   if(mm[2]){mock.pins.push([mm[1],body]);const k=mock.keys.find(x=>x.id===mm[1]);const previous={serverId:k.pinnedFromServerId,serverName:k.pinnedFromServerName};Object.assign(k,{hostKey:{sha256:body.fingerprint,type:'ssh-ed25519'},pinnedFromServerId:body.serverId,pinnedFromServerName:state.servers.find(s=>s.id===body.serverId)?.name});return json({key:k,...(mock.movedPin&&previous.serverId!==body.serverId?{replacedPin:{...previous,text:'Launches on '+previous.serverName+' with this key now need the Git host key confirmed from there again.'}}:{})})}
    mock.created.push(body);const k={id:'33333333-3333-4333-8333-333333333333',name:body.name,gitHost:body.gitHost,publicKey:PUB,fingerprint:'SHA256:newkeynewkey',hostKey:{sha256:FP,type:'ssh-ed25519'},pinnedFromServerId:body.serverId,pinnedFromServerName:state.servers.find(s=>s.id===body.serverId)?.name,pinnedAt:ago(5),createdAt:ago(5)};mock.keys.push(k);return json({key:k},201);
   }
-  if(endpoint==='/api/launches'&&m==='GET')return json({launches:mock.listOpen?[{...LAUNCH_STATES.done(),id:'l9',siteId:'s2',finishedAt:ago(3*3600),removeUntil:ahead(21*3600)}]:[]});
+  if(endpoint==='/api/servers/a/launch'&&m==='GET')return json({launches:mock.reopen?[LAUNCH_STATES[mock.reopen](),{...LAUNCH_STATES.done(),id:'l8'}]:[]});
   if(endpoint==='/api/servers/a/launch/check'){mock.checks.push(body);return json(checkResult(body))}
   if(endpoint==='/api/servers/a/launch'){if(mock.needReauth)return reauth();if(body.source==='git'&&body.trustConfirmed!==true)return json({error:'Confirm that you trust this repository.',code:'TRUST_REQUIRED'},400);mock.launches.push(body);mock.launch=mock.launch||'running';return json({launch:{id:'l1'}},202)}
   mm=endpoint.match(/^\/api\/launches\/([^/]+)(?:\/(.+))?$/);
@@ -345,6 +350,41 @@ try{
    await e.getByText('Launched. Backups and restore tests are on.').waitFor();
    await second.context.close();
   });
+  await scenario('maintenance step '+tag,async()=>{
+   const {context,page}=await open({width,height,scheme});
+   mock.launch='maintenanceFailed';
+   await openNew(page);await fillCompose(page);await toCheck(page);
+   await page.getByRole('button',{name:'Launch',exact:true}).click();
+   const d=dialog(page);
+   await d.getByRole('heading',{name:'shop2.example.com is live'}).waitFor();
+   await d.getByText('nginx could not load the maintenance page. Set it up from the site.').waitFor();
+   await d.getByText('Launched. Backups and restore tests are on.').waitFor();
+   await shot(page,'51-built-launch-maintenance-failed',scheme);await layoutOk(page);
+   await context.close();
+   // while it runs the step has its own row in the timeline
+   const run=await open({width,height,scheme});
+   mock.launch='running';
+   await openNew(run.page);await fillCompose(run.page);await toCheck(run.page);
+   await run.page.getByRole('button',{name:'Launch',exact:true}).click();
+   await dialog(run.page).locator('.dn-tl-item',{hasText:'Maintenance page'}).waitFor();
+   await run.context.close();
+  });
+  await scenario('reopen a running launch '+tag,async()=>{
+   const {context,page}=await open({width,height,scheme});
+   mock.reopen='running';mock.launch='running';
+   await gotoMap(page);
+   if(phone(page))await page.locator('.map-list-group',{hasText:'Commerce host'}).getByRole('button',{name:'Details'}).click();
+   else await page.locator('[data-node="server:a"]').click();
+   const panel=page.locator('.map-panel, dialog[open]').last();
+   await panel.getByRole('heading',{name:'Commerce host'}).waitFor();
+   await panel.getByText('Launches',{exact:true}).waitFor();
+   assert.equal(await panel.getByRole('button',{name:/shop2.example.com/}).count(),1,'only launches that are still going are listed');
+   await shot(page,'52-built-launch-reopen',scheme);
+   await panel.getByRole('button',{name:/shop2.example.com/}).click();
+   await dialog(page).getByRole('heading',{name:'Launching shop2.example.com'}).waitFor();
+   await dialog(page).getByText('Building the image…').waitFor();
+   await context.close();
+  });
   await scenario('remove launch '+tag,async()=>{
    const {context,page}=await open({width,height,scheme});
    await openSite(page,'shop2.example.com');
@@ -387,17 +427,17 @@ try{
    await d.getByLabel('Name').fill('Admin repo key');await d.getByLabel('Git host').fill('github.com');
    await d.getByLabel('Read from').selectOption({label:'Commerce host'});
    await shot(page,'46-built-deploy-key-new',scheme);await layoutOk(page);
-   mock.needReauth=true;
    await d.getByRole('button',{name:'Next'}).click();
-   await reauth(page);
    await d.getByRole('heading',{name:'Confirm github.com'}).waitFor();
    await d.getByText(FP).waitFor();
-   assert.deepEqual(mock.keyCalls[0],['create',{name:'Admin repo key',gitHost:'github.com',serverId:'a'}]);
+   assert.deepEqual(mock.keyCalls[0],['host-key',{gitHost:'github.com',serverId:'a'}]);
    assert.equal(mock.created.length,0,'nothing is created before the confirmation');
    await shot(page,'47-built-deploy-key-host-confirm',scheme);await layoutOk(page);
+   mock.needReauth=true;
    await d.getByRole('button',{name:'Pin key'}).click();
+   await reauth(page);
    await d.getByRole('heading',{name:'Admin repo key'}).waitFor();
-   assert.deepEqual(mock.created[0],{name:'Admin repo key',gitHost:'github.com',serverId:'a',hostKeySha256:FP});
+   assert.deepEqual(mock.created[0],{name:'Admin repo key',gitHost:'github.com',serverId:'a',fingerprint:FP});
    await d.getByText('Add it as a read-only deploy key at github.com.').waitFor();
    await d.getByText(PUB).waitFor();
    await d.getByText('github.com, from Commerce host').waitFor();
@@ -405,23 +445,26 @@ try{
    await d.getByRole('button',{name:'Done'}).click();
    await sec.getByText('Admin repo key').waitFor();
    // re-pin after a rotation: the pinned and the new fingerprint, confirm
-   mock.hostFp=FP2;mock.needReauth=true;
+   mock.hostFp=FP2;
    await sec.getByRole('button',{name:'Re-pin host key of Shop deploy key'}).click();
-   await reauth(page);
    await d.getByRole('heading',{name:'Re-pin github.com'}).waitFor();
    await d.getByText('Host key changed').waitFor();await d.getByText(FP2).waitFor();await d.getByText(FP,{exact:true}).waitFor();
    await shot(page,'49-built-deploy-key-repin',scheme);await layoutOk(page);
+   mock.needReauth=true;
    await d.getByRole('button',{name:'Re-pin',exact:true}).click();
+   await reauth(page);
    await page.getByText('github.com is pinned again.').waitFor();
-   assert.equal(mock.pins[0][1].hostKeySha256,FP2);
+   assert.equal(mock.pins[0][1].fingerprint,FP2);
    // pinning from another server: the answer says the first server needs the key confirmed again
    mock.movedPin=true;
    await sec.getByRole('button',{name:'Re-pin host key of Docs repo key'}).click();
    await d.getByRole('heading',{name:'Re-pin gitlab.com'}).waitFor();
    await d.getByLabel('Read from').selectOption({label:'Commerce host'});
    await d.getByText('Host key changed').waitFor();
+   mock.needReauth=true;
    await d.getByRole('button',{name:'Re-pin',exact:true}).click();
-   await d.getByText('Launches on Content host with this key now need the Git host key confirmed from there.').waitFor();
+   await reauth(page);
+   await d.getByText('Launches on Content host with this key now need the Git host key confirmed from there again.').waitFor();
    await d.getByRole('button',{name:'Done'}).click();
    // delete, then the empty state
    mock.keys=mock.keys.slice(0,1);

@@ -14,11 +14,13 @@ export function createDeployKeysClient(api){
  const id=x=>encodeURIComponent(x);
  return {
   list:()=>api('/deploy-keys'),
-  // Without hostKeySha256 the server only reads the Git host's key and answers 409 HOST_KEY_CONFIRM with its fingerprint
-  // (e.data.hostKey.sha256), creating nothing. With it, the key is read again, must still match, and is created.
+  // Reads the Git host's SSH key as the server sees it and answers {fingerprint,type}; stores nothing. With a key id
+  // it also answers {changed, previous:{fingerprint,serverId,serverName,pinnedAt}} for the pinned key.
+  hostKey:(a,b)=>b===undefined?api('/deploy-keys/host-key',a):api('/deploy-keys/'+id(a)+'/host-key',b),
+  // The key is created only when the host key still has the confirmed fingerprint (else 409 HOST_KEY_CHANGED with hostKey.fingerprint).
   create:body=>api('/deploy-keys',body),
-  // The same two steps to pin the host key again (after the Git host rotated its key, or from another server).
-  pin:(keyId,body)=>api('/deploy-keys/'+id(keyId)+'/pin',body),
+  // Pins the host key again; may answer replacedPin {serverId,serverName,text} when the pin moved from another server.
+  repin:(keyId,body)=>api('/deploy-keys/'+id(keyId)+'/repin',body),
   remove:keyId=>api('/deploy-keys/'+id(keyId),undefined,'DELETE')
  };
 }
@@ -38,6 +40,7 @@ function useCopy(){
  return [copied,async text=>{try{await navigator.clipboard.writeText(text);setCopied(true)}catch{setCopied(false)}}];
 }
 
+
 const Private=({checked,onChange})=><label className="cx-check"><input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)}/>Allow private address</label>;
 
 function NewKeyDialog({client,connections,servers,onClose,onCreated}){
@@ -45,22 +48,19 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
  const [fp,setFp]=useState(''),[key,setKey]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[copied,copy]=useCopy();
  const hostName=host.trim().toLowerCase(),server=servers.find(s=>s.id===serverId);
  const ready=name.trim().length>0&&hostName.length>0&&!!serverId;
- const base={name:name.trim(),gitHost:hostName,serverId,...(priv?{allowPrivate:true}:{})};
- // Next: the server reads the host key and asks for the confirmation (409 HOST_KEY_CONFIRM); nothing is created yet.
+ const where={gitHost:hostName,serverId,...(priv?{allowPrivate:true}:{})};
+ // Next: the server reads the Git host's key and answers its SHA-256; nothing is stored yet.
  async function next(){
   setBusy(true);setError('');
-  await guard.run(async()=>{await client.create(base);setError('The host key was not offered for confirmation.')},e=>{
-   if(e.code==='HOST_KEY_CONFIRM'){setFp(e.data?.hostKey?.sha256||'');setStep('host');return}
-   if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);
-   setError(e.message||'The host key could not be read.');
-  });
+  try{const r=await client.hostKey(where);setFp(r.fingerprint);setStep('host')}
+  catch(e){if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);setError(e.message||'The host key could not be read.')}
   setBusy(false);
  }
  // Pin key: the server reads the key again and creates the pair only if it is still the one that was confirmed.
  async function pin(){
   setBusy(true);setError('');
-  await guard.run(async()=>{const r=await client.create({...base,hostKeySha256:fp});setKey(r.key);setStep('pub');onCreated?.()},e=>{
-   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.sha256)setFp(e.data.hostKey.sha256);
+  await guard.run(async()=>{const r=await client.create({name:name.trim(),...where,fingerprint:fp});setKey(r.key);setStep('pub');onCreated?.()},e=>{
+   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.fingerprint)setFp(e.data.hostKey.fingerprint);
    setError(e.message||'The key could not be created.');
   });
   setBusy(false);
@@ -78,35 +78,28 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   {guard.box}
  </Dlg>;
- return <Dlg labelId="dk-title" title="New deploy key" onClose={onClose} foot={<><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!ready||busy||guard.waiting} onClick={next}>Next</button></>}>
+ return <Dlg labelId="dk-title" title="New deploy key" onClose={onClose} foot={<><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!ready||busy} onClick={next}>Next</button></>}>
   <label className="field"><span>Name</span><input type="text" autoComplete="off" spellCheck={false} maxLength={80} value={name} onChange={e=>setName(e.target.value)}/></label>
   <label className="field"><span>Git host</span><input type="text" autoComplete="off" spellCheck={false} inputMode="url" value={host} onChange={e=>setHost(e.target.value)}/></label>
   <label className="field"><span>Read from</span><select value={serverId} onChange={e=>setServerId(e.target.value)}>{servers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
   {showPriv&&<Private checked={priv} onChange={setPriv}/>}
   <p className="t-caption">DockNest reads the host key from this server and asks you to confirm it.</p>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
-  {guard.box}
  </Dlg>;
 }
 
-// Pin the host key again: read it (again from the pinned server, or from another one), compare with the pinned key, confirm.
+// Pin the host key again: read it (from the pinned server, or another one), compare with the pinned key, confirm.
 function RepinDialog({client,connections,item,servers,onClose,onDone}){
  const guard=useReauth(connections,{verifyLabel:'Verify'}),[serverId,setServerId]=useState(item.pinnedFromServerId||servers[0]?.id||''),[state,setState]=useState({loading:true}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[moved,setMoved]=useState(null);
- const base={serverId,...(priv?{allowPrivate:true}:{})};
+ const where={serverId,...(priv?{allowPrivate:true}:{})};
  useEffect(()=>{
   let live=true;setState({loading:true});
-  guard.run(async()=>{await client.pin(item.id,base);if(live)setState({error:'The host key was not offered for confirmation.'})},e=>{
-   if(!live)return;
-   if(e.code==='HOST_KEY_CONFIRM')return setState({fingerprint:e.data?.hostKey?.sha256||''});
-   if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);
-   setState({error:e.message||'The host key could not be read.'});
-  });
+  client.hostKey(item.id,{serverId,...(priv?{allowPrivate:true}:{})}).then(r=>{if(live)setState({fingerprint:r.fingerprint,previous:r.previous})}).catch(e=>{if(!live)return;if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);setState({error:e.message||'The host key could not be read.'})});
   return()=>{live=false};
- // eslint-disable-next-line react-hooks/exhaustive-deps
  },[client,item.id,serverId,priv]);
- const pinned=item.hostKey?.sha256,sameKey=state.fingerprint&&state.fingerprint===pinned,sameServer=serverId===item.pinnedFromServerId,nothing=sameKey&&sameServer;
- async function go(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.pin(item.id,{...base,hostKeySha256:state.fingerprint});if(r?.replacedPin)setMoved(r.replacedPin);else await onDone()},e=>{
-   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.sha256)setState({fingerprint:e.data.hostKey.sha256});
+ const pinned=state.previous?.fingerprint||item.hostKey?.sha256,sameKey=state.fingerprint&&state.fingerprint===pinned,sameServer=serverId===item.pinnedFromServerId,nothing=sameKey&&sameServer;
+ async function go(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.repin(item.id,{...where,fingerprint:state.fingerprint});if(r?.replacedPin)setMoved(r.replacedPin);else await onDone()},e=>{
+   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.fingerprint)setState(s=>({...s,fingerprint:e.data.hostKey.fingerprint}));
    setError(e.message||'The host key could not be pinned.');
   });setBusy(false)}
  if(moved)return <Dlg labelId="dk-title" title={'Re-pin '+item.gitHost} onClose={onDone} foot={<button type="button" className="primary" onClick={onDone}>Done</button>}>
