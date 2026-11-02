@@ -30,7 +30,9 @@ const RUNTIME = 'self_heal_runtime';
 const COMMAND = 'python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
 const streams = new Map();
 const runtime = { servers: {}, sites: {} };
+// Never after this worker lost its lease: the runtime state then belongs to the worker that took over.
 function persist() {
+  if (healRunner.halted) return;
   try { db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(RUNTIME, JSON.stringify({ ...runtime, at: new Date(healClock.now()).toISOString() })); }
   catch (error) { console.error(`Self-heal stream state could not be saved: ${error.code ?? error.name}`); }
 }
@@ -173,6 +175,7 @@ export class ServerStream {
   }
   // The helper's first line: the current container of each watched entry (same order), or null when it is gone.
   snapshot(list) {
+    if (this.stopped || healRunner.halted) return;
     this.connectedAt = healClock.now(); this.lastReason = null;
     const bySite = new Map();
     this.watch.forEach((entry, index) => {

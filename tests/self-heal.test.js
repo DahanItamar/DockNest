@@ -533,9 +533,12 @@ test('after the lease is lost, self-heal stops at once: no streams, no armed re-
     unhealthy(f);
     assert.equal(heal.armedRechecks(), 1);
     const pending = armed[0];
-    // What src/worker.js renew() does when the lease is lost.
+    // What src/worker.js renew() does when the lease is lost: halt first, then close the streams.
     heal.healRunner.active = () => false;
-    streams.stopStreams(); heal.haltSelfHeal();
+    const newWorkerState = JSON.stringify({ servers: { other: { state: 'connected', reason: null } }, sites: {} });
+    db.prepare("UPDATE settings SET value=? WHERE key='self_heal_runtime'").run(newWorkerState); // written by the worker that took over
+    heal.haltSelfHeal(); streams.stopStreams();
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key='self_heal_runtime'").get().value, newWorkerState, 'the stream state of the new worker is not blanked');
     assert.equal(streams.openStreams().size, 0, 'no stream is open');
     assert.equal(heal.armedRechecks(), 0, 'no re-check is armed');
     assert.equal(armed.length, 0, 'the timer was cleared');
@@ -548,5 +551,8 @@ test('after the lease is lost, self-heal stops at once: no streams, no armed re-
     assert.equal(streams.openStreams().size, 0); assert.equal(connects.length, 1);
     assert.equal(history(f.siteId).length, rows);
     assert.deepEqual(jobsOf(f.siteId), []);
+    // A late snapshot line from the closed connection changes nothing either.
+    connects[0].client.channel.send({ watched: { index: 0, name: 'shop-web-1', id: ID('a') } }); connects[0].client.channel.send({ watching: 2 });
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key='self_heal_runtime'").get().value, newWorkerState);
   } finally { heal.healRunner.active = () => false; }
 });

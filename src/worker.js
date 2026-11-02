@@ -51,7 +51,7 @@ function heartbeat(running=true){db.prepare("INSERT INTO settings VALUES ('worke
 // Renewal fails only when the lease expired and another worker took it over: stop claiming at once.
 // Lease lost: self-heal stops at once too (streams closed, re-checks cancelled, nothing more recorded or queued), since
 // the worker that took over runs its own streams.
-function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');try{stopStreams();haltSelfHeal();}catch{/* best effort */}return false;}
+function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');try{haltSelfHeal();stopStreams();}catch{/* best effort */}return false;}
 heartbeat();
 // The heartbeat (every 15 s) also wakes self-heal, so settings changes, re-pins and finished site work reach the
 // streams and queued restarts promptly even while the loop runs a long job of another site.
