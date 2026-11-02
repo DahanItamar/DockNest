@@ -163,6 +163,19 @@ async function failures(){
  assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: server unreachable. Retrying.');
  assert.equal((await dlg.locator('.sh-watched').innerText()).trim(),'Watching demo-0-web');
  await context.close();
+ // Too many containers: the server's own sentence in the red panel
+ fresh();mock.putError='TOO_MANY_CONTAINERS';
+ ({context,page}=await open({}));
+ dlg=await openSheet(page,1280);
+ await dlg.getByRole('button',{name:'Save'}).click();
+ await dlg.locator('.alert-error').waitFor();
+ assert.match(await dlg.locator('.alert-error').innerText(),/Too many containers/);
+ await context.close();
+ fresh({stream:{state:'off',reason:'too_many',notWatching:'x'}});
+ ({context,page}=await open({}));
+ dlg=await openSheet(page,1280);
+ assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: this server already watches 50 containers.');
+ await context.close();
  // Another save error keeps the sheet open with a red panel
  fresh();mock.putError='UNREACHABLE';
  ({context,page}=await open({}));
