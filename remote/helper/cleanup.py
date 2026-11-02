@@ -1,0 +1,293 @@
+# helper/cleanup.py: Server cleanup: scan reclaimable Docker space, then remove exactly the previewed, still-eligible items.
+# <build:header>
+# Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
+# These imports exist only so editors and linters can resolve names.
+import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
+from .common import (
+    docker, emit, run)
+from .staging import (
+    JOB_DIRECTORY, job_folder_finished)
+from .move import (
+    MOVES_ROOT)
+from .restore_test import (
+    RESTORE_ROOT, RESTORE_TESTS_ROOT)
+# </build:header>
+# ---- Server cleanup (docs/server-cleanup.md) ----
+# Rules: never a blanket prune (no `docker system prune`, `volume prune`, `image prune -a`); every removal names one
+# container, image or volume by ID and never uses -f or -v. Anything a registered site, a backup in progress, a restore
+# copy, a restore test, a move or a kept old copy still needs is protected, and so is DockNest itself. When ownership is
+# unclear the item is kept: only anonymous volumes are offered, never named ones. The clean re-reads the server and
+# re-checks each item right before removing it, so a preview that went stale can only skip items, never widen.
+# Build cache is the one exception to item-by-item: `docker builder prune` without --all and with an age filter, which
+# BuildKit applies only to cache no build is using. It never holds site data.
+CLEANUP_KINDS=('containers','images','volumes','buildCache')
+CLEANUP_STOPPED={'exited','created','dead'}
+CLEANUP_OWN_LABEL_PREFIXES=('docknest.','docker-backup-manager.','io.github.dahanitamar.docknest')
+CLEANUP_OWN_NAMES=re.compile(r'(docknest|docker-backup-manager)([_.-].*)?')
+CLEANUP_ANONYMOUS=re.compile(r'[0-9a-f]{64}')
+CLEANUP_REF=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}')
+CLEANUP_FRESH_SECONDS=3600
+CLEANUP_ACTIVE_SECONDS=6*3600
+CLEANUP_BUILD_CACHE_AGE='24h'
+CLEANUP_MAX_ITEMS=500
+CLEANUP_WALK_LIMIT=200000
+CLEANUP_WALK_SECONDS=20
+CLEANUP_JOURNAL_BYTES=4*1024*1024
+CLEANUP_LOCK=MOVES_ROOT.parent/'cleanup.lock'
+CLEANUP_DEFAULT_STAGING='/var/lib/docknest'
+
+def cleanup_time(text):
+    """Docker timestamps (RFC 3339, nanoseconds, Z or an offset) as epoch seconds; None when unreadable."""
+    import datetime
+    value=str(text or '').strip()
+    match=re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)?',value)
+    if not match:return None
+    zone=match.group(3) or 'Z'
+    try:return datetime.datetime.fromisoformat(match.group(1)+('+00:00' if zone=='Z' else zone)).timestamp()
+    except ValueError:return None
+def cleanup_size(text):
+    """`docker system df` sizes (decimal units, '1.2GB', '0B', '512kB (40%)') as bytes; None when unreadable."""
+    match=re.fullmatch(r'\s*([0-9.]+)\s*([kKMGTP]?B)\s*(\(.*\))?\s*',str(text or ''))
+    if not match:return None
+    try:return int(float(match.group(1))*{'B':1,'kB':1e3,'KB':1e3,'MB':1e6,'GB':1e9,'TB':1e12,'PB':1e15}[match.group(2)])
+    except (ValueError,KeyError):return None
+def cleanup_digest(*parts):return hashlib.sha256('\0'.join(str(p) for p in parts).encode()).hexdigest()[:32]
+def own_labels(labels):return any(key.startswith(CLEANUP_OWN_LABEL_PREFIXES) for key in (labels or {}))
+def cleanup_refs(value,limit=2000):
+    """Request references (container names or IDs, volume names): strings of a safe shape only, at most `limit`."""
+    if value is None:return set()
+    if not isinstance(value,list) or len(value)>limit:raise ValueError('Invalid cleanup protection list')
+    refs=set()
+    for item in value:
+        if not isinstance(item,str) or not CLEANUP_REF.fullmatch(item):raise ValueError('Invalid cleanup protection entry')
+        refs.add(item)
+    return refs
+def cleanup_protect(req):
+    protect=req.get('protect') or {}
+    if not isinstance(protect,dict):raise ValueError('Invalid cleanup protection')
+    roots=protect.get('stagingRoots') or []
+    if not isinstance(roots,list) or len(roots)>200 or any(not isinstance(r,str) or not r.startswith('/') or '..' in r.split('/') or len(r)>512 for r in roots):raise ValueError('Invalid staging roots')
+    return {'containers':cleanup_refs(protect.get('containers')),'volumes':cleanup_refs(protect.get('volumes')),'stagingRoots':list(dict.fromkeys([CLEANUP_DEFAULT_STAGING,*roots]))}
+
+# ---- What the server says ----
+def journal_strings(value,into):
+    if isinstance(value,str):into.add(value)
+    elif isinstance(value,dict):
+        for item in value.values():journal_strings(item,into)
+    elif isinstance(value,list):
+        for item in value:journal_strings(item,into)
+def read_journal(path,into):
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size>CLEANUP_JOURNAL_BYTES:return
+        journal_strings(json.loads(path.read_text()),into)
+    except (OSError,ValueError):pass
+def cleanup_journals():
+    """Every name and ID that a move or a restore test journalled, and the containers of each kept old copy. A journal
+    DockNest cannot read protects nothing extra, but Docker labels and the site lists still do."""
+    found={'move':set(),'oldCopy':set(),'restoreTest':set()}
+    for root,kind in [(MOVES_ROOT,'move'),(RESTORE_TESTS_ROOT,'restoreTest')]:
+        try:entries=[e for e in os.scandir(root) if e.is_dir(follow_symlinks=False)] if root.is_dir() and not root.is_symlink() else []
+        except OSError:entries=[]
+        for entry in entries:
+            folder=pathlib.Path(entry.path)
+            read_journal(folder/'resources.json',found[kind])
+            read_journal(folder/'state.json',found[kind])
+            if kind=='move':
+                for name in ['retired.json','retired.pending','stopped.json','stopped.pending']:read_journal(folder/name,found['oldCopy'])
+    return found
+def cleanup_activity(roots,now):
+    """Snapshot images of every DockNest job folder (a backup commits them while it runs), and whether a backup or
+    restore looks active: an unfinished job folder or restore staging folder changed in the last six hours."""
+    images=set();active=None
+    for base in [pathlib.Path(r) for r in roots]+[RESTORE_ROOT]:
+        try:
+            if base.is_symlink() or not base.is_dir():continue
+            entries=list(os.scandir(base))
+        except OSError:continue
+        for entry in entries:
+            if not JOB_DIRECTORY.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):continue
+            folder=pathlib.Path(entry.path)
+            snapshots=set();read_journal(folder/'snapshot-images.json',snapshots);images|=snapshots
+            if base!=RESTORE_ROOT and job_folder_finished(folder):continue
+            try:latest=max([os.lstat(folder).st_mtime]+[os.lstat(os.path.join(folder,name)).st_mtime for name in os.listdir(folder)])
+            except OSError:latest=now
+            if now-latest<CLEANUP_ACTIVE_SECONDS:active='restore' if base==RESTORE_ROOT else 'backup'
+    return images,active
+def volume_bytes(mountpoint):
+    """Bytes under a volume, without following links; None when it is too large or slow to count."""
+    total=0;count=0;deadline=time.monotonic()+CLEANUP_WALK_SECONDS
+    try:
+        if not mountpoint or not os.path.isdir(mountpoint) or os.path.islink(mountpoint):return None
+        for current,dirs,files in os.walk(mountpoint,followlinks=False):
+            for name in dirs+files:
+                count+=1
+                if count>CLEANUP_WALK_LIMIT or time.monotonic()>deadline:return None
+                try:total+=os.lstat(os.path.join(current,name)).st_size
+                except OSError:pass
+    except OSError:return None
+    return total
+def docker_json(*args):
+    output=docker(*args).decode()
+    return json.loads(output) if output.strip() else []
+def docker_lines(*args):return docker(*args).decode().split()
+def cleanup_facts(protect,now=None):
+    now=time.time() if now is None else now
+    ids=docker_lines('ps','-aq','--no-trunc')
+    containers=docker_json('container','inspect','--size',*ids) if ids else []
+    image_ids=list(dict.fromkeys(docker_lines('image','ls','-q','--no-trunc','--filter','dangling=true')))
+    images=docker_json('image','inspect',*image_ids) if image_ids else []
+    names=docker_lines('volume','ls','-q','--filter','dangling=true')
+    volumes=docker_json('volume','inspect',*names) if names else []
+    build=None
+    try:
+        for line in docker('system','df','--format','{{json .}}').decode().splitlines():
+            row=json.loads(line) if line.strip() else {}
+            if row.get('Type')=='Build Cache':build=cleanup_size(row.get('Reclaimable'))
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):build=None
+    snapshots,active=cleanup_activity(protect['stagingRoots'],now)
+    return {'containers':containers,'images':images,'volumes':volumes,'buildCacheBytes':build,'snapshotImages':snapshots,'journals':cleanup_journals(),'active':active,'now':now}
+
+# ---- Decisions (pure: tests call these with plain data) ----
+def container_refs(c):
+    cid=c.get('Id','');name=(c.get('Name') or '').lstrip('/')
+    return {cid,cid[:12],name} - {''}
+def ref_matches(refs,known):
+    if refs & known:return True
+    # A short ID in a site list (12+ hex characters) matches the full ID it starts.
+    return any(len(k)>=12 and re.fullmatch(r'[0-9a-f]+',k) and any(r.startswith(k) for r in refs) for k in known)
+def compose_project(labels):return (labels or {}).get('com.docker.compose.project') or None
+def cleanup_classify(facts,protect):
+    """Splits what the server holds into items DockNest may remove and protected items with a reason."""
+    now=facts['now'];journals=facts['journals'];eligible=[];kept=[]
+    def fresh(created):
+        at=cleanup_time(created)
+        return at is None or now-at<CLEANUP_FRESH_SECONDS
+    containers=facts['containers']
+    site_ids=set()
+    for c in containers:
+        if ref_matches(container_refs(c),protect['containers']):site_ids.add(c.get('Id'))
+    site_projects={compose_project((c.get('Config') or {}).get('Labels')) for c in containers if c.get('Id') in site_ids}-{None}
+    running_projects={compose_project((c.get('Config') or {}).get('Labels')) for c in containers if (c.get('State') or {}).get('Status') not in CLEANUP_STOPPED}-{None}
+    used_images={c.get('Image') for c in containers}-{None}
+    used_volumes={m.get('Name') for c in containers for m in c.get('Mounts') or [] if m.get('Type')=='volume'}-{None}
+    def add(kind,item,reason):(kept if reason else eligible).append({**item,'kind':kind,**({'reason':reason} if reason else {})})
+    for c in containers:
+        state=c.get('State') or {}
+        if state.get('Status') not in CLEANUP_STOPPED or state.get('Running') or state.get('Paused') or state.get('Restarting'):continue
+        config=c.get('Config') or {};labels=config.get('Labels') or {};refs=container_refs(c);project=compose_project(labels)
+        name=(c.get('Name') or '').lstrip('/');image=str(config.get('Image') or '')
+        if own_labels(labels) and any(k.startswith('docknest.restore-test') for k in labels):reason='restoreTest'
+        elif own_labels(labels) and any(k.startswith('docknest.move') for k in labels):reason='move'
+        elif own_labels(labels) and any(k.startswith('docker-backup-manager.restore') for k in labels):reason='restoreCopy'
+        elif own_labels(labels) or project in ('docknest','docker-backup-manager') or CLEANUP_OWN_NAMES.fullmatch(name) or CLEANUP_OWN_NAMES.fullmatch(image.split('/')[-1].split(':')[0]):reason='docknest'
+        elif c.get('Id') in site_ids or (project and project in site_projects):reason='site'
+        elif ref_matches(refs,journals['oldCopy']):reason='oldCopy'
+        elif ref_matches(refs,journals['move']):reason='move'
+        elif ref_matches(refs,journals['restoreTest']):reason='restoreTest'
+        elif project and project in running_projects:reason='runningStack'
+        elif fresh(c.get('Created')):reason='tooNew'
+        else:reason=None
+        add('containers',{'id':c.get('Id'),'name':name,'bytes':c.get('SizeRw') if isinstance(c.get('SizeRw'),int) else None,
+            'fingerprint':cleanup_digest(c.get('Id'),c.get('Created'),state.get('Status'),state.get('StartedAt'),state.get('FinishedAt'))},reason)
+    for i in facts['images']:
+        iid=i.get('Id','');labels=(i.get('Config') or {}).get('Labels') or {};refs={iid,iid.split(':')[-1],iid.split(':')[-1][:12]}
+        if i.get('RepoTags'):continue  # tagged meanwhile: not dangling, not listed
+        if iid in used_images:reason='inUse'
+        elif own_labels(labels):reason='docknest'
+        elif refs & facts['snapshotImages']:reason='backup'
+        elif ref_matches(refs,journals['oldCopy']) or ref_matches(refs,journals['move']):reason='move'
+        elif ref_matches(refs,journals['restoreTest']):reason='restoreTest'
+        elif fresh(i.get('Created')):reason='tooNew'
+        else:reason=None
+        add('images',{'id':iid,'name':iid.split(':')[-1][:12],'bytes':i.get('Size') if isinstance(i.get('Size'),int) else None,'fingerprint':cleanup_digest(iid,i.get('Created'))},reason)
+    for v in facts['volumes']:
+        name=v.get('Name','');labels=v.get('Labels') or {};project=compose_project(labels)
+        if name in used_volumes:reason='inUse'
+        elif own_labels(labels) and any(k.startswith('docknest.restore-test') for k in labels):reason='restoreTest'
+        elif own_labels(labels) and any(k.startswith('docknest.move') for k in labels):reason='move'
+        elif own_labels(labels) or CLEANUP_OWN_NAMES.fullmatch(name) or project in ('docknest','docker-backup-manager'):reason='docknest'
+        elif name in protect['volumes'] or (project and project in site_projects):reason='site'
+        elif name in journals['oldCopy'] or name in journals['move']:reason='move'
+        elif name in journals['restoreTest']:reason='restoreTest'
+        # Fail closed: a named volume may be used again by a stack that is down right now. Only anonymous ones go.
+        elif not CLEANUP_ANONYMOUS.fullmatch(name):reason='named'
+        elif fresh(v.get('CreatedAt')):reason='tooNew'
+        else:reason=None
+        add('volumes',{'id':name,'name':name[:12] if CLEANUP_ANONYMOUS.fullmatch(name) else name,'bytes':v.get('bytes'),'mountpoint':v.get('Mountpoint'),'fingerprint':cleanup_digest(name,v.get('CreatedAt'))},reason)
+    if facts.get('buildCacheBytes'):
+        eligible.append({'kind':'buildCache','id':'build-cache','name':'Unused build cache','bytes':facts['buildCacheBytes'],'fingerprint':'build-cache'})
+    return eligible,kept
+
+def public_item(item):return {k:item.get(k) for k in ['kind','id','name','bytes','fingerprint','reason'] if k in item}
+def cleanup_scan(req,now=None):
+    protect=cleanup_protect(req);facts=cleanup_facts(protect,now)
+    eligible,kept=cleanup_classify(facts,protect)
+    for item in eligible:
+        if item['kind']=='volumes':item['bytes']=volume_bytes(item.get('mountpoint'))
+    emit(result={'items':[public_item(i) for i in eligible],'protected':[public_item(i) for i in kept][:CLEANUP_MAX_ITEMS],'busy':facts['active']})
+
+# ---- Clean ----
+def cleanup_lock():
+    import fcntl
+    CLEANUP_LOCK.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if CLEANUP_LOCK.is_symlink():raise ValueError('The cleanup lock cannot be a symbolic link')
+    handle=open(CLEANUP_LOCK,'a')
+    try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:handle.close();raise ValueError('Another cleanup is already running on this server.')
+    return handle
+def cleanup_requested(req):
+    items=req.get('items')
+    if not isinstance(items,list) or not items or len(items)>CLEANUP_MAX_ITEMS:raise ValueError('Choose up to %d items to clean'%CLEANUP_MAX_ITEMS)
+    result=[]
+    for item in items:
+        if not isinstance(item,dict) or item.get('kind') not in CLEANUP_KINDS or not isinstance(item.get('id'),str) or not CLEANUP_REF.fullmatch(item['id']) or not isinstance(item.get('fingerprint'),str) or len(item['fingerprint'])>64:raise ValueError('Invalid cleanup item')
+        result.append({'kind':item['kind'],'id':item['id'],'fingerprint':item['fingerprint']})
+    return result
+def still_eligible(item):
+    """The last look right before removal: one item, read fresh from Docker."""
+    kind=item['kind'];ref=item['id']
+    try:
+        if kind=='containers':
+            c=docker_json('container','inspect',ref)[0];state=c.get('State') or {}
+            return state.get('Status') in CLEANUP_STOPPED and not state.get('Running') and not own_labels((c.get('Config') or {}).get('Labels')) and cleanup_digest(c.get('Id'),c.get('Created'),state.get('Status'),state.get('StartedAt'),state.get('FinishedAt'))==item['fingerprint']
+        if kind=='images':
+            i=docker_json('image','inspect',ref)[0]
+            return not i.get('RepoTags') and not own_labels((i.get('Config') or {}).get('Labels')) and not docker_lines('ps','-aq','--no-trunc','--filter','ancestor='+ref) and cleanup_digest(i.get('Id'),i.get('Created'))==item['fingerprint']
+        if kind=='volumes':
+            v=docker_json('volume','inspect',ref)[0]
+            return CLEANUP_ANONYMOUS.fullmatch(v.get('Name',''))is not None and not own_labels(v.get('Labels')) and not docker_lines('ps','-aq','--no-trunc','--filter','volume='+ref) and cleanup_digest(v.get('Name'),v.get('CreatedAt'))==item['fingerprint']
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,IndexError,TypeError):return False
+    return False
+def remove_item(item):
+    if item['kind']=='containers':docker('rm',item['id'])
+    elif item['kind']=='images':docker('image','rm',item['id'])
+    elif item['kind']=='volumes':docker('volume','rm',item['id'])
+def prune_build_cache():
+    output=run(['docker','builder','prune','--force','--filter','until='+CLEANUP_BUILD_CACHE_AGE],timeout=600).decode(errors='replace')
+    match=re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kKMGTP]?B)',output)
+    return cleanup_size(match.group(1)) if match else None
+def cleanup_apply(req,now=None):
+    requested=cleanup_requested(req);protect=cleanup_protect(req)
+    lock=cleanup_lock()
+    try:
+        facts=cleanup_facts(protect,now)
+        if facts['active']:raise ValueError('A %s is running on this server. Clean up after it finishes.'%facts['active'])
+        eligible,kept=cleanup_classify(facts,protect)
+        current={(i['kind'],i['id']):i for i in eligible};reasons={(i['kind'],i['id']):i['reason'] for i in kept}
+        results=[]
+        order={kind:n for n,kind in enumerate(CLEANUP_KINDS)}
+        for item in sorted(requested,key=lambda i:order[i['kind']]):
+            key=(item['kind'],item['id']);now_item=current.get(key)
+            outcome={'kind':item['kind'],'id':item['id'],'name':(now_item or {}).get('name') or item['id'][:12]}
+            if now_item is None:outcome.update(status='skipped',reason=reasons.get(key,'gone'))
+            elif now_item['fingerprint']!=item['fingerprint']:outcome.update(status='skipped',reason='changed')
+            elif item['kind']=='buildCache':
+                try:outcome.update(status='removed',bytes=prune_build_cache())
+                except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):outcome.update(status='failed',reason='buildCache')
+            elif not still_eligible(item):outcome.update(status='skipped',reason='changed')
+            else:
+                try:remove_item(item);outcome.update(status='removed',bytes=now_item.get('bytes') if item['kind']!='volumes' else None)
+                except (subprocess.CalledProcessError,subprocess.TimeoutExpired):outcome.update(status='failed',reason='docker')
+            results.append(outcome)
+        emit(result={'results':results})
+    finally:lock.close()

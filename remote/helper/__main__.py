@@ -29,6 +29,8 @@ from .install import (
 from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
+from .cleanup import (
+    cleanup_apply, cleanup_scan)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
@@ -134,6 +136,8 @@ def main(req):
         tid=test_id(req);_,state=test_state(tid);ids=[item['id'] for item in (state.get('restored') or {}).get('containers',[]) if item['id'] in (state.get('restored') or {}).get('running',[])]
         emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
+    elif op=='cleanup-scan':cleanup_scan(req)
+    elif op=='cleanup-apply':cleanup_apply(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.
