@@ -11,7 +11,11 @@
 .sc-preview>.alert-panel,.sc-result>.alert-panel{margin-top:0}
 .sc-total{margin:0;display:flex;align-items:baseline;gap:8px}
 .sc-total strong{font-size:var(--fs-card);line-height:var(--lh-card);color:var(--heading);font-variant-numeric:tabular-nums}
-.sc-empty{margin:0}
+.sc-empty{margin:16px 0 0}
+.sc-loading{margin-top:16px}
+.sc-notes{display:flex;flex-direction:column;gap:8px}
+.sc-notes h3{margin:0}
+.sc-id-inline{display:none}
 .sc-group{display:flex;flex-direction:column;gap:8px;min-width:0}
 .sc-group-head{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:40px}
 .sc-include{margin:0;align-items:center}
@@ -26,7 +30,14 @@
 dialog.sc-dialog{width:min(520px,calc(100vw - 2 * var(--edge)));scrollbar-width:none}
 dialog.sc-dialog::-webkit-scrollbar{display:none}
 .sc-dialog .modal-body p{margin:0 0 8px}
+@media(max-width:767px){
+ .sc-items th:nth-child(2),.sc-items td:nth-child(2){display:none}
+ .sc-id-inline{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
+}
 @media(max-width:480px){
+ .sc-root .alert-panel-body{flex:1 1 auto}
+ .sc-actions{flex-direction:column}
+ .sc-actions button{width:100%;min-height:44px}
  .sc-controls{flex-direction:column;align-items:stretch}
  .sc-controls .field{flex:1 1 auto}
  .sc-foot button,.sc-actions button{flex:1 1 auto}

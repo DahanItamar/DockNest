@@ -68,6 +68,11 @@ try {
     assert.equal(await card.getByRole('button', { name: 'Stopped containers next page' }).count(), 1, label + ': the long group pages');
     assert.match(await card.locator('.sc-group').nth(2).locator('tbody td').nth(2).innerText(), /Unknown/, label + ': a size the server could not count says so');
     assert.equal(await card.locator('.sc-group').nth(2).locator('.sc-group-size').innerText(), 'Unknown', label + ': never a false 0 B');
+    assert.equal(await card.locator('.sc-group').nth(3).locator('.sc-group-size').innerText(), 'Up to 300 MB', label + ': build cache is an upper bound');
+    if (viewport.width < 768) {
+      assert.equal(await card.locator('.sc-items').first().locator('tbody td:nth-child(2)').first().isVisible(), false, label + ': no ID column on a phone');
+      assert.equal(await card.locator('.sc-items').first().locator('.sc-id-inline').first().innerText(), '000000000000', label + ': the ID shows under the name');
+    } else assert.equal(await card.locator('.sc-items .sc-id-inline').first().isVisible(), false, label + ': the ID has its own column');
     const longName = card.locator('.sc-group').first().locator('tbody td').first();
     assert.match(await longName.getAttribute('title'), /^a-very-long-one-off/, label + ': long names keep their full text in the title');
     // Kept items with plain reasons, behind a disclosure.
@@ -93,6 +98,8 @@ try {
     assert.equal(sent.items.length, 9); assert.ok(!sent.items.some(item => item.kind === 'images'), label + ': a group left out is not sent');
     assert.match(await card.locator('.sc-result .alert-panel').innerText(), /Removed 8 items, 1\.2 GB freed\. 1 item skipped\./, label);
     assert.deepEqual(await card.locator('.sc-result tbody td').allInnerTexts(), ['job-0', 'Stopped containers', 'In use'], label + ': why an item stayed');
+    assert.equal(await card.getByRole('heading', { name: 'Items not removed' }).count(), 1, label + ': a section heading, not a caption');
+    assert.equal(await card.locator('.sc-result caption').count(), 0, label);
     assert.equal(await page.getByRole('dialog').count(), 0, label + ': the dialog closed');
     if (viewport.width < 768) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), label + ': no horizontal scroll');
     if (colorScheme === 'dark') assert.notEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(255, 255, 255)');
@@ -115,6 +122,15 @@ try {
     const panel = card.locator('.alert-panel.alert-error'); await panel.waitFor();
     assert.match(await panel.innerText(), /Cleanup did not run[\s\S]*could not reach Production/);
     assert.equal(await panel.getByRole('button', { name: 'Scan again' }).count(), 1);
+    await context.close();
+  }
+  { // On a phone the alert action is full width and 44 px high.
+    const { context, page, card } = await openStorage({ width: 390, height: 844 }, 'light', { scan: () => ({ status: 502, json: { error: 'DockNest could not reach Production.', code: 'SERVER_UNREACHABLE' } }) });
+    await card.getByRole('button', { name: 'Scan', exact: true }).click();
+    const action = card.locator('.alert-panel.alert-error').getByRole('button', { name: 'Scan again' }); await action.waitFor();
+    const button = await box(action), panel = await box(card.locator('.alert-panel-body'));
+    assert.ok(button.height >= 44 && Math.abs(button.width - panel.width) <= 1, 'phone: full-width 44 px action ' + JSON.stringify({ button, panel }));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'phone: no horizontal scroll');
     await context.close();
   }
   { // Nothing to clean, on the second server.
