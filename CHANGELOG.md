@@ -6,6 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
+- Server cleanup on the Storage page: scan a server, see how much space stopped containers, dangling images, unused anonymous volumes and old build cache take, and remove them after you confirm. Anything a site, backup, restore test, move or kept old copy still needs, and DockNest itself, is never removed. See [docs/server-cleanup.md](docs/server-cleanup.md).
 - Certificate alerts: get an alert when a site's TLS certificate expires within 14 days (change it under Connections settings) or when certbot fails to renew it. DockNest reads certificate dates only while it already backs up, checks or discovers a site, so nothing new runs on your servers. Tick the two new events on an alert line in the Map. See [docs/alerts.md](docs/alerts.md#certificates).
 
 ### Fixed

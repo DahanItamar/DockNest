@@ -39,6 +39,11 @@ test('restore test helper journals before every create, limits and isolates the 
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for restore test helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('server cleanup protects sites, backups, restore tests, moves, old copies and DockNest, and removes only previewed items by ID',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_cleanup.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for server cleanup helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('certificate facts come only from public certificate files, certbot renewal outcomes and verified probes, and never fail an operation',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_certificates.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for certificate helper verification');

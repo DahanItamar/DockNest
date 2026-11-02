@@ -29,9 +29,13 @@ from .install import (
 from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
-# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
+from .cleanup import (
+    cleanup_apply, cleanup_scan, cleanup_shared)
+# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, CLEANUP_SHARED, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
+# Steps that create or need Docker resources hold the shared cleanup lock for their whole run (remote/helper/cleanup.py).
+CLEANUP_SHARED_OPS={'capture','capture-stream','prepare-restore','restore','restore-test-prepare','restore-test-run'}
 LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
 def move_lock(mid,wait=False):
     import fcntl
@@ -62,7 +66,9 @@ def stop_after_stdin(read=None,limit=180):
     os._exit(1)
 def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
+    if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:CLEANUP_SHARED=cleanup_shared()
     if req.get('operation')=='move-lock-status':
         handle=move_lock(move_id(req))
         emit(result={'busy':handle is None})
@@ -134,6 +140,8 @@ def main(req):
         tid=test_id(req);_,state=test_state(tid);ids=[item['id'] for item in (state.get('restored') or {}).get('containers',[]) if item['id'] in (state.get('restored') or {}).get('running',[])]
         emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
+    elif op=='cleanup-scan':cleanup_scan(req)
+    elif op=='cleanup-apply':cleanup_apply(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.

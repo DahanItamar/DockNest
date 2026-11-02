@@ -73,6 +73,7 @@ jobs:
           npm run test:self-backup
           npm run test:storage
           npm run test:storage-report
+          npm run test:cleanup
           npm run test:mobile
           npm run test:reports
           npm run test:status-pages
