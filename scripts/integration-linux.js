@@ -281,6 +281,8 @@ try {
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
+  const {runLaunchScenario}=await import('./integration-launch.js');
+  await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
   const wrapper=join(directory,'tar-wrapper');
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');
