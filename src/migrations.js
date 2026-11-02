@@ -266,15 +266,33 @@ CREATE TRIGGER IF NOT EXISTS site_launches_no_delete BEFORE DELETE ON site_launc
 CREATE TRIGGER IF NOT EXISTS site_launch_steps_no_delete BEFORE DELETE ON site_launch_steps BEGIN SELECT RAISE(ABORT,'launch steps are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS site_launches_reason_once BEFORE UPDATE OF reason,failed_step ON site_launches WHEN (OLD.reason IS NOT NULL AND NEW.reason IS NOT OLD.reason) OR (OLD.failed_step IS NOT NULL AND NEW.failed_step IS NOT OLD.failed_step) BEGIN SELECT RAISE(ABORT,'a launch failure is written once'); END;
 `;
+// The rebuild runs inside migrate()'s transaction, so a failure anywhere rolls the whole migration back. SQLite asks for
+// foreign_keys=OFF around a rebuild because DROP TABLE on a *parent* table runs an implicit DELETE that would fire
+// ON DELETE actions in its children. server_installs is a child only (it references servers, nothing references it;
+// checked below, fail closed), so dropping it touches no other row and foreign_keys stays ON: every copied row is
+// checked against servers as it is inserted, and foreign_key_check must come back empty before the migration finishes.
+export function serverInstallsReferrers(db) {
+  return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('server_installs','server_installs_v17')").all()
+    .filter(({ name }) => db.prepare('SELECT "table" FROM pragma_foreign_key_list(?)').all(name).some(row => row.table === 'server_installs')).map(row => row.name);
+}
 function siteLaunches(db) {
   db.exec(siteLaunchesSchema);
-  // Widen the install package list (adds 'git'): same columns in the same order, same index.
+  // Widen the install package list (adds 'git'): same columns in the same order, same values, same index, same foreign key.
   if ((db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='server_installs'").get()?.sql ?? '').includes("'git'")) return;
+  const referrers = serverInstallsReferrers(db);
+  if (referrers.length) throw new Error(`server_installs is referenced by ${referrers.join(', ')}; refusing to rebuild it.`);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') AND tbl_name='server_installs'").get()) throw new Error('server_installs has triggers or views; refusing to rebuild it.');
+  // Rows whose server is gone cannot exist while foreign keys are on (ON DELETE CASCADE); if one does, stop with a plain
+  // reason before anything changes (the snapshot and the old schema stay) instead of dropping it.
+  if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs has rows whose server no longer exists; DockNest did not change the database. See docs/upgrading.md.');
+  const rows = db.prepare('SELECT COUNT(*) AS n FROM server_installs').get().n;
   db.exec(`CREATE TABLE server_installs_v17 (id TEXT PRIMARY KEY,server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,package TEXT NOT NULL CHECK (package IN ('nginx','docker','compose','certbot','git')),status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),stage TEXT NOT NULL CHECK (length(stage) <= 32),steps TEXT NOT NULL CHECK (length(steps) <= 8192),actor TEXT NOT NULL,error TEXT CHECK (error IS NULL OR length(error) <= 1024),created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT);
 INSERT INTO server_installs_v17(id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at) SELECT id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at FROM server_installs;
 DROP TABLE server_installs;
 ALTER TABLE server_installs_v17 RENAME TO server_installs;
 CREATE INDEX IF NOT EXISTS server_installs_status ON server_installs(status,created_at);`);
+  if (db.prepare('SELECT COUNT(*) AS n FROM server_installs').get().n !== rows) throw new Error('server_installs rebuild lost rows; nothing was changed.');
+  if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs rebuild found rows without their server; nothing was changed.');
 }
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
