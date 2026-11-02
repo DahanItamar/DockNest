@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Restores, restore tests and moves now keep the original container's read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor settings. A copy never runs with fewer protections; when a setting cannot be kept (for example an AppArmor profile missing on the server), DockNest stops with the reason. Hardened sites, such as ones that drop all capabilities and add a few back, can now be restore tested.
+- Moving a Compose site that adds only Docker's default capabilities (`cap_add: [CHOWN]`) no longer stops at the Compose check.
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).

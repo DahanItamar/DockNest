@@ -77,8 +77,11 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
 
   At "Check space" C is also refused above the test server's `nproc`, with a plain reason ("The test server has 2
   CPUs, so it cannot give each container 4. Lower the CPU limit.").
-- Restores already refuse privileged containers, devices, host namespaces and added capabilities beyond Docker's defaults (adding a default one such as `CHOWN` is accepted only when nothing is dropped, so the copy matches the original)
+- Restores already refuse privileged containers, devices, host namespaces and added capabilities beyond Docker's defaults
   (`restore_network_plan`), so a test never gets them either.
+- The copy keeps the original's protections (2.14.0): read-only root filesystem (with its RAM folders), dropped
+  capabilities and default ones added back, no-new-privileges, the seccomp profile (also `unconfined`), the AppArmor
+  profile and SELinux labels. See [Hardened sites](#hardened-sites).
 - The time limit runs from claim to the end of the checks. Clean-up has its own 10 minutes.
 - Disk is not capped. Docker has no portable per-container disk quota for bind mounts. Instead:
   - "Check space" requires free space at the staging root of `backup.size*3 + 1 GiB` (the `planRestore` rule; the
@@ -530,3 +533,30 @@ From [agency-agents](https://github.com/msitarzewski/agency-agents):
 for the design and trade-offs, and
 [Security Engineer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-security-engineer.md)
 for isolation, secrets, abuse limits and clean-up failure handling.
+
+## Hardened sites
+
+Since 2.14.0 every copy DockNest makes (restore, restore test, move) keeps the original container's protections:
+
+| Setting on the original | The copy |
+|---|---|
+| Read-only root filesystem (`--read-only`, Compose `read_only`) | Read-only too, with the same RAM folders (`--tmpfs`, Compose `tmpfs`) |
+| Dropped capabilities (`--cap-drop`, Compose `cap_drop`) | The same capabilities dropped |
+| Added capabilities within Docker's defaults (for example `CHOWN`, `NET_BIND_SERVICE`) | Added back, also after `--cap-drop ALL` |
+| `no-new-privileges` | Kept |
+| seccomp profile: default, `unconfined` or a custom profile | The same profile |
+| AppArmor profile | The same profile; it must be loaded on the server that runs the copy |
+| SELinux labels (`label=...`) | Kept |
+
+Before a copy of a hardened container starts, DockNest inspects it. If it has fewer protections than the original, it
+stops with "The copy of web would run without ..., which the original has". A copy never runs with less.
+
+A setting DockNest cannot reproduce is refused with the reason instead of being dropped:
+
+- an AppArmor profile that is not loaded on the server that runs the copy ("Load it, then try again");
+- a seccomp profile given as a file path that is not on that server, or as a relative path;
+- other security options (for example `systempaths=unconfined`);
+- added capabilities beyond Docker's defaults (`NET_ADMIN`, `NET_RAW`, `SYS_ADMIN`, `ALL`), as before.
+
+A restore test that cannot run because of one of these ends "Couldn't run" with that reason. A move checks the site's
+settings and the new server's AppArmor profiles in the preflight and blocks before it starts.

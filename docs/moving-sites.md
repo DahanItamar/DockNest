@@ -219,10 +219,17 @@ Collapsed by default and pre-filled; most moves need no changes here.
   existing web root; the move journals it when it creates it and removes it on Undo. The site record follows at the
   finish and goes back on Switch back.
 - Compose: the merged configuration (`docker compose config`) is checked against allow-lists of known top-level and
-  service settings; anything else (for example `security_opt`, `sysctls`, `volumes_from`, `uts`, `cgroup`,
-  `cgroup_parent`, privileged mode, host namespaces, devices, added capabilities, secrets or configs read from files,
-  volumes with driver options, external networks or volumes, networks or mounts the backup does not hold, fixed
+  service settings; anything else (for example `sysctls`, `volumes_from`, `uts`, `cgroup`, `cgroup_parent`,
+  privileged mode, host namespaces, devices, capabilities added beyond Docker's defaults, secrets or configs read from
+  files, volumes with driver options, external networks or volumes, networks or mounts the backup does not hold, fixed
   addresses) is refused with the reason. A Compose project of the same name already on the new server is refused.
+- Security settings (2.14.0): the copy keeps the site's read-only root, dropped capabilities, default capabilities added
+  back, no-new-privileges, seccomp and AppArmor profiles. Compose `cap_add` is accepted when it adds only Docker's
+  default capabilities (the same rule as every other copy), `cap_drop` is accepted, and `security_opt` is accepted for
+  `no-new-privileges`, `seccomp` (`unconfined` or an absolute path to a profile on the new server), `apparmor` (loaded on
+  the new server) and `label`. The preflight blocks when a setting cannot be kept or the new server lacks an AppArmor
+  profile; each copy is inspected before it starts and refused if it is less protected than the original. See
+  [restore-tests.md](restore-tests.md#hardened-sites).
 - Remove old copy with data deletes only read-write data folders and volumes of the old containers; never folders used
   by another container, served by nginx on that server or named in another DockNest site's settings (compared after
   following symlinks), never a home folder itself (`/home/<user>` or any user's home), and never system paths. What was kept is listed in the step result (`kept`).
