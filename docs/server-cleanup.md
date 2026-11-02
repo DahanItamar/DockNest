@@ -44,6 +44,8 @@ When it is unclear who owns something, it stays.
   refuses to remove anything in use.
 - The preview is checked again at clean time. The server is read again, and each item is checked once more right before
   it is removed. An item that changed, came into use or became protected since the scan is skipped.
+- A clean stops starting new removals after 30 minutes; anything left is listed as not removed (Time limit reached).
+  Scan again to continue.
 - A preview is valid for 15 minutes and can be used once, by the administrator who made it. Scan again after that.
 - Cleanup waits while a backup, restore, restore test or site move uses the server, and only one cleanup runs per server.
   On the server it also refuses while any backup job folder is unfinished or any restore staging folder exists, however

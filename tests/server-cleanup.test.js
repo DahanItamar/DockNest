@@ -152,13 +152,17 @@ test('clean refuses while a backup, restore, restore test or running move uses t
   db.prepare("INSERT INTO restore_tests(id,site_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,started_at) VALUES(?,?,?,?,'manual','{}','qa',?,?)").run(testRow, elsewhere, at(), server, at(), at());
   ({ clean } = await attempt()); assert.equal(clean.body.error, 'A restore test is running on this server. Clean up after it finishes.');
   db.prepare("UPDATE restore_tests SET result='passed',cleanup='done' WHERE id=?").run(testRow);
+  const install = randomUUID();
+  db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES(?,?,'nginx','running','install','[]','qa',?)").run(install, server, at());
+  ({ clean } = await attempt()); assert.equal(clean.body.error, 'An install is running on this server. Clean up after it finishes.');
+  db.prepare("UPDATE server_installs SET status='completed' WHERE id=?").run(install);
   const move = randomUUID();
   db.prepare("INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,'running','{}','{}','h','qa',?,?)").run(move, site, server, other, at(), at());
   ({ clean } = await attempt()); assert.equal(clean.body.code, 'SERVER_BUSY');
   db.prepare("UPDATE site_moves SET state='completed' WHERE id=?").run(move);
   ({ clean } = await attempt()); assert.equal(clean.status, 200, 'a completed move keeps only its old copy, which is protected');
   const refused = audits(server).filter(row => row.detail.result === 'refused');
-  assert.equal(refused.length, 4, 'every refused clean is audited');
+  assert.equal(refused.length, 5, 'every refused clean is audited');
 });
 
 test('helper refusals and unreachable servers are reported plainly and audited', async () => {

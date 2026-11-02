@@ -10,7 +10,7 @@ import './server-cleanup.css';
 // Server cleanup (docs/server-cleanup.md): Scan, review what can go and what stays, confirm, see what happened.
 // The server decides; this page only shows its preview and sends back the items that were shown.
 export const KINDS=[['containers','Stopped containers'],['images','Dangling images'],['volumes','Unused volumes'],['buildCache','Build cache']];
-export const REASONS={site:'Used by a site',oldCopy:'Kept old copy',move:'Site move',restoreTest:'Restore test',restoreCopy:'Restore copy',backup:'Backup running',docknest:'DockNest',inUse:'In use',runningStack:'Running stack',named:'Named volume',tooNew:'Under an hour old',gone:'Already gone',unknown:'Unknown',changed:'Changed since scan',docker:'Docker refused',buildCache:'Prune failed'};
+export const REASONS={site:'Used by a site',oldCopy:'Kept old copy',move:'Site move',restoreTest:'Restore test',restoreCopy:'Restore copy',backup:'Backup running',docknest:'DockNest',inUse:'In use',runningStack:'Running stack',named:'Named volume',tooNew:'Under an hour old',gone:'Already gone',unknown:'Unknown',changed:'Changed since scan',docker:'Docker refused',buildCache:'Prune failed',timeLimit:'Time limit reached'};
 const size=bytes=>Number.isFinite(bytes)?formatBytes(bytes):'Unknown';
 const kindLabel=kind=>(KINDS.find(([key])=>key===kind)||[kind,kind])[1];
 const sum=items=>items.reduce((total,item)=>total+(item.bytes||0),0);

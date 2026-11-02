@@ -29,6 +29,9 @@ CLEANUP_REF=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}')
 CLEANUP_FRESH_SECONDS=3600
 CLEANUP_SIZE_SECONDS=60
 CLEANUP_SHARED_WAIT=120
+# A clean stops starting new removals after 30 minutes (DockNest's job hold lasts 45) and reports the rest as not removed.
+CLEANUP_APPLY_SECONDS=1800
+CLEANUP_REMOVE_TIMEOUT=120
 CLEANUP_BUILD_CACHE_AGE='24h'
 CLEANUP_MAX_ITEMS=500
 CLEANUP_WALK_LIMIT=200000
@@ -302,37 +305,41 @@ def journal_protects(item,journals):
     """Journals re-read right before each removal. The shared lock already keeps new steps out; this is the second net."""
     ref=item['id'];refs={ref,ref[:12],ref.split(':')[-1],ref.split(':')[-1][:12]}
     return any(ref_matches(refs,journals[kind]) for kind in ['move','oldCopy','restoreTest'])
-def remove_item(item):
-    if item['kind']=='containers':docker('rm',item['id'])
-    elif item['kind']=='images':docker('image','rm',item['id'])
-    elif item['kind']=='volumes':docker('volume','rm',item['id'])
-def prune_build_cache():
-    output=run(['docker','builder','prune','--force','--filter','until='+CLEANUP_BUILD_CACHE_AGE],timeout=600).decode(errors='replace')
+def remove_item(item,timeout=CLEANUP_REMOVE_TIMEOUT):
+    command={'containers':['rm'],'images':['image','rm'],'volumes':['volume','rm']}[item['kind']]
+    run(['docker',*command,item['id']],timeout=max(1,int(timeout)))
+def prune_build_cache(timeout=600):
+    output=run(['docker','builder','prune','--force','--filter','until='+CLEANUP_BUILD_CACHE_AGE],timeout=max(1,int(timeout))).decode(errors='replace')
     match=re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kKMGTP]?B)',output)
     return cleanup_size(match.group(1)) if match else None
+def active_message(kind):
+    """An unfinished folder blocks until recovery finishes it; the message names the folder, not a guess at a job."""
+    if kind=='restore':return 'A restore staging folder exists on this server (a restore is running or was interrupted). DockNest recovery removes it when the restore is finished; until then, or until the folder is removed, cleanup waits.'
+    return 'An unfinished backup job folder exists on this server (a backup is running or needs recovery). It unblocks when DockNest recovery finishes the job or the folder is removed.'
 def cleanup_apply(req,now=None):
-    requested=cleanup_requested(req);protect=cleanup_protect(req)
+    requested=cleanup_requested(req);protect=cleanup_protect(req);started=time.monotonic()
     lock=cleanup_lock()
     try:
         if step_locks_held():raise ValueError('A site move or restore test step is running on this server. Clean up after it finishes.')
         facts=cleanup_facts(protect,now)
-        if facts['active']:raise ValueError('A %s is running on this server. Clean up after it finishes.'%facts['active'])
+        if facts['active']:raise ValueError(active_message(facts['active']))
         eligible,kept=cleanup_classify(facts,protect)
         current={(i['kind'],i['id']):i for i in eligible};reasons={(i['kind'],i['id']):i['reason'] for i in kept}
-        results=[]
+        results=[];deadline=started+CLEANUP_APPLY_SECONDS
         order={kind:n for n,kind in enumerate(CLEANUP_KINDS)}
         for item in sorted(requested,key=lambda i:order[i['kind']]):
-            key=(item['kind'],item['id']);now_item=current.get(key)
+            key=(item['kind'],item['id']);now_item=current.get(key);left=deadline-time.monotonic()
             outcome={'kind':item['kind'],'id':item['id'],'name':(now_item or {}).get('name') or item['id'][:12]}
-            if now_item is None:outcome.update(status='skipped',reason=reasons.get(key,'gone'))
+            if left<=0:outcome.update(status='skipped',reason='timeLimit')
+            elif now_item is None:outcome.update(status='skipped',reason=reasons.get(key,'gone'))
             elif now_item['fingerprint']!=item['fingerprint']:outcome.update(status='skipped',reason='changed')
             elif item['kind']=='buildCache':
-                try:outcome.update(status='removed',bytes=prune_build_cache())
+                try:outcome.update(status='removed',bytes=prune_build_cache(min(600,left)))
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError):outcome.update(status='failed',reason='buildCache')
             elif journal_protects(item,cleanup_journals()):outcome.update(status='skipped',reason='move')
             elif not still_eligible(item):outcome.update(status='skipped',reason='changed')
             else:
-                try:remove_item(item);outcome.update(status='removed',bytes=now_item.get('bytes') if item['kind']!='volumes' else None)
+                try:remove_item(item,min(CLEANUP_REMOVE_TIMEOUT,left));outcome.update(status='removed',bytes=now_item.get('bytes') if item['kind']!='volumes' else None)
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired):outcome.update(status='failed',reason='docker')
             results.append(outcome)
         emit(result={'results':results})

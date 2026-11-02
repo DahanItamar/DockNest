@@ -157,8 +157,11 @@ class Clean(unittest.TestCase):
         self.tmp.cleanup()
     def run_op(self,fn,req,fake,builder=b'Total reclaimed space: 2MB\n'):
         events=io.StringIO()
-        with patch('helper.docker',side_effect=fake),patch('helper.EVENT_STREAM',events),patch('helper.run',return_value=builder) as run:
-            fn(req);self.run_calls=run.call_args_list
+        def run(args,timeout=3600,**_):
+            if args[:3]==['docker','builder','prune']:return builder
+            return fake(*args[1:])
+        with patch('helper.docker',side_effect=fake),patch('helper.EVENT_STREAM',events),patch('helper.run',side_effect=run) as mocked:
+            fn(req);self.run_calls=[c for c in mocked.call_args_list if c.args[0][:3]==['docker','builder','prune']]
         return [json.loads(line) for line in events.getvalue().splitlines()][-1]['result']
     def scan(self,fake,req=None):return self.run_op(helper.cleanup_scan,req or {},fake)
     def test_scan_then_clean_removes_exactly_the_chosen_items_by_id(self):
@@ -204,13 +207,28 @@ class Clean(unittest.TestCase):
         job=self.root/'staging'/'0b5e8d3c-1f2a-4c3d-9e8f-123456789abc';job.mkdir(parents=True);(job/'snapshot-images.json').write_text('["sha256:x"]')
         helper.os.utime(job,(NOW-30,NOW-30));helper.os.utime(job/'snapshot-images.json',(NOW-30,NOW-30))
         self.assertEqual(self.scan(fake)['busy'],'backup')
-        with self.assertRaisesRegex(ValueError,'backup is running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
+        with self.assertRaisesRegex(ValueError,'unfinished backup job folder.*recovery finishes the job or the folder is removed'):self.run_op(helper.cleanup_apply,{'items':items},fake)
         self.assertIn('c1',fake.containers)
+    def test_clean_stops_starting_removals_at_its_time_limit(self):
+        fake=FakeDocker([container('c1','a'),container('c2','b')],[image('sha256:junk')])
+        items=self.scan(fake)['items']
+        clock=[0.0];removing=fake.__call__
+        def slow(*args):
+            if args[0]=='rm':clock[0]+=helper.CLEANUP_APPLY_SECONDS+1  # the first removal uses up the time
+            return removing(*args)
+        with patch('helper.time.monotonic',side_effect=lambda:clock[0]):done=self.run_op(helper.cleanup_apply,{'items':items},slow)
+        by={r['id']:r for r in done['results']}
+        removed=[r for r in done['results'] if r['status']=='removed']
+        self.assertEqual(len(removed),1,'one removal ran, then the clean stopped')
+        rest=[r for r in done['results'] if r['status']!='removed']
+        self.assertTrue(rest and all(r['reason']=='timeLimit' for r in rest),rest)
+        self.assertIn('sha256:junk',fake.images);self.assertEqual(by['build-cache']['reason'],'timeLimit')
+        self.assertEqual(self.run_calls,[],'no build cache prune after the limit')
     def test_an_old_unfinished_job_folder_still_blocks(self):
         fake=FakeDocker([container('c1','tmp')]);items=self.scan(fake)['items']
         job=self.root/'staging'/'0b5e8d3c-1f2a-4c3d-9e8f-123456789abc';job.mkdir(parents=True)
         helper.os.utime(job,(NOW-30*86400,NOW-30*86400))
-        with self.assertRaisesRegex(ValueError,'backup is running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
+        with self.assertRaisesRegex(ValueError,'unfinished backup job folder'):self.run_op(helper.cleanup_apply,{'items':items},fake)
         (job/'disarmed').touch();(job/'watchdog.done').touch()
         self.assertEqual(self.scan(fake)['busy'],None,'a finished job folder does not block')
     def test_restore_staging_folder_blocks(self):

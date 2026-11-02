@@ -14,6 +14,7 @@ import { requireAdmin } from './auth.js';
 import { transport } from './engine.js';
 import { heldBy } from './restore-tests/hold.js';
 import { cleanupHeld, takeCleanupHold, releaseCleanupHold } from './cleanup-hold.js';
+import { installActive } from './installs.js';
 
 export const serverCleanupRoutes = express.Router();
 // Test only: the Linux integration test cannot wait an hour for its fixtures to age. DockNest itself never calls this.
@@ -69,12 +70,14 @@ export function busyReason(serverId) {
   if (job) return { restore: 'A restore is running on this server.', 'restore-test': 'A restore test is running on this server.', 'site-move': 'A site move is running on this server.' }[job.type] ?? 'A backup is running on this server.';
   if (heldBy(serverId)) return 'A restore test is running on this server.';
   if (db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state IN ${RUNNING_MOVE}`).get(serverId, serverId)) return 'A site move is running on this server.';
+  if (installActive(serverId)) return 'An install is running on this server.';
   if (cleanupHeld(serverId)) return 'A cleanup is already running on this server.';
   return null;
 }
 
 const itemOf = item => ({ kind: item.kind, id: String(item.id), name: String(item.name ?? '').slice(0, 128), bytes: Number.isFinite(item.bytes) ? item.bytes : null, fingerprint: String(item.fingerprint ?? '') });
 const REASONS = new Set(['site', 'oldCopy', 'move', 'restoreTest', 'restoreCopy', 'backup', 'docknest', 'inUse', 'runningStack', 'named', 'tooNew']);
+// The hold outlasts the helper's 30-minute clean limit (remote/helper/cleanup.py, CLEANUP_APPLY_SECONDS) plus a final prune.
 // A reason this release does not know (a newer helper) is shown as unknown; the item is kept either way.
 function remember(preview) {
   const now = Date.now();
@@ -102,7 +105,7 @@ export async function scanServer(serverId, actor) {
   catch (error) { if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED'); throw unreachable(error, server); }
   const items = (Array.isArray(result?.items) ? result.items : []).filter(item => CLEANUP_KINDS.includes(item?.kind) && REF.test(String(item?.id))).map(itemOf).slice(0, MAX_ITEMS);
   const kept = (Array.isArray(result?.protected) ? result.protected : []).filter(item => CLEANUP_KINDS.includes(item?.kind)).map(item => ({ ...itemOf(item), reason: REASONS.has(item.reason) ? item.reason : 'unknown' })).map(({ fingerprint: _f, ...item }) => item);
-  const busy = busyReason(server.id) ?? (result?.busy === 'restore' ? 'A restore is running on this server.' : result?.busy ? 'A backup is running on this server.' : null);
+  const busy = busyReason(server.id) ?? (result?.busy === 'restore' ? 'A restore staging folder exists on this server. It unblocks when DockNest recovery finishes the restore or the folder is removed.' : result?.busy ? 'An unfinished backup job folder exists on this server. It unblocks when DockNest recovery finishes the job or the folder is removed.' : null);
   const { token, expiresAt } = remember({ serverId: server.id, actor, items: new Map(items.map(item => [item.kind + '\0' + item.id, item])) });
   return { token, expiresAt, busy, items: items.map(({ fingerprint: _f, ...item }) => item), protected: kept, totalBytes: items.reduce((sum, item) => sum + (item.bytes ?? 0), 0) };
 }
