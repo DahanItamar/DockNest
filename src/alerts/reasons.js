@@ -29,6 +29,10 @@ const catalogue = Object.freeze({
   'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
   'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
+  // Certificates (docs/alerts.md, "Certificates"). {days} is "3 days", "1 day" or "less than a day".
+  'certificate.expiring': 'The certificate expires in {days}. Renew it before visitors see a warning.',
+  'certificate.expiring:expired': 'The certificate has expired, so visitors see a security warning. Renew it now.',
+  'certificate.renewal_failed': 'certbot could not renew the certificate. Check certbot on the server before it expires.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

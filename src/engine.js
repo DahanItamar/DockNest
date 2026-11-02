@@ -22,9 +22,12 @@ import { pipeline } from 'node:stream/promises';
 import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
+import { takeCertificates } from './alerts/certificates.js';
 const now=()=>new Date().toISOString();
-export const testServer=server=>remote(server,{operation:'test'});
-export const discover=server=>remote(server,{operation:'discover'});
+// Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
+// server's capabilities and never returned by the API.
+export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
+export const discover=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'discover'}));
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
@@ -42,7 +45,7 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const result=await remote(server,{operation:'readiness',config:site.config});
+ const result=takeCertificates({serverId:server.id,siteId},await remote(server,{operation:'readiness',config:site.config}));
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
@@ -484,6 +487,7 @@ export async function executeJob(job){
    published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
   captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
+  result=takeCertificates({serverId:site.server_id,siteId:site.id},result);
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   manifest.deliveryMode=direct?'direct':'staged';

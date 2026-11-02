@@ -80,7 +80,7 @@ test('only an administrator turns the operator setting on or off, with re-verifi
   assert.equal((await admin('PUT', '/connections/settings', { operatorsManage: true, role: 'operator' })).status, 400, 'unknown fields are refused');
   assert.equal((await admin('PUT', '/connections/settings', {})).status, 400);
   const on = await admin('PUT', '/connections/settings', { operatorsManage: true });
-  assert.equal(on.status, 200); assert.deepEqual(on.body.settings, { allowPrivateNetwork: false, operatorsManage: true });
+  assert.equal(on.status, 200); assert.deepEqual(on.body.settings, { allowPrivateNetwork: false, operatorsManage: true, certificateDays: 14 });
   const [event] = audits('alerts.operators_manage');
   assert.equal(event.actor, admin.id); assert.equal(event.detail.enabled, true); assert.equal(event.detail.role, 'admin');
   assert.equal((await operator('GET', '/connections')).status, 200, 'applies at once');

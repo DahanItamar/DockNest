@@ -220,6 +220,8 @@ def verify_hardening(originals,created,every=False):
 
 TRANSFER=None
 PROBE_POLICY_FALLBACKS=[]
+# Certificate facts the HTTPS probes of this run saw, by hostname (net.py, note_peer_certificate). One run, one process.
+PEER_CERTIFICATES={}
 
 # ---- Chain restore ----
 # Every package's transfer checksum and every manifest link are checked before any archive is extracted. Each mount is
