@@ -123,6 +123,8 @@ case "$1" in
     esac ;;
   run)
     case "$*" in
+      # Unfinished Safe Edits (scripts/upgrade.sh open_edits); "fail-open-edits" makes the query print nothing.
+      *site_edits*) [ -e "$S/fail-open-edits" ] || read_state open-edits 0 ;;
       *--entrypoint\ node*) read_state schema 0 ;;
       *ls\ /data/upgrade-snapshots*) read_state snapshots ;;
       *state.sqlite.restoring*) echo "restored ${*##* }" >> "$S/restores" ;;

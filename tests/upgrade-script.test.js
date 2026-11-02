@@ -579,6 +579,27 @@ test('reason codes: busy, build failure and an unhealthy start report fixed code
   assert.deepEqual([status.reason, status.schemaFrom, status.schemaTo], ['health-timeout-api', 0, 2]);
 });
 
+// Safe Edit (docs/safe-edit.md, security review item 9): a release before migration 14 cannot see an unfinished edit.
+test('a downgrade to a release before Safe Edit is refused while an edit is unfinished or cannot be checked; upgrades never ask', { skip: !shell }, async t => {
+  const f = await fixture(t), origin = join(f.root, 'origin');
+  await writeFile(join(origin, 'package.json'), pkg('2.3.0', '2.0.0')); await writeFile(join(origin, 'src/migrations.js'), migrations([1, -2, -14]));
+  git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'v2.3.0'); git(origin, 'tag', 'v2.3.0');
+  await writeFile(join(f.state, 'open-edits'), '1\n'); // an upgrade does not look at edits at all
+  let result = f.run('--version', 'v2.3.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await f.read('schema'), '14');
+  result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /A Safe Edit has not finished on 1 site\. 2\.1\.0 cannot see it/);
+  assert.equal((await f.status()).reason, 'jobs-did-not-finish'); assert.equal(f.head(), 'v2.3.0'); assert.notEqual(await f.read('hold'), 'true');
+  await writeFile(join(f.state, 'open-edits'), '2\n');
+  assert.match(f.run('--version', 'v2.1.0').stderr, /on 2 sites/);
+  await writeFile(join(f.state, 'fail-open-edits'), '');
+  result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 2); assert.match(result.stderr, /Could not check the state volume for unfinished Safe Edits/);
+  await rm(join(f.state, 'fail-open-edits')); await writeFile(join(f.state, 'open-edits'), '0\n');
+  result = f.run('--version', 'v2.1.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.1.0');
+});
+
 test('image mode: --expect-image-digest pulls and persists name:X.Y.Z@sha256, records RepoDigests; upgrade-only checks the running image', { skip: !shell }, async t => {
   const f = await fixture(t), env = join(f.work, '.env'), digest = n => 'sha256:' + String(n).repeat(64);
   await writeFile(join(f.state, 'image-mode'), '');

@@ -11,7 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { storageCapacity } from '../storage.js';
-import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners, discardIncrementalState } from '../engine.js';
+import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners, discardIncrementalState, editingSite } from '../engine.js';
 import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
@@ -128,7 +128,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
-    state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id),
+    state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id) || !!editingSite(site.id),
       archived: !!db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id), deploymentHold: deploymentHeld(db),
       activeMove: !!db.prepare("SELECT 1 FROM site_moves WHERE site_id=? AND id<>? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned')").get(site.id, ownMove ?? '') },
     backupStorage: capacity && capacity.available !== null ? { freeBytes: capacity.available } : undefined,
