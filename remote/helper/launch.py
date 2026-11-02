@@ -107,6 +107,7 @@ LAUNCH_REASONS={
     'COMPOSE_INCLUDE_REFUSED':'The Compose file includes other Compose files, which DockNest cannot check.',
     'COMPOSE_EXTENDS_REFUSED':'The Compose file uses extends, which DockNest cannot check. Write the settings out.',
     'COMPOSE_SYNTAX_REFUSED':'The Compose file uses YAML that DockNest cannot check safely (a directive, an explicit, tagged or aliased key, or an escaped or multi-line quoted key).',
+    'SANDBOX_UNAVAILABLE':'DockNest could not read the Compose file in an isolated view of the server (it needs unshare and mount namespaces).',
     'COMPOSE_FLOW_REFUSED':'Write the Compose file as YAML blocks, not as one JSON or flow mapping.',
     'BUILD_IMAGE_REFUSED':'A service that is built must use an image name of its own (starting with the site name, no registry).',
     'BIND_COVERS_SECRETS':'A service mounts the site folder, its .env or its Compose file with write access. Mount it read-only.',
@@ -563,8 +564,42 @@ def launch_compose_base(slug,files,project_dir,env_file):
     args=['docker','compose','-p',slug]
     for f in files:args+=['-f',str(f)]
     return args+['--project-directory',str(project_dir),'--env-file',str(env_file)]
+# Compose config sandbox (defence in depth behind the text checks): every `docker compose config` on the user's file runs
+# in a private mount namespace where the other sites' folders, DockNest's own state and home folders are empty tmpfs
+# mounts. Only the folder of this launch (its site folder, or a check folder) is bound back, read-only. An include or
+# extends the text checks missed can then only reach files of this launch. The mounts are done by this fixed Python
+# program (no shell); its arguments are a JSON list of folders to keep and the compose argv.
+LAUNCH_SANDBOX_HIDE=('/srv/docknest','/var/lib/docknest','/var/lib/docker-backup-manager','/etc/docknest','/root','/home','/var/lib/docker/volumes')
+LAUNCH_SANDBOX_CODE=r'''
+import json,os,subprocess,sys
+spec=json.loads(sys.argv[1]);argv=sys.argv[2:]
+def mount(*args,fds=()):
+    if subprocess.run(['mount',*args],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=fds).returncode:os._exit(97)
+try:
+    mount('--make-rprivate','/')
+    keep=[(path,os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)) for path in spec['keep']]
+    hidden=[]
+    for path in spec['hide']:
+        if os.path.isdir(path) and not os.path.islink(path) and not any(path==h or path.startswith(h+'/') for h in hidden):
+            mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
+    for path,fd in keep:
+        os.makedirs(path,mode=0o755,exist_ok=True)
+        mount('--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
+        os.close(fd)
+except OSError:os._exit(97)
+os.execvp(argv[0],argv)
+'''
+def launch_sandboxed(argv,keep):
+    """argv wrapped in the compose config sandbox. Refuses SANDBOX_UNAVAILABLE without unshare (fail closed)."""
+    if shutil.which('unshare',path=LAUNCH_PATH) is None or shutil.which('mount',path=LAUNCH_PATH) is None:launch_refuse('SANDBOX_UNAVAILABLE')
+    hide=list(dict.fromkeys([str(LAUNCH_SITES),str(LAUNCH_ROOT),*LAUNCH_SANDBOX_HIDE]))
+    python=sys.executable if sys.executable and os.path.isabs(sys.executable) else 'python3'
+    return ['unshare','--mount','--propagation','private','--',python,'-I','-c',LAUNCH_SANDBOX_CODE,json.dumps({'keep':[str(k) for k in keep],'hide':hide}),*argv]
 def launch_model(slug,files,project_dir,env_file):
-    code,stdout,_=launch_exec(launch_compose_base(slug,files,project_dir,env_file)+['config','--format','json'],120)
+    # Every file Compose may read for this launch lives in the env file's folder (the site folder or a check folder).
+    argv=launch_sandboxed(launch_compose_base(slug,files,project_dir,env_file)+['config','--format','json'],[os.path.dirname(str(env_file))])
+    code,stdout,_=launch_exec(argv,120)
+    if code==97:launch_refuse('SANDBOX_UNAVAILABLE')
     if code!=0:launch_refuse('COMPOSE_INVALID')
     try:model=json.loads(stdout)
     except ValueError:launch_refuse('COMPOSE_INVALID')
@@ -585,9 +620,12 @@ def launch_compose_text_problem(data):
     if re.search(r'"(?:[^"\\]|\\.)*(?:\\|\n)(?:[^"\\]|\\.)*"[ \t]*:(?:[ \t]|$)',text) or re.search(r"'(?:[^'\n]|'')*\n(?:[^']|'')*'[ \t]*:(?:[ \t]|$)",text):return 'COMPOSE_SYNTAX_REFUSED'
     # The words themselves as a key anywhere (block or flow, quoted or plain, the colon even on the next line). A value
     # that happens to read "include:" is refused too; DockNest prefers that to a missed key.
-    if re.search(r'(?<![\w-])["\']?include["\']?\s*:(?:\s|$|[\[{"\'])',text):return 'COMPOSE_INCLUDE_REFUSED'
-    if re.search(r'(?<![\w-])["\']?extends["\']?\s*:(?:\s|$|[\[{"\'])',text):return 'COMPOSE_EXTENDS_REFUSED'
+    # No condition on what follows the colon: a quoted (JSON-style) key may have its value right after it.
+    if re.search(r'(?<![\w-])(["\']?)include\1\s*:',text):return 'COMPOSE_INCLUDE_REFUSED'
+    if re.search(r'(?<![\w-])(["\']?)extends\1\s*:',text):return 'COMPOSE_EXTENDS_REFUSED'
+    # A flow document may start on the --- line, after a tag or an anchor.
     first=next((line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith('#') and line.strip()!='---'),'')
+    first=re.sub(r'^(?:---[ \t]*)?(?:[!&][^\s]*[ \t]+)*','',first)
     if first.startswith(('{','[')):return 'COMPOSE_FLOW_REFUSED'
     return None
 def launch_build_problems(model,repo_root,slug):

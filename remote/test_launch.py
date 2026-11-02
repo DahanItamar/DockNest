@@ -38,7 +38,7 @@ class Host:
         self.git_version=kw.get('git_version','2.51.0');self.repo=kw.get('repo',{'compose.yaml':'services: {}\n'})
         self.model=kw.get('model');self.existing=kw.get('existing',{});self.images=kw.get('images',{})
         self.nginx_dump=kw.get('nginx_dump','# configuration file /etc/nginx/nginx.conf:\nevents {}\nhttp { include /etc/nginx/conf.d/*.conf; }\n')
-        self.fail=kw.get('fail',{});self.dns=kw.get('dns',PUBLIC_V4);self.tools=set(kw.get('tools',{'ssh','nginx','certbot','git','docker','buildx'}))
+        self.fail=kw.get('fail',{});self.dns=kw.get('dns',PUBLIC_V4);self.tools=set(kw.get('tools',{'ssh','nginx','certbot','git','docker','buildx','unshare','mount'}))
         self.ports=kw.get('ports',[]);self.addresses=kw.get('addresses',['203.0.113.10']);self.keyscan=kw.get('keyscan','')
         self.containers=kw.get('containers',[]);self.gate=kw.get('gate');self.on_call=kw.get('on_call')
         self.labels={}  # docker object -> launch label, for teardown
@@ -53,7 +53,7 @@ class Host:
     def watch(self,argv,env,timeout,folder=None,limit=None,cwd=None,journal=None):
         argv=list(argv);self.calls.append({'argv':argv,'env':env,'timeout':timeout,'folder':folder,'limit':limit,'cwd':cwd,'journal':journal is not None})
         if self.on_call:self.on_call(self,argv)
-        words=argv
+        words=argv[argv.index('docker'):] if argv[0]=='unshare' and 'docker' in argv else argv
         def out(code=0,stdout=b'',tail='',why=None):return code,stdout,tail,why
         for key,result in self.fail.items():
             if key in ' '.join(words):return result
@@ -220,9 +220,15 @@ class FetchTests(unittest.TestCase):
         self.assertFalse((host.site()/'app'/'.git').exists(),'.git is removed after the commit is recorded')
     def test_compose_runs_with_explicit_project_files_and_env_file(self):
         host=Host(self,gate=gate_ok);host.run('launch-fetch',**self.git_req())
-        config=[c for c in host.calls if c['argv'][:2]==['docker','compose'] and 'config' in c['argv']][0]
+        config=[c for c in host.calls if 'config' in c['argv']][0]
         site=host.site()
-        self.assertEqual(config['argv'],['docker','compose','-p','shop','-f',str(site/'app'/'compose.yaml'),'--project-directory',str(site/'app'),'--env-file',str(site/'.env'),'config','--format','json'])
+        sandbox=config['argv'][:config['argv'].index('docker')]
+        self.assertEqual(sandbox[:5],['unshare','--mount','--propagation','private','--'])
+        self.assertEqual(sandbox[6:8],['-I','-c']);self.assertEqual(sandbox[8],helper.LAUNCH_SANDBOX_CODE)
+        spec=json.loads(sandbox[9]);self.assertEqual(spec['keep'],[str(site)])
+        self.assertTrue({str(host.sites),str(host.launches),'/etc/docknest','/root','/home','/var/lib/docker/volumes'}<=set(spec['hide']))
+        compile(helper.LAUNCH_SANDBOX_CODE,'<sandbox>','exec')
+        self.assertEqual(config['argv'][len(sandbox):],['docker','compose','-p','shop','-f',str(site/'app'/'compose.yaml'),'--project-directory',str(site/'app'),'--env-file',str(site/'.env'),'config','--format','json'])
         self.assertEqual(config['env']['PATH'],helper.LAUNCH_PATH)
         self.assertFalse(any(k.startswith(('DOCKER_','COMPOSE_FILE','COMPOSE_PROJECT')) for k in config['env']))
         self.assertEqual((site/'.env').read_text(),'DB_PASSWORD="pa\\$\\$ w0rd\\"\'x"\n')
@@ -779,6 +785,21 @@ class ReviewTests(unittest.TestCase):
             'services:\n  web:\n    image: nginx\n    ports: !override\n      - "127.0.0.1:8080:80"\n    command: ["sh","-c","echo \\"hi\\""]\n':None}
         for text,code in cases.items():self.assertEqual(helper.launch_compose_text_problem(text.encode()),code,text)
         self.assertEqual(helper.launch_compose_text_problem(b'services: {}\n\xff\n'),'COMPOSE_SYNTAX_REFUSED')
+    def test_compose_bypasses_from_the_second_178_recheck(self):
+        cases={'x-e: &e {file: other.yml, service: base}\nservices:\n  a: {image: alpine, "extends":*e}\n':'COMPOSE_EXTENDS_REFUSED',
+            "x-e: &e {file: other.yml, service: base}\nservices:\n  a: {image: alpine, 'extends':*e}\n":'COMPOSE_EXTENDS_REFUSED',
+            'services:\n  a: {image: alpine, "extends":!!map {file: other.yml, service: base}}\n':'COMPOSE_EXTENDS_REFUSED',
+            'services:\n  a: {image: alpine, "extends":&q {file: other.yml, service: base}}\n':'COMPOSE_EXTENDS_REFUSED',
+            '--- {"include":!!seq [other.yml], "services": {a: {image: alpine}}}\n':'COMPOSE_INCLUDE_REFUSED',
+            '--- {"x-i": &i [other.yml], "include":*i, "services": {a: {image: alpine}}}\n':'COMPOSE_INCLUDE_REFUSED'}
+        for text,code in cases.items():self.assertEqual(helper.launch_compose_text_problem(text.encode()),code,text)
+        for text in ('--- {"services": {a: {image: alpine}}}\n','--- !!map {services: {}}\n','---\n&a {services: {}}\n'):
+            self.assertEqual(helper.launch_compose_text_problem(text.encode()),'COMPOSE_FLOW_REFUSED',text)
+    def test_compose_config_without_a_sandbox_is_refused(self):
+        host=Host(self,gate=gate_ok);host.tools.discard('unshare')
+        self.assertEqual(host.run('launch-fetch',source='compose',composeText='x: 1\n')['code'],'SANDBOX_UNAVAILABLE')
+        host=Host(self,gate=gate_ok,fail={' config ':(97,b'','',None)})
+        self.assertEqual(host.run('launch-fetch',source='compose',composeText='x: 1\n')['code'],'SANDBOX_UNAVAILABLE')
     def test_git_too_old_reason(self):
         self.assertEqual(helper.LAUNCH_REASONS['GIT_TOO_OLD'],'Git 2.37 or newer is needed. Update git, then try again.')
 
