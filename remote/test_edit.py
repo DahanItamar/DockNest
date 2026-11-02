@@ -41,7 +41,7 @@ class FakeDocker:
     def __init__(self,base):
         self.base=base;self.calls=[];self.version=b'2.29.1\n';self.pull_fail=False;self.up_fail=False
         self.containers=[];self.volumes=['shop_data'];self.networks=['shop_default'];self.tags={};self.created=[]
-        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[];self.holders={};self.missing={'shop:2.0','ghost:5.1'};self.pulled=[]
+        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[];self.holders={};self.missing={'shop:2.0','ghost:5.1'};self.registry={'shop:2.0','ghost:5.1'};self.pulled=[]
     def __call__(self,args,timeout=120,env=None):
         self.calls.append({'args':list(args),'env':dict(env or {})})
         if args[:2]!=['docker','compose'] or args[2:4]==['version','--short']:return self.docker(args[1:])
@@ -50,7 +50,7 @@ class FakeDocker:
         if tail[0]=='config':return self.config(args)
         if tail[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,args[:2])
-            self.pulled.append(list(tail[2:]));self.missing-={'shop:2.0'}
+            self.pulled.append(list(tail[2:]));self.missing-=self.registry
             return b''
         if tail[0]=='stop':self.stops.append(list(args));return b''
         if tail[0]=='up':
@@ -102,7 +102,8 @@ class FakeDocker:
         if args[:2]==['image','rm']:self.tags.pop(args[-1],None);return b''
         if args[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,['docker','pull'])
-            self.pulled.append([args[1]]);self.missing.discard(args[1])
+            self.pulled.append([args[1]])
+            if args[1] in self.registry:self.missing.discard(args[1])
             return b''
         if args[0]=='stop':self.stops.append(list(args));return b''
         if args[0]=='rename':
@@ -779,6 +780,13 @@ class LocalImages(EditCase):
         check=self.run_op('edit-check',files=files,env=env);self.assertTrue(check['ok'],check)
         result=self.run_op('edit-prepare',files=files,env=env,reviewedModelSha256=check['verdict']['reviewedModelSha256'])
         self.assertTrue(result['ok'],result)
+    def test_a_pull_that_succeeds_without_the_image_fails_at_prepare(self):
+        # pull_policy: never (or a pull Compose skips): the pull "succeeds" but the image is still missing.
+        self.fake.registry=set()
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
+        check=self.run_op('edit-check',files=files,env=[]);self.assertTrue(check['ok'],check)
+        self.refused(self.run_op('edit-prepare',files=files,env=[],reviewedModelSha256=check['verdict']['reviewedModelSha256']),'PULL_FAILED')
+        self.assertEqual(self.fake.pulled,[['web']],'it did try to pull')
     def test_a_failed_pull_of_a_missing_image_fails_closed(self):
         self.fake.pull_fail=True
         files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
