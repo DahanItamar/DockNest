@@ -9,6 +9,6 @@ export const RESULTS={
  skipped:{state:'queued',label:'Skipped'},
  restart_failed:{state:'failed',label:'Restart failed'}
 };
-export const rows=events=>(Array.isArray(events)?events:[]).filter(e=>RESULTS[e?.kind]);
+export const rows=events=>(Array.isArray(events?.items)?events.items:[]).filter(e=>RESULTS[e?.kind]);
 export const timeOf=at=>{const d=new Date(at);if(isNaN(d))return '';const t=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});return d.toDateString()===new Date().toDateString()?t:d.toLocaleDateString([],{day:'2-digit',month:'2-digit'})+' '+t};
-export const saveError=e=>e?.code==='NO_HEALTHCHECK'?{title:'No health check',text:'No container in this site has a health check. Add one in Compose.'}:e?.status===403?{title:'Not allowed',text:'Only administrators can change self-heal.'}:{title:'Could not save',text:e?.message||'Try again.'};
+export const saveError=e=>e?.code==='NO_HEALTHCHECK'?{title:'No health check',text:'No container in this site has a health check. Add one in Compose.'}:e?.status===403?{title:'Not allowed',text:'Only administrators can change self-heal.'}:e?.code==='SITE_REMOVED'?{title:'Site removed',text:'This site was removed from active sites.'}:e?.code==='UNREACHABLE'?{title:'Server not reachable',text:'Could not check the containers. Try again.'}:{title:'Could not save',text:e?.message||'Try again.'};
