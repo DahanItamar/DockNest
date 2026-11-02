@@ -55,7 +55,7 @@ engine.launchTransport.remote = async (server, request) => {
     case 'launch-start': return { ok: true, containers: ['c1', 'c2'], containerNames: [`${request.slug}-web-1`, `${request.slug}-db-1`], composeFiles: [`/srv/docknest/${request.slug}/app/compose.yaml`, `/srv/docknest/${request.slug}/compose.docknest.yaml`] };
     case 'launch-poll': return { ok: true, state: 'passed', httpStatus: 200 };
     case 'launch-web': return { ok: true, file: `/etc/nginx/conf.d/docknest-${request.slug}.conf` };
-    case 'launch-certificate': return { ok: true, state: 'issued', certName: `docknest-${request.slug}` };
+    case 'launch-certificate': return { ok: true, state: 'issued', certName: `docknest-${request.slug}`, maintenanceReset: !!request.maintenanceDirectory };
     case 'launch-teardown': return { ok: true, removed: ['folder', 'containers'], left: [], keepBackup: true };
     case 'launch-status': return { ok: true, journal: true, phase: 'started', commit: null, counts: {}, present: [], busy: false, killed: 0, resumable: ['check_health', 'web', 'certificate'] };
     default: throw new Error('unexpected ' + request.operation);
@@ -503,7 +503,19 @@ test('a certificate issued later re-runs the maintenance step (the helper clears
   await admin('POST', `/launches/${id}/check-dns`, {}); await drive();
   const certCall = calls.filter(call => call.request.operation === 'launch-certificate').at(-1);
   assert.equal(certCall.request.maintenanceDirectory, `/var/lib/docknest/maintenance/${siteId}`);
-  assert.equal(maintenanceCalls.length, 2, 'the maintenance step ran again'); assert.equal(steps(id).maintenance, 'done');
+  assert.equal(maintenanceCalls.length, 2, 'the maintenance step ran again (maintenanceReset)'); assert.equal(steps(id).maintenance, 'done');
+  // No reset reported: the step is not run again. A changed staging root: the field is left out.
+  db.prepare("UPDATE site_launch_steps SET state='waiting' WHERE launch_id=? AND step='certificate'").run(id); db.prepare("UPDATE site_launches SET state='waiting_dns' WHERE id=?").run(id);
+  script = { 'launch-certificate': { ok: true, state: 'issued', certName: 'x', maintenanceReset: false } };
+  await admin('POST', `/launches/${id}/check-dns`, {}); await drive();
+  assert.equal(maintenanceCalls.length, 2);
+  const custom = JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId).config);
+  db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...custom, maintenance: { ...custom.maintenance, directory: '/opt/stage/maintenance/' + siteId } }), siteId);
+  db.prepare("UPDATE site_launch_steps SET state='waiting' WHERE launch_id=? AND step='certificate'").run(id); db.prepare("UPDATE site_launches SET state='waiting_dns' WHERE id=?").run(id);
+  script = {};
+  await admin('POST', `/launches/${id}/check-dns`, {}); await drive();
+  assert.equal(calls.filter(call => call.request.operation === 'launch-certificate').at(-1).request.maintenanceDirectory, undefined);
+  assert.equal(maintenanceCalls.length, 2);
   assert.equal(db.prepare('SELECT state FROM site_launches WHERE id=?').get(id).state, 'done');
   // An interrupted maintenance step on a saved launch: not resumable, fails with its own sentence, no teardown.
   db.prepare("UPDATE site_launch_steps SET state='launch_running' WHERE launch_id=? AND step='maintenance'").run(id);

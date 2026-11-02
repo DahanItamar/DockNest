@@ -655,11 +655,15 @@ const RUN = {
     // On a saved site whose maintenance page is set up, issuing the certificate rewrites the launch's nginx file: the
     // helper clears <maintenanceDirectory>/ready and the maintenance step runs again, so its include is never lost.
     const maintenance = steps.find(step => step.step === 'maintenance');
-    const maintenanceDirectory = launch.site_id && maintenance?.state === 'done' ? `/var/lib/docknest/maintenance/${launch.site_id}` : null;
+    // Only the default folder (remote/helper/launch.py accepts exactly /var/lib/docknest/maintenance/<uuid>); a site whose
+    // owner changed its staging root keeps its own setup and the field is left out.
+    const expected = launch.site_id ? `/var/lib/docknest/maintenance/${launch.site_id}` : null;
+    const siteMaintenance = launch.site_id ? parseJson(db.prepare('SELECT config FROM sites WHERE id=?').get(launch.site_id)?.config, {})?.maintenance : null;
+    const maintenanceDirectory = expected && maintenance?.state === 'done' && siteMaintenance?.directory === expected ? expected : null;
     const answer = await helper(server, { ...base(launch, 'launch-certificate'), serverIps: (launch.options.dns ?? []).map(record => record.value), ...(maintenanceDirectory ? { maintenanceDirectory } : {}) }, { signal });
     const certName = typeof answer?.certName === 'string' ? answer.certName.slice(0, 80) : null;
     const settled = ['waiting_dns', 'done'].includes(launch.state);
-    if (answer?.state === 'issued') { if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'issued'); return { state: 'done', result: { state: 'issued', certName, certCode: null }, ...(settled ? { launch: { state: 'done' } } : {}), ...(maintenanceDirectory ? { requeue: ['maintenance'] } : {}) }; }
+    if (answer?.state === 'issued') { if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'issued'); return { state: 'done', result: { state: 'issued', certName, certCode: null }, ...(settled ? { launch: { state: 'done' } } : {}), ...(maintenanceDirectory && answer.maintenanceReset === true ? { requeue: ['maintenance'] } : {}) }; }
     if (answer?.state === 'dns_waiting') return { state: 'waiting', detail: `${launch.domain} does not point to this server yet. Add the DNS record, then press Check again.`, result: { state: 'dns_waiting' }, ...(settled ? { launch: { state: 'waiting_dns' } } : {}) };
     const certCode = typeof answer?.code === 'string' ? cleanCode(answer.code) : null;
     if (launch.site_id && AFTER_DNS_FAILURES.includes(certCode)) updateSiteUrls(launch.site_id, launch.domain, 'failed');
