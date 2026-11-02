@@ -274,18 +274,41 @@ test('a worker restart asks launch-status: a resumable step runs again, otherwis
 
 test('build steps run only with build:, slow health checks wait without holding the worker, and the time limit fails them', async () => {
   const server = serverRow('slow-srv'); calls = [];
-  engine.launchLimits.scale = 0.001;
-  try {
-    script = { 'launch-fetch': { services: [{ name: 'web', ports: [3000], build: true }], gate: { ok: true, refusals: [] } }, 'launch-poll': { state: 'waiting', reason: 'starting' } };
-    const id = (await admin('POST', `/servers/${server}/launch`, { source: 'git', domain: 'slow.example.com', repo: { url: 'https://github.com/o/mono.git', ref: 'main', composePath: 'apps/web/compose.yaml' }, webService: 'web', webPort: 3000, trustConfirmed: true })).body.launch.id;
-    await drive();
-    assert.ok(calls.some(call => call.request.operation === 'launch-build'));
-    assert.equal(steps(id).check_health, 'waiting');
-    await new Promise(resolve => setTimeout(resolve, 700));
-    await drive();
-    const launch = (await admin('GET', `/launches/${id}`)).body;
-    assert.equal(launch.state, 'failed'); assert.equal(launch.failedStep, 'check_health');
-  } finally { engine.launchLimits.scale = 1; }
+  script = { 'launch-fetch': { services: [{ name: 'web', ports: [3000], build: true }], gate: { ok: true, refusals: [] } }, 'launch-poll': { state: 'waiting', reason: 'starting' } };
+  const id = (await admin('POST', `/servers/${server}/launch`, { source: 'git', domain: 'slow.example.com', repo: { url: 'https://github.com/o/mono.git', ref: 'main', composePath: 'apps/web/compose.yaml' }, webService: 'web', webPort: 3000, trustConfirmed: true })).body.launch.id;
+  await drive();
+  assert.ok(calls.some(call => call.request.operation === 'launch-build'));
+  assert.equal(calls.find(call => call.request.operation === 'launch-fetch').request.repo.composePath, 'apps/web/compose.yaml');
+  assert.equal(steps(id).check_health, 'waiting', 'between looks no job is held');
+  assert.equal(claimLaunch(), null, 'and nothing is claimable until the next look is due');
+  // The 10-minute limit passes.
+  const row = db.prepare("SELECT result FROM site_launch_steps WHERE launch_id=? AND step='check_health'").get(id);
+  db.prepare("UPDATE site_launch_steps SET result=? WHERE launch_id=? AND step='check_health'").run(JSON.stringify({ ...JSON.parse(row.result), deadline: new Date(Date.now() - 1000).toISOString() }), id);
+  await drive();
+  const launch = (await admin('GET', `/launches/${id}`)).body;
+  assert.equal(launch.state, 'failed'); assert.equal(launch.failedStep, 'check_health'); assert.match(launch.reason, /did not answer within 10 minutes/);
+  script = {};
+});
+
+test('a build that runs past its time limit is stopped and the launch is torn down', async () => {
+  const server = serverRow('timeout-srv'); calls = [];
+  let aborted = false;
+  script = { 'launch-fetch': { services: [{ name: 'web', ports: [3000], build: true }], gate: { ok: true, refusals: [] } } };
+  const plainRemote = engine.launchTransport.remote;
+  engine.launchTransport.remote = (original => async (srv, request, options) => {
+    if (request.operation === 'launch-build') return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('stopped'), { aborted: true })); }));
+    return original(srv, request, options);
+  })(engine.launchTransport.remote);
+  const id = (await admin('POST', `/servers/${server}/launch`, { source: 'git', domain: 'hang.example.com', repo: { url: 'https://github.com/o/r.git', ref: 'main' }, webService: 'web', webPort: 3000, trustConfirmed: true })).body.launch.id;
+  for (let index = 0; index < 4 && steps(id).build !== 'launch_queued'; index++) { engine.tickLaunches(); const claimed = claimLaunch(); if (claimed) await engine.executeLaunchStep(claimed); }
+  engine.launchLimits.scale = 0.0001; // 30 minutes become 0.18 seconds for this one step
+  try { engine.tickLaunches(); await engine.executeLaunchStep(claimLaunch()); } finally { engine.launchLimits.scale = 1; }
+  assert.equal(aborted, true, 'the helper call was stopped (its stdin closes)');
+  await drive();
+  const launch = (await admin('GET', `/launches/${id}`)).body;
+  assert.equal(launch.state, 'failed'); assert.equal(launch.failedStep, 'build'); assert.match(launch.reason, /took longer than/);
+  assert.ok(calls.some(call => call.request.operation === 'launch-teardown' && call.request.launchId === id));
+  engine.launchTransport.remote = plainRemote; script = {};
 });
 
 test('cancel before start ends the launch; after start it is refused', async () => {
