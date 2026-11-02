@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hunks, lineScript, reviewDiff, inlineSecretKeys, splitLines, MASK } from '../src/site-edits/diff.js';
-import { changesRecord, tabsUsed, stateFor, cancellable, SAY, reasonFor, helperCode } from '../src/site-edits/state.js';
+import { changesRecord, tabsUsed, stateFor, cancellable, SAY, reasonFor, helperCode, copySeconds, COPY } from '../src/site-edits/state.js';
 
 // invocation.js imports the database module; its pure parts are checked through a fresh import with a temp DATA_DIR.
 import { mkdtemp, writeFile } from 'node:fs/promises';
@@ -82,4 +82,21 @@ test('states, cancel window and reasons', () => {
   assert.equal(cancellable({ result: null, progress: { phase: 'prepare', applyStarted: true } }), false);
   assert.equal(SAY.unhealthy(120), 'The site did not become healthy in 2 minutes.'); assert.equal(SAY.unhealthy(60), 'The site did not become healthy in 1 minute.'); assert.equal(SAY.unhealthy(90), 'The site did not become healthy in 90 seconds.');
   assert.equal(reasonFor('NOPE', 'fallback'), 'fallback'); assert.equal(helperCode('rm -rf /'), null); assert.equal(helperCode('PORT_IN_USE'), 'PORT_IN_USE');
+});
+
+test('call limits for the data copy grow with the reviewed size and are capped (same budget as the helper)', () => {
+  assert.equal(copySeconds(600, null), 600); assert.equal(copySeconds(600, 0), 600);
+  assert.equal(copySeconds(600, 20 * 1024 ** 3), 600 + 1024);
+  assert.equal(copySeconds(900, 20 * 1024 ** 3, COPY.restoreFactor), 900 + 1536);
+  assert.equal(copySeconds(600, 10 ** 15), 600 + COPY.maxSeconds, 'capped');
+  assert.equal(copySeconds(900, 10 ** 15, 1.5), 900 + COPY.maxSeconds * 1.5);
+});
+
+test('a review token whose sealed candidate names other original hashes is refused (binding)', async () => {
+  const tokens = await import('../src/site-edits/tokens.js');
+  const bound = { userId: 'u', sessionHash: 's', siteId: 'site' };
+  const issued = tokens.issueToken({ ...bound, hashes: [{ path: '/a', before: 'a'.repeat(64) }], candidate: { files: [], env: [], originalHashes: [{ path: '/a', before: 'b'.repeat(64) }] }, meta: {} });
+  assert.throws(() => tokens.takeToken(issued.token, bound), error => error.code === 'REVIEW_EXPIRED');
+  const good = tokens.issueToken({ ...bound, hashes: [{ path: '/a', before: 'a'.repeat(64) }], candidate: { files: [], env: [], originalHashes: [{ path: '/a', before: 'a'.repeat(64) }] }, meta: {} });
+  assert.equal(tokens.takeToken(good.token, bound).hashes[0].before, 'a'.repeat(64));
 });
