@@ -26,3 +26,9 @@ test('privacy audit allows protocol-defined special-purpose ranges but still rep
  const result=await audit('server '+[93,184,216,34].join('.'));assert.equal(result.status,1);assert.match(result.stderr,/non-example IP address/);
  assert.equal((await audit('edge '+[100,128,0,1].join('.'))).status,1,'Only 100.64.0.0/10 is allowed');
 });
+test('private key material is reported after a real or an escaped line break',async()=>{
+ // The header is built from parts so this file never contains one.
+ const header='-----BEGIN OPENSSH '+'PRIVATE KEY-----',body='b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB';
+ for(const text of [header+'\n'+body,"KEY='"+header+'\\n'+body+"'"]){const result=await audit(text);assert.equal(result.status,1);assert.match(result.stderr,/private key material/);}
+ assert.equal((await audit('match '+header+'\\n[A-Za-z0-9+/=\\n]+')).status,0,'a pattern that only names the header is not key material');
+});
