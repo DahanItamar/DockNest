@@ -20,9 +20,7 @@ const schema = db => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_maste
 const contents = (db, tables) => Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row }))]));
 
 test('migration versions are unique, increasing and contiguous from 1, and incremental backups are migration 12', () => {
-  // 13 (2.14.0) and 14 (Safe Edit) are built on parallel 2.15 branches; until they merge, only they may be missing.
-  const reserved = [13, 14].filter(version => !migrations.some(migration => migration.version === version));
-  const versions = [...migrations.map(migration => migration.version), ...reserved].sort((a, b) => a - b);
+  const versions = migrations.map(migration => migration.version);
   assert.deepEqual(versions, versions.map((_, index) => index + 1));
   const incremental = migrations.find(migration => migration.name === 'incremental-backups');
   assert.equal(incremental.version, 12); assert.equal(incremental.compatible, true);

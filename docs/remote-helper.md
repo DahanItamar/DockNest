@@ -27,6 +27,7 @@ remote/
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
+│   ├── edit.py             Safe Edit: load, gate, journal, atomic writes, apply, health poll, rollback (docs/safe-edit.md)
 │   ├── heal.py             self-heal: health event stream, health-check lookup, guarded restart
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
 ├── boot_recovery.py        boot driver; imports names from the built helper.py
@@ -89,7 +90,7 @@ classDiagram
     atomic_json() complete_recovery()
   }
   class main["__main__"] {
-    main(req) dispatch of 44 operations
+    main(req) dispatch of 52 operations
     move_lock() stop_after_stdin()
     restore-chain entry point
   }
@@ -97,6 +98,7 @@ classDiagram
   class restore { verify_recovery() safe_extract() unpack_chain() restore() restore_chain_offline() }
   class move { move_facts() deploy_restore() compose_up() move_* steps }
   class restore_test { restore_test_prepare/run/teardown() start_reaper() }
+  class edit { edit_operation() edit_gate() edit_env_apply() edit_apply() edit_rollback() }
   class heal { health_events() self_heal_resolve() self_heal_restart() }
   class databases { sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
   class incremental { plan_incremental() incremental_commit() }
@@ -111,6 +113,7 @@ classDiagram
   main --> restore
   main --> move
   main --> restore_test
+  main --> edit
   main --> heal
   heal --> incremental
   main --> install
@@ -121,6 +124,8 @@ classDiagram
   backup --> guides
   restore --> backup
   restore_test --> restore
+  edit --> move
+  edit --> maintenance
   move --> restore
   maintenance --> net
   databases --> net

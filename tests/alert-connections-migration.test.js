@@ -56,9 +56,7 @@ test('migration 10 is one compatible line named alert-connections; 9 stays as re
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/);
   assert.match(source.find(line => /^\s*\{\s*version:\s*10\b/.test(line)), /^ {2}\{ version: 10, name: 'alert-connections', compatible: true, up: /);
   assert.ok(schemaVersion >= 10); assert.equal(compatFloor(migrations), 1);
-  // 13 (2.14.0) and 14 (Safe Edit) merge from parallel 2.15 branches; until then only they may be missing.
-  const versions = [...migrations.map(item => item.version), ...[13, 14].filter(version => !migrations.some(item => item.version === version))].sort((x, y) => x - y);
-  assert.deepEqual(versions, versions.map((_, index) => index + 1));
+  assert.deepEqual(migrations.map(item => item.version), migrations.map((_, index) => index + 1));
 });
 
 test('a fresh install gets the new tables, empty, and the import marker', () => withDatabase(10, async db => {

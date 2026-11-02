@@ -154,12 +154,22 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
     assert.equal(events(siteId, 'restarted').length, restartsDuring, 'no restart during the backup');
     record('Self-heal item 8: a queued restart yields to a queued backup (no deadlock); the backup stops and starts the site and nothing restarts it underneath');
   }
-  // Safe Edit at the same time: an edit job running for the site holds restarts exactly like a backup.
-  const edit = randomUUID();
-  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,started_at,details) VALUES(?,?,'site-edit','edit_running','apply',?,?,'{}')").run(edit, siteId, new Date().toISOString(), new Date().toISOString());
-  assert.equal(heal.blockReason(siteId), 'site_busy');
-  db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE id=?").run(new Date().toISOString(), edit);
-  record('Self-heal item 8: a running Safe Edit (edit_running) holds restarts of its site');
+  // Safe Edit at the same time: each Safe Edit job status (src/site-edits/engine.js) holds restarts of its site, and a
+  // container turning unhealthy while a Safe Edit step runs is recorded skipped, never restarted.
+  for (const [status, reason] of [['edit_queued', 'work_queued'], ['edit_running', 'site_busy'], ['edit_waiting', 'site_busy']]) {
+    const edit = randomUUID();
+    db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,started_at,details) VALUES(?,?,'site-edit',?,'apply',?,?,'{}')").run(edit, siteId, status, new Date().toISOString(), new Date().toISOString());
+    assert.equal(heal.blockReason(siteId), reason, status);
+    if (status === 'edit_running') {
+      const editStarted = await startedAt('healshop-web-1');
+      await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
+      assert.ok(await pump(30_000, () => events(siteId, 'skipped', 'healshop-web-1').some(row => row.reason === 'site_busy' && Date.parse(row.at) > Date.now() - 30_000)), 'no skip during the Safe Edit step');
+      assert.equal(await startedAt('healshop-web-1'), editStarted, 'no restart during a Safe Edit step');
+      await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'touch', '/tmp/ok');
+    }
+    db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE id=?").run(new Date().toISOString(), edit);
+  }
+  record('Self-heal item 8: Safe Edit jobs (edit_queued, edit_running, edit_waiting) hold restarts of their site; an unhealthy container during a Safe Edit step is skipped, not restarted');
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web did not settle', 60);
 
   // 4. Drop the SSH session (kill the sshd child) while the container turns unhealthy: on reconnect the restart happens.

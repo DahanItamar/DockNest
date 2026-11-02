@@ -85,7 +85,8 @@ jobs:
   linux-integration:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # Safe Edit scenarios (scripts/integration-safe-edit.js) add about 20 minutes of real health windows.
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

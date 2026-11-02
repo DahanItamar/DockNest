@@ -5,7 +5,7 @@ import { classify } from './addresses.js';
 import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'self_heal.restarted', 'self_heal.gave_up']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
 export const SOURCE_KINDS = Object.freeze(['docknest', 'server', 'site']);
 // Disk threshold: low when more than 90 percent is used or less than 5 GB is free.
 export const DISK_USED_PERCENT = 90;
@@ -55,6 +55,9 @@ export function messageFor(event) {
     case 'backup.copy_failed': return `Backup copy failed: ${site} to ${clean(event.destinationName, 'the copy destination')}${when}. DockNest retries automatically.`;
     case 'backup.copy_recovered': return `Backup copy saved: ${site} to ${clean(event.destinationName, 'the copy destination')}${when}.`;
     case 'backup.copy_gave_up': return `Backup copy stopped: ${site} to ${clean(event.destinationName, 'the copy destination')} failed for 7 days${when}. Open DockNest to retry it.`;
+    // Safe Edit (docs/safe-edit.md): changed field names and reasons stay in DockNest; the alert names the site only.
+    case 'edit.rolled_back': return `Change undone: ${site} on ${server}${when} did not come up, so the previous version is back. Open DockNest to see why.`;
+    case 'edit.needs_you': return `Change needs you: ${site} on ${server}${when} could not be put back by itself and stays behind the maintenance page. Open DockNest.`;
     // Self-heal (docs/self-heal.md): the first restart of a container in a window, and "gave up". Names only.
     case 'self_heal.restarted': return event.code === 'failed' ? `Self-heal could not restart a container of ${site} on ${server}${when}. Open DockNest to see why.` : `Self-heal restarted an unhealthy container of ${site} on ${server}${when}.`;
     case 'self_heal.gave_up': return event.code === 'recreated' ? `Self-heal stopped: a watched container of ${site} on ${server} was recreated${when}. Open DockNest to check it.` : `Self-heal stopped restarting a container of ${site} on ${server}${when}: it stayed unhealthy. Open DockNest to check it.`;
@@ -78,9 +81,9 @@ export function ruleMatches(rule, event) {
 // - reason: one fixed sentence from the reasons catalogue (reasons.js), keyed by event type and `event.code` / `event.detail`.
 // - time: the event's time of day in its time zone, for example "03:00 UTC" ('' for events without one).
 // - url: the job deep link, only when APP_ORIGIN is not a loopback address (no link a phone cannot open).
-const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped' };
-const timed = new Set(['self_heal.restarted', 'self_heal.gave_up', 'backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up']);
-const siteEvents = new Set(['self_heal.restarted', 'self_heal.gave_up', 'backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up']);
+const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'edit.rolled_back': 'Change undone', 'edit.needs_you': 'Change needs you', 'self_heal.restarted': 'Container restarted', 'self_heal.gave_up': 'Self-heal stopped' };
+const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
+const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'edit.rolled_back', 'edit.needs_you', 'self_heal.restarted', 'self_heal.gave_up']);
 const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you']);
 export const loopbackOrigin = origin => {
   try { const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return host === 'localhost' || host.endsWith('.localhost') || (isIP(host) !== 0 && classify(host) === 'refused'); } catch { return true; }
