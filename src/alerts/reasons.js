@@ -33,6 +33,8 @@ const catalogue = Object.freeze({
   'certificate.expiring': 'The certificate expires in {days}. Renew it before visitors see a warning.',
   'certificate.expiring:expired': 'The certificate has expired, so visitors see a security warning. Renew it now.',
   'certificate.renewal_failed': 'certbot could not renew the certificate. Check certbot on the server before it expires.',
+  // Launches (docs/launch-site.md): the teardown of a failed launch did not finish, so the server stays held.
+  'launch.needs_you': 'A failed launch could not remove everything it made. Open DockNest and press Try again.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

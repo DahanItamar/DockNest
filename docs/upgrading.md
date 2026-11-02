@@ -223,6 +223,24 @@ database still holds increments, the Update Center warns before a downgrade. Bac
 plain packages and restore on 2.11 as before. To recover a format 2 backup without DockNest or on 2.12 again, see
 [independent recovery](independent-recovery.md).
 
+## Launching sites in 2.16
+
+Migration 17 (`site-launches`, compatible) adds the launch and deploy key tables. It also rebuilds `server_installs`
+so it can hold Git installs. Every row is copied with its values, and the index and the link to its server are kept.
+If an install row points to a server that no longer exists, the upgrade stops before changing anything and the
+previous release keeps working. Delete that row (`DELETE FROM server_installs WHERE server_id NOT IN (SELECT id FROM
+servers)`) and upgrade again.
+
+Rolling back to 2.15 or 2.14 is a compatible rollback:
+
+- The older release ignores the launch and deploy key tables.
+- Sites made by a launch are normal sites and keep backing up.
+- Git install rows stay in the install history. A Git install still queued when you roll back fails with "DockNest
+  cannot install that.", because the older helper does not know Git. Nothing is installed.
+
+**Finish launches before rolling back.** A launch that is still running or needs attention is not resumed or torn
+down by an older release, so whatever it had created stays on the server until 2.16 runs again.
+
 ## Protected mounts are no longer copied (2.11.1)
 
 **This changes what new backups contain.** From 2.11.1, a selected container's bind mount of password files, sudo
