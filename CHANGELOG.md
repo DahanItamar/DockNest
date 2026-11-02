@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Certificate alerts: get an alert when a site's TLS certificate expires within 14 days (change it under Connections settings) or when certbot fails to renew it. DockNest reads certificate dates only while it already backs up, checks or discovers a site, so nothing new runs on your servers. Tick the two new events on an alert line in the Map. See [docs/alerts.md](docs/alerts.md#certificates).
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
