@@ -95,6 +95,16 @@ test('Check again on a saved site and a failed teardown hold the server; a queue
   assert.equal(claimJob()?.id, later); finish(later);
 });
 
+test('first_backup never holds the server, so the first backup job (and others) can run while it is open', () => {
+  reset();
+  const server = serverRow('first-backup-srv'), site = siteRow(server, 'launched');
+  const launchId = launch(server, { state: 'running', steps: Object.fromEntries(STEPS.map(step => [step, step === 'first_backup' ? 'launch_running' : step === 'teardown' ? 'pending' : 'done'])) });
+  assert.equal(launchHeld(server), false, 'even a first_backup step marked running holds nothing');
+  const backup = job(site);
+  assert.equal(claimJob()?.id, backup, 'the first backup runs'); finish(backup);
+  setStep(launchId, 'first_backup', 'done'); setLaunch(launchId, 'done');
+});
+
 test('scheduled backups of other sites queue behind the hold instead of being skipped, then run', () => {
   reset();
   const server = serverRow('sched-srv'), site = siteRow(server, 'scheduled');
