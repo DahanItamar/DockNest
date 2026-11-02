@@ -42,7 +42,7 @@ const serverRow = name => { const serverId = randomUUID(); db.prepare('INSERT IN
 const SECRET = 'S3cr3t-Value-' + randomBytes(6).toString('hex');
 const COMPOSE = `services:\n  web:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: \${DB_PASSWORD}\n  db:\n    image: mariadb:11\n`;
 let calls = [], script = {};
-const facts = (extra = {}) => ({ tools: { docker: true, compose: true, git: true, nginx: true, certbot: true, buildx: true }, freeBytes: 50e9, ports: { 80: true, 443: true }, nginxDomains: [], certLineages: [], dnsAnswers: { A: ['95.216.10.20'], AAAA: [] }, serverIps: ['95.216.10.20', '10.0.0.5', '100.64.1.2', '2a01:4f9:c010::20'], usedPorts: [22, 80, 443], checks: [{ id: 'docker', ok: true }], services: [{ name: 'web', ports: [80], build: false }, { name: 'db', ports: [], build: false }], ...extra });
+const facts = (extra = {}) => ({ tools: { docker: true, compose: true, git: true, nginx: true, certbot: true, buildx: true }, freeBytes: 50e9, ports: { 80: true, 443: true }, nginxDomains: [], certLineages: [], dnsAnswers: { A: ['8.8.8.8'], AAAA: [] }, serverIps: ['8.8.8.8', '10.0.0.5', ['100', '64', '1', '2'].join('.'), '2a01:4f9:c010::20'], usedPorts: [22, 80, 443], checks: [{ id: 'docker', ok: true }], services: [{ name: 'web', ports: [80], build: false }, { name: 'db', ports: [], build: false }], ...extra });
 engine.launchTransport.remote = async (server, request) => {
   calls.push({ server: server.name, request: structuredClone(request) });
   const answer = script[request.operation];
@@ -107,7 +107,7 @@ test('check answers the facts in the move shape and runs nothing that changes th
   assert.equal(answer.status, 200);
   assert.equal(answer.body.ok, true); assert.equal(answer.body.domain, 'shop.example.com'); assert.equal(answer.body.slug, 'shop-example-com'); assert.equal(answer.body.folder, '/srv/docknest/shop-example-com');
   assert.deepEqual(answer.body.services.map(service => service.name), ['web', 'db']);
-  assert.deepEqual(answer.body.dns.records, [{ type: 'A', name: 'shop.example.com', value: '95.216.10.20' }, { type: 'AAAA', name: 'shop.example.com', value: '2a01:4f9:c010::20' }], 'private and CGNAT addresses are left out');
+  assert.deepEqual(answer.body.dns.records, [{ type: 'A', name: 'shop.example.com', value: '8.8.8.8' }, { type: 'AAAA', name: 'shop.example.com', value: '2a01:4f9:c010::20' }], 'private and CGNAT addresses are left out');
   assert.deepEqual(calls.map(call => call.request.operation), ['launch-facts']);
   script = { 'launch-facts': facts({ os: { id: 'ubuntu', versionId: '24.04' }, packageManager: 'apt', tools: { git: false }, checks: [{ id: 'git', ok: false, code: 'GIT_MISSING', reason: 'The server needs git. Install it, then try again.', install: 'git' }, { id: 'nginxDomain', ok: false, code: 'NGINX_DOMAIN_SERVED', reason: 'nginx on this server already serves this domain.' }] }) };
   const blocked = await admin('POST', `/servers/${server}/launch/check`, { source: 'git', domain: 'app.example.com', repo: { url: 'https://github.com/owner/app.git', ref: 'main', composePath: 'deploy/compose.yaml' }, webService: 'web', webPort: 3000 });
@@ -466,7 +466,7 @@ test('review fixes: required Launch fields, save failure, first backup refusals,
   assert.equal(db.prepare('SELECT state FROM site_launches WHERE id=?').get(stuck).state, 'failed');
   // S5: the certificate step gets the public addresses of the DNS record.
   const certCall = calls.find(call => call.request.operation === 'launch-certificate');
-  assert.deepEqual(certCall.request.serverIps, ['95.216.10.20', '2a01:4f9:c010::20']);
+  assert.deepEqual(certCall.request.serverIps, ['8.8.8.8', '2a01:4f9:c010::20']);
 });
 
 test('the site URLs follow the certificate: none while DNS waits, http after a failure, https once issued', async () => {

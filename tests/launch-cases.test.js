@@ -18,7 +18,7 @@ const { claimLaunch } = await import('../src/launches/claim.js');
 const at = () => new Date().toISOString();
 const serverRow = name => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(serverId, name, 'h', 22, 'root', 'k', '0'.repeat(64), at()); return serverId; };
 let script = {}, calls = [];
-const baseFacts = { serverIps: ['95.216.10.9'], dnsAnswers: { A: [], AAAA: [] }, usedPorts: [], checks: [{ id: 'docker', ok: true }] };
+const baseFacts = { serverIps: ['1.1.1.1'], dnsAnswers: { A: [], AAAA: [] }, usedPorts: [], checks: [{ id: 'docker', ok: true }] };
 engine.launchTransport.remote = async (_server, request) => {
   calls.push(request.operation);
   if (script[request.operation] !== undefined) return structuredClone(script[request.operation]);
