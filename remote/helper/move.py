@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    APPARMOR_PROFILE, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
+    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
     hardening_args, inspect, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
@@ -255,7 +255,9 @@ def hardening_facts(cs):
         try:h=hardening(c)
         except ValueError as error:problems.append(str(error));continue
         if h['apparmor'] not in [None,'unconfined'] and h['apparmor'] not in profiles:profiles.append(h['apparmor'])
-    return {'hardened':any(hardened(c) for c in cs),'problems':problems,'apparmor':profiles}
+    # The AppArmor profile Docker applied by host default (not set on the container): reported, not enforced on a move.
+    host=sorted({str(c.get('AppArmorProfile')) for c in cs if c.get('AppArmorProfile') not in [None,'','unconfined']})
+    return {'hardened':any(hardened(c) for c in cs),'problems':problems,'apparmor':profiles,'hostAppArmor':host}
 def target_probe(probe):
     paths=[]
     for value in (probe.get('paths') or [])[:200]:
@@ -268,7 +270,7 @@ def target_probe(probe):
     project=names.get('composeProject')
     if isinstance(project,str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):conflicts['composeProjects']=[project] if docker('ps','-aq','--filter','label=com.docker.compose.project='+project).decode().split() else []
     wanted=[str(p) for p in (probe.get('apparmor') or [])[:30] if isinstance(p,str) and APPARMOR_PROFILE.fullmatch(p)]
-    return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)]}
+    return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES)}
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
     cfg=req.get('config') or {}
@@ -612,7 +614,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
                 for other in networks:
                     # A test copy never joins Docker's shared default bridge.
                     if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*aliases(other),other,created[-1])
-        verify_hardening(containers,created)  # Compose or docker create: never less protected than the original
+        verify_hardening(containers,created,every=bool(compose))  # never less protected than the original
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])

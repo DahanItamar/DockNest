@@ -75,7 +75,14 @@ class SecurityOptionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'cannot read'):self.args('seccomp={not json')
         with tempfile.TemporaryDirectory() as d:
             profile=pathlib.Path(d)/'profile.json';profile.write_text(json.dumps(PROFILE))
-            if os.name=='posix':self.assertEqual(json.loads(pathlib.Path(self.args('seccomp='+str(profile))[1].split('=',1)[1]).read_text()),PROFILE)
+            if os.name=='posix':
+                # Read the written copy while d still exists.
+                args=helper.hardening_args(container(SecurityOpt=['seccomp='+str(profile)]),d)
+                self.assertEqual(json.loads(pathlib.Path(args[1].split('=',1)[1]).read_text()),PROFILE)
+            fifo=pathlib.Path(d)/'fifo.json'
+            if hasattr(os,'mkfifo'):
+                os.mkfifo(fifo)  # a FIFO never hangs the helper: opened non-blocking, refused as not a file
+                with self.assertRaisesRegex(ValueError,'not on this server'):self.args('seccomp='+str(fifo))
     def test_apparmor_profiles_must_be_loaded_here(self):
         with tempfile.TemporaryDirectory() as d:
             loaded=pathlib.Path(d)/'profiles';loaded.write_text('docker-default (enforce)\nsite-profile (enforce)\n')
@@ -85,9 +92,13 @@ class SecurityOptionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'AppArmor profile other-profile, which is not loaded on this server'):self.args('apparmor=other-profile')
             with patch('helper.APPARMOR_PROFILES',str(pathlib.Path(d)/'absent')),self.assertRaisesRegex(ValueError,'not loaded'):self.args('apparmor=docker-default')
     def test_options_docknest_cannot_copy_safely_are_refused_with_a_reason(self):
-        for option in ['systempaths=unconfined','writable-cgroups=true','seccomp=','apparmor=--x','no-new-privileges=maybe',5]:
+        for option in ['systempaths=masked','writable-cgroups=maybe','mask=/proc','seccomp=','apparmor=--x','no-new-privileges=maybe',5]:
             with self.assertRaises(ValueError,msg=option):self.args(option)
-        with self.assertRaisesRegex(ValueError,'security option systempaths'):self.args('systempaths=unconfined')
+        with self.assertRaisesRegex(ValueError,'security option mask'):self.args('mask=/proc')
+    def test_options_that_only_turn_protection_off_are_left_out_so_the_copy_is_stricter(self):
+        # Upgrade safety: these sites restored before 2.14.0 (the option was dropped); they still do.
+        for option in ['systempaths=unconfined','systempaths:unconfined','writable-cgroups=true','writable-cgroups=false']:self.assertEqual(self.args(option),[],option)
+        self.assertEqual(helper.hardening(container(SecurityOpt=['systempaths=unconfined','writable-cgroups=false']))['relaxed'],['systempaths=unconfined'])
     def test_selinux_labels_are_kept(self):
         self.assertEqual(self.args('label=disable'),['--security-opt','label=disable'])
         self.assertEqual(self.args('label:level:s0:c100,c200'),['--security-opt','label=level:s0:c100,c200'])
@@ -114,6 +125,21 @@ class ShortfallTests(unittest.TestCase):
         self.assertIn('AppArmor profile',helper.hardening_shortfall(custom,container(SecurityOpt=['seccomp='+json.dumps(PROFILE,indent=2)])))
         self.assertIsNone(helper.hardening_shortfall(custom,container(SecurityOpt=['seccomp='+json.dumps(PROFILE,indent=2),'apparmor=site-profile'])),'same profile, other spacing')
         self.assertIn('seccomp profile',helper.hardening_shortfall(container(),container(SecurityOpt=['seccomp=unconfined'])),'never weaker than the default either')
+    def test_a_copy_that_unmasks_system_paths_the_original_kept_masked_is_weaker(self):
+        self.assertIn('masked system paths',helper.hardening_shortfall(container(),container(SecurityOpt=['systempaths=unconfined'])))
+        self.assertIsNone(helper.hardening_shortfall(container(SecurityOpt=['systempaths=unconfined']),container()),'the stricter copy passes')
+    def test_compose_copies_are_always_inspected_and_never_weaker(self):
+        # A Compose copy is built from the site's files, which may add what the original never had.
+        plain=container('web')
+        for weaker in [['seccomp=unconfined'],['apparmor=unconfined'],['label=disable'],['systempaths=unconfined']]:
+            with patch('helper.inspect',return_value=[container('copy',SecurityOpt=weaker)]),self.assertRaises(ValueError,msg=weaker):helper.verify_hardening([plain],['cid'],every=True)
+        with patch('helper.inspect',return_value=[container('copy',CapAdd=['CHOWN'],Privileged=True)]),self.assertRaisesRegex(ValueError,'dropped capabilities'):helper.verify_hardening([plain],['cid'],every=True)
+        with patch('helper.inspect',return_value=[container('copy')]):helper.verify_hardening([plain],['cid'],every=True)
+        with patch('helper.inspect',side_effect=AssertionError('no inspect')):helper.verify_hardening([plain],['cid'])
+        self.assertIn('verify_hardening(containers,created,every=bool(compose))',pathlib.Path(helper.__file__).read_text(),'the move deploy checks every Compose copy')
+    def test_copies_that_cannot_be_matched_fail_closed(self):
+        with self.assertRaisesRegex(ValueError,'could not match'):helper.verify_hardening([container(ReadonlyRootfs=True)],[])
+        with patch('helper.inspect',return_value=[]),self.assertRaisesRegex(ValueError,'could not inspect'):helper.verify_hardening([container(ReadonlyRootfs=True)],['cid'])
     def test_unhardened_originals_are_not_inspected(self):
         with patch('helper.inspect',side_effect=AssertionError('no inspect')):helper.verify_hardening([container()],['cid'])
         with patch('helper.inspect',return_value=[container()]),self.assertRaisesRegex(ValueError,'read-only root'):helper.verify_hardening([container(ReadonlyRootfs=True)],['cid'])
@@ -132,21 +158,23 @@ class ComposeTests(unittest.TestCase):
     def test_hardened_compose_services_pass(self):
         helper.check_compose_config(self.config(cap_drop=['ALL'],cap_add=['NET_BIND_SERVICE'],read_only=True,tmpfs=['/tmp'],security_opt=['no-new-privileges:true','seccomp:unconfined']),['web'],self.manifest())
     def test_compose_settings_a_copy_cannot_have_are_refused(self):
-        for service in [dict(security_opt=['systempaths=unconfined']),dict(security_opt=['seccomp:/srv/missing/profile.json']),dict(security_opt=['seccomp:./profile.json']),
+        for service in [dict(security_opt=['mask=/proc']),dict(security_opt=['seccomp:/srv/missing/profile.json']),dict(security_opt=['seccomp:./profile.json']),
                         dict(cap_drop=['NET RAW']),dict(cap_add='CHOWN'),dict(security_opt=['apparmor=not-loaded-here'])]:
             with patch('helper.APPARMOR_PROFILES','/nonexistent/apparmor'),self.assertRaises(ValueError,msg=service):helper.check_compose_config(self.config(**service),['web'],self.manifest())
 
 class MovePreflightFactTests(unittest.TestCase):
     def test_source_facts_name_problems_and_needed_profiles_and_the_target_reports_loaded_ones(self):
-        facts=helper.hardening_facts([container('web',SecurityOpt=['apparmor=site-profile','no-new-privileges']),container('db',SecurityOpt=['systempaths=unconfined']),container('cache',SecurityOpt=['apparmor=unconfined'])])
+        facts=helper.hardening_facts([container('web',SecurityOpt=['apparmor=site-profile','no-new-privileges']),container('db',SecurityOpt=['mask=/proc']),container('cache',SecurityOpt=['apparmor=unconfined'])])
         self.assertTrue(facts['hardened']);self.assertEqual(facts['apparmor'],['site-profile'])
-        self.assertEqual(len(facts['problems']),1);self.assertIn('Container db uses the security option systempaths',facts['problems'][0])
-        self.assertEqual(helper.hardening_facts([container()]),{'hardened':False,'problems':[],'apparmor':[]})
+        self.assertEqual(len(facts['problems']),1);self.assertIn('Container db uses the security option mask',facts['problems'][0])
+        self.assertEqual(helper.hardening_facts([container()]),{'hardened':False,'problems':[],'apparmor':[],'hostAppArmor':[]})
+        self.assertEqual(helper.hardening_facts([{**container(),'AppArmorProfile':'docker-default'},{**container('b'),'AppArmorProfile':'unconfined'}])['hostAppArmor'],['docker-default'])
         with tempfile.TemporaryDirectory() as d:
             loaded=pathlib.Path(d)/'profiles';loaded.write_text('site-profile (enforce)\n')
             with patch('helper.APPARMOR_PROFILES',str(loaded)),patch('helper.docker',return_value=b''):
                 probe=helper.target_probe({'paths':[],'names':{},'apparmor':['site-profile','other','--bad']})
-        self.assertEqual(probe['apparmorLoaded'],['site-profile'])
+        self.assertEqual(probe['apparmorLoaded'],['site-profile']);self.assertTrue(probe['apparmorEnabled'])
+        with patch('helper.APPARMOR_PROFILES','/nonexistent/apparmor'),patch('helper.docker',return_value=b''):self.assertFalse(helper.target_probe({'paths':[],'names':{}})['apparmorEnabled'])
 
 @unittest.skipUnless(os.name=='posix','Restore test journals sync directories (POSIX only)')
 class RestoreTestCopyTests(unittest.TestCase):

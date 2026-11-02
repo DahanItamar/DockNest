@@ -555,8 +555,15 @@ A setting DockNest cannot reproduce is refused with the reason instead of being 
 
 - an AppArmor profile that is not loaded on the server that runs the copy ("Load it, then try again");
 - a seccomp profile given as a file path that is not on that server, or as a relative path;
-- other security options (for example `systempaths=unconfined`);
+- security options DockNest does not know.
 - added capabilities beyond Docker's defaults (`NET_ADMIN`, `NET_RAW`, `SYS_ADMIN`, `ALL`), as before.
+
+`systempaths=unconfined` and `writable-cgroups` only turn a protection off, so the copy is created without them and
+is stricter than the original (as before 2.14.0). A Compose copy that adds one the original lacks is refused as weaker.
+
+Only settings on the container itself are kept. Docker's host-wide defaults (the AppArmor profile Docker applies when
+none is set, a daemon-wide seccomp profile) belong to the server that runs the copy; a move notes when the new server
+has no AppArmor.
 
 A restore test that cannot run because of one of these ends "Couldn't run" with that reason. A move checks the site's
 settings and the new server's AppArmor profiles in the preflight and blocks before it starts.

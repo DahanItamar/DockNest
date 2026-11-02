@@ -228,7 +228,11 @@ Collapsed by default and pre-filled; most moves need no changes here.
   default capabilities (the same rule as every other copy), `cap_drop` is accepted, and `security_opt` is accepted for
   `no-new-privileges`, `seccomp` (`unconfined` or an absolute path to a profile on the new server), `apparmor` (loaded on
   the new server) and `label`. The preflight blocks when a setting cannot be kept or the new server lacks an AppArmor
-  profile; each copy is inspected before it starts and refused if it is less protected than the original. See
+  profile; each copy is inspected before it starts and refused if it is less protected than the original. Every
+  Compose copy is inspected, so Compose files that add `unconfined` or `label=disable` the original lacks are refused.
+  `systempaths=unconfined` and `writable-cgroups` are left out (the copy is stricter). Docker's host-wide defaults are
+  not moved: when the site runs under Docker's default AppArmor profile and the new server has no AppArmor, the
+  preflight notes it under Advanced settings. See
   [restore-tests.md](restore-tests.md#hardened-sites).
 - Remove old copy with data deletes only read-write data folders and volumes of the old containers; never folders used
   by another container, served by nginx on that server or named in another DockNest site's settings (compared after

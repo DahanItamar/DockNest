@@ -110,6 +110,7 @@ APPARMOR_PROFILE=re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}')
 SELINUX_LABEL=re.compile(r'[A-Za-z0-9_.:,=-]{1,255}')
 SECCOMP_LIMIT=1024*1024
 APPARMOR_PROFILES='/sys/kernel/security/apparmor/profiles'
+RELAXING_OPTIONS={'systempaths=unconfined':'systempaths=unconfined','systempaths:unconfined':'systempaths=unconfined','writable-cgroups=true':'writable-cgroups=true','writable-cgroups:true':'writable-cgroups=true','writable-cgroups=false':None,'writable-cgroups:false':None}  # None: Docker's default anyway
 def capability_name(value):
     name=value.strip().upper().removeprefix('CAP_') if isinstance(value,str) else ''
     return name if CAPABILITY_NAME.fullmatch(name) else None
@@ -127,7 +128,7 @@ def seccomp_profile(value,name):
         path=pathlib.Path(value)
         if not value.startswith('/') or '..' in path.parts:raise ValueError('Container %s uses the seccomp profile %s. Use an absolute path to the profile file.'%(name,value[:256]))
         try:
-            fd=os.open(path,os.O_RDONLY|NOFOLLOW)
+            fd=os.open(path,os.O_RDONLY|NOFOLLOW|getattr(os,'O_NONBLOCK',0)|getattr(os,'O_CLOEXEC',0))  # a FIFO never blocks
             with os.fdopen(fd,'rb') as source:
                 if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):raise OSError('not a file')
                 text=source.read(SECCOMP_LIMIT+1).decode()
@@ -145,7 +146,7 @@ def hardening(c):
             cap=capability_name(value)
             if cap is None:raise ValueError('Container %s %s a capability DockNest does not recognize (%s).'%(name,kind,str(value)[:64]))
             if cap not in result:result.append(cap)
-    found={'noNewPrivileges':False,'seccomp':'default','apparmor':None,'labels':[]}
+    found={'noNewPrivileges':False,'seccomp':'default','apparmor':None,'labels':[],'relaxed':[]}
     for item in hc.get('SecurityOpt') or []:
         if not isinstance(item,str):raise ValueError('Container %s has a security option DockNest cannot read.'%name)
         # The Docker CLI's own parsing: key=value, or the older key:value.
@@ -155,9 +156,12 @@ def hardening(c):
         elif key=='seccomp' and value:found['seccomp']=seccomp_profile(value,name)
         elif key=='apparmor' and APPARMOR_PROFILE.fullmatch(value):found['apparmor']=value
         elif key=='label' and SELINUX_LABEL.fullmatch(value):found['labels'].append(value)
+        # Options that only turn a protection off: a copy without them is stricter, so they are left out (as before
+        # 2.14.0) and recorded, so a Compose copy that adds one the original lacks is caught as weaker.
+        elif item in RELAXING_OPTIONS:found['relaxed']+=[RELAXING_OPTIONS[item]] if RELAXING_OPTIONS[item] else []
         else:raise ValueError('Container %s uses the security option %s, which DockNest cannot copy safely. Remove it, or restore this site by hand.'%(name,key[:64]))
     base=set() if 'ALL' in drop else DOCKER_BASE_CAPABILITIES-set(drop)
-    return {'readonly':bool(hc.get('ReadonlyRootfs')),'privileged':bool(hc.get('Privileged')),'drop':drop,'add':add,'capabilities':frozenset(base|set(add)),**found,'labels':sorted(found['labels'])}
+    return {'readonly':bool(hc.get('ReadonlyRootfs')),'privileged':bool(hc.get('Privileged')),'drop':drop,'add':add,'capabilities':frozenset(base|set(add)),**found,'labels':sorted(found['labels']),'relaxed':sorted(set(found['relaxed']))}
 def hardened(c):
     hc=c.get('HostConfig') or {}
     return bool(hc.get('ReadonlyRootfs') or hc.get('CapDrop') or hc.get('CapAdd') or hc.get('SecurityOpt'))
@@ -198,13 +202,19 @@ def hardening_shortfall(original,copy):
     if o['seccomp']!='unconfined' and k['seccomp']!=o['seccomp']:missing.append('its seccomp profile')
     if o['apparmor']!='unconfined' and k['apparmor']!=o['apparmor']:missing.append('its AppArmor profile')
     if 'disable' not in o['labels'] and k['labels']!=o['labels']:missing.append('its SELinux labels')
+    if set(k['relaxed'])-set(o['relaxed']):missing.append('its masked system paths and read-only cgroups')
     if not missing:return None
     return 'The copy of %s would run without %s, which the original has. DockNest stopped so a copy is never less protected.'%(container_label(original),', '.join(missing))
-def verify_hardening(originals,created):
-    """Inspect each new copy of a hardened container before it starts; raise when it is less protected."""
-    pairs=[(o,cid) for o,cid in zip(originals,created) if hardened(o)]
+def verify_hardening(originals,created,every=False):
+    """Inspect each new copy before it starts; raise when it is less protected than its original. Plain copies skip
+    unhardened originals (DockNest adds nothing to them); a Compose copy (every=True) is always checked, because the
+    site's Compose files may add settings the original lacks."""
+    if len(originals)!=len(created):raise ValueError('DockNest could not match each copy to its original, so it stopped.')
+    pairs=[(o,cid) for o,cid in zip(originals,created) if every or hardened(o)]
     if not pairs:return
-    for (original,_),copy in zip(pairs,inspect([cid for _,cid in pairs])):
+    copies=inspect([cid for _,cid in pairs])
+    if len(copies)!=len(pairs):raise ValueError('DockNest could not inspect every copy, so it stopped.')
+    for (original,_),copy in zip(pairs,copies):
         problem=hardening_shortfall(original,copy)
         if problem:raise ValueError(problem)
 
