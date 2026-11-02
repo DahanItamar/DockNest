@@ -1,6 +1,6 @@
 # Launch a new site from the Map (ADR, issue #151)
 
-Status: proposed design for 2.16.0 "Launch", awaiting owner approval. Date: 2026-11-02. No code yet.
+Status: approved for 2.16.0 "Launch"; owner questions decided 2026-11-02 (all recommendations accepted).
 Builds on [moving-sites.md](moving-sites.md) (deploy journal, Compose allow-list, nginx and certificate steps, install
 on server), [restore-tests.md](restore-tests.md), [safe-edit.md](safe-edit.md) (the privilege gate) and
 [alert-channels.md](alert-channels.md) (Connections, sealed secrets).
@@ -37,14 +37,14 @@ feature ships with the "beta" label.
 | Where it lives | `/srv/docknest/<slug>` on the server (an application location under the moves rules); refused if it exists. Compose project name `<slug>`. Decided (lead). |
 | Fetch | On the server with `git` (offered through the existing install flow, `git` added to its fixed package table). Decided (lead). |
 | Deploy key | A **Deploy key** in its own table, listed on the Connections page in its own section: DockNest generates an ed25519 key pair, shows the public key to paste into the Git host, seals the private key with the master key. The Git host's SSH key is read from the server's network view and confirmed by SHA-256 when the key is created (item 10). Deploy keys are always admin-only, never covered by "Operators can manage alerts". Decided (lead). |
-| Build | Allowed when the Compose file has `build:`, with the build gate below, a 30-minute time limit and a free-space check. Owner question 1. |
+| Build | Allowed when the Compose file has `build:`, with the build gate below, a 30-minute time limit and a free-space check. Decided (owner): allowed, with the build allow-list, the trust warning and re-verification. |
 | Gate | The resolved Compose model (`docker compose config --format json`) must pass the Safe Edit privilege gate with no "before": nothing privileged, no host namespaces, no `docker.sock`, bind mounts only inside the site folder, named volumes allowed, published ports only on `127.0.0.1` (nginx fronts the site). Decided (lead). |
 | Web service | The owner picks the service and container port that nginx proxies to; DockNest binds it to a free `127.0.0.1` port through a generated override (as moves do, needs Compose 2.24+). Decided (lead). |
 | nginx and certificate | The move steps: an nginx site file journalled in `/etc/nginx/sites-available` or `conf.d` (by distribution), `nginx -t` before reload, certbot `--nginx` once DNS points at the server. Without certbot, the existing **Install certbot** offer; without DNS, the site launches on HTTP and the certificate step waits for **Check again**. Decided (lead). |
 | DNS | Cloudflare (existing token) can create the A/AAAA record; otherwise DockNest shows the exact record. Decided (lead). |
 | Day one | The site record is created with its containers, Compose files and configuration files; a daily backup policy at a quiet time; the first backup runs as the last step. Restore tests weekly on the chosen test server; with no other server, they stay off with "Add a test server to turn on restore tests". Decided (lead). |
 | Failure | Every created thing is journalled before creation (the `deploy-restore` pattern); any failure before the site is saved tears down all of it. Decided (lead). |
-| After launch | It is a normal site (Safe Edit, self-heal, moves). **Remove launch** is offered for 24 hours: tears down what the launch created, keeps the first backup. Owner question 3. |
+| After launch | It is a normal site (Safe Edit, self-heal, moves). **Remove launch** is offered for 24 hours: tears down what the launch created, keeps the first backup. Decided (owner): yes, 24 hours. |
 | Locks | One launch per server at a time; holds the server like an install (no backup, restore, move, install or restore test step there while a launch step runs). Decided (lead). |
 | Schema | Migration `site-launches`, next free number at merge (currently 15), `compatible: true`, new tables only. The same migration adds the `deploy_keys` table (see Security review changes, item 10). |
 
@@ -220,16 +220,19 @@ launches before rolling back". Deploy keys live in their own table, so 2.15.x ne
 - A server with only one connected server in DockNest: restore tests stay off with the reason.
 - An ARM server and an image without an ARM build: fails at start with "This image has no build for arm64".
 
-## Owner questions
+## Owner questions (decided 2026-11-02)
+
+The owner accepted all three recommendations.
 
 1. **Builds on the server.** Allow Compose files with `build:` (code from the repository runs at build time on the
    server), or only prebuilt images in 2.16? Recommendation: allow, with the build allow-list, the trust warning and
-   re-verification; most private apps need it.
+   re-verification; most private apps need it. **Decided: allowed, as recommended.**
 2. **Git on the server.** Install `git` on the server (through the existing install offer) or fetch on the DockNest
    host and copy the files over SFTP? Recommendation: on the server; it keeps the deploy key off the dashboard's disk
-   and needs no Git in the DockNest image.
+   and needs no Git in the DockNest image. **Decided: on the server; the deploy key is stored only in the sealed
+   `deploy_keys` table on the dashboard host.**
 3. **Undo window.** Offer **Remove launch** for 24 hours after launch? Recommendation: yes, it makes trying a site cheap
-   and never touches anything the launch did not create.
+   and never touches anything the launch did not create. **Decided: yes, 24 hours.**
 
 ## Roles used
 
