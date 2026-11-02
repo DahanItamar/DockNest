@@ -251,8 +251,9 @@ CREATE TABLE IF NOT EXISTS site_hardening (site_id TEXT PRIMARY KEY REFERENCES s
 // - site_launches: never the pasted Compose text or environment values (those live only in the sealed `payload` of the
 //   fetch step, wiped after it). `commit_sha` is the spec's `commit` (a reserved word in SQLite).
 // - site_launch_steps: the launch's jobs (item 11: jobs.site_id is NOT NULL). launch_queued/launch_running are the job
-//   statuses; `teardown` is the journal-first undo, also used by Remove launch.
-export const LAUNCH_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'first_backup', 'teardown']);
+//   statuses; `maintenance` sets up the maintenance page after save (never fatal); `teardown` is the journal-first
+//   undo, also used by Remove launch.
+export const LAUNCH_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup', 'teardown']);
 export const LAUNCH_STATES = Object.freeze(['queued', 'running', 'waiting_dns', 'done', 'failed', 'cancelled', 'removed', 'needs_attention']);
 const launchStepList = LAUNCH_STEPS.map(step => `'${step}'`).join(',');
 export const siteLaunchesSchema = `

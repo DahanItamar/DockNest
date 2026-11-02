@@ -24,7 +24,7 @@ const at = () => new Date().toISOString();
 
 const serverRow = name => { const serverId = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(serverId, name, 'h', 22, 'root', 'k', '0'.repeat(64), at()); return serverId; };
 const siteRow = (serverId, name) => { const siteId = randomUUID(); db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, serverId, name, JSON.stringify({ kind: 'compose', containers: ['app'] }), at()); return siteId; };
-const STEPS = ['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'first_backup', 'teardown'];
+const STEPS = ['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup', 'teardown'];
 function launch(serverId, { state = 'queued', steps = { check: 'launch_queued' } } = {}) {
   const launchId = randomUUID();
   db.prepare("INSERT INTO site_launches(id,server_id,slug,source,domain,state,created_by,created_at,updated_at) VALUES(?,?,?,'compose',?,?,'admin',?,?)").run(launchId, serverId, 'site-' + launchId.slice(0, 8), launchId.slice(0, 8) + '.example.com', state, at(), at());

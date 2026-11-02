@@ -87,8 +87,9 @@ test('launch constraints: one queued or running launch per server, one live slug
   db.prepare("UPDATE site_launches SET state='needs_attention' WHERE id='c'").run(); // the state may still change
   assert.throws(() => db.prepare("DELETE FROM site_launches WHERE id='a'").run(), /append-only/);
   const step = (step, state = 'pending') => db.prepare('INSERT INTO site_launch_steps(launch_id,step,state) VALUES(?,?,?)').run('a', step, state);
-  for (const name of ['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'first_backup', 'teardown']) step(name, name === 'check' ? 'launch_queued' : 'pending');
+  for (const name of ['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup', 'teardown']) step(name, name === 'check' ? 'launch_queued' : 'pending');
   assert.throws(() => step('deploy'), /CHECK constraint failed/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM site_launch_steps WHERE launch_id='a'").get().n, 11, 'maintenance is one of the steps');
   assert.throws(() => db.prepare("UPDATE site_launch_steps SET state='queued' WHERE launch_id='a' AND step='fetch'").run(), /CHECK constraint failed/, 'job statuses are launch_queued/launch_running');
   assert.throws(() => db.prepare("UPDATE site_launch_steps SET detail=? WHERE launch_id='a' AND step='fetch'").run('x'.repeat(501)), /CHECK constraint failed/);
   assert.throws(() => db.prepare("DELETE FROM site_launch_steps WHERE launch_id='a'").run(), /append-only/);
