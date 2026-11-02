@@ -22,11 +22,12 @@ def container(**overrides):
 
 class HardeningFactTests(unittest.TestCase):
     def test_safe_container_reports_clean_facts_and_no_secrets(self):
-        facts = hardening_facts(container(HostConfig__Memory=268435456, HostConfig__SecurityOpt=['no-new-privileges:true'], Config__User='1000:1000'), rootless=False)
+        facts = hardening_facts(container(HostConfig__Memory=268435456, HostConfig__SecurityOpt=['no-new-privileges:true'], Config__User='1000:1000'), engine='none')
         self.assertEqual(facts['format'], 1); self.assertEqual(facts['name'], 'web')
         for flag in ['privileged', 'dockerSocket', 'rootUser', 'hostNetwork']: self.assertFalse(facts[flag], flag)
         for flag in ['memoryLimit', 'healthcheck', 'noNewPrivileges']: self.assertTrue(facts[flag], flag)
         self.assertEqual(facts['publicPorts'], []); self.assertEqual(facts['extraCapabilities'], []); self.assertEqual(facts['imagePin'], 'tag')
+        self.assertFalse(facts['publishAll']); self.assertIs(facts['rootless'], False)
         text = json.dumps(facts)
         for secret in ['hunter2', 'label-secret', 'DB_PASSWORD', '/srv/app/data']: self.assertNotIn(secret, text)
 
@@ -68,12 +69,47 @@ class HardeningFactTests(unittest.TestCase):
         self.assertFalse(hardening_facts(container(HostConfig__SecurityOpt=['no-new-privileges:false']))['noNewPrivileges'])
 
     def test_rootless_engine_detection(self):
-        with patch('helper.docker', return_value=b'["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]\n'): self.assertTrue(engine_rootless())
-        with patch('helper.docker', return_value=b'["name=seccomp,profile=builtin"]\n'): self.assertFalse(engine_rootless())
-        with patch('helper.docker', side_effect=subprocess.CalledProcessError(1, 'docker')): self.assertIsNone(engine_rootless())
+        with patch('helper.run', return_value=b'["name=seccomp,profile=builtin","name=rootless","name=cgroupns"]\n') as command:
+            self.assertEqual(engine_rootless(), 'rootless')
+            self.assertEqual(command.call_args.kwargs.get('timeout'), 15)
+        with patch('helper.run', return_value=b'["name=seccomp,profile=builtin","name=userns"]\n'): self.assertEqual(engine_rootless(), 'userns')
+        with patch('helper.run', return_value=b'["name=seccomp,profile=builtin"]\n'): self.assertEqual(engine_rootless(), 'none')
+        with patch('helper.run', side_effect=subprocess.CalledProcessError(1, 'docker')): self.assertIsNone(engine_rootless())
+        with patch('helper.run', side_effect=subprocess.TimeoutExpired('docker', 15)): self.assertIsNone(engine_rootless())
+
+    def test_userns_remap_with_host_userns_is_real_root(self):
+        self.assertIs(hardening_facts(container(), engine='rootless')['rootless'], True)
+        self.assertIs(hardening_facts(container(), engine='userns')['rootless'], True)
+        self.assertIs(hardening_facts(container(HostConfig__UsernsMode='host'), engine='userns')['rootless'], False)
+        self.assertIs(hardening_facts(container(), engine='none')['rootless'], False)
+        self.assertIsNone(hardening_facts(container())['rootless'])
+
+    def test_engine_socket_folders_and_destinations(self):
+        def bind(source, destination='/x'): return hardening_facts(container(Mounts=[{'Type': 'bind', 'Source': source, 'Destination': destination}]))['dockerSocket']
+        for source in ['/var/run/docker.sock', '/run/docker.sock', '/srv/custom/docker.sock', '/run/podman/podman.sock', '/', '/var', '/run', '/var/run', '/var/run/', '/run/user/1000', '/run/user/1000/docker.sock']:
+            self.assertTrue(bind(source), source)
+        for source in ['/srv/app', '/var/lib/app', '/run/secrets', '/home/user/docker.sock.bak']:
+            self.assertFalse(bind(source), source)
+        self.assertTrue(bind('/srv/odd/engine', '/var/run/docker.sock'), 'destination is where clients look for the engine')
+        self.assertTrue(hardening_facts(container(Mounts=[{'Type': 'volume', 'Source': '/var/lib/docker/volumes/x/_data', 'Destination': '/var/run/docker.sock'}]))['dockerSocket'])
+        self.assertTrue(hardening_facts(container(Mounts=[], HostConfig__Binds=['/var/run:/host-run']))['dockerSocket'])
+        self.assertTrue(hardening_facts(container(Mounts=[], HostConfig__Binds=['/srv/x:/var/run/docker.sock']))['dockerSocket'])
+
+    def test_publish_all_and_specific_addresses(self):
+        self.assertTrue(hardening_facts(container(HostConfig__PublishAllPorts=True))['publishAll'])
+        lan = hardening_facts(container(HostConfig__PortBindings={'80/tcp': [{'HostIp': '192.168.1.10', 'HostPort': '8080'}]}, NetworkSettings={'Ports': {}}))
+        self.assertEqual(lan['publicPorts'], ['192.168.1.10:8080->80/tcp'], 'a specific non-loopback address is reachable from outside')
+        for address in ['127.0.0.1', '127.0.0.2', '::1', '[::1]', 'localhost']:
+            self.assertEqual(hardening_facts(container(HostConfig__PortBindings={'80/tcp': [{'HostIp': address, 'HostPort': '8080'}]}, NetworkSettings={'Ports': {}}))['publicPorts'], [], address)
+
+    def test_database_ports_survive_a_long_port_list(self):
+        many = {'%d/tcp' % port: [{'HostIp': '0.0.0.0', 'HostPort': str(port)}] for port in range(10000, 10100)}
+        many['5432/tcp'] = [{'HostIp': '0.0.0.0', 'HostPort': '5432'}]
+        facts = hardening_facts(container(HostConfig__PortBindings=many, NetworkSettings={'Ports': {}}))
+        self.assertEqual(len(facts['publicPorts']), 64); self.assertEqual(facts['publicPorts'][0], '0.0.0.0:5432->5432/tcp')
 
     def test_report_never_fails_the_scan(self):
-        with patch('helper.docker', return_value=b'[]'):
+        with patch('helper.run', return_value=b'[]'):
             self.assertEqual(hardening_report([]), [])
             self.assertEqual(len(hardening_report([container(), container(Name='/db')])), 2)
             self.assertIsNone(hardening_report([{'Config': 'broken'}]))

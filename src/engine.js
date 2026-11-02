@@ -25,8 +25,9 @@ import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
-// Every discovery scan also refreshes the hardening facts of the sites on that server (docs/hardening-score.md).
-export const discover=async server=>{const result=await remote(server,{operation:'discover'});try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}return result;};
+// A discovery scan an administrator runs also refreshes the hardening facts of the sites on that server
+// (docs/hardening-score.md); other roles only read.
+export const discover=async(server,{recordHardening:record=false}={})=>{const result=await remote(server,{operation:'discover'});if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};

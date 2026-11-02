@@ -8,10 +8,12 @@ DockNest only reads. It never changes a container, a Compose file or a server se
 
 The grade is refreshed by work DockNest already does, with no extra connection or timer:
 
-- a server scan (discovery, for example when you add or edit a site), and
+- a server scan run by an administrator (discovery, for example when you add or edit a site), and
 - every backup of the site.
 
-Until one of these runs after the update, the site has no grade (`grade: null`). A static website has no containers and never gets a grade.
+Scans run by operators and viewers only read; they never change the stored grade.
+
+Until one of these runs after the update, the site has no grade (`grade: null`). A static website has no containers and never gets a grade. A scan updates a site only when it finds every container of that site; otherwise the previous grade stays. A site with more than 30 containers (more than a site can hold) gets no grade.
 
 ## Checks
 
@@ -21,7 +23,7 @@ Until one of these runs after the update, the site has no grade (`grade: null`).
 | Docker socket mounted | high | Remove the `docker.sock` mount or use a read-only socket proxy. |
 | Extra capabilities | high for `ALL`, `SYS_ADMIN`, `SYS_MODULE`, `SYS_PTRACE`, `SYS_RAWIO`, `DAC_READ_SEARCH`, `BPF`, `PERFMON`, `SYS_BOOT`; medium otherwise | Remove `cap_add` entries the service does not strictly need. |
 | Runs as root | medium | Set `user:` to a non-root UID in the Compose file. |
-| Ports open on all interfaces | medium | Bind ports to `127.0.0.1` and publish through your reverse proxy. |
+| Ports open to the network | high for database ports, low for only 80/443, medium otherwise | Bind ports to `127.0.0.1` and publish through your reverse proxy. |
 | Privilege escalation allowed | low | Add `security_opt: no-new-privileges:true` to the service. |
 | No memory limit | low | Set `mem_limit` so one service cannot exhaust server memory. |
 | Unpinned image tag | low | Pin the image to a version tag or digest, not latest. |
@@ -31,7 +33,10 @@ Details:
 
 - **Extra capabilities** counts only capabilities beyond Docker's default set (the same set restore uses), so adding `CHOWN` or `SETUID` is not a finding.
 - **Runs as root** passes when the Docker engine runs rootless or with user namespaces, because root in the container is then not root on the server.
-- **Ports open on all interfaces** covers ports published on `0.0.0.0` or `::` (or with no address), and containers on the host network. Ports bound to `127.0.0.1` pass.
+- **Docker socket mounted** covers a bind of any `docker.sock` or `podman.sock`, a bind of `/`, `/var`, `/run`, `/var/run` or anything under `/run/user/` (folders that hold the socket), and any mount onto `/var/run/docker.sock`.
+- **Runs as root** with user namespace remapping still counts a container started with `userns_mode: host`, because it runs as real root.
+- **Ports open to the network** covers every published port not bound to a loopback address: `0.0.0.0`, `::`, no address, or a specific LAN or public address. Containers on the host network and containers with "publish all ports" (`-P`) are medium. Database ports (3306, 5432, 6379, 27017, 1433, as the container port or the host port) are high. When the only reachable host ports are 80 and 443, the finding is low, because a public web server needs them. Ports bound to `127.0.0.1` pass.
+- **Privilege escalation allowed** looks at the container's own `security_opt`. If you set `no-new-privileges` for the whole Docker daemon (`daemon.json`), DockNest cannot see it yet and still reports this check.
 - **Unpinned image tag** flags `:latest` and images with no tag. A version tag or a `@sha256:` digest passes.
 - A healthcheck defined in the image counts.
 

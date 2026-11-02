@@ -216,7 +216,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
   } catch (error) { db.prepare("UPDATE servers SET status='failed' WHERE id=?").run(server.id); throw Object.assign(error, serverTestFailure(error)); }
 });
 app.get('/api/servers/:id/discover', async (req, res) => {
-  const result = await discover(getServer(req.params.id));
+  const result = await discover(getServer(req.params.id), { recordHardening: req.user.role === 'admin' });
   const containers = Array.isArray(result) ? result : result.containers || [];
   res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
 });

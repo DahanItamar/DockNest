@@ -16,7 +16,7 @@ const { gradeHardening, cleanFacts, recordHardening, recordDiscoveredHardening, 
 const { migrations, migrate } = await import('../src/migrations.js');
 
 // A container that passes every check; each test changes only what it is about.
-const safe = (overrides = {}) => ({ format: 1, name: 'web', image: 'nginx:1.27', privileged: false, dockerSocket: false, rootUser: false, rootless: false, hostNetwork: false,
+const safe = (overrides = {}) => ({ format: 1, name: 'web', image: 'nginx:1.27', privileged: false, dockerSocket: false, rootUser: false, rootless: false, hostNetwork: false, publishAll: false,
   publicPorts: [], memoryLimit: true, imagePin: 'tag', healthcheck: true, noNewPrivileges: true, extraCapabilities: [], ...overrides });
 const ids = view => view.findings.map(item => item.id);
 const at = '2026-10-01T10:00:00.000Z';
@@ -45,16 +45,28 @@ test('every finding has a short plain-language fix and the exact response fields
   }
 });
 
-test('host network counts as ports open on all interfaces', () => {
+const portFinding = facts => gradeHardening([safe(facts)]).findings.find(item => item.id === 'public-ports')?.severity ?? null;
+
+test('host network and publish-all count as ports open to the network (medium)', () => {
   const view = gradeHardening([safe({ hostNetwork: true })], at);
-  assert.deepEqual(ids(view), ['public-ports']); assert.equal(view.grade, 'C');
+  assert.deepEqual(ids(view), ['public-ports']); assert.equal(view.grade, 'C'); assert.equal(view.findings[0].severity, 'medium');
+  assert.equal(portFinding({ publishAll: true }), 'medium');
+  assert.equal(portFinding({ publishAll: true, publicPorts: ['0.0.0.0:443->443/tcp'] }), 'medium', 'publish-all is never only 80/443');
 });
 
-test('ports on 127.0.0.1 only pass; 0.0.0.0 and :: are findings', () => {
-  assert.deepEqual(ids(gradeHardening([safe({ publicPorts: [] })])), []);
-  assert.deepEqual(ids(gradeHardening([safe({ publicPorts: ['0.0.0.0:8080->80/tcp'] })])), ['public-ports']);
-  assert.deepEqual(ids(gradeHardening([safe({ publicPorts: [':::8443->443/tcp'] })])), ['public-ports']);
-  assert.deepEqual(ids(gradeHardening([safe({ publicPorts: ['[::]:8443->443/tcp'] })])), ['public-ports']);
+test('ports: loopback passes, 80/443 only is low, other ports medium, database ports high', () => {
+  assert.equal(portFinding({ publicPorts: [] }), null, 'nothing reachable (127.0.0.1 bindings are not reported)');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:80->8080/tcp', ':::443->8443/tcp'] }), 'low');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:8080->80/tcp'] }), 'medium');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:80->80/tcp', '[::]:8443->443/tcp'] }), 'medium');
+  assert.equal(portFinding({ publicPorts: ['192.168.1.10:8080->80/tcp'] }), 'medium', 'a specific non-loopback address is reachable');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:?->80/tcp'] }), 'medium');
+  for (const port of [3306, 5432, 6379, 27017, 1433]) assert.equal(portFinding({ publicPorts: [`0.0.0.0:${port}->${port}/tcp`] }), 'high', String(port));
+  assert.equal(portFinding({ publicPorts: [':::15432->5432/tcp'] }), 'high', 'container database port on another host port');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:6379->9000/tcp'] }), 'high', 'host port that clients expect a database on');
+  assert.equal(portFinding({ publicPorts: ['0.0.0.0:3300-3310->3300-3310/tcp'] }), 'high', 'a range that covers a database port');
+  assert.equal(portFinding({ hostNetwork: true, publicPorts: ['0.0.0.0:5432->5432/tcp'] }), 'high');
+  assert.equal(gradeHardening([safe({ publicPorts: ['0.0.0.0:5432->5432/tcp'] })]).grade, 'D');
 });
 
 test('root user is a finding unless the engine is rootless; a non-root user passes', () => {
@@ -76,7 +88,8 @@ test('grading rule: one low A, two lows B, one medium C, two mediums D, powerful
   assert.equal(gradeHardening([safe({ healthcheck: false })]).grade, 'A');
   assert.equal(gradeHardening([safe({ healthcheck: false, memoryLimit: false })]).grade, 'B');
   assert.equal(gradeHardening([safe({ rootUser: true, healthcheck: false, memoryLimit: false, noNewPrivileges: false })]).grade, 'C');
-  assert.equal(gradeHardening([safe({ rootUser: true, publicPorts: ['0.0.0.0:80->80/tcp'] })]).grade, 'D');
+  assert.equal(gradeHardening([safe({ rootUser: true, publicPorts: ['0.0.0.0:8080->80/tcp'] })]).grade, 'D');
+  assert.equal(gradeHardening([safe({ rootUser: true, publicPorts: ['0.0.0.0:80->80/tcp'] })]).grade, 'C', 'a web server on 80 is low noise');
   const caps = gradeHardening([safe({ extraCapabilities: ['SYS_ADMIN'] })]);
   assert.equal(caps.grade, 'D'); assert.equal(caps.findings[0].severity, 'high');
   assert.equal(gradeHardening([safe({ extraCapabilities: ['NET_ADMIN'] })]).findings[0].severity, 'medium');
@@ -95,7 +108,13 @@ test('facts are validated: unknown format, wrong types or odd values make the sc
   assert.equal(cleanFacts(safe({ imagePin: 'pinned' })), null);
   assert.equal(cleanFacts(safe({ name: '../etc' })), null);
   assert.equal(cleanFacts({ ...safe(), publicPorts: undefined }), null);
-  assert.deepEqual(cleanFacts(safe({ env: ['SECRET=1'], extraCapabilities: ['NET_ADMIN', 'bad cap'] })).extraCapabilities, ['NET_ADMIN']);
+  assert.equal(cleanFacts(safe({ extraCapabilities: ['NET_ADMIN', 'bad cap'] })), null, 'a malformed capability rejects the record');
+  assert.equal(cleanFacts(safe({ publicPorts: ['0.0.0.0:8080->80/tcp', 'all of them'] })), null, 'a malformed port rejects the record');
+  assert.equal(cleanFacts(safe({ publicPorts: Array.from({ length: 65 }, (_, i) => `0.0.0.0:${10000 + i}->80/tcp`) })), null);
+  assert.equal(cleanFacts(safe({ extraCapabilities: Array.from({ length: 41 }, (_, i) => 'CAP' + i) })), null);
+  assert.equal(cleanFacts({ ...safe(), publishAll: undefined }), null);
+  assert.equal(gradeHardening(Array.from({ length: 31 }, (_, i) => safe({ name: 'c' + i }))).grade, null, 'more than 30 containers: no grade');
+  assert.equal(gradeHardening(Array.from({ length: 30 }, (_, i) => safe({ name: 'c' + i }))).grade, 'A');
   assert.equal('env' in cleanFacts(safe({ env: ['SECRET=1'] })), false, 'unknown fields are dropped before storage');
   assert.deepEqual(gradeHardening([safe(), { format: 1 }]), { grade: null, checkedAt: null, passed: 0, total: 0, findings: [] });
 });
@@ -108,6 +127,7 @@ site('compose', 'srv-a', { containers: ['app', 'cache'] });
 site('by-id', 'srv-a', { containers: ['bbbbbbbbbbbb'] });
 site('static', 'srv-a', { kind: 'static', containers: [] });
 site('other', 'srv-b', { containers: ['app'] });
+site('partial', 'srv-a', { containers: ['app', 'gone'] });
 
 test('a never-scanned site has grade null and no findings', () => {
   assert.deepEqual(hardeningView('never'), { grade: null, checkedAt: null, passed: 0, total: 0, findings: [] });
@@ -127,6 +147,7 @@ test('a discovery scan records each site on that server from its own containers,
   assert.equal(hardeningView('by-id').grade, 'F');
   assert.equal(hardeningView('never').grade, null, 'a site whose containers are absent keeps its state');
   assert.equal(hardeningView('other').grade, null, 'another server is never touched');
+  assert.equal(hardeningView('partial').grade, null, 'a site with a missing container is not graded from the rest');
 });
 
 test('a scan from an older helper (no facts) keeps the previous result, and a backup replaces it', () => {
