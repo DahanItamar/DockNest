@@ -37,8 +37,8 @@ ships with the "beta" label, like moves and restore tests did.
 | Gate | An allow-list first (the move lists: an unknown key is refused), then the candidate is resolved on the server and compared with the current model; anything that adds privilege is refused, and services that already have host access are frozen (Security review changes, items 1-4). Decided (lead). |
 | Order | Validate, backup, pull, maintenance on, write, gate again on the real files, `compose up -d --no-build --pull never`, health check, maintenance off. The pull happens before the maintenance page, so downtime is only the restart. Decided (lead). |
 | Healthy | The restore test rules: every service that ran before runs, is Docker-healthy where it has a health check, still runs after 60 seconds, and the site's health URL (if set) answers 200-399 from the server. Time limit 2 minutes by default, 1-10 in Advanced. Decided (lead). |
-| Rollback | Automatic on any failure after the first write: original files back (byte for byte, owner and mode), previous image IDs pinned, `compose up`, health check again. Data volumes are restored from the pre-change backup only when an image changed (owner decision 1). |
-| Rollback fails | The site stays behind the maintenance page, the edit becomes `needs_attention`, `edit.needs_you` alerts, and **Restore backup** offers the pre-change backup through the normal restore. Decided (lead). |
+| Rollback | Automatic on any failure after the first write: original files back (byte for byte, owner and mode), previous image IDs pinned, `compose up`, health check again. When an image changed, the site's data is put back from a server-local safety copy (see "Data safety copy" below; owner decision 1). |
+| Rollback fails | The site stays behind the maintenance page, the edit becomes `needs_attention`, `edit.needs_you` alerts, and **Restore backup** offers the pre-change backup through the normal (isolated) restore. A data safety copy, if one was made, is kept on the server and the panel says so. Decided (lead). |
 | Locks | A Safe Edit is a site job (`site-edit`, statuses `edit_queued`/`edit_running`): no backup, restore, move or other edit of the site runs at the same time; refused during an unfinished move and a deployment hold. Self-heal is paused for the site while it runs. Decided (lead). |
 | Audit | `site.edit.requested`, `site.edit.applied`, `site.edit.rolled_back`, `site.edit.needs_attention`, with changed field names and file hashes only, never values. Decided (lead). |
 | Schema | Migration `safe-edits`, next free number at merge (currently 13), `compatible: true`, new tables only. |
@@ -105,7 +105,7 @@ lock and stop when stdin closes:
 | `edit-prepare` | prepare | Journal `/var/lib/docknest/edits/<editId>/` (root 0700): original files, owners, modes, hashes, current image IDs per service; pulls new images (`docker compose pull` of changed services only, time limit 15 minutes). |
 | `edit-apply` | apply | Maintenance on (existing), re-check inode/hash, atomic writes, gate again on the real files, `docker compose up -d --no-build --pull never` (single containers: recreate from inspect with a 0600 `--env-file`). |
 | `edit-poll` | check_health | Running, health, stability, health URL. `final: true` at the end of the window. |
-| `edit-rollback` | roll_back | Originals back, services pinned to the image IDs held by the protective `docknest-edit/<editId>` tags, `compose up -d --no-build --pull never --remove-orphans`, health check, then the data restore when an image changed (owner decision 1). Idempotent. |
+| `edit-rollback` | roll_back | Originals back, services pinned to the image IDs held by the protective `docknest-edit/<editId>` tags, `compose up -d --no-build --pull never --remove-orphans`, with the data sets put back from the safety copy first when an image changed (owner decision 1), health check. Idempotent. |
 | `edit-finish` | finish | Maintenance off, journal removed. |
 | `edit-status` | recovery | What the journal holds and whether files match original or candidate. |
 
@@ -171,12 +171,24 @@ The security review (2026-11-02) tightened the design. Where this section and th
     `--env-file`, as Launch records it) is stored with the site and reused by check, apply and rollback.
 14. **Minimum Compose.** The resolution flags of item 3 need Compose 2.24 or newer (the move override already needs
     it); older Compose is refused at review with "Update Docker Compose to 2.24 or newer."
-15. **Downgrade wait.** The `jobs-did-not-finish` wait in `scripts/upgrade.sh` counts `edit_*`, `heal_*` and the launch
-    statuses.
+15. **Downgrade wait.** The `jobs-did-not-finish` wait in `scripts/upgrade.sh` counts `edit_*` and `heal_*` in 2.15.0.
+    The launch job statuses do not exist yet; 2.16.0 adds them to the same wait when it introduces them.
 16. **Extra Linux cases:** newline and `COMPOSE_FILE` injection through environment; `env_file: /etc/shadow` not leaked
     in the 422 text; `use_api_socket`; label spoofing; rollback with `pull_policy: always`; `docker image prune` between
     prepare and rollback; orphan removal; symlinked bind source; a hand edit during the backup step; image change on a
     `docker.sock` service refused.
+
+## Data safety copy (owner decision 1, approved 2026-11-02)
+
+The normal restore only creates an isolated copy, so data rollback does not use the pre-change backup. Instead, when the
+reviewed change replaces an image, `edit-apply` makes a server-local safety copy after the maintenance page is on and the
+site's services are stopped: every data set the site's backup covers (local named volumes and the bind data folders in
+the backup config, not the Compose or configuration files, which the file journal covers), with owner, mode and
+symlinks preserved, into `/var/lib/docknest/edits/<editId>/data/`. It is refused before any write when free disk space
+on that filesystem is below 1.2 times the data size ("Not enough free disk space for the safety copy."), and at review
+when a volume uses a non-local driver. Rollback stops the services and replaces each data set exactly from the copy
+before the pinned `up`. The copy is deleted after a successful change and after a successful rollback; when rollback
+fails it is kept, and the "needs attention" state says so. Env-only and port-only changes make no copy.
 
 ## Upgrade safety
 
@@ -218,7 +230,7 @@ The security review (2026-11-02) tightened the design. Where this section and th
 - No health check and no health URL: only "running and stable" counts; Review says so.
 - The site is already in maintenance; the edit keeps it on afterwards.
 - A registry rate limit or private registry login failure during pull: fails before any write.
-- Server disk too full for the pre-change backup: refused at backup.
+- Server disk too full for the pre-change backup: refused at backup; too full for the data safety copy: refused before any write.
 - The file was edited by hand over SSH between load and Apply: refused, reload.
 - Adding a Redis service to an existing project; removing a service: refused.
 - DockNest's own site (self-backup host): refused, it would stop the dashboard.
@@ -229,7 +241,7 @@ The security review (2026-11-02) tightened the design. Where this section and th
    pre-change backup? The site is behind the maintenance page during the change, so no visitor writes are lost.
    Recommendation: automatic only when an image changed (new versions run database migrations), never for env or port
    changes; shown in Review as "Data rollback: Yes".
-   **Decided:** data rollback only when an image changed.
+   **Decided:** data rollback only when an image changed, from a server-local safety copy (see "Data safety copy").
 2. **Maintenance page.** Show the maintenance page during every change, or only when an image changes? Recommendation:
    every change, it is a few seconds and keeps data rollback safe.
    **Decided:** the maintenance page for every change.

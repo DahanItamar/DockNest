@@ -147,7 +147,7 @@ The security review (2026-11-02) tightened the design. Where this section and th
 
 ## Upgrade safety
 
-Additive migration; off for every site. Rolling back to 2.14.x ignores the tables and `heal_*` jobs (the downgrade wait counts them); any queued restart
+Additive migration; off for every site. Rolling back to 2.14.x ignores the tables and `heal_*` jobs (the downgrade wait in `scripts/upgrade.sh` counts them; 2.16.0 adds its launch statuses to that wait when it introduces them); any queued restart
 simply never runs. Existing alert lines do not gain the new events.
 
 ## Test plan
