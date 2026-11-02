@@ -684,8 +684,10 @@ async function alertsFlow(scheme){
  assert.deepEqual(await block.locator('input:checked').evaluateAll(l=>l.map(x=>x.parentElement.textContent)),['Backup failed','Restore test failed']);
  assert.equal(alertsDb.rules.length,4,'nothing is saved until Save');
  await block.getByRole('checkbox',{name:'Backup succeeded'}).check();
+ // Certificate alerts (2.14): both events are offered for a site and saved in catalogue order
+ await block.getByRole('checkbox',{name:'Certificate expiring'}).check();await block.getByRole('checkbox',{name:'Certificate renewal failed'}).check();
  await panel.getByRole('button',{name:'Save'}).click();await panel.waitFor({state:'detached'});
- assert.ok(alertsDb.calls.some(c=>c[0]==='rule'&&JSON.parse(c[1]).nodeId==='c2'&&JSON.parse(c[1]).sourceId==='s2'&&JSON.parse(c[1]).events.join()==='backup.failed,backup.succeeded,restore_test.failed'),'rule saved with nodeId');
+ assert.ok(alertsDb.calls.some(c=>c[0]==='rule'&&JSON.parse(c[1]).nodeId==='c2'&&JSON.parse(c[1]).sourceId==='s2'&&JSON.parse(c[1]).events.join()==='backup.failed,backup.succeeded,restore_test.failed,certificate.expiring,certificate.renewal_failed'),'rule saved with nodeId');
  await page.waitForFunction(()=>document.querySelectorAll('.rule-g').length===5);
  // A server starts with the four failures, DockNest with those and the update
  await dragAlert(page,'server:ash','c1');await panel.locator('fieldset[data-src="server:ash"]').waitFor();

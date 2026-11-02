@@ -20,6 +20,9 @@ import { canManageAlerts, alertSettings, setAllowPrivateNetwork, setOperatorsMan
 import { providerList } from './providers/index.js';
 import { listConnectionViews, createConnection, updateConnection, deleteConnection, testConnection, testValues, listNodes, createNode, updateNode, deleteNode, testNode, OPERATOR_TEST_FAILED } from './manage.js';
 import { outboundLimits } from './outbound.js';
+import { CERT_DAYS, certificateDays, setCertificateDays } from './certificates.js';
+// The alert settings plus the certificate warning days (docs/alerts.md, "Certificates").
+const settingsView = () => ({ ...alertSettings(), certificateDays: certificateDays() });
 
 // Tests shorten failMs; nothing else changes it.
 export const operatorPolicy = { failMs: outboundLimits.totalMs };
@@ -78,16 +81,17 @@ const testing = fn => handle(async (req, res) => {
 // ---- /api/connections --------------------------------------------------------------------------------------------
 export const connectionRoutes = express.Router();
 connectionRoutes.use(gate);
-connectionRoutes.get('/', handle((req, res) => res.json({ connections: listConnectionViews(role(req)), settings: alertSettings(), legacyChanged: legacyChangedSinceImport(), limits: connectionLimits, role: role(req) })));
+connectionRoutes.get('/', handle((req, res) => res.json({ connections: listConnectionViews(role(req)), settings: settingsView(), legacyChanged: legacyChangedSinceImport(), limits: connectionLimits, role: role(req) })));
 connectionRoutes.get('/providers', handle((_req, res) => res.json({ providers: providerList() })));
 // Admin-only, decided by the session alone: requireAdmin, then the re-verification, then the setters (which check the
 // role again and audit it).
-const settingsBody = z.object({ allowPrivateNetwork: z.boolean().optional(), operatorsManage: z.boolean().optional() }).strict().refine(body => Object.keys(body).length > 0, 'Choose a setting to change.');
+const settingsBody = z.object({ allowPrivateNetwork: z.boolean().optional(), operatorsManage: z.boolean().optional(), certificateDays: z.number().int().min(CERT_DAYS.min).max(CERT_DAYS.max).optional() }).strict().refine(body => Object.keys(body).length > 0, 'Choose a setting to change.');
 connectionRoutes.put('/settings', requireAdmin, requireRecentAuth, writeLimit, handle((req, res) => {
   const body = settingsBody.parse(req.body);
   if (body.allowPrivateNetwork !== undefined) setAllowPrivateNetwork(body.allowPrivateNetwork, req.user.id, req.user.role);
   if (body.operatorsManage !== undefined) setOperatorsManage(body.operatorsManage, req.user.id, req.user.role);
-  res.json({ settings: alertSettings() });
+  if (body.certificateDays !== undefined) setCertificateDays(body.certificateDays, req.user.id, req.user.role);
+  res.json({ settings: settingsView() });
 }));
 connectionRoutes.post('/test', testLimit, testing(req => testValues(req.body, req.user.id, context(req))));
 connectionRoutes.post('/', writeLimit, handle((req, res) => res.status(201).json(createConnection(req.body, req.user.id, context(req)))));
@@ -99,7 +103,7 @@ connectionRoutes.post('/:id/test', testLimit, testing(req => testConnection(uuid
 export const alertRoutes = express.Router();
 alertRoutes.use(gate);
 // The Map's one summary: nodes, lines, the Connections it can pick (no secrets) and the provider list.
-alertRoutes.get('/', handle((req, res) => res.json({ nodes: listNodes(), rules: listRules(), connections: listConnectionViews(role(req)), providers: providerList(), events: EVENTS, sourceKinds: SOURCE_KINDS, diskLow: { usedPercent: DISK_USED_PERCENT, freeBytes: DISK_FREE_BYTES }, limits: connectionLimits, settings: alertSettings(), role: role(req) })));
+alertRoutes.get('/', handle((req, res) => res.json({ nodes: listNodes(), rules: listRules(), connections: listConnectionViews(role(req)), providers: providerList(), events: EVENTS, sourceKinds: SOURCE_KINDS, diskLow: { usedPercent: DISK_USED_PERCENT, freeBytes: DISK_FREE_BYTES }, limits: connectionLimits, settings: settingsView(), role: role(req) })));
 alertRoutes.get('/nodes', handle((_req, res) => res.json({ nodes: listNodes() })));
 alertRoutes.post('/nodes', writeLimit, handle((req, res) => res.status(201).json(createNode(req.body, req.user.id, context(req)))));
 alertRoutes.patch('/nodes/:id', writeLimit, handle((req, res) => res.json(updateNode(uuid.parse(req.params.id), req.body, req.user.id, context(req)))));

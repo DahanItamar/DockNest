@@ -462,11 +462,12 @@ class RestoreNetworkTests(unittest.TestCase):
         self.assertEqual(restore_network_plan([self.container('app',{'bridge':{},'none':{}},NetworkMode='bridge')]),[{}])
         restore_network_plan([self.container('app',{'shop_default':{}},NetworkMode='shop_default'),self.container('db',{'shop.back-1':{}})])
     def test_only_capabilities_every_container_already_has_are_accepted(self):
-        # The copy is created with Docker's default capabilities, so it must not differ from the original.
+        # The copy gets the original's CapDrop and CapAdd (test_hardening.py), so only a CapAdd beyond the defaults is refused.
         for added in [['CAP_CHOWN','CAP_SETGID','CAP_SETUID'],['chown','NET_BIND_SERVICE'],['CAP_KILL']]:
             self.assertEqual(restore_network_plan([self.container('app',{},CapAdd=added)]),[{}],added)
+        self.assertEqual(restore_network_plan([self.container('app',{},CapAdd=['CHOWN'],CapDrop=['ALL'])]),[{}])  # reproduced exactly since 2.14.0
         for host in [{'CapAdd':['SYS_ADMIN']},{'CapAdd':['CAP_NET_ADMIN']},{'CapAdd':['NET_RAW']},{'CapAdd':['ALL']},{'CapAdd':['CHOWN','SYS_PTRACE']},
-                     {'CapAdd':['CHOWN'],'CapDrop':['ALL']},{'CapAdd':[None]},{'CapAdd':['CHOWN'],'Privileged':True}]:
+                     {'CapAdd':['NET_RAW'],'CapDrop':['ALL']},{'CapAdd':[None]},{'CapAdd':['CHOWN'],'Privileged':True}]:
             with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=host):restore_network_plan([self.container('app',{},**host)])
         self.assertEqual(restore_network_plan([self.container('app',{},CapDrop=['NET_RAW'])]),[{}])  # unchanged: drops alone were always accepted
 

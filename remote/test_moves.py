@@ -451,7 +451,8 @@ class MoveSafetyTests(unittest.TestCase):
         manifest=fixture_manifest()
         base=lambda **service:{'services':{'web':{'image':'x',**service}},'networks':{'default':{'name':'shop_default'}},'volumes':{}}
         helper.check_compose_config(base(networks={'default':{'aliases':['web']}}),['web'],manifest)
-        cases=[base(security_opt=['seccomp:unconfined']),base(sysctls={'net.ipv4.ip_forward':'1'}),base(volumes_from=['db']),base(uts='host'),base(cgroup='host'),base(cgroup_parent='/x'),
+        helper.check_compose_config(base(security_opt=['seccomp:unconfined']),['web'],manifest)  # reproduced, never dropped (test_hardening.py)
+        cases=[base(security_opt=['mask=/proc']),base(cap_add=['NET_ADMIN']),base(sysctls={'net.ipv4.ip_forward':'1'}),base(volumes_from=['db']),base(uts='host'),base(cgroup='host'),base(cgroup_parent='/x'),
             base(networks={'outside':None}),base(networks={'default':{'ipv4_address':'172.30.0.9'}}),
             {**base(),'secrets':{'key':{'file':'/root/key'}}},{**base(),'configs':{'c':{'file':'./c'}}},
             {**base(),'volumes':{'data0':{'name':'shop_data0','driver_opts':{'type':'nfs'}}}},{**base(),'networks':{'default':{'name':'shop_default','external':True}}},
