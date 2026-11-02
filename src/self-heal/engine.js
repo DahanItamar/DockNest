@@ -15,7 +15,7 @@ import { db, id, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, jobRunners, claimHooks, claimJob, siteInfo, movingSite } from '../engine.js';
 import { emit } from '../alerts/delivery.js';
-import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, REASONS, reasonText, timing } from './limits.js';
+import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, RETRYABLE, REASONS, reasonText, timing } from './limits.js';
 
 // Clock, SSH and timers; tests replace members.
 export const healClock = { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: timer => clearTimeout(timer) };
@@ -33,9 +33,11 @@ export function settingsOf(siteId) {
 }
 // The newest history row of one container (rowid breaks ties inside one millisecond).
 const latestOf = (siteId, container) => db.prepare('SELECT *,rowid FROM self_heal_events WHERE site_id=? AND container=? ORDER BY at DESC,rowid DESC LIMIT 1').get(siteId, container) ?? null;
-// An open episode that still wants a restart: an unhealthy event not yet acted on, or one that waited for a reason that
-// clears by itself (busy, maintenance, settle...).
-export const wantsRestart = row => Boolean(row) && (row.kind === 'unhealthy' || (row.kind === 'skipped' && TRANSIENT.has(row.reason)));
+// An open episode that still wants a restart: an unhealthy event not yet acted on, one that waited for a reason that
+// clears by itself (busy, maintenance, settle...), an attempt to retry after the gap (a failed restart, an unreachable
+// server, the server-side lock or maintenance marker), or a limit reached, retried when the window has room again. A
+// healthy event (recovered) or a check by the helper (no longer unhealthy, not running, recreated...) closes it.
+export const wantsRestart = row => Boolean(row) && (row.kind === 'unhealthy' || row.kind === 'restart_failed' || row.kind === 'limit_reached' || (row.kind === 'skipped' && (TRANSIENT.has(row.reason) || RETRYABLE.has(row.reason))));
 function record(event) {
   const row = { id: id(), at: iso(healClock.now()), reason: null, jobId: null, containerId: null, ...event };
   db.prepare('INSERT INTO self_heal_events(id,site_id,server_id,container,container_id,kind,reason,job_id,at) VALUES(?,?,?,?,?,?,?,?,?)')
@@ -43,7 +45,9 @@ function record(event) {
   if (row.kind === 'unhealthy' || row.kind === 'recovered') db.prepare('UPDATE self_heal_settings SET last_event_at=? WHERE site_id=?').run(row.at, row.siteId);
   return row;
 }
-const restartsSince = (siteId, container, sinceMs) => db.prepare("SELECT COUNT(*) AS n,MAX(at) AS last FROM self_heal_events WHERE site_id=? AND container=? AND kind IN ('restarted','restart_failed') AND at>?").get(siteId, container, iso(sinceMs));
+// Attempts in the window: restarts, failed restarts and retryable attempts that never reached Docker.
+const restartsSince = (siteId, container, sinceMs) => db.prepare(`SELECT COUNT(*) AS n,MAX(at) AS last,MIN(at) AS first FROM self_heal_events WHERE site_id=? AND container=? AND at>? AND (kind IN ('restarted','restart_failed') OR (kind='skipped' AND reason IN (${[...RETRYABLE].map(() => '?').join(',')})))`).get(siteId, container, iso(sinceMs), ...RETRYABLE);
+const settleEnds = (siteId, nowMs) => { const last = db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL").get(siteId)?.at; return last ? Date.parse(last) + timing.settleMs - nowMs : 0; };
 const activeHealJob = (siteId, container) => db.prepare("SELECT id FROM jobs WHERE site_id=? AND type='self-heal' AND status IN ('heal_queued','heal_running') AND json_extract(details,'$.container')=?").get(siteId, container);
 const siteNames = siteId => db.prepare('SELECT s.name AS site,s.server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(siteId);
 const zoneFor = siteId => { try { return db.prepare('SELECT timezone FROM policies WHERE site_id=?').get(siteId)?.timezone || 'UTC'; } catch { return 'UTC'; } };
@@ -121,7 +125,9 @@ export function healNow() {
   })();
   return healRunner.running;
 }
-// One re-check when a container's 60 s gap ends (scheduled by the restart that started the gap, never a polling loop).
+// One re-check when a wait ends: the 60 s gap after an attempt, the settle time after site work, or the window of a
+// reached limit. Scheduled by the event that started the wait, never a polling loop; the worker's heartbeat tick
+// (every 15 s, src/worker.js) covers waits that end with another job, such as a backup finishing.
 const rechecks = new Map();
 function recheckAt(siteId, ms) {
   if (rechecks.has(siteId) || !healRunner.active()) return;
@@ -141,7 +147,7 @@ function tickSite(siteId, nowMs = healClock.now()) {
   const serverId = db.prepare('SELECT server_id FROM sites WHERE id=?').get(siteId)?.server_id;
   if (!serverId) return;
   // The newest row of every container that has one, keeping only those that still want a restart.
-  const open = db.prepare("SELECT * FROM (SELECT e.*,ROW_NUMBER() OVER (PARTITION BY container ORDER BY at DESC,rowid DESC) AS n FROM self_heal_events e WHERE site_id=?) WHERE n=1 AND kind IN ('unhealthy','skipped')").all(siteId).filter(wantsRestart);
+  const open = db.prepare("SELECT * FROM (SELECT e.*,ROW_NUMBER() OVER (PARTITION BY container ORDER BY at DESC,rowid DESC) AS n FROM self_heal_events e WHERE site_id=?) WHERE n=1 AND kind IN ('unhealthy','skipped','restart_failed','limit_reached')").all(siteId).filter(wantsRestart);
   let queued = false;
   for (const row of open) {
     const entry = settings.watched.find(item => item.name === row.container);
@@ -150,11 +156,16 @@ function tickSite(siteId, nowMs = healClock.now()) {
       const latest = latestOf(siteId, row.container);
       if (!wantsRestart(latest) || latest.id !== row.id) return;
       const block = blockReason(siteId, nowMs);
-      if (block) { if (latest.kind === 'unhealthy') record({ siteId, serverId, container: row.container, containerId: row.container_id, kind: 'skipped', reason: block }); return; }
-      const windowStart = nowMs - settings.window_minutes * 60_000, restarts = restartsSince(siteId, row.container, windowStart);
+      if (block) {
+        if (latest.kind === 'unhealthy') record({ siteId, serverId, container: row.container, containerId: row.container_id, kind: 'skipped', reason: block });
+        if (block === 'settling') recheckAt(siteId, settleEnds(siteId, nowMs) + 50);
+        return;
+      }
+      const windowMs = settings.window_minutes * 60_000, restarts = restartsSince(siteId, row.container, nowMs - windowMs);
       if (restarts.n >= settings.max_restarts) {
-        record({ siteId, serverId, container: row.container, containerId: row.container_id, kind: 'limit_reached', reason: 'limit' });
-        gaveUp(siteId, row.container, 'limit', nowMs);
+        // One limit_reached row (and one gave_up per window); re-checked when the oldest attempt leaves the window.
+        if (latest.kind !== 'limit_reached') { record({ siteId, serverId, container: row.container, containerId: row.container_id, kind: 'limit_reached', reason: 'limit' }); gaveUp(siteId, row.container, 'limit', nowMs); }
+        recheckAt(siteId, Date.parse(restarts.first) + windowMs - nowMs + 50);
         return;
       }
       if (restarts.last && nowMs - Date.parse(restarts.last) < timing.minGapMs) { recheckAt(siteId, Date.parse(restarts.last) + timing.minGapMs - nowMs + 50); return; } // the gap

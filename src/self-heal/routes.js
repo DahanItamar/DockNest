@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { db, audit, transaction } from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { remote } from '../ssh.js';
-import { LIMITS, MIN_GAP_MS, CONTAINER, NOT_WATCHING, reasonText } from './limits.js';
+import { LIMITS, MIN_GAP_MS, CONTAINER, NOT_WATCHING, WATCH_PER_SERVER, reasonText } from './limits.js';
 
 // SSH from the API for "find containers with a health check"; tests replace it.
 export const healApi = { resolve: (server, names) => remote(server, { operation: 'self-heal-resolve', names }) };
@@ -61,6 +61,7 @@ export function streamView(site, row) {
   if (!watchedOf(row).length) return { state: 'off', reason: 'no_healthcheck', notWatching: notWatching('no_healthcheck') };
   if (!workerOnline()) return { state: 'off', reason: 'worker_offline', notWatching: notWatching('worker_offline') };
   const runtime = readJson(RUNTIME), server = runtime?.servers?.[site.server_id];
+  if (runtime?.sites?.[site.id]?.tooMany) return { state: 'off', reason: 'too_many', notWatching: notWatching('too_many') };
   if (!server) return { state: 'connecting', reason: null, notWatching: null };
   if (server.state !== 'connected') return { state: server.state === 'off' ? 'off' : 'connecting', reason: server.reason ?? null, notWatching: notWatching(server.reason) };
   if (runtime.sites?.[site.id]?.missing?.length) return { state: 'connected', reason: 'recreated', notWatching: notWatching('recreated') };
@@ -124,7 +125,13 @@ selfHealRoutes.put('/sites/:id/self-heal', requireAdmin, handle(async (req, res)
     }
   }
   const at = new Date().toISOString(), text = JSON.stringify(watched);
-  if (text.length > 4096) throw httpError(422, 'TOO_MANY', 'Too many containers to watch in one site.');
+  if (text.length > 4096) throw httpError(422, 'TOO_MANY_CONTAINERS', 'Too many containers to watch in one site.');
+  if (data.enabled) {
+    // One stream per server watches at most WATCH_PER_SERVER containers, counted over every enabled site on it.
+    const others = db.prepare('SELECT h.watched FROM self_heal_settings h JOIN sites s ON s.id=h.site_id WHERE h.enabled=1 AND s.server_id=? AND h.site_id<>? AND h.site_id NOT IN (SELECT site_id FROM site_archives)').all(site.server_id, site.id)
+      .reduce((sum, row) => sum + watchedOf(row).length, 0);
+    if (others + watched.length > WATCH_PER_SERVER) throw httpError(422, 'TOO_MANY_CONTAINERS', `Self-heal can watch up to ${WATCH_PER_SERVER} containers per server; this server would have ${others + watched.length}.`);
+  }
   const action = !current?.enabled && data.enabled ? 'self_heal.enabled' : current?.enabled && !data.enabled ? 'self_heal.disabled' : (current && (current.max_restarts !== data.maxRestarts || current.window_minutes !== data.windowMinutes)) ? 'self_heal.changed' : null;
   transaction(() => {
     db.prepare(`INSERT INTO self_heal_settings(site_id,enabled,max_restarts,window_minutes,watched,updated_at,updated_by) VALUES(?,?,?,?,?,?,?)

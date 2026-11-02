@@ -51,7 +51,9 @@ function heartbeat(running=true){db.prepare("INSERT INTO settings VALUES ('worke
 // Renewal fails only when the lease expired and another worker took it over: stop claiming at once.
 function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');return false;}
 heartbeat();
-const heartbeatTimer=setInterval(()=>{if(renew())heartbeat();},LEASE_TTL_MS/4);
+// The heartbeat (every 15 s) also wakes self-heal, so settings changes, re-pins and finished site work reach the
+// streams and queued restarts promptly even while the loop runs a long job of another site.
+const heartbeatTimer=setInterval(()=>{if(renew()){heartbeat();if(!stopping)try{syncStreams();tickSelfHeal();}catch{/* Retried at the next heartbeat. */}}},LEASE_TTL_MS/4);
 // Drain: the first signal stops claiming and lets the current job finish, then the lease is released and the worker
 // exits 0. A second signal exits at once and leaves the lease to expire; the next worker marks the job recovery_required.
 let signals=0;

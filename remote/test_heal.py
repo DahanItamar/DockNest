@@ -1,10 +1,10 @@
 """Self-heal helper operations (docs/self-heal.md): the event format, the watched-container filter, the connect
 snapshot, the bounded stream and the guarded restart. Run: python3 remote/test_heal.py
 
-The fixture remote/fixtures/docker-events-health.jsonl holds `docker events --filter type=container --filter
-event=health_status --format '{{json .}}'` lines in the two shapes Docker prints: with the legacy status/id/from fields
-(Docker 26 and older API versions) and without them (Docker 28 and 29). The Linux integration run
-(scripts/integration-self-heal.js) checks the same parser against the live output of the Docker it runs."""
+The fixture remote/fixtures/docker-events-health.jsonl holds lines as `docker events --format HEAL_EVENT_FORMAT` prints
+them (the helper's narrow template: ID, action, timeNano, name, Compose project and service, and the two DockNest copy
+labels; a missing label prints ""). The Linux integration run (scripts/integration-self-heal.js) captures the live
+output of the same template on its Docker and checks this parser against it."""
 import unittest, pathlib, json, io, sys, subprocess, contextlib
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
@@ -37,9 +37,12 @@ class EventFormat(unittest.TestCase):
         self.assertEqual(set(second),{'container','status','at','id','timeNano'})
         self.assertEqual((second['status'],second['timeNano']),('healthy',1762070460987654321))
         self.assertEqual(helper.heal_event(LINES[2],[WEB])['status'],'starting')
-    def test_labels_image_and_paths_are_never_forwarded(self):
+    def test_only_the_five_fields_are_forwarded(self):
         text=json.dumps(helper.heal_event(LINES[0],[WEB]))
-        for value in ('compose.yaml','/srv/shop','nginx','config-hash','maintainer'):self.assertNotIn(value,text)
+        for value in ('project','service','restoreTest','move','action'):self.assertNotIn(value,text)
+    def test_the_template_names_only_the_fields_self_heal_reads(self):
+        self.assertIn('.Actor.ID',helper.HEAL_EVENT_FORMAT);self.assertIn('.TimeNano',helper.HEAL_EVENT_FORMAT)
+        self.assertNotIn('json .}}',helper.HEAL_EVENT_FORMAT,'never the whole event with every label')
     def test_restore_test_and_move_copies_never_match(self):
         self.assertIsNone(helper.heal_event(LINES[3],[WEB]))
         self.assertIsNone(helper.heal_event(LINES[4],[WEB]))
@@ -51,28 +54,31 @@ class EventFormat(unittest.TestCase):
         self.assertIsNone(helper.heal_event(LINES[5],[WEB]))
     def test_compose_identity_follows_labels_not_the_name(self):
         # `compose up` recreated the container: a new ID, the same project and service, still healed.
-        line=json.loads(LINES[0]);line['Actor']['ID']=B;line['Actor']['Attributes']['name']='shop-web-1'
+        line=json.loads(LINES[0]);line['id']=B
         self.assertEqual(helper.heal_event(json.dumps(line),[WEB])['id'],B)
-        other=json.loads(LINES[0]);other['Actor']['Attributes']['com.docker.compose.project']='blog'
+        other=json.loads(LINES[0]);other['project']='blog'
         self.assertIsNone(helper.heal_event(json.dumps(other),[WEB]))
     def test_malformed_output_raises_so_the_stream_closes(self):
+        base=json.loads(LINES[0])
         bad=[
             'not json',
             json.dumps([1,2]),
-            json.dumps({'Type':'container'}),
-            json.dumps({**json.loads(LINES[0]),'Action':'health_status: sick'}),
-            json.dumps({**json.loads(LINES[0]),'Action':'health_status:unhealthy'}),
-            json.dumps({**json.loads(LINES[0]),'timeNano':'1762070400123456789'}),
-            json.dumps({**json.loads(LINES[0]),'timeNano':True}),
-            json.dumps({**json.loads(LINES[0]),'Actor':{'ID':'short','Attributes':{'name':'shop-web-1'}}}),
-            json.dumps({**json.loads(LINES[0]),'Actor':{'ID':A,'Attributes':{'name':'bad name; rm'}}}),
-            json.dumps({**json.loads(LINES[0]),'Actor':'x'}),
-            '{"Action":"health_status: unhealthy","pad":"%s"}'%('x'*5000),
+            json.dumps({**base,'action':'health_status: sick'}),
+            json.dumps({**base,'action':'health_status:unhealthy'}),
+            json.dumps({**base,'action':None}),
+            json.dumps({**base,'timeNano':'1762070400123456789'}),
+            json.dumps({**base,'timeNano':True}),
+            json.dumps({**base,'id':'short'}),
+            '{"name":"shop-web-1","pad":"%s"}'%('x'*5000),
         ]
         for line in bad:
             with self.subTest(line=line[:60]):self.assertRaises(ValueError,helper.heal_event,line,[WEB])
+    def test_unwatched_or_odd_containers_never_close_the_stream(self):
+        base=json.loads(LINES[0])
+        for line in [json.dumps({**base,'name':'other','project':'blog','id':'short','timeNano':'x','action':'health_status: sick'}),json.dumps({**base,'name':'bad name; rm'}),json.dumps({'Type':'container'}),json.dumps({**base,'project':'blog','action':7})]:
+            with self.subTest(line=line[:60]):self.assertIsNone(helper.heal_event(line,[WEB]))
     def test_other_actions_are_ignored(self):
-        self.assertIsNone(helper.heal_event(json.dumps({'Type':'container','Action':'start','Actor':{'ID':A,'Attributes':{'name':'shop-web-1'}}}),[WEB]))
+        self.assertIsNone(helper.heal_event(json.dumps({**json.loads(LINES[0]),'action':'start'}),[WEB]))
 
 class Watch(unittest.TestCase):
     def test_watch_entries_are_validated(self):
@@ -83,6 +89,17 @@ class Watch(unittest.TestCase):
         self.assertEqual([c and c['Id'] for c in helper.heal_resolve([WEB,CACHE],cs)],[A,None])
         moved=[container(C,'shop-web-1',{**COMPOSE,'docknest.move':'m'})]
         self.assertEqual(helper.heal_resolve([WEB],moved),[None])
+
+class Containers(unittest.TestCase):
+    def test_a_container_removed_between_ps_and_inspect_is_left_out(self):
+        def run(args,**kw):
+            if args[:2]==['docker','ps']:return subprocess.CompletedProcess(args,0,(A+'\n'+B+'\n').encode(),b'')
+            return subprocess.CompletedProcess(args,1,json.dumps([container(A,'shop-web-1',COMPOSE)]).encode(),b'Error: No such object')
+        with patch.object(helper.subprocess,'run',side_effect=run):self.assertEqual([c['Id'] for c in helper.heal_containers()],[A])
+        def gone(args,**kw):
+            if args[:2]==['docker','ps']:return subprocess.CompletedProcess(args,0,(A+'\n').encode(),b'')
+            return subprocess.CompletedProcess(args,1,b'[]',b'Error')
+        with patch.object(helper.subprocess,'run',side_effect=gone):self.assertEqual(helper.heal_containers(),[])
 
 class Resolve(unittest.TestCase):
     def test_reports_health_checks_and_compose_identity_without_secrets(self):
@@ -112,26 +129,33 @@ class Stream(unittest.TestCase):
         data=('\n'.join(LINES)+'\n').encode()
         out,calls,error=self.run_stream(data,cs)
         args,kw=calls[0]
-        self.assertEqual(args,['docker','events','--filter','type=container','--filter','event=health_status','--format','{{json .}}'])
+        self.assertEqual(args,['docker','events','--filter','type=container','--filter','event=health_status','--format',helper.HEAL_EVENT_FORMAT])
         self.assertNotIn('--since',args)
         self.assertTrue(kw['start_new_session'])
         self.assertEqual(kw['stderr'],subprocess.DEVNULL)
-        self.assertEqual(out[0],{'watching':[{'name':'shop-web-1','id':A},{'name':'cache','id':C}]})
-        self.assertEqual([(o['container'],o['status'],o['timeNano']) for o in out[1:3]],[('shop-web-1','unhealthy',0),('cache','healthy',0)])
-        streamed=out[3:]
+        self.assertEqual(out[:3],[{'watched':{'index':0,'name':'shop-web-1','id':A}},{'watched':{'index':1,'name':'cache','id':C}},{'watching':2}])
+        self.assertEqual([(o['container'],o['status'],o['timeNano']) for o in out[3:5]],[('shop-web-1','unhealthy',0),('cache','healthy',0)])
+        streamed=out[5:]
         self.assertEqual([(o['container'],o['status']) for o in streamed],[('shop-web-1','unhealthy'),('shop-web-1','healthy'),('shop-web-1','starting'),('cache','unhealthy')])
-        for o in out[1:]:self.assertEqual(set(o),{'container','status','at','id','timeNano'})
+        for o in out[3:]:self.assertEqual(set(o),{'container','status','at','id','timeNano'})
+        for line in [json.dumps(o) for o in out]:self.assertLess(len(line),400,'every line stays short')
         self.assertEqual(error,'docker events stopped.')
     def test_missing_watched_container_is_reported_as_none(self):
         out,_,_=self.run_stream(b'',[container(C,'cache',None,health='healthy')])
-        self.assertEqual(out[0],{'watching':[None,{'name':'cache','id':C}]})
+        self.assertEqual(out[:3],[{'watched':{'index':0,'name':None,'id':None}},{'watched':{'index':1,'name':'cache','id':C}},{'watching':2}])
+    def test_sixty_watched_containers_fit_in_short_lines(self):
+        watch=[{'name':'svc-%02d-%s'%(i,'x'*100),'project':None,'service':None} for i in range(60)]
+        cs=[container('%064x'%i,w['name'],None,health='healthy') for i,w in enumerate(watch)]
+        out,_,_=self.run_stream(b'',cs,watch=watch)
+        self.assertEqual(out[60],{'watching':60})
+        self.assertTrue(all(len(json.dumps(o))<4096 for o in out))
     def test_long_or_malformed_lines_close_the_stream(self):
         cs=[container(A,'shop-web-1',COMPOSE,health='healthy')]
-        out,_,error=self.run_stream(b'{"Action":"health_status: unhealthy","x":"'+b'y'*5000+b'"}\n'+LINES[0].encode()+b'\n',cs)
+        out,_,error=self.run_stream(b'{"name":"shop-web-1","x":"'+b'y'*5000+b'"}\n'+LINES[0].encode()+b'\n',cs)
         self.assertIn('4 KB',error)
-        self.assertEqual(len(out),2,'nothing after the long line is forwarded')
+        self.assertEqual(len(out),4,'nothing after the long line is forwarded')
         out,_,error=self.run_stream(b'garbage\n'+LINES[0].encode()+b'\n',cs)
-        self.assertEqual(len(out),2)
+        self.assertEqual(len(out),4)
     def test_stdin_close_ends_the_docker_events_group(self):
         killed=[]
         class Proc:

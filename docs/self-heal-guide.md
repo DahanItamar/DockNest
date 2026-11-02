@@ -18,8 +18,10 @@ Not validated yet: this release adds self-heal with unit tests and a Linux Docke
 1. DockNest keeps one SSH session open to each server that has a site with self-heal on, and listens to
    `docker events` for health changes of that site's containers. Nothing is installed or left running on the server.
 2. When a watched container turns **unhealthy**, DockNest records it and, if the limits allow, restarts it with
-   `docker restart --time 30`. Right before the restart it checks again that the container is the same one, still
-   running and still unhealthy, that the site is not in maintenance and that no other DockNest step holds the site.
+   `docker restart --time 30`. DockNest's own job rules keep the restart apart from every other job of the site (see
+   "When it waits"). Right before the restart the server checks once more that the container is the same one, still
+   running and still unhealthy, that the site's maintenance page is off, and that no other DockNest step holds the
+   site's lock file there.
 3. When the container is **healthy** again, the episode is recorded as recovered.
 
 Only containers that have a Docker health check are watched. A health check that is still in its start period
@@ -34,9 +36,12 @@ Administrators turn it on per site; operators can see the setting and the histor
 - **Restarts.** How many restarts per container in one window: 1 to 10, default 3.
 - **Window.** 10 minutes to 24 hours, default 1 hour.
 
-Two restarts of the same container are always at least 60 seconds apart. When a container used up its restarts in a
-window, further unhealthy events are recorded as "Restart limit reached" and DockNest stops restarting it until the
-window has passed.
+Two restarts of the same container are always at least 60 seconds apart. If a restart fails, or the server could not
+be reached, DockNest tries again after those 60 seconds; each try counts toward the limit. When a container used up
+its restarts in a window, DockNest records "Restart limit reached" once and sends one **Self-heal stopped** alert.
+Restarts resume by themselves as soon as the oldest restart is more than one window ago, if the container is still
+unhealthy then. One server watches at most 50 containers across all its sites; turning self-heal on for a site that
+would pass that is refused.
 
 API (administrators, with the usual CSRF header): `PUT /api/sites/:id/self-heal` with
 `{ "enabled": true, "maxRestarts": 3, "windowMinutes": 60 }`. `GET /api/sites/:id/self-heal` shows the settings, the
@@ -52,8 +57,8 @@ Self-heal never fights DockNest's own work. No restart happens while the site:
 - is in maintenance;
 - finished such work less than 2 minutes ago (its containers are still starting).
 
-The unhealthy event is then recorded as skipped with the reason. If the container is still unhealthy once the wait
-is over, it is restarted then.
+The unhealthy event is then recorded as skipped with the reason. When the wait is over, DockNest restarts the
+container if it is still unhealthy (within about 15 seconds; at the exact moment for the 2-minute wait).
 
 ## Alerts
 
@@ -74,6 +79,7 @@ The setting shows whether DockNest is watching (`connected`), trying to (`connec
 - *the server SSH host key does not match the pinned key*: DockNest stops trying. Check the server and confirm the
   new key on the server page if the change is expected.
 - *Docker events could not be read on the server*: check that Docker runs and that the server's Docker is supported.
+- *this server already has 50 watched containers*: turn self-heal off for another site on that server.
 - *container recreated*: a watched container is gone. Turn self-heal off and on again to pick up the site's
   current containers.
 

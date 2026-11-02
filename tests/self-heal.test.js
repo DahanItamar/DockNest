@@ -108,7 +108,7 @@ test('window, 60 s gap and limit: exactly N restarts, then limit_reached and one
   assert.equal(restarts.length, 2, 'exactly N restarts');
   const kinds = history(f.siteId);
   assert.deepEqual(kinds.slice(0, 4), ['shop-web-1:unhealthy', 'shop-web-1:restarted', 'shop-web-1:unhealthy', 'shop-web-1:restarted']);
-  assert.deepEqual(kinds.slice(4), ['shop-web-1:unhealthy', 'shop-web-1:limit_reached:limit', 'shop-web-1:unhealthy', 'shop-web-1:limit_reached:limit']);
+  assert.deepEqual(kinds.slice(4), ['shop-web-1:unhealthy', 'shop-web-1:limit_reached:limit'], 'one limit_reached per episode; further events add nothing');
   const audits = db.prepare("SELECT action,detail FROM audit_events WHERE target=? AND action LIKE 'self_heal.%' ORDER BY created_at,rowid").all(f.siteId).map(row => [row.action, JSON.parse(row.detail)]);
   assert.deepEqual(audits.map(([action, detail]) => [action, detail.firstInWindow ?? detail.reason]), [['self_heal.restarted', true], ['self_heal.restarted', false], ['self_heal.gave_up', 'limit']]);
   // A new window: restarts again.
@@ -127,7 +127,7 @@ test('busy, queued work, maintenance, move and settle make a restart wait (recor
   now += 30_000; heal.tickSelfHeal();
   assert.equal(heal.blockReason(f.siteId), 'settling'); assert.deepEqual(jobsOf(f.siteId), []);
   now += 91_000; heal.tickSelfHeal(); await work();
-  assert.equal(restarts.length, 1, 'restarted after the settle time');
+  assert.equal(restarts.filter(r => r.siteKey === f.siteId).length, 1, 'restarted after the settle time');
   // Maintenance as DockNest last set it.
   db.prepare('INSERT INTO audit_events VALUES (?,?,?,?,?,?)').run(randomUUID(), 'admin', 'maintenance.set', f.siteId, JSON.stringify({ enabled: true }), at());
   assert.equal(heal.blockReason(f.siteId), 'maintenance');
@@ -186,24 +186,24 @@ test('claim: heal jobs go first, are site-scoped, block their own site and never
 
 test('restart outcomes: failure counts and alerts as restarted, refusals are skipped, recreated gives up, SSH errors restart nothing', async () => {
   db.exec("DELETE FROM alert_outbox;DELETE FROM alert_lines;DELETE FROM alert_nodes;DELETE FROM connections");
-  const f = fixture('outcomes');
+  const f = fixture('outcomes'); enable(f.siteId, { max: 10 });
   db.prepare("UPDATE servers SET name='Ashburn-1' WHERE id=?").run(f.serverId);
   const credential = store.createCredential({ kind: 'telegram', name: 'Bot', config: { token: '123456789:' + 'AbCdEf_-12'.repeat(4).slice(0, 35) } }, 'test');
   const channel = store.createChannel({ kind: 'telegram', name: 'Phone', credentialId: credential.id, config: { chatId: '-1001234567890' } }, 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: f.siteId, events: ['self_heal.restarted', 'self_heal.gave_up'] }, 'test');
   const clock = () => new Date(now).toISOString().slice(11, 16) + ' UTC';
   restartAnswer = () => ({ outcome: 'failed', code: 'exit_1', exitCode: 1, message: 'Docker could not restart the container.' });
-  const failedAt = clock(); unhealthy(f); await work();
+  const failedAt = clock(); unhealthy(f); heal.tickSelfHeal(); await work();
   assert.match(history(f.siteId).at(-1), /restart_failed:exit_1$/);
   assert.equal(db.prepare("SELECT error FROM jobs WHERE site_id=? AND type='self-heal'").get(f.siteId).error, 'Docker could not restart the container.');
-  now += 61_000; restartAnswer = () => ({ outcome: 'restarted' }); unhealthy(f); await work();
-  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'not_unhealthy' }); unhealthy(f); await work();
-  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'recreated' }); const recreatedAt = clock(); unhealthy(f); await work();
-  now += 61_000; restartAnswer = () => { throw new Error('connect ECONNREFUSED 192.0.2.10:22'); }; unhealthy(f); await work();
-  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'something-new' }); unhealthy(f); await work();
-  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'busy' }); unhealthy(f); await work();
-  const asked = jobsOf(f.siteId).length; heal.tickSelfHeal(); await work();
-  assert.equal(jobsOf(f.siteId).length, asked, 'a server-side refusal is not re-asked every tick');
+  now += 61_000; restartAnswer = () => ({ outcome: 'restarted' }); unhealthy(f); heal.tickSelfHeal(); await work();
+  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'not_unhealthy' }); unhealthy(f); heal.tickSelfHeal(); await work();
+  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'recreated' }); const recreatedAt = clock(); unhealthy(f); heal.tickSelfHeal(); await work();
+  now += 61_000; restartAnswer = () => { throw new Error('connect ECONNREFUSED 192.0.2.10:22'); }; unhealthy(f); heal.tickSelfHeal(); await work();
+  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'something-new' }); unhealthy(f); heal.tickSelfHeal(); await work();
+  now += 61_000; restartAnswer = () => ({ outcome: 'refused', code: 'busy' }); unhealthy(f); heal.tickSelfHeal(); await work();
+  const asked = jobsOf(f.siteId).length; now += 20_000; heal.tickSelfHeal(); await work();
+  assert.equal(jobsOf(f.siteId).length, asked, 'a server-side refusal is not re-asked inside the gap');
   assert.deepEqual(history(f.siteId).filter(item => !item.endsWith(':unhealthy')), ['shop-web-1:restart_failed:exit_1', 'shop-web-1:restarted', 'shop-web-1:skipped:not_unhealthy', 'shop-web-1:skipped:recreated', 'shop-web-1:skipped:unreachable', 'shop-web-1:skipped:unavailable', 'shop-web-1:skipped:locked']);
   const outbox = db.prepare('SELECT event,message FROM alert_outbox ORDER BY created_at,rowid').all().map(row => `${row.event}|${row.message}`);
   assert.deepEqual(outbox, [
@@ -211,6 +211,9 @@ test('restart outcomes: failure counts and alerts as restarted, refusals are ski
     `self_heal.gave_up|Self-heal stopped: a watched container of outcomes on Ashburn-1 was recreated at ${recreatedAt}. Open DockNest to check it.`,
   ], 'only the first restart of the window and the gave_up alert; never stderr or hosts');
   for (const row of db.prepare('SELECT message,payload FROM alert_outbox').all()) assert.doesNotMatch(row.message + row.payload, /192\.0\.2|ECONNREFUSED|shop-web-1/);
+  // ...but tried again once the gap after it passed, without a new Docker event.
+  restartAnswer = () => ({ outcome: 'restarted' }); now += 45_000; heal.tickSelfHeal(); await work();
+  assert.equal(history(f.siteId).at(-1), 'shop-web-1:restarted');
 });
 
 test('an existing alert line does not gain the new events', () => {
@@ -275,6 +278,39 @@ test('a restart queued by an event starts at once beside a long job of another s
   } finally { heal.healRunner.active = () => false; heal.cancelRechecks(); db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), longBackup); }
 });
 
+test('one re-check is scheduled when a wait ends: the settle time, a failed restart\'s gap, and the window of a reached limit', async () => {
+  const f = fixture('rechecks'); enable(f.siteId, { max: 3, window: 10 });
+  const timers = [];
+  heal.healClock.setTimeout = (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer; };
+  heal.healClock.clearTimeout = timer => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index, 1); };
+  const fire = async () => { const timer = timers.shift(); timer.fn(); await heal.healRunner.running; return timer.ms; };
+  heal.healRunner.active = () => true;
+  try {
+    // Settle: a backup of the site finished 30 s ago; one re-check at the end of the 2 minutes, then the restart.
+    queueJob(f.siteId, { status: 'completed', finishedAt: at(now - 30_000) });
+    unhealthy(f);
+    assert.equal(timers.length, 1); assert.ok(Math.abs(timers[0].ms - 90_050) < 100, String(timers[0].ms));
+    now += 90_100; await fire();
+    assert.equal(restarts.filter(r => r.siteKey === f.siteId).length, 1, 'restarted when the settle time ended');
+    // A failed restart is retried once its gap has passed, with no new Docker event.
+    healthy(f); now += 61_000; restartAnswer = () => ({ outcome: 'failed', code: 'exit_125' });
+    unhealthy(f); await heal.healRunner.running;
+    assert.match(history(f.siteId).at(-1), /restart_failed:exit_125$/);
+    heal.tickSelfHeal();
+    assert.equal(timers.length, 1, 'one re-check for the gap'); assert.ok(timers[0].ms > 59_000 && timers[0].ms <= 60_100, String(timers[0].ms));
+    now += 60_100; restartAnswer = () => ({ outcome: 'restarted' }); await fire();
+    assert.equal(history(f.siteId).at(-1), 'shop-web-1:restarted', 'the failed restart was retried');
+    // Three attempts in this 10-minute window: the limit. One re-check when the oldest attempt leaves the window.
+    healthy(f); now += 61_000; unhealthy(f);
+    assert.match(history(f.siteId).at(-1), /limit_reached:limit$/);
+    assert.equal(timers.length, 1); const wait = timers[0].ms;
+    assert.ok(wait > 0 && wait <= 10 * 60_000, String(wait));
+    now += wait; await fire();
+    assert.equal(history(f.siteId).at(-1), 'shop-web-1:restarted', 'restarted again once the window had room');
+    assert.equal(restarts.filter(r => r.siteKey === f.siteId).length, 4);
+  } finally { heal.healRunner.active = () => false; heal.cancelRechecks(); }
+});
+
 // ---------- streams ----------
 class FakeChannel extends EventEmitter {
   constructor() { super(); this.stderr = new EventEmitter(); this.written = ''; this.closed = false; }
@@ -323,6 +359,14 @@ test('streams: one per server, opened and reopened on the tick when the fingerpr
   queueJob(a, { status: 'completed', finishedAt: at() });
   streams.syncStreams(); await tick();
   assert.equal(connects.length, 3);
+  // A server over the cap (for example a site moved onto it) watches what fits; the rest says why.
+  const crowded = siteRow(serverId, 'stream-crowded');
+  enable(crowded, { watched: Array.from({ length: 49 }, (_, index) => ({ name: 'c' + index, project: null, service: null })) });
+  streams.syncStreams(); await tick();
+  const sentLast = JSON.parse(connects.at(-1).client.channel.written.trim().split('\n')[1]).watch;
+  assert.ok(sentLast.length <= 50, String(sentLast.length));
+  assert.equal(Object.values(runtime().sites).filter(site => site.tooMany).length >= 1, true, 'the site that did not fit is marked');
+  db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id=?').run(crowded);
   // Turning both off closes it.
   db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id IN (?,?)').run(a, b);
   streams.syncStreams(); await tick();
@@ -336,7 +380,10 @@ test('streams: snapshot, validation, dedupe, throttle, reconnect backoff on clos
   streams.syncStreams(); await tick();
   const first = connects[0].client;
   assert.equal(runtime().servers[f.serverId].state, 'connecting');
-  first.channel.send({ watching: [{ name: 'shop-web-1', id: ID('a') }, null] });
+  first.channel.send({ watched: { index: 0, name: 'shop-web-1', id: ID('a') } });
+  first.channel.send({ watched: { index: 1, name: null, id: null } });
+  assert.equal(runtime().servers[f.serverId].state, 'connecting', 'connected only after the end marker');
+  first.channel.send({ watching: 2 });
   assert.equal(runtime().servers[f.serverId].state, 'connected');
   assert.deepEqual(runtime().sites[f.siteId].missing, ['shop-db-1']);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE target=? AND action='self_heal.gave_up' AND json_extract(detail,'$.reason')='recreated'").get(f.siteId).n, 1, 'a watched service that disappeared gives up with that reason');
@@ -433,6 +480,13 @@ test('API: read for everyone, change for administrators with CSRF, 422 NO_HEALTH
   assert.equal((await operator('GET', '/self-heal/events?after=bad')).status, 400);
   assert.equal((await operator('GET', `/sites/${siteId}/self-heal?limit=3`)).body.events.items.length, 3);
   assert.equal((await operator('GET', '/sites/00000000-0000-4000-8000-000000000000/self-heal')).status, 404);
+  // At most 50 watched containers per server, counted over every enabled site on it.
+  const crowded = siteRow(serverId, 'api-crowded');
+  db.prepare("INSERT INTO self_heal_settings(site_id,enabled,watched,updated_at) VALUES(?,1,?,?)").run(crowded, JSON.stringify(Array.from({ length: 50 }, (_, index) => ({ name: 'c' + index, project: null, service: null }))), at());
+  resolveAnswer = () => ({ containers: [{ name: 'shop-web-1', project: 'shop', service: 'web', healthcheck: true }] });
+  const full = await admin('PUT', `/sites/${siteId}/self-heal`, { enabled: true });
+  assert.deepEqual([full.status, full.body.code, full.body.error], [422, 'TOO_MANY_CONTAINERS', 'Self-heal can watch up to 50 containers per server; this server would have 51.']);
+  db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id=?').run(crowded);
   // Self-heal jobs stay out of the site job lists.
   queueJob(siteId, { type: 'self-heal', status: 'completed' });
   const state = await operator('GET', '/jobs?limit=200');
