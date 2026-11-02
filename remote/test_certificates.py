@@ -1,7 +1,7 @@
 """Certificate facts for certificate alerts (docs/alerts.md, "Certificates"). Run: python3 remote/test_certificates.py
 Proves the helper reads only public certificate files and certbot's renewal outcome, sends only dates, DNS names,
 serials and certificate names, and never lets a certificate problem fail the operation it rides on."""
-import unittest, tempfile, pathlib, shutil, sys, ssl, time
+import unittest, tempfile, pathlib, shutil, sys, ssl, time, os
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
@@ -81,6 +81,10 @@ class RenewalOutcome(unittest.TestCase):
         self.le.log('Failed to renew certificate example.test with error: dns\n',index=1)
         self.le.log('Processing /etc/letsencrypt/renewal/example.test.conf\nCertificate not yet due for renewal\nNo renewals were attempted.\n')
         self.assertEqual(self.outcome()['example.test'],'failed')
+    def test_a_failure_logged_before_the_current_certificate_was_issued_is_over(self):
+        self.le.log('Failed to renew certificate example.test with error: dns\n')
+        os.utime(self.le.logs/'letsencrypt.log',(1700000000,1700000000))  # 2023, before the fixture's notBefore
+        self.assertEqual(self.outcome()['example.test'],'ok')
     def test_only_the_tail_of_a_huge_log_is_read(self):
         self.le.log('Failed to renew certificate example.test with error: old\n'+'x'*(helper.CERT_LOG_TAIL+10)+'\n')
         self.assertIsNone(self.outcome()['example.test'])
