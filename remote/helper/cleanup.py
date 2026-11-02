@@ -67,7 +67,10 @@ def cleanup_protect(req):
     if not isinstance(protect,dict):raise ValueError('Invalid cleanup protection')
     roots=protect.get('stagingRoots') or []
     if not isinstance(roots,list) or len(roots)>200 or any(not isinstance(r,str) or not r.startswith('/') or '..' in r.split('/') or len(r)>512 for r in roots):raise ValueError('Invalid staging roots')
-    return {'containers':cleanup_refs(protect.get('containers')),'volumes':cleanup_refs(protect.get('volumes')),'stagingRoots':list(dict.fromkeys([CLEANUP_DEFAULT_STAGING,*roots]))}
+    # Only the Linux integration test lowers this (it cannot wait an hour); DockNest itself never sends it.
+    age=req.get('minAgeSeconds',CLEANUP_FRESH_SECONDS)
+    if not isinstance(age,int) or isinstance(age,bool) or not 0<=age<=86400:raise ValueError('Invalid minimum age')
+    return {'containers':cleanup_refs(protect.get('containers')),'volumes':cleanup_refs(protect.get('volumes')),'stagingRoots':list(dict.fromkeys([CLEANUP_DEFAULT_STAGING,*roots])),'minAge':age}
 
 # ---- What the server says ----
 def journal_strings(value,into):
@@ -161,7 +164,7 @@ def cleanup_classify(facts,protect):
     now=facts['now'];journals=facts['journals'];eligible=[];kept=[]
     def fresh(created):
         at=cleanup_time(created)
-        return at is None or now-at<CLEANUP_FRESH_SECONDS
+        return at is None or now-at<protect.get('minAge',CLEANUP_FRESH_SECONDS)
     containers=facts['containers']
     site_ids=set()
     for c in containers:

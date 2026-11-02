@@ -22,7 +22,7 @@ def volume(name,labels=None,created=OLD):return {'Name':name,'Labels':labels or 
 def facts(containers=(),images=(),volumes=(),snapshots=(),journals=None,build=None,active=None):
     j={'move':set(),'oldCopy':set(),'restoreTest':set()};j.update(journals or {})
     return {'containers':list(containers),'images':list(images),'volumes':list(volumes),'buildCacheBytes':build,'snapshotImages':set(snapshots),'journals':j,'active':active,'now':NOW}
-def protect(containers=(),volumes=()):return {'containers':set(containers),'volumes':set(volumes),'stagingRoots':['/var/lib/docknest']}
+def protect(containers=(),volumes=()):return {'containers':set(containers),'volumes':set(volumes),'stagingRoots':['/var/lib/docknest'],'minAge':3600}
 def split(f,p):
     eligible,kept=helper.cleanup_classify(f,p)
     return {(i['kind'],i['id']) for i in eligible},{(i['kind'],i['id']):i['reason'] for i in kept}
@@ -101,6 +101,9 @@ class Protection(unittest.TestCase):
     def test_protection_lists_are_validated(self):
         for bad in [{'containers':'shop'},{'containers':['bad name']},{'volumes':[1]},{'stagingRoots':['relative']}]:
             with self.assertRaises(ValueError):helper.cleanup_protect({'protect':bad})
+        for age in [-1,86401,'0',True]:
+            with self.assertRaises(ValueError):helper.cleanup_protect({'minAgeSeconds':age})
+        self.assertEqual(helper.cleanup_protect({})['minAge'],3600,'an hour unless the integration test says otherwise')
 
 class FakeDocker:
     """A server whose state can change between the scan and the clean."""

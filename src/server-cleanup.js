@@ -14,6 +14,8 @@ import { transport } from './engine.js';
 import { heldBy } from './restore-tests/hold.js';
 
 export const serverCleanupRoutes = express.Router();
+// Extra helper request fields; only the Linux integration test sets one ({ minAgeSeconds: 0 }).
+export const cleanupOptions = {};
 export const CLEANUP_KINDS = Object.freeze(['containers', 'images', 'volumes', 'buildCache']);
 const PREVIEW_MS = 15 * 60_000, MAX_PREVIEWS = 50, MAX_ITEMS = 500, MAX_REFS = 2000;
 const REF = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}$/;
@@ -88,7 +90,7 @@ const handle = fn => async (req, res, next) => {
 export async function scanServer(serverId, actor) {
   const server = serverOf(serverId), protect = protectionFor(server.id);
   let result;
-  try { result = await transport.remote(server, { operation: 'cleanup-scan', protect }); }
+  try { result = await transport.remote(server, { ...cleanupOptions, operation: 'cleanup-scan', protect }); }
   catch (error) { if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED'); throw unreachable(error, server); }
   const items = (Array.isArray(result?.items) ? result.items : []).filter(item => CLEANUP_KINDS.includes(item?.kind) && REF.test(String(item?.id))).map(itemOf).slice(0, MAX_ITEMS);
   const kept = (Array.isArray(result?.protected) ? result.protected : []).filter(item => CLEANUP_KINDS.includes(item?.kind)).map(item => ({ ...itemOf(item), reason: REASONS.has(item.reason) ? item.reason : 'site' })).map(({ fingerprint: _f, ...item }) => item);
@@ -114,7 +116,7 @@ export async function cleanServer(serverId, body, actor) {
   cleaning.add(server.id);
   try {
     let result;
-    try { result = await transport.remote(server, { operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
+    try { result = await transport.remote(server, { ...cleanupOptions, operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
     catch (error) {
       audit(actor, 'server.cleanup', server.id, { result: error.remoteReported ? 'refused' : 'failed', requested: chosen.length, removed: 0, bytes: 0 });
       if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED');
