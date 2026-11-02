@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, atomic_json, docker, emit, inspect, run)
+    NOFOLLOW, atomic_json, docker, emit, hardening_args, inspect, run, verify_hardening)
 from .databases import (
     cached_sqlite_file_proof, data_checks, restart_services)
 from .backup import (
@@ -371,6 +371,7 @@ def restore_test_restore(req):
         if multi and plans[i] and not internet:args+=['--dns','127.0.0.1']
         try:
             for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+            args+=hardening_args(c,root)  # the original's read-only root, capabilities and security options
         except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
         for j,m in enumerate(c['Mounts']):
             try:source=extract_mount(unpacked,i,j,m,sources,root)
@@ -431,6 +432,8 @@ def restore_test_restore(req):
         cid=docker(*args).decode().strip();created.append(cid)
         for original,aliases in list(plans[i].items())[1:]:
             docker('network','connect',*[part for alias in aliases for part in ['--alias',alias]],networks[original],cid)
+    try:verify_hardening(containers,created)
+    except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
     ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]

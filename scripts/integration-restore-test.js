@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { writeHelperBundle } from '../src/helper-bundle.js';
+import { HARDENED_FLAGS, buildHardenedImage, hardeningOf, assertReadOnlyRoot } from './integration-copies.js';
 
 export async function runRestoreTestScenario({ run, until, hosts, servers, db, record, staticSiteId, evidence }) {
   const { enqueueBackup, claimJob, executeJob, planBackup } = await import('../src/engine.js');
@@ -338,5 +339,24 @@ print(json.dumps({'refused':refused,'now':helper.image_id_of('rt-collide:1'),'by
   await verifyClean(reaped, before);
   record('Restore test: with the manager stopped past the deadline, the reaper alone removes the copy, networks, images and staging; the manager later records couldnt_run and finds nothing left');
 
-  for (const name of ['rt-single', 'rt-web', 'rt-db', 'rt-netadmin', 'rt-exit', 'rt-oom']) await run('exec', source, 'docker', 'rm', '-f', name).catch(() => {});
+  // 13. A hardened site is testable: the copy keeps the read-only root, RAM folder, CapDrop ALL with default
+  // capabilities added back and no-new-privileges (issue 145), next to the test's own limits.
+  const hardenedImage = await buildHardenedImage(run, source, 'docknest-rt:local');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'rt-hardened', ...HARDENED_FLAGS, '-v', 'rt-hardened-data:/site', hardenedImage);
+  await healthy('rt-hardened');
+  const hardenedOriginal = await hardeningOf(run, source, 'rt-hardened');
+  const hardenedSite = site('rt-hardened', config(['rt-hardened'])); await backup(hardenedSite);
+  before = await snapshot(target);
+  const hardened = rt.createRestoreTest({ siteId: hardenedSite, serverId: servers[1].id, actor: 'qa', probe: { service: 'rt-hardened', port: 8080, path: '/' } }).id;
+  let hardenedSeen = false;
+  const hardenedDone = await drive(hardened, { onHealth: async () => {
+    const [copy] = await copies(hardened); assertLimits(copy, hardened);
+    assert.deepEqual(await hardeningOf(run, target, copy.Id), hardenedOriginal, 'the test copy has the same protections as the original');
+    await assertReadOnlyRoot(run, target, copy.Id); hardenedSeen = true;
+  } });
+  assert.equal(hardenedDone.result, 'passed', hardenedDone.reason ?? ''); assert.equal(hardenedSeen, true, 'the copy was inspected while it ran');
+  await verifyClean(hardened, before);
+  record('Restore test, hardened site: the copy keeps the read-only root, RAM folder, CapDrop ALL plus default capabilities and no-new-privileges (docker inspect and /proc/1/status match the original) and the test passes');
+
+  for (const name of ['rt-single', 'rt-web', 'rt-db', 'rt-netadmin', 'rt-exit', 'rt-oom', 'rt-hardened']) await run('exec', source, 'docker', 'rm', '-f', name).catch(() => {});
 }
