@@ -5,7 +5,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    emit, inspect)
+    emit)
 from .incremental import (
     INCREMENTAL_ROOT, SITE_KEY, incremental_root)
 from .restore_test import (
@@ -21,7 +21,10 @@ HEAL_PROJECT='com.docker.compose.project'
 HEAL_SERVICE='com.docker.compose.service'
 HEAL_MOVE_LABEL='docknest.move'
 HEAL_LINE_LIMIT=4096
-HEAL_WATCH_LIMIT=60
+HEAL_WATCH_LIMIT=60  # DockNest sends at most 50 per server (src/self-heal/limits.js WATCH_PER_SERVER)
+# A narrow template: only the fields self-heal reads, so label-heavy containers never make a long line. A missing
+# label prints "". The Linux integration run checks this template against the live Docker.
+HEAL_EVENT_FORMAT='{"id":{{json .Actor.ID}},"action":{{json .Action}},"timeNano":{{json .TimeNano}},"name":{{json (index .Actor.Attributes "name")}},"project":{{json (index .Actor.Attributes "com.docker.compose.project")}},"service":{{json (index .Actor.Attributes "com.docker.compose.service")}},"restoreTest":{{json (index .Actor.Attributes "docknest.restore-test")}},"move":{{json (index .Actor.Attributes "docknest.move")}}}'
 # `docker restart` exit codes as fixed sentences (security review item 7); stderr is never read or forwarded.
 HEAL_RESTART_SENTENCES={1:'Docker could not restart the container.',125:'Docker refused the restart command.',126:'Docker could not run the restart command.',127:'Docker was not found on the server.',137:'The restart was stopped before it finished.'}
 
@@ -56,8 +59,18 @@ def heal_health(container):
     status=((container.get('State') or {}).get('Health') or {}).get('Status')
     return status if status in ('healthy','unhealthy','starting') else None
 def heal_containers():
+    """Every container, inspected. One that disappears between `ps` and `inspect` is simply left out: `docker inspect`
+    still prints the others (and exits 1), so its output is read whatever the exit code."""
     ids=subprocess.run(['docker','ps','-a','--no-trunc','--format','{{.ID}}'],capture_output=True,timeout=30,check=True).stdout.decode().split()
-    return inspect(ids) if ids else []
+    if not ids:return []
+    found=subprocess.run(['docker','inspect',*ids],capture_output=True,timeout=60)
+    try:items=json.loads(found.stdout or b'[]')
+    except ValueError:items=None
+    items=[c for c in items if isinstance(c,dict) and isinstance(c.get('Name'),str) and isinstance(c.get('Id'),str)] if isinstance(items,list) else []
+    # Containers exist but none could be inspected: Docker itself failed. Raise, so the stream closes and reconnects,
+    # rather than report every watched container as gone (which would give up with "container recreated").
+    if not items and found.returncode!=0:raise ValueError('docker inspect failed.')
+    return items
 def heal_resolve(watch,containers):
     """Each watched entry's current container, or None. A Compose service scaled to several containers prefers the one
     with the saved name, then a running one, then the first by name, so the choice is stable."""
@@ -84,22 +97,23 @@ def self_heal_resolve(req):
     emit(result={'containers':found})
 
 def heal_event(line,watch):
-    """One `docker events --format '{{json .}}'` line as {container,status,at,id,timeNano}, or None when it is not a
-    health event of a watched container. Malformed output raises, which closes the stream (security review item 6)."""
+    """One line of `docker events --format HEAL_EVENT_FORMAT` as {container,status,at,id,timeNano}, or None when it is not
+    a health event of a watched container. Unwatched containers are dropped before any format check, so they can never
+    close the stream; malformed output of a watched one raises, which closes it (security review item 6)."""
     if len(line)>HEAL_LINE_LIMIT:raise ValueError('Docker sent an event line over 4 KB.')
     event=json.loads(line)
-    if not isinstance(event,dict) or not isinstance(event.get('Action'),str):raise ValueError('Docker sent an event without an action.')
-    action=event['Action']
+    if not isinstance(event,dict):raise ValueError('Docker sent an event in an unknown format.')
+    name,project,service=event.get('name'),event.get('project') or None,event.get('service') or None
+    if not isinstance(name,str) or not HEAL_NAME.fullmatch(name):return None
+    labels={key:value for key,value in (('com.docker.compose.project',project),('com.docker.compose.service',service),(TEST_LABEL,event.get('restoreTest') or None),(HEAL_MOVE_LABEL,event.get('move') or None)) if isinstance(value,str)}
+    if not any(heal_matches(entry,name,labels) for entry in watch):return None
+    action=event.get('action')
+    if not isinstance(action,str):raise ValueError('Docker sent an event without an action.')
     if not action.startswith('health_status'):return None
     match=HEAL_ACTION.fullmatch(action)
     if not match:raise ValueError('Docker sent a health event in an unknown format.')
-    actor=event.get('Actor')
-    if not isinstance(actor,dict) or not isinstance(actor.get('Attributes') or {},dict):raise ValueError('Docker sent a health event without its container.')
-    cid,labels=actor.get('ID'),actor.get('Attributes') or {}
-    name=labels.get('name')
-    nano=event.get('timeNano')
-    if not isinstance(cid,str) or not HEAL_ID.fullmatch(cid) or not isinstance(name,str) or not HEAL_NAME.fullmatch(name) or isinstance(nano,bool) or not isinstance(nano,int) or nano<=0:raise ValueError('Docker sent a health event in an unknown format.')
-    if not any(heal_matches(entry,name,labels) for entry in watch):return None
+    cid,nano=event.get('id'),event.get('timeNano')
+    if not isinstance(cid,str) or not HEAL_ID.fullmatch(cid) or isinstance(nano,bool) or not isinstance(nano,int) or nano<=0:raise ValueError('Docker sent a health event in an unknown format.')
     return {'container':name,'status':match[1],'at':nano/1e9,'id':cid,'timeNano':nano}
 
 def heal_stop_with_stdin(process,read=None):
@@ -119,12 +133,16 @@ def health_events(req,popen=None,containers=None,watch_stdin=True):
     """The held stream: start `docker events` (own process group, no --since), then report the current health of the
     watched containers once, then forward health events of watched containers only. Read-only."""
     watch=heal_watch(req)
-    process=(popen or subprocess.Popen)(['docker','events','--filter','type=container','--filter','event=health_status','--format','{{json .}}'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+    process=(popen or subprocess.Popen)(['docker','events','--filter','type=container','--filter','event=health_status','--format',HEAL_EVENT_FORMAT],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
     if watch_stdin:threading.Thread(target=heal_stop_with_stdin,args=(process,),daemon=True).start()
     try:
         # The snapshot runs after `docker events` started, so a change during the snapshot is still streamed.
         resolved=heal_resolve(watch,heal_containers() if containers is None else containers)
-        emit(watching=[{'name':c['Name'].lstrip('/'),'id':c['Id']} if c is not None and HEAL_ID.fullmatch(c.get('Id') or '') and HEAL_NAME.fullmatch(c['Name'].lstrip('/')) else None for c in resolved])
+        # One short line per watched entry (a single line would pass 4 KB with many containers), then the end marker.
+        for index,c in enumerate(resolved):
+            found=c is not None and HEAL_ID.fullmatch(c.get('Id') or '') and HEAL_NAME.fullmatch(c['Name'].lstrip('/'))
+            emit(watched={'index':index,'name':c['Name'].lstrip('/') if found else None,'id':c['Id'] if found else None})
+        emit(watching=len(resolved))
         for c in resolved:
             status=heal_health(c) if c is not None else None
             if status is not None and HEAL_ID.fullmatch(c.get('Id') or ''):emit(container=c['Name'].lstrip('/'),status=status,at=time.time(),id=c['Id'],timeNano=0)

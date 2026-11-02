@@ -8,6 +8,7 @@ export const LIMITS = Object.freeze({
 export const MIN_GAP_MS = 60_000;          // at least 60 s between two restarts of one container
 export const THROTTLE_MS = 10_000;         // at most one event acted on per container per 10 s
 export const SETTLE_MS = 120_000;          // no restart within 2 minutes after DockNest work on the site ended
+export const WATCH_PER_SERVER = 50;        // containers one server's stream watches (the helper accepts up to 60)
 export const KEEP_DAYS = 90;               // history kept; the worker's maintenance step deletes older rows
 // The live values. Only the Linux integration run shortens them (the same properties, less CI time).
 export const timing = { minGapMs: MIN_GAP_MS, throttleMs: THROTTLE_MS, settleMs: SETTLE_MS };
@@ -28,6 +29,10 @@ export function backoffMs(attempt, random = Math.random) {
 // The server-side refusals (`locked`, `maintenance_flag`) are not in this set: re-asking the server every tick would
 // only repeat them; the next health event or reconnect snapshot opens a new episode.
 export const TRANSIENT = new Set(['site_busy', 'work_queued', 'moving', 'maintenance', 'settling', 'deployment_hold']);
+// Attempts that did not restart (the server could not be reached, the site lock or maintenance marker on the server).
+// They are tried again once the 60 s gap after them has passed, and count toward the restart limit like a restart, so
+// an unreachable server is asked at most N times per window. A failed `docker restart` is retried the same way.
+export const RETRYABLE = new Set(['unreachable', 'locked', 'maintenance_flag']);
 export const REASONS = Object.freeze({
   site_busy: 'DockNest was working on this site.',
   work_queued: 'A backup or change for this site was waiting, so the restart stepped aside.',
@@ -67,4 +72,5 @@ export const NOT_WATCHING = Object.freeze({
   worker_offline: 'the DockNest worker is not running',
   no_healthcheck: 'no container in this site has a health check',
   static: 'static websites have no containers',
+  too_many: 'this server already has 50 watched containers',
 });

@@ -32,7 +32,9 @@ export function takeToken(token, { userId, sessionHash, siteId }) {
   if (!entry) throw httpError(409, 'REVIEW_EXPIRED', 'This review expired. Review the change again.');
   store.delete(key);
   if (entry.userId !== userId || entry.sessionHash !== sessionHash || entry.siteId !== siteId) throw httpError(409, 'REVIEW_EXPIRED', 'This review expired. Review the change again.');
-  return { candidate: JSON.parse(open(entry.sealed)), meta: entry.meta, hashes: entry.hashes, sealed: entry.sealed, restore: () => { if (entry.expiresAt > tokenClock.now()) store.set(key, entry); } };
+  const candidate = JSON.parse(open(entry.sealed));
+  if (!sameHashes(entry.hashes, candidate.originalHashes ?? [])) throw httpError(409, 'REVIEW_EXPIRED', 'This review expired. Review the change again.');
+  return { candidate, meta: entry.meta, hashes: entry.hashes, sealed: entry.sealed, restore: () => { if (entry.expiresAt > tokenClock.now()) store.set(key, entry); } };
 }
 
 // The original hashes a token was bound to must still be the ones the candidate names.

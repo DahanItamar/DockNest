@@ -234,8 +234,8 @@ Safe Edit (beta) is new in 2.15. Nothing changes for existing sites until an adm
   the containers, the first time someone opens Safe Edit for the site.
 - Existing alert lines do not gain the two new events (Change undone, Change needs you); add them on the Map if you
   want them.
-- While a Safe Edit runs, the site's other work (backups, restores, moves, maintenance actions) waits, and
-  `scripts/upgrade.sh` waits for it like for a running backup.
+- While a Safe Edit runs, the site's other work is refused with 409 (manual backups, restores, moves, maintenance
+  actions) or skipped (scheduled backups), and `scripts/upgrade.sh` waits for it like for a running backup.
 
 **Going back to 2.14.** Let every Safe Edit finish first. `scripts/upgrade.sh` refuses the downgrade while one is
 unfinished. If a server was left mid-edit anyway, it keeps its journal under `/var/lib/docknest/edits/`, and the next

@@ -9,11 +9,11 @@ export const RESULTS = Object.freeze(['applied', 'rolled_back', 'failed', 'cance
 export const TABS = Object.freeze(['compose', 'env', 'ports', 'image']);
 
 // The engine's position (site_edits.progress.phase). Each phase belongs to one step of the timeline.
-// data_restore / data_restore_wait / rollback_health are parts of roll_back; recover runs edit-status after an interrupted
+// rollback_health is part of roll_back (the data comes back inside edit-rollback); recover runs edit-status after an interrupted
 // or unreachable step; attention waits for the owner (needs_attention).
-export const PHASE_STEP = Object.freeze({ backup: 'backup', prepare: 'prepare', apply: 'apply', check_health: 'check_health', roll_back: 'roll_back', data_restore: 'roll_back', data_restore_wait: 'roll_back', rollback_health: 'roll_back', finish: 'finish' });
+export const PHASE_STEP = Object.freeze({ backup: 'backup', prepare: 'prepare', apply: 'apply', check_health: 'check_health', roll_back: 'roll_back', rollback_health: 'roll_back', finish: 'finish' });
 // Phases that run as a `site-edit` job on the site's server.
-export const JOB_PHASES = Object.freeze(['prepare', 'apply', 'check_health', 'roll_back', 'data_restore', 'rollback_health', 'finish', 'recover']);
+export const JOB_PHASES = Object.freeze(['prepare', 'apply', 'check_health', 'roll_back', 'rollback_health', 'finish', 'recover']);
 // Phases that wait between polls: their job rests in edit_waiting.
 export const POLL_PHASES = Object.freeze(['check_health', 'rollback_health']);
 
@@ -22,7 +22,7 @@ export function stateFor(phase, outcome = null, started = true) {
   if (phase === 'attention') return 'needs_attention';
   if (phase === 'backup') return started ? 'running' : 'queued';
   if (phase === 'check_health') return 'checking';
-  if (['roll_back', 'data_restore', 'data_restore_wait', 'rollback_health'].includes(phase)) return 'rolling_back';
+  if (['roll_back', 'rollback_health'].includes(phase)) return 'rolling_back';
   if (phase === 'finish') return outcome === 'rolled_back' ? 'rolling_back' : outcome === 'applied' ? 'checking' : 'running';
   return 'running';
 }
@@ -30,6 +30,10 @@ export function stateFor(phase, outcome = null, started = true) {
 // Cancel is accepted only before `apply` starts; afterwards rollback is the undo.
 export const cancellable = edit => edit.result === null && !edit.progress?.applyStarted && ['backup', 'prepare'].includes(edit.progress?.phase ?? 'backup');
 
+// The data safety copy's time budget, the same as the helper's (remote/helper/edit.py EDIT_COPY_*): a call limit is the
+// step's base plus the reviewed data size over a conservative throughput (restores 1.5x), capped.
+export const COPY = Object.freeze({ bytesPerSecond: 20 * 1024 * 1024, maxSeconds: 3 * 3600, restoreFactor: 1.5 });
+export const copySeconds = (base, bytes, factor = 1) => Math.round(base + Math.min(COPY.maxSeconds * factor, Number.isSafeInteger(bytes) && bytes > 0 ? (bytes / COPY.bytesPerSecond) * factor : 0));
 export const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const ENV_REFUSED_PREFIX = /^(COMPOSE_|DOCKER_|BUILDKIT_)/i;
 export const LIMITS = Object.freeze({ fileBytes: 256 * 1024, files: 10, envKeys: 200, valueBytes: 8 * 1024, editsPerHour: 10, tokenMs: 15 * 60_000, timeLimit: { min: 60, max: 600, default: 120 } });
@@ -62,8 +66,14 @@ export const REASONS = Object.freeze({
   MAINTENANCE_FAILED: 'The maintenance page could not be switched.',
   APPLY_FAILED: 'Docker could not start the changed site.',
   FAILED: 'Safe Edit could not run on the server.',
+  DATA_NOT_LOCAL: 'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
+  OWN_SITE: 'This is DockNest itself. Update it with the DockNest upgrade, not Safe Edit.',
+  DATA_TOO_LARGE: 'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
+  DATA_UNREADABLE: 'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+  YAML_REFUSED: 'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
+  DATA_COPY_SPACE: 'Not enough free disk space for the safety copy. Nothing was changed.',
 });
-export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST']);
+export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST', 'DATA_NOT_LOCAL', 'OWN_SITE', 'DATA_TOO_LARGE', 'DATA_UNREADABLE', 'YAML_REFUSED']);
 export const FIELD = /^[A-Za-z0-9_.\-[\]]{1,200}$/;
 export const reasonFor = (code, fallback = 'The change could not be checked. Try again.') => (Object.hasOwn(REASONS, code) ? REASONS[code] : fallback);
 export const helperCode = value => (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(value) ? (value === 'FILE_CHANGED_APPLY' ? 'FILE_CHANGED' : value) : null);
@@ -81,10 +91,12 @@ export const SAY = Object.freeze({
   unhealthy: seconds => `The site did not become healthy in ${seconds % 60 === 0 ? `${seconds / 60} minute${seconds === 60 ? '' : 's'}` : `${seconds} seconds`}.`,
   previousUnhealthy: 'The previous version did not become healthy either. The site stays behind the maintenance page.',
   rollbackFailed: 'The previous version could not be put back. The site stays behind the maintenance page.',
-  dataRestoreFailed: 'The data could not be restored from the backup taken before the change.',
+  dataCopySpace: 'Not enough free disk space for the safety copy. Nothing was changed.',
+  dataCopyKept: 'A safety copy of the data is kept on the server.',
+  applyFailedUndone: 'The change could not be applied, so it was undone.',
   finishFailed: 'The maintenance page could not be turned off.',
   cancelled: 'The change was cancelled before anything was written.',
-  restoredBackup: 'The backup from before the change was restored. Check the site, then turn off its maintenance page.',
+  restoredBackup: 'The backup from before the change was restored through the normal restore. Check the site, then turn off its maintenance page.',
   siteGone: 'This site was removed from active sites.',
 });
 

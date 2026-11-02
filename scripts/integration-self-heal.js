@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { writeHelperBundle } from '../src/helper-bundle.js';
+import { writeHelperBundle, helperSource } from '../src/helper-bundle.js';
 
 export async function runSelfHealScenario({ run, until, hosts, servers, db, directory, record, evidence }) {
   const { enqueueBackup, claimJob, executeJob } = await import('../src/engine.js');
@@ -29,7 +29,9 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   const gaveUps = (siteId, reason) => db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='self_heal.gave_up' AND target=? AND json_extract(detail,'$.reason')=?").get(siteId, reason).n;
   const runtime = () => { try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='self_heal_runtime'").get()?.value ?? '{}'); } catch { return {}; } };
   const streamState = () => runtime().servers?.[server.id]?.state;
-  const eventsProcesses = async () => Number((await run('exec', source, 'sh', '-c', "pgrep -f 'docker events --filter type=container' | wc -l")).trim());
+  // Anchored at the start of the command line, so the `sh -c` running pgrep (whose own line contains the pattern) never
+  // counts itself.
+  const eventsProcesses = async () => Number((await run('exec', source, 'sh', '-c', "pgrep -f '^docker events --filter type=container' | wc -l")).trim());
   // The worker loop in this process: open/close streams, queue restarts, claim and run one job, repeat.
   let pumping = false;
   async function pump(ms, stop = () => false) {
@@ -62,7 +64,9 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, server.id, 'heal-shop', JSON.stringify(config), new Date().toISOString());
 
   // The live event format of this Docker, parsed by the helper's own parser (security review item 4).
-  const capture = spawn('docker', ['exec', source, 'timeout', '20', 'docker', 'events', '--filter', 'type=container', '--filter', 'event=health_status', '--format', '{{json .}}'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  // The exact narrow template the helper streams with (remote/helper/heal.py HEAL_EVENT_FORMAT).
+  const eventFormat = /^HEAL_EVENT_FORMAT='(.*)'$/m.exec(helperSource().toString('utf8'))[1];
+  const capture = spawn('docker', ['exec', source, 'timeout', '20', 'docker', 'events', '--filter', 'type=container', '--filter', 'event=health_status', '--format', eventFormat], { stdio: ['ignore', 'pipe', 'ignore'] });
   let captured = ''; capture.stdout.on('data', chunk => { captured += chunk; });
   await wait(1000);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
@@ -77,7 +81,8 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   assert.deepEqual(Object.keys(parsed).sort(), ['at', 'container', 'id', 'status', 'timeNano']);
   assert.equal(parsed.container, 'healshop-web-1'); assert.equal(parsed.status, 'unhealthy'); assert.equal(parsed.id, await idOf('healshop-web-1'));
   evidence.selfHealDocker = evidence.docker;
-  record(`Self-heal: the helper parses the live docker events health format of Docker ${evidence.docker} to exactly {container, status, at, id, timeNano}`);
+  assert.ok(Buffer.byteLength(line) < 1024, 'the narrow template keeps event lines short');
+  record(`Self-heal: the helper's narrow docker events template works on Docker ${evidence.docker} and parses to exactly {container, status, at, id, timeNano}`);
 
   // Turning it on finds only the site's containers with a health check (read-only helper call), with their Compose identity.
   const resolved = await remote(server, { operation: 'self-heal-resolve', names: config.containers });
@@ -141,9 +146,11 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   // Item 8: a backup that stops the container while a restart is queued. The restart yields (skipped), the real backup
   // runs and starts the site again, and nothing restarts it underneath.
   await pump(15_000, () => false);
+  await until(async () => (await health('healshop-web-1')) === 'healthy', 'web is not healthy before the queued-backup case', 60);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
-  assert.ok(await pump(20_000, () => Boolean(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued'").get(siteId)) || events(siteId, 'restarted', 'healshop-web-1').length > restartsBefore + 1), 'a restart was queued');
-  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued'").get(siteId)) {
+  // Let the stream record the event and queue the restart, without claiming it (no pump).
+  await until(async () => { streams.syncStreams(); heal.tickSelfHeal(); return Boolean(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued'").get(siteId)); }, 'no restart was queued for the queued-backup case', 60);
+  {
     const backup = enqueueBackup(siteId, 'qa');
     const first = claimJob();
     assert.equal(first.id, backup.id, 'the queued restart yields to the queued backup');
@@ -175,7 +182,8 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   // 4. Drop the SSH session (kill the sshd child) while the container turns unhealthy: on reconnect the restart happens.
   await pump(15_000, () => streamState() === 'connected');
   const dropRestarts = events(siteId, 'restarted', 'healshop-web-1').length;
-  await run('exec', source, 'sh', '-c', "pkill -f 'sshd-session' || pkill -f 'sshd: root@' || true");
+  // Anchored patterns: an unanchored one would also match (and kill) the `sh -c` that runs pkill.
+  await run('exec', source, 'sh', '-c', "pkill -f '^sshd-session' || pkill -f '^sshd: root@' || true");
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
   assert.ok(await pump(60_000, () => events(siteId, 'restarted', 'healshop-web-1').length > dropRestarts), 'no restart after the reconnect');
   await until(async () => (await eventsProcesses()) === 1, 'the dropped session left a docker events process behind', 30);
@@ -193,13 +201,31 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
 
   // 6. Worker restart: the stream resumes and an already handled event is not acted on again.
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web is not healthy before the restart case', 60);
-  const handled = events(siteId, 'restarted').length;
+  await pump(timing.minGapMs + 2000);
+  const handled = events(siteId, 'restarted').length, startedBefore = await startedAt('healshop-web-1');
+  // The worker dies while a restart is marked running: the stream goes, and the next start finds the job.
+  const interrupted = randomUUID(), webId = await idOf('healshop-web-1');
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,started_at,details) VALUES(?,?,'self-heal','heal_running','restarting',?,?,?)").run(interrupted, siteId, new Date().toISOString(), new Date().toISOString(), JSON.stringify({ container: 'healshop-web-1', containerId: webId, project: 'healshop', service: 'web' }));
   streams.stopStreams();
+  await until(async () => (await eventsProcesses()) === 0, 'docker events still runs after the worker stopped', 30);
   heal.recoverInterruptedHeals();
+  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(interrupted).status, 'failed', 'an interrupted restart is failed, not retried');
+  assert.equal(events(siteId, 'restart_failed', 'healshop-web-1').at(-1).reason, 'interrupted');
+  const before6 = Date.now();
   await connected();
+  assert.ok(Date.parse(runtime().servers[server.id].since) >= before6 - 1000, 'the stream was reopened after the restart');
+  assert.equal(await eventsProcesses(), 1);
   await pump(15_000);
   assert.equal(events(siteId, 'restarted').length, handled, 'no duplicate restart after a worker restart');
-  record('Self-heal case 6: after a worker restart the stream resumes and nothing already handled restarts again');
+  assert.equal(await startedAt('healshop-web-1'), startedBefore, 'the healthy container was not touched');
+  // The connect snapshot still acts on a container that turned unhealthy while the worker was down.
+  streams.stopStreams();
+  await until(async () => (await eventsProcesses()) === 0, 'docker events still runs after the second stop', 30);
+  await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
+  await until(async () => (await health('healshop-web-1')) === 'unhealthy', 'web did not turn unhealthy while the worker was down', 30);
+  assert.ok(await pump(60_000, () => events(siteId, 'restarted').length > handled), 'the snapshot on reconnect did not lead to a restart');
+  assert.equal(events(siteId, 'restarted').length, handled + 1, 'exactly one restart');
+  record('Self-heal case 6: after a worker restart the interrupted restart is failed (not retried), the stream reopens with one docker events, nothing already handled restarts again, and a container that turned unhealthy while the worker was down is restarted once');
 
   // Item 8: `compose up` recreates the container after enable (new ID, same labels): it is still healed.
   const oldId = await idOf('healshop-web-1');

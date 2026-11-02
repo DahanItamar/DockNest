@@ -27,7 +27,7 @@ remote/
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
-│   ├── edit.py             Safe Edit: load, gate, journal, atomic writes, apply, health poll, rollback (docs/safe-edit.md)
+│   ├── edit.py             Safe Edit: load, gate, journal, data safety copy, atomic writes, apply, health poll, rollback (docs/safe-edit.md)
 │   ├── heal.py             self-heal: health event stream, health-check lookup, guarded restart
 │   └── __main__.py         locks, stdin watcher, operation dispatch (main), command-line entry points
 ├── boot_recovery.py        boot driver; imports names from the built helper.py

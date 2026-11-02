@@ -16,8 +16,8 @@ import { createHash } from 'node:crypto';
 import { db } from '../db.js';
 import { connect } from '../ssh.js';
 import { helperSource } from '../helper-bundle.js';
-import { recordHealth, gaveUp, healClock } from './engine.js';
-import { STREAM, CONTAINER, CONTAINER_ID, STATUSES, backoffMs, timing } from './limits.js';
+import { recordHealth, gaveUp, healClock, healRunner, tickSelfHeal } from './engine.js';
+import { STREAM, CONTAINER, CONTAINER_ID, STATUSES, WATCH_PER_SERVER, backoffMs, timing } from './limits.js';
 
 // SSH, timers and randomness; tests replace members.
 export const streamTransport = {
@@ -30,7 +30,9 @@ const RUNTIME = 'self_heal_runtime';
 const COMMAND = 'python3 -c "import base64,sys;exec(compile(base64.b64decode(sys.stdin.readline()),\'<docknest-helper>\',\'exec\'))"';
 const streams = new Map();
 const runtime = { servers: {}, sites: {} };
+// Never after this worker lost its lease: the runtime state then belongs to the worker that took over.
 function persist() {
+  if (healRunner.halted) return;
   try { db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(RUNTIME, JSON.stringify({ ...runtime, at: new Date(healClock.now()).toISOString() })); }
   catch (error) { console.error(`Self-heal stream state could not be saved: ${error.code ?? error.name}`); }
 }
@@ -49,7 +51,9 @@ export function validEvent(value) {
 }
 
 // What should be open: one entry per server with an enabled, active site.
+const overfull = new Set();
 export function desiredStreams() {
+  overfull.clear();
   const rows = db.prepare(`SELECT h.site_id,h.watched,h.updated_at,s.server_id,v.host,v.port,v.username,v.host_key,v.private_key,
       (SELECT MAX(finished_at) FROM jobs j WHERE j.site_id=s.id AND j.type NOT IN ('self-heal','restore-test')) AS last_work
     FROM self_heal_settings h JOIN sites s ON s.id=h.site_id JOIN servers v ON v.id=s.server_id
@@ -59,6 +63,10 @@ export function desiredStreams() {
     let watched = []; try { watched = JSON.parse(row.watched); } catch { watched = []; }
     const entries = (Array.isArray(watched) ? watched : []).filter(item => item && CONTAINER.test(item.name ?? '')).map(item => ({ siteId: row.site_id, name: item.name, project: item.project ?? null, service: item.service ?? null }));
     if (!entries.length) continue;
+    // At most WATCH_PER_SERVER containers per server (the API refuses more; a site moved onto a full server is not
+    // watched and says why). Sites are taken in a stable order.
+    const count = desired.get(row.server_id)?.watch.length ?? 0;
+    if (count + entries.length > WATCH_PER_SERVER) { overfull.add(row.site_id); continue; }
     const item = desired.get(row.server_id) ?? { serverId: row.server_id, server: { id: row.server_id, host: row.host, port: row.port, username: row.username, host_key: row.host_key, private_key: row.private_key }, watch: [], parts: [row.host, row.port, row.username, row.host_key, createHash('sha256').update(String(row.private_key)).digest('hex')] };
     item.watch.push(...entries);
     // Identity, not the current name: a Compose name the snapshot updates never reopens the stream.
@@ -75,6 +83,7 @@ export class ServerStream {
     this.state = 'off'; this.reason = null; this.attempt = 0; this.timer = null; this.client = null; this.channel = null;
     this.stopped = false; this.connectedAt = null; this.lastAccepted = new Map(); this.seen = new Set(); this.pending = new Map(); this.flushTimers = new Map();
     this.names = new Map(watch.map(entry => [entry.name, entry]));
+    this.found = null;
   }
   setState(state, reason = null) {
     if (this.state === state && this.reason === reason) return;
@@ -122,7 +131,13 @@ export class ServerStream {
   drop() { try { this.channel?.close(); } catch { /* closing */ } try { this.client?.end(); } catch { /* closing */ } }
   line(text) {
     let value; try { value = JSON.parse(text); } catch { return; }
-    if (Array.isArray(value?.watching)) return this.snapshot(value.watching);
+    // The snapshot: one `watched` line per entry (index, current name and ID, or nulls), then `watching: <count>`.
+    if (value && typeof value.watched === 'object' && value.watched !== null) {
+      const index = value.watched.index;
+      if (Number.isInteger(index) && index >= 0 && index < this.watch.length) (this.found ??= [])[index] = value.watched;
+      return;
+    }
+    if (Number.isInteger(value?.watching)) { const list = this.found ?? []; this.found = null; return this.snapshot(this.watch.map((_, index) => list[index] ?? null)); }
     if (typeof value?.error === 'string') { this.lastReason = /docker events stopped/.test(value.error) ? 'stream_ended' : 'docker_events'; return; }
     const event = validEvent(value);
     if (!event) return;
@@ -160,11 +175,12 @@ export class ServerStream {
   }
   // The helper's first line: the current container of each watched entry (same order), or null when it is gone.
   snapshot(list) {
+    if (this.stopped || healRunner.halted) return;
     this.connectedAt = healClock.now(); this.lastReason = null;
     const bySite = new Map();
     this.watch.forEach((entry, index) => {
       const found = list[index];
-      const name = found && typeof found.name === 'string' && CONTAINER.test(found.name) ? found.name : null;
+      const name = found && typeof found.name === 'string' && CONTAINER.test(found.name) && typeof found.id === 'string' && CONTAINER_ID.test(found.id) ? found.name : null;
       const site = bySite.get(entry.siteId) ?? { missing: [], renamed: [] };
       if (!name) site.missing.push(entry.name);
       else if (name !== entry.name) { site.renamed.push([entry, name]); this.names.delete(entry.name); entry.name = name; this.names.set(name, entry); }
@@ -176,10 +192,13 @@ export class ServerStream {
       for (const name of site.missing) { try { gaveUp(siteId, name, 'recreated'); } catch (error) { console.error(`Self-heal could not record a missing container: ${error.code ?? error.name}`); } }
     }
     this.setState('connected');
+    // Restarts that waited for this server (unreachable) are tried now.
+    try { tickSelfHeal(); } catch (error) { console.error(`Self-heal tick after connect failed: ${error.code ?? error.name}`); }
     persist();
   }
   closed(client) {
     if (this.client === client) { this.client = null; this.channel = null; }
+    this.found = null;
     if (this.stopped) return;
     if (this.connectedAt && healClock.now() - this.connectedAt >= STREAM.steadyMs) this.attempt = 0;
     this.connectedAt = null;
@@ -214,6 +233,7 @@ function renameWatched(siteId, renamed) {
 
 // On the worker tick: open, close or reopen streams whose fingerprint changed.
 export function syncStreams() {
+  if (healRunner.halted) return;
   let desired;
   try { desired = desiredStreams(); } catch (error) { console.error(`Self-heal streams could not be read: ${error.code ?? error.name}`); return; }
   let changed = false;
@@ -225,6 +245,9 @@ export function syncStreams() {
     if (streams.has(serverId)) continue;
     streams.set(serverId, new ServerStream(item).start()); changed = true;
   }
+  // After the streams changed (stopping one clears its sites' state): sites that did not fit on their server.
+  for (const siteId of overfull) if (!runtime.sites[siteId]?.tooMany) { runtime.sites[siteId] = { missing: [], tooMany: true }; changed = true; }
+  for (const [siteId, site] of Object.entries(runtime.sites)) if (site.tooMany && !overfull.has(siteId)) { delete runtime.sites[siteId]; changed = true; }
   if (changed) persist();
 }
 export function stopStreams() {
@@ -234,3 +257,4 @@ export function stopStreams() {
   persist();
 }
 export const openStreams = () => new Map(streams);
+healRunner.serverConnected = serverId => streams.get(serverId)?.state === 'connected';

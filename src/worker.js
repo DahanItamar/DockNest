@@ -16,7 +16,7 @@ import { tickRestoreTestSchedule } from './restore-tests/scheduler.js';
 import { tickSiteEdits, recoverInterruptedSiteEdits } from './site-edits/engine.js';
 import { claimInstall, executeInstall, failInterruptedInstalls } from './installs.js';
 import { tickAlerts, tickReachability } from './alerts/detect.js';
-import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks } from './self-heal/engine.js';
+import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks, haltSelfHeal } from './self-heal/engine.js';
 import { syncStreams, stopStreams } from './self-heal/streams.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
@@ -49,9 +49,13 @@ try{await recoverInterruptedCopies(verifyEncrypted);}catch{console.error('Backup
 healRunner.active=()=>!stopping&&!lost;
 function heartbeat(running=true){db.prepare("INSERT INTO settings VALUES ('worker_heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({running,lastSeen:new Date().toISOString()}));}
 // Renewal fails only when the lease expired and another worker took it over: stop claiming at once.
-function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');return false;}
+// Lease lost: self-heal stops at once too (streams closed, re-checks cancelled, nothing more recorded or queued), since
+// the worker that took over runs its own streams.
+function renew(){if(lost)return false;if(renewLease(db,holder))return true;lost=stopping=true;console.error('Worker lease lost to another process; no further jobs will be claimed.');try{haltSelfHeal();stopStreams();}catch{/* best effort */}return false;}
 heartbeat();
-const heartbeatTimer=setInterval(()=>{if(renew())heartbeat();},LEASE_TTL_MS/4);
+// The heartbeat (every 15 s) also wakes self-heal, so settings changes, re-pins and finished site work reach the
+// streams and queued restarts promptly even while the loop runs a long job of another site.
+const heartbeatTimer=setInterval(()=>{if(renew()){heartbeat();if(!stopping)try{syncStreams();tickSelfHeal();}catch{/* Retried at the next heartbeat. */}}},LEASE_TTL_MS/4);
 // Drain: the first signal stops claiming and lets the current job finish, then the lease is released and the worker
 // exits 0. A second signal exits at once and leaves the lease to expire; the next worker marks the job recovery_required.
 let signals=0;
