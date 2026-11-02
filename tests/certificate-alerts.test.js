@@ -145,6 +145,36 @@ test('renewal failed alerts once; a later success and a new expiry reset it, and
   assert.equal(row(shop).renewal, 'ok');
 });
 
+test('a second renewal failure of the same certificate alerts again; the same failed run never repeats', () => {
+  reset(); const ch = channel(); const srv = server('Web-12'), shop = site(srv, 'Shop', ['shop.example.test']);
+  store.createRule({ channelId: ch.id, sourceKind: 'docknest', events: ['certificate.renewal_failed'] }, 'test');
+  const fact = (renewal, run) => certbot('shop', NOW + 25 * DAY, ['shop.example.test'], { serial: 'CC01', renewal, ...(run ? { renewalAt: seconds(run) } : {}) });
+  assert.equal(certs.recordCertificates({ serverId: srv }, [fact('failed', NOW - 3600_000)], { at: NOW }), 1);
+  assert.equal(certs.recordCertificates({ serverId: srv }, [fact('failed', NOW - 3600_000)], { at: NOW + 3600_000 }), 0, 'the same run again');
+  // A later run worked without issuing a new certificate (same expiry), then another run failed.
+  certs.recordCertificates({ serverId: srv }, [fact('ok')], { at: NOW + 12 * 3600_000 });
+  assert.equal(row(shop).renewal, 'ok'); assert.equal(row(shop).renewal_failed_at, null);
+  assert.equal(certs.recordCertificates({ serverId: srv }, [fact('failed', NOW + DAY)], { at: NOW + DAY + 60_000 }), 1);
+  // A newer failed run straight after another (no success in between) is also a new failure.
+  assert.equal(certs.recordCertificates({ serverId: srv }, [fact('failed', NOW + 2 * DAY)], { at: NOW + 2 * DAY + 60_000 }), 1);
+  assert.deepEqual(outbox().map(item => item.event), ['certificate.renewal_failed', 'certificate.renewal_failed', 'certificate.renewal_failed']);
+});
+
+test('an expired certbot certificate that nothing renews is an orphan: no row, no alert, and the probe row stays', () => {
+  reset(); const ch = channel(); const srv = server('Web-13'), shop = site(srv, 'Shop', ['shop.example.test']), old = site(srv, 'Old', ['old.example.test']);
+  store.createRule({ channelId: ch.id, sourceKind: 'docknest', events: CERT_EVENTS }, 'test');
+  const orphan = name => certbot(name, NOW - 30 * DAY, [name], { renews: false, serial: 'DEAD01' });
+  assert.equal(certs.recordCertificates({ serverId: srv }, [orphan('old.example.test')], { at: NOW }), 0);
+  assert.equal(row(old), undefined);
+  // The site's probe sees a valid certificate; a stale orphan lineage for the same name never replaces it.
+  certs.recordCertificates({ serverId: srv, siteId: shop }, [tls('shop.example.test', NOW + 80 * DAY, ['shop.example.test'], { serial: 'FEED01' })], { at: NOW });
+  assert.equal(certs.recordCertificates({ serverId: srv }, [orphan('shop.example.test')], { at: NOW + DAY }), 0);
+  assert.equal(row(shop).source, 'tls'); assert.equal(row(shop).serial, 'FEED01');
+  // An expired certificate that certbot does renew still alerts.
+  assert.equal(certs.recordCertificates({ serverId: srv }, [certbot('old.example.test', NOW - DAY, ['old.example.test'], { serial: 'DEAD02' })], { at: NOW }), 1);
+  assert.equal(outbox().length, 1);
+});
+
 test('a newer certbot file replaces an older probe fact, an older one never does, and a renewal re-alerts', () => {
   reset(); const ch = channel(); const srv = server('Web-8'), shop = site(srv, 'Shop', ['shop.example.test']);
   store.createRule({ channelId: ch.id, sourceKind: 'docknest', events: CERT_EVENTS }, 'test');

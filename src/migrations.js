@@ -231,9 +231,10 @@ CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(paren
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
 // The latest certificate facts per site (src/alerts/certificates.js) and which alert each one already gave.
-// not_after: ISO time, NULL when a probe only learned that the certificate has expired. renewal: certbot's newest outcome.
+// not_after: ISO time, NULL when a probe only learned that the certificate has expired. renewal: certbot's newest outcome;
+// renewal_failed_at: when the failed run happened, so a later failure alerts again.
 const siteCertificatesSchema = `
-CREATE TABLE IF NOT EXISTS site_certificates (site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,source TEXT NOT NULL CHECK (source IN ('tls','certbot')),name TEXT NOT NULL CHECK (length(name) <= 255),serial TEXT CHECK (serial IS NULL OR length(serial) <= 64),not_after TEXT,expired INTEGER NOT NULL DEFAULT 0 CHECK (expired IN (0,1)),renewal TEXT CHECK (renewal IS NULL OR renewal IN ('ok','failed')),checked_at TEXT NOT NULL,alerted_not_after TEXT,alerted_stage TEXT CHECK (alerted_stage IS NULL OR alerted_stage IN ('expiring','expired')),renewal_alerted INTEGER NOT NULL DEFAULT 0 CHECK (renewal_alerted IN (0,1)));
+CREATE TABLE IF NOT EXISTS site_certificates (site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,source TEXT NOT NULL CHECK (source IN ('tls','certbot')),name TEXT NOT NULL CHECK (length(name) <= 255),serial TEXT CHECK (serial IS NULL OR length(serial) <= 64),not_after TEXT,expired INTEGER NOT NULL DEFAULT 0 CHECK (expired IN (0,1)),renewal TEXT CHECK (renewal IS NULL OR renewal IN ('ok','failed')),renewal_failed_at TEXT,checked_at TEXT NOT NULL,alerted_not_after TEXT,alerted_stage TEXT CHECK (alerted_stage IS NULL OR alerted_stage IN ('expiring','expired')),renewal_alerted INTEGER NOT NULL DEFAULT 0 CHECK (renewal_alerted IN (0,1)));
 `;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },

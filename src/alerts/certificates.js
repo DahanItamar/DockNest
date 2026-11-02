@@ -32,7 +32,9 @@ const NAME = /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]
 const LINEAGE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const host = value => String(value ?? '').toLowerCase().replace(/\.$/, '');
 // One fact as the helper sent it, checked field by field; anything odd is dropped, never stored.
-function normalize(fact) {
+// A certbot certificate that nothing renews (no renewal settings) and that has already expired is an orphan left on
+// disk, not what a site serves: it is dropped, so it can never raise a false "expired" alert.
+function normalize(fact, at = Date.now()) {
   if (!fact || typeof fact !== 'object' || !['tls', 'certbot'].includes(fact.source)) return null;
   const name = fact.source === 'tls' ? host(fact.name) : String(fact.name ?? '');
   if (!(fact.source === 'tls' ? NAME.test(name) || /^[0-9a-f.:]{2,45}$/.test(name) : LINEAGE.test(name))) return null;
@@ -41,8 +43,11 @@ function normalize(fact) {
   if (!notAfter && !expired) return null;
   const domains = Array.isArray(fact.domains) ? fact.domains.map(host).filter(value => NAME.test(value)).slice(0, 50) : [];
   const serial = typeof fact.serial === 'string' && /^[0-9A-F]{1,64}$/i.test(fact.serial) ? fact.serial.toUpperCase() : null;
+  if (fact.source === 'certbot' && fact.renews === false && notAfter && Date.parse(notAfter) <= at) return null;
   const renewal = fact.source === 'certbot' && ['ok', 'failed'].includes(fact.renewal) ? fact.renewal : null;
-  return { source: fact.source, name, notAfter, expired, domains, serial, renewal };
+  // When the failed renewal run happened (its log time): a later failure is a new one, even for the same certificate.
+  const runAt = Number(fact.renewalAt), renewalAt = renewal === 'failed' && Number.isFinite(runAt) && runAt > 0 && runAt < 1e11 ? new Date(runAt * 1000).toISOString() : null;
+  return { source: fact.source, name, notAfter, expired, domains, serial, renewal, renewalAt };
 }
 // A certificate name covers a site domain exactly, or as a wildcard for exactly one more label (*.example.com covers
 // shop.example.com, not example.com and not a.shop.example.com).
@@ -61,7 +66,7 @@ const STALE_MS = 7 * 86400_000;
 export function recordCertificates({ serverId, siteId = null }, facts, { at = Date.now() } = {}) {
   if (!Array.isArray(facts)) return 0;
   try {
-    const list = facts.slice(0, 60).map(normalize).filter(Boolean), checked = new Date(at).toISOString(), touched = [];
+    const list = facts.slice(0, 60).map(fact => normalize(fact, at)).filter(Boolean), checked = new Date(at).toISOString(), touched = [];
     const sites = db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId);
     for (const site of sites) {
       const own = site.id === siteId, domains = domainsOf(site);
@@ -87,10 +92,12 @@ export function recordCertificates({ serverId, siteId = null }, facts, { at = Da
       // issued). A later expiry than the stored one also means the certificate was renewed.
       let renewal = certbot ? certbot.renewal ?? row?.renewal ?? null : row?.renewal ?? null;
       if (renewal === 'failed' && row?.not_after && next.notAfter && next.notAfter > row.not_after && !certbot?.renewal) renewal = 'ok';
-      const renewalAlerted = renewal === 'failed' ? row?.renewal_alerted ?? 0 : 0;
-      db.prepare(`INSERT INTO site_certificates(site_id,source,name,serial,not_after,expired,renewal,checked_at,alerted_not_after,alerted_stage,renewal_alerted) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(site_id) DO UPDATE SET source=excluded.source,name=excluded.name,serial=excluded.serial,not_after=excluded.not_after,expired=excluded.expired,renewal=excluded.renewal,checked_at=excluded.checked_at,renewal_alerted=excluded.renewal_alerted`)
-        .run(site.id, next.source, next.name.slice(0, 255), next.serial, next.notAfter, next.expired, renewal, checked, row?.alerted_not_after ?? null, row?.alerted_stage ?? null, renewalAlerted);
+      // A failure from another run than the one already told is a new failure.
+      const failedAt = renewal === 'failed' ? certbot?.renewalAt ?? row?.renewal_failed_at ?? null : null;
+      const renewalAlerted = renewal === 'failed' && failedAt === (row?.renewal_failed_at ?? null) ? row?.renewal_alerted ?? 0 : 0;
+      db.prepare(`INSERT INTO site_certificates(site_id,source,name,serial,not_after,expired,renewal,renewal_failed_at,checked_at,alerted_not_after,alerted_stage,renewal_alerted) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(site_id) DO UPDATE SET source=excluded.source,name=excluded.name,serial=excluded.serial,not_after=excluded.not_after,expired=excluded.expired,renewal=excluded.renewal,renewal_failed_at=excluded.renewal_failed_at,checked_at=excluded.checked_at,renewal_alerted=excluded.renewal_alerted`)
+        .run(site.id, next.source, next.name.slice(0, 255), next.serial, next.notAfter, next.expired, renewal, failedAt, checked, row?.alerted_not_after ?? null, row?.alerted_stage ?? null, renewalAlerted);
       touched.push(site.id);
     }
     return touched.length ? detectCertificates(at, touched) : 0;
@@ -118,9 +125,10 @@ export function stageOf(row, at = Date.now(), days = certificateDays()) {
 // each channel hears about it once: its serial, else where it came from.
 const identityOf = (row, serverId) => (row.serial ? `serial:${row.serial}` : `${row.source}:${serverId}:${row.name}`);
 // Judges the stored facts: one alert per certificate per stage (expiring, then expired) for each expiry date, so a
-// renewal (a new date) can alert again and a repeat never does. A stage counts as told once a line wants it (its alert is
-// queued, or was already queued for this certificate through another site); while no line wants it, later ticks try
-// again, so turning the event on still tells you. Returns the number queued.
+// renewal (a new date) can alert again and a repeat never does; a renewal failure alerts once per failed run. While no
+// line wants an event it is skipped before anything is queued and later ticks try again, so turning the event on still
+// tells you. Once a line wants it, it counts as told (queued now, or already queued for this certificate through another
+// site). Returns the number queued.
 const wanted = event => enabledRules().some(rule => ruleMatches(rule, event));
 export function detectCertificates(at = Date.now(), siteIds = null) {
   const days = certificateDays(); let count = 0;
@@ -132,15 +140,17 @@ export function detectCertificates(at = Date.now(), siteIds = null) {
     if (stage && (row.alerted_not_after !== row.not_after || (RANK[stage] ?? 0) > (RANK[row.alerted_stage] ?? 0))) {
       const left = Math.max(0, Math.floor((Date.parse(row.not_after) - at) / 86400_000));
       const event = { ...base, type: 'certificate.expiring', code: stage === 'expired' ? 'expired' : undefined, daysLeft: Number.isFinite(left) ? left : undefined, key: `occ:cert:${identity}:${row.not_after ?? 'unknown'}:${stage}` };
-      const queued = emit(event, { at });
-      if (queued || wanted(event)) db.prepare('UPDATE site_certificates SET alerted_not_after=?,alerted_stage=? WHERE site_id=?').run(row.not_after, stage, row.site_id);
-      count += queued;
+      if (wanted(event)) {
+        count += emit(event, { at });
+        db.prepare('UPDATE site_certificates SET alerted_not_after=?,alerted_stage=? WHERE site_id=?').run(row.not_after, stage, row.site_id);
+      }
     }
     if (row.renewal === 'failed' && !row.renewal_alerted) {
-      const event = { ...base, type: 'certificate.renewal_failed', key: `occ:cert-renewal:${identity}:${row.not_after ?? 'unknown'}` };
-      const queued = emit(event, { at });
-      if (queued || wanted(event)) db.prepare('UPDATE site_certificates SET renewal_alerted=1 WHERE site_id=?').run(row.site_id);
-      count += queued;
+      const event = { ...base, type: 'certificate.renewal_failed', key: `occ:cert-renewal:${identity}:${row.not_after ?? 'unknown'}:${row.renewal_failed_at ?? 'unknown'}` };
+      if (wanted(event)) {
+        count += emit(event, { at });
+        db.prepare('UPDATE site_certificates SET renewal_alerted=1 WHERE site_id=?').run(row.site_id);
+      }
     }
   }
   return count;

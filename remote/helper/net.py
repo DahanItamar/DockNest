@@ -219,7 +219,9 @@ def note_peer_certificate(host,sock=None,error=None):
     try:
         name=str(host).lower().rstrip('.')
         if error is not None:
-            if getattr(error,'verify_code',None)==10 and len(PEER_CERTIFICATES)<CERT_LIMIT:PEER_CERTIFICATES[name]={'source':'tls','name':name,'expired':True}
+            # An expired marker never replaces a certificate this run already verified for the same host (for example a
+            # public probe that worked, then an origin probe that reached an old certificate on loopback).
+            if getattr(error,'verify_code',None)==10 and name not in PEER_CERTIFICATES and len(PEER_CERTIFICATES)<CERT_LIMIT:PEER_CERTIFICATES[name]={'source':'tls','name':name,'expired':True}
             return
         fact=certificate_fact(sock.getpeercert(),'tls',name)
         if fact and (name in PEER_CERTIFICATES or len(PEER_CERTIFICATES)<CERT_LIMIT):PEER_CERTIFICATES[name]=fact
@@ -248,7 +250,7 @@ def certbot_certificates(root=None,logs=None):
     decode=getattr(getattr(ssl,'_ssl',None),'_test_decode_cert',None)
     try:
         if decode is None or not live.is_dir():return []
-        names=sorted(entry.name for entry in os.scandir(live) if entry.is_dir() and LINEAGE.fullmatch(entry.name))[:CERT_LIMIT]
+        with os.scandir(live) as entries:names=sorted(entry.name for entry in entries if entry.is_dir() and LINEAGE.fullmatch(entry.name))[:CERT_LIMIT]
     except OSError:return []
     renewal=renewal_outcomes(logs) if names else {};facts=[]
     for name in names:
@@ -263,6 +265,8 @@ def certbot_certificates(root=None,logs=None):
                 # A failure logged before this certificate was issued was followed by a renewal that worked.
                 if state=='failed' and modified<ssl.cert_time_to_seconds(decoded['notBefore']):state='ok'
                 fact['renewal']=state
+                # Which run failed (its log file's time), so DockNest can tell a new failure from the one it already told.
+                if state=='failed':fact['renewalAt']=int(modified)
         except Exception:continue
         facts.append(fact)
     return facts

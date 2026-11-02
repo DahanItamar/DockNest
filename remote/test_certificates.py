@@ -60,6 +60,11 @@ class CertbotCertificates(unittest.TestCase):
     def test_a_certificate_without_renewal_settings_is_reported_as_not_renewing(self):
         self.le.lineage('manual.test',renews=False)
         self.assertFalse(self.le.facts()[0]['renews'])
+    def test_a_python_without_the_certificate_decoder_degrades_to_no_facts(self):
+        self.le.lineage('example.test')
+        import types
+        with patch.object(helper.ssl,'_ssl',types.SimpleNamespace()):self.assertEqual(self.le.facts(),[])
+        self.assertEqual(len(self.le.facts()),1)
 
 class RenewalOutcome(unittest.TestCase):
     def setUp(self):self.le=Letsencrypt();self.le.lineage('example.test');self.le.lineage('other.test')
@@ -70,6 +75,15 @@ class RenewalOutcome(unittest.TestCase):
             'All renewals failed. The following certificates could not be renewed:\n  /etc/letsencrypt/live/example.test/fullchain.pem (failure)\n')
         self.assertEqual(self.outcome(),{'example.test':'failed','other.test':None})
         self.assertNotIn('secret-ish',repr(self.le.facts()))
+    def test_a_failure_carries_the_time_of_its_run_so_a_later_failure_is_new(self):
+        self.le.log('Failed to renew certificate example.test with error: dns\n')
+        os.utime(self.le.logs/'letsencrypt.log',(4000000000,4000000000))
+        first={fact['name']:fact for fact in self.le.facts()}
+        self.assertEqual(first['example.test']['renewalAt'],4000000000);self.assertNotIn('renewalAt',first['other.test'])
+        os.utime(self.le.logs/'letsencrypt.log',(4000043200,4000043200))
+        self.assertEqual({fact['name']:fact for fact in self.le.facts()}['example.test']['renewalAt'],4000043200)
+        self.le.log('/etc/letsencrypt/live/example.test/fullchain.pem (success)\n')
+        self.assertNotIn('renewalAt',{fact['name']:fact for fact in self.le.facts()}['example.test'],'only a failure has a run time')
     def test_failed_then_succeeded_in_a_newer_run_is_ok(self):
         self.le.log('Failed to renew certificate example.test with error: timeout\n',index=1)
         self.le.log('Congratulations, all renewals succeeded:\n  /etc/letsencrypt/live/example.test/fullchain.pem (success)\n')
@@ -105,6 +119,16 @@ class ProbeCertificates(unittest.TestCase):
         error=ssl.SSLCertVerificationError('certificate verify failed: certificate has expired');error.verify_code=10
         helper.note_peer_certificate('old.example.test',error=error)
         self.assertEqual(helper.PEER_CERTIFICATES['old.example.test'],{'source':'tls','name':'old.example.test','expired':True})
+    def test_an_expired_marker_never_replaces_a_certificate_verified_for_the_same_host(self):
+        cert=ssl._ssl._test_decode_cert(str(FIXTURE))
+        helper.note_peer_certificate('shop.example.test',self.Socket(cert))  # the public probe verified it
+        error=ssl.SSLCertVerificationError('certificate has expired');error.verify_code=10
+        helper.note_peer_certificate('shop.example.test',error=error)  # the origin probe reached an old one on loopback
+        self.assertEqual(helper.PEER_CERTIFICATES['shop.example.test']['serial'],'1A2B3C')
+        self.assertNotIn('expired',helper.PEER_CERTIFICATES['shop.example.test'])
+        # A verified certificate does replace an earlier expired marker.
+        helper.note_peer_certificate('next.example.test',error=error);helper.note_peer_certificate('next.example.test',self.Socket(cert))
+        self.assertNotIn('expired',helper.PEER_CERTIFICATES['next.example.test'])
     def test_other_handshake_failures_and_plain_http_record_nothing(self):
         error=ssl.SSLCertVerificationError('self signed');error.verify_code=18
         helper.note_peer_certificate('self.example.test',error=error)

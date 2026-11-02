@@ -72,7 +72,7 @@ saved token can never be pointed at a new server by editing the server alone.
 | `backup.copy_recovered` | A copy that failed earlier was saved | Once per copy |
 | `backup.copy_gave_up` | A copy still failed after 7 days of retries (it can be retried in DockNest) | Once per copy |
 | `certificate.expiring` | A site's TLS certificate expires within the warning days (14 by default), or has expired | Once per certificate, expiry date and stage (expires soon, then expired) |
-| `certificate.renewal_failed` | certbot's newest renewal run for a site's certificate failed | Once per failure; again after a renewal works and a later one fails |
+| `certificate.renewal_failed` | certbot's newest renewal run for a site's certificate failed | Once per failed certbot run; a later failed run alerts again |
 
 New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.
@@ -97,10 +97,17 @@ facts while it already works on the server or site:
 A certbot certificate counts for every site on that server whose domains it covers (a wildcard covers one label:
 `*.example.com` covers `shop.example.com`, not `example.com`). A certificate shared by several sites is one alert per
 channel. When a probe and a certbot file disagree, what visitors see wins, unless the file is newer (a renewal the web
-server has not loaded yet). A site without TLS has no certificate facts and never alerts.
+server has not loaded yet). A site without TLS has no certificate facts and never alerts. An expired certbot
+certificate that nothing renews (no file in `/etc/letsencrypt/renewal`) is left-over, not served, and is ignored.
+
+**Forgetting a certificate.** When a backup or readiness check of a site sees no certificate for it at all (no HTTPS
+probe answer and no certbot certificate covering its domains), DockNest keeps the stored facts, and what they already
+alerted, for 7 days, so a site that was down for a day does not alert twice. After 7 days without any certificate it
+forgets them: the site is treated as having no TLS.
 
 The stored facts are judged again on each pass of the alert worker, so a certificate that reaches the warning days
-between backups still alerts. A renewal (a new expiry date) clears a renewal failure and can alert again later.
+between backups still alerts. A renewal (a new expiry date) clears a renewal failure and can alert again later. Each
+failed certbot run is told once, so a second failure of the same certificate alerts again.
 
 **Warning days.** Administration, Connections, **Connections settings**, **Certificate warning**: 1 to 90 days, 14 by
 default. Saving asks for the same fresh sign-in check as the other settings (`PUT /api/connections/settings` with
