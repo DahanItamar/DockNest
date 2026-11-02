@@ -33,7 +33,6 @@ export function generateDeployKey(comment) {
   const padding = []; for (let index = 1; secret.length % 8; index++) { padding.push(index); secret = Buffer.concat([secret, Buffer.from([index])]); }
   const body = Buffer.concat([Buffer.from('openssh-key-v1\0'), sshString('none'), sshString('none'), sshString(''), uint32(1), sshString(blob), sshString(secret)]);
   const pem = `${pemLine('BEGIN')}\n${body.toString('base64').match(/.{1,70}/g).join('\n')}\n${pemLine('END')}\n`;
-  seed.fill(0);
   return { publicKey: `ssh-ed25519 ${blob.toString('base64')} ${comment}`, fingerprint: sha256Fingerprint(blob), privateKey: pem };
 }
 
@@ -88,10 +87,8 @@ export async function createDeployKey({ name, gitHost: rawHost, serverId, allowP
   const hostKey = await readHostKey(server, gitHost, allowPrivate);
   confirmHostKey(hostKey, hostKeySha256, gitHost.text);
   const keyId = id(), at = now(), pair = generateDeployKey(`docknest-${keyId.slice(0, 8)}`);
-  try {
-    db.prepare('INSERT INTO deploy_keys(id,name,git_host,host_key_line,host_key_sha256,public_key,fingerprint,sealed_private_key,pinned_from_server_id,pinned_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
-      .run(keyId, name, gitHost.text, hostKey.line, hostKey.sha256, pair.publicKey, pair.fingerprint, seal(pair.privateKey), server.id, at, actor, at);
-  } finally { pair.privateKey = null; }
+  db.prepare('INSERT INTO deploy_keys(id,name,git_host,host_key_line,host_key_sha256,public_key,fingerprint,sealed_private_key,pinned_from_server_id,pinned_at,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(keyId, name, gitHost.text, hostKey.line, hostKey.sha256, pair.publicKey, pair.fingerprint, seal(pair.privateKey), server.id, at, actor, at);
   audit(actor, 'deploy_key.created', keyId, { name, gitHost: gitHost.text, fingerprint: pair.fingerprint, hostKey: hostKey.sha256, server: server.id });
   return { key: deployKeyView(db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId)) };
 }
@@ -164,4 +161,4 @@ deployKeyRoutes.get('/:id', handle(async (req, res) => {
 }));
 deployKeyRoutes.post('/', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.status(201).json(await createDeployKey(createBody.parse(req.body), req.user.id))));
 deployKeyRoutes.post('/:id/pin', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(await repinDeployKey(uuid.parse(req.params.id), pinBody.parse(req.body), req.user.id))));
-deployKeyRoutes.delete('/:id', requireRecentAuth, handle(async (req, res) => res.json(deleteDeployKey(uuid.parse(req.params.id), req.user.id))));
+deployKeyRoutes.delete('/:id', requireRecentAuth, rateLimit('deploy-key', 30, 10 * 60_000), handle(async (req, res) => res.json(deleteDeployKey(uuid.parse(req.params.id), req.user.id))));

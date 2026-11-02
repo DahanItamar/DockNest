@@ -6,8 +6,9 @@ import { randomUUID } from 'node:crypto';
 // Versioned metadata schema. PRAGMA user_version lives in the database header, changes inside the same
 // transaction as the DDL, survives VACUUM INTO/backup copies and is readable without knowing any table,
 // so a schema_migrations table would add nothing but a second source of truth. v2.0.0 databases report 0.
-// `compatible: true` marks a purely additive migration (new tables/indexes only) that older code can ignore, so
-// downgrading across it needs no data discard. Rules: never edit or renumber a released migration; append a new entry. Migration 1 is the v2.0.0
+// `compatible: true` marks a migration that older code can ignore, so downgrading across it needs no data discard:
+// new tables, indexes and triggers, or (migration 17 only) a row-for-row rebuild of a child table that keeps every
+// column, value, index and foreign key and only widens a CHECK list, so every row older code could write is still valid. Rules: never edit or renumber a released migration; append a new entry. Migration 1 is the v2.0.0
 // startup schema and stays idempotent: it is re-applied on every start exactly as v2.0.0 did, so
 // additive CREATE ... IF NOT EXISTS objects may still be appended to it. Anything else needs a new entry.
 const baselineSchema = `
@@ -281,7 +282,9 @@ function siteLaunches(db) {
   if ((db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='server_installs'").get()?.sql ?? '').includes("'git'")) return;
   const referrers = serverInstallsReferrers(db);
   if (referrers.length) throw new Error(`server_installs is referenced by ${referrers.join(', ')}; refusing to rebuild it.`);
-  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('trigger','view') AND tbl_name='server_installs'").get()) throw new Error('server_installs has triggers or views; refusing to rebuild it.');
+  // A trigger or view anywhere that names server_installs would be rewritten or broken by the rename; refuse instead.
+  const dependents = db.prepare("SELECT type,name FROM sqlite_master WHERE type IN ('view','trigger') AND sql LIKE '%server_installs%'").all();
+  if (dependents.length) throw new Error(`server_installs is used by ${dependents.map(row => `${row.type} ${row.name}`).join(', ')}; DockNest did not change the database. See docs/upgrading.md.`);
   // Rows whose server is gone cannot exist while foreign keys are on (ON DELETE CASCADE); if one does, stop with a plain
   // reason before anything changes (the snapshot and the old schema stay) instead of dropping it.
   if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs has rows whose server no longer exists; DockNest did not change the database. See docs/upgrading.md.');
