@@ -57,6 +57,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 **Map and moving sites**
 - A Map page shows your servers, their sites and your backup storage as connected nodes. Click any node for its details, such as the databases that move with a site.
 - The "+" on a server lists sites DockNest found there that you have not added yet.
+- Administrators can launch a new Docker site from a server on the Map from a Compose file or Git repository, with backups from the first day (beta). See [launch a site](docs/launch-site-guide.md).
 - Administrators move a site to another server by dragging it to that server and pressing Save changes. DockNest shows how long the move takes and how long the site is offline, then backs up the site, tests a copy on the new server and waits for your DNS change before switching.
 - The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving sites](docs/moving-sites.md).
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
