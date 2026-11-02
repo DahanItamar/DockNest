@@ -55,22 +55,44 @@ You can cancel until Apply starts. After that, rollback is the undo.
 ## When the change does not come up
 
 DockNest rolls back by itself: the original files come back byte for byte, the services start again with the
-previous image IDs (never pulled again), and the health check runs again. When the image changed, DockNest also restores
-the backup it took before the change, through the normal restore. The change is shown as **Rolled back** with the reason,
+previous image IDs (never pulled again), and the health check runs again. When the image changed, the data comes back
+too, in place (see "The data safety copy" below). The change is shown as **Rolled back** with the reason,
 for example "The site did not become healthy in 2 minutes", and the **Change undone** alert is sent.
 
 If the rollback itself fails, the site stays behind the maintenance page and the change **needs attention** (alert:
 **Change needs you**). Choose:
 
 - **Try again** runs the rollback once more.
-- **Restore backup** restores the backup taken before the change through the normal restore. The maintenance page
+- **Restore backup** restores the backup taken before the change through DockNest's normal restore, as a separate
+  copy next to the site (it does not overwrite the live site). The maintenance page
   stays on until you have checked the site and turned it off.
 
 While a change runs or needs attention, the site's backups, restores, moves and maintenance actions wait.
 
+## The data safety copy
+
+A new image version often changes its data on first start (database migrations). So when a change gives a service a
+new image, DockNest also keeps the data:
+
+- Just before writing the change, after the maintenance page is on, the site's services stop and DockNest copies the
+  site's data on the server into its journal folder (`/var/lib/docknest/edits/<id>/data`): every named volume of the
+  local driver and every data folder the site binds, keeping owners, permissions, extended attributes and symbolic links
+  (links are copied as links, never followed). Compose and configuration files are not part of it; they come back from
+  the file journal. Folders the site excludes from its backups are left out.
+- The copy needs free disk space of at least 1.2 times the data size. With less, the change stops before anything is
+  written: "Not enough free disk space for the safety copy." Review shows the size of the data.
+- On rollback the services stop, each data folder gets exactly the copied contents back (files added since are
+  removed), and the previous version starts.
+- The copy is deleted after a change that comes up and after a rollback that works. If the rollback fails, the copy is
+  kept and the change says "A safety copy of the data is kept on the server."
+- Data on a volume of another driver (for example NFS) cannot be copied, so an image change on such a site is refused.
+  Environment and port changes never take a copy.
+
 ## Refused changes
 
 DockNest refuses a change with one plain reason when it would:
+
+- change DockNest's own containers (update DockNest with its upgrade instead);
 
 - add a privilege the site did not have: `privileged`, added capabilities beyond Docker's defaults, host network or
   namespaces, devices, `docker.sock`, `use_api_socket`, `gpus`, `runtime`, security options, a `docknest.*` or

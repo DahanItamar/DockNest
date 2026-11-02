@@ -74,7 +74,7 @@ test('changes record: field paths, env key names and hashes only, trimmed to 409
 });
 
 test('states, cancel window and reasons', () => {
-  assert.equal(stateFor('backup', null, false), 'queued'); assert.equal(stateFor('check_health'), 'checking'); assert.equal(stateFor('data_restore_wait'), 'rolling_back'); assert.equal(stateFor('attention'), 'needs_attention');
+  assert.equal(stateFor('backup', null, false), 'queued'); assert.equal(stateFor('check_health'), 'checking'); assert.equal(stateFor('rollback_health'), 'rolling_back'); assert.equal(stateFor('attention'), 'needs_attention');
   assert.equal(stateFor('finish', 'rolled_back'), 'rolling_back'); assert.equal(stateFor('finish', 'failed'), 'running');
   assert.equal(cancellable({ result: null, progress: { phase: 'backup' } }), true);
   assert.equal(cancellable({ result: null, progress: { phase: 'prepare' } }), true);
