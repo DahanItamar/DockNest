@@ -43,7 +43,9 @@ a service or renaming the project ("Remove it by hand"). Adding a service is all
    from the internet, when a Compose file holds a password-like value inline ("Move secrets to Environment") and when
    the site has neither a health check nor a health URL (then only "running and stable" counts).
 2. **Backup.** A normal, verified backup of the site.
-3. **Prepare.** Copies of the current files and the current image IDs are kept on the server; new images are pulled.
+3. **Prepare.** Copies of the current files and the current image IDs are kept on the server. A new image that
+   is not on the server yet is pulled; one that is already there (built or loaded locally) is used as it is. A failed pull
+   stops the change only when the image is still missing: "The new image could not be pulled. Nothing was changed."
    Each previous image is held by a stopped placeholder container (`docknest-edit-hold-…`, never started, outside
    the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. `docker
    container prune` and `docker system prune` do remove these placeholders (they are stopped containers); avoid them
