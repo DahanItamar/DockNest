@@ -82,7 +82,7 @@ LAUNCH_REASONS={
     'URL_METADATA':'This Git address points to a local or cloud metadata address, which DockNest never fetches from.',
     'DNS_FAILED':'The server could not find the Git host. Check the address.',
     'GIT_MISSING':'The server needs git. Install it, then try again.',
-    'GIT_TOO_OLD':'The git on the server is too old (it lacks the 2025 submodule fixes). Update git, then try again.',
+    'GIT_TOO_OLD':'Git 2.37 or newer is needed. Update git, then try again.',
     'SSH_MISSING':'The server needs the OpenSSH client (ssh and ssh-keyscan) for SSH Git addresses.',
     'KEY_REQUIRED':'An SSH Git address needs a deploy key.',
     'KEY_INVALID':'The deploy key could not be read.',
@@ -106,6 +106,7 @@ LAUNCH_REASONS={
     'COMPOSE_INVALID':'Docker Compose could not read the Compose file.',
     'COMPOSE_INCLUDE_REFUSED':'The Compose file includes other Compose files, which DockNest cannot check.',
     'COMPOSE_EXTENDS_REFUSED':'The Compose file uses extends, which DockNest cannot check. Write the settings out.',
+    'COMPOSE_SYNTAX_REFUSED':'The Compose file uses YAML that DockNest cannot check safely (a directive, an explicit, tagged or aliased key, or an escaped or multi-line quoted key).',
     'COMPOSE_FLOW_REFUSED':'Write the Compose file as YAML blocks, not as one JSON or flow mapping.',
     'BUILD_IMAGE_REFUSED':'A service that is built must use an image name of its own (starting with the site name, no registry).',
     'BIND_COVERS_SECRETS':'A service mounts the site folder, its .env or its Compose file with write access. Mount it read-only.',
@@ -208,13 +209,23 @@ def launch_tree_size(folder):
             try:total+=os.lstat(os.path.join(current,name)).st_size
             except OSError:pass
     return total
+def launch_wait(process,timeout):
+    """Wait for the child to exit for at most `timeout` seconds without polling: on Linux a pidfd becomes readable when
+    the process exits (select wakes on that event); elsewhere Popen.wait. Raises subprocess.TimeoutExpired."""
+    try:fd=os.pidfd_open(process.pid)
+    except (AttributeError,OSError):return process.wait(timeout=timeout)
+    try:
+        ready,_,_=__import__('select').select([fd],[],[],max(0,timeout))
+        if not ready:raise subprocess.TimeoutExpired(process.args,timeout)
+        return process.wait()
+    finally:os.close(fd)
 def launch_kill_group(process):
     for sig in (signal.SIGTERM,getattr(signal,'SIGKILL',signal.SIGTERM)):
         try:os.killpg(process.pid,sig)
         except (OSError,AttributeError):
             try:process.kill()
             except OSError:pass
-        try:process.wait(timeout=20);return
+        try:launch_wait(process,20);return
         except subprocess.TimeoutExpired:pass
 def launch_proc_start(pid):
     """The kernel start time of a process (field 22 of /proc/<pid>/stat), so a recorded group is never confused with a
@@ -248,7 +259,7 @@ def launch_watch(argv,env,timeout,folder=None,limit=None,cwd=None,journal=None):
             if journal is not None:journal[1].setdefault('children',[]).append(record);launch_save(*journal)
             while True:
                 wait=LAUNCH_WATCH_SECONDS if folder and limit else max(0.1,deadline-time.monotonic())
-                try:code=process.wait(timeout=wait);break
+                try:code=launch_wait(process,wait);break
                 except subprocess.TimeoutExpired:
                     if STOPPING:why='stopped'
                     elif time.monotonic()>deadline:why='timeout'
@@ -563,10 +574,19 @@ def launch_compose_text_problem(data):
     """Compose text DockNest can judge from the resolved model alone: no include, no extends (both pull in other files
     or services the model hides) and no JSON or flow-style document. Keys are matched in block and flow position."""
     if len(data)>LAUNCH_COMPOSE_LIMIT:return 'COMPOSE_TOO_LARGE'
-    text=data.decode('utf-8','replace').lstrip('\ufeff')
-    key=r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(?:[!&*][^\s]*[ \t]+)*["\']?%s["\']?[ \t]*:'
-    if re.search(key%'include',text):return 'COMPOSE_INCLUDE_REFUSED'
-    if re.search(key%'extends',text):return 'COMPOSE_EXTENDS_REFUSED'
+    try:text=data.decode('utf-8').lstrip('\ufeff')
+    except UnicodeDecodeError:return 'COMPOSE_SYNTAX_REFUSED'
+    # Every YAML spelling that could hide a key from the plain-text checks below is refused first: directives (%YAML,
+    # %TAG), explicit keys (?), tagged or aliased keys (!!binary, *anchor), and quoted keys with an escape or a line break.
+    if re.search(r'(?m)^%',text):return 'COMPOSE_SYNTAX_REFUSED'
+    if re.search(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{\[,][ \t]*)\?(?:[ \t]|$)',text):return 'COMPOSE_SYNTAX_REFUSED'
+    if re.search(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)\*[^\s,:\]}]+[ \t]*:',text):return 'COMPOSE_SYNTAX_REFUSED'
+    if re.search(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)![^\s]*[ \t]+(?:"[^"\n]*"|\'[^\'\n]*\'|[^\s:\[\]{},#]+)[ \t]*:(?:[ \t]|$)',text):return 'COMPOSE_SYNTAX_REFUSED'
+    if re.search(r'"(?:[^"\\]|\\.)*(?:\\|\n)(?:[^"\\]|\\.)*"[ \t]*:(?:[ \t]|$)',text) or re.search(r"'(?:[^'\n]|'')*\n(?:[^']|'')*'[ \t]*:(?:[ \t]|$)",text):return 'COMPOSE_SYNTAX_REFUSED'
+    # The words themselves as a key anywhere (block or flow, quoted or plain, the colon even on the next line). A value
+    # that happens to read "include:" is refused too; DockNest prefers that to a missed key.
+    if re.search(r'(?<![\w-])["\']?include["\']?\s*:(?:\s|$|[\[{"\'])',text):return 'COMPOSE_INCLUDE_REFUSED'
+    if re.search(r'(?<![\w-])["\']?extends["\']?\s*:(?:\s|$|[\[{"\'])',text):return 'COMPOSE_EXTENDS_REFUSED'
     first=next((line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith('#') and line.strip()!='---'),'')
     if first.startswith(('{','[')):return 'COMPOSE_FLOW_REFUSED'
     return None
@@ -1072,9 +1092,10 @@ def launch_build_op(req):
         journal['phase']='building';launch_record(d,journal,'builders',builder)
         for image in images:launch_record(d,journal,'images',image)
         try:
-            # Explicit buildkitd flags replace buildx's default --allow-insecure-entitlement=network.host for this driver,
-            # so the builder grants no entitlement at all.
-            code,_,_=launch_exec(['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+LAUNCH_BUILDKIT_IMAGE,'--buildkitd-flags=--oci-worker-gc','--bootstrap'],600,journal=(d,journal))
+            # buildx may still allow the network.host entitlement on this builder (0.13 and later do by default). The controls
+            # are that no build can ask for it: the Dockerfile allow-list (RUN --network=default|none, --security=sandbox, no
+            # variables) and the build allow-list (no network or entitlements keys); nothing passes --allow to the build.
+            code,_,_=launch_exec(['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+LAUNCH_BUILDKIT_IMAGE,'--bootstrap'],600,journal=(d,journal))
             if code!=0:launch_refuse('BUILD_FAILED')
             argv=launch_compose_base(slug,[files['compose'],override],files['projectDir'],files['envFile'])+['build','--builder',builder]
             code,_,tail,why=launch_watch(argv,launch_env(),LAUNCH_BUILD_SECONDS,journal=(d,journal))

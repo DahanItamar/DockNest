@@ -31,7 +31,7 @@ class Gate(Exception):
 class Host:
     """A fake server. Every process the helper starts goes through launch_watch, which is replaced here."""
     def __init__(self,test,**kw):
-        self.test=test;self.tmp=tempfile.TemporaryDirectory();root=pathlib.Path(os.path.realpath(self.tmp.name))
+        self.test=test;self.tmp=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);test.addCleanup(self.tmp.cleanup);root=pathlib.Path(os.path.realpath(self.tmp.name))
         self.root=root;self.launches=root/'launches';self.sites=root/'srv'/'docknest';self.acme=root/'acme';self.le=root/'letsencrypt';self.conf=root/'nginx'/'conf.d'
         self.conf.mkdir(parents=True);(root/'srv').mkdir()
         self.calls=[];self.events=io.StringIO()
@@ -409,7 +409,7 @@ class BuildTests(unittest.TestCase):
         builder='docknest-launch-'+LID.replace('-','')[:12]
         self.assertEqual(seen,[([builder],['shop-web'])])
         create=host.argvs('create')[0]['argv']
-        self.assertEqual(create,['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+helper.LAUNCH_BUILDKIT_IMAGE,'--buildkitd-flags=--oci-worker-gc','--bootstrap'])
+        self.assertEqual(create,['docker','buildx','create','--name',builder,'--driver','docker-container','--driver-opt','image='+helper.LAUNCH_BUILDKIT_IMAGE,'--bootstrap'])
         self.assertRegex(helper.LAUNCH_BUILDKIT_IMAGE,r'^moby/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$')
         build=[c for c in host.calls if c['argv'][:2]==['docker','compose'] and 'build' in c['argv']][0]
         self.assertEqual(build['argv'][-3:],['build','--builder',builder]);self.assertEqual(build['timeout'],1800)
@@ -770,8 +770,17 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(host.run('launch-web',domain='shop.example.com',www=True,loopbackPort=18080)['ok']);(host.le/'accounts').mkdir(parents=True)
         self.assertEqual(host.run('launch-certificate',domain='shop.example.com')['state'],'issued')
         self.assertEqual(host.argvs('certbot')[0]['argv'][-4:],['-d','shop.example.com','-d','www.shop.example.com'])
-    def test_builder_grants_no_entitlement(self):
-        self.assertIn("'--buildkitd-flags=--oci-worker-gc'",pathlib.Path(helper.__file__).read_text())
+    def test_compose_bypasses_from_the_178_review(self):
+        cases={'? include\n: [o.yaml]\n':'COMPOSE_SYNTAX_REFUSED','"\\x69nclude": [o.yaml]\n':'COMPOSE_SYNTAX_REFUSED','"include": [o.yaml]\n':'COMPOSE_INCLUDE_REFUSED',
+            'services:\n  a:\n    "extends": {file: /etc/x.yaml, service: b}\n':'COMPOSE_EXTENDS_REFUSED','"inc\\\nlude": [o.yaml]\n':'COMPOSE_SYNTAX_REFUSED',
+            '%YAML 1.2\n---\n{include: [o.yaml]}\n':'COMPOSE_SYNTAX_REFUSED','"include"\n  : [o.yaml]\n':'COMPOSE_INCLUDE_REFUSED',
+            'x: &k include\n*k : [o.yaml]\n':'COMPOSE_SYNTAX_REFUSED','!!binary aW5jbHVkZQ==: [o.yaml]\n':'COMPOSE_SYNTAX_REFUSED',"'inc\nlude': [o.yaml]\n":'COMPOSE_SYNTAX_REFUSED',
+            '{services: {a: {? extends : b}}}\n':'COMPOSE_SYNTAX_REFUSED',
+            'services:\n  web:\n    image: nginx\n    ports: !override\n      - "127.0.0.1:8080:80"\n    command: ["sh","-c","echo \\"hi\\""]\n':None}
+        for text,code in cases.items():self.assertEqual(helper.launch_compose_text_problem(text.encode()),code,text)
+        self.assertEqual(helper.launch_compose_text_problem(b'services: {}\n\xff\n'),'COMPOSE_SYNTAX_REFUSED')
+    def test_git_too_old_reason(self):
+        self.assertEqual(helper.LAUNCH_REASONS['GIT_TOO_OLD'],'Git 2.37 or newer is needed. Update git, then try again.')
 
 class EntryTests(unittest.TestCase):
     def test_bad_requests_and_unexpected_errors_never_leak_text(self):
