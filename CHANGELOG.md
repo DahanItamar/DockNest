@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Hardening score: each Docker site now gets a security grade from A to F, with a one-line fix for each finding (privileged mode, Docker socket, root user, open ports, memory limit, image tag, healthcheck, privilege escalation, extra capabilities). It updates on server scans and backups and never changes the site. See [docs/hardening-score.md](docs/hardening-score.md).
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
