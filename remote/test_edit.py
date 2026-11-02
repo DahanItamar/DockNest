@@ -41,7 +41,7 @@ class FakeDocker:
     def __init__(self,base):
         self.base=base;self.calls=[];self.version=b'2.29.1\n';self.pull_fail=False;self.up_fail=False
         self.containers=[];self.volumes=['shop_data'];self.networks=['shop_default'];self.tags={};self.created=[]
-        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None
+        self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[]
     def __call__(self,args,timeout=120,env=None):
         self.calls.append({'args':list(args),'env':dict(env or {})})
         if args[:2]!=['docker','compose'] or args[2:4]==['version','--short']:return self.docker(args[1:])
@@ -51,6 +51,7 @@ class FakeDocker:
         if tail[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,args[:2])
             return b''
+        if tail[0]=='stop':self.stops.append(list(args));return b''
         if tail[0]=='up':
             if self.up_fail:raise subprocess.CalledProcessError(1,args[:2])
             if self.on_up:self.on_up(args)
@@ -98,7 +99,7 @@ class FakeDocker:
         if args[0]=='pull':
             if self.pull_fail:raise subprocess.CalledProcessError(1,['docker','pull'])
             return b''
-        if args[0]=='stop':return b''
+        if args[0]=='stop':self.stops.append(list(args));return b''
         if args[0]=='rename':
             for c in [self.single]+self.created:
                 if c and (c['Id']==args[1] or c['Name'].lstrip('/')==args[1]):c['Name']='/'+args[2]
@@ -134,7 +135,7 @@ class EditCase(unittest.TestCase):
         self.env_text='# shop settings\nTAG=1.0\nexport DB_PASSWORD="old pass#1"\nDBIMG=postgres:16\n'
         pathlib.Path(self.envfile).write_bytes((self.env_text).encode())
         self.fake=FakeDocker(self.tmp)
-        self.fake.containers=[{'Id':'c-%s'%s,'Image':'sha256:'+str(i)*64,'Config':{'Image':img,'Labels':{'com.docker.compose.service':s,'com.docker.compose.project':'shop'}},'State':{'Running':True,'Status':'running','StartedAt':'2020-01-01T00:00:00.0Z'}} for i,(s,img) in enumerate([('web','shop:1.0'),('proxy','proxy:1'),('db','postgres:16')],1)]
+        self.fake.containers=[{'Id':'c-%s'%s,'Image':'sha256:'+str(i)*64,'Config':{'Image':img,'Labels':{'com.docker.compose.service':s,'com.docker.compose.project':'shop'}},'State':{'Running':True,'Status':'running','StartedAt':'2020-01-01T00:00:00.0Z'},'Mounts':[{'Type':'bind','Source':self.root+'/data','Destination':'/data','RW':True}] if s=='web' else []} for i,(s,img) in enumerate([('web','shop:1.0'),('proxy','proxy:1'),('db','postgres:16')],1)]
         self.events=io.StringIO();self.maint=[]
         self.patches=[patch('helper.edit_exec',side_effect=self.fake),patch('helper.EVENT_STREAM',self.events),patch('helper.EDITS_ROOT',pathlib.Path(posix(self.tmp)+'/edits')),
             patch('helper.INCREMENTAL_ROOT',pathlib.Path(posix(self.tmp)+'/incremental')),patch('helper.listening_ports',return_value=[22,8080,3306]),
@@ -324,7 +325,12 @@ class Load(EditCase):
         self.assertNotIn('old pass',json.dumps(result));self.assertEqual(result['files'][0]['text'],pathlib.Path(self.compose).read_bytes().decode())
         self.assertEqual(result['usable'],{'compose':True,'env':True,'ports':True,'image':True})
         web=[s for s in result['services'] if s['name']=='web'][0]
-        self.assertEqual(web['image'],'shop:1.0');self.assertEqual(web['ports'],[{'host':'8080','container':80,'protocol':'tcp','hostIp':'127.0.0.1'}])
+        self.assertEqual(web['image'],'shop:1.0');self.assertEqual(web['ports'],[{'host':'8080','container':80,'protocol':'tcp','hostIp':'127.0.0.1','at':{'file':self.compose,'line':web['ports'][0]['at']['line']}}])
+        # Guided tabs: the port's one line; the image comes from TAG in .env; proxy's image line is unique.
+        lines=pathlib.Path(self.compose).read_text().splitlines()
+        self.assertIn('8080',lines[web['ports'][0]['at']['line']-1])
+        self.assertEqual((web['imageAt'],web['imageReason'],web['imageVariable']),(None,'IMAGE_FROM_ENV','TAG'))
+        proxy=[s for s in result['services'] if s['name']=='proxy'][0];self.assertIn('proxy:1',lines[proxy['imageAt']['line']-1]);self.assertIsNone(proxy['imageReason'])
     def test_large_file(self):
         pathlib.Path(self.compose).write_bytes(compose_doc(self.services).encode()+b' '*(256*1024))
         result=self.run_op('edit-load');self.assertIsNone(result['files'][0]['text']);self.assertEqual(result['reasons']['compose'],'FILE_TOO_LARGE')
@@ -444,6 +450,109 @@ class Lifecycle(EditCase):
             result=self.run_op('edit-check',files=[])
         self.assertEqual(result,{'ok':False,'code':'FAILED','reason':helper.EDIT_REASONS['FAILED']})
 
+class DataCopy(EditCase):
+    """Owner decision: an image change rolls the data back in place from a safety copy in the journal folder."""
+    prepare=Lifecycle.prepare;journal=Lifecycle.journal
+    def data(self):return pathlib.Path(self.root+'/data')
+    def seed(self):
+        d=self.data();(d/'uploads'/'a.txt').write_text('before');(d/'db.sqlite').write_bytes(b'v1')
+        outside=pathlib.Path(posix(self.tmp)+'/outside.txt');outside.write_text('outside')
+        try:os.symlink(str(outside),str(d/'link'))
+        except (OSError,NotImplementedError):pass
+        if os.name=='posix':os.chmod(d/'db.sqlite',0o640)
+        return outside
+    def copy_dir(self):return pathlib.Path(posix(self.tmp))/'edits'/EDIT/'data'
+    def with_config(self,op,**extra):
+        return self.run_op(op,config={'maintenance':{'directory':self.root+'/maint'},'mountExclusions':[{'source':self.root+'/data','path':self.root+'/data/cache','reason':'cache'}]},**extra)
+    def test_image_change_copies_data_and_rollback_puts_it_back_exactly(self):
+        outside=self.seed()
+        digest,_=self.prepare()
+        self.assertTrue(self.journal()['dataCopy'])
+        applied=self.run_op('edit-apply',reviewedModelSha256=digest);self.assertTrue(applied['ok'],applied)
+        self.assertTrue(applied['dataCopy']);self.assertGreaterEqual(applied['dataBytes'],len('before')+2)
+        self.assertTrue(self.fake.stops,'the services stop before the copy')
+        journal=self.journal();self.assertEqual([r['state'] for r in journal['data']],['saved']);self.assertEqual(journal['data'][0]['path'],self.root+'/data')
+        self.assertTrue(journal['servicesStopped'])
+        # The new version "migrates" the data and adds files.
+        d=self.data();(d/'db.sqlite').write_bytes(b'v2-migrated');(d/'new.txt').write_text('extra');(d/'uploads'/'a.txt').unlink()
+        for _ in range(2):
+            rolled=self.run_op('edit-rollback',restoreData=True);self.assertTrue(rolled['ok'],rolled)
+            self.assertEqual((d/'db.sqlite').read_bytes(),b'v1');self.assertEqual((d/'uploads'/'a.txt').read_text(),'before')
+            self.assertFalse((d/'new.txt').exists(),'extras are removed')
+        if os.path.islink(str(d/'link')):
+            self.assertEqual(os.readlink(str(d/'link')),str(outside),'a symbolic link comes back as the same link')
+            self.assertTrue((self.copy_dir()/'0'/'link').is_symlink(),'the copy kept the link, never its target')
+            self.assertEqual(outside.read_text(),'outside')
+        if os.name=='posix':self.assertEqual(os.stat(d/'db.sqlite').st_mode&0o777,0o640)
+        self.assertEqual([r['state'] for r in self.journal()['data']],['restored'])
+        self.assertTrue(self.run_op('edit-status')['dataCopy'],'the copy stays until finish')
+        self.assertTrue(self.run_op('edit-finish')['ok']);self.assertFalse(self.copy_dir().exists(),'finish removes the copy')
+    def test_owner_and_mode_are_kept(self):
+        self.seed();digest,_=self.prepare();owners=[]
+        with patch('helper.os.geteuid',create=True,return_value=0),patch('helper.os.chown',create=True,side_effect=lambda path,u,g,**k:owners.append(os.path.basename(str(path)))):
+            self.assertTrue(self.run_op('edit-apply',reviewedModelSha256=digest)['ok'])
+            if os.name=='posix':
+                self.assertIn('db.sqlite',owners,'owners are copied (as root)')
+                self.assertEqual(os.stat(self.copy_dir()/'0'/'db.sqlite').st_mode&0o777,0o640)
+    def test_rollback_without_restore_data_leaves_data_alone(self):
+        self.seed();digest,_=self.prepare();self.run_op('edit-apply',reviewedModelSha256=digest)
+        (self.data()/'new.txt').write_text('kept')
+        self.assertTrue(self.run_op('edit-rollback',restoreData=False)['ok']);self.assertTrue((self.data()/'new.txt').exists())
+    def test_env_only_change_takes_no_copy(self):
+        digest,_=self.prepare(files=[],env=[{'file':self.envfile,'key':'DB_PASSWORD','value':SECRET}])
+        self.assertFalse(self.journal()['dataCopy'])
+        applied=self.run_op('edit-apply',reviewedModelSha256=digest);self.assertTrue(applied['ok'],applied);self.assertFalse(applied['dataCopy'])
+        self.assertFalse(self.fake.stops);self.assertFalse(self.copy_dir().exists())
+    def test_not_enough_space_refuses_before_any_write(self):
+        self.seed();digest,_=self.prepare();original=pathlib.Path(self.compose).read_bytes()
+        with patch('helper.shutil.disk_usage',return_value=type('Usage',(),{'free':1})()):result=self.run_op('edit-apply',reviewedModelSha256=digest)
+        self.assertEqual((result['ok'],result['code'],result['reason']),(False,'DISK_FULL','Not enough free disk space for the safety copy.'))
+        self.assertEqual(pathlib.Path(self.compose).read_bytes(),original);self.assertFalse(self.fake.stops,'nothing stopped');self.assertEqual(self.journal()['state'],'prepared')
+    def test_copy_interrupted_restarts_the_site_at_finish(self):
+        self.seed();digest,_=self.prepare()
+        with patch('helper.edit_copy_tree',side_effect=OSError(28,'No space left on device')):result=self.run_op('edit-apply',reviewedModelSha256=digest)
+        self.assertEqual(result['code'],'DISK_FULL');self.assertEqual(self.journal()['state'],'prepared');self.assertTrue(self.journal()['servicesStopped'])
+        self.assertEqual(self.run_op('edit-status')['files'],'original')
+        self.assertTrue(self.run_op('edit-finish')['ok'])
+        ups=[c['args'] for c in self.fake.calls if 'up' in c['args']];self.assertTrue(ups,'the stopped site starts again with its own files')
+    def test_failed_rollback_keeps_the_copy(self):
+        self.seed();digest,_=self.prepare();self.run_op('edit-apply',reviewedModelSha256=digest)
+        self.fake.up_fail=True
+        self.refused(self.run_op('edit-rollback',restoreData=True),'ROLLBACK_FAILED')
+        self.assertTrue((self.copy_dir()/'0').is_dir());self.assertTrue(self.run_op('edit-status')['dataCopy'])
+    def test_excluded_paths_are_neither_copied_nor_removed(self):
+        self.seed();(self.data()/'cache').mkdir();(self.data()/'cache'/'big.bin').write_bytes(b'x')
+        digest,_=self.prepare()
+        self.assertTrue(self.with_config('edit-apply',reviewedModelSha256=digest)['ok'])
+        self.assertFalse((self.copy_dir()/'0'/'cache').exists())
+        (self.data()/'cache'/'big.bin').write_bytes(b'new cache')
+        self.assertTrue(self.run_op('edit-rollback',restoreData=True)['ok'])
+        self.assertEqual((self.data()/'cache'/'big.bin').read_bytes(),b'new cache','an excluded folder is left as it is')
+    def test_volume_of_another_driver_is_refused_when_the_image_changes(self):
+        self.fake.containers[0]['Mounts']=[{'Type':'volume','Name':'nfs_data','Source':'/x','Destination':'/data','RW':True,'Driver':'nfs'}]
+        self.refused(self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[]),'DATA_NOT_LOCAL')
+        self.assertTrue(self.run_op('edit-check',files=[],env=[{'file':self.envfile,'key':'DB_PASSWORD','value':'x'}])['ok'],'no image change: no data copy needed')
+    def test_review_reports_the_data_size_for_an_image_change(self):
+        self.seed()
+        verdict=self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[])['verdict'];self.assertGreater(verdict['dataBytes'],0)
+    def test_docknest_itself_is_refused(self):
+        self.fake.containers[0]['Config']['Labels']['io.github.dahanitamar.docknest']='app'
+        self.refused(self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:2.0'})),env=[]),'OWN_SITE')
+
+class Guided(unittest.TestCase):
+    def test_anchors_extends_and_two_files_are_never_guessed(self):
+        texts={'/s/a.yaml':'services:\n  web:\n    image: shop:1.0\n    ports:\n      - "8080:80"\n','/s/b.yaml':'services:\n  web:\n    ports:\n      - "8080:80"\n'}
+        first={'services':{'web':{'image':'shop:1.0','ports':[{'published':'8080','target':80}]},'api':{'image':'base:1','extends':{'service':'web'}},'w2':{'image':'shared:1'},'w3':{'image':'shared:1'}}}
+        guided=helper.edit_guided(first,texts)
+        self.assertEqual(guided['web']['imageAt'],{'file':'/s/a.yaml','line':3})
+        self.assertEqual(guided['web']['ports'][0]['reason'],'EDIT_IN_COMPOSE','the same port line in two files')
+        self.assertEqual(guided['api']['imageReason'],'EDIT_IN_COMPOSE','extends')
+        self.assertEqual((guided['w2']['imageReason'],guided['w3']['imageReason']),('EDIT_IN_COMPOSE','EDIT_IN_COMPOSE'),'one anchor line shared by two services')
+        port=helper.edit_guided({'services':{'web':{'image':'x:1','ports':[{'published':'${PORT}','target':80}]}}},{'/s/a.yaml':'services: {}'})['web']['ports'][0]
+        self.assertEqual(port['reason'],'EDIT_IN_COMPOSE')
+        override=helper.edit_guided({'services':{'web':{'image':'shop:1.0','ports':[{'published':'9090','target':81}]}}},{'/s/a.yaml':'services:\n  web:\n    image: shop:1.0\n','/s/o.yaml':'services:\n  web:\n    ports:\n      - published: 9090\n        target: 81\n'})['web']
+        self.assertEqual(override['ports'][0]['at'],{'file':'/s/o.yaml','line':4},'the port in the override file')
+
 class Poll(EditCase):
     def poll(self,**extra):
         req={'services':['web','db'],'windowStartedAt':helper.time.time()-30,'timeLimitSeconds':120,'final':False,**extra}
@@ -467,10 +576,11 @@ class Poll(EditCase):
 class SingleContainer(EditCase):
     def setUp(self):
         super().setUp()
+        self.volume=posix(self.tmp)+'/volumes/blog_content/_data';os.makedirs(self.volume);pathlib.Path(self.volume+'/post.md').write_text('first')
         self.fake.single={'Id':'orig','Name':'/blog','Image':'sha256:'+'a'*64,'State':{'Running':True,'Status':'running','StartedAt':'2020-01-01T00:00:00Z'},
             'Config':{'Image':'ghost:5','Env':['PATH=/usr/bin','DB_PASS=old-secret','MODE=prod'],'Labels':{'img':'1','team':'web'},'Cmd':['run'],'Entrypoint':None,'WorkingDir':'/app','User':'','Hostname':'orig'[:12],'Healthcheck':None},
             'HostConfig':{'NetworkMode':'blognet','RestartPolicy':{'Name':'unless-stopped'},'PortBindings':{'2368/tcp':[{'HostIp':'127.0.0.1','HostPort':'2368'}]},'LogConfig':{'Type':'json-file','Config':{}},'Tmpfs':{}},
-            'NetworkSettings':{'Networks':{'blognet':{'Aliases':['blog']}}},'Mounts':[{'Type':'volume','Name':'blog_content','Source':'/var/lib/docker/volumes/blog_content/_data','Destination':'/var/lib/ghost/content','RW':True,'Driver':'local'}]}
+            'NetworkSettings':{'Networks':{'blognet':{'Aliases':['blog']}}},'Mounts':[{'Type':'volume','Name':'blog_content','Source':self.volume,'Destination':'/var/lib/ghost/content','RW':True,'Driver':'local'}]}
     def request(self,operation,**extra):
         req=super().request(operation,**extra);req['invocation']={'container':'blog'};return req
     def test_recreate_uses_a_private_env_file_and_rolls_back_by_rename(self):
