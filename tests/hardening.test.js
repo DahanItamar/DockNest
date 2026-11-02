@@ -1,5 +1,5 @@
 // Hardening score per site (docs/hardening-score.md): grading, the stored facts, discovery matching, never-scanned and
-// pre-upgrade sites, and migration 13 being purely additive.
+// pre-upgrade sites, and migration 14 being purely additive.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile } from 'node:fs/promises';
@@ -173,7 +173,7 @@ test('a database from before the upgrade (no site_hardening table) reads as neve
   old.close();
 });
 
-test('migration 13 adds only site_hardening, keeps every earlier table unchanged and is compatible', () => {
+test('migration 14 adds only site_hardening, keeps every earlier table unchanged and is compatible', () => {
   const file = join(temporary, 'migration.sqlite'), database = new DatabaseSync(file), quiet = () => {};
   const schema = () => database.prepare("SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => ({ ...row }));
   try {

@@ -6,7 +6,13 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
+- Certificate alerts: get an alert when a site's TLS certificate expires within 14 days (change it under Connections settings) or when certbot fails to renew it. DockNest reads certificate dates only while it already backs up, checks or discovers a site, so nothing new runs on your servers. Tick the two new events on an alert line in the Map. See [docs/alerts.md](docs/alerts.md#certificates).
 - Hardening score: each Docker site now gets a security grade from A to F, with a one-line fix for each finding (privileged mode, Docker socket, root user, open ports, memory limit, image tag, healthcheck, privilege escalation, extra capabilities). It updates on server scans and backups and never changes the site. See [docs/hardening-score.md](docs/hardening-score.md).
+
+### Fixed
+
+- Restores, restore tests and moves now keep the original container's read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor settings. A copy never runs with fewer protections; when a setting cannot be kept (for example an AppArmor profile missing on the server), DockNest stops with the reason. Hardened sites, such as ones that drop all capabilities and add a few back, can now be restore tested.
+- Moving a Compose site that adds only Docker's default capabilities (`cap_add: [CHOWN]`) no longer stops at the Compose check.
 
 ## [2.13.5] - 2026-11-01
 

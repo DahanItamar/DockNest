@@ -1,6 +1,6 @@
 // Hardening score per site (docs/hardening-score.md). Read-only: DockNest grades how a site's containers are
 // configured and never changes them. Facts come from the remote helper during discovery scans and backups that already
-// run (remote/helper/discovery.py hardening_facts); nothing here opens a connection or runs on a timer.
+// run (remote/helper/discovery.py container_hardening_facts); nothing here opens a connection or runs on a timer.
 //
 // Trust: facts arrive from the managed server, so every field is validated and anything unexpected is dropped. Only
 // booleans, port bindings, the image reference and capability names are stored, never environment values.

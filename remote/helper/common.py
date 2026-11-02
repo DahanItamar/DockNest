@@ -99,8 +99,129 @@ def tmpfs_as_host_config(c):
         tmpfs[m.get('Destination')]=','.join(options)
     return {**c,'HostConfig':{**host,'Tmpfs':tmpfs},'Mounts':[m for m in c.get('Mounts') or [] if m.get('Type')!='tmpfs']}
 
+# ---- Container hardening: a copy (restore, restore test, move) keeps the original's protections ----
+# Docker's default capabilities: every container already has them, so adding one changes nothing. NET_RAW is left out
+# on purpose: a site that adds it is refused like any other extra capability. The one definition for restores, restore
+# tests, moves and the Compose allow-list.
+DEFAULT_CAPABILITIES=frozenset({'AUDIT_WRITE','CHOWN','DAC_OVERRIDE','FOWNER','FSETID','KILL','MKNOD','NET_BIND_SERVICE','SETFCAP','SETGID','SETPCAP','SETUID','SYS_CHROOT'})
+DOCKER_BASE_CAPABILITIES=DEFAULT_CAPABILITIES|{'NET_RAW'}  # what a container without CapAdd/CapDrop starts with
+CAPABILITY_NAME=re.compile(r'[A-Z][A-Z0-9_]{1,31}')
+APPARMOR_PROFILE=re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,127}')
+SELINUX_LABEL=re.compile(r'[A-Za-z0-9_.:,=-]{1,255}')
+SECCOMP_LIMIT=1024*1024
+APPARMOR_PROFILES='/sys/kernel/security/apparmor/profiles'
+RELAXING_OPTIONS={'systempaths=unconfined':'systempaths=unconfined','systempaths:unconfined':'systempaths=unconfined','writable-cgroups=true':'writable-cgroups=true','writable-cgroups:true':'writable-cgroups=true','writable-cgroups=false':None,'writable-cgroups:false':None}  # None: Docker's default anyway
+def capability_name(value):
+    name=value.strip().upper().removeprefix('CAP_') if isinstance(value,str) else ''
+    return name if CAPABILITY_NAME.fullmatch(name) else None
+def extra_capabilities(added):
+    """True when anything is added beyond Docker's defaults (ALL, NET_RAW, SYS_ADMIN, ... or a value that is no name)."""
+    return any(capability_name(cap) not in DEFAULT_CAPABILITIES for cap in added or [])
+def container_label(c):return str(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12] or 'A container'
+def seccomp_profile(value,name):
+    """'default', 'unconfined' or the profile as canonical JSON. Docker stores a custom profile's contents; an absolute
+    path (Compose files, other tools) must name a readable profile file on this server."""
+    if value=='builtin':return 'default'
+    if value=='unconfined':return value
+    text=value
+    if not value.lstrip().startswith('{'):
+        path=pathlib.Path(value)
+        if not value.startswith('/') or '..' in path.parts:raise ValueError('Container %s uses the seccomp profile %s. Use an absolute path to the profile file.'%(name,value[:256]))
+        try:
+            fd=os.open(path,os.O_RDONLY|NOFOLLOW|getattr(os,'O_NONBLOCK',0)|getattr(os,'O_CLOEXEC',0))  # a FIFO never blocks
+            with os.fdopen(fd,'rb') as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):raise OSError('not a file')
+                text=source.read(SECCOMP_LIMIT+1).decode()
+        except (OSError,UnicodeDecodeError):raise ValueError('Container %s uses the seccomp profile %s, which is not on this server. Copy the file to the same path, then try again.'%(name,value[:256]))
+    try:profile=json.loads(text) if len(text)<=SECCOMP_LIMIT else None
+    except ValueError:profile=None
+    if not isinstance(profile,dict):raise ValueError('Container %s has a seccomp profile DockNest cannot read.'%name)
+    return json.dumps(profile,sort_keys=True,separators=(',',':'))
+def hardening(c):
+    """The protections a copy must keep, read from the container's HostConfig. Refuses what DockNest cannot reproduce."""
+    hc=c.get('HostConfig') or {};name=container_label(c)
+    drop,add=[],[]
+    for kind,values,result in [('drops',hc.get('CapDrop'),drop),('adds',hc.get('CapAdd'),add)]:
+        for value in values or []:
+            cap=capability_name(value)
+            if cap is None:raise ValueError('Container %s %s a capability DockNest does not recognize (%s).'%(name,kind,str(value)[:64]))
+            if cap not in result:result.append(cap)
+    found={'noNewPrivileges':False,'seccomp':'default','apparmor':None,'labels':[],'relaxed':[]}
+    for item in hc.get('SecurityOpt') or []:
+        if not isinstance(item,str):raise ValueError('Container %s has a security option DockNest cannot read.'%name)
+        # The Docker CLI's own parsing: key=value, or the older key:value.
+        key,separator,value=item.partition('=')
+        if not separator and key!='no-new-privileges':key,separator,value=item.partition(':')
+        if key=='no-new-privileges' and value in ['','true','false']:found['noNewPrivileges']=value!='false'
+        elif key=='seccomp' and value:found['seccomp']=seccomp_profile(value,name)
+        elif key=='apparmor' and APPARMOR_PROFILE.fullmatch(value):found['apparmor']=value
+        elif key=='label' and SELINUX_LABEL.fullmatch(value):found['labels'].append(value)
+        # Options that only turn a protection off: a copy without them is stricter, so they are left out (as before
+        # 2.14.0) and recorded, so a Compose copy that adds one the original lacks is caught as weaker.
+        elif item in RELAXING_OPTIONS:found['relaxed']+=[RELAXING_OPTIONS[item]] if RELAXING_OPTIONS[item] else []
+        else:raise ValueError('Container %s uses the security option %s, which DockNest cannot copy safely. Remove it, or restore this site by hand.'%(name,key[:64]))
+    base=set() if 'ALL' in drop else DOCKER_BASE_CAPABILITIES-set(drop)
+    return {'readonly':bool(hc.get('ReadonlyRootfs')),'privileged':bool(hc.get('Privileged')),'drop':drop,'add':add,'capabilities':frozenset(base|set(add)),**found,'labels':sorted(found['labels']),'relaxed':sorted(set(found['relaxed']))}
+def hardened(c):
+    hc=c.get('HostConfig') or {}
+    return bool(hc.get('ReadonlyRootfs') or hc.get('CapDrop') or hc.get('CapAdd') or hc.get('SecurityOpt'))
+def apparmor_loaded(profile):
+    try:
+        with open(APPARMOR_PROFILES) as source:return any(line.rsplit(' (',1)[0]==profile for line in source.read().splitlines())
+    except OSError:return False
+def target_hardening_problem(h,name):
+    """What this server lacks to give a copy the same protections; None when it can."""
+    if h['apparmor'] not in [None,'unconfined'] and not apparmor_loaded(h['apparmor']):return 'Container %s uses the AppArmor profile %s, which is not loaded on this server. Load it, then try again.'%(name,h['apparmor'])
+    return None
+def hardening_args(c,directory):
+    """`docker create` flags that give a copy the original's read-only root, capabilities and security options. A
+    custom seccomp profile is written to a private file in `directory` (Docker reads it at create)."""
+    h=hardening(c);name=container_label(c)
+    if extra_capabilities(h['add']):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
+    problem=target_hardening_problem(h,name)
+    if problem:raise ValueError(problem)
+    args=['--read-only'] if h['readonly'] else []
+    for cap in h['drop']:args+=['--cap-drop',cap]
+    for cap in h['add']:args+=['--cap-add',cap]
+    if h['noNewPrivileges']:args+=['--security-opt','no-new-privileges=true']
+    if h['seccomp']=='unconfined':args+=['--security-opt','seccomp=unconfined']
+    elif h['seccomp']!='default':
+        path=pathlib.Path(directory)/('seccomp-%s.json'%hashlib.sha256(h['seccomp'].encode()).hexdigest()[:16])
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|NOFOLLOW,0o600)
+        with os.fdopen(fd,'w') as output:output.write(h['seccomp'])
+        args+=['--security-opt','seccomp='+str(path)]
+    if h['apparmor']:args+=['--security-opt','apparmor='+h['apparmor']]
+    for label in h['labels']:args+=['--security-opt','label='+label]
+    return args
+def hardening_shortfall(original,copy):
+    """None when the copy keeps every protection of the original, else the user-facing reason."""
+    o,k=hardening(original),hardening(copy);missing=[]
+    if o['readonly'] and not k['readonly']:missing.append('a read-only root filesystem')
+    if k['privileged'] or not k['capabilities']<=o['capabilities']:missing.append('its dropped capabilities')
+    if o['noNewPrivileges'] and not k['noNewPrivileges']:missing.append('no-new-privileges')
+    if o['seccomp']!='unconfined' and k['seccomp']!=o['seccomp']:missing.append('its seccomp profile')
+    if o['apparmor']!='unconfined' and k['apparmor']!=o['apparmor']:missing.append('its AppArmor profile')
+    if 'disable' not in o['labels'] and k['labels']!=o['labels']:missing.append('its SELinux labels')
+    if set(k['relaxed'])-set(o['relaxed']):missing.append('its masked system paths and read-only cgroups')
+    if not missing:return None
+    return 'The copy of %s would run without %s, which the original has. DockNest stopped so a copy is never less protected.'%(container_label(original),', '.join(missing))
+def verify_hardening(originals,created,every=False):
+    """Inspect each new copy before it starts; raise when it is less protected than its original. Plain copies skip
+    unhardened originals (DockNest adds nothing to them); a Compose copy (every=True) is always checked, because the
+    site's Compose files may add settings the original lacks."""
+    if len(originals)!=len(created):raise ValueError('DockNest could not match each copy to its original, so it stopped.')
+    pairs=[(o,cid) for o,cid in zip(originals,created) if every or hardened(o)]
+    if not pairs:return
+    copies=inspect([cid for _,cid in pairs])
+    if len(copies)!=len(pairs):raise ValueError('DockNest could not inspect every copy, so it stopped.')
+    for (original,_),copy in zip(pairs,copies):
+        problem=hardening_shortfall(original,copy)
+        if problem:raise ValueError(problem)
+
 TRANSFER=None
 PROBE_POLICY_FALLBACKS=[]
+# Certificate facts the HTTPS probes of this run saw, by hostname (net.py, note_peer_certificate). One run, one process.
+PEER_CERTIFICATES={}
 
 # ---- Chain restore ----
 # Every package's transfer checksum and every manifest link are checked before any archive is extracted. Each mount is

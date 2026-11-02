@@ -4,9 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    inspect, run)
-from .restore import (
-    DEFAULT_CAPABILITIES)
+    DEFAULT_CAPABILITIES, inspect, run)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -178,7 +176,7 @@ def loopback(address):
     try:return ipaddress.ip_address(address).is_loopback
     except ValueError:return False
 DATABASE_PORTS={'3306','5432','6379','27017','1433'}
-def hardening_facts(c,engine=None):
+def container_hardening_facts(c,engine=None):
     config=c.get('Config') or {};host=c.get('HostConfig') or {}
     bindings={}
     for source in (host.get('PortBindings') or {},(c.get('NetworkSettings') or {}).get('Ports') or {}):
@@ -207,5 +205,5 @@ def hardening_report(containers):
     """Facts for every container, or None. A fact we cannot read never fails the scan or the backup around it."""
     try:
         engine=engine_rootless() if containers else None
-        return [hardening_facts(c,engine) for c in containers]
+        return [container_hardening_facts(c,engine) for c in containers]
     except Exception:return None

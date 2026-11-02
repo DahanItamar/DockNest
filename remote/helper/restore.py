@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    atomic_json, complete_recovery, docker, emit, inspect, run)
+    atomic_json, complete_recovery, docker, emit, extra_capabilities, hardening_args, inspect, run, verify_hardening)
 from .paths import (
     excluded_path, mount_table)
 from .databases import (
@@ -177,21 +177,14 @@ def chain_paths(req,root):
     """Remote paths for a chain restore: payload-0.tar.gz (the full backup) up to payload-<n-1>.tar.gz."""
     n=chain_length(req)
     return {} if n is None else {'remotePaths':[str(root/('payload-%d.tar.gz'%k)) for k in range(n)]}
-# Docker's default capabilities: every container already has them, so adding one changes nothing. A copy (restore,
-# restore test, move) is created without the original's CapAdd and CapDrop, so it is accepted only when the original's
-# effective set is exactly that default: nothing dropped and nothing added beyond it. NET_RAW is left out on purpose.
-DEFAULT_CAPABILITIES={'AUDIT_WRITE','CHOWN','DAC_OVERRIDE','FOWNER','FSETID','KILL','MKNOD','NET_BIND_SERVICE','SETFCAP','SETGID','SETPCAP','SETUID','SYS_CHROOT'}
-def extra_capabilities(hc):
-    added=hc.get('CapAdd') or []
-    if not added:return False
-    if hc.get('CapDrop'):return True  # a hardened container: its copy would silently get more than the original
-    return not all(isinstance(cap,str) and cap.upper().removeprefix('CAP_') in DEFAULT_CAPABILITIES for cap in added)
+# A copy (restore, restore test, move) gets the original's CapDrop and CapAdd (common.hardening_args), so only a CapAdd
+# beyond Docker's defaults (common.DEFAULT_CAPABILITIES) is refused: that copy would hold host privileges.
 def restore_network_plan(containers):
     if not 1<=len(containers)<=30:raise ValueError('Restore requires 1 to 30 containers')
     plans=[]
     for c in containers:
         hc=c['HostConfig'];mode=hc.get('NetworkMode','')
-        if hc.get('Privileged') or hc.get('Devices') or extra_capabilities(hc) or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
+        if hc.get('Privileged') or hc.get('Devices') or extra_capabilities(hc.get('CapAdd')) or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
         networks={}
         for name,n in c.get('NetworkSettings',{}).get('Networks',{}).items():
             if name=='none':continue
@@ -580,6 +573,7 @@ def restore(req):
         args+=['--label','com.docker.compose.project=docknest-restore-'+req['job'][:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
         if multi and plans[i]:args+=['--dns','127.0.0.1']
         for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+        args+=hardening_args(c,root)
         for j,m in enumerate(c['Mounts']):
             source=extract_mount(unpacked,i,j,m,sources,root)
             if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
@@ -616,6 +610,7 @@ def restore(req):
                 for original,aliases in list(plans[i].items())[1:]:
                     flags=[part for alias in aliases for part in ['--alias',alias]]
                     docker('network','connect',*flags,networks[original],cid)
+        verify_hardening(containers,created)
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
         mapping={c['Id']:cid for c,cid in zip(containers,created)}

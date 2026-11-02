@@ -8,6 +8,7 @@ import { checksEnabled, compareSemver, packageVersion, finalTag } from '../updat
 import { emit, deliverDue } from './delivery.js';
 import { DISK_USED_PERCENT, DISK_FREE_BYTES } from './events.js';
 import { enabledRules } from './store.js';
+import { detectCertificates } from './certificates.js';
 
 const CURSOR = 'alerts_cursor', UPDATE_NOTIFIED = 'alerts_update_notified';
 const read = key => { try { return JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? 'null'); } catch { return null; } };
@@ -136,7 +137,7 @@ export const resetProbeState = () => misses.clear();
 // Worker entry points. Each swallows its own errors: alerting must never stop backups, moves or the update check.
 const guard = (label, fn) => { try { return fn(); } catch (error) { console.error(`Alerts: ${label} skipped (${error.code ?? error.name})`); return 0; } };
 export function tickAlerts() {
-  guard('detect', detectJobsAndMoves); guard('update', detectUpdate); guard('disk', detectDisk);
+  guard('detect', detectJobsAndMoves); guard('update', detectUpdate); guard('disk', detectDisk); guard('certificates', () => detectCertificates());
   deliverDue().catch(error => console.error(`Alerts: delivery skipped (${error.code ?? error.name})`));
 }
 let nextProbe = 0, probing = false;
