@@ -675,6 +675,14 @@ class ReviewFixes(EditCase):
         self.assertEqual(refused.exception.reason,helper.EDIT_REASONS['NODE_PROPERTY'])
         with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc+'x-k: &k include\n',yaml_doc+'x-k: &k include\n*k : [x]\n')
         self.assertEqual(refused.exception.field,'alias-key','a new alias key, even when its anchor already exists')
+        # Invisible characters (review re-check): a BOM before the key hides it from ^-anchored checks; Compose strips it.
+        for name,text in {'bom':'\ufeffinclude: [other.yaml]\n'+yaml_doc,'zero-width':yaml_doc+'\u200binclude: [x]\n','bidi':yaml_doc+'x-a: \u202eb\n','control':yaml_doc+'x-a: \x07\n'}.items():
+            with self.assertRaises(helper.EditRefused,msg=name) as refused:helper.edit_raw_problems(yaml_doc,text)
+            self.assertEqual((refused.exception.code,refused.exception.field),('YAML_REFUSED','invisible'),name)
+        bom='\ufeff'+yaml_doc
+        helper.edit_raw_problems(bom,bom.replace('nginx:1','nginx:2'))  # a file that starts with a BOM stays editable
+        with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,yaml_doc+'x-f: {"a":&k include}\n')
+        self.assertEqual(refused.exception.field,'node-property','an anchor right after a colon counts')
         # Tokens a file already has stay allowed (an existing && in a command, an existing anchor).
         shell=yaml_doc+'    command: sh -c "a && b"\n'
         helper.edit_raw_problems(shell,shell.replace('nginx:1','nginx:2'))

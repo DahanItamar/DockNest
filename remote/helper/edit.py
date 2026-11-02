@@ -377,9 +377,18 @@ EDIT_HIDDEN_BREAKS=re.compile('\r(?!\n)|[\u0085\u2028\u2029]')
 # an alias (*) or a tag (!) after whitespace or a flow indicator counts, inside quotes and block scalars too. A token the
 # candidate has more often than the original is refused, so new shell `&&`, `*` globs and `!` after a space are refused
 # as well (the guide says to put such commands in a script or edit by hand). Tokens the file already has stay allowed.
-EDIT_PROPERTY_TOKEN=re.compile(r'(?m)(?:^|[\s\[\]{},])([&*!][^\s\[\]{},]*)')
+EDIT_PROPERTY_TOKEN=re.compile(r'(?m)(?:^|[\s\[\]{},:])([&*!][^\s\[\]{},]*)')
 # An alias used as a mapping key, at the start of a line or list item or inside a flow mapping.
 EDIT_ALIAS_KEY=re.compile(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(\*\S+)[ \t]*:')
+def edit_invisible(text):
+    """Every format (Cf: BOM, zero-width, bidi) or control (C*) character except tab, newline and the CR of a CRLF, as
+    a sorted list: a candidate may only keep the ones its original has (a file that starts with a BOM keeps working)."""
+    import unicodedata
+    found=[]
+    for i,c in enumerate(text):
+        if c in '\t\n' or (c=='\r' and text[i+1:i+2]=='\n'):continue
+        if unicodedata.category(c).startswith('C'):found.append(c)
+    return sorted(found)
 def edit_yaml_properties(text):
     """Every &, * or ! token after whitespace or a flow indicator, as a sorted list (quotes are not interpreted)."""
     return sorted(EDIT_PROPERTY_TOKEN.findall(text))
@@ -393,6 +402,7 @@ def edit_new(before,after):
 def edit_raw_problems(original,candidate):
     original=original or ''
     if EDIT_HIDDEN_BREAKS.search(candidate):edit_refuse('YAML_REFUSED','line-break')
+    if edit_new(edit_invisible(original),edit_invisible(candidate)):edit_refuse('YAML_REFUSED','invisible')
     # Escaped keys: the exact set must stay as it is (not only their number).
     if sorted(EDIT_ESCAPED_KEY.findall(candidate))!=sorted(EDIT_ESCAPED_KEY.findall(original)):edit_refuse('YAML_REFUSED','escaped-key')
     for name,pattern in EDIT_RAW_PATTERNS.items():
