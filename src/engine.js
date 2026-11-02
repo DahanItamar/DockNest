@@ -14,6 +14,7 @@ import { retainCopies } from './backup-copies.js';
 import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
 import { CLAIMABLE_JOB_SQL } from './job-claim.js';
+import { recordHardening, recordDiscoveredHardening } from './hardening.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -24,7 +25,8 @@ import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 const now=()=>new Date().toISOString();
 export const testServer=server=>remote(server,{operation:'test'});
-export const discover=server=>remote(server,{operation:'discover'});
+// Every discovery scan also refreshes the hardening facts of the sites on that server (docs/hardening-score.md).
+export const discover=async server=>{const result=await remote(server,{operation:'discover'});try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}return result;};
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
@@ -484,6 +486,7 @@ export async function executeJob(job){
    published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
   captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
+  try{recordHardening(site.id,result.hardening);}catch{/* A grade is never worth failing a backup. */}
   // Secrets live only inside authenticated encrypted payload; metadata uses a redacted manifest.
   const manifest={formatVersion:1,kind:result.manifest.kind||'docker',...(result.manifest.kind==='static'?{documentRoot:result.manifest.documentRoot,staticFiles:result.manifest.staticFiles}:{}),complete:result.manifest.complete,capturedAt:captured.ms/1000,downtimeSeconds:result.manifest.downtimeSeconds,containerDowntimeSeconds:result.manifest.containerDowntimeSeconds,visitorDowntimeSeconds:result.manifest.visitorDowntimeSeconds,shutdownEvidence:result.manifest.shutdownEvidence,originalImages:result.manifest.originalImages.map(image=>({id:image.Id,digests:image.RepoDigests||[]})),architecture:result.manifest.architecture,restoreTested:false,containers:result.manifest.containers.map(c=>({id:c.Id,name:c.Name,image:c.Config.Image,mounts:c.Mounts.map(m=>({type:m.Type,destination:m.Destination}))}))};
   manifest.deliveryMode=direct?'direct':'staged';

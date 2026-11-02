@@ -230,6 +230,11 @@ CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERE
 CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
+// Hardening score per site (docs/hardening-score.md): the latest container configuration facts for each site, as cleaned
+// JSON (booleans, port bindings, image reference, capability names; never environment values). One additive table.
+export const hardeningSchema = `
+CREATE TABLE IF NOT EXISTS site_hardening (site_id TEXT PRIMARY KEY REFERENCES sites(id),checked_at TEXT NOT NULL,facts TEXT NOT NULL CHECK (length(facts) <= 262144));
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -265,6 +270,9 @@ export const migrations = [
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
   { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
+  // Hardening score (docs/hardening-score.md): one new table, so 2.13 code ignores it. Purely additive: renumber before
+  // release if another migration lands first.
+  { version: 13, name: 'site-hardening', compatible: true, up: db => db.exec(hardeningSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

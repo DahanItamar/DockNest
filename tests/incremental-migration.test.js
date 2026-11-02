@@ -33,7 +33,7 @@ test('migration 12 adds only its two tables and indexes, and the 2.11 positional
     db.exec('PRAGMA foreign_keys=ON');
     migrate(db, { file, list: migrations.filter(migration => migration.version <= 11), log: quiet });
     const before = schema(db);
-    migrate(db, { file, log: quiet });
+    migrate(db, { file, list: migrations.filter(migration => migration.version <= 12), log: quiet });
     const added = schema(db).filter(row => !before.some(item => item.name === row.name)).map(row => row.name).sort();
     assert.deepEqual(added, ['backup_chain_links', 'backup_chain_links_chain', 'backup_chain_links_parent', 'site_incremental']);
     for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'unchanged: ' + row.name);
