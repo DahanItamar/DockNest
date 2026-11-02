@@ -155,6 +155,10 @@ test('a pasted Compose launch runs every step, saves the site with day-one backu
   assert.equal(launch.state, 'done'); assert.equal(launch.steps.find(step => step.step === 'first_backup').state, 'done');
   assert.ok(Date.parse(launch.removeUntil) - Date.now() > 23 * 3600_000, 'Remove launch is offered for 24 hours');
   assert.deepEqual(launch.actions, { cancel: false, checkDns: false, remove: true, retry: false });
+  assert.equal(launch.dns.type, 'A'); assert.equal(launch.progress, 100); assert.match(launch.statusLine, /live and backed up/);
+  assert.deepEqual(launch.certificate, { state: 'issued', reason: null }); assert.equal(launch.backups.schedule, '15 4 * * *');
+  const state = (await admin('GET', '/state')).body.sites.find(item => item.id === site.id);
+  assert.deepEqual(state.launch, { id: launchId, launchedAt: launch.finishedAt, removeUntil: launch.removeUntil }, '/api/state carries the launch for Remove launch');
   const everything = JSON.stringify([launch, db.prepare('SELECT * FROM audit_events').all(), logged, db.prepare('SELECT * FROM site_launches').all(), db.prepare('SELECT detail,result FROM site_launch_steps').all(), db.prepare('SELECT config FROM sites').all()]);
   assert.ok(!everything.includes(SECRET) && !everything.includes('mariadb:11'), 'no value or Compose text in answers, audit rows, logs or stored rows');
 });

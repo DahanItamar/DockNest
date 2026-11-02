@@ -76,21 +76,22 @@ test('only administrators with CSRF and a re-verification within 5 minutes may c
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deploy_keys').get().n, 0);
 });
 
-test('create: the host key fingerprint is shown first, stored only after it is confirmed, and the private key never leaves', async () => {
+test('create: the host key fingerprint is read first (nothing stored), the key is made only for that fingerprint, and the private key never leaves', async () => {
   const body = { name: 'Shop repo', gitHost: 'github.com', serverId: web };
-  const first = await send(admin, 'POST', '/deploy-keys', body);
-  assert.equal(first.status, 409);
+  const first = await send(admin, 'POST', '/deploy-keys/host-key', { gitHost: 'github.com', serverId: web });
+  assert.equal(first.status, 200);
   const ask = await first.json();
-  assert.equal(ask.code, 'HOST_KEY_CONFIRM'); assert.equal(ask.hostKey.sha256, fp(hostBlob(hostKey))); assert.equal(ask.hostKey.type, 'ssh-ed25519');
+  assert.deepEqual(ask, { gitHost: 'github.com', fingerprint: fp(hostBlob(hostKey)), type: 'ssh-ed25519' });
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deploy_keys').get().n, 0, 'nothing stored before the confirmation');
-  const wrong = await send(admin, 'POST', '/deploy-keys', { ...body, hostKeySha256: fp(hostBlob(randomBytes(32))) });
+  assert.equal((await send(admin, 'POST', '/deploy-keys', body)).status, 400, 'the confirmed fingerprint is required');
+  const wrong = await send(admin, 'POST', '/deploy-keys', { ...body, fingerprint: fp(hostBlob(randomBytes(32))) });
   assert.equal(wrong.status, 409); assert.equal((await wrong.json()).code, 'HOST_KEY_CHANGED');
-  const created = await send(admin, 'POST', '/deploy-keys', { ...body, hostKeySha256: ask.hostKey.sha256.replace('SHA256:', '') });
+  const created = await send(admin, 'POST', '/deploy-keys', { ...body, fingerprint: ask.fingerprint.replace('SHA256:', '') });
   assert.equal(created.status, 201);
   const { key } = await created.json();
   assert.match(key.publicKey, /^ssh-ed25519 [A-Za-z0-9+/]+=* docknest-[0-9a-f]{8}$/);
   assert.equal(key.gitHost, 'github.com'); assert.equal(key.pinnedFromServerId, web); assert.equal(key.pinnedFromServerName, 'web-1');
-  assert.equal(key.hostKey.sha256, ask.hostKey.sha256);
+  assert.equal(key.hostKey.sha256, ask.fingerprint);
   const row = db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(key.id);
   assert.doesNotMatch(row.sealed_private_key, /PRIVATE KEY/, 'stored sealed');
   const privateKey = open(row.sealed_private_key);
@@ -105,18 +106,18 @@ test('create: the host key fingerprint is shown first, stored only after it is c
 test('host rules: options, private addresses, ports and odd helper answers are refused', async () => {
   const before = calls.length;
   for (const gitHost of ['-oProxyCommand=x', 'git@github.com', 'github.com/owner', 'localhost', '127.0.0.1', '169.254.169.254', 'host:0', 'host:70000', 'a b', '*.example.com']) {
-    const answer = await send(admin, 'POST', '/deploy-keys', { name: 'x', gitHost, serverId: web });
+    const answer = await send(admin, 'POST', '/deploy-keys/host-key', { gitHost, serverId: web });
     assert.equal(answer.status, 400, gitHost);
   }
   assert.equal(calls.length, before, 'refused before any server is contacted');
-  const lan = await send(admin, 'POST', '/deploy-keys', { name: 'x', gitHost: '192.168.1.20:2222', serverId: web });
+  const lan = await send(admin, 'POST', '/deploy-keys/host-key', { gitHost: '192.168.1.20:2222', serverId: web });
   assert.equal((await lan.json()).code, 'PRIVATE_ADDRESS');
-  const allowed = await send(admin, 'POST', '/deploy-keys', { name: 'x', gitHost: '192.168.1.20:2222', serverId: web, allowPrivate: true });
-  assert.equal((await allowed.json()).code, 'HOST_KEY_CONFIRM', 'a LAN Git server works with Allow private address');
+  const allowed = await send(admin, 'POST', '/deploy-keys/host-key', { gitHost: '192.168.1.20:2222', serverId: web, allowPrivate: true });
+  assert.equal(allowed.status, 200, 'a LAN Git server works with Allow private address');
   assert.deepEqual(calls.at(-1).request, { operation: 'launch-host-key', gitHost: '192.168.1.20:2222', allowPrivate: true });
   for (const [answer, code] of [[{ ok: false, code: 'PRIVATE_ADDRESS', reason: 'x' }, 'PRIVATE_ADDRESS'], [{ hostKeyLine: 'github.com ssh-dss AAAA' }, 'HOST_KEY_UNAVAILABLE'], [{ hostKeyLine: `evil.example ssh-ed25519 ${hostBlob(hostKey).toString('base64')}` }, 'HOST_KEY_UNAVAILABLE'], [{ hostKeyLine: `github.com ssh-ed25519 ${hostBlob(hostKey).toString('base64')}`, sha256: fp(hostBlob(randomBytes(32))) }, 'HOST_KEY_UNAVAILABLE'], [{ ok: false, code: 'bad code; rm', reason: 'x' }, 'HOST_KEY_UNAVAILABLE']]) {
     helperAnswer = answer;
-    const response = await send(admin, 'POST', '/deploy-keys', { name: 'x', gitHost: 'github.com', serverId: web });
+    const response = await send(admin, 'POST', '/deploy-keys/host-key', { gitHost: 'github.com', serverId: web });
     assert.equal(response.status, 409); assert.equal((await response.json()).code, code, JSON.stringify(answer));
   }
   helperAnswer = null;
@@ -127,16 +128,20 @@ test('re-pin after a host key rotation, and a key confirmed on one server is ref
   assert.ok(keys.deployKeyForLaunch(key.id, web).privateKey.includes('OPENSSH PRIVATE KEY'));
   assert.throws(() => keys.deployKeyForLaunch(key.id, other), error => error.code === 'HOST_KEY_REPIN_REQUIRED' && !error.message.includes('PRIVATE'));
   hostKey = randomBytes(32); // the Git host rotated its key
-  const ask = await (await send(admin, 'POST', `/deploy-keys/${key.id}/pin`, { serverId: other })).json();
-  assert.equal(ask.code, 'HOST_KEY_CONFIRM'); assert.equal(ask.hostKey.sha256, fp(hostBlob(hostKey)));
-  const pinned = await send(admin, 'POST', `/deploy-keys/${key.id}/pin`, { serverId: other, hostKeySha256: ask.hostKey.sha256 });
+  const ask = await (await send(admin, 'POST', `/deploy-keys/${key.id}/host-key`, { serverId: other })).json();
+  assert.equal(ask.fingerprint, fp(hostBlob(hostKey))); assert.equal(ask.changed, true);
+  assert.deepEqual({ ...ask.previous, pinnedAt: undefined }, { fingerprint: key.hostKey.sha256, serverId: web, serverName: 'web-1', pinnedAt: undefined });
+  assert.equal(db.prepare('SELECT pinned_from_server_id FROM deploy_keys WHERE id=?').get(key.id).pinned_from_server_id, web, 'reading changes nothing');
+  const pinned = await send(admin, 'POST', `/deploy-keys/${key.id}/repin`, { serverId: other, fingerprint: ask.fingerprint });
   assert.equal(pinned.status, 200);
   const pinBody = await pinned.json(), view = pinBody.key;
   assert.deepEqual({ ...pinBody.replacedPin, text: undefined }, { serverId: web, serverName: 'web-1', text: undefined }, 'the answer says the old server now needs a re-pin');
   assert.match(pinBody.replacedPin.text, /web-1/);
-  assert.equal(view.pinnedFromServerId, other); assert.equal(view.hostKey.sha256, ask.hostKey.sha256); assert.equal(view.publicKey, key.publicKey, 'the deploy key itself is unchanged');
+  assert.equal(view.pinnedFromServerId, other); assert.equal(view.hostKey.sha256, ask.fingerprint); assert.equal(view.publicKey, key.publicKey, 'the deploy key itself is unchanged');
   assert.equal(keys.deployKeyForLaunch(key.id, other).hostKeyLine, `github.com ssh-ed25519 ${hostBlob(hostKey).toString('base64')}`);
-  assert.equal((await send(staleAdmin, 'POST', `/deploy-keys/${key.id}/pin`, { serverId: web })).status, 403);
+  assert.equal((await send(staleAdmin, 'POST', `/deploy-keys/${key.id}/repin`, { serverId: web, fingerprint: ask.fingerprint })).status, 403);
+  const same = await (await send(admin, 'POST', `/deploy-keys/${key.id}/repin`, { serverId: other, fingerprint: ask.fingerprint })).json();
+  assert.equal(same.replacedPin, undefined, 'a re-pin from the same server replaces nobody');
 });
 
 test('delete is refused while a launch uses the key and leaves launch history otherwise', async () => {
@@ -151,5 +156,5 @@ test('delete is refused while a launch uses the key and leaves launch history ot
   assert.equal((await send(admin, 'GET', `/deploy-keys/${key.id}`)).status, 404);
   assert.throws(() => keys.deployKeyForLaunch(key.id, other), error => error.code === 'DEPLOY_KEY_MISSING');
   const actions = db.prepare("SELECT action,detail FROM audit_events WHERE action LIKE 'deploy_key.%' ORDER BY created_at").all().map(row => row.action);
-  assert.deepEqual(actions, ['deploy_key.created', 'deploy_key.pinned', 'deploy_key.deleted']);
+  assert.deepEqual(actions, ['deploy_key.created', 'deploy_key.pinned', 'deploy_key.pinned', 'deploy_key.deleted']);
 });
