@@ -64,7 +64,7 @@ function recordFailure(launch, step, reason) {
   if (launch.failed_step || launch.reason) return;
   setLaunch(launch.id, { failed_step: step, reason: plainReason(reason) });
 }
-const SAFE_RESULT = ['tries', 'services', 'commit', 'images', 'containerCount', 'containerNames', 'composeFiles', 'certName', 'state', 'removed', 'left', 'file', 'jobId', 'backupId', 'deadline', 'interrupted', 'recovered', 'gate', 'checks'];
+const SAFE_RESULT = ['certCode', 'tries', 'services', 'commit', 'images', 'containerCount', 'containerNames', 'composeFiles', 'certName', 'state', 'removed', 'left', 'file', 'jobId', 'backupId', 'deadline', 'interrupted', 'recovered', 'gate', 'checks'];
 const journalResult = (previous, extra) => Object.fromEntries(Object.entries({ ...previous, ...extra }).filter(([key]) => SAFE_RESULT.includes(key)));
 
 // ---------- input ----------
@@ -465,7 +465,14 @@ function quietTime(serverId, chosen) {
   return { hour: 3, minute: 0 };
 }
 const policyZone = serverId => db.prepare('SELECT p.timezone FROM policies p JOIN sites s ON s.id=p.site_id WHERE s.server_id=? ORDER BY s.created_at LIMIT 1').get(serverId)?.timezone ?? 'UTC';
-const certificateState = steps => ({ done: 'issued', failed: 'failed' })[steps.find(step => step.step === 'certificate')?.state] ?? 'waiting';
+// Certificate failures that happen after certbot found the domain pointing here (remote/helper/launch.py): only these
+// mean http:// reaches this server. Refusals and a missing certbot say nothing about DNS.
+export const AFTER_DNS_FAILURES = Object.freeze(['RATE_LIMITED', 'CAA_REFUSED', 'CERT_FAILED', 'NO_ACCOUNT_EMAIL']);
+const certificateState = steps => {
+  const step = steps.find(item => item.step === 'certificate');
+  if (step?.state === 'done') return 'issued';
+  return step?.state === 'failed' && AFTER_DNS_FAILURES.includes(step.result?.certCode) ? 'failed' : 'waiting';
+};
 // The site's URLs follow the certificate: https once issued, http after a failure (the domain points here). While DNS
 // does not point here yet the health check uses the containers only (a URL that cannot reach this server would fail
 // every backup's health check), and Check again switches it on.
@@ -497,7 +504,7 @@ export function siteConfig(launch, steps, siteId) {
     kind: 'docker', containers, stagingRoot, deliveryMode: 'staged', exclusiveSourcesConfirmed: true, stopTimeout: 60, shutdownProfile: 'generic', cleanShutdownConfirmed: true, unresolvedDependencies: [], services: [],
     configFiles: [`${folder}/.env`], mountExclusions: [], mountExclusionsConfirmed: false, restoreReferences: [], temporaryMemoryFolders: [], composeFiles,
     externalReferencesConfirmed: true, maintenanceRequired: true, domains: [launch.domain], ...siteUrls(launch.domain, certificateState(steps)),
-    maintenance: { required: true, directory: `${stagingRoot}/maintenance/${siteId}`, publicUrl: siteUrls(launch.domain, certificateState(steps)).publicUrl, healthUrl: '', probeOrigin: false, readableFlag: false },
+    maintenance: { required: true, directory: `${stagingRoot}/maintenance/${siteId}`, publicUrl: siteUrls(launch.domain, certificateState(steps)).publicUrl, healthUrl: '', probeOrigin: true, readableFlag: false },
     maintenancePage: maintenanceRow ? normalizeMaintenance(JSON.parse(maintenanceRow.value)) : maintenanceDefaults,
     launch: { id: launch.id, folder },
   };
@@ -571,6 +578,7 @@ export async function executeLaunchStep(claimed) {
     if (!setStep(launchId, name, fields, 'launch_running')) return;
     if (outcome.launch) setLaunch(launchId, outcome.launch);
     for (const skip of outcome.skip ?? []) setStep(launchId, skip, { state: 'skipped', finished_at: now() }, 'pending');
+    for (const again of outcome.requeue ?? []) setStep(launchId, again, { state: 'launch_queued', detail: null }, 'done');
   });
   audit('worker', `launch.step.${name}.${outcome.state}`, launchId, { server: launch?.server_id });
   // Try again on a launch that needs you, failing again: alert again (detection reads this audit row).
@@ -598,7 +606,7 @@ const RUN = {
     if (refused(facts)) return failedWith(facts, launch);
     const failing = checksOf(facts, launch.domain).filter(item => !item.ok);
     if (failing.length) return { state: 'failed', detail: failing[0].text };
-    if (Array.isArray(facts?.usedPorts) && facts.usedPorts.includes(launch.loopback_port)) return { state: 'failed', detail: REFUSALS.PORT_TAKEN() };
+    if (Array.isArray(facts?.usedPorts) && facts.usedPorts.includes(launch.loopback_port)) return { state: 'failed', detail: REFUSALS.PORT_IN_USE() };
     return { state: 'done', result: { checks: checksOf(facts, launch.domain).length } };
   },
   async fetch(launch, steps, server, signal) {
@@ -643,18 +651,26 @@ const RUN = {
     return { state: 'done', result: { file: typeof answer?.file === 'string' ? answer.file.slice(0, 200) : null } };
   },
   // Never fatal: dns_waiting -> waiting (Check again), failed -> failed with the reason (Try again); the site stays on HTTP.
-  async certificate(launch, _steps, server, signal) {
-    const answer = await helper(server, { ...base(launch, 'launch-certificate'), serverIps: (launch.options.dns ?? []).map(record => record.value) }, { signal });
+  async certificate(launch, steps, server, signal) {
+    // On a saved site whose maintenance page is set up, issuing the certificate rewrites the launch's nginx file: the
+    // helper clears <maintenanceDirectory>/ready and the maintenance step runs again, so its include is never lost.
+    const maintenance = steps.find(step => step.step === 'maintenance');
+    const maintenanceDirectory = launch.site_id && maintenance?.state === 'done' ? `/var/lib/docknest/maintenance/${launch.site_id}` : null;
+    const answer = await helper(server, { ...base(launch, 'launch-certificate'), serverIps: (launch.options.dns ?? []).map(record => record.value), ...(maintenanceDirectory ? { maintenanceDirectory } : {}) }, { signal });
     const certName = typeof answer?.certName === 'string' ? answer.certName.slice(0, 80) : null;
     const settled = ['waiting_dns', 'done'].includes(launch.state);
-    if (answer?.state === 'issued') { if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'issued'); return { state: 'done', result: { state: 'issued', certName }, ...(settled ? { launch: { state: 'done' } } : {}) }; }
+    if (answer?.state === 'issued') { if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'issued'); return { state: 'done', result: { state: 'issued', certName, certCode: null }, ...(settled ? { launch: { state: 'done' } } : {}), ...(maintenanceDirectory ? { requeue: ['maintenance'] } : {}) }; }
     if (answer?.state === 'dns_waiting') return { state: 'waiting', detail: `${launch.domain} does not point to this server yet. Add the DNS record, then press Check again.`, result: { state: 'dns_waiting' }, ...(settled ? { launch: { state: 'waiting_dns' } } : {}) };
-    if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'failed');
-    return { state: 'failed', detail: refused(answer) ? refusalText(answer, launch.domain) : plainReason(answer?.reason, 'The certificate could not be issued.') + ' The site works on HTTP; press Try again later.', result: { state: 'failed' } };
+    const certCode = typeof answer?.code === 'string' ? cleanCode(answer.code) : null;
+    if (launch.site_id && AFTER_DNS_FAILURES.includes(certCode)) updateSiteUrls(launch.site_id, launch.domain, 'failed');
+    return { state: 'failed', detail: refused(answer) ? refusalText(answer, launch.domain) : plainReason(answer?.reason, 'The certificate could not be issued.') + ' The site works on HTTP; press Try again later.', result: { state: 'failed', certCode } };
   },
-  async maintenance(launch) {
-    try { await launchMaintenance.setup(launch.site_id, 'launch:' + launch.id); return { state: 'done' }; }
-    catch { return { state: 'failed', detail: 'The maintenance page could not be set up automatically. The site works; set it up from the site page.' }; }
+  // The 2.13 setup has no stop signal of its own; DockNest stops waiting at the step limit (the helper's own test and
+  // rollback still finish on the server) and the step fails without a teardown.
+  async maintenance(launch, _steps, _server, signal) {
+    const stopped = new Promise((_resolve, reject) => { if (signal?.aborted) reject(Object.assign(new Error('stopped'), { stopped: true })); signal?.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { stopped: true })), { once: true }); });
+    try { await Promise.race([launchMaintenance.setup(launch.site_id, 'launch:' + launch.id), stopped]); return { state: 'done' }; }
+    catch (error) { return { state: 'failed', detail: error?.stopped ? 'Setting up the maintenance page took too long. The site works; set it up from the site page.' : 'The maintenance page could not be set up automatically. The site works; set it up from the site page.' }; }
   },
   async teardown(launch, _steps, server, signal) {
     const answer = await helper(server, { ...base(launch, 'launch-teardown'), keepBackup: true }, { signal });
@@ -671,13 +687,15 @@ async function recover(launch, steps, step, server, signal) {
   let status;
   try { status = await helper(server, base(launch, 'launch-status'), { signal }); }
   catch (error) { return { state: 'failed', detail: `DockNest stopped while ${LABELS[step.step].toLowerCase()} ran and could not check the server: ${error.message}`, result: { recovered: 1 } }; }
-  // A step runs again only when the server's journal is consistent for it (remote/helper/launch.py launch-status: not
-  // busy, `resumable` not false, and the journal phase is one this step can continue from); otherwise everything goes.
-  const RESUMABLE_PHASES = { check: [null], build: ['fetched', 'built'], start: ['built', 'started'], check_health: ['started'], web: ['started', 'web'], certificate: ['web', 'certificate'], maintenance: ['web', 'certificate'] };
-  const resumable = status?.busy !== true && status?.resumable !== false && (RESUMABLE_PHASES[step.step] ?? []).includes(status?.phase ?? null);
+  // A step runs again only when the server's journal says so: remote/helper/launch.py launch-status answers `resumable`
+  // as the list of steps that can continue from its journal (or false). Anything else is torn down.
+  const resumable = status?.busy !== true && Array.isArray(status?.resumable) && status.resumable.includes(step.step);
   if (resumable) {
     const outcome = await RUN[step.step](launch, steps, server, signal);
     return { ...outcome, result: { ...(outcome.result ?? {}), recovered: 1 } };
   }
+  // Certificate and maintenance never tear the site down: they fail with their own next step for the owner.
+  if (step.step === 'certificate') return { state: 'failed', detail: 'DockNest stopped while the certificate was being issued. The site works on HTTP; press Try again.', result: { recovered: 1 } };
+  if (step.step === 'maintenance') return { state: 'failed', detail: 'DockNest stopped while the maintenance page was being set up. The site works; set it up from the site page.', result: { recovered: 1 } };
   return { state: 'failed', detail: `DockNest stopped while ${LABELS[step.step].toLowerCase()} ran, so it removes what the launch made.`, result: { recovered: 1 } };
 }

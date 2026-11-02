@@ -52,12 +52,12 @@ engine.launchTransport.remote = async (server, request) => {
     case 'launch-facts': return facts();
     case 'launch-fetch': return { ok: true, commit: null, services: [{ name: 'web', ports: [80], build: false }, { name: 'db', ports: [], build: false }], composeName: null, gate: { ok: true, refusals: [] } };
     case 'launch-build': return { ok: true, images: ['shop-web'] };
-    case 'launch-start': return { ok: true, containers: ['c1', 'c2'], containerNames: [`${request.slug}-web-1`, `${request.slug}-db-1`], composeFiles: [`/srv/docknest/${request.slug}/app/compose.yaml`, `/srv/docknest/${request.slug}/compose.launch.yaml`] };
+    case 'launch-start': return { ok: true, containers: ['c1', 'c2'], containerNames: [`${request.slug}-web-1`, `${request.slug}-db-1`], composeFiles: [`/srv/docknest/${request.slug}/app/compose.yaml`, `/srv/docknest/${request.slug}/compose.docknest.yaml`] };
     case 'launch-poll': return { ok: true, state: 'passed', httpStatus: 200 };
     case 'launch-web': return { ok: true, file: `/etc/nginx/conf.d/docknest-${request.slug}.conf` };
     case 'launch-certificate': return { ok: true, state: 'issued', certName: `docknest-${request.slug}` };
     case 'launch-teardown': return { ok: true, removed: ['folder', 'containers'], left: [], keepBackup: true };
-    case 'launch-status': return { ok: true, journal: true, phase: 'started', commit: null, counts: {}, present: [], busy: false, killed: 0, resumable: true };
+    case 'launch-status': return { ok: true, journal: true, phase: 'started', commit: null, counts: {}, present: [], busy: false, killed: 0, resumable: ['check_health', 'web', 'certificate'] };
     default: throw new Error('unexpected ' + request.operation);
   }
 };
@@ -164,7 +164,7 @@ test('a pasted Compose launch runs every step, saves the site with day-one backu
   const site = db.prepare('SELECT * FROM sites WHERE id=?').get(launch.siteId), config = JSON.parse(site.config);
   assert.equal(site.name, 'shop.example.com'); assert.deepEqual(config.containers, ['shop-example-com-web-1', 'shop-example-com-db-1']);
   assert.deepEqual(config.domains, ['shop.example.com']); assert.deepEqual(config.configFiles, ['/srv/docknest/shop-example-com/.env']);
-  assert.deepEqual(config.composeFiles, ['/srv/docknest/shop-example-com/app/compose.yaml', '/srv/docknest/shop-example-com/compose.launch.yaml']);
+  assert.deepEqual(config.composeFiles, ['/srv/docknest/shop-example-com/app/compose.yaml', '/srv/docknest/shop-example-com/compose.docknest.yaml']);
   assert.equal(config.healthUrl, 'https://shop.example.com/'); assert.equal(config.maintenance.publicUrl, 'https://shop.example.com');
   assert.deepEqual(backupPreflightProblems(config), [], 'the saved site passes the backup preflight rules');
   const policy = db.prepare('SELECT * FROM policies WHERE site_id=?').get(site.id);
@@ -467,6 +467,64 @@ test('review fixes: required Launch fields, save failure, first backup refusals,
   // S5: the certificate step gets the public addresses of the DNS record.
   const certCall = calls.find(call => call.request.operation === 'launch-certificate');
   assert.deepEqual(certCall.request.serverIps, ['8.8.8.8', '2a01:4f9:c010::20']);
+});
+
+test('a loopback port taken after Launch fails the check step; certificate refusals keep the health URL empty', async () => {
+  const server = serverRow('port-srv'); calls = [];
+  script = {};
+  const id = (await admin('POST', `/servers/${server}/launch`, pasted('port.example.com'))).body.launch.id;
+  const port = db.prepare('SELECT loopback_port FROM site_launches WHERE id=?').get(id).loopback_port;
+  script = { 'launch-facts': facts({ usedPorts: [22, 80, 443, port] }) };
+  await drive();
+  const view = (await admin('GET', `/launches/${id}`)).body;
+  assert.equal(view.state, 'failed'); assert.equal(view.failedStep, 'check'); assert.match(view.reason, /taken meanwhile/);
+  // A refusal (here an existing lineage) and a missing certbot say nothing about DNS: no http:// health URL.
+  for (const [code, reason] of [['CERT_LINEAGE_EXISTS', 'A certificate for this domain already exists on the server.'], ['CERTBOT_MISSING', 'The server needs certbot. Install it, then try again.']]) {
+    script = { 'launch-certificate': code === 'CERTBOT_MISSING' ? { ok: true, state: 'failed', certName: 'x', code, reason } : { ok: false, code, reason } };
+    const other = (await admin('POST', `/servers/${serverRow('cert-' + code)}/launch`, pasted(`${code.toLowerCase().replace(/_/g, '-')}.example.com`))).body.launch.id;
+    await drive();
+    const siteId = db.prepare('SELECT site_id FROM site_launches WHERE id=?').get(other).site_id;
+    assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId).config).healthUrl, '', code);
+  }
+  script = {};
+});
+
+test('a certificate issued later re-runs the maintenance step (the helper clears ready), and interrupted non-fatal steps never tear down', async () => {
+  const server = serverRow('remaint-srv'); calls = []; maintenanceCalls = [];
+  engine.launchMaintenance.setup = async (siteId, actor) => { maintenanceCalls.push({ siteId, actor }); return {}; };
+  script = { 'launch-certificate': { ok: true, state: 'dns_waiting', certName: 'x', code: 'DNS_WAITING', reason: 'The domain does not point at this server yet.' } };
+  const id = (await admin('POST', `/servers/${server}/launch`, pasted('remaint.example.com'))).body.launch.id;
+  await drive();
+  const siteId = db.prepare('SELECT site_id FROM site_launches WHERE id=?').get(id).site_id;
+  finishBackups(siteId); await drive();
+  assert.equal(maintenanceCalls.length, 1);
+  assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(siteId).config).maintenance.probeOrigin, true, 'setup probes through loopback before DNS points here');
+  script = {};
+  await admin('POST', `/launches/${id}/check-dns`, {}); await drive();
+  const certCall = calls.filter(call => call.request.operation === 'launch-certificate').at(-1);
+  assert.equal(certCall.request.maintenanceDirectory, `/var/lib/docknest/maintenance/${siteId}`);
+  assert.equal(maintenanceCalls.length, 2, 'the maintenance step ran again'); assert.equal(steps(id).maintenance, 'done');
+  assert.equal(db.prepare('SELECT state FROM site_launches WHERE id=?').get(id).state, 'done');
+  // An interrupted maintenance step on a saved launch: not resumable, fails with its own sentence, no teardown.
+  db.prepare("UPDATE site_launch_steps SET state='launch_running' WHERE launch_id=? AND step='maintenance'").run(id);
+  interruptLaunchSteps();
+  script = { 'launch-status': { ok: true, journal: true, phase: 'certificate', present: [], busy: false, killed: 0, resumable: false } };
+  db.prepare("UPDATE site_launches SET state='running' WHERE id=?").run(id);
+  await drive();
+  assert.equal(steps(id).maintenance, 'failed'); assert.equal(steps(id).teardown, 'pending');
+  assert.match((await admin('GET', `/launches/${id}`)).body.steps.find(step => step.step === 'maintenance').detail, /set it up from the site page/);
+  script = {};
+});
+
+test('a maintenance setup that hangs is stopped at the step limit without a teardown', async () => {
+  const server = serverRow('hang-maint-srv');
+  engine.launchMaintenance.setup = () => new Promise(() => {});
+  const id = (await admin('POST', `/servers/${server}/launch`, pasted('hangmaint.example.com'))).body.launch.id;
+  for (let index = 0; index < 12 && steps(id).maintenance !== 'launch_queued'; index++) { engine.tickLaunches(); const claimed = claimLaunch(); if (claimed) await engine.executeLaunchStep(claimed); }
+  engine.launchLimits.scale = 0.001;
+  try { engine.tickLaunches(); await engine.executeLaunchStep(claimLaunch()); } finally { engine.launchLimits.scale = 1; engine.launchMaintenance.setup = async (siteId, actor) => { maintenanceCalls.push({ siteId, actor }); return {}; }; }
+  assert.equal(steps(id).maintenance, 'failed'); assert.equal(steps(id).teardown, 'pending');
+  assert.match((await admin('GET', `/launches/${id}`)).body.steps.find(step => step.step === 'maintenance').detail, /took too long/);
 });
 
 test('the site URLs follow the certificate: none while DNS waits, http after a failure, https once issued', async () => {
