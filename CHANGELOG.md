@@ -4,6 +4,18 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Server cleanup on the Storage page: scan a server, see how much space stopped containers, dangling images, unused anonymous volumes and old build cache take, and remove them after you confirm. Anything a site, backup, restore test, move or kept old copy still needs, and DockNest itself, is never removed. See [docs/server-cleanup.md](docs/server-cleanup.md).
+- Certificate alerts: get an alert when a site's TLS certificate expires within 14 days (change it under Connections settings) or when certbot fails to renew it. DockNest reads certificate dates only while it already backs up, checks or discovers a site, so nothing new runs on your servers. Tick the two new events on an alert line in the Map. See [docs/alerts.md](docs/alerts.md#certificates).
+- Hardening score: each Docker site now gets a security grade from A to F, with a one-line fix for each finding (privileged mode, Docker socket, root user, open ports, memory limit, image tag, healthcheck, privilege escalation, extra capabilities). It shows on each site card and in the Map, updates on server scans and backups, and never changes the site. See [docs/hardening-score.md](docs/hardening-score.md).
+
+### Fixed
+
+- Restores, restore tests and moves now keep the original container's read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor settings. A copy never runs with fewer protections; when a setting cannot be kept (for example an AppArmor profile missing on the server), DockNest stops with the reason. Hardened sites, such as ones that drop all capabilities and add a few back, can now be restore tested.
+- Moving a Compose site that adds only Docker's default capabilities (`cap_add: [CHOWN]`) no longer stops at the Compose check.
+- Site cards on the Sites page no longer clip the left icon in the footer at 1440px; narrow cards stack the footer instead.
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).

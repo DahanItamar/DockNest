@@ -36,6 +36,7 @@
     "test:self-backup": "node scripts/self-backup-browser.js",
     "test:storage": "node scripts/storage-browser.js",
     "test:storage-report": "node scripts/storage-report-browser.js",
+    "test:cleanup": "node scripts/cleanup-browser.js",
     "test:copies": "node scripts/copies-browser.js",
     "test:incremental": "node scripts/incremental-browser.js",
     "test:s3": "node --no-addons scripts/s3-integration.js",
@@ -49,6 +50,7 @@
     "test:map": "node scripts/map-browser.js",
     "test:connections": "node scripts/connections-browser.js",
     "test:zip": "node scripts/zip-dialog-browser.js",
+    "test:hardening": "node scripts/hardening-browser.js",
     "test:restore-tests": "node scripts/restore-tests-browser.js",
     "test:auth": "node scripts/auth-browser.js"
   },

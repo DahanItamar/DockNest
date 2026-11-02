@@ -3,6 +3,7 @@
 // refused. The copy step is driven like the worker does (claimCopy + executeCopy). Credentials are throwaway values and
 // are never printed.
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { startS3Fixture } from './integration-s3.js';
 
 export async function runCopiesScenario({run,until,hosts,servers,db,record,siteId}){
@@ -86,5 +87,54 @@ export async function runCopiesScenario({run,until,hosts,servers,db,record,siteI
   try{if(testBackupId){db.prepare('DELETE FROM backup_copies WHERE backup_id=?').run(testBackupId);db.prepare('DELETE FROM backups WHERE id=?').run(testBackupId);}}catch{cleanupFailures.push('test backup removal');}
   await stop();
   if(cleanupFailures.length)console.warn('Copies scenario cleanup incomplete: '+cleanupFailures.join(', '));
+ }
+}
+
+// Hardened sites (issue 145): a copy keeps the original's read-only root (and the RAM folder it needs), dropped
+// capabilities with Docker defaults added back, and no-new-privileges. Shared by the restore, restore test and move
+// scenarios. The fixture writes /app/writable.txt on first start, so the hardened image already holds it.
+export const HARDENED_FLAGS=['--read-only','--tmpfs','/tmp:size=16m,mode=1777','--cap-drop','ALL','--cap-add','CHOWN','--cap-add','FOWNER','--cap-add','DAC_OVERRIDE','--security-opt','no-new-privileges'];
+export async function buildHardenedImage(run,host,base){
+ await run('exec',host,'sh','-c',`printf 'FROM ${base}\\nRUN printf hardened-layer > /app/writable.txt\\n' | docker build -q -t docknest-hardened:local -`);
+ return 'docknest-hardened:local';
+}
+// What `docker inspect` and the kernel say about a container's protections, in one comparable form.
+export async function hardeningOf(run,host,id){
+ const [c]=JSON.parse(await run('exec',host,'docker','inspect',id)),h=c.HostConfig;
+ const caps=list=>(list||[]).map(cap=>cap.toUpperCase().replace(/^CAP_/,'')).sort();
+ const option=value=>/^no-new-privileges([:=]true)?$/.test(value)?'no-new-privileges=true':value.replace(/^([a-z-]+):/,'$1=');
+ const kernel=(await run('exec',host,'docker','exec',id,'sh','-c',"grep -E '^(CapEff|CapBnd|NoNewPrivs|Seccomp):' /proc/1/status")).split('\n').map(line=>line.replace(/\s+/g,' ').trim()).sort();
+ return {readonly:h.ReadonlyRootfs,drop:caps(h.CapDrop),add:caps(h.CapAdd),securityOpt:(h.SecurityOpt||[]).map(option).sort(),tmpfs:Object.keys(h.Tmpfs||{}).sort(),privileged:h.Privileged,kernel};
+}
+export async function assertReadOnlyRoot(run,host,id){
+ await assert.rejects(run('exec',host,'docker','exec',id,'sh','-c','touch /app/escape'),'the copy cannot write its root filesystem');
+}
+
+// Isolated restore of a hardened site onto the second host: the copy's docker inspect and /proc/1/status match.
+export async function runHardenedRestoreScenario({run,until,hosts,servers,db,record}){
+ const {enqueueBackup,claimJob,executeJob,planRestore,enqueueRestore}=await import('../src/engine.js');
+ const image=await buildHardenedImage(run,hosts[0],'docknest-fixture:local');
+ await run('exec',hosts[0],'docker','run','-d','--name','hard-site',...HARDENED_FLAGS,'-v','hard-site-data:/site',image);
+ let copyId=null;
+ try{
+  await until(async()=>(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Health.Status}}','hard-site'))==='healthy','Hardened fixture is not healthy');
+  const original=await hardeningOf(run,hosts[0],'hard-site');
+  assert.equal(original.readonly,true);assert.deepEqual(original.drop,['ALL']);assert.deepEqual(original.securityOpt,['no-new-privileges=true']);
+  const siteId=randomUUID(),cfg={containers:['hard-site'],stagingRoot:'/var/lib/docknest',exclusiveSourcesConfirmed:true,externalReferencesConfirmed:true,cleanShutdownConfirmed:true,shutdownProfile:'generic',maintenanceRequired:false,maintenance:{required:false}};
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId,servers[0].id,'hard-site',JSON.stringify(cfg),new Date().toISOString());
+  const queued=enqueueBackup(siteId,'qa'),job=claimJob();assert.equal(job.id,queued.id);await executeJob(job);
+  const done=db.prepare('SELECT status,error FROM jobs WHERE id=?').get(job.id);assert.equal(done.status,'completed',done.error);
+  const backup=db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);
+  const plan=await planRestore(backup.id,{serverId:servers[1].id});assert.equal(plan.executable,true,JSON.stringify(plan.blockers));
+  const restoreQueued=await enqueueRestore(backup.id,plan,'qa'),restoreJob=claimJob();assert.equal(restoreJob.id,restoreQueued.id);await executeJob(restoreJob);
+  const row=db.prepare('SELECT * FROM jobs WHERE id=?').get(restoreJob.id);assert.equal(row.status,'completed',row.error);
+  copyId=JSON.parse(row.details).result.containerId;
+  assert.deepEqual(await hardeningOf(run,hosts[1],copyId),original,'the restored copy has the same read-only root, capabilities, security options and RAM folder');
+  await assertReadOnlyRoot(run,hosts[1],copyId);
+  assert.equal(await run('exec',hosts[1],'docker','exec',copyId,'cat','/app/writable.txt'),'hardened-layer');
+  record('Hardened site restore: a container with a read-only root, a RAM folder, CapDrop ALL plus default capabilities and no-new-privileges restores to a copy whose docker inspect and /proc/1/status (CapEff, CapBnd, NoNewPrivs, Seccomp) match the original');
+ }finally{
+  if(copyId)await run('exec',hosts[1],'docker','rm','-f',copyId).catch(()=>{});
+  await run('exec',hosts[0],'docker','rm','-f','hard-site').catch(()=>{});
  }
 }

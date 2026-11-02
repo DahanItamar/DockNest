@@ -10,11 +10,11 @@ from .backup import (
 from .incremental import (
     incremental_commit, incremental_discard)
 from .net import (
-    skip_refused_probes)
+    certbot_certificates, skip_refused_probes)
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
-    configuration_paths, list_project_files, nginx_sites, web_hints)
+    configuration_paths, hardening_report, list_project_files, nginx_sites, web_hints)
 from .restore import (
     external_restore_plan, prepare_restore, restore, restore_chain_offline, verify_recovery,
     verify_restore_recovery)
@@ -29,9 +29,13 @@ from .install import (
 from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
-# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
+from .cleanup import (
+    cleanup_apply, cleanup_scan, cleanup_shared)
+# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, CLEANUP_SHARED, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
+# Steps that create or need Docker resources hold the shared cleanup lock for their whole run (remote/helper/cleanup.py).
+CLEANUP_SHARED_OPS={'capture','capture-stream','prepare-restore','restore','restore-test-prepare','restore-test-run'}
 LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
 def move_lock(mid,wait=False):
     import fcntl
@@ -62,7 +66,9 @@ def stop_after_stdin(read=None,limit=180):
     os._exit(1)
 def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 def main(req):
-    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER
+    global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
+    # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
+    if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:CLEANUP_SHARED=cleanup_shared()
     if req.get('operation')=='move-lock-status':
         handle=move_lock(move_id(req))
         emit(result={'busy':handle is None})
@@ -85,13 +91,13 @@ def main(req):
     elif op=='plan':emit(result=public_plan(backup_plan(req['config'])))
     elif op=='install-boot-recovery':install_boot_recovery(req)
     elif op=='test':
-        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid()})
+        emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates()})
     elif op=='discover':
         ids=docker('ps','-aq').decode().split()
         cs=inspect(ids) if ids else []
         # Do not expose environment secrets to dashboard.
-        routes=nginx_sites()
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c in cs]})
+        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates()})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)
@@ -134,6 +140,8 @@ def main(req):
         tid=test_id(req);_,state=test_state(tid);ids=[item['id'] for item in (state.get('restored') or {}).get('containers',[]) if item['id'] in (state.get('restored') or {}).get('running',[])]
         emit(result={'intact':egress_intact(tid,ids) if (state.get('restored') or {}).get('internet') else None})
     elif op=='restore-test-reap':restore_test_reap(req)
+    elif op=='cleanup-scan':cleanup_scan(req)
+    elif op=='cleanup-apply':cleanup_apply(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.
