@@ -38,12 +38,14 @@ LAUNCH_ENV_KEY=re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,255}')
 LAUNCH_ENV_REFUSED=('COMPOSE_','DOCKER_','BUILDKIT_')
 LAUNCH_IMAGE=re.compile(r'[a-z0-9][a-z0-9._/:@-]{0,254}')
 LAUNCH_EMAIL=re.compile(r'[A-Za-z0-9._%+][A-Za-z0-9._%+-]{0,63}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}')
-# Item 9 and 16: the oldest git accepted is the larger of 2.37 (http.curloptResolve) and the release line with the
-# 2025 submodule and .gitmodules fixes (CVE-2025-48384 and friends). Fixed releases per line; anything from 2.51 is new
-# enough. Distribution builds that backport the fixes without a new version number are refused too (fail closed).
-LAUNCH_GIT_MIN=(2,43,7)
-LAUNCH_GIT_FIXED={(2,43):7,(2,44):4,(2,45):4,(2,46):4,(2,47):3,(2,48):2,(2,49):1,(2,50):1}
-LAUNCH_GIT_NEW=(2,51)
+# Items 9 and 16 (owner decision 2026-11-02): git 2.37 or newer (http.curloptResolve). The CVE classes of the 2024-2025
+# fixes are closed by how every git call runs (LAUNCH_GIT_CONFIG and launch_git_env), whatever the distribution's
+# version number: no submodules (and .gitmodules refused), no file/ext transports, no bundle URIs, no hooks, no
+# symlinks in the checkout, no system or global configuration, an empty HOME, and never a local path.
+LAUNCH_GIT_MIN=(2,37,0)
+LAUNCH_GIT_CONFIG=('-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','protocol.file.allow=never',
+    '-c','protocol.ext.allow=never','-c','http.followRedirects=false','-c','submodule.recurse=false','-c','transfer.bundleURI=false',
+    '-c','core.hooksPath=/dev/null','-c','core.symlinks=false')
 LAUNCH_CLONE_LIMIT=2*1024**3
 LAUNCH_CLONE_SECONDS=600
 LAUNCH_BUILD_SECONDS=1800
@@ -406,17 +408,27 @@ def launch_git_version():
     match=re.search(r'git version (\d+)\.(\d+)(?:\.(\d+))?',stdout.decode('utf-8','replace')) if code==0 else None
     if not match:return None,False
     version=(int(match[1]),int(match[2]),int(match[3] or 0))
-    ok=version[:2]>=LAUNCH_GIT_NEW or (version[:2] in LAUNCH_GIT_FIXED and version[2]>=LAUNCH_GIT_FIXED[version[:2]])
+    ok=version>=LAUNCH_GIT_MIN
     return '%d.%d.%d'%version,ok
+def launch_git_home(folder):
+    """An empty, private HOME for git inside the journal (or check) folder: git finds no .gitconfig, credentials or hooks."""
+    home=pathlib.Path(folder)/'git-home'
+    if home.is_symlink():launch_refuse('INVALID_REQUEST')
+    home.mkdir(mode=0o700,exist_ok=True)
+    if any(home.iterdir()):launch_refuse('INVALID_REQUEST')
+    return home
 def launch_git_env(home,ssh=None):
-    # clone and ls-remote create or need no repository, so GIT_DIR stays unset (it would redirect clone's own .git);
-    # git runs in its private folder and never looks above it for one.
+    # clone and ls-remote create or need no repository, so GIT_DIR stays unset for them (it would redirect clone's own
+    # .git); git runs in its private folder and never looks above it for one.
     pairs=['PATH='+LAUNCH_PATH,'HOME='+str(home),'GIT_TERMINAL_PROMPT=0','GIT_CONFIG_NOSYSTEM=1','GIT_CONFIG_GLOBAL=/dev/null','GIT_CEILING_DIRECTORIES=/','LC_ALL=C']
     if ssh:pairs+=['GIT_SSH_COMMAND='+ssh,'GIT_SSH_VARIANT=ssh']
     return pairs
 def launch_git_argv(home,target,ssh,tail):
-    config=['-c','protocol.allow=never','-c','protocol.https.allow=always','-c','protocol.ssh.allow=always','-c','http.followRedirects=false','-c','submodule.recurse=false','-c','core.hooksPath=/dev/null']
-    if target.get('resolve'):config+=['-c','http.curloptResolve='+target['resolve']]
+    url=target.get('url') if isinstance(target,dict) else None
+    # Never a local path or another transport: only the https:// and SSH forms launch_git_target builds.
+    if url is not None and not (url.startswith(('https://','ssh://')) or re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}@(?:\[[0-9a-f:.]+\]|[a-z0-9.-]+):[^-].*',url)):launch_refuse('URL_REFUSED')
+    config=list(LAUNCH_GIT_CONFIG)
+    if isinstance(target,dict) and target.get('resolve'):config+=['-c','http.curloptResolve='+target['resolve']]
     return ['env','-i',*launch_git_env(home,ssh),'git',*config,*tail]
 def launch_ssh_command(known_hosts,key,alias):
     """Item 3. git runs GIT_SSH_COMMAND through sh, so every value is quoted."""
@@ -483,7 +495,7 @@ def launch_git_failure(tail,why):
 def launch_ls_remote(folder,repo,ref,target,key,journal=None):
     patterns=['refs/heads/'+ref,'refs/tags/'+ref,'refs/tags/'+ref+'^{}'] if ref else ['HEAD']
     def action(ssh):
-        code,stdout,tail,why=launch_watch(launch_git_argv(folder,target,ssh,['ls-remote','--',target['url'],*patterns]),{},120,cwd=str(folder),journal=journal)
+        code,stdout,tail,why=launch_watch(launch_git_argv(launch_git_home(folder),target,ssh,['ls-remote','--',target['url'],*patterns]),{},120,cwd=str(folder),journal=journal)
         if code!=0:launch_refuse(launch_git_failure(tail,why))
         found={}
         for line in stdout.decode('utf-8','replace').splitlines():
@@ -986,10 +998,10 @@ def launch_fetch_op(req):
             site.mkdir(mode=0o755)
             argv_tail=['clone','--depth','1','--single-branch','--no-recurse-submodules']+(['--branch',ref] if ref else [])+['--',target['url'],str(repo_root)]
             def clone(ssh):
-                code,_,tail,why=launch_watch(launch_git_argv(d,target,ssh,argv_tail),{},LAUNCH_CLONE_SECONDS,folder=str(site),limit=LAUNCH_CLONE_LIMIT,cwd=str(d),journal=(d,journal))
+                code,_,tail,why=launch_watch(launch_git_argv(launch_git_home(d),target,ssh,argv_tail),{},LAUNCH_CLONE_SECONDS,folder=str(site),limit=LAUNCH_CLONE_LIMIT,cwd=str(d),journal=(d,journal))
                 if code!=0:launch_refuse(launch_git_failure(tail,why))
             launch_with_key(d,repo,target,req.get('deployKey'),clone,(d,journal))
-            code,stdout,_=launch_exec(['env','-i',*launch_git_env(d),'GIT_DIR='+str(repo_root/'.git'),'git','-c','core.hooksPath=/dev/null','-C',str(repo_root),'rev-parse','HEAD'],30,env={},cwd=str(repo_root))
+            code,stdout,_=launch_exec(['env','-i',*launch_git_env(launch_git_home(d)),'GIT_DIR='+str(repo_root/'.git'),'git',*LAUNCH_GIT_CONFIG,'-C',str(repo_root),'rev-parse','HEAD'],30,env={},cwd=str(repo_root))
             commit=stdout.decode('utf-8','replace').strip()
             if code!=0 or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}',commit):launch_refuse('FETCH_FAILED')
             journal['commit']=commit;launch_save(d,journal)
@@ -1054,7 +1066,7 @@ def launch_build_op(req):
         for image in images:
             owner,present=launch_image_label(image)
             if present and owner!=lid:launch_refuse('IMAGE_EXISTS')
-        override=d/'compose.build.yaml'
+        override=site/'compose.docknest-build.yaml'
         override.unlink(missing_ok=True);launch_private_write(override,text.encode())
         builder='docknest-launch-'+lid.replace('-','')[:12]
         journal['phase']='building';launch_record(d,journal,'builders',builder)
@@ -1100,7 +1112,7 @@ def launch_start_op(req):
         if refusals:emit(result={'ok':False,'code':'GATE_REFUSED','reason':LAUNCH_REASONS['GATE_REFUSED'],'gate':{'ok':False,'refusals':refusals[:50]}});return
         own=launch_docker_lines('ps','-aq','--filter','label=docknest.launch='+lid)
         if loopback in listening_ports() and not own:launch_refuse('PORT_IN_USE')
-        override=d/'compose.launch.yaml'
+        override=site/'compose.docknest.yaml'
         override.unlink(missing_ok=True);launch_private_write(override,launch_start_override(lid,model,web,web_port,loopback).encode())
         names=launch_resolved_names(model,slug)
         journal['phase']='starting'
@@ -1296,7 +1308,12 @@ def launch_status_op(req):
     summary={kind:len(values) for kind,values in journal['created'].items()}
     phase=journal.get('phase')
     launch_answer({'journal':True,'phase':phase,'commit':journal.get('commit'),'counts':summary,'present':launch_present(lid,journal),'busy':busy,'killed':len(killed),
-        'resumable':not busy and phase in ('fetched','built','started','web','certificate') and isinstance(journal.get('files'),dict)})
+        'resumable':launch_resumable(journal,phase,busy)})
+LAUNCH_RESUME={'fetched':['build','start'],'built':['start'],'started':['check_health','web'],'web':['certificate'],'certificate':[]}
+def launch_resumable(journal,phase,busy):
+    """The steps that can safely run next after a restart, or False (a step was cut off mid-way, so teardown decides)."""
+    if busy or journal.get('children') or not isinstance(journal.get('files'),dict) or phase not in LAUNCH_RESUME:return False
+    return list(LAUNCH_RESUME[phase])
 LAUNCH_HOST_KEY_CODES={'URL_PRIVATE':'PRIVATE_ADDRESS','URL_METADATA':'REFUSED_ADDRESS','URL_REFUSED':'REFUSED_ADDRESS','HOST_KEY_UNAVAILABLE':'CONNECT_FAILED','SSH_MISSING':'CONNECT_FAILED'}
 def launch_host_key_mapped(req):
     """launch-host-key answers with the backend's codes: PRIVATE_ADDRESS, REFUSED_ADDRESS, DNS_FAILED, CONNECT_FAILED."""
