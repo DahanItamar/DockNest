@@ -3,7 +3,7 @@ import {Sheet} from '../map/MoveFlow.jsx';
 import {AlertPanel,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {RefreshCw} from '../icons.jsx';
-import {WINDOWS,DEFAULT_RESTARTS,DEFAULT_WINDOW,MIN_RESTARTS,MAX_RESTARTS,validRestarts,RESULTS,rows,timeOf,saveError} from './model.js';
+import {notWatching,WINDOWS,DEFAULT_RESTARTS,DEFAULT_WINDOW,MIN_RESTARTS,MAX_RESTARTS,validRestarts,RESULTS,rows,timeOf,saveError} from './model.js';
 import './self-heal.css';
 
 function Restarts({events,narrow}){
@@ -54,7 +54,7 @@ export function SelfHealSheet({client,site,narrow,onClose,onSaved,onSessionExpir
     <select className="sh-window" aria-label="Time window" value={windowMinutes} disabled={fieldsOff} onChange={e=>{setError(null);setWindow(Number(e.target.value))}}>{WINDOWS.map(([m,l])=><option key={m} value={m}>{l}</option>)}</select>
    </div>
   </div>
-  {noHc?<AlertPanel variant="warning">No container has a health check. Add one in Compose.</AlertPanel>:enabled&&data.stream?.notWatching?<AlertPanel variant="warning">{data.stream.notWatching}</AlertPanel>:<AlertPanel variant="info">Only containers with a health check. {data.note}</AlertPanel>}
+  {noHc?<AlertPanel variant="warning">No container has a health check. Add one in Compose.</AlertPanel>:enabled&&notWatching(data.stream)?<AlertPanel variant="warning">{notWatching(data.stream)}</AlertPanel>:<AlertPanel variant="info">Only containers with a health check. {data.note}</AlertPanel>}
   {enabled&&!noHc&&Array.isArray(data.watched)&&data.watched.length>0&&<p className="t-caption sh-watched">Watching {data.watched.map((w,i)=><React.Fragment key={w.name}>{i>0&&', '}<code>{w.name}</code></React.Fragment>)}</p>}
   {error&&<AlertPanel variant="error" title={error.title}>{error.text}</AlertPanel>}
   <div className="sh-history"><h3>Recent restarts</h3><Restarts events={data.events} narrow={narrow}/></div>

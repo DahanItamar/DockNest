@@ -156,6 +156,13 @@ async function failures(){
  assert.equal(await sw.isDisabled(),true);assert.equal(await sw.getAttribute('aria-checked'),'false');
  assert.equal(await dlg.count(),1,'sheet stays open');
  await context.close();
+ // Not watching: a short amber sentence, and the watched names under it
+ fresh({stream:{state:'connecting',reason:'unreachable',notWatching:'Not watching: the server cannot be reached; DockNest keeps trying'}});
+ ({context,page}=await open({}));
+ dlg=await openSheet(page,1280);
+ assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: server unreachable. Retrying.');
+ assert.equal((await dlg.locator('.sh-watched').innerText()).trim(),'Watching demo-0-web');
+ await context.close();
  // Another save error keeps the sheet open with a red panel
  fresh();mock.putError='UNREACHABLE';
  ({context,page}=await open({}));
