@@ -230,6 +230,20 @@ CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERE
 CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
+// Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
+// altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
+// of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
+// UPDATE and the DELETE of a row newer than 90 days; the worker's existing maintenance step deletes older rows.
+// server_id carries no foreign key so the history never blocks removing a server; container_id is the Docker ID the
+// event named, used only to refuse restarting a container that was recreated in the meantime.
+export const selfHealSchema = `
+CREATE TABLE IF NOT EXISTS self_heal_settings (site_id TEXT PRIMARY KEY REFERENCES sites(id),enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),max_restarts INTEGER NOT NULL DEFAULT 3 CHECK (typeof(max_restarts) = 'integer' AND max_restarts BETWEEN 1 AND 10),window_minutes INTEGER NOT NULL DEFAULT 60 CHECK (typeof(window_minutes) = 'integer' AND window_minutes BETWEEN 10 AND 1440),watched TEXT NOT NULL DEFAULT '[]' CHECK (length(watched) <= 4096),last_event_at TEXT,updated_at TEXT NOT NULL,updated_by TEXT);
+CREATE TABLE IF NOT EXISTS self_heal_events (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),server_id TEXT NOT NULL CHECK (length(server_id) <= 64),container TEXT NOT NULL CHECK (length(container) <= 128),container_id TEXT CHECK (container_id IS NULL OR length(container_id) <= 64),kind TEXT NOT NULL CHECK (kind IN ('unhealthy','restarted','restart_failed','recovered','skipped','limit_reached')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),job_id TEXT REFERENCES jobs(id),at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS self_heal_events_site ON self_heal_events(site_id,at,id);
+CREATE INDEX IF NOT EXISTS self_heal_events_at ON self_heal_events(at,id);
+CREATE TRIGGER IF NOT EXISTS self_heal_events_no_update BEFORE UPDATE ON self_heal_events BEGIN SELECT RAISE(ABORT,'self-heal history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS self_heal_events_keep_recent BEFORE DELETE ON self_heal_events WHEN OLD.at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days') BEGIN SELECT RAISE(ABORT,'self-heal history is kept for 90 days'); END;
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -265,6 +279,9 @@ export const migrations = [
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
   { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
+  // 13 (2.14.0) and 14 ('safe-edits', 2.15.0) are built on parallel branches and take their numbers when they merge.
+  // Self-heal (docs/self-heal.md): new tables, an index and triggers only, so 2.14 code ignores them.
+  { version: 15, name: 'self-heal', compatible: true, up: db => db.exec(selfHealSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
