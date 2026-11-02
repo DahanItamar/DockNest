@@ -278,7 +278,7 @@ class Clean(unittest.TestCase):
         fake=FakeDocker([container('c1','tmp')]);items=self.scan(fake)['items']
         held=helper.cleanup_lock()
         try:
-            with self.assertRaisesRegex(ValueError,'already running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
+            with self.assertRaisesRegex(ValueError,'Another cleanup or DockNest step is running'):self.run_op(helper.cleanup_apply,{'items':items},fake)
         finally:held.close()
 
 if __name__=='__main__':unittest.main()
