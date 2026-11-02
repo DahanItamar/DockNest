@@ -50,6 +50,7 @@
     "test:connections": "node scripts/connections-browser.js",
     "test:zip": "node scripts/zip-dialog-browser.js",
     "test:restore-tests": "node scripts/restore-tests-browser.js",
+    "test:safe-edit": "node scripts/safe-edit-browser.js",
     "test:auth": "node scripts/auth-browser.js"
   },
   "dependencies": {
