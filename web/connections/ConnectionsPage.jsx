@@ -1,6 +1,7 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {IconPencil,IconSend,IconTrash,IconPlugConnected,IconPlus,IconEye} from '@tabler/icons-react';
 import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
+import {CircleX} from '../icons.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
 import {createConnectionsClient,testState,usedByText,usedByShort} from './client.js';
@@ -69,7 +70,7 @@ function CertificateDays({saved,disabled,onSave}){
  useEffect(()=>{setValue(String(saved))},[saved]);
  const days=Number(value),valid=Number.isInteger(days)&&days>=1&&days<=90,changed=valid&&days!==saved;
  return <div className="cx-days-row">
-  <div className="cx-days-text"><label className="sb-switch-label" htmlFor="cx-cert-days">Certificate warning</label><span className="t-caption" id="cx-cert-days-help">{valid?'Alert this many days before a certificate expires.':'Enter 1 to 90.'}</span></div>
+  <div className="cx-days-text"><label className="sb-switch-label" htmlFor="cx-cert-days">Certificate warning</label><span className={'t-caption'+(valid?'':' cx-days-error')} id="cx-cert-days-help">{valid?'Alert this many days before a certificate expires.':<><CircleX size={16} stroke={2} aria-hidden="true"/>Enter 1 to 90.</>}</span></div>
   <div className="cx-days-control">
    <input id="cx-cert-days" type="number" inputMode="numeric" min="1" max="90" step="1" value={value} disabled={disabled} aria-invalid={valid?undefined:'true'} aria-describedby="cx-cert-days-help" onChange={event=>setValue(event.target.value)}/>
    <span className="cx-days-unit">days</span>

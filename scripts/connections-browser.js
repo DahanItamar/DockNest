@@ -164,6 +164,8 @@ async function emptyAndList(scheme){
  const days=page.getByLabel('Certificate warning'),save=page.locator('.cx-days-row').getByRole('button',{name:'Save'});
  assert.equal(await days.inputValue(),'14');assert.equal(await save.isDisabled(),true);
  await days.fill('0');await page.locator('.cx-settings').getByText('Enter 1 to 90.').waitFor();assert.equal(await save.isDisabled(),true);assert.equal(await days.getAttribute('aria-invalid'),'true');
+ assert.equal(await page.locator('.cx-days-error svg').count(),1,'the error line has the shared error icon');
+ await days.focus();assert.equal(await days.evaluate(el=>getComputedStyle(el).boxShadow),'none','no second ring on an invalid field in focus');
  await days.fill('30');await page.waitForFunction(()=>!document.querySelector('.cx-days-row button').disabled);
  const daysHeights=await page.locator('.cx-days-control').evaluate(el=>[...el.querySelectorAll('input,button')].map(x=>Math.round(x.getBoundingClientRect().height)));
  assert.equal(daysHeights[0],daysHeights[1],'the days field and Save are the same height');
