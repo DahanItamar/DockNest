@@ -230,6 +230,23 @@ CREATE TABLE IF NOT EXISTS backup_chain_links (backup_id TEXT PRIMARY KEY REFERE
 CREATE INDEX IF NOT EXISTS backup_chain_links_parent ON backup_chain_links(parent_id);
 CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_id,chain_position);
 `;
+// Safe Edit (docs/safe-edit.md, "Data model"). Additive only: new tables, indexes and triggers, no rows, nothing altered.
+// - site_edits: one append-only row per edit. `changes` holds field paths, environment key names and file hashes, never a
+//   value; `progress` holds the step machine's non-secret position. The partial unique index keeps one unfinished edit
+//   per site; the triggers keep history append-only and the outcome written once.
+// - site_edit_steps: the per-step journal shown as the timeline.
+// - site_compose_invocations: the one recorded Compose invocation per site (security review item 13), reused by check,
+//   apply and rollback. No row means DockNest derives it from the containers' Compose labels when it is first needed.
+export const safeEditsSchema = `
+CREATE TABLE IF NOT EXISTS site_edits (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),server_id TEXT NOT NULL REFERENCES servers(id),job_id TEXT REFERENCES jobs(id),backup_id TEXT REFERENCES backups(id) ON DELETE SET NULL,state TEXT NOT NULL CHECK (state IN ('queued','running','checking','rolling_back','done','needs_attention','cancelled')),result TEXT CHECK (result IS NULL OR result IN ('applied','rolled_back','failed','cancelled')),failed_step TEXT CHECK (failed_step IS NULL OR failed_step IN ('backup','prepare','apply','check_health','finish','roll_back')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),changes TEXT NOT NULL DEFAULT '{}' CHECK (length(changes) <= 4096),progress TEXT NOT NULL DEFAULT '{}' CHECK (length(progress) <= 4096),health_seconds INTEGER CHECK (health_seconds IS NULL OR (typeof(health_seconds) = 'integer' AND health_seconds >= 0)),time_limit_seconds INTEGER NOT NULL DEFAULT 120 CHECK (typeof(time_limit_seconds) = 'integer' AND time_limit_seconds BETWEEN 60 AND 600),data_rollback INTEGER NOT NULL DEFAULT 0 CHECK (data_rollback IN (0,1)),cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0,1)),created_by TEXT NOT NULL,created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,CHECK ((result IS NULL) = (state NOT IN ('done','cancelled'))));
+CREATE UNIQUE INDEX IF NOT EXISTS site_edits_site_active ON site_edits(site_id) WHERE result IS NULL;
+CREATE INDEX IF NOT EXISTS site_edits_site_created ON site_edits(site_id,created_at,id);
+CREATE TABLE IF NOT EXISTS site_edit_steps (edit_id TEXT NOT NULL REFERENCES site_edits(id),step TEXT NOT NULL CHECK (step IN ('backup','prepare','apply','check_health','finish','roll_back')),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped')),started_at TEXT,finished_at TEXT,detail TEXT CHECK (detail IS NULL OR length(detail) <= 500),PRIMARY KEY (edit_id,step));
+CREATE TRIGGER IF NOT EXISTS site_edits_no_delete BEFORE DELETE ON site_edits BEGIN SELECT RAISE(ABORT,'safe edit history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_edit_steps_no_delete BEFORE DELETE ON site_edit_steps BEGIN SELECT RAISE(ABORT,'safe edit steps are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_edits_result_once BEFORE UPDATE OF result,failed_step,reason,changes ON site_edits WHEN OLD.result IS NOT NULL AND (NEW.result IS NOT OLD.result OR NEW.failed_step IS NOT OLD.failed_step OR NEW.reason IS NOT OLD.reason OR NEW.changes IS NOT OLD.changes) BEGIN SELECT RAISE(ABORT,'a safe edit result is written once'); END;
+CREATE TABLE IF NOT EXISTS site_compose_invocations (site_id TEXT PRIMARY KEY REFERENCES sites(id),kind TEXT NOT NULL CHECK (kind IN ('compose','container')),invocation TEXT NOT NULL CHECK (length(invocation) <= 8192),source TEXT NOT NULL CHECK (source IN ('launch','labels','site')),recorded_at TEXT NOT NULL);
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -265,6 +282,8 @@ export const migrations = [
   { version: 11, name: 'backup-copies', compatible: true, up: db => db.exec(backupCopiesSchema) },
   // Incremental backups (docs/incremental-backups.md): new tables and indexes only, so 2.11 code ignores them.
   { version: 12, name: 'incremental-backups', compatible: true, up: db => db.exec(incrementalSchema) },
+  // Safe Edit (docs/safe-edit.md): new tables, indexes and triggers only, so 2.14 code ignores them. 13 is 2.14.0's.
+  { version: 14, name: 'safe-edits', compatible: true, up: db => db.exec(safeEditsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

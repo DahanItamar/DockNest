@@ -29,15 +29,15 @@ export async function remote(server, request, onStage=()=>{}, onDiagnostic=()=>{
    client.exec(command,{pty:false},(err,stream)=>{
     if(err)return reject(err);
     if(options.signal){const abort=()=>{reject(Object.assign(new Error('DockNest stopped waiting for this step.'),{aborted:true}));try{stream.close();}catch{}};if(options.signal.aborted){abort();return;}options.signal.addEventListener('abort',abort,{once:true});}
-    let buffer='',result,remoteError;
+    let buffer='',result,remoteError,remoteCode;
     stream.on('data',chunk=>{
      buffer+=chunk.toString();
      if(buffer.length>4*1024*1024){stream.destroy();reject(new Error('Remote output exceeds limit'));return;}
-     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.result)result=event.result;if(event.error)remoteError=event.error;}catch{}}
+     let n;while((n=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,n);buffer=buffer.slice(n+1);try{const event=JSON.parse(line);if(event.stage)onStage(event.stage);if(event.diagnostic)onDiagnostic(event.diagnostic);if(typeof event.warning==='string')console.warn('Remote helper warning: '+event.warning.slice(0,500));if(event.result)result=event.result;if(event.error)remoteError=event.error;if(typeof event.code==='string'&&/^[A-Z][A-Z0-9_]{1,39}$/.test(event.code))remoteCode=event.code;}catch{}}
     });
     stream.stderr.on('data',()=>{}); // Docker output may contain secret environment values.
     stream.once('error',reject);
-    stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null})));
+    stream.once('close',code=>code===0&&result?resolve(result):reject(Object.assign(new Error(remoteError||'Remote helper failed; inspect recovery status before retrying'),{remoteReported:!!remoteError,exitCode:Number.isInteger(code)?code:null,...(remoteCode?{helperCode:remoteCode}:{})})));
     const payload=encoded+'\n'+JSON.stringify(request)+'\n';
     if(options.keepStdinOpen)stream.write(payload);else stream.end(payload);
    });

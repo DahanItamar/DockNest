@@ -66,7 +66,12 @@ export const busySite=siteId=>Boolean(busy(siteId));
 // backups pass the actor `move:<id>`.
 const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
 export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
-export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});}
+export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});requireNotEditing(siteId,actor);}
+// A site with an unfinished Safe Edit (docs/safe-edit.md) refuses other mutating work, also while the edit waits for its
+// backup or a health poll and while it needs attention; the edit's own backup and restore pass the actor `edit:<id>`.
+const editsTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_edits'").get();
+export function editingSite(siteId){if(!editsTable())return null;return db.prepare('SELECT id,state FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)||null;}
+export function requireNotEditing(siteId,actor=''){const edit=editingSite(siteId);if(edit&&actor!=='edit:'+edit.id)throw Object.assign(new Error('This site is being changed by a Safe Edit. Wait for it to finish first.'),{status:409,code:'SITE_EDITING',publicCode:'SITE_EDITING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
 // `within` runs first inside the enqueue transaction (Full backup now: its settings change and the job commit together).
 export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}){
@@ -75,7 +80,7 @@ export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
  if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{}),...(extra.editId?{editId:extra.editId}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
@@ -215,7 +220,7 @@ export async function planRestore(backupId,{serverId,mode='new-copy',mappings={}
  return {backupId,serverId,mode,mappings,capabilities,...(chainLength>1?{chainLength}:{}),externalReferences,sources:sources.map(publicSource),source:{targetId:chosen.targetId,role:chosen.role},sourceTargetId:sourceTargetId||null,blockers,executable:blockers.length===0,isolated:true,networkMode:grouped?'isolated-internal':'none',warnings:staticSite?['Static files restore into a new private directory. The live website and nginx configuration stay unchanged.','File contents and ownership are verified. Review the restored website before planning a separate production cutover.']:[...externalWarnings,'No published ports or external network: grouped services communicate only on fresh isolated networks. Use docker exec for validation, then explicitly plan production routing.','Static IP assignments, shared container network namespaces, overlapping mount paths, escaping links/device files and privileged host configuration require offline review.','Application-specific data validation is required after container health succeeds. Original stopped containers stay stopped.'],plannedAt:now()};
 }
 export async function enqueueRestore(backupId,plan,actor='administrator'){
- requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id);}
+ requireNoDeploymentHold();{const row=db.prepare('SELECT site_id FROM backups WHERE id=?').get(backupId);if(row)requireNotMoving(row.site_id,actor);}
  const fresh=await planRestore(backupId,{serverId:plan?.serverId,mode:plan?.mode,mappings:plan?.mappings,sourceTargetId:plan?.sourceTargetId||null});
  if(!fresh.executable)throw new Error(fresh.blockers.join('; '));
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
@@ -515,7 +520,7 @@ export async function executeJob(job){
   if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
-  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{})}});
+  const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{}),...(jobDetails.editId?{editId:jobDetails.editId}:{})}});
   publishedBackup=true;
   // A superseded job keeps its authenticated package but skips cleanup and retention; recovery review owns the source.
   // Its snapshot files are not committed, so the next backup of the site is full.
@@ -556,7 +561,7 @@ export function tickScheduler(currentDate=new Date()){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
-   if(next&&next<=currentDate){if(busy(policy.site_id)||movingSite(policy.site_id))continue;enqueueBackup(policy.site_id);}
+   if(next&&next<=currentDate){if(busy(policy.site_id)||movingSite(policy.site_id)||editingSite(policy.site_id))continue;enqueueBackup(policy.site_id);}
    if(!next||next<=currentDate){
     const upcoming=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate}).next().toISOString();
     db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run(upcoming,policy.site_id);
@@ -574,7 +579,7 @@ export function claimJob(){
   // Site-move and restore-test jobs use their own statuses so a release without them (for example after a rollback)
   // never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.
-  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' ELSE 'running' END,stage=CASE status WHEN 'test_queued' THEN stage ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
+  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'edit_queued' THEN 'edit_running' ELSE 'running' END,stage=CASE WHEN status IN ('test_queued','edit_queued') THEN stage ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
 }
