@@ -22,7 +22,7 @@ from .net import (
 from .maintenance import (
     MAINTENANCE_NOT_SET_UP, MaintenanceOptional, maintenance)
 from .discovery import (
-    nginx_sites, temporary_mounts)
+    hardening_report, nginx_sites, temporary_mounts)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
@@ -660,4 +660,5 @@ def capture(req,output=None):
         except Exception:pass
     # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
     if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots,'exclusions':increment['exclusions']})
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    # Hardening facts travel beside the manifest, never inside the package, so the package format is unchanged.
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts()})

@@ -236,6 +236,11 @@ CREATE INDEX IF NOT EXISTS backup_chain_links_chain ON backup_chain_links(chain_
 const siteCertificatesSchema = `
 CREATE TABLE IF NOT EXISTS site_certificates (site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,source TEXT NOT NULL CHECK (source IN ('tls','certbot')),name TEXT NOT NULL CHECK (length(name) <= 255),serial TEXT CHECK (serial IS NULL OR length(serial) <= 64),not_after TEXT,expired INTEGER NOT NULL DEFAULT 0 CHECK (expired IN (0,1)),renewal TEXT CHECK (renewal IS NULL OR renewal IN ('ok','failed')),renewal_failed_at TEXT,checked_at TEXT NOT NULL,alerted_not_after TEXT,alerted_stage TEXT CHECK (alerted_stage IS NULL OR alerted_stage IN ('expiring','expired')),renewal_alerted INTEGER NOT NULL DEFAULT 0 CHECK (renewal_alerted IN (0,1)));
 `;
+// Hardening score per site (docs/hardening-score.md): the latest container configuration facts for each site, as cleaned
+// JSON (booleans, port bindings, image reference, capability names; never environment values). One additive table.
+export const hardeningSchema = `
+CREATE TABLE IF NOT EXISTS site_hardening (site_id TEXT PRIMARY KEY REFERENCES sites(id),checked_at TEXT NOT NULL,facts TEXT NOT NULL CHECK (length(facts) <= 262144));
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -274,6 +279,9 @@ export const migrations = [
   // Certificate alerts (docs/alerts.md, "Certificates"): one new table, nothing altered, so 2.13 code ignores it.
   // Purely additive: renumber before release if another migration lands first.
   { version: 13, name: 'site-certificates', compatible: true, up: db => db.exec(siteCertificatesSchema) },
+  // Hardening score (docs/hardening-score.md): one new table, so 2.13 code ignores it. Purely additive: renumber before
+  // release if another migration lands first.
+  { version: 14, name: 'site-hardening', compatible: true, up: db => db.exec(hardeningSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

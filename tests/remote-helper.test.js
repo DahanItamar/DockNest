@@ -59,3 +59,8 @@ test('the helper source keeps shared state in common.py and builds into one help
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for remote helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('hardening facts: privileged, socket, root, ports, limits, image pin, healthcheck, capabilities and no secrets',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_hardening_score.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for hardening helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});

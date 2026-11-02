@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    inspect)
+    DEFAULT_CAPABILITIES, inspect, run)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -143,3 +143,68 @@ def temporary_mounts(c):
         result.append((destination,options))
     return result
 def tmpfs_argument(destination,options):return destination+':'+options if options else destination
+
+# ---- Hardening facts (docs/hardening-score.md) ----
+# Read-only facts about how each container is configured, gathered from the `docker inspect` output that discovery and
+# backups already read. Only booleans, port bindings, the image reference and capability names leave the server: never
+# environment values, labels, commands or mount sources other than the Docker socket flag.
+HARDENING_FORMAT=1
+# A bind of the socket itself, of a folder that holds it, or onto the path clients use, gives the container the engine.
+SOCKET_FOLDERS=('/','/var','/run','/var/run','/run/podman')
+USER_RUN=re.compile(r'/run/user/[0-9]+(?:/(?:docker|podman)\.sock)?')
+def engine_socket(source,destination):
+    source=str(source or '').rstrip('/') or '/';destination=str(destination or '').rstrip('/')
+    return source.endswith(('/docker.sock','/podman.sock')) or source in SOCKET_FOLDERS or bool(USER_RUN.fullmatch(source)) or destination=='/var/run/docker.sock'
+def engine_rootless():
+    """rootless, userns or none for the Docker engine; None when it cannot be read."""
+    try:options=json.loads(run(['docker','info','--format','{{json .SecurityOptions}}'],timeout=15) or b'null') or []
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):return None
+    names=[o for o in options if isinstance(o,str)]
+    return 'rootless' if any('name=rootless' in o for o in names) else 'userns' if any('name=userns' in o for o in names) else 'none'
+def image_pin(image):
+    """digest, tag, latest or untagged for an image reference such as nginx:1.27 or app@sha256:..."""
+    if not isinstance(image,str) or not image or re.fullmatch(r'(?:sha256:)?[0-9a-f]{12,64}',image):return 'untagged'
+    if '@sha256:' in image:return 'digest'
+    last=image.rsplit('/',1)[-1]
+    if ':' not in last:return 'untagged'
+    return 'latest' if last.rsplit(':',1)[1]=='latest' else 'tag'
+def root_user(user):
+    name=(user or '').split(':',1)[0].strip()
+    return name in ('','root','0')
+def loopback(address):
+    address=address.strip('[]').split('%',1)[0]
+    if address=='localhost':return True
+    try:return ipaddress.ip_address(address).is_loopback
+    except ValueError:return False
+DATABASE_PORTS={'3306','5432','6379','27017','1433'}
+def container_hardening_facts(c,engine=None):
+    config=c.get('Config') or {};host=c.get('HostConfig') or {}
+    bindings={}
+    for source in (host.get('PortBindings') or {},(c.get('NetworkSettings') or {}).get('Ports') or {}):
+        for internal,values in source.items():
+            for binding in values or []:
+                if not isinstance(binding,dict):continue
+                address=(binding.get('HostIp') or '').split('%',1)[0];port=str(binding.get('HostPort') or '')
+                if not loopback(address):bindings[(address or '0.0.0.0')+':'+(port or '?')+'->'+str(internal)]=True
+    # Database ports first, so a long list never drops the finding that matters most.
+    ports=sorted(bindings,key=lambda value:(not bool(DATABASE_PORTS & set(re.findall(r'[0-9]+',value.split(':')[-1]))),value))[:64]
+    sockets=any(m.get('Type')=='bind' and engine_socket(m.get('Source'),m.get('Destination')) for m in c.get('Mounts') or [])
+    sockets=sockets or any(m.get('Destination')=='/var/run/docker.sock' for m in c.get('Mounts') or [])
+    sockets=sockets or any(isinstance(b,str) and engine_socket(*(b.split(':')+[''])[:2]) for b in host.get('Binds') or [])
+    check=(config.get('Healthcheck') or {}).get('Test') or []
+    security=[str(o).replace('=',':') for o in host.get('SecurityOpt') or []]
+    added=[str(cap).upper().removeprefix('CAP_') for cap in host.get('CapAdd') or [] if isinstance(cap,str)]
+    # With userns-remap, a container started with --userns=host still runs as real root.
+    rootless=None if engine is None else engine=='rootless' or (engine=='userns' and host.get('UsernsMode')!='host')
+    return {'format':HARDENING_FORMAT,'name':(c.get('Name') or '').lstrip('/') or (c.get('Id') or '')[:12],
+        'privileged':bool(host.get('Privileged')),'dockerSocket':sockets,'rootUser':root_user(config.get('User')),
+        'rootless':rootless,'hostNetwork':host.get('NetworkMode')=='host','publicPorts':ports,'publishAll':bool(host.get('PublishAllPorts')),
+        'memoryLimit':bool(host.get('Memory')),'image':str(config.get('Image') or '')[:255],'imagePin':image_pin(config.get('Image')),
+        'healthcheck':bool(check) and check[0]!='NONE','noNewPrivileges':any(o in ('no-new-privileges','no-new-privileges:true') for o in security),
+        'extraCapabilities':sorted({cap for cap in added if cap not in DEFAULT_CAPABILITIES})[:40]}
+def hardening_report(containers):
+    """Facts for every container, or None. A fact we cannot read never fails the scan or the backup around it."""
+    try:
+        engine=engine_rootless() if containers else None
+        return [container_hardening_facts(c,engine) for c in containers]
+    except Exception:return None

@@ -78,6 +78,7 @@ jobs:
           npm run test:reports
           npm run test:status-pages
           npm run test:map
+          npm run test:hardening
           npm run test:connections
           npm run test:layout
         env:
