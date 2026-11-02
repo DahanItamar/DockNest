@@ -136,6 +136,19 @@ class ComposeTests(unittest.TestCase):
                         dict(cap_drop=['NET RAW']),dict(cap_add='CHOWN'),dict(security_opt=['apparmor=not-loaded-here'])]:
             with patch('helper.APPARMOR_PROFILES','/nonexistent/apparmor'),self.assertRaises(ValueError,msg=service):helper.check_compose_config(self.config(**service),['web'],self.manifest())
 
+class MovePreflightFactTests(unittest.TestCase):
+    def test_source_facts_name_problems_and_needed_profiles_and_the_target_reports_loaded_ones(self):
+        facts=helper.hardening_facts([container('web',SecurityOpt=['apparmor=site-profile','no-new-privileges']),container('db',SecurityOpt=['systempaths=unconfined']),container('cache',SecurityOpt=['apparmor=unconfined'])])
+        self.assertTrue(facts['hardened']);self.assertEqual(facts['apparmor'],['site-profile'])
+        self.assertEqual(len(facts['problems']),1);self.assertIn('Container db uses the security option systempaths',facts['problems'][0])
+        self.assertEqual(helper.hardening_facts([container()]),{'hardened':False,'problems':[],'apparmor':[]})
+        with tempfile.TemporaryDirectory() as d:
+            loaded=pathlib.Path(d)/'profiles';loaded.write_text('site-profile (enforce)\n')
+            with patch('helper.APPARMOR_PROFILES',str(loaded)),patch('helper.docker',return_value=b''):
+                probe=helper.target_probe({'paths':[],'names':{},'apparmor':['site-profile','other','--bad']})
+        self.assertEqual(probe['apparmorLoaded'],['site-profile'])
+
+@unittest.skipUnless(os.name=='posix','Restore test journals sync directories (POSIX only)')
 class RestoreTestCopyTests(unittest.TestCase):
     """A hardened site is testable: the restore test copy gets the original's protections and is checked."""
     def run_test(self,host,mutate=None,internet=False):
