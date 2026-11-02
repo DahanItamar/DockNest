@@ -14,13 +14,14 @@ import {ChainLine} from './incremental/ChainLine.jsx';
 import {isIncremental,toBackups} from './incremental/model.js';
 import {chainDownloadUrl} from './incremental/incremental-client.js';
 import {Download} from './icons.jsx';
+import {HardeningRow} from './hardening.jsx';
 
 const SiteIcon=props=><BrandIcon name="sites" {...props}/>;
 const BackupIcon=props=><BrandIcon name="backups" {...props}/>;
 const SiteIcons=Object.fromEntries(['edit','readiness','schedule','restore','remove'].map(n=>[n,({size})=><BrandIcon name={n} size={size}/>]));
 function Control({label,icon,className='',...props}){return <button type="button" className={`icon-button recovery-action ${className}`} aria-label={label} title={label} {...props}><BrandIcon name={icon} size={20}/></button>;}
 
-export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onTests,onReady,onSchedule,onStorage,onIncremental,onRemove,onBackup,query}){
+export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilter,onEdit,onTests,onReady,onSchedule,onStorage,onIncremental,onRemove,onBackup,query,checking}){
  if(!allSites.length)return <section className="panel"><Empty icon={SiteIcon} title="Choose the sites to protect">Connect a server, discover Docker containers, and group the containers that make up each site.</Empty></section>;
  if(!sites.length)return <section className="panel"><Empty icon={SiteIcon} title="No matching sites" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another site name, server or container.</Empty></section>;
  return <Paginated rows={sites} label="Sites" pageSize={4} stableHeight resetKey={query}>{visible=><div className="card-grid site-grid" aria-label="Sites and schedules">{visible.map(site=>{
@@ -35,6 +36,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
      <div className="def-row"><dt>Schedule</dt><dd>{describeSchedule(policy.schedule)}<span className="t-caption">{policy.timezone||'Time zone not set'}</span></dd></div>
      <div className="def-row"><dt>Retention</dt><dd>{policy.retention!=null?`${count(policy.retention,'successful backup')}`:'Not configured'}</dd></div>
      {(summary=>summary&&<div className="def-row"><dt>Storage</dt><dd>{summary.main}<span className="t-caption">{summary.copies}</span>{summary.missing&&<StatusLabel state="needs-review">Copy missing</StatusLabel>}{user?.role==='admin'&&onStorage&&<button type="button" className="cp-link" aria-label={`Change storage for ${site.name}`} onClick={()=>onStorage(site)}>Change</button>}</dd></div>)(siteStorageSummary(site))}
+     <HardeningRow site={site} checking={checking?.has(site.id)}/>
      {site.config?.kind!=='static'&&site.incremental&&<div className="def-row"><dt>Incremental</dt><dd>{site.incremental.enabled?'Full every '+toBackups(site.incremental.interval)+' backups':'Off'}<span className="t-caption">{site.incremental.enabled?'Beta':'Every backup is complete'}</span>{onIncremental&&<button type="button" className="cp-link" aria-label={`Change incremental backups for ${site.name}`} onClick={()=>onIncremental(site)}>Change</button>}</dd></div>}
     </dl>
    </div>

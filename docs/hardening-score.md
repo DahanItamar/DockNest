@@ -70,6 +70,14 @@ The site objects in `GET /api/state` carry a `hardening` field, readable by ever
 
 A site that was never scanned returns `grade: null`, `checkedAt: null`, `passed: 0`, `total: 0` and no findings.
 
+## Where you see it
+
+- **Sites & schedules:** every site card has a Hardening row: `Grade B` with the number of findings to fix and a **Findings** button, `All passed` for an A with nothing to fix, or `Not checked yet. Next backup checks it.` until the first scan or backup. While a backup of an ungraded site runs, the row says `Checking…`. A static website shows `Static site, nothing to check.`
+- **Findings dialog:** a red alert for grade F, an amber one for D and none for A to C. The table lists each finding with its container and fix, five per page. On a phone the fix sits under the finding.
+- **Map:** the details panel of a site shows the grade, the first three findings and **See all**, which opens the same dialog.
+
+Every role can open these views. Nothing in them changes a site.
+
 ## What is stored
 
 For each container DockNest stores only the facts it grades: yes/no flags, published port bindings, the image reference and the names of extra capabilities. It never stores environment values, labels, commands or mount paths. A scan from a helper that cannot report these facts keeps the previous grade.
