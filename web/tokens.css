@@ -9,7 +9,7 @@
  --button-primary:#5E35B1;--button-primary-hover:#4527A0;
  --success:#21704A;--success-surface:#E9F1ED;--warning:#835A00;--warning-surface:#F3EFE6;
  --error:#C62828;--error-surface:#F9EAEA;--info:#1B5FB3;--info-surface:#E8EFF7;
- --backdrop:rgb(27 23 34 / 45%);--shadow:rgb(27 23 34 / 16%);--transparent:transparent;--qr-background:#FFFFFF;
+ --dialog-edge:transparent;--backdrop:rgb(27 23 34 / 45%);--shadow:rgb(27 23 34 / 16%);--transparent:transparent;--qr-background:#FFFFFF;
  --storage-decoration:#91B9EE;--sidebar-storage-accent:var(--primary-deep);--sidebar-nav-accent:var(--primary-deep);--sidebar-nav-soft:var(--primary-light);--metric-purple:#5E35B1;--metric-purple-decoration:#4527A0;--metric-blue:#1B5FB3;--metric-blue-decoration:#164E93;--metric-period:#18549E;--on-solid:#FFFFFF;--metric-purple-label:#D1C4E9;--metric-blue-label:#BBDEFB;--metric-blue-soft:#E3F2FD;
  --chart-backup:#9E7EB5;--chart-unverified:#4E7FC4;--chart-restore:#5E35B1;--chart-failed:#7A7585;--chart-area:rgba(94,53,177,.25);
  /* Blue header/sidebar accents are scoped to navigation and utility controls. */
@@ -33,7 +33,7 @@
  --accent:#BEA3F8;--accent-soft:#2E2A38;--accent-hover:#D8C6FC;--link:#C2A8FA;--focus-ring:#C2A8FA;--button-primary:#7F55DA;--button-primary-hover:#6E45C8;
  --success:#7ADBA7;--success-surface:#293832;--warning:#EBC46F;--warning-surface:#3B3429;
  --error:#FFA3AE;--error-surface:#3F2F33;--info:#80BAF5;--info-surface:#2A333F;
- --backdrop:rgb(0 0 0 / 70%);--shadow:rgb(0 0 0 / 40%);
+ --dialog-edge:var(--border-subtle);--backdrop:rgb(0 0 0 / 70%);--shadow:rgb(0 0 0 / 40%);
  --storage-decoration:#37587C;--metric-purple:#402E66;--metric-purple-decoration:#30224F;--metric-blue:#184E77;--metric-blue-decoration:#123D5E;--metric-period:#27699B;
  --chart-backup:#C4A4DA;--chart-unverified:#9E7EB5;--chart-restore:#BEA3F8;--chart-failed:#7FAEE0;--chart-area:rgba(190,163,248,.25);
  --alert-error-border:#7A5359;--alert-error-text:#FFB5BE;--alert-warning-border:#72613F;--alert-warning-text:#EFD08C;--alert-info-border:#455D77;--alert-info-text:#99C8F7;

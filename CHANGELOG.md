@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Self-heal settings in a site's panel on the Map: restart unhealthy containers up to a set number of times in a time window, with a list of recent restarts. Administrators change it; operators can read it.
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).

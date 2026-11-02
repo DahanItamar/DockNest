@@ -7,6 +7,8 @@ import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
+import {createSelfHealClient} from '../self-heal/self-heal-client.js';
+import {SelfHealSheet} from '../self-heal/SelfHealSheet.jsx';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
@@ -125,6 +127,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function openPanel(p,el){opener.current=el;setFlow(null);setGhost(null);if(['server','site','storage','alert','docknest'].includes(p.kind))setSel({type:'node',key:p.kind==='docknest'?'docknest:root':p.kind+':'+p.id});setPanel(p)}
  function closePanel(back=true){setPanel(null);setGhost(null);setSel(null);if(back)setTimeout(()=>opener.current?.focus?.(),0)}
  useEffect(()=>{if(!panel||narrow)return;const h=e=>{if(e.key==='Escape'&&!e.defaultPrevented&&!document.querySelector('dialog[open]'))closePanel(true)};document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h)},[panel,narrow]);
+ const [shFlow,setShFlow]=useState(null),shClient=useMemo(()=>createSelfHealClient(api||(()=>Promise.reject(new Error('Self-heal is not available.')))),[api]);
  const [edit,setEdit]=useState(null),[checks,setChecks]=useState({}),[flow,setFlow]=useState(null),opener=useRef(null);
  const pending=edit&&edit.targetId?edit:null,unconnected=edit&&!edit.targetId?edit:null;
  const siteChecks=checks[drag?.id]||{};
@@ -353,6 +356,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
+  {shFlow&&byId.sites[shFlow]&&<SelfHealSheet client={shClient} site={byId.sites[shFlow]} canEdit={canMove} narrow={narrow} onClose={()=>{setShFlow(null);focusBack()}} onSaved={m=>{setShFlow(null);setNote(m);focusBack()}}/>}
   {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
   {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
  </>;
@@ -379,6 +383,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
+    {api&&s.config?.kind!=='static'&&<button type="button" className="map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
     {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
