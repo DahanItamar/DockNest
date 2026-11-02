@@ -37,3 +37,6 @@
 }
 
 .sh-watched{margin:-8px 0 0;color:var(--text-secondary)}
+.sh-reason{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted);font-weight:400}
+.sh-more{display:flex;justify-content:flex-start;margin-top:12px}
+.map-root .sh-more button{width:auto;white-space:nowrap}

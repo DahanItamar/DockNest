@@ -15,3 +15,4 @@ export const saveError=e=>e?.code==='NO_HEALTHCHECK'?{title:'No health check',te
 // Short "Not watching" sentences by the backend's stream.reason code (the server text is longer).
 export const NOT_WATCHING={recreated:'Not watching: container recreated.',host_key:'Not watching: server key changed.',unreachable:'Not watching: server unreachable. Retrying.',docker_events:'Not watching: Docker events unreadable.',stream_ended:'Not watching: stream ended. Reconnecting.',worker_offline:'Not watching: DockNest worker is off.',no_healthcheck:'Not watching: no health check.',static:'Not watching: no containers.',too_many:'Not watching: this server already watches 50 containers.'};
 export const notWatching=stream=>stream?.notWatching?(NOT_WATCHING[stream.reason]||'Not watching: see Servers.'):null;
+export const windowLabel=m=>m%60===0?(m/60)+(m===60?' hour':' hours'):m+' minutes';

@@ -1,4 +1,4 @@
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
@@ -22,8 +22,8 @@ const EVENTS=[
  {id:'e1',container:'demo-0-web',kind:'restarted',at:ago(40)},
  {id:'e2',container:'demo-0-web',kind:'restarted',at:ago(120)},
  {id:'e3',container:'demo-0-web',kind:'limit_reached',at:ago(150)},
- {id:'e4',container:'demo-0-db',kind:'skipped',at:ago(200)},
- {id:'e5',container:'demo-0-web',kind:'restart_failed',at:ago(260)},
+ {id:'e4',container:'demo-0-db',kind:'skipped',reason:'A backup is running.',at:ago(200)},
+ {id:'e5',container:'demo-0-web',kind:'restart_failed',reason:'Docker could not restart it.',at:ago(260)},
  {id:'e6',container:'demo-0-web',kind:'recovered',at:ago(300)},
  {id:'e7',container:'demo-0-web',kind:'unhealthy',at:ago(310)}
 ];
@@ -41,10 +41,12 @@ async function open({role='admin',width=1280,height=800,scheme='light'}={}){
  await page.route('**/api/**',route=>{
   const req=route.request(),url=new URL(req.url()),endpoint=url.pathname,method=req.method();
   const auth={authenticated:true,setupRequired:false,csrfToken:'fixture',user:{id:'u1',name:'Fixture user',role},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000};
+  if(endpoint==='/api/self-heal/events')return json(route,{items:[{id:'e8',container:'demo-0-web',kind:'recovered',at:ago(400)}],nextCursor:null});
   if(/^\/api\/sites\/s0\/self-heal$/.test(endpoint)){
+   if(method==='GET'&&mock.loadStatus===401)return json(route,{error:'No'},401);
    if(method==='PUT'){
     if(role!=='admin')return json(route,{error:'No'},403);
-    if(mock.putError)return json(route,{error:'raw',code:mock.putError},mock.putError==='UNREACHABLE'?502:422);
+    if(mock.putError)return json(route,{error:'raw',code:mock.putError},({UNREACHABLE:502,SITE_REMOVED:409,FORBIDDEN:403,INVALID:400,NOT_FOUND:404})[mock.putError]||422);
     const body=req.postDataJSON();mock.puts.push(body);Object.assign(mock.card,body);return json(route,{...mock.card,canEdit:true});
    }
    return mock.loadStatus===200?json(route,{...mock.card,canEdit:role==='admin'}):json(route,{error:'Self-heal could not be loaded.'},mock.loadStatus);
@@ -113,7 +115,7 @@ async function behaviour(scheme){
  // Opening focuses the title, so the switch starts without a ring, and a mouse click leaves none
  assert.equal(await ring(),'none','no ring on open');
  await sw.click();
- assert.equal(await sw.getAttribute('aria-checked'),'false','click turns it off');
+ await expect(sw).toHaveAttribute('aria-checked','false');
  assert.equal(await sw.evaluate(e=>e.matches(':focus-visible')),false,'no focus-visible after click');
  assert.equal(await ring(),'none','no ring after mouse click');
  assert.equal(await sw.evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)','switch hit area stays transparent');
@@ -124,7 +126,7 @@ async function behaviour(scheme){
  assert.equal(await sw.evaluate(e=>e===document.activeElement),true,'keyboard reaches the switch');
  assert.notEqual(await ring(),'none','ring on keyboard focus');
  await page.keyboard.press('Space');
- assert.equal(await sw.getAttribute('aria-checked'),'true','space toggles');
+ await expect(sw).toHaveAttribute('aria-checked','true');
  // Off disables the fields, on enables them; limit 1..10
  await sw.click();
  assert.equal(await dlg.locator('.sh-count').isDisabled(),true);assert.equal(await dlg.locator('select.sh-window').isDisabled(),true);
@@ -153,7 +155,7 @@ async function failures(){
  assert.equal(await sw.isDisabled(),false,'unknown state can be switched on');
  await sw.click();await dlg.getByRole('button',{name:'Save'}).click();
  await dlg.getByText('No container has a health check. Add one in Compose.').waitFor();
- assert.equal(await sw.isDisabled(),true);assert.equal(await sw.getAttribute('aria-checked'),'false');
+ assert.equal(await sw.isDisabled(),true);await expect(sw).toHaveAttribute('aria-checked','false');
  assert.equal(await dlg.count(),1,'sheet stays open');
  await context.close();
  // Not watching: a short amber sentence, and the watched names under it
@@ -161,7 +163,7 @@ async function failures(){
  ({context,page}=await open({}));
  dlg=await openSheet(page,1280);
  assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: server unreachable. Retrying.');
- assert.equal((await dlg.locator('.sh-watched').innerText()).trim(),'Watching demo-0-web');
+ assert.equal(await dlg.locator('.sh-watched').count(),0,'the watched caption is hidden while not watching');
  await context.close();
  // Too many containers: the server's own sentence in the red panel
  fresh();mock.putError='TOO_MANY_CONTAINERS';
@@ -175,6 +177,49 @@ async function failures(){
  ({context,page}=await open({}));
  dlg=await openSheet(page,1280);
  assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: this server already watches 50 containers.');
+ await context.close();
+ // Every real status keeps the sheet open with the right panel
+ for(const [code,text] of [['SITE_REMOVED',/Site removed/],['FORBIDDEN',/Not allowed/],['INVALID',/Could not save/],['NOT_FOUND',/Could not save/]]){
+  fresh();mock.putError=code;
+  ({context,page}=await open({}));
+  dlg=await openSheet(page,1280);
+  await dlg.getByRole('button',{name:'Save'}).click();
+  await dlg.locator('.alert-error').waitFor();
+  assert.match(await dlg.locator('.alert-error').innerText(),text,code);
+  assert.equal(await dlg.count(),1,code+': sheet stays open');
+  await context.close();
+ }
+ // 401 on load ends the session instead of leaving "Loading…"
+ fresh();
+ ({context,page}=await open({}));
+ mock.loadStatus=401;
+ await page.locator('.map-site',{hasText:'Demo Shop'}).first().click();
+ await page.getByRole('button',{name:'Self-heal',exact:true}).click();
+ await page.locator('dialog.sh-sheet').waitFor({state:'detached'});
+ await context.close();
+ // Unknown reason code: the fallback sentence, and no watched caption while not watching
+ fresh({stream:{state:'off',reason:'something_new',notWatching:'raw backend text'}});
+ ({context,page}=await open({}));
+ dlg=await openSheet(page,1280);
+ assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: see Servers.');
+ assert.equal(await dlg.locator('.sh-watched').count(),0,'no caption while not watching');
+ await context.close();
+ // Unlisted window is added; unfound containers are not listed; reasons show; Show more appends
+ fresh({windowMinutes:45,watched:[{name:'demo-0-web',found:true},{name:'gone-1',found:false}],events:{items:EVENTS,nextCursor:'c1'}});
+ ({context,page}=await open({}));
+ dlg=await openSheet(page,1280);
+ assert.equal(await dlg.locator('select.sh-window').inputValue(),'45');
+ assert.ok((await dlg.locator('select.sh-window option').allTextContents()).includes('45 minutes'));
+ assert.equal((await dlg.locator('.sh-watched').innerText()).trim(),'Watching demo-0-web');
+ assert.equal(await dlg.locator('tbody tr').count(),6,'the unhealthy event is not listed');
+ assert.equal(await dlg.getByText('Unhealthy',{exact:true}).count(),0);
+ await dlg.getByText('A backup is running.').waitFor();await dlg.getByText('Docker could not restart it.').waitFor();
+ await dlg.getByRole('button',{name:'Show more'}).click();
+ await expect(dlg.locator('tbody tr')).toHaveCount(7);
+ assert.equal(await dlg.getByRole('button',{name:'Show more'}).count(),0,'no more pages');
+ await dlg.getByRole('button',{name:'Save'}).click();
+ await page.waitForFunction(()=>!document.querySelector('dialog.sh-sheet'));
+ assert.equal(mock.puts[0].windowMinutes,45,'the unlisted window is saved as it was');
  await context.close();
  // Another save error keeps the sheet open with a red panel
  fresh();mock.putError='UNREACHABLE';
@@ -252,7 +297,7 @@ async function realApi(){
  db.prepare("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,0,(SELECT id FROM users LIMIT 1),?)").run(now());
   let {context,page}=await signedIn(adminToken);
   let d=await openFor(page,'Demo Shop');
-  assert.equal(await d.getByRole('switch').getAttribute('aria-checked'),'false','off on a fresh site');
+  await expect(d.getByRole('switch')).toHaveAttribute('aria-checked','false');
   assert.equal(await d.getByText('No restarts yet').count(),1);
   await d.getByRole('switch').click();await d.locator('.sh-count').fill('4');await d.locator('select.sh-window').selectOption('360');
   await d.getByRole('button',{name:'Save'}).click();
@@ -262,7 +307,7 @@ async function realApi(){
   // History: real rows come back newest first through the real GET
   for(const [i,kind] of ['restarted','limit_reached','restart_failed'].entries())db.prepare('INSERT INTO self_heal_events(id,site_id,server_id,container,kind,reason,at) VALUES(?,?,?,?,?,?,?)').run(randomUUID(),healthy,serverId,'demo-web',kind,null,new Date(Date.now()-(i+1)*3600000).toISOString());
   d=await openFor(page,'Demo Shop');
-  assert.equal(await d.getByRole('switch').getAttribute('aria-checked'),'true');assert.equal(await d.locator('.sh-count').inputValue(),'4');assert.equal(await d.locator('select.sh-window').inputValue(),'360');
+  await expect(d.getByRole('switch')).toHaveAttribute('aria-checked','true');assert.equal(await d.locator('.sh-count').inputValue(),'4');assert.equal(await d.locator('select.sh-window').inputValue(),'360');
   assert.deepEqual(await d.locator('tbody tr td:last-child').allInnerTexts(),['Restarted','Limit reached','Restart failed']);
   await noOverflow(page,'real');await shot(page,'real-on-desktop');
   await d.getByRole('button',{name:'Cancel'}).click();
@@ -283,7 +328,7 @@ async function realApi(){
   await page.locator('.map-list li',{hasText:'Demo Shop'}).getByRole('button',{name:'Details'}).click();await page.getByRole('button',{name:'Self-heal',exact:true}).click();
   d=page.locator('dialog.sh-sheet');await d.getByRole('switch').waitFor();await noOverflow(page,'real phone');await shot(page,'real-on-phone');
   await context.close();
- }finally{listener.close()}
+ }finally{listener.closeAllConnections?.();await new Promise(resolve=>listener.close(resolve))}
 }
 
 browser=await chromium.launch();

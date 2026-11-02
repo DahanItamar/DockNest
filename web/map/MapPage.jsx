@@ -74,7 +74,7 @@ function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onA
  </div>;
 }
 
-export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
+export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onSessionExpired,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
  const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
@@ -356,7 +356,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
-  {shFlow&&byId.sites[shFlow]&&<SelfHealSheet client={shClient} site={byId.sites[shFlow]} narrow={narrow} onClose={()=>{setShFlow(null);focusBack()}} onSaved={m=>{setShFlow(null);setNote(m);focusBack()}}/>}
+  {shFlow&&byId.sites[shFlow]&&<SelfHealSheet client={shClient} site={byId.sites[shFlow]} onSessionExpired={onSessionExpired} narrow={narrow} onClose={()=>{setShFlow(null);focusBack()}} onSaved={m=>{setShFlow(null);setNote(m);focusBack()}}/>}
   {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
   {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
  </>;
