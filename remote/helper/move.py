@@ -4,7 +4,8 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, VERSION, atomic_json, docker, emit, inspect, run)
+    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
+    hardening_args, inspect, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
 from .databases import (
@@ -245,7 +246,18 @@ def source_site_facts(cfg,tokens):
     return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
         'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
-        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens)}
+        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':hardening_facts(cs)}
+def hardening_facts(cs):
+    """What the copy must keep (common.hardening), for the preflight: settings no copy can have, AppArmor profiles the
+    target must have loaded."""
+    problems,profiles=[],[]
+    for c in cs:
+        try:h=hardening(c)
+        except ValueError as error:problems.append(str(error));continue
+        if h['apparmor'] not in [None,'unconfined'] and h['apparmor'] not in profiles:profiles.append(h['apparmor'])
+    # The AppArmor profile Docker applied by host default (not set on the container): reported, not enforced on a move.
+    host=sorted({str(c.get('AppArmorProfile')) for c in cs if c.get('AppArmorProfile') not in [None,'','unconfined']})
+    return {'hardened':any(hardened(c) for c in cs),'problems':problems,'apparmor':profiles,'hostAppArmor':host}
 def target_probe(probe):
     paths=[]
     for value in (probe.get('paths') or [])[:200]:
@@ -257,7 +269,8 @@ def target_probe(probe):
     conflicts={kind:sorted(set(names.get(kind) or [])&set(values)) for kind,values in existing.items()}
     project=names.get('composeProject')
     if isinstance(project,str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):conflicts['composeProjects']=[project] if docker('ps','-aq','--filter','label=com.docker.compose.project='+project).decode().split() else []
-    return {'existingPaths':paths,'conflicts':conflicts}
+    wanted=[str(p) for p in (probe.get('apparmor') or [])[:30] if isinstance(p,str) and APPARMOR_PROFILE.fullmatch(p)]
+    return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES)}
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
     cfg=req.get('config') or {}
@@ -581,6 +594,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             for binding in port_bindings(c):
                 spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
             for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
+            args+=hardening_args(c,d)
             for m in c['Mounts']:
                 if ',' in m['Source'] or ',' in m['Destination']:raise ValueError('Mount paths with commas need a manual move')
                 mount=('type=volume,src='+m['Name'] if m['Type']=='volume' else 'type=bind,src='+m['Source'])+',dst='+m['Destination']
@@ -600,6 +614,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
                 for other in networks:
                     # A test copy never joins Docker's shared default bridge.
                     if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*aliases(other),other,created[-1])
+        verify_hardening(containers,created,every=bool(compose))  # never less protected than the original
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
         contracts=manifest.get('backupPlan',{}).get('services',[])
         ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
@@ -652,7 +667,7 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
 # Allow-lists for the merged Compose configuration (docker compose config). Anything not listed is refused, so a
 # setting DockNest does not understand can never reach the new server.
 COMPOSE_TOP_KEYS={'name','services','networks','volumes','secrets','configs'}
-COMPOSE_SERVICE_KEYS={'image','build','command','entrypoint','environment','env_file','ports','expose','volumes','networks','depends_on','restart','healthcheck','labels','container_name','hostname','domainname','working_dir','user','stop_signal','stop_grace_period','tmpfs','logging','pull_policy','init','extra_hosts','mem_limit','mem_reservation','memswap_limit','cpus','cpu_shares','cpuset','shm_size','ulimits','read_only','stdin_open','tty','platform','profiles','links','dns','dns_search','deploy','secrets','configs','scale','oom_score_adj','pids_limit'}
+COMPOSE_SERVICE_KEYS={'image','build','command','entrypoint','environment','env_file','ports','expose','volumes','networks','depends_on','restart','healthcheck','labels','container_name','hostname','domainname','working_dir','user','stop_signal','stop_grace_period','tmpfs','logging','pull_policy','init','extra_hosts','mem_limit','mem_reservation','memswap_limit','cpus','cpu_shares','cpuset','shm_size','ulimits','read_only','stdin_open','tty','platform','profiles','links','dns','dns_search','deploy','secrets','configs','scale','oom_score_adj','pids_limit','cap_add','cap_drop','security_opt'}
 COMPOSE_SERVICE_NETWORK_KEYS={'aliases','priority'}
 COMPOSE_NETWORK_KEYS={'name','driver','internal','enable_ipv6','labels','attachable','ipam','external','driver_opts'}
 COMPOSE_VOLUME_KEYS={'name','driver','labels','external','driver_opts'}
@@ -671,6 +686,15 @@ def compose_volume_problem(item):
     if set(item)-COMPOSE_VOLUME_KEYS:return 'uses %s'%', '.join(sorted(set(item)-COMPOSE_VOLUME_KEYS))
     if (item.get('driver') or 'local')!='local' or item.get('driver_opts'):return 'uses a volume driver or driver options'
     return None
+def compose_hardening_problem(name,service):
+    """cap_add, cap_drop and security_opt pass only when the copy can have exactly them on this server: cap_add within
+    Docker's defaults (the same rule as every other copy), known options, profiles present here."""
+    for key in ['cap_add','cap_drop','security_opt']:
+        if not isinstance(service.get(key) or [],list):return 'The Compose service %s has a %s setting DockNest cannot read.'%(name,key)
+    if extra_capabilities(service.get('cap_add')):return 'The Compose service %s adds capabilities beyond Docker\'s defaults.'%name
+    try:h=hardening({'Name':'/'+name,'HostConfig':{'CapDrop':service.get('cap_drop'),'CapAdd':service.get('cap_add'),'SecurityOpt':service.get('security_opt')}})
+    except ValueError as error:return str(error)
+    return target_hardening_problem(h,name)
 COMPOSE_MOUNT_KEYS={'type','source','target','read_only','bind','volume','tmpfs','consistency'}
 def check_compose_config(config,services,manifest):
     # The site's Compose files come from the old server; the merged result may only describe what the backup holds.
@@ -698,6 +722,8 @@ def check_compose_config(config,services,manifest):
         if not isinstance(service,dict):raise ValueError('The Compose service %s is missing from the Compose files'%name)
         extra=set(service)-COMPOSE_SERVICE_KEYS
         if extra:refuse('The Compose service %s uses %s.'%(name,', '.join(sorted(extra))))
+        problem=compose_hardening_problem(name,service)
+        if problem:refuse(problem)
         for network,options in (service.get('networks') or {}).items():
             real=((declared_networks.get(network) or {}).get('name') or network)
             if real not in networks:refuse('The Compose service %s joins the network %s, which the old copy did not use.'%(name,real))

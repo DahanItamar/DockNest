@@ -251,8 +251,9 @@ try {
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
-  const {runCopiesScenario}=await import('./integration-copies.js');
+  const {runCopiesScenario,runHardenedRestoreScenario}=await import('./integration-copies.js');
   await runCopiesScenario({run,until,hosts,servers,db,record,siteId});
+  await runHardenedRestoreScenario({run,until,hosts,servers,db,record});
   const {runLegacyCompatibility}=await import('./integration-legacy.js');
   await runLegacyCompatibility({run,until,hosts,servers,db,remote,evidence,record});
   const {runRedisCompatibility}=await import('./integration-redis.js');

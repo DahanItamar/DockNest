@@ -4,6 +4,7 @@
 // the move created on the target while the source keeps running. DNS uses a stub resolver (no real DNS in CI).
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { HARDENED_FLAGS, buildHardenedImage, hardeningOf, assertReadOnlyRoot } from './integration-copies.js';
 
 export async function runMoveScenario({ run, until, hosts, servers, db, record }) {
   const { enqueueBackup, claimJob, executeJob } = await import('../src/engine.js');
@@ -133,4 +134,27 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   assert.equal(await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', 'move-cancel'), 'true');
   assert.equal(db.prepare('SELECT server_id FROM sites WHERE id=?').get(sites['move-cancel']).server_id, servers[0].id);
   record('Cancelling a move before the switch removes the copy, its volume and labels on the new server; the old site never stopped');
+
+  // A hardened site (issue 145): the copy on the new server keeps the read-only root, RAM folder, CapDrop ALL with
+  // default capabilities added back and no-new-privileges. Checked on the test copy, then cancelled.
+  const hardenedImage = await buildHardenedImage(run, source, 'docknest-fixture:local');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'move-hardened', '--restart', 'unless-stopped', '-p', '127.0.0.1:8098:8080', ...HARDENED_FLAGS, '-v', 'move-hardened-data:/site', hardenedImage);
+  await until(async () => (await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Health.Status}}', 'move-hardened')) === 'healthy', 'Hardened move fixture is not healthy');
+  const hardenedOriginal = await hardeningOf(run, source, 'move-hardened');
+  sites.hardened = randomUUID();
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(sites.hardened, servers[0].id, 'move-hardened', JSON.stringify({ ...config('move-cancel'), containers: ['move-hardened'], domains: ['hardened.example.invalid'], healthUrl: 'http://127.0.0.1:8098/' }), new Date().toISOString());
+  { const queued = enqueueBackup(sites.hardened, 'qa'), job = claimJob(); assert.equal(job.id, queued.id); await executeJob(job); assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id).status, 'completed', db.prepare('SELECT error FROM jobs WHERE id=?').get(job.id).error); }
+  const hardenedMove = await moves.previewMove({ siteId: sites.hardened, targetServerId: servers[1].id, options: { askBeforeSwitch: true } }, 'qa');
+  assert.equal(hardenedMove.ok, true, hardenedMove.sentence);
+  await moves.startMove(hardenedMove.id, { preflightHash: hardenedMove.preflightHash }, 'qa');
+  await drive(hardenedMove.id, state => ['waiting', 'rolled_back', 'failed', 'recovery_required', 'cancelled'].includes(state));
+  assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(hardenedMove.id).state, 'waiting', moves.moveView(hardenedMove.id).statusLine);
+  assert.deepEqual(await hardeningOf(run, target, 'move-hardened'), hardenedOriginal, 'the copy on the new server has the same protections as the original');
+  await assertReadOnlyRoot(run, target, 'move-hardened');
+  moves.cancelMove(hardenedMove.id, 'qa');
+  await drive(hardenedMove.id, state => ['cancelled', 'rolled_back', 'recovery_required'].includes(state));
+  assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(hardenedMove.id).state, 'cancelled');
+  assert.equal(await run('exec', target, 'sh', '-c', 'docker ps -aq --filter name=move-hardened'), '');
+  await run('exec', source, 'docker', 'rm', '-f', 'move-hardened').catch(() => {});
+  record('Site move, hardened site: the copy on the new server keeps the read-only root, RAM folder, CapDrop ALL plus default capabilities and no-new-privileges (docker inspect and /proc/1/status match the original)');
 }
