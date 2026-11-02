@@ -13,12 +13,12 @@
 // history and the audit log.
 import { db, id, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
-import { transport, jobRunners, claimHooks, siteInfo, movingSite } from '../engine.js';
+import { transport, jobRunners, claimHooks, claimJob, siteInfo, movingSite } from '../engine.js';
 import { emit } from '../alerts/delivery.js';
 import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, REASONS, reasonText, timing } from './limits.js';
 
-// Clock and SSH; tests replace members.
-export const healClock = { now: () => Date.now() };
+// Clock, SSH and timers; tests replace members.
+export const healClock = { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: timer => clearTimeout(timer) };
 export const healTransport = { remote: (server, request) => transport.remote(server, request) };
 const iso = ms => new Date(ms).toISOString();
 const ACTOR = 'self-heal';
@@ -99,6 +99,34 @@ export function recordHealth({ siteId, serverId, container, status, id: containe
   return null;
 }
 
+// ---------- running restarts at once ----------
+// The worker loop runs one job at a time, so a restart queued while another site's backup runs would wait for it. The
+// worker therefore sets `healRunner.active`, and a restart queued by an event (or by a gap ending) is claimed and run
+// at once beside the running job: claimJob's site rules (src/job-claim.js) keep it off a busy site, the claim is
+// atomic, and only self-heal jobs are claimed here. Off unless the worker turns it on (tests drive claims themselves).
+export const healRunner = { active: () => false, running: null };
+export function healNow() {
+  if (healRunner.running || !healRunner.active()) return healRunner.running;
+  healRunner.running = (async () => {
+    try {
+      for (let count = 0; count < 50 && healRunner.active(); count++) {
+        const job = claimJob({ healOnly: true });
+        if (!job) break;
+        await executeHealJob(job);
+      }
+    } catch (error) { console.error(`Self-heal restart step failed: ${error.code ?? error.name}`); }
+    finally { healRunner.running = null; }
+  })();
+  return healRunner.running;
+}
+// One re-check when a container's 60 s gap ends (scheduled by the restart that started the gap, never a polling loop).
+const rechecks = new Map();
+function recheckAt(siteId, ms) {
+  if (rechecks.has(siteId) || !healRunner.active()) return;
+  rechecks.set(siteId, healClock.setTimeout(() => { rechecks.delete(siteId); try { tickSite(siteId); } catch (error) { console.error(`Self-heal re-check failed: ${error.code ?? error.name}`); } }, Math.max(1000, ms)));
+}
+export function cancelRechecks() { for (const timer of rechecks.values()) healClock.clearTimeout(timer); rechecks.clear(); }
+
 // ---------- the tick ----------
 export function tickSelfHeal(nowMs = healClock.now()) {
   for (const { site_id: siteId } of db.prepare('SELECT site_id FROM self_heal_settings WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all()) {
@@ -112,6 +140,7 @@ function tickSite(siteId, nowMs = healClock.now()) {
   if (!serverId) return;
   // The newest row of every container that has one, keeping only those that still want a restart.
   const open = db.prepare("SELECT * FROM (SELECT e.*,ROW_NUMBER() OVER (PARTITION BY container ORDER BY at DESC,rowid DESC) AS n FROM self_heal_events e WHERE site_id=?) WHERE n=1 AND kind IN ('unhealthy','skipped')").all(siteId).filter(wantsRestart);
+  let queued = false;
   for (const row of open) {
     const entry = settings.watched.find(item => item.name === row.container);
     if (!entry || activeHealJob(siteId, row.container)) continue;
@@ -126,13 +155,15 @@ function tickSite(siteId, nowMs = healClock.now()) {
         gaveUp(siteId, row.container, 'limit', nowMs);
         return;
       }
-      if (restarts.last && nowMs - Date.parse(restarts.last) < timing.minGapMs) return; // the gap: a later tick acts
+      if (restarts.last && nowMs - Date.parse(restarts.last) < timing.minGapMs) { recheckAt(siteId, Date.parse(restarts.last) + timing.minGapMs - nowMs + 50); return; } // the gap
       if (!row.container_id) return;
       const jobId = id();
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'self-heal','heal_queued','queued',?,?)")
         .run(jobId, siteId, iso(nowMs), JSON.stringify({ container: row.container, containerId: row.container_id, project: entry.project ?? null, service: entry.service ?? null, eventId: row.id }));
+      queued = true;
     });
   }
+  if (queued) healNow();
 }
 
 // ---------- claim ----------

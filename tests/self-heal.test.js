@@ -235,6 +235,29 @@ test('a disabled site, a removed site and a container no longer watched never re
   assert.equal(heal.blockReason(f.siteId), 'removed');
 });
 
+test('a restart queued by an event starts at once beside a long job of another site, never on a busy site', async () => {
+  const serverId = serverRow('now-host'), a = siteRow(serverId, 'now-a'), b = siteRow(serverId, 'now-b');
+  enable(a); enable(b);
+  const longBackup = queueJob(b, { status: 'running' }); // the worker loop is busy with site B's backup
+  heal.healRunner.active = () => true;
+  try {
+    unhealthy({ serverId, siteId: a });
+    await heal.healRunner.running;
+    assert.equal(restarts.length, 1, 'site A healed while site B backup runs');
+    assert.deepEqual(jobsOf(a), ['completed/completed']);
+    unhealthy({ serverId, siteId: b });
+    await heal.healRunner.running;
+    assert.equal(restarts.length, 1, 'site B is busy: no restart');
+    assert.match(history(b).at(-1), /skipped:site_busy$/);
+    // The gap: a second unhealthy inside 60 s schedules one re-check when the gap ends.
+    const timers = []; heal.healClock.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.at(-1); }; heal.healClock.clearTimeout = () => {};
+    now += 20_000; healthy({ serverId, siteId: a }); unhealthy({ serverId, siteId: a });
+    assert.equal(timers.length, 1); assert.ok(timers[0].ms > 39_000 && timers[0].ms < 41_000, String(timers[0].ms));
+    now += 41_000; timers[0].fn(); await heal.healRunner.running;
+    assert.equal(restarts.length, 2, 'restarted when the gap ended');
+  } finally { heal.healRunner.active = () => false; heal.cancelRechecks(); db.prepare("UPDATE jobs SET status='completed',finished_at=? WHERE id=?").run(at(), longBackup); }
+});
+
 // ---------- streams ----------
 class FakeChannel extends EventEmitter {
   constructor() { super(); this.stderr = new EventEmitter(); this.written = ''; this.closed = false; }
