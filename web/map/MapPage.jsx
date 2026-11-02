@@ -10,7 +10,7 @@ import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {Sheet,ReviewDialog,ProgressDialog,TargetDialog,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {formatDate} from '../date-format.js';
 import {HardeningSection} from '../hardening.jsx';
-import {LaunchFlow} from './LaunchFlow.jsx';
+import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,offerOpen} from './LaunchFlow.jsx';
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
@@ -355,6 +355,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='launch'&&byId.servers[flow.serverId]&&<LaunchFlow server={byId.servers[flow.serverId]} api={api} narrow={narrow} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
+  {flow?.kind==='remove-launch'&&byId.sites[flow.siteId]&&<RemoveLaunchDialog site={byId.sites[flow.siteId]} server={byId.servers[byId.sites[flow.siteId].serverId]} api={api} onClose={finished=>{closeFlow(false);if(finished)onRefresh?.()}}/>}
   {flow?.kind==='progress'&&<ProgressDialog site={flowSite} to={flowTo} client={client} moveId={flow.moveId} onClose={()=>closeFlow(true)}/>}
   {aflow?.kind==='pick'&&<PickSheet source={aflow.source} nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} onClose={closeAflow} onAdd={()=>addNode(null,aflow.source)} onPick={c=>openAlert(c.id,aflow.source)}/>}
   {aflow?.kind==='delete'&&<DeleteNodeSheet node={aflow.node} count={aflow.count} client={alertsClient} onClose={closeAflow} onDeleted={async()=>{const gone=aflow.node;setAflow(null);if(panel?.kind==='alert'&&panel.id===gone.id)setPanel(null);await loadAlerts();setUndo(null);setNote(gone.name+' is deleted.');setTimeout(()=>view.current?.focus?.(),0)}}/>}
@@ -380,6 +381,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const s=byId.sites[panel.id],home=byId.servers[s.serverId],dbs=databasesOf(s),doms=domainsOf(s),lb=lastBackup(s.id),target=byId.storage[backupOf[s.id]],failed=lastJob(s.id)?.status==='failed',pol=(policies||[]).find(x=>x.siteId===s.id),ports=Array.isArray(s.config?.ports)?s.config.ports.map(String):[],sched=pol?.enabled?(pol.nextRun?'Next run '+when(pol.nextRun):'On a schedule'):'No schedule';
    const cs=Array.isArray(s.config?.containers)?s.config.containers:[],names=cs.length&&cs.every(x=>typeof x==='string')?cs.join(', '):cs.length?String(cs.length):'';
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
+    {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>

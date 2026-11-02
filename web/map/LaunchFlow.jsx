@@ -4,7 +4,7 @@ import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Sheet,Note,useGuard,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {installChecks,PACKAGE_NAME} from './moves-client.js';
-import {createLaunchClient,LAUNCH_STOP,LAUNCH_STEPS,STEP_LABEL,rowState,STATE_WORD,serviceNames,ENV_KEY,ENV_REFUSED,domainOk,friendlyLaunch,clock,elapsed} from './launch-client.js';
+import {createLaunchClient,LAUNCH_STOP,LAUNCH_STEPS,STEP_LABEL,rowState,STATE_WORD,serviceNames,ENV_KEY,ENV_REFUSED,domainOk,friendlyLaunch,clock,elapsed,agoText,untilText} from './launch-client.js';
 import './launch.css';
 
 // Launch a new site from the Map (docs/launch-site.md). The Map's "New site" opens this flow on a server:
@@ -111,7 +111,7 @@ export function stepsOf(l){
  return LAUNCH_STEPS.map(([step,label])=>({step,label,state:'pending'}));
 }
 
-function Progress({server,client,launchId,onClose,onBack}){
+export function LaunchProgress({server,client,launchId,onClose,onBack}){
  const [l,setL]=useState(null),[err,setErr]=useState(''),[busy,setBusy]=useState(false),[tick,setTick]=useState(0),[copied,setCopied]=useState(false);
  useEffect(()=>{
   let stop=false,t;
@@ -159,11 +159,11 @@ function Progress({server,client,launchId,onClose,onBack}){
   <Note kind="ok" icon={IconCircleCheck} role="status">{domain} is removed from {server.name}. Backups stay.</Note>
  </Sheet>;
  const pct=Math.round(Math.min(100,Math.max(0,l?.progress??(steps.length?100*steps.filter(s=>s.state==='done').length/steps.length:0))));
- return <Sheet className="ln-dialog" title={domain?`Launching ${domain}`:'Launching'} labelId="ln-run-title" onClose={finish} actions={<><button type="button" disabled={!acts.cancel||busy} onClick={()=>act(()=>client.cancel(launchId))}>Cancel</button><button type="button" className="primary" onClick={finish}>Close</button></>}>
+ return <Sheet className="ln-dialog" title={state==='removing'?`Removing ${domain}`:domain?`Launching ${domain}`:'Launching'} labelId="ln-run-title" onClose={finish} actions={<><button type="button" disabled={!acts.cancel||busy||state==='removing'} onClick={()=>act(()=>client.cancel(launchId))}>Cancel</button><button type="button" className="primary" onClick={finish}>Close</button></>}>
   <div className="map-bar" role="progressbar" aria-label="Launch progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={pct}><span style={{width:pct+'%'}}/></div>
   <p className="map-status" role="status">{l?.statusLine||'Starting…'}</p>
   <Timeline steps={steps} now={now}/>
-  <p className="map-caption">Closing keeps it running.</p>
+  <p className="map-caption">{state==='removing'?'Closing keeps it going.':'Closing keeps it running.'}</p>
   {errNote}
  </Sheet>;
 }
@@ -188,5 +188,27 @@ export function LaunchFlow({server,api,narrow,onClose}){
  if(stage==='install')return <InstallConfirmDialog server={server} check={{...ins,serverId:server.id}} client={client} onCancel={toCheck} onStarted={jobId=>{setIns(i=>({...i,jobId}));setStage('install-run')}} onCheckAgain={check}/>;
  if(stage==='install-run')return <InstallProgressDialog server={server} pkg={ins.install.package} client={client} jobId={ins.jobId} onClose={toCheck} onCheckAgain={check}/>;
  if(stage==='command')return <CommandDialog server={server} check={ins} onClose={toCheck} onCheckAgain={check}/>;
- return <Progress server={server} client={client} launchId={launchId} onClose={close} onBack={()=>{setStage('source')}}/>;
+ return <LaunchProgress server={server} client={client} launchId={launchId} onClose={close} onBack={()=>{setStage('source')}}/>;
+}
+
+// The Remove launch offer on a launched site's details (docs/launch-site.md, "After launch"): 24 hours after the launch.
+export function LaunchOffer({launch,onRemove}){
+ return <section className="hd-section"><h3 className="map-group-title">Launch</h3>
+  <span className="t-caption">Launched {agoText(launch.launchedAt)}. You can remove it until {untilText(launch.removeUntil)}. The first backup stays.</span>
+  <div><button type="button" onClick={onRemove}>Remove launch</button></div>
+ </section>;
+}
+export const offerOpen=launch=>!!launch?.id&&Date.parse(launch.removeUntil)>Date.now();
+
+// Confirm, with the fresh sign-in check the server asks for, then follow the removal like a launch.
+export function RemoveLaunchDialog({site,server,api,onClose}){
+ const client=useMemo(()=>createLaunchClient(api),[api]),guard=useGuard(client),[busy,setBusy]=useState(false),[err,setErr]=useState(''),[running,setRunning]=useState(false);
+ const id=site.launch?.id;
+ if(running)return <LaunchProgress server={server} client={client} launchId={id} onClose={onClose} onBack={()=>onClose(true)}/>;
+ const go=()=>{setBusy(true);setErr('');return guard.run(async()=>{await client.remove(id);setRunning(true)},e=>setErr(friendlyLaunch(e))).finally(()=>setBusy(false))};
+ return <Sheet className="ln-dialog" title="Remove launch?" labelId="ln-remove-title" onClose={()=>onClose(false)} actions={<><button type="button" onClick={()=>onClose(false)}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Remove launch</button></>}>
+  <p>This removes what the launch created on {server?.name||'the server'}: containers, volumes, the nginx file and the certificate. Backups stay.</p>
+  {err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>}
+  {guard.prompt}
+ </Sheet>;
 }

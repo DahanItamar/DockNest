@@ -41,6 +41,7 @@ const LAUNCH_STATES={
 };
 async function open({width=1440,height=900,scheme='light'}={}){
  const context=await browser.newContext({viewport:{width,height},reducedMotion:'reduce',colorScheme:scheme});
+ await context.grantPermissions(['clipboard-read','clipboard-write'],{origin}).catch(()=>{});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  const page=await context.newPage(),offOrigin=[];
  page.on('pageerror',e=>errors.push(e.message));
@@ -122,6 +123,18 @@ async function reauth(page){
  await page.getByText('Please confirm it is you').waitFor();
  await page.getByLabel('Password').fill('pw');await page.getByLabel('Authenticator code').fill('123456');
  await page.getByRole('button',{name:'Verify and continue'}).click();
+}
+async function openConnections(page){
+ if(phone(page)){await page.getByRole('button',{name:'Open navigation'}).click()}
+ await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Connections',exact:true}).first().click();
+ await page.getByRole('heading',{name:'Deploy keys'}).waitFor();
+ await page.getByRole('heading',{name:'Deploy keys'}).scrollIntoViewIfNeeded();
+}
+async function openSite(page,name){
+ await gotoMap(page);
+ if(phone(page))await page.locator('.map-list li',{hasText:name}).getByRole('button',{name:'Details'}).click();
+ else await page.locator('.map-site',{hasText:name}).first().click();
+ await page.getByRole('heading',{name}).waitFor();
 }
 const only=process.argv[2];
 async function scenario(name,fn){if(only&&only!==name)return;reset();process.stdout.write(name+' ... ');await fn();console.log('ok')}
@@ -283,6 +296,84 @@ try{
    await e.getByRole('button',{name:'Try again'}).click();
    await e.getByText('Launched. Backups and restore tests are on.').waitFor();
    await second.context.close();
+  });
+ }
+ for(const [width,height,scheme] of [[1440,900,'light'],[390,844,'dark'],[1440,900,'dark'],[390,844,'light']]){
+  const tag=`${width}-${scheme}`;
+  await scenario('remove launch '+tag,async()=>{
+   const {context,page}=await open({width,height,scheme});
+   await openSite(page,'shop2.example.com');
+   const panel=page.locator('.map-panel, dialog[open]').last();
+   await panel.getByText(/Launched 3 hours ago\. You can remove it until /).waitFor();
+   await panel.getByText(/The first backup stays\./).waitFor();
+   await shot(page,'43-built-remove-launch-offer',scheme);
+   await panel.getByRole('button',{name:'Remove launch'}).click();
+   const d=dialog(page);
+   await d.getByRole('heading',{name:'Remove launch?'}).waitFor();
+   await d.getByText(/containers, volumes, the nginx file and the certificate\. Backups stay\./).waitFor();
+   mock.needReauth=true;
+   await d.getByRole('button',{name:'Remove launch'}).click();
+   await d.getByText('Please confirm it is you').waitFor();
+   assert.equal(await d.getByRole('button',{name:'Remove launch'}).isDisabled(),true,'waits for the check');
+   await shot(page,'44-built-remove-launch-confirm',scheme);await layoutOk(page);
+   await reauth(page);
+   await dialog(page).getByRole('heading',{name:'Launch removed'}).waitFor();
+   assert.equal(mock.removes,1);assert.equal(mock.reauths,1);
+   await context.close();
+  });
+  await scenario('deploy keys '+tag,async()=>{
+   const {context,page,offOrigin}=await open({width,height,scheme});
+   await openConnections(page);
+   const sec=page.locator('section[aria-labelledby=dk-heading]');
+   await sec.getByText('Shop deploy key').waitFor();
+   await sec.getByText('github.com').waitFor();await sec.getByText('Commerce host').waitFor();await sec.getByText('3 days ago').waitFor();
+   await sec.getByText('14 days ago').waitFor();
+   assert.equal(await sec.getByRole('button',{name:'New key'}).count(),1);
+   await shot(page,'45-built-deploy-keys-list',scheme);
+   // copy the public key
+   await sec.getByRole('button',{name:'Copy public key of Shop deploy key'}).click();
+   await page.getByText('Public key of Shop deploy key copied.').waitFor();
+   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),PUB);
+   // create: form, host key confirm, public key
+   await sec.getByRole('button',{name:'New key'}).click();
+   const d=dialog(page);
+   await d.getByRole('heading',{name:'New deploy key'}).waitFor();
+   assert.equal(await d.getByRole('button',{name:'Next'}).isDisabled(),true);
+   await d.getByLabel('Name').fill('Admin repo key');await d.getByLabel('Git host').fill('github.com');
+   await d.getByLabel('Read from').selectOption({label:'Commerce host'});
+   await shot(page,'46-built-deploy-key-new',scheme);await layoutOk(page);
+   await d.getByRole('button',{name:'Next'}).click();
+   await d.getByRole('heading',{name:'Confirm github.com'}).waitFor();
+   await d.getByText(FP).waitFor();
+   assert.deepEqual(mock.keyCalls[0],['host-key',{gitHost:'github.com',serverId:'a'}]);
+   await shot(page,'47-built-deploy-key-host-confirm',scheme);await layoutOk(page);
+   mock.needReauth=true;
+   await d.getByRole('button',{name:'Pin key'}).click();
+   await reauth(page);
+   await d.getByRole('heading',{name:'Admin repo key'}).waitFor();
+   assert.deepEqual(mock.created[0],{name:'Admin repo key',gitHost:'github.com',serverId:'a',fingerprint:FP});
+   await d.getByText('Add it as a read-only deploy key at github.com.').waitFor();
+   await d.getByText(PUB).waitFor();
+   await d.getByText('github.com, from Commerce host').waitFor();
+   await shot(page,'48-built-deploy-key-public',scheme);await layoutOk(page);
+   await d.getByRole('button',{name:'Done'}).click();
+   await sec.getByText('Admin repo key').waitFor();
+   // re-pin after a rotation
+   await sec.getByRole('button',{name:'Re-pin host key of Shop deploy key'}).click();
+   await d.getByRole('heading',{name:'Re-pin github.com'}).waitFor();
+   await d.getByText('Host key changed').waitFor();await d.getByText(FP2).waitFor();
+   await shot(page,'49-built-deploy-key-repin',scheme);await layoutOk(page);
+   await d.getByRole('button',{name:'Re-pin',exact:true}).click();
+   await page.getByText('github.com is pinned again.').waitFor();
+   assert.equal(mock.repins[0][1].fingerprint,FP2);
+   // delete, then the empty state
+   mock.keys=mock.keys.slice(0,1);
+   await sec.getByRole('button',{name:/Delete /}).first().click();
+   await dialog(page).getByRole('button',{name:'Delete',exact:true}).click();
+   await sec.getByText('No deploy keys yet').waitFor();
+   await shot(page,'50-built-deploy-keys-empty',scheme);
+   assert.deepEqual(offOrigin,[]);
+   await context.close();
   });
  }
  if(errors.length)throw new Error('Page errors: '+errors.join(' | '));

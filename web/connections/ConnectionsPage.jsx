@@ -6,6 +6,7 @@ import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
 import {createConnectionsClient,testState,usedByText,usedByShort} from './client.js';
 import {ProviderIcon,SwitchRow} from './parts.jsx';
+import {DeployKeys} from './DeployKeys.jsx';
 import {ConnectionDialog,DeleteConnectionDialog,useReauth} from './ConnectionDialog.jsx';
 import './connections.css';
 
@@ -13,7 +14,7 @@ import './connections.css';
 // columns (Name, Provider, Used by, Last test, Actions); on phones the rows become labelled records. A failed real send
 // shows a warning panel. The settings (administrators only) are two switches that ask for a fresh sign-in check.
 // Loads once and after each change; nothing polls.
-export function ConnectionsPage({api,user,openNew=0,onSessionExpired}){
+export function ConnectionsPage({api,user,servers=[],openNew=0,onSessionExpired}){
  const client=useMemo(()=>createConnectionsClient(api),[api]);
  const [data,setData]=useState(null),[providers,setProviders]=useState([]),[error,setError]=useState(null),[dialog,setDialog]=useState(null),[note,setNote]=useState(null),[testing,setTesting]=useState(null);
  const load=useCallback(async()=>{
@@ -57,6 +58,7 @@ export function ConnectionsPage({api,user,openNew=0,onSessionExpired}){
    {list.length?<Paginated rows={list} label="Connections" pageSize={10}>{visible=><DataTable headers={['Name','Provider','Used by','Last test','Actions']} columns={['22%','18%','20%','24%','16%']} numeric={[4]}>{rows(visible)}</DataTable>}</Paginated>
     :<div className="empty"><span className="empty-icon"><IconPlugConnected size={28} stroke={1.5} aria-hidden="true"/></span><h3>No connections yet</h3><p>A connection holds the login for one provider. Add one, then pick it on an alert node.</p><button type="button" className="primary" onClick={()=>setDialog({kind:'new'})}><IconPlus size={18} stroke={2} aria-hidden="true"/>New connection</button></div>}
   </section>
+  {role==='admin'&&<DeployKeys api={api} connections={client} servers={servers}/>}
   {role==='admin'&&<Settings client={client} settings={data.settings} onChanged={load}/>}
   {(dialog?.kind==='new'||dialog?.kind==='edit')&&<ConnectionDialog key={dialog.connection?.id||'new'} client={client} providers={providers} connection={dialog.connection} role={role} onClose={close} onSaved={async(view,created)=>{close();setNote({ok:true,text:created?`${view.name} is saved. Pick it on an alert node on the Map.`:`${view.name} is saved.`});await load()}}/>}
   {dialog?.kind==='delete'&&<DeleteConnectionDialog client={client} connection={dialog.connection} onClose={close} onDeleted={async()=>{close();setNote({ok:true,text:`${dialog.connection.name} is deleted.`});await load()}}/>}
