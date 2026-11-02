@@ -189,7 +189,20 @@ try {
   const {execFileSync}=await import('node:child_process');
   execFileSync(process.platform==='win32'?'python':'python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);bad=z.testzip();assert bad is None,repr(bad)",fullZip],{stdio:['ignore','ignore','pipe']});
   await run('cp',fullZip,hosts[1]+':/full-site.zip');
-  assert.equal(await run('exec',hosts[1],'python3','-c',"import zipfile;z=zipfile.ZipFile('/full-site.zip');bad=z.testzip();assert bad is None,repr(bad);assert z.read('site-files/site-a/site/asset.txt')==b'snapshot-asset';assert 'site-files/site-a/site/database.sqlite' in z.namelist();assert 'recovery-originals/images.tar' in z.namelist();assert 'recovery-originals/manifest.json' in z.namelist();print('full-zip-verified')"),'full-zip-verified');
+  // asset.txt and asset-hardlink.txt are one inode. GNU tar stores whichever name the directory listing returns first as
+  // the file and the other as a hard link; that order depends on the filesystem (it changed with the runner image). The
+  // ZIP holds the content under the first name and a link note under the other, so both orders are checked exactly.
+  const zipCheck=["import zipfile",
+    "z=zipfile.ZipFile('/full-site.zip');bad=z.testzip();assert bad is None,repr(bad);names=z.namelist();p='site-files/site-a/site/'",
+    "primary,linked=('asset.txt','asset-hardlink.txt') if p+'asset.txt' in names else ('asset-hardlink.txt','asset.txt')",
+    "assert z.read(p+primary)==b'snapshot-asset',repr(names)",
+    "assert p+linked not in names,repr(names)",
+    "assert z.read(p+linked+'.docknest-link.txt').decode().startswith('Original Linux hard link to '+primary+'\\n'),repr(names)",
+    "assert z.read(p+'asset-link.txt.docknest-link.txt').decode().startswith('Original Linux link: asset.txt\\n'),repr(names)",
+    "assert p+'database.sqlite' in names,repr(names)",
+    "assert 'recovery-originals/images.tar' in names and 'recovery-originals/manifest.json' in names,repr(names)",
+    "print('full-zip-verified')"].join('\n');
+  assert.equal(await run('exec',hosts[1],'python3','-c',zipCheck),'full-zip-verified');
   await rm(fullZip);assert.deepEqual((await readdir(process.env.DATA_DIR,{recursive:true})).filter(name=>/(^|[\\/])(export-[A-Za-z0-9]+|payload\.tar\.gz)([\\/]|$)/.test(name)),[],'No export files exist anywhere under the data directory');
   record('Full ZIP is prepared (verify only), then streamed from the encrypted SFTP backup with browsable database/files and original image archives, passes every ZIP CRC and never stores plaintext on the server');
   record('Clean second-host restore loads bundled images without pulling; original database rows, asset, mode and writable layer survive live-source edits; copy has network none');
