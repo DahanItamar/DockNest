@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Safe Edit screens: administrators can edit a Compose or single-container site's Compose file, environment values, ports and image from the Map or the Sites page. Review the change, apply it with a backup first, and watch the timeline. Operators can read the edit history.
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
