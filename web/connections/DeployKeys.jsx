@@ -14,12 +14,11 @@ export function createDeployKeysClient(api){
  const id=x=>encodeURIComponent(x);
  return {
   list:()=>api('/deploy-keys'),
-  get:keyId=>api('/deploy-keys/'+id(keyId)),
-  // Reads the Git host's SSH key from the server; nothing is stored.
-  hostKey:(body)=>api('/deploy-keys/host-key',body),
+  // Without hostKeySha256 the server only reads the Git host's key and answers 409 HOST_KEY_CONFIRM with its fingerprint
+  // (e.data.hostKey.sha256), creating nothing. With it, the key is read again, must still match, and is created.
   create:body=>api('/deploy-keys',body),
-  rotation:(keyId,serverId)=>api('/deploy-keys/'+id(keyId)+'/host-key',{serverId}),
-  repin:(keyId,body)=>api('/deploy-keys/'+id(keyId)+'/repin',body),
+  // The same two steps to pin the host key again (after the Git host rotated its key, or from another server).
+  pin:(keyId,body)=>api('/deploy-keys/'+id(keyId)+'/pin',body),
   remove:keyId=>api('/deploy-keys/'+id(keyId),undefined,'DELETE')
  };
 }
@@ -39,18 +38,38 @@ function useCopy(){
  return [copied,async text=>{try{await navigator.clipboard.writeText(text);setCopied(true)}catch{setCopied(false)}}];
 }
 
+const Private=({checked,onChange})=><label className="cx-check"><input type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)}/>Allow private address</label>;
+
 function NewKeyDialog({client,connections,servers,onClose,onCreated}){
- const guard=useReauth(connections),[step,setStep]=useState('form'),[name,setName]=useState(''),[host,setHost]=useState(''),[serverId,setServerId]=useState(servers[0]?.id||'');
- const [fp,setFp]=useState(''),[key,setKey]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[copied,copy]=useCopy();
+ const guard=useReauth(connections,{verifyLabel:'Verify'}),[step,setStep]=useState('form'),[name,setName]=useState(''),[host,setHost]=useState(''),[serverId,setServerId]=useState(servers[0]?.id||'');
+ const [fp,setFp]=useState(''),[key,setKey]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[copied,copy]=useCopy();
  const hostName=host.trim().toLowerCase(),server=servers.find(s=>s.id===serverId);
- const ready=name.trim().length>0&&/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(hostName)&&!!serverId;
- async function next(){setBusy(true);setError('');try{const r=await client.hostKey({gitHost:hostName,serverId});setFp(r.fingerprint);setStep('host')}catch(e){setError(e.message||'The host key could not be read.')}setBusy(false)}
- async function pin(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.create({name:name.trim(),gitHost:hostName,serverId,fingerprint:fp});setKey(r.key);setStep('pub');onCreated?.()},e=>setError(e.message||'The key could not be created.'));setBusy(false)}
+ const ready=name.trim().length>0&&hostName.length>0&&!!serverId;
+ const base={name:name.trim(),gitHost:hostName,serverId,...(priv?{allowPrivate:true}:{})};
+ // Next: the server reads the host key and asks for the confirmation (409 HOST_KEY_CONFIRM); nothing is created yet.
+ async function next(){
+  setBusy(true);setError('');
+  await guard.run(async()=>{await client.create(base);setError('The host key was not offered for confirmation.')},e=>{
+   if(e.code==='HOST_KEY_CONFIRM'){setFp(e.data?.hostKey?.sha256||'');setStep('host');return}
+   if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);
+   setError(e.message||'The host key could not be read.');
+  });
+  setBusy(false);
+ }
+ // Pin key: the server reads the key again and creates the pair only if it is still the one that was confirmed.
+ async function pin(){
+  setBusy(true);setError('');
+  await guard.run(async()=>{const r=await client.create({...base,hostKeySha256:fp});setKey(r.key);setStep('pub');onCreated?.()},e=>{
+   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.sha256)setFp(e.data.hostKey.sha256);
+   setError(e.message||'The key could not be created.');
+  });
+  setBusy(false);
+ }
  if(step==='pub')return <Dlg labelId="dk-title" title={key.name} onClose={onClose} foot={<button type="button" className="primary" onClick={onClose}>Done</button>}>
   <div className="field" role="group" aria-labelledby="dk-pub"><span id="dk-pub">Public key</span><pre className="command-preview cx-wrap" tabIndex={0} aria-labelledby="dk-pub">{key.publicKey}</pre></div>
   <div><button type="button" onClick={()=>copy(key.publicKey)}><IconCopy size={18} stroke={1.75} aria-hidden="true"/>{copied?'Copied':'Copy'}</button></div>
   <AlertPanel variant="info">Add it as a read-only deploy key at {key.gitHost}.</AlertPanel>
-  <div className="field"><span>Pinned host key</span><div className="cx-saved"><span><IconLock size={18} stroke={1.75} aria-hidden="true"/>{key.gitHost}, from {server?.name||'the server'}</span></div></div>
+  <div className="field"><span>Pinned host key</span><div className="cx-saved"><span><IconLock size={18} stroke={1.75} aria-hidden="true"/>{key.gitHost}, from {key.pinnedFromServerName||server?.name||'the server'}</span></div></div>
  </Dlg>;
  if(step==='host')return <Dlg labelId="dk-title" title={'Confirm '+hostName} onClose={onClose} foot={<><button type="button" onClick={()=>{setStep('form');setError('')}}>Back</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={pin}>Pin key</button></>}>
   <p>{server?.name||'The server'} sees this host key for {hostName}. Compare it with the one your Git host publishes.</p>
@@ -59,29 +78,51 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   {guard.box}
  </Dlg>;
- return <Dlg labelId="dk-title" title="New deploy key" onClose={onClose} foot={<><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!ready||busy} onClick={next}>Next</button></>}>
+ return <Dlg labelId="dk-title" title="New deploy key" onClose={onClose} foot={<><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={!ready||busy||guard.waiting} onClick={next}>Next</button></>}>
   <label className="field"><span>Name</span><input type="text" autoComplete="off" spellCheck={false} maxLength={80} value={name} onChange={e=>setName(e.target.value)}/></label>
   <label className="field"><span>Git host</span><input type="text" autoComplete="off" spellCheck={false} inputMode="url" value={host} onChange={e=>setHost(e.target.value)}/></label>
   <label className="field"><span>Read from</span><select value={serverId} onChange={e=>setServerId(e.target.value)}>{servers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+  {showPriv&&<Private checked={priv} onChange={setPriv}/>}
   <p className="t-caption">DockNest reads the host key from this server and asks you to confirm it.</p>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
+  {guard.box}
  </Dlg>;
 }
 
+// Pin the host key again: read it (again from the pinned server, or from another one), compare with the pinned key, confirm.
 function RepinDialog({client,connections,item,servers,onClose,onDone}){
- const guard=useReauth(connections),[state,setState]=useState({loading:true}),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const serverId=item.pinnedFromServerId||servers[0]?.id;
- useEffect(()=>{let live=true;client.rotation(item.id,serverId).then(r=>{if(live)setState({fingerprint:r.fingerprint,previous:r.previous})}).catch(e=>{if(live)setState({error:e.message||'The host key could not be read.'})});return()=>{live=false}},[client,item.id,serverId]);
- const same=state.fingerprint&&state.fingerprint===state.previous;
- async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.repin(item.id,{serverId,fingerprint:state.fingerprint});await onDone()},e=>setError(e.message||'The host key could not be pinned.'));setBusy(false)}
- return <Dlg labelId="dk-title" title={'Re-pin '+item.gitHost} onClose={onClose} foot={<><button type="button" onClick={onClose}>{same||state.error?'Close':'Cancel'}</button>{!same&&!state.error&&<button type="submit" className="primary" disabled={state.loading||busy||guard.waiting} onClick={go}>Re-pin</button>}</>}>
+ const guard=useReauth(connections,{verifyLabel:'Verify'}),[serverId,setServerId]=useState(item.pinnedFromServerId||servers[0]?.id||''),[state,setState]=useState({loading:true}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[moved,setMoved]=useState(null);
+ const base={serverId,...(priv?{allowPrivate:true}:{})};
+ useEffect(()=>{
+  let live=true;setState({loading:true});
+  guard.run(async()=>{await client.pin(item.id,base);if(live)setState({error:'The host key was not offered for confirmation.'})},e=>{
+   if(!live)return;
+   if(e.code==='HOST_KEY_CONFIRM')return setState({fingerprint:e.data?.hostKey?.sha256||''});
+   if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);
+   setState({error:e.message||'The host key could not be read.'});
+  });
+  return()=>{live=false};
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ },[client,item.id,serverId,priv]);
+ const pinned=item.hostKey?.sha256,sameKey=state.fingerprint&&state.fingerprint===pinned,sameServer=serverId===item.pinnedFromServerId,nothing=sameKey&&sameServer;
+ async function go(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.pin(item.id,{...base,hostKeySha256:state.fingerprint});if(r?.replacedPin)setMoved(r.replacedPin);else await onDone()},e=>{
+   if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.sha256)setState({fingerprint:e.data.hostKey.sha256});
+   setError(e.message||'The host key could not be pinned.');
+  });setBusy(false)}
+ if(moved)return <Dlg labelId="dk-title" title={'Re-pin '+item.gitHost} onClose={onDone} foot={<button type="button" className="primary" onClick={onDone}>Done</button>}>
+  <AlertPanel variant="info">{moved.text}</AlertPanel>
+ </Dlg>;
+ return <Dlg labelId="dk-title" title={'Re-pin '+item.gitHost} onClose={onClose} foot={<><button type="button" onClick={onClose}>{nothing||state.error?'Close':'Cancel'}</button>{!nothing&&!state.error&&<button type="submit" className="primary" disabled={state.loading||busy||guard.waiting} onClick={go}>Re-pin</button>}</>}>
+  {servers.length>1&&<label className="field"><span>Read from</span><select value={serverId} onChange={e=>setServerId(e.target.value)}>{servers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>}
+  {showPriv&&<Private checked={priv} onChange={setPriv}/>}
   {state.loading&&<p className="t-caption" role="status">Reading the host key…</p>}
   {state.error&&<AlertPanel variant="error">{state.error}</AlertPanel>}
-  {same&&<AlertPanel variant="info">{item.gitHost} sends the same key as before. Nothing to change.</AlertPanel>}
-  {state.fingerprint&&!same&&<>
-   <AlertPanel variant="warning" title="Host key changed">{item.gitHost} now sends a different key. Continue only if you expect that.</AlertPanel>
-   <Fingerprint label="Pinned" id="dk-old" value={state.previous}/>
-   <Fingerprint label="Now" id="dk-new" value={state.fingerprint}/>
+  {nothing&&<AlertPanel variant="info">{item.gitHost} sends the same key as before. Nothing to change.</AlertPanel>}
+  {state.fingerprint&&!nothing&&<>
+   {sameKey?<AlertPanel variant="info">{item.gitHost} sends the same key. Pin it from this server to use the key there.</AlertPanel>
+    :<AlertPanel variant="warning" title="Host key changed">{item.gitHost} now sends a different key. Continue only if you expect that.</AlertPanel>}
+   {!sameKey&&<Fingerprint label="Pinned" id="dk-old" value={pinned}/>}
+   <Fingerprint label={sameKey?'Host key':'Now'} id="dk-new" value={state.fingerprint}/>
   </>}
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   {guard.box}
@@ -89,7 +130,7 @@ function RepinDialog({client,connections,item,servers,onClose,onDone}){
 }
 
 function DeleteKeyDialog({client,connections,item,onClose,onDeleted}){
- const guard=useReauth(connections),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const guard=useReauth(connections,{verifyLabel:'Verify'}),[busy,setBusy]=useState(false),[error,setError]=useState('');
  async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.remove(item.id);await onDeleted()},e=>setError(e.message||'This key could not be deleted.'));setBusy(false)}
  return <Dlg confirm labelId="dk-title" title={'Delete '+item.name+'?'} onClose={onClose} foot={<><button type="button" onClick={onClose}>Cancel</button><button type="button" className="primary" disabled={busy||guard.waiting} onClick={go}>Delete</button></>}>
   <p>The key is removed from DockNest. Also remove its public key at {item.gitHost}.</p>
@@ -105,7 +146,7 @@ export function DeployKeys({api,connections,servers=[]}){
  useEffect(()=>{load()},[load]);
  const byServer=useMemo(()=>Object.fromEntries(servers.map(s=>[s.id,s.name])),[servers]);
  async function copyKey(k){
-  try{const r=await client.get(k.id);await navigator.clipboard.writeText(r.key.publicKey);setNote({ok:true,text:`Public key of ${k.name} copied.`})}
+  try{await navigator.clipboard.writeText(k.publicKey);setNote({ok:true,text:`Public key of ${k.name} copied.`})}
   catch(e){setNote({ok:false,text:`${k.name}: ${e.message||'The public key could not be copied.'}`})}
  }
  const close=()=>setDialog(null);
@@ -113,7 +154,7 @@ export function DeployKeys({api,connections,servers=[]}){
  const rows=visible=>visible.map(k=><tr key={k.id}>
   <td><b className="cx-trunc" title={k.name}>{k.name}</b></td>
   <td><span className="cx-trunc" title={k.gitHost}>{k.gitHost}</span></td>
-  <td><span className="cx-trunc">{byServer[k.pinnedFromServerId]||k.pinnedFromName||'Removed server'}</span></td>
+  <td><span className="cx-trunc">{k.pinnedFromServerName||byServer[k.pinnedFromServerId]||'Removed server'}</span></td>
   <td><span className="cx-trunc">{ago(k.createdAt)}</span></td>
   <td><div className="actions row-actions">
    <IconButton label={'Copy public key of '+k.name} icon={IconCopy} onClick={()=>copyKey(k)}/>
