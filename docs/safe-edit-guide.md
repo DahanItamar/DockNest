@@ -111,6 +111,10 @@ DockNest refuses a change with one plain reason when it would:
 - remove a service;
 - use YAML that cannot be checked safely as text: an escaped or complex (`?`) key, a top-level `<<` merge or flow
   mapping that the file did not already have, or any new `include`, `extends` or `file` key.
+- add `&`, `*` or `!` at the start of a word (after a space, a bracket or a comma), anywhere in a Compose file,
+  including inside quotes: in YAML these can start an anchor, an alias or a tag, which DockNest does not try to
+  read. This also refuses a newly added shell `&&`, a `*` glob or a `!` after a space in a command; put such
+  commands in a script the container runs, or edit the file by hand. Ones the file already has stay allowed.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."
 If it changes while the backup runs, the change stops before anything is written: "The files changed during the

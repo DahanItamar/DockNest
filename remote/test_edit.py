@@ -662,7 +662,22 @@ class ReviewFixes(EditCase):
         for name,text in bypasses.items():
             with self.assertRaises(helper.EditRefused,msg=name) as refused:helper.edit_raw_problems(original.get(name,yaml_doc),text)
             self.assertIn(refused.exception.code,('YAML_REFUSED','PATH_REFUSED'),name)
-        # Node properties a file already has stay allowed; a new one is refused, outside quotes only.
+        # Quote-agnostic: anchors and aliases hidden between quotes or inside block scalars count too (review re-check).
+        hidden={
+            'apostrophes':yaml_doc+"    command: echo 'it\nx-k: &k include\n*k : [other.yaml]\nx-z: a 'b\n",
+            'double-quotes':yaml_doc+'x-a: a "b\nx-k: &k include\n*k : [other.yaml]\nx-b: c"\n',
+            'block-scalars':yaml_doc+'x-note: |\n  "\nx-k: &k include\n*k : [other.yaml]\nx-n2: |\n  "\n',
+            'shell-and':yaml_doc+'    command: sh -c "a && b"\n',
+        }
+        for name,text in hidden.items():
+            with self.assertRaises(helper.EditRefused,msg=name) as refused:helper.edit_raw_problems(yaml_doc,text)
+            self.assertEqual(refused.exception.code,'YAML_REFUSED',name)
+        self.assertEqual(refused.exception.reason,helper.EDIT_REASONS['NODE_PROPERTY'])
+        with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc+'x-k: &k include\n',yaml_doc+'x-k: &k include\n*k : [x]\n')
+        self.assertEqual(refused.exception.field,'alias-key','a new alias key, even when its anchor already exists')
+        # Tokens a file already has stay allowed (an existing && in a command, an existing anchor).
+        shell=yaml_doc+'    command: sh -c "a && b"\n'
+        helper.edit_raw_problems(shell,shell.replace('nginx:1','nginx:2'))
         anchored=yaml_doc+'x-common: &common\n  restart: always\n  labels:\n    x: "*not-an-alias &not-an-anchor"\n'
         helper.edit_raw_problems(anchored,anchored.replace('nginx:1','nginx:2'))
         with self.assertRaises(helper.EditRefused):helper.edit_raw_problems(anchored,anchored+'x-two: &two {}\n')
@@ -672,7 +687,12 @@ class ReviewFixes(EditCase):
         folder=pathlib.Path(tempfile.mkdtemp(prefix='edit-compose-'))
         try:
             (folder/'other.yaml').write_text('services:\n  sneaky:\n    image: alpine:3\n')
-            for name,text in {'tag':'services:\n  web:\n    image: nginx:1\n!!str include: [other.yaml]\n','anchor':'services:\n  web:\n    image: nginx:1\n&a include: [other.yaml]\n'}.items():
+            base='services:\n  web:\n    image: nginx:1\n'
+            cases={'tag':base+'!!str include: [other.yaml]\n','anchor':base+'&a include: [other.yaml]\n',
+                'apostrophes':base+"    command: echo 'it\nx-k: &k include\n*k : [other.yaml]\nx-z: a 'b\n",
+                'double-quotes':base+'x-a: a "b\nx-k: &k include\n*k : [other.yaml]\nx-b: c"\n',
+                'block-scalars':base+'x-note: |\n  "\nx-k: &k include\n*k : [other.yaml]\nx-n2: |\n  "\n'}
+            for name,text in cases.items():
                 (folder/'compose.yaml').write_text(text)
                 out=subprocess.run(['docker','compose','-f',str(folder/'compose.yaml'),'config','--services'],capture_output=True,text=True,cwd=str(folder))
                 if out.returncode==0:self.assertIn('sneaky',out.stdout,name+': Compose reads it as an include')

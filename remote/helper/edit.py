@@ -105,6 +105,7 @@ EDIT_REASONS={
     'DATA_COPY_SPACE':'Not enough free disk space for the safety copy.',
     'DATA_TOO_LARGE':'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
     'DATA_UNREADABLE':'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+    'NODE_PROPERTY':'Compose text adds &, * or ! where an anchor, alias or tag could start. Change this line by hand.',
     'YAML_REFUSED':'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
     'DATA_NOT_LOCAL':'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
     'OWN_SITE':'This is DockNest itself. Change it with the DockNest upgrade, not Safe Edit.',
@@ -372,31 +373,16 @@ EDIT_RAW_PATTERNS={
 EDIT_REFERENCE_KEY=re.compile(r"(?m)(?:(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*:|\?[ \t]+"+EDIT_KEY_PROPS+r"[\"']?(include|extends|file)[\"']?[ \t]*$)")
 # Line breaks YAML honours but these line-based checks do not see (security review delta: bare CR, NEL, LS, PS).
 EDIT_HIDDEN_BREAKS=re.compile('\r(?!\n)|[\u0085\u2028\u2029]')
+# Quote-agnostic (security review re-check): YAML quoting is never parsed. Every token that could start an anchor (&),
+# an alias (*) or a tag (!) after whitespace or a flow indicator counts, inside quotes and block scalars too. A token the
+# candidate has more often than the original is refused, so new shell `&&`, `*` globs and `!` after a space are refused
+# as well (the guide says to put such commands in a script or edit by hand). Tokens the file already has stay allowed.
+EDIT_PROPERTY_TOKEN=re.compile(r'(?m)(?:^|[\s\[\]{},])([&*!][^\s\[\]{},]*)')
+# An alias used as a mapping key, at the start of a line or list item or inside a flow mapping.
+EDIT_ALIAS_KEY=re.compile(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(\*\S+)[ \t]*:')
 def edit_yaml_properties(text):
-    """Every tag (!x), anchor (&x) and alias (*x) token outside quoted scalars and comments, as a sorted list. A quote that
-    does not close on its line makes the rest of the text count, so unsure input counts more, never less."""
-    found=[];quote=None;i=0;n=len(text);previous='\n'
-    while i<n:
-        c=text[i]
-        if quote:
-            if c=='\\' and quote=='"':i+=2;continue
-            if c==quote:
-                if quote=="'" and i+1<n and text[i+1]=="'":i+=2;continue
-                quote=None
-            elif c=='\n' and quote=="'":pass
-            previous=c;i+=1;continue
-        if c in '"\'' and previous in ' \t\n[{,:-?':quote=c;previous=c;i+=1;continue
-        if c=='#' and previous in ' \t\n':
-            while i<n and text[i]!='\n':i+=1
-            continue
-        if c in '!&*' and previous in ' \t\n[{,:-?':
-            j=i+1
-            while j<n and not text[j].isspace() and text[j] not in ',[]{}':j+=1
-            token=text[i:j]
-            if c!='*' or len(token)>1:found.append(token)
-            previous=text[j-1];i=j;continue
-        previous=c;i+=1
-    return sorted(found)
+    """Every &, * or ! token after whitespace or a flow indicator, as a sorted list (quotes are not interpreted)."""
+    return sorted(EDIT_PROPERTY_TOKEN.findall(text))
 def edit_new(before,after):
     """Items of `after` (a list) not in `before`, counting repeats."""
     remaining=list(before);extra=[]
@@ -411,7 +397,8 @@ def edit_raw_problems(original,candidate):
     if sorted(EDIT_ESCAPED_KEY.findall(candidate))!=sorted(EDIT_ESCAPED_KEY.findall(original)):edit_refuse('YAML_REFUSED','escaped-key')
     for name,pattern in EDIT_RAW_PATTERNS.items():
         if len(pattern.findall(candidate))>len(pattern.findall(original)):edit_refuse('YAML_REFUSED',name)
-    if edit_new(edit_yaml_properties(original),edit_yaml_properties(candidate)):edit_refuse('YAML_REFUSED','node-property')
+    if edit_new(EDIT_ALIAS_KEY.findall(original),EDIT_ALIAS_KEY.findall(candidate)):edit_refuse('YAML_REFUSED','alias-key')
+    if edit_new(edit_yaml_properties(original),edit_yaml_properties(candidate)):edit_refuse('YAML_REFUSED','node-property',EDIT_REASONS['NODE_PROPERTY'])
     keys=lambda text:[a or b for a,b in EDIT_REFERENCE_KEY.findall(text)]
     for token in edit_new(keys(original),keys(candidate)):edit_refuse('PATH_REFUSED',token)
 def edit_text_problems(original,candidate,inv,roots):
