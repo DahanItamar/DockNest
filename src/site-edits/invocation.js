@@ -18,7 +18,7 @@ export function validInvocation(kind, invocation) {
   if (kind === 'container') return invocation && CONTAINER.test(invocation.container ?? '') && Object.keys(invocation).length === 1 ? { container: invocation.container } : null;
   if (kind !== 'compose' || !invocation || !PROJECT.test(invocation.project ?? '')) return null;
   const files = invocation.files, envFiles = invocation.envFiles ?? [];
-  if (!Array.isArray(files) || !files.length || files.length > 20 || !files.every(absolute)) return null;
+  if (!Array.isArray(files) || !files.length || files.length > 10 || !files.every(absolute)) return null; // the helper's limit too
   if (!Array.isArray(envFiles) || envFiles.length > 10 || !envFiles.every(absolute)) return null;
   if (!absolute(invocation.projectDirectory)) return null;
   return { project: invocation.project, files: [...files], projectDirectory: invocation.projectDirectory, envFiles: [...envFiles] };

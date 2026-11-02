@@ -2,7 +2,7 @@
 // key names and file hashes only; never a value, a payload or a helper message.
 import { z } from 'zod';
 import { db } from '../db.js';
-import { LABELS, cancellable } from './state.js';
+import { LABELS, SAY, cancellable } from './state.js';
 import { loadEdit, loadSteps } from './engine.js';
 
 const actorName = userId => db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name ?? null;
@@ -22,11 +22,18 @@ export function detailOf(editId, { admin = false } = {}) {
   const edit = loadEdit(editId);
   if (!edit) return null;
   const restoring = restoreActive(edit);
-  return {
+  const detail = {
     ...summaryOf(edit), serverId: edit.server_id, backupId: edit.backup_id, timeLimitSeconds: edit.time_limit_seconds, files: edit.changes?.files ?? [], cancelRequested: edit.cancel_requested,
     // The maintenance page is on from apply until finish, and stays on after Restore backup (the owner checks first).
     maintenance: (edit.result === null ? !!edit.progress.applyStarted : !!edit.progress.restoredBackup) ? 'on' : 'off',
     restore: edit.progress.restoreJobId ? { jobId: edit.progress.restoreJobId, running: restoring } : null,
+    // The data safety copy (image changes only) is removed by finish, after a change that came up or a rollback that
+    // worked. While a failed rollback waits for the owner, or after Restore backup ended it, the copy stays on the server.
+    // From the journal truth the helper reports (apply, rollback, status, finish): kept while an unfinished edit waits for
+    // the owner, and whenever finish could not run yet.
+    dataCopyKept: !!edit.progress.dataCopy && (edit.result === null ? edit.state === 'needs_attention' : true),
+    dataBytes: Number.isSafeInteger(edit.progress.dataBytes) ? edit.progress.dataBytes : null,
+    dataCopyNote: null,
     steps: loadSteps(edit.id).map(step => ({ step: step.step, label: LABELS[step.step], state: step.state, startedAt: step.started_at, finishedAt: step.finished_at, detail: step.detail })),
     actions: {
       cancel: admin && cancellable(edit) && !edit.cancel_requested,
@@ -34,6 +41,8 @@ export function detailOf(editId, { admin = false } = {}) {
       restoreBackup: admin && edit.state === 'needs_attention' && !!edit.backup_id && !restoring,
     },
   };
+  if (detail.dataCopyKept) detail.dataCopyNote = SAY.dataCopyKept;
+  return detail;
 }
 
 // Keyset paging on (created_at, id), newest first, like the other histories.

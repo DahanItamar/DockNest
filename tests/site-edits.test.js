@@ -116,6 +116,7 @@ const everything = () => JSON.stringify(['site_edits', 'site_edit_steps', 'jobs'
 // Each test starts with no unfinished work from the one before (edits of every site are ticked together).
 test.beforeEach(() => {
   answers = {}; calls = []; restores = []; now += 3600_000 * 2;
+  db.prepare("DELETE FROM rate_limits WHERE key LIKE 'site-edit-review:%'").run(); // the per-client review limit is tested by its own case
   db.prepare("UPDATE site_edits SET result='cancelled',state='cancelled' WHERE result IS NULL").run();
   db.prepare("UPDATE jobs SET status='completed' WHERE status IN ('queued','running','edit_queued','edit_running','edit_waiting')").run();
 });
@@ -316,8 +317,10 @@ test('a change that comes up: backup, prepare, apply, check health (polls), fini
   assert.equal(detail.body.maintenance, 'off'); assert.equal(detail.body.dataRollback, true);
 });
 
-test('health check fails after an image change: files rolled back, data restored from the pre-change backup, rolled back', async () => {
-  const { siteId, serverId } = site();
+test('health check fails after an image change: files and data rolled back in place from the safety copy', async () => {
+  const { siteId } = site();
+  answers['edit-apply'] = () => ({ ok: true, startedAt: now / 1000, dataCopy: true, dataBytes: 5 * 1024 ** 2 });
+  answers['edit-rollback'] = () => ({ ok: true, journal: true, leftovers: 0, dataCopy: true, dataRestored: true });
   let window = 0;
   answers['edit-poll'] = request => (calls.filter(call => call.operation === 'edit-rollback').length ? { state: 'healthy', healthSeconds: 61 } : request.final ? (window++, { state: 'waiting' }) : { state: 'waiting' });
   const editId = await apply(siteId);
@@ -329,7 +332,10 @@ test('health check fails after an image change: files rolled back, data restored
   assert.equal(done.reason, 'The site did not become healthy in 2 minutes.');
   assert.deepEqual(steps(editId), { backup: 'done', prepare: 'done', apply: 'done', check_health: 'failed', roll_back: 'done', finish: 'done' });
   assert.equal(calls.find(call => call.operation === 'edit-rollback').restoreData, true);
-  assert.equal(restores.length, 1); assert.equal(restores[0].backupId, done.backup_id); assert.equal(restores[0].actor, 'edit:' + editId); assert.equal(restores[0].plan.serverId, serverId);
+  assert.equal(restores.length, 0, 'the data comes back in place inside edit-rollback, never as an isolated restore');
+  assert.equal(done.progress.dataRestored, true); assert.equal(se.loadSteps(editId).find(step => step.step === 'roll_back').detail, 'Previous version and data back.');
+  const detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
+  assert.equal(detail.dataCopyKept, false, 'finish removed the safety copy'); assert.equal(detail.dataCopyNote, null); assert.equal(detail.dataBytes, 5 * 1024 ** 2);
   const order = ops().filter(op => ['edit-apply', 'edit-rollback', 'edit-finish'].includes(op));
   assert.deepEqual(order, ['edit-apply', 'edit-rollback', 'edit-finish']);
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='site.edit.rolled_back' AND target=?").get(siteId));
@@ -352,6 +358,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   const { siteId } = site();
   answers['edit-poll'] = () => ({ state: 'unhealthy' });
   answers['edit-rollback'] = () => ({ ok: false, code: 'ROLLBACK_FAILED', reason: 'journal /var/lib/docknest/edits/x corrupted' });
+  answers['edit-apply'] = () => ({ ok: true, startedAt: now / 1000, dataCopy: true, dataBytes: 1024 });
   const editId = await apply(siteId);
   await drive(30);
   let row = edit(editId);
@@ -361,6 +368,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   assert.doesNotMatch(everything(), /corrupted|\/var\/lib\/docknest\/edits/);
   let detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
   assert.deepEqual(detail.actions, { cancel: false, retry: true, restoreBackup: true }); assert.equal(detail.maintenance, 'on');
+  assert.equal(detail.dataCopyKept, true); assert.equal(detail.dataCopyNote, 'A safety copy of the data is kept on the server.');
   // The site stays locked: no backup, restore or second edit.
   assert.equal((await json(await admin('POST', `/sites/${siteId}/backup`))).body.code, 'SITE_EDITING');
   // Try again: the rollback works this time.
@@ -387,8 +395,14 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   assert.equal((await json(await admin('POST', `/site-edits/${second}/retry`, {}))).body.code, 'RESTORE_RUNNING');
   await drive(4);
   row = edit(second);
-  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The backup from before the change was restored. Check the site, then turn off its maintenance page.');
-  assert.equal((await json(await admin('GET', `/site-edits/${second}`))).body.maintenance, 'on');
+  await drive(10);
+  row = edit(second);
+  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The backup from before the change was restored through the normal restore. Check the site, then turn off its maintenance page.');
+  // Once the restore succeeded, finish cleaned up the journal, copy, holders and tags but left the maintenance page on.
+  const cleanup = calls.filter(call => call.operation === 'edit-finish').at(-1);
+  assert.equal(cleanup.keepMaintenance, true);
+  const after = (await json(await admin('GET', `/site-edits/${second}`))).body;
+  assert.equal(after.maintenance, 'on'); assert.equal(after.dataCopyKept, false, 'the copy was removed after the restore succeeded');
 });
 
 // What a worker killed inside edit-apply leaves: the apply job edit_running, applyStarted journalled, the step running.
@@ -463,6 +477,86 @@ test('the files change during the backup: refused at apply, nothing rolled back 
   const second = await apply(siteId);
   await drive(20);
   assert.equal(edit(second).result, 'failed'); assert.equal(edit(second).failed_step, 'prepare'); assert.ok(!ops().includes('edit-apply'));
+});
+
+test('not enough disk space for the data safety copy: refused at apply before any write, no rollback', async () => {
+  const { siteId } = site();
+  answers['edit-apply'] = () => ({ ok: false, code: 'DATA_COPY_SPACE', reason: 'Not enough free disk space for the safety copy.', dataCopy: false });
+  const editId = await apply(siteId);
+  await drive(20);
+  const row = edit(editId);
+  assert.equal(row.result, 'failed'); assert.equal(row.failed_step, 'apply'); assert.equal(row.reason, 'Not enough free disk space for the safety copy. Nothing was changed.');
+  assert.ok(!ops().includes('edit-rollback')); assert.ok(ops().includes('edit-finish'));
+});
+
+test('review: data size for an image change, DockNest itself and non-local volumes refused with fixed reasons', async () => {
+  const { siteId } = site();
+  answers['edit-check'] = () => verdict({ dataBytes: 2 * 1024 ** 3 });
+  const reviewed = await review(siteId);
+  assert.equal(reviewed.body.summary.dataBytes, 2 * 1024 ** 3); assert.ok(reviewed.body.warnings.some(item => item.code === 'LARGE_DATA_COPY'));
+  answers['edit-check'] = () => verdict({ imageChanged: false, changed: [], dataBytes: 99 });
+  assert.equal((await review(siteId)).body.summary.dataBytes, null, 'no image change, no copy');
+  for (const code of ['OWN_SITE', 'DATA_NOT_LOCAL']) {
+    answers['edit-check'] = () => ({ ok: false, code, reason: 'x' });
+    const refused = await review(siteId);
+    assert.equal(refused.status, 422); assert.equal(refused.body.code, code);
+  }
+});
+
+test('load: guided-tab locations, ports as numbers, IMAGE_FROM_ENV with its variable and EDIT_IN_COMPOSE', async () => {
+  const { siteId } = site();
+  answers['edit-load'] = () => ({ ...loadAnswer(), services: [{ name: 'web', image: 'shop:1.0', ports: [{ host: '8080', container: 80, protocol: 'tcp', hostIp: '', at: { file: '/srv/shop/compose.yaml', line: 5 } }, { host: '9000-9001', container: 90, at: null, reason: 'EDIT_IN_COMPOSE' }], frozen: false, healthcheck: true, imageAt: null, imageReason: 'IMAGE_FROM_ENV', imageVariable: 'TAG' }], usable: { compose: true, env: true, ports: true, image: false }, reasons: { image: 'IMAGE_FROM_ENV' }, variables: { image: 'TAG' } });
+  const loaded = (await json(await admin('GET', `/sites/${siteId}/edit`))).body;
+  assert.deepEqual(loaded.services[0].ports, [{ host: 8080, container: 80, protocol: 'tcp', hostIp: '', at: { file: '/srv/shop/compose.yaml', line: 5 } }, { host: null, container: 90, protocol: 'tcp', hostIp: '', at: null, reason: 'EDIT_IN_COMPOSE' }]);
+  assert.deepEqual([loaded.services[0].imageAt, loaded.services[0].imageReason, loaded.services[0].imageVariable], [null, 'IMAGE_FROM_ENV', 'TAG']);
+  assert.deepEqual(loaded.reasons.image, { code: 'IMAGE_FROM_ENV', message: 'Edit TAG in Environment.', variable: 'TAG' });
+  answers['edit-load'] = () => ({ ...loadAnswer(), usable: { compose: true, env: true, ports: false, image: true }, reasons: { ports: 'EDIT_IN_COMPOSE' } });
+  assert.deepEqual((await json(await admin('GET', `/sites/${siteId}/edit`))).body.reasons.ports, { code: 'EDIT_IN_COMPOSE', message: 'Edit this in Compose.' });
+});
+
+test('apply failures: an unknown write state goes through edit-status; pre-write refusals end as failed; APPLY_FAILED rolls back', async () => {
+  const { siteId } = site();
+  // FAILED (for example out of space after the candidate was written): never straight to finish, the journal decides.
+  answers['edit-apply'] = () => ({ ok: false, code: 'FAILED', dataCopy: true });
+  answers['edit-status'] = () => ({ ok: true, journal: true, files: 'candidate', maintenance: true, dataCopy: true });
+  answers['edit-poll'] = () => ({ state: 'healthy' });
+  let editId = await apply(siteId);
+  await drive(30);
+  let row = edit(editId);
+  assert.equal(row.result, 'rolled_back', JSON.stringify(row)); assert.equal(row.reason, 'The change could not be applied, so it was undone.');
+  assert.deepEqual(ops().filter(op => ['edit-apply', 'edit-status', 'edit-rollback', 'edit-finish'].includes(op)), ['edit-apply', 'edit-status', 'edit-rollback', 'edit-finish']);
+  // The same with nothing written: finish only.
+  calls = []; now += 3600_000;
+  answers['edit-status'] = () => ({ ok: true, journal: true, files: 'original', maintenance: true, dataCopy: false });
+  editId = await apply(siteId);
+  await drive(30);
+  row = edit(editId);
+  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The change could not be applied. Nothing was changed.'); assert.ok(!ops().includes('edit-rollback'));
+  for (const code of ['MAINTENANCE_FAILED', 'INVALID_REQUEST']) {
+    calls = []; now += 3600_000;
+    answers['edit-apply'] = () => ({ ok: false, code });
+    editId = await apply(siteId);
+    await drive(30);
+    row = edit(editId);
+    assert.equal(row.result, 'failed', code); assert.ok(!ops().includes('edit-rollback'), code); assert.ok(!ops().includes('edit-status'), code);
+  }
+  calls = []; now += 3600_000;
+  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true });
+  answers['edit-rollback'] = () => ({ ok: true, dataCopy: true, dataRestored: true });
+  editId = await apply(siteId);
+  await drive(30);
+  assert.equal(edit(editId).result, 'rolled_back'); assert.equal(edit(editId).reason, 'Docker could not start the changed site.');
+});
+
+test('the data copy kept flag follows the journal: apply failed after the copy, then the rollback failed', async () => {
+  const { siteId } = site();
+  answers['edit-apply'] = () => ({ ok: false, code: 'APPLY_FAILED', dataCopy: true });
+  answers['edit-rollback'] = () => ({ ok: false, code: 'ROLLBACK_FAILED', dataCopy: true });
+  const editId = await apply(siteId);
+  await drive(30);
+  const detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
+  assert.equal(detail.state, 'needs_attention'); assert.equal(detail.dataCopyKept, true); assert.equal(detail.dataCopyNote, 'A safety copy of the data is kept on the server.');
+  assert.equal(edit(editId).progress.dataRestored, undefined, 'nothing claims the data came back');
 });
 
 test('a failed pull ends the edit before anything is written; the pre-change backup failing does too', async () => {
