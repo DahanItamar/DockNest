@@ -101,3 +101,15 @@ export function untilText(v,now=Date.now()){
 }
 // One line for a launch in a list.
 export const stateText=l=>l.removing?'Removing':({queued:'Launching',running:'Launching',waiting_dns:'Waiting for DNS',needs_attention:'Needs your attention',done:'Live'}[l.state]||'Launch');
+
+// The check and launch request body for the source form (shared by the check and the launch).
+export function bodyOf(form){
+ const base={domain:form.domain.trim().toLowerCase(),...(form.allowPrivate?{allowPrivate:true}:{})};
+ return form.tab==='git'?{source:'git',repo:{url:form.repo.trim(),ref:form.ref.trim()||'main',composePath:form.composePath.trim()},...(form.keyId&&sshUrl(form.repo)?{deployKeyId:form.keyId}:{}),...base}
+  :{source:'compose',compose:form.compose,...(form.service||serviceNames(form.compose)[0]?{webService:form.service||serviceNames(form.compose)[0]}:{}),...base};
+}
+// The launch request body: the source, the chosen web service and container port, the environment values, the restore
+// test server, and the confirmations the engine requires (clean shutdown always, trust for Git or builds).
+export function startBody(form,{service,port,testServerId,trust}){
+ return {...bodyOf(form),...(service?{webService:service}:{}),webPort:Number(port),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(testServerId!==undefined?{testServerId}:{}),cleanShutdownConfirmed:true,...(trust?{trustConfirmed:true}:{})};
+}

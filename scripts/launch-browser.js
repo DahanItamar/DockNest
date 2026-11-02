@@ -24,16 +24,16 @@ const KEYS=[
  {id:'11111111-1111-4111-8111-111111111111',name:'Shop deploy key',gitHost:'github.com',publicKey:PUB,fingerprint:'SHA256:keykeykeykey',hostKey:{sha256:FP,type:'ssh-ed25519'},pinnedFromServerId:'a',pinnedFromServerName:'Commerce host',pinnedAt:ago(3*86400),createdAt:ago(3*86400)},
  {id:'22222222-2222-4222-8222-222222222222',name:'Docs repo key',gitHost:'gitlab.com',publicKey:PUB,fingerprint:'SHA256:keykeykeykey',hostKey:{sha256:FP,type:'ssh-ed25519'},pinnedFromServerId:'b',pinnedFromServerName:'Content host',pinnedAt:ago(14*86400),createdAt:ago(14*86400)}];
 // Steps as the engine answers them: states queued, running, waiting, done, failed, skipped, pending.
-const ORDER=['check','fetch','build','start','check_health','web','certificate','save','first_backup','maintenance'];
+const ORDER=['check','fetch','build','start','check_health','web','certificate','save','maintenance','first_backup'];
 const steps=({done=0,running=-1,failed=-1,waiting=-1,teardown=null}={})=>[...ORDER.map((step,i)=>({step,state:i<done?'done':i===failed?'failed':i===running?'running':i===waiting?'waiting':'pending',startedAt:i<done||i===running||i===failed||i===waiting?ago(300-i*30):null,finishedAt:i<done||i===failed?ago(290-i*30):null,detail:null,result:{}})),{step:'teardown',state:teardown||'pending',startedAt:teardown?ago(60):null,finishedAt:teardown==='failed'?ago(30):null,detail:teardown==='failed'?'The nginx file could not be removed':null,result:{}}];
 let mock,browser;const errors=[];
-const reset=()=>{mock={checkMode:'ok',checks:[],launches:[],reauths:0,needReauth:false,launch:null,next:null,dnsCalls:0,retries:0,removes:0,cancels:0,installs:[],keys:KEYS.map(k=>({...k})),keyCalls:[],created:[],pins:[],hostFp:FP,movedPin:false,listOpen:true}};
+const reset=()=>{mock={noPorts:false,checkMode:'ok',checks:[],launches:[],reauths:0,needReauth:false,launch:null,next:null,dnsCalls:0,retries:0,removes:0,cancels:0,installs:[],keys:KEYS.map(k=>({...k})),keyCalls:[],created:[],pins:[],hostFp:FP,movedPin:false,listOpen:true}};
 reset();
 const ck=(id,title,ok,text,extra={})=>({id,title,ok,status:ok?'ok':'block',value:text,text,...extra});
 const okChecks=[ck('docker','Docker',true,'28.1'),ck('compose','Docker Compose',true,'2.29'),ck('nginx','nginx',true,'1.26'),ck('certbot','certbot',true,''),ck('space','Free space',true,'')];
 function checkResult(body){
- const base={slug:'shop2-example-com',folder:'/srv/docknest/shop2-example-com',domain:body.domain,www:'www.'+body.domain,gate:{ok:true,refusals:[]},services:[{name:'web',ports:[8080],build:false},{name:'db',ports:[],build:false}],composeName:null,refHead:null,blockers:[],warnings:[],builds:false,dns:{records:[{type:'A',name:body.domain,value:'192.0.2.10'}],answers:{A:[],AAAA:[]},pointsHere:true},testServers:[{id:'b',name:'Content host'}]};
- if(mock.checkMode==='nginx'){const bad=[ck('nginx','nginx',false,'nginx is missing. Install it to continue.',{code:'NGINX_MISSING',install:{package:'nginx'}}),ck('git','Git',false,'Git is missing.',{code:'GIT_MISSING',install:{package:'git'}})];return {...base,ok:false,checks:[okChecks[0],okChecks[1],...bad],blockers:bad.map(x=>x.text)}}
+ const base={slug:'shop2-example-com',folder:'/srv/docknest/shop2-example-com',domain:body.domain,www:'www.'+body.domain,gate:{ok:true,refusals:[]},services:mock.noPorts?[{name:'web',ports:[],build:false}]:[{name:'web',ports:[8080],build:false},{name:'db',ports:[],build:false}],composeName:null,refHead:null,blockers:[],warnings:[],builds:false,dns:{records:[{type:'A',name:body.domain,value:'192.0.2.10'}],answers:{A:[],AAAA:[]},pointsHere:true},testServers:[{id:'b',name:'Content host'}]};
+ if(mock.checkMode==='nginx'){const bad=[ck('nginx','nginx',false,'nginx is missing. Install it to continue.',{code:'NGINX_MISSING',install:{package:'nginx',command:'sudo apt-get install -y nginx',supported:true}}),ck('git','Git',false,'Git is missing.',{code:'GIT_MISSING',install:{package:'git',command:'sudo apt-get install -y git',supported:true}})];return {...base,ok:false,checks:[okChecks[0],okChecks[1],...bad],blockers:bad.map(x=>x.text)}}
  if(mock.checkMode==='refusal'){const bad=ck('domain','Domain',false,'nginx on this server already serves '+body.domain+'. DockNest never takes over another site.',{code:'NGINX_DOMAIN_SERVED'});return {...base,ok:false,checks:[...okChecks,bad],blockers:[bad.text],gate:{ok:false,refusals:[{code:'BUILD_SETTING_REFUSED',service:'web',field:null}]},dns:{...base.dns,pointsHere:false}}}
  return {...base,ok:true,checks:okChecks,builds:body.source==='git',warnings:mock.warn?['The image is large.']:[]};
 }
@@ -88,7 +88,7 @@ async function open({width=1440,height=900,scheme='light'}={}){
   }
   if(endpoint==='/api/servers/a/launch'&&m==='GET')return json({launches:mock.reopen?[LAUNCH_STATES[mock.reopen](),{...LAUNCH_STATES.done(),id:'l8'}]:[]});
   if(endpoint==='/api/servers/a/launch/check'){mock.checks.push(body);return json(checkResult(body))}
-  if(endpoint==='/api/servers/a/launch'){if(mock.needReauth)return reauth();if(body.source==='git'&&body.trustConfirmed!==true)return json({error:'Confirm that you trust this repository.',code:'TRUST_REQUIRED'},400);mock.launches.push(body);mock.launch=mock.launch||'running';return json({launch:{id:'l1'}},202)}
+  if(endpoint==='/api/servers/a/launch'){if(mock.needReauth)return reauth();if(!body.webPort)return json({error:'Enter the container port that serves the website.',code:'INVALID_PORT',field:'webPort'},400);if(body.cleanShutdownConfirmed!==true)return json({error:'Confirm that the app saves its data when its containers stop.',code:'SHUTDOWN_CONFIRM_REQUIRED'},400);if(body.source==='git'&&body.trustConfirmed!==true)return json({error:'Confirm that you trust this repository.',code:'TRUST_REQUIRED'},400);mock.launches.push(body);mock.launch=mock.launch||'running';return json({launch:{id:'l1'}},202)}
   mm=endpoint.match(/^\/api\/launches\/([^/]+)(?:\/(.+))?$/);
   if(mm){
    if(mm[2]==='check-dns'){mock.dnsCalls++;mock.launch=mock.next||'done';return json(LAUNCH_STATES[mock.launch]())}
@@ -201,7 +201,7 @@ try{
    await page.getByRole('heading',{name:'Launching shop2.example.com'}).waitFor();
    assert.equal(mock.reauths,1);
    assert.deepEqual(mock.launches[0].env,{SECRET_KEY:'s3cret'});
-   assert.equal(mock.launches[0].webService,'web');assert.equal(mock.launches[0].testServerId,'b');assert.equal(mock.launches[0].cleanShutdownConfirmed,true);
+   assert.equal(mock.launches[0].webService,'web');assert.equal(mock.launches[0].webPort,8080);assert.equal(mock.launches[0].testServerId,'b');assert.equal(mock.launches[0].cleanShutdownConfirmed,true);
    assert.equal('trustConfirmed' in mock.launches[0],false);
    await d.getByText('Building the image…').waitFor();
    await d.getByRole('progressbar').waitFor();
@@ -214,6 +214,19 @@ try{
    await page.getByRole('button',{name:'Close',exact:true}).click();
    await page.locator('dialog[open]').waitFor({state:'detached'});
    assert.deepEqual(offOrigin,[]);
+   await context.close();
+  });
+  await scenario('web port '+tag,async()=>{
+   const {context,page}=await open({width,height,scheme});
+   mock.noPorts=true;
+   await openNew(page);await fillCompose(page);await toCheck(page);
+   const d=dialog(page);
+   // The Compose file publishes no port: the owner enters the container port; Launch waits for it
+   assert.equal(await d.getByRole('button',{name:'Launch',exact:true}).isDisabled(),true);
+   await d.getByLabel('Web port').fill('3000');
+   await d.getByRole('button',{name:'Launch',exact:true}).click();
+   await d.getByRole('heading',{name:'Launching shop2.example.com'}).waitFor();
+   assert.equal(mock.launches[0].webPort,3000);
    await context.close();
   });
   await scenario('cancel before start '+tag,async()=>{
@@ -270,7 +283,11 @@ try{
    await d.getByRole('heading',{name:'Cannot launch yet'}).waitFor();
    assert.equal(await page.getByRole('button',{name:'Launch',exact:true}).isDisabled(),true);
    await d.getByRole('button',{name:'Install nginx'}).waitFor();await d.getByRole('button',{name:'Install Git'}).waitFor();
-   assert.equal(await d.getByRole('button',{name:'Show command'}).count(),0,'the check answer carries no command to show');
+   await d.getByRole('button',{name:'Show command'}).click();
+   await page.getByRole('heading',{name:'Install nginx yourself'}).waitFor();
+   await page.getByText('sudo apt-get install -y nginx').waitFor();
+   await page.getByRole('button',{name:'Close',exact:true}).click();
+   await d.getByRole('heading',{name:'Cannot launch yet'}).waitFor();
    await shot(page,'36-built-launch-blocked-install',scheme);await layoutOk(page);
    await d.getByRole('button',{name:'Install Git'}).click();
    await page.getByRole('heading',{name:'Install Git on Commerce host'}).waitFor();

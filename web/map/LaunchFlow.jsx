@@ -4,7 +4,7 @@ import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Sheet,Note,useGuard,InstallConfirmDialog,InstallProgressDialog,CommandDialog} from './MoveFlow.jsx';
 import {installChecks,PACKAGE_NAME} from './moves-client.js';
-import {createLaunchClient,LAUNCH_STEPS,STEP_LABEL,STATE_WORD,serviceNames,ENV_KEY,ENV_REFUSED,domainOk,friendlyLaunch,clock,elapsed,agoText,untilText,checkRows,blockersOf,statusLine,settled,busyLaunch,sshUrl} from './launch-client.js';
+import {createLaunchClient,LAUNCH_STEPS,STEP_LABEL,STATE_WORD,serviceNames,ENV_KEY,ENV_REFUSED,domainOk,friendlyLaunch,clock,elapsed,agoText,untilText,checkRows,blockersOf,statusLine,settled,busyLaunch,sshUrl,bodyOf,startBody} from './launch-client.js';
 import './launch.css';
 
 // Launch a new site from the Map (docs/launch-site.md). The Map's "New site" opens this flow on a server:
@@ -67,12 +67,6 @@ function Source({server,form,set,keys,narrow,err,privateHint,onCancel,onCheck}){
  </Sheet>;
 }
 
-function bodyOf(form){
- const base={domain:form.domain.trim().toLowerCase(),...(form.allowPrivate?{allowPrivate:true}:{})};
- return form.tab==='git'?{source:'git',repo:{url:form.repo.trim(),ref:form.ref.trim()||'main',composePath:form.composePath.trim()},...(form.keyId&&sshUrl(form.repo)?{deployKeyId:form.keyId}:{}),...base}
-  :{source:'compose',compose:form.compose,...(form.service||serviceNames(form.compose)[0]?{webService:form.service||serviceNames(form.compose)[0]}:{}),...base};
-}
-
 function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onCommand,onLaunched}){
  const guard=useGuard(client,{verifyLabel:'Verify'}),[busy,setBusy]=useState(false),[err,setErr]=useState('');
  const services=result?.services||[],tests=result?.testServers||[];
@@ -80,16 +74,18 @@ function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onC
  const blocked=!loading&&!result?.ok,installs=installChecks(result||{}),git=form.tab==='git',trust=git||!!result?.builds;
  const rows=loading?['Docker','Compose','nginx','Certbot','DNS'].map((t,i)=>[t,<State state={i===0?'running':'queued'}>{i===0?'Checking':'Waiting'}</State>]):checkRows(result).map(c=>[c.title,<State state={c.state}>{c.value}</State>]);
  const blockers=blockersOf(result),svc=services.find(x=>x.name===pick.service)||services[0],ports=svc?.ports||[];
+ const portValue=pick.port||ports[0]||'',portOk=Number.isInteger(Number(portValue))&&Number(portValue)>=1&&Number(portValue)<=65535&&String(portValue).trim()!=='';
  const go=()=>{setBusy(true);setErr('');return guard.run(async()=>{
-   const body={...bodyOf(form),...(services.length>1&&svc?{webService:svc.name}:{}),...(pick.port?{webPort:Number(pick.port)}:{}),...(form.env.length?{env:Object.fromEntries(form.env.map(r=>[r.key,r.value]))}:{}),...(tests.length?{testServerId:pick.test||null}:{}),cleanShutdownConfirmed:true,...(trust?{trustConfirmed:true}:{})};
+   const body=startBody(form,{service:svc?.name,port:portValue,testServerId:tests.length?(pick.test||null):undefined,trust});
    const r=await client.start(server.id,body);onLaunched(r?.launch?.id);
   },e=>setErr(friendlyLaunch(e))).finally(()=>setBusy(false))};
- return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting||!form.shutdown} onClick={go}>Launch</button></>}>
-  {blocked&&<AlertPanel variant="error" action={<div className="rp-actions">{installs.map((c,i)=><button key={c.install.package} type="button" className={i===0?'primary':undefined} onClick={()=>onInstall(c)}>Install {PACKAGE_NAME[c.install.package]}</button>)}{installs.some(c=>c.install.command)?<button type="button" onClick={()=>onCommand(installs.find(c=>c.install.command))}>Show command</button>:null}{!installs.length&&<button type="button" onClick={onAgain}>Check again</button>}</div>}>{blockers.join(' ')||'Something must be fixed before this site can launch.'}</AlertPanel>}
+ return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting||!form.shutdown||!portOk} onClick={go}>Launch</button></>}>
+  {blocked&&<AlertPanel variant="error" action={<div className="rp-actions">{installs.filter(c=>c.install.supported!==false).map((c,i)=><button key={c.install.package} type="button" className={i===0?'primary':undefined} onClick={()=>onInstall(c)}>Install {PACKAGE_NAME[c.install.package]}</button>)}{installs.some(c=>c.install.command)?<button type="button" onClick={()=>onCommand(installs.find(c=>c.install.command))}>Show command</button>:null}{!installs.some(c=>c.install.supported!==false||c.install.command)&&<button type="button" onClick={onAgain}>Check again</button>}</div>}>{blockers.join(' ')||'Something must be fixed before this site can launch.'}</AlertPanel>}
   <Facts rows={rows}/>
-  {!loading&&!blocked&&(services.length>1||tests.length>0)&&<div className="ln-grid">
+  {!loading&&!blocked&&(services.length>1||ports.length!==1||tests.length>0)&&<div className="ln-grid">
    {services.length>1&&<label className="map-field">Web service<select value={svc?.name||''} onChange={e=>setPick({...pick,service:e.target.value,port:''})}>{services.map(x=><option key={x.name} value={x.name}>{x.name}</option>)}</select></label>}
-   {services.length>1&&ports.length>1&&<label className="map-field">Web port<select value={pick.port||ports[0]} onChange={e=>setPick({...pick,port:e.target.value})}>{ports.map(p=><option key={p} value={p}>{p}</option>)}</select></label>}
+   {ports.length>1&&<label className="map-field">Web port<select value={pick.port||ports[0]} onChange={e=>setPick({...pick,port:e.target.value})}>{ports.map(p=><option key={p} value={p}>{p}</option>)}</select></label>}
+   {ports.length===0&&<label className="map-field">Web port<input type="text" inputMode="numeric" autoComplete="off" value={pick.port} aria-invalid={!!pick.port&&!portOk||undefined} onChange={e=>setPick({...pick,port:e.target.value.replace(/\D/g,'')})}/></label>}
    {tests.length>0&&<label className="map-field">Restore test server<select value={pick.test} onChange={e=>setPick({...pick,test:e.target.value})}>{tests.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}<option value="">No restore tests</option></select></label>}
   </div>}
   {!loading&&(result?.warnings||[]).map((w,i)=><AlertPanel key={i} variant="warning">{typeof w==='string'?w:w?.text}</AlertPanel>)}
