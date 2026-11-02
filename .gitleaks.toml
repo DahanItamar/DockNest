@@ -27,3 +27,9 @@ description = "Pushover's own documented example application token and user key 
 condition = "AND"
 paths = ['''^scripts/connections-browser\.js$''']
 regexes = ['''^azGDORePK8gMaC0QOYAMyEEuzJnyUi$''', '''^uQiRzpo4DXghDmr9QzzfQu27cmVRsG$''']
+
+[[allowlists]]
+description = "Made-up deploy key fixture in the launch helper tests (a fake OpenSSH PEM wrapper around a canary body, never key material); only that canary, only in that test file. The fixture is now built at runtime; this covers the copy already in history."
+condition = "AND"
+paths = ['''^remote/test_launch\.py$''']
+regexes = ['''SECRETKEYMATERIAL0123456789''']
