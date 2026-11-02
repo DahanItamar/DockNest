@@ -113,8 +113,10 @@ export async function repinDeployKey(keyId, { serverId, allowPrivate = false, ho
     if (activeUse(keyId)) throw httpError(409, 'KEY_IN_USE', 'A launch is using this deploy key. Pin its host key again when the launch has finished.');
     db.prepare('UPDATE deploy_keys SET host_key_line=?,host_key_sha256=?,pinned_from_server_id=?,pinned_at=? WHERE id=?').run(hostKey.line, hostKey.sha256, server.id, now(), keyId);
   });
-  audit(actor, 'deploy_key.pinned', keyId, { hostKey: hostKey.sha256, previous: row.host_key_sha256, server: server.id });
-  return { key: deployKeyView(db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId)) };
+  audit(actor, 'deploy_key.pinned', keyId, { hostKey: hostKey.sha256, previous: row.host_key_sha256, server: server.id, previousServer: row.pinned_from_server_id });
+  // A key is pinned from one server at a time (item 17): moving the pin means the previous server must confirm again.
+  const previous = row.pinned_from_server_id && row.pinned_from_server_id !== server.id ? { serverId: row.pinned_from_server_id, serverName: serverRow(row.pinned_from_server_id)?.name ?? null } : null;
+  return { key: deployKeyView(db.prepare('SELECT * FROM deploy_keys WHERE id=?').get(keyId)), ...(previous ? { replacedPin: { ...previous, text: `Launches on ${previous.serverName ?? 'the previous server'} with this key now need the Git host key confirmed from there again.` } } : {}) };
 }
 
 export function deleteDeployKey(keyId, actor) {
