@@ -152,7 +152,11 @@ The security review (2026-11-02) tightened the design. Where this section and th
    is refused; a new bind must be inside a folder the site already binds; nested read-write binds across services are
    refused.
 7. **Rollback cannot re-pull.** Apply and rollback use `up -d --no-build --pull never`. `edit-prepare` tags every
-   current image ID as `docknest-edit/<editId>:<service>` so a prune cannot remove it; `edit-finish` removes those tags.
+   current image ID as `docknest-edit/<editId>:<service>` (for retagging) and creates one never-started holder container
+   per image (`docknest-edit-hold-<editId>-<hash>`, label `docknest.edit.hold`, outside the Compose project, `--network
+   none`), because tags alone do not survive `docker image prune -a`. `edit-finish` removes the holders (with their
+   anonymous volumes) and the tags. A `docker container prune` or `docker system prune` removes the holders too; rollback
+   then fails closed (needs attention, maintenance page stays). Corrected after review, 2026-11-02.
    Rollback runs with `--remove-orphans` (scoped by `-p`) and removes volumes and networks the journal records as
    created by the candidate.
 8. **No secrets in argv.** Single-container recreates pass environment through a 0600 `--env-file` in the journal
