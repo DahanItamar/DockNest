@@ -115,6 +115,10 @@ DockNest refuses a change with one plain reason when it would:
   including inside quotes: in YAML these can start an anchor, an alias or a tag, which DockNest does not try to
   read. This also refuses a newly added shell `&&`, a `*` glob or a `!` after a space in a command; put such
   commands in a script the container runs, or edit the file by hand. Ones the file already has stay allowed.
+- add characters outside plain ASCII to a Compose file (letters with accents, other scripts, emoji, invisible
+  characters): "The change adds characters that cannot be checked safely." Characters the file already has may stay.
+  Environment values typed in the Environment tab are not Compose text and may use any characters except line breaks,
+  so non-ASCII passwords work there.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."
 If it changes while the backup runs, the change stops before anything is written: "The files changed during the

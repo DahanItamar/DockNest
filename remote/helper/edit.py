@@ -105,6 +105,7 @@ EDIT_REASONS={
     'DATA_COPY_SPACE':'Not enough free disk space for the safety copy.',
     'DATA_TOO_LARGE':'The site\'s data is too large to copy safely within the time limit, so an image change cannot be undone safely. Change the image by hand.',
     'DATA_UNREADABLE':'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
+    'EXTRA_BYTES':'The change adds characters that cannot be checked safely. Use plain ASCII or edit by hand.',
     'NODE_PROPERTY':'Compose text adds &, * or ! where an anchor, alias or tag could start. Change this line by hand.',
     'YAML_REFUSED':'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
     'DATA_NOT_LOCAL':'This site keeps data on a volume DockNest cannot copy, so an image change cannot be undone safely. Change the image by hand.',
@@ -380,6 +381,17 @@ EDIT_HIDDEN_BREAKS=re.compile('\r(?!\n)|[\u0085\u2028\u2029]')
 EDIT_PROPERTY_TOKEN=re.compile(r'(?m)(?:^|[\s\[\]{},:])([&*!][^\s\[\]{},]*)')
 # An alias used as a mapping key, at the start of a line or list item or inside a flow mapping.
 EDIT_ALIAS_KEY=re.compile(r'(?m)(?:^[ \t]*(?:-[ \t]+)?|[{,][ \t]*)(\*\S+)[ \t]*:')
+def edit_extra_bytes(original,candidate):
+    """Fail-closed byte allow-list (final B4 guard): printable ASCII, tab, LF and the CR of a CRLF are always allowed; any
+    other byte value (all non-ASCII UTF-8 included) only as often as the original has it. True when the candidate adds one."""
+    def counts(text):
+        data=text.encode('utf-8');found={}
+        for i,b in enumerate(data):
+            if 0x20<=b<=0x7e or b in (0x09,0x0a) or (b==0x0d and data[i+1:i+2]==b'\n'):continue
+            found[b]=found.get(b,0)+1
+        return found
+    before=counts(original)
+    return any(n>before.get(b,0) for b,n in counts(candidate).items())
 def edit_invisible(text):
     """Every format (Cf: BOM, zero-width, bidi) or control (C*) character except tab, newline and the CR of a CRLF, as
     a sorted list: a candidate may only keep the ones its original has (a file that starts with a BOM keeps working)."""
@@ -399,10 +411,15 @@ def edit_new(before,after):
         if item in remaining:remaining.remove(item)
         else:extra.append(item)
     return extra
+def edit_without_bom(text):return text[1:] if text.startswith('\ufeff') else text
 def edit_raw_problems(original,candidate):
     original=original or ''
+    if edit_extra_bytes(original,candidate):edit_refuse('YAML_REFUSED','bytes',EDIT_REASONS['EXTRA_BYTES'])
     if EDIT_HIDDEN_BREAKS.search(candidate):edit_refuse('YAML_REFUSED','line-break')
     if edit_new(edit_invisible(original),edit_invisible(candidate)):edit_refuse('YAML_REFUSED','invisible')
+    # A BOM the original already starts with must not hide the first key from the ^-anchored checks below: one leading
+    # U+FEFF is set aside on both sides (a BOM the candidate adds was refused above by the byte and invisible checks).
+    original,candidate=edit_without_bom(original),edit_without_bom(candidate)
     # Escaped keys: the exact set must stay as it is (not only their number).
     if sorted(EDIT_ESCAPED_KEY.findall(candidate))!=sorted(EDIT_ESCAPED_KEY.findall(original)):edit_refuse('YAML_REFUSED','escaped-key')
     for name,pattern in EDIT_RAW_PATTERNS.items():
@@ -415,6 +432,7 @@ def edit_text_problems(original,candidate,inv,roots):
     """Before any Compose call: a candidate may not add an include block, nor a new `file:` reference (extends,
     secrets, configs) that leaves the site's folders or is interpolated, anchored or protected."""
     edit_raw_problems(original,candidate)
+    original,candidate=edit_without_bom(original or ''),edit_without_bom(candidate)
     if edit_text_includes(candidate) and edit_text_includes(candidate)!=edit_text_includes(original or ''):edit_refuse('PATH_REFUSED','include')
     before={v.strip() for v in EDIT_FILE_VALUE.findall(original or '')}
     for raw in EDIT_FILE_VALUE.findall(candidate):

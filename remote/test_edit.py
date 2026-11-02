@@ -678,9 +678,19 @@ class ReviewFixes(EditCase):
         # Invisible characters (review re-check): a BOM before the key hides it from ^-anchored checks; Compose strips it.
         for name,text in {'bom':'\ufeffinclude: [other.yaml]\n'+yaml_doc,'zero-width':yaml_doc+'\u200binclude: [x]\n','bidi':yaml_doc+'x-a: \u202eb\n','control':yaml_doc+'x-a: \x07\n'}.items():
             with self.assertRaises(helper.EditRefused,msg=name) as refused:helper.edit_raw_problems(yaml_doc,text)
-            self.assertEqual((refused.exception.code,refused.exception.field),('YAML_REFUSED','invisible'),name)
+            self.assertEqual(refused.exception.code,'YAML_REFUSED',name);self.assertIn(refused.exception.field,('bytes','invisible'),name)
+        # Byte allow-list: any byte outside printable ASCII, tab, LF and CRLF may not grow in number.
+        with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,yaml_doc+'    labels:\n      team: caf\u00e9\n')
+        self.assertEqual((refused.exception.field,refused.exception.reason),('bytes',helper.EDIT_REASONS['EXTRA_BYTES']))
+        with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,'\ufeff'+yaml_doc)
+        self.assertEqual(refused.exception.field,'bytes','a BOM first is refused')
+        commented='# \u05d0\u05ea\u05e8 \u2014 caf\u00e9\n'+yaml_doc
+        helper.edit_raw_problems(commented,commented.replace('nginx:1','nginx:2'))  # UTF-8 comments the file has stay
+        helper.edit_raw_problems(commented,commented.replace('caf\u00e9','cafe'))  # fewer is fine
         bom='\ufeff'+yaml_doc
         helper.edit_raw_problems(bom,bom.replace('nginx:1','nginx:2'))  # a file that starts with a BOM stays editable
+        with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(bom,'\ufeffinclude: [other.yaml]\n'+yaml_doc)
+        self.assertEqual((refused.exception.code,refused.exception.field),('PATH_REFUSED','include'),'the kept BOM no longer hides the key')
         with self.assertRaises(helper.EditRefused) as refused:helper.edit_raw_problems(yaml_doc,yaml_doc+'x-f: {"a":&k include}\n')
         self.assertEqual(refused.exception.field,'node-property','an anchor right after a colon counts')
         # Tokens a file already has stay allowed (an existing && in a command, an existing anchor).
