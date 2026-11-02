@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Server cleanup on the Storage page: scan a server, see how much space stopped containers, dangling images, unused anonymous volumes and old build cache take, and remove them after you confirm. Anything a site, backup, restore test, move or kept old copy still needs, and DockNest itself, is never removed. See [docs/server-cleanup.md](docs/server-cleanup.md).
+
 ## [2.13.5] - 2026-11-01
 
 See [docs/releases/2026-11-01-v2.13.5.md](docs/releases/2026-11-01-v2.13.5.md).
