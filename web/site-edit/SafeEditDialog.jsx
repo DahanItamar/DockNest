@@ -13,6 +13,7 @@ import './site-edit.css';
 const Shell=props=><div className="map-root se-root"><Sheet className="dialog-edge" labelId="safe-edit-title" {...props}/></div>;
 const Foot=({a,onA,b,onB,disabled})=><>{a&&<button type="button" onClick={onA}>{a}</button>}{b&&<button type="button" className={disabled?undefined:'primary'} disabled={disabled} onClick={onB}>{b}</button>}</>;
 const FROZEN='This service has host access. Change it by hand.';
+const size=n=>n>=1024**3?(n/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(n/1024**2))+' MB';
 const envKey=(file,key)=>file+'\n'+key;
 
 // Safe Edit for one site: Compose, Environment, Ports and Image, then Review, Apply and the timeline.
@@ -39,9 +40,10 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
    setReplaced({});setDraft(null);setAdded([]);setEditing({});
    const rowsP=[],rowsI=[];
    for(const s of v.services||[]){
-    const at=v.kind==='compose'?locate(files,s):{image:null,ports:s.ports.map(()=>null)};
-    s.ports.forEach((p,i)=>rowsP.push({service:s.name,container:p.container,host:p.host,protocol:p.protocol,hostIp:p.hostIp,frozen:s.frozen,loc:v.kind==='container'?(p.host==null?null:{}):at.ports[i],value:p.host==null?'':String(p.host),applied:p.host==null?'':String(p.host),stale:false}));
-    rowsI.push({service:s.name,image:s.image,frozen:s.frozen,loc:v.kind==='container'?{}:at.image,value:s.image,applied:s.image,stale:false});
+    // The server's file and line win; the UI's own locator is the fallback.
+    const own=v.kind==='compose'?locate(files,s):{image:null,ports:s.ports.map(()=>null)};
+    s.ports.forEach((p,i)=>rowsP.push({service:s.name,container:p.container,host:p.host,protocol:p.protocol,hostIp:p.hostIp,frozen:s.frozen||!!p.reason,loc:p.host==null?null:v.kind==='container'?{}:(p.at||own.ports[i]),value:p.host==null?'':String(p.host),applied:p.host==null?'':String(p.host),stale:false}));
+    rowsI.push({service:s.name,image:s.image,frozen:s.frozen,reason:s.imageReason,variable:s.imageVariable,loc:s.imageReason?null:v.kind==='container'?{}:(s.imageAt||own.image),value:s.image,applied:s.image,stale:false});
    }
    setPorts(rowsP);setImages(rowsI);
    setTab(v.kind==='container'?'Environment':'Compose');setStage('edit');
@@ -175,7 +177,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
    {images.map((m,i)=>{
     const can=tabOn&&!m.frozen&&m.loc&&!m.stale;
     return can?<label key={m.service} className="map-field">{m.service}<input className="se-input" spellCheck="false" autoComplete="off" value={m.value} onChange={e=>changeImage(i,e.target.value)}/></label>
-     :<div key={m.service} className="map-field"><span>{m.service}</span><code className="se-ell">{m.image}</code><span className="map-caption">{m.frozen?FROZEN:!tabOn?'':'This image is set in a way that needs the file.'} {!tabOn||m.frozen||isContainer?null:inCompose}</span></div>;
+     :<div key={m.service} className="map-field"><span>{m.service}</span><code className="se-ell">{m.image}</code><span className="map-caption">{m.frozen?FROZEN:m.variable?`Edit ${m.variable} in Environment.`:!tabOn?'':'This image is set in a way that needs the file.'} {!tabOn||m.frozen||isContainer?null:m.variable?<button type="button" className="map-link se-link" onClick={()=>setTab('Environment')}>Open Environment</button>:inCompose}</span></div>;
    })}
   </>;
  }
@@ -203,7 +205,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
     <div className="def-row"><dt>Backup first</dt><dd>Yes</dd></div>
     <div className="def-row"><dt>Health check</dt><dd>{healthText(s.health)}</dd></div>
     <div className="def-row"><dt>Rollback</dt><dd>Automatic</dd></div>
-    <div className="def-row"><dt>Data rollback</dt><dd>{s.dataRollback?'Yes':'No'}</dd></div>
+    <div className="def-row"><dt>Data rollback</dt><dd>{s.dataRollback?(s.dataBytes!=null?'Yes, '+size(s.dataBytes):'Yes'):'No'}</dd></div>
    </dl>
    {error&&<Note kind="error" icon={X} role="alert">{error}</Note>}
    {guard.prompt}
@@ -223,7 +225,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId}){
  </Shell>;
  if(outcome==='done')return <Shell onClose={onClose} title={site.name} actions={<Foot b="Close" onB={onClose}/>}><Note kind="ok" icon={CheckCircle2} role="status">Change applied</Note><Timeline edit={edit}/></Shell>;
  if(outcome==='attention')return <Shell onClose={onClose} title="Needs your attention" actions={<Foot a="Close" onA={onClose}/>}>
-  <AlertPanel variant="error" action={(acts.retry||acts.restoreBackup)&&<div className="rp-actions">{acts.retry&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.retryRollback(edit.id))}>Try again</button>}{acts.restoreBackup&&<button type="button" disabled={busy} onClick={()=>act(()=>client.restoreBackup(edit.id))}>Restore backup</button>}</div>}>{edit.reason||'Rollback failed. The maintenance page is on.'}</AlertPanel>
+  <AlertPanel variant="error" action={(acts.retry||acts.restoreBackup)&&<div className="rp-actions">{acts.retry&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.retryRollback(edit.id))}>Try again</button>}{acts.restoreBackup&&<button type="button" disabled={busy} onClick={()=>act(()=>client.restoreBackup(edit.id))}>Restore backup</button>}</div>}>{edit.reason||'Rollback failed. The maintenance page is on.'}{edit.dataCopyNote&&<small className="se-note">{edit.dataCopyNote}</small>}</AlertPanel>
   {edit.restore&&<AlertPanel variant="info">{edit.restore.running?'Restoring the backup. Follow it in Jobs.':'The restore was started. Follow it in Jobs.'}</AlertPanel>}
   <Timeline edit={edit}/>{fail}
  </Shell>;

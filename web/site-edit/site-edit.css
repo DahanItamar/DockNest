@@ -49,3 +49,5 @@
 
 .se-root .se-cell{display:inline-flex;align-items:center;justify-content:flex-end;gap:4px;min-height:var(--control-height)}
 .se-root td.num .se-cell{width:100%}
+
+.se-root .se-note{display:block;margin-top:4px;font-size:var(--fs-caption);line-height:var(--lh-caption)}

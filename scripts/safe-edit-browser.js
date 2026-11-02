@@ -46,10 +46,11 @@ volumes:
   dbdata:`;
 const lineOf=text=>COMPOSE.split('\n').findIndex(l=>l.includes(text))+1;
 const ENV='/srv/shop/.env';
-const noPort=container=>({host:null,container,protocol:'tcp',hostIp:''}),port=(host,container)=>({host,container,protocol:'tcp',hostIp:''});
+const noPort=container=>({host:null,container,protocol:'tcp',hostIp:'',at:null}),port=(host,container,at=null)=>({host,container,protocol:'tcp',hostIp:'',at});
+const at=(text,file='compose.yaml')=>({file,line:lineOf(text)});
 const viewFor=(over={})=>({siteId:'demo-site-0',kind:'compose',files:[{path:'compose.yaml',inode:11,sha256:'a'.repeat(64),text:COMPOSE}],
  env:[{file:ENV,keys:['APP_ENV','DATABASE_URL','SECRET_KEY','SMTP_PASSWORD'].map(key=>({key,set:true}))}],
- services:[{name:'web',image:'demo/shop:1.5',ports:[port(8080,8080),port(9090,9090)],frozen:false,healthcheck:true},{name:'db',image:'postgres:16',ports:[noPort(5432)],frozen:false,healthcheck:false}],
+ services:[{name:'web',image:'demo/shop:1.5',imageAt:at('demo/shop'),imageReason:null,imageVariable:null,ports:[port(8080,8080,at('8080:8080')),port(9090,9090,at('9090:9090'))],frozen:false,healthcheck:true},{name:'db',image:'postgres:16',imageAt:at('postgres'),imageReason:null,imageVariable:null,ports:[noPort(5432)],frozen:false,healthcheck:false}],
  usable:{compose:true,env:true,ports:true,image:true},reasons:{},healthUrl:true,...over});
 const DIFF={files:[{path:'compose.yaml',hunks:[{oldStart:3,newStart:3,lines:[{type:'remove',text:'image: demo/shop:1.4'},{type:'add',text:'image: demo/shop:1.5'},{type:'context',text:'ports:'},{type:'context',text:'- "8080:8080"'},{type:'add',text:'- "9090:9090"'}]}]}],env:[]};
 const stepsOf=(phase)=>{
@@ -61,7 +62,7 @@ const stepsOf=(phase)=>{
  return [S('backup','done',0,48),S('apply','done',1,12),S('check_health','failed',2,120,'No answer from the health check'),S('roll_back','failed',4,31,'The old version did not start'),S('finish','skipped')];
 };
 const editFor=phase=>({id:'e1',siteId:sites[0].id,state:phase==='running'?'running':phase==='attention'?'needs_attention':'done',result:phase==='done'?'applied':phase==='rolled'?'rolled_back':null,
- reason:phase==='rolled'?'No healthy answer in 2 minutes. The previous version runs again.':phase==='attention'?'Rollback failed. The maintenance page is on.':null,backupId:'demo-recovery-0',steps:stepsOf(phase),restore:phase==='attention'&&mock.restored?{jobId:'j1',running:true}:null,actions:{cancel:phase==='running'&&false,retry:phase==='attention',restoreBackup:phase==='attention'&&!mock.restored}});
+ reason:phase==='rolled'?'No healthy answer in 2 minutes. The previous version runs again.':phase==='attention'?'Rollback failed. The maintenance page is on.':null,backupId:'demo-recovery-0',steps:stepsOf(phase),dataCopyNote:phase==='attention'?'A copy of the data is kept on the server.':null,restore:phase==='attention'&&mock.restored?{jobId:'j1',running:true}:null,actions:{cancel:phase==='running'&&false,retry:phase==='attention',restoreBackup:phase==='attention'&&!mock.restored}});
 
 let mock;
 function freshMock(){
@@ -86,9 +87,10 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
   if((m=endpoint.match(/^\/api\/sites\/([^/]+)\/edit\/(review|apply)$/))&&method==='POST'){
    mock.requests.push({kind:m[2],body});
    if(m[2]==='review'){
+    if(mock.reviewMode==='dataNotLocal')return json(route,{code:'DATA_NOT_LOCAL',error:'This site keeps its data outside the server. Change the image by hand.'},422);
     if(mock.reviewMode==='blocked')return json(route,{code:'PRIVILEGE_ADDED',error:'This change adds privileged mode. Edit it by hand.'},422);
     if(mock.reviewMode==='conflict')return json(route,{code:'FILE_CHANGED',error:'This file changed on the server. Reload it.'},422);
-    return json(route,{token:'tok-1',diff:DIFF,summary:{health:'url',dataRollback:mock.dataRollback},warnings:[{code:'PUBLIC_PORT',port:9090,message:'Port 9090 is reachable from the internet.'}]});
+    return json(route,{token:'tok-1',diff:DIFF,summary:{health:'url',dataRollback:mock.dataRollback,dataBytes:mock.dataRollback?1288490188:null},warnings:[{code:'PUBLIC_PORT',port:9090,message:'Port 9090 is reachable from the internet.'},...(mock.dataRollback?[{code:'LARGE_DATA_COPY',bytes:1288490188,message:'The safety copy of the data is large.'}]:[])]});
    }
    if(mock.needReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
    if(mock.applyError)return json(route,{code:mock.applyError,error:'raw'},409);
@@ -270,6 +272,7 @@ async function boards(width,scheme){
  await dlg(page).getByText('Rollback failed. The maintenance page is on.').waitFor();
  assert.equal(await dlg(page).locator('.alert-error').getByRole('button').count(),2,'the red panel carries Try again and Restore backup');
  if(width<500){const ws=await dlg(page).locator('.rp-actions button').evaluateAll(l=>l.map(b=>Math.round(b.getBoundingClientRect().width)));assert.equal(new Set(ws).size,1,'panel buttons share one width on a phone')}
+ await dlg(page).getByText('A copy of the data is kept on the server.').waitFor();
  await shot(page,'15','needs-attention',width,scheme);await layout(page,'attention '+tag);
  await dlg(page).getByRole('button',{name:'Try again'}).click();
  await dlg(page).getByText('Change applied').waitFor({timeout:9000});assert.equal(mock.retries,1);
@@ -379,6 +382,31 @@ async function roles(){
  await dlg(page).getByLabel('Value for COMPOSE_FILE').fill(OTHER);
  assert.equal(await dlg(page).getByLabel('Variable name').getAttribute('aria-invalid'),'true');
  await context.close();
+ // Review shows the data copy size and the large-copy warning; DATA_NOT_LOCAL is a blocked panel with the server's sentence.
+ freshMock();mock.dataRollback=true;
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+ await dlg(page).getByText('Large data copy').waitFor();
+ assert.match(await dlg(page).innerText(),/Data rollback\s*Yes, 1\.2 GB/);
+ await context.close();
+ freshMock();mock.reviewMode='dataNotLocal';
+ ({context,page}=await open({width:1280}));
+ await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+ await dlg(page).getByText('This site keeps its data outside the server. Change the image by hand.').waitFor();
+ await context.close();
+ // The server's file and line win over the UI's own search: two identical port lines, only the reported one changes.
+ freshMock();
+ {const NL=String.fromCharCode(10),L=COMPOSE.split(NL),k=L.findIndex(l=>l.includes('9090:9090'));L.splice(k,0,L[k]);const twice=L.join(NL);
+  mock.view=viewFor({files:[{path:'compose.yaml',inode:11,sha256:'a'.repeat(64),text:twice}]});
+  ({context,page}=await open({width:1280}));
+  await startEdit(page,1280);
+  await dlg(page).getByRole('tab',{name:'Ports'}).click();
+  await dlg(page).getByRole('button',{name:'Edit host port for web 9090'}).click();
+  await dlg(page).getByLabel('Host port for web 9090').fill('9091');
+  await dlg(page).getByRole('tab',{name:'Compose'}).click();
+  const t=await dlg(page).locator('textarea').inputValue();
+  assert.equal(t.split(NL)[lineOf('9090:9090')-1].includes('9091:9090'),true);assert.equal((t.match(/9090:9090/g)||[]).length,1,'only the reported line changed');
+  await context.close();}
  // Busy site: the 409 sentence is shown at Apply.
  freshMock();mock.applyError='SITE_BUSY';
  ({context,page}=await open({width:1280}));
@@ -412,7 +440,7 @@ async function realApi(){
   calls.push(request.operation);
   switch(request.operation){
    case 'discover':return {containers:['shop-web','shop-db'].map(name=>({name,labels:{'com.docker.compose.project':'shop','com.docker.compose.project.config_files':'/srv/shop/compose.yaml','com.docker.compose.project.working_dir':'/srv/shop','com.docker.compose.project.environment_file':'/srv/shop/.env'}}))};
-   case 'edit-load':return {files:[{path:'/srv/shop/compose.yaml',inode:11,sha256:sha(TEXT),text:TEXT}],env:[{file:'/srv/shop/.env',keys:['DB_PASSWORD','TAG']}],services:[{name:'web',image:'shop:1.0',ports:[{host:8080,container:80,protocol:'tcp',hostIp:''}],frozen:false,healthcheck:true},{name:'db',image:'postgres:16',ports:[],frozen:false,healthcheck:false}],composeVersion:'2.29.1',usable:{compose:true,env:true,ports:true,image:true},reasons:{}};
+   case 'edit-load':return {files:[{path:'/srv/shop/compose.yaml',inode:11,sha256:sha(TEXT),text:TEXT}],env:[{file:'/srv/shop/.env',keys:['DB_PASSWORD','TAG']}],services:[{name:'web',image:'shop:1.0',ports:[{host:8080,container:80,protocol:'tcp',hostIp:'',at:{file:'/srv/shop/compose.yaml',line:5}}],imageAt:{file:'/srv/shop/compose.yaml',line:3},imageReason:null,imageVariable:null,frozen:false,healthcheck:true},{name:'db',image:'postgres:16',ports:[],frozen:false,healthcheck:false}],composeVersion:'2.29.1',usable:{compose:true,env:true,ports:true,image:true},reasons:{}};
    case 'edit-check':return {ok:true,verdict:{changed:['services.web.ports'],imageChanged:false,newPorts:[{host:8081,allAddresses:true}],hashes:[{path:'/srv/shop/compose.yaml',before:sha(TEXT),after:'b'.repeat(64)}],reviewedModelSha256:'c'.repeat(64)}};
    case 'edit-prepare':return {ok:true,pulled:[]};
    case 'edit-apply':return {ok:true,startedAt:now/1000};

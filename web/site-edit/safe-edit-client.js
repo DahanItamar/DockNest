@@ -37,7 +37,7 @@ const FRIENDLY={
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
 
 // Review warnings: a short title in front of the server's sentence.
-const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',NO_HEALTH_CHECK:'No health check'};
+const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',LARGE_DATA_COPY:'Large data copy',NO_HEALTH_CHECK:'No health check'};
 export const warningView=w=>({title:WARNING_TITLE[w.code]||'Check this',text:w.code==='PUBLIC_PORT'?w.message+' Check your firewall.':w.message});
 export const healthText=health=>({url:'The health URL answers',docker:'Docker health check'}[health]||'Running and stable');
 
