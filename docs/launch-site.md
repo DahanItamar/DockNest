@@ -245,3 +245,18 @@ for Git, build and nginx steps,
 [Secrets and Credential Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-secrets-credential-engineer.md)
 for the threat model and deploy keys, and
 [UI Designer](https://github.com/msitarzewski/agency-agents/blob/main/design/design-ui-designer.md) for the boards.
+
+## Owner decisions after the security review (2026-11-02)
+
+1. **Git minimum 2.37, hardening on every call.** The floor is 2.37 (`http.curloptResolve`), not the newest CVE release,
+   so distribution gits with backported fixes (Ubuntu 24.04, Debian 12) work. The CVE classes stay closed by how git is
+   called, whatever the version: `--no-recurse-submodules` and `.gitmodules` refused (submodule path and CR injection),
+   `-c core.hooksPath=/dev/null` (hooks), `-c core.symlinks=false` where the checkout allows it plus the symlink-escape
+   check (symlink and case-collision writes), `-c transfer.bundleURI=false` (bundle-uri), `-c protocol.file.allow=never`
+   and `-c protocol.ext.allow=never` with the protocol allow-list (file and ext transports), never a local path as the
+   source (local-clone tricks), and `GIT_CONFIG_NOSYSTEM=1`, an empty `HOME`, `GIT_CONFIG_GLOBAL=/dev/null`,
+   `GIT_TERMINAL_PROMPT=0`. This replaces the version floor in items 9 and 16.
+2. **Maintenance page at launch.** A `maintenance` step after the nginx and certificate steps sets the page up through
+   the 2.13 auto-setup (its test and rollback) and sets the health URL to the launched domain (https once the
+   certificate is issued). A failure there does not fail the launch: the site shows the normal "Set up maintenance
+   page" offer, with no repeated warning.
