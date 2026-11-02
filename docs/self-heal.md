@@ -60,7 +60,7 @@ in the UI ("Works while DockNest is running") and docs. C stays possible later a
 | Who | Administrators turn it on per site. Operators see the setting and history read-only. No re-verification (it only restarts containers the site already runs). Decided (lead). |
 | Limits | Restart up to N times (1-10, default 3) per container in a window (10 minutes to 24 hours, default 1 hour). At least 60 seconds between two restarts of one container. Decided (lead). |
 | Which containers | Only containers of the site that have a Docker health check. The setting shows which ones are watched; a site with none cannot turn it on ("No container in this site has a health check"). Decided (lead). |
-| When it waits | No restart while the site has a queued or running job (backup, restore, Safe Edit), an unfinished move, is in maintenance, or within 2 minutes after such work ended (containers starting). The event is recorded as `skipped` with the reason. Decided (lead). |
+| When it waits | No restart while the site has a running job (backup, restore, Safe Edit), an unfinished move, is in maintenance, or within 2 minutes after such work ended (containers starting). The event is recorded as `skipped` with the reason. Decided (lead). |
 | Restart | A short job `self-heal` (statuses `heal_queued`/`heal_running`, never claimed by older releases), sorted first in `claimJob` (it is seconds). The helper re-reads the container's health right before acting and restarts only if it is still `unhealthy` (`docker restart --time 30 <name>`). Decided (lead). |
 | Recovered | The next `healthy` event for that container closes the episode (`recovered`). |
 | Limit reached | Further unhealthy events in the window are recorded as `limit_reached`, no restart, alert `self_heal.gave_up` once per window. |
@@ -86,8 +86,8 @@ in the UI ("Works while DockNest is running") and docs. C stays possible later a
 Next free number at merge time (currently 14, after Safe Edit). New objects only.
 
 - `self_heal_settings(site_id PK → sites, enabled 0/1 DEFAULT 0, max_restarts INTEGER CHECK 1..10 DEFAULT 3,
-  window_minutes INTEGER CHECK 10..1440 DEFAULT 60, watched TEXT CHECK length <= 4096 (JSON: container name, ID,
-  project label), last_event_at TEXT, updated_at, updated_by)`. No row means off.
+  window_minutes INTEGER CHECK 10..1440 DEFAULT 60, watched TEXT CHECK length <= 4096 (JSON: Compose project,
+  service and name per container), last_event_at TEXT, updated_at, updated_by)`. No row means off.
 - `self_heal_events(id PK, site_id → sites, server_id → servers, container TEXT CHECK length <= 128, kind CHECK
   unhealthy|restarted|restart_failed|recovered|skipped|limit_reached, reason CHECK length <= 300, job_id → jobs NULL,
   at TEXT)`. Index `(site_id, at, id)`. Triggers refuse `UPDATE`, and `DELETE` of a row newer than 90 days; the worker's
@@ -103,8 +103,8 @@ Next free number at merge time (currently 14, after Safe Edit). New objects only
 ## Worker and helper changes
 
 - Worker: `streams.js` (open/close/reconnect), `tickSelfHeal()` only turns recorded `unhealthy` events into `heal_queued`
-  jobs when the checks pass (it does not read servers). `claimJob` sorts `self-heal` first; `busy()` ignores
-  `self-heal` jobs so a restart never blocks a backup.
+  jobs when the checks pass (it does not read servers). `claimJob` sorts `self-heal` first; a running
+  `self-heal` job makes its site busy for its few seconds (Security review changes, item 1).
 - Helper module `remote/helper/heal.py`: `health-events` (stream, read-only) and `self-heal-restart` (project, service
   and name; refuses if the labels differ, the container is not running or health is not `unhealthy`). Fixed argv, no shell.
 
@@ -121,8 +121,9 @@ Next free number at merge time (currently 14, after Safe Edit). New objects only
 
 The security review (2026-11-02) tightened the design. Where this section and the text above differ, this section wins.
 
-1. **Restarts and backups never overlap.** A queued or running `self-heal` job counts as busy for its own site
-   (seconds), so a backup waits for it; and Safe Edit, move and backup claims wait for a running heal job of the site.
+1. **Restarts and backups never overlap.** A running `self-heal` job counts as busy for its own site (seconds), so a
+   backup waits for it; a heal claim waits only for running site jobs, and a queued heal that finds a queued backup
+   for its site yields and is recorded as `skipped` (no deadlock between the two queues); and Safe Edit, move and backup claims wait for a running heal job of the site.
    `self-heal-restart` takes the same per-site lock file as backup and edit operations, refuses unless `State.Running`
    is true and `State.Health.Status` is `unhealthy`, and re-checks the maintenance marker on the server.
 2. **Identity by Compose labels, not container ID.** Containers are identified by `com.docker.compose.project` plus
@@ -135,8 +136,9 @@ The security review (2026-11-02) tightened the design. Where this section and th
    Python test pins it on captured real output; the Linux run covers the oldest supported Docker and 28.
 5. **Stream lifecycle.** The stream closes and reopens on host-key re-pin, credential change, server removal, a site
    move, and a Safe Edit that changes the services; it fails closed on a pin mismatch.
-6. **Bounded helper.** `docker events` runs in its own process group, killed when stdin closes; lines over 4 KB are
-   dropped and more than 50 lines per second closes the stream (reconnect with backoff). The stream uses its own SSH
+6. **Bounded helper.** `docker events` runs in its own process group, killed when stdin closes; lines over 4 KB or
+   malformed output close the stream (reconnect with backoff); events are throttled per container (at most one acted
+   on per 10 seconds), so one flapping site never pauses healing for the others. The stream uses its own SSH
    connection, separate from job traffic. Docs note `MaxSessions` and `ClientAliveInterval`.
 7. **Plain failures.** Known `docker restart` exit codes map to fixed sentences; never stderr.
 8. **Extra Linux cases:** a container recreated by `compose up` after enable is still healed; a backup stopping the
@@ -145,14 +147,14 @@ The security review (2026-11-02) tightened the design. Where this section and th
 
 ## Upgrade safety
 
-Additive migration; off for every site. Rolling back to 2.14.x ignores the tables and `heal_*` jobs; any queued restart
+Additive migration; off for every site. Rolling back to 2.14.x ignores the tables and `heal_*` jobs (the downgrade wait counts them); any queued restart
 simply never runs. Existing alert lines do not gain the new events.
 
 ## Test plan
 
-- Unit: window counting, gap, limit, dedupe, busy/maintenance/move/settle skips, claim ordering, ID mismatch refusal,
+- Unit: window counting, gap, limit, dedupe, busy/maintenance/move/settle skips, claim ordering, label mismatch refusal, queued backup plus queued heal never deadlock,
   reconnect backoff with jitter (fake timers), event validation drops unknown fields, migration from a 2.14 fixture.
-- Python: event filter and output shape, Action parsing, inspect on connect, restart refuses healthy or wrong ID.
+- Python: event filter and output shape, Action parsing, inspect on connect, restart refuses healthy, stopped or wrong labels.
 - Browser: settings card, watched list, no-healthcheck state, history table, phone and both themes.
 - Linux integration (`scripts/integration-self-heal.js`):
   1. Container whose health check fails after a file is removed: restarted within 20 s, `recovered` after the file

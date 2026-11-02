@@ -36,7 +36,7 @@ feature ships with the "beta" label.
 | Sources | (a) Compose file pasted or uploaded, plus optional environment values; (b) Git repository over `https://` (public) or SSH (`git@host:path`, `ssh://`) with a deploy key, a branch or tag, and the Compose file path inside it. Decided (lead). |
 | Where it lives | `/srv/docknest/<slug>` on the server (an application location under the moves rules); refused if it exists. Compose project name `<slug>`. Decided (lead). |
 | Fetch | On the server with `git` (offered through the existing install flow, `git` added to its fixed package table). Decided (lead). |
-| Deploy key | A **Deploy key** in its own table, listed on the Connections page in its own section: DockNest generates an ed25519 key pair, shows the public key to paste into the Git host, seals the private key with the master key. The Git host's SSH key is pinned when the Connection is created (shown as SHA-256, like servers). Deploy keys are always admin-only, never covered by "Operators can manage alerts". Decided (lead). |
+| Deploy key | A **Deploy key** in its own table, listed on the Connections page in its own section: DockNest generates an ed25519 key pair, shows the public key to paste into the Git host, seals the private key with the master key. The Git host's SSH key is read from the server's network view and confirmed by SHA-256 when the key is created (item 10). Deploy keys are always admin-only, never covered by "Operators can manage alerts". Decided (lead). |
 | Build | Allowed when the Compose file has `build:`, with the build gate below, a 30-minute time limit and a free-space check. Owner question 1. |
 | Gate | The resolved Compose model (`docker compose config --format json`) must pass the Safe Edit privilege gate with no "before": nothing privileged, no host namespaces, no `docker.sock`, bind mounts only inside the site folder, named volumes allowed, published ports only on `127.0.0.1` (nginx fronts the site). Decided (lead). |
 | Web service | The owner picks the service and container port that nginx proxies to; DockNest binds it to a free `127.0.0.1` port through a generated override (as moves do, needs Compose 2.24+). Decided (lead). |
@@ -54,12 +54,12 @@ feature ships with the "beta" label.
 |---|---|
 | Arbitrary code from a repository builds and runs as root on the server | The trust warning before **Launch** ("This builds and runs code from the repository on {server}. Only use repositories you trust."); admin plus re-verification; the runtime gate keeps containers unprivileged; the build gate below keeps builds unprivileged. Residual: a hostile repository runs code inside an unprivileged container with network access, like any `docker compose up` the owner would run. |
 | Build escape | Build settings allow-list: `context` and `dockerfile` inside the repository after resolving symlinks (no URL or `..` contexts), `args`, `target`, `labels`, `platforms`. Refused: `network`, `extra_hosts`, `privileged`, `entitlements`, `ssh`, `secrets`, `cache_from`/`cache_to`, `additional_contexts`. BuildKit is run without extra entitlements. |
-| Git URL tricks (SSRF, local files, `ext::`, option injection) | Only `https://` and SSH forms; the host must be a DNS name or public IP after the server resolves it (private and metadata addresses refused unless "Allow private address" is ticked for a self-hosted Git server, admin only); no leading `-` anywhere; argv only, no shell; `git -c protocol.file.allow=never -c protocol.ext.allow=never -c core.hooksPath=/dev/null clone --depth 1 --no-recurse-submodules --single-branch --branch <ref> -- <url> <dir>` with `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `HOME` set to the journal folder. Size cap 2 GB and 10-minute time limit. |
-| Repository content tricks | After clone, symlinks inside the repository that point outside it are refused for the Compose file, `env_file`s and build contexts; `.git` is removed after the checkout commit is recorded; setuid bits cleared (existing restore rule). |
-| Deploy key theft | Private key sealed with the master key, never returned or logged; sent over SSH stdin and written to a 0600 file in the 0700 journal folder only for the clone, then removed (also on failure, and by teardown); `ssh -i <key> -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<pinned line>`. The public key is read-only on the Git host by the owner's choice; the UI says "Add it as a read-only deploy key". |
+| Git URL tricks (SSRF, local files, `ext::`, option injection) | Only `https://` and SSH forms; the host must be a DNS name or public IP after the server resolves it (private and metadata addresses refused unless "Allow private address" is ticked for a self-hosted Git server, admin only); no leading `-` anywhere; argv only, no shell; the clone argv, environment and IP pinning of Security review changes items 2 and 3, with `core.hooksPath=/dev/null`, `--depth 1 --single-branch --no-recurse-submodules`, and after `env -i` explicitly `HOME=<journal folder>`, `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`. Size cap 2 GB and 10-minute time limit. |
+| Repository content tricks | After clone, any symlink whose realpath leaves the repository refuses the launch (item 4); `.git` is removed after the checkout commit is recorded; setuid bits cleared (existing restore rule). |
+| Deploy key theft | Private key sealed with the master key, never returned or logged; sent over SSH stdin and written to a 0600 file in the 0700 journal folder only for the clone, then removed (also on failure, and by teardown); the `GIT_SSH_COMMAND` of item 3. The public key is read-only on the Git host by the owner's choice; the UI says "Add it as a read-only deploy key". |
 | Secrets in environment values | As Safe Edit: write-only, written to `/srv/docknest/<slug>/.env` 0600 root, never stored or logged. |
 | nginx takeover of another site | Refused when any existing nginx server block already serves the domain; the file name is DockNest's own (`docknest-<slug>.conf`); `nginx -t` must pass, else the file is removed and the reason shown. |
-| Port and name collisions | A Compose project or container name that exists is refused; the loopback port is chosen free at check and re-checked at start. |
+| Port and name collisions | A Compose project, container, volume or network name that exists is refused (item 5); the loopback port is chosen free at check and re-checked at start. |
 | Concurrent jobs | Server hold as above; the new site exists in DockNest only after the deploy passed, so no backup can run against a half-made site. |
 | Resource abuse | 3 launches per server per hour; free space for clone plus images plus 2 GB checked before fetch. |
 
@@ -69,7 +69,7 @@ Next free number at merge time (currently 15, after Safe Edit and self-heal). Ne
 
 - `site_launches(id PK, server_id → servers, site_id → sites NULL (set when saved), slug CHECK length 1..40,
   source CHECK compose|git, repo_url CHECK length <= 512 NULL, ref CHECK length <= 200 NULL, commit TEXT NULL,
-  compose_path CHECK length <= 300 NULL, connection_id → connections NULL ON DELETE SET NULL, domain CHECK length <= 253,
+  compose_path CHECK length <= 300 NULL, deploy_key_id → deploy_keys NULL ON DELETE SET NULL, domain CHECK length <= 253,
   web_service, web_port, loopback_port, state CHECK queued|running|waiting_dns|done|failed|cancelled|removed|needs_attention,
   failed_step, reason CHECK length <= 300, created_by, created_at, started_at, finished_at, remove_until)`.
   The pasted Compose text and environment values are never stored here (sealed job payload, wiped after `deploy`).
@@ -166,7 +166,19 @@ The security review (2026-11-02) tightened the design. Where this section and th
     (`claimLaunch`), because `jobs.site_id` is NOT NULL.
 12. **Hold and backups.** Scheduled backups of other sites on the server queue behind a launch hold instead of being
     skipped; the hold is released before `first_backup`.
-13. **Extra Linux cases:** a redirect to a private IP; DNS rebinding between check and fetch; a repository symlink used
+13. **Certificate lineage.** certbot runs with `--cert-name docknest-<slug>`; the launch is refused when an existing
+    lineage covers the domain or its `www.` alias; teardown deletes only a lineage the journal recorded as created.
+14. **The buildx builder, honestly.** Its buildkitd runs as a privileged container, so a BuildKit sandbox escape is root
+    on the host (no worse than dockerd's built-in builder; stated in docs). Images are built with
+    `--builder <name>` and loaded into the engine so `up --no-build` finds them. The `moby/buildkit` image is pinned
+    by digest in the helper.
+15. **Holds seen by every claim.** `CLAIMABLE_JOB_SQL`, `claimInstall` and the restore test claim treat a running
+    launch step as a hold on its server; tested.
+16. **Git minimum and ports.** The minimum git is the larger of 2.37 (`http.curloptResolve`) and the CVE floor;
+    the pin uses the URL's real port (`https://host:8443/` works).
+17. **Pin provenance.** `deploy_keys` stores `pinned_from_server_id` (shown in the UI); using the key from another
+    server asks to confirm the Git host key again from that server.
+18. **Extra Linux cases:** the built image is runnable after a buildx build; a redirect to a private IP; DNS rebinding between check and fetch; a repository symlink used
     as a bind source; a volume name collision; `RUN --network=host`; a repository `.env` with `COMPOSE_FILE`; teardown
     removing the certbot lineage.
 
