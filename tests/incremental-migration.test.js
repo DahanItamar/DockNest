@@ -20,7 +20,9 @@ const schema = db => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_maste
 const contents = (db, tables) => Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row }))]));
 
 test('migration versions are unique, increasing and contiguous from 1, and incremental backups are migration 12', () => {
-  const versions = migrations.map(migration => migration.version);
+  // 13 (2.14.0) and 14 (Safe Edit) are built on parallel 2.15 branches; until they merge, only they may be missing.
+  const reserved = [13, 14].filter(version => !migrations.some(migration => migration.version === version));
+  const versions = [...migrations.map(migration => migration.version), ...reserved].sort((a, b) => a - b);
   assert.deepEqual(versions, versions.map((_, index) => index + 1));
   const incremental = migrations.find(migration => migration.name === 'incremental-backups');
   assert.equal(incremental.version, 12); assert.equal(incremental.compatible, true);
@@ -33,7 +35,7 @@ test('migration 12 adds only its two tables and indexes, and the 2.11 positional
     db.exec('PRAGMA foreign_keys=ON');
     migrate(db, { file, list: migrations.filter(migration => migration.version <= 11), log: quiet });
     const before = schema(db);
-    migrate(db, { file, log: quiet });
+    migrate(db, { file, list: migrations.filter(migration => migration.version <= 12), log: quiet });
     const added = schema(db).filter(row => !before.some(item => item.name === row.name)).map(row => row.name).sort();
     assert.deepEqual(added, ['backup_chain_links', 'backup_chain_links_chain', 'backup_chain_links_parent', 'site_incremental']);
     for (const row of before) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'unchanged: ' + row.name);
