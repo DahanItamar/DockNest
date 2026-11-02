@@ -216,5 +216,28 @@ class Restart(unittest.TestCase):
         for bad in [{'containerId':'abc'},{'name':'a b'},{'project':'shop','service':None},{'maintenanceDirectory':'../x'},{'maintenanceDirectory':'relative'},{'siteKey':'../x'}]:
             with self.subTest(bad=bad):self.assertRaises(ValueError,self.restart,container(A,'shop-web-1',COMPOSE),bad)
 
+class CleanupLock(unittest.TestCase):
+    """While a server cleanup holds its lock: Safe Edit answers SITE_BUSY (retried by the engine, so a rollback is never
+    stranded), self-heal a 'cleanup' refusal; other steps still fail. cleanup-apply watches stdin."""
+    def busy(self,*args,**kw):raise ValueError('A server cleanup is running on this server. Try again when it finishes.')
+    def test_edit_ops_answer_site_busy_with_copy_facts(self):
+        for op in ('edit-prepare','edit-apply','edit-rollback'):
+            with self.subTest(op=op),captured() as out,patch.object(helper,'cleanup_shared',side_effect=self.busy),patch.object(helper,'edit_copy_facts',return_value={'dataCopy':'kept'}),patch.object(helper,'edit_id_ok',return_value=True),patch.object(helper,'edit_operation') as run:
+                helper.main({'operation':op,'editId':'e'})
+                result=lines(out)[-1]['result']
+                self.assertEqual((result['ok'],result['code'],result['reason']),(False,'SITE_BUSY',helper.EDIT_REASONS['SITE_BUSY']))
+                self.assertEqual(result.get('dataCopy'),'kept' if op!='edit-prepare' else None)
+                run.assert_not_called()
+    def test_self_heal_restart_is_refused_as_cleanup(self):
+        with captured() as out,patch.object(helper,'cleanup_shared',side_effect=self.busy),patch.object(helper,'self_heal_restart') as run:
+            helper.main({'operation':'self-heal-restart'})
+        self.assertEqual(lines(out)[-1]['result'],{'outcome':'refused','code':'cleanup'});run.assert_not_called()
+    def test_other_steps_still_fail(self):
+        with patch.object(helper,'cleanup_shared',side_effect=self.busy):self.assertRaises(ValueError,helper.main,{'operation':'capture'})
+    def test_cleanup_apply_watches_stdin(self):
+        with patch.object(helper,'watch_stdin') as watch,patch.object(helper,'cleanup_apply') as apply:
+            helper.main({'operation':'cleanup-apply','watchStdin':True})
+        watch.assert_called_once();apply.assert_called_once()
+
 if __name__=='__main__':
     unittest.main()

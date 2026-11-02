@@ -130,7 +130,8 @@ export async function cleanServer(serverId, body, actor) {
   previews.delete(token);  // used once, whatever happens next
   try {
     let result;
-    try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
+    // stdin stays open while the clean runs, so a dropped connection or a stopped API ends the clean on the server.
+    try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-apply', watchStdin: true, protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }, () => {}, () => {}, { keepStdinOpen: true }); }
     catch (error) {
       audit(actor, 'server.cleanup', server.id, { result: error.remoteReported ? 'refused' : 'failed', requested: chosen.length, removed: 0, bytes: 0 });
       if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED');

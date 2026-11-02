@@ -213,7 +213,7 @@ claimHooks.heal = { check: job => healClaimCheck(job), skip: skipHealJob };
 function finishHeal(jobId, status, stage, details, error = null) {
   return db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=?,details=?,error=? WHERE id=? AND status=\'heal_running\'').run(status, stage, iso(healClock.now()), JSON.stringify(details), error, jobId).changes === 1;
 }
-const RESULT_CODES = new Set(['busy', 'maintenance', 'missing', 'labels', 'recreated', 'not_running', 'not_unhealthy', 'timeout', 'exit_1', 'exit_125', 'exit_126', 'exit_127', 'exit_137', 'exit_other']);
+const RESULT_CODES = new Set(['busy', 'maintenance', 'cleanup', 'missing', 'labels', 'recreated', 'not_running', 'not_unhealthy', 'timeout', 'exit_1', 'exit_125', 'exit_126', 'exit_127', 'exit_137', 'exit_other']);
 jobRunners['self-heal'] = executeHealJob;
 export async function executeHealJob(job) {
   let details = {}; try { details = JSON.parse(job.details || '{}'); } catch { details = {}; }

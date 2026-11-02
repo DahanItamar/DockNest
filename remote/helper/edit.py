@@ -1454,6 +1454,12 @@ def edit_copy_facts(edit_id):
     if isinstance(size,int):facts['dataBytes']=size
     return facts
 def edit_id_ok(req):return isinstance(req.get('editId'),str) and bool(EDIT_UUID.fullmatch(req['editId']))
+def edit_cleanup_busy(req):
+    """A running server cleanup holds the shared cleanup lock: answer an edit-* op with SITE_BUSY, which the engine
+    retries (a rollback is never stranded by a helper error), with the copy facts apply and rollback always report."""
+    op=req.get('operation')
+    extra=edit_copy_facts(req['editId']) if op in ('edit-rollback','edit-apply') and edit_id_ok(req) else {}
+    emit(result={'ok':False,'code':'SITE_BUSY','reason':EDIT_REASONS['SITE_BUSY'],**extra})
 def edit_operation(req,watch=None):
     """Entry point for every edit-* op: validate, take the site lock, run, answer with one result line."""
     global SNAPSHOT_FILTER

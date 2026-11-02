@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { migrations, migrate, schemaVersion, compatFloor } from '../src/migrations.js';
+import { migrations, migrate, schemaVersion, compatFloor, safeEditsSchema, selfHealSchema } from '../src/migrations.js';
 
 const quiet = () => {};
 const temporary = async fn => { const directory = await mkdtemp(join(tmpdir(), 'docknest-self-heal-migration-')); try { return await fn(directory); } finally { await rm(directory, { recursive: true, force: true }); } };
@@ -119,17 +119,20 @@ test('the real 2.14.0 code builds the schema-14 database, it upgrades to 16 unch
 }));
 
 test('a pre-release 2.15 database (placeholder 13, Safe Edit 14, self-heal 15) gains 2.14.0\'s tables on upgrade', () => temporary(async directory => {
-  const file = join(directory, 'state.sqlite'), db = new DatabaseSync(file);
-  try {
-    db.exec('PRAGMA foreign_keys=ON');
+  {
     const prerelease = [...migrations.filter(item => item.version <= 12), { version: 13, name: 'reserved-2.14', compatible: true, up: () => {} },
-      { version: 14, name: 'safe-edits', compatible: true, up: () => {} },
-      { version: 15, name: 'self-heal', compatible: true, up: () => {} }];
+      { version: 14, name: 'safe-edits', compatible: true, up: target => target.exec(safeEditsSchema) },
+      { version: 15, name: 'self-heal', compatible: true, up: target => target.exec(selfHealSchema) }];
+    // A fresh database for each pass: exactly what that pre-release build left behind, nothing else.
     for (const upTo of [14, 15]) {
-      db.exec('PRAGMA user_version=0'); migrate(db, { file, list: prerelease.filter(item => item.version <= upTo), log: quiet });
-      for (const name of ['site_certificates', 'site_hardening']) db.exec(`DROP TABLE IF EXISTS ${name}`);
-      migrate(db, { file, log: quiet });
-      for (const name of ['site_certificates', 'site_hardening', 'site_edits', 'self_heal_settings']) assert.ok(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), `${name} after a pre-release v${upTo}`);
+      const file = join(directory, `prerelease-${upTo}.sqlite`), db = new DatabaseSync(file);
+      try {
+        db.exec('PRAGMA foreign_keys=ON');
+        assert.equal(migrate(db, { file, list: prerelease.filter(item => item.version <= upTo), log: quiet }).to, upTo);
+        for (const name of ['site_certificates', 'site_hardening']) assert.equal(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), undefined, `the pre-release v${upTo} has no ${name}`);
+        assert.equal(migrate(db, { file, log: quiet }).to, 16);
+        for (const name of ['site_certificates', 'site_hardening', 'site_edits', 'self_heal_settings']) assert.ok(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), `${name} after a pre-release v${upTo}`);
+      } finally { db.close(); }
     }
-  } finally { db.close(); }
+  }
 }));

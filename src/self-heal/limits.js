@@ -32,7 +32,7 @@ export const TRANSIENT = new Set(['site_busy', 'work_queued', 'moving', 'mainten
 // Attempts that did not restart (the server could not be reached, the site lock or maintenance marker on the server).
 // They are tried again once the 60 s gap after them has passed, and count toward the restart limit like a restart, so
 // an unreachable server is asked at most N times per window. A failed `docker restart` is retried the same way.
-export const RETRYABLE = new Set(['unreachable', 'locked', 'maintenance_flag']);
+export const RETRYABLE = new Set(['unreachable', 'locked', 'maintenance_flag', 'cleanup']);
 export const REASONS = Object.freeze({
   site_busy: 'DockNest was working on this site.',
   work_queued: 'A backup or change for this site was waiting, so the restart stepped aside.',
@@ -42,6 +42,7 @@ export const REASONS = Object.freeze({
   deployment_hold: 'DockNest was being updated.',
   locked: 'Another DockNest step held the site lock on the server.',
   maintenance_flag: 'The site was in maintenance on the server.',
+  cleanup: 'A server cleanup was running.',
   not_unhealthy: 'The container was no longer unhealthy.',
   not_running: 'The container was not running.',
   labels: 'The container is no longer the one this site watches.',

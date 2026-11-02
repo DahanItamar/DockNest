@@ -30,7 +30,7 @@ from .restore_test import (
     TEST_LABEL, egress_intact, restore_test_check, restore_test_prepare, restore_test_reap, restore_test_run,
     restore_test_status, restore_test_teardown, test_id, test_lock, test_state)
 from .edit import (
-    edit_operation)
+    edit_cleanup_busy, edit_operation)
 from .heal import (
     health_events, self_heal_restart, self_heal_resolve)
 from .cleanup import (
@@ -73,7 +73,14 @@ def watch_stdin():threading.Thread(target=stop_after_stdin,daemon=True).start()
 def main(req):
     global EVENT_STREAM,CAPTURE_DIAGNOSTICS,MOVE_LOCK,MOVE_ID,SNAPSHOT_FILTER,CLEANUP_SHARED
     # Taken before any move or test lock, so a clean probing those locks never races a step that is starting.
-    if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:CLEANUP_SHARED=cleanup_shared()
+    if req.get('operation') in CLEANUP_SHARED_OPS or req.get('operation') in LOCKED_MOVE_OPS:
+        try:CLEANUP_SHARED=cleanup_shared()
+        except ValueError:
+            # A clean is running. Safe Edit answers SITE_BUSY (retried, so a rollback is never stranded) and self-heal a
+            # 'cleanup' refusal (retried after its gap); every other step fails as before.
+            if str(req.get('operation','')).startswith('edit-'):return edit_cleanup_busy(req)
+            if req.get('operation')=='self-heal-restart':return emit(result={'outcome':'refused','code':'cleanup'})
+            raise
     if req.get('operation')=='move-lock-status':
         handle=move_lock(move_id(req))
         emit(result={'busy':handle is None})
@@ -159,7 +166,10 @@ def main(req):
     elif op=='self-heal-resolve':self_heal_resolve(req)
     elif op=='self-heal-restart':self_heal_restart(req)
     elif op=='cleanup-scan':cleanup_scan(req)
-    elif op=='cleanup-apply':cleanup_apply(req)
+    elif op=='cleanup-apply':
+        # DockNest keeps stdin open while the clean runs: a dropped connection or a stopped API ends it.
+        if req.get('watchStdin'):watch_stdin()
+        cleanup_apply(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.
