@@ -45,8 +45,10 @@ a service or renaming the project ("Remove it by hand"). Adding a service is all
 2. **Backup.** A normal, verified backup of the site.
 3. **Prepare.** Copies of the current files and the current image IDs are kept on the server; new images are pulled.
    Each previous image is held by a stopped placeholder container (`docknest-edit-hold-…`, never started, outside
-   the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. The site keeps
-   running during the pull.
+   the Compose project), so not even `docker image prune -a` can remove it before a rollback needs it. `docker
+   container prune` and `docker system prune` do remove these placeholders (they are stopped containers); avoid them
+   while a change runs. If they were removed and the old image is gone, a rollback fails closed: the change needs
+   attention and the site stays behind the maintenance page. The site keeps running during the pull.
 4. **Apply.** The maintenance page goes on, the files are written, and the services start with the new version.
 5. **Check health.** Every service that ran before runs, is healthy where it has a health check, still runs after 60
    seconds, and the site's health URL (if set) answers. Time limit: 2 minutes, 1 to 10 in Advanced.

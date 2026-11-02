@@ -173,7 +173,7 @@ function advanceBackup(edit, job) {
 function restoreJobState(jobId) { return jobId ? db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId)?.status ?? 'failed' : null; }
 function advanceAttention(edit) {
   const status = restoreJobState(edit.progress.restoreJobId);
-  if (status === 'completed') { goFinish(edit, 'failed', { failedStep: edit.failed_step ?? 'roll_back', reason: SAY.restoredBackup }); save(edit, { restoredBackup: true, keepMaintenance: true }); return; }
+  if (status === 'completed') { atomic(() => { goFinish(edit, 'failed', { failedStep: edit.failed_step ?? 'roll_back', reason: SAY.restoredBackup }); save(edit, { restoredBackup: true, keepMaintenance: true }); }); return; }
   else if (status && !['queued', 'running'].includes(status)) save(edit, { restoreJobId: null, restoreFailed: true });
 }
 
@@ -187,6 +187,7 @@ async function call(server, request, limitSeconds = null) {
   finally { clearTimeout(timer); }
 }
 // edit-apply copies the data and edit-rollback puts it back: their limits grow with the reviewed data size (state.js COPY).
+const largerBytes = (edit, bytes) => (Number.isSafeInteger(bytes) && bytes > (edit.progress.dataBytes ?? -1) ? { dataBytes: bytes } : {});
 const applySeconds = edit => copySeconds(editTiming.callSeconds['edit-apply'], edit.progress.dataBytes, 1);
 const rollbackSeconds = edit => copySeconds(editTiming.callSeconds['edit-rollback'], edit.progress.dataBytes, COPY.restoreFactor);
 // remote: the helper answered with an error (and maybe a fixed code); unreachable: SSH, a time limit or no answer.
@@ -276,7 +277,7 @@ const RUNNERS = {
     finally { db.prepare("UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE id=?").run(job.id); }
     if (!failure && answer?.ok !== true) failure = { kind: 'remote', code: helperCode(answer?.code) };
     if (failure?.kind === 'unreachable') { moveTo(edit, 'recover', { interrupted: 'apply', recoverWhy: 'unreachable' }); return; }
-    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy });
+    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy, ...largerBytes(edit, answer.dataBytes) });
     if (failure) {
       // Refused before anything was written (the helper says so by code): the edit ends, finish takes the maintenance page
       // down and starts a site the safety copy stopped. DATA_COPY_SPACE is only ever raised while the journal is prepared.
@@ -295,7 +296,7 @@ const RUNNERS = {
       return;
     }
     const at = clock();
-    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at, dataCopy: answer.dataCopy === true, ...(Number.isSafeInteger(answer.dataBytes) ? { dataBytes: answer.dataBytes } : {}) }); });
+    atomic(() => { setStep(edit.id, 'apply', 'done'); setStep(edit.id, 'check_health', 'running'); moveTo(edit, 'check_health', { windowStartedAt: at, helperStartedAt: Number.isFinite(answer.startedAt) ? answer.startedAt : at / 1000, nextPollAt: at, dataCopy: answer.dataCopy === true, ...largerBytes(edit, answer.dataBytes) }); });
   },
   check_health: (edit, ctx) => poll(edit, ctx, 'check_health'),
   rollback_health: (edit, ctx) => poll(edit, ctx, 'rollback_health'),
@@ -308,7 +309,7 @@ const RUNNERS = {
       retryLater(edit, () => goAttention(edit, 'roll_back', `${SAY.unreachable} ${SAY.rollbackFailed}`));
       return;
     }
-    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy });
+    if (typeof answer?.dataCopy === 'boolean') save(edit, { dataCopy: answer.dataCopy, ...largerBytes(edit, answer.dataBytes) });
     if (answer?.ok !== true) {
       if (helperCode(answer?.code) === 'SITE_BUSY') { busyRetry(edit, () => goAttention(edit, 'roll_back', SAY.rollbackFailed)); return; }
       goAttention(edit, 'roll_back', SAY.rollbackFailed); return;
