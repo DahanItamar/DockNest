@@ -17,7 +17,7 @@ import { db } from '../db.js';
 import { connect } from '../ssh.js';
 import { helperSource } from '../helper-bundle.js';
 import { recordHealth, gaveUp, healClock } from './engine.js';
-import { STREAM, THROTTLE_MS, CONTAINER, CONTAINER_ID, STATUSES, backoffMs } from './limits.js';
+import { STREAM, CONTAINER, CONTAINER_ID, STATUSES, backoffMs, timing } from './limits.js';
 
 // SSH, timers and randomness; tests replace members.
 export const streamTransport = {
@@ -138,10 +138,10 @@ export class ServerStream {
     // one and is acted on when the window ends (latest state wins), so a flapping container costs one row per 10 s and
     // a real change is never lost.
     const now = healClock.now(), last = this.lastAccepted.get(event.container) ?? -Infinity;
-    if (now - last < THROTTLE_MS) {
+    if (now - last < timing.throttleMs) {
       const waiting = this.pending.has(event.container);
       this.pending.set(event.container, { entry, event });
-      if (!waiting) this.flushTimers.set(event.container, streamTransport.setTimeout(() => this.flush(event.container), last + THROTTLE_MS - now));
+      if (!waiting) this.flushTimers.set(event.container, streamTransport.setTimeout(() => this.flush(event.container), last + timing.throttleMs - now));
       return;
     }
     this.act(entry, event, now);

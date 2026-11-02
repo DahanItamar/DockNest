@@ -15,7 +15,7 @@ import { db, id, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { transport, jobRunners, claimHooks, siteInfo, movingSite } from '../engine.js';
 import { emit } from '../alerts/delivery.js';
-import { CONTAINER, CONTAINER_ID, STATUSES, MIN_GAP_MS, SETTLE_MS, KEEP_DAYS, TRANSIENT, REASONS, reasonText } from './limits.js';
+import { CONTAINER, CONTAINER_ID, STATUSES, KEEP_DAYS, TRANSIENT, REASONS, reasonText, timing } from './limits.js';
 
 // Clock and SSH; tests replace members.
 export const healClock = { now: () => Date.now() };
@@ -62,7 +62,7 @@ export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','move_queued','edit_queued')").get(siteId)) return 'work_queued';
   if (movingSite(siteId)) return 'moving';
   if (inMaintenance(siteId)) return 'maintenance';
-  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - SETTLE_MS))) return 'settling';
+  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';
   return null;
 }
 
@@ -126,7 +126,7 @@ function tickSite(siteId, nowMs = healClock.now()) {
         gaveUp(siteId, row.container, 'limit', nowMs);
         return;
       }
-      if (restarts.last && nowMs - Date.parse(restarts.last) < MIN_GAP_MS) return; // the gap: a later tick acts
+      if (restarts.last && nowMs - Date.parse(restarts.last) < timing.minGapMs) return; // the gap: a later tick acts
       if (!row.container_id) return;
       const jobId = id();
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'self-heal','heal_queued','queued',?,?)")

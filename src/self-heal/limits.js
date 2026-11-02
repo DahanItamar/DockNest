@@ -9,6 +9,8 @@ export const MIN_GAP_MS = 60_000;          // at least 60 s between two restarts
 export const THROTTLE_MS = 10_000;         // at most one event acted on per container per 10 s
 export const SETTLE_MS = 120_000;          // no restart within 2 minutes after DockNest work on the site ended
 export const KEEP_DAYS = 90;               // history kept; the worker's maintenance step deletes older rows
+// The live values. Only the Linux integration run shortens them (the same properties, less CI time).
+export const timing = { minGapMs: MIN_GAP_MS, throttleMs: THROTTLE_MS, settleMs: SETTLE_MS };
 export const STREAM = Object.freeze({ keepaliveMs: 15_000, keepaliveMisses: 3, backoffStartMs: 5_000, backoffMaxMs: 300_000, steadyMs: 60_000, lineBytes: 4096, bufferBytes: 65_536 });
 export const CONTAINER = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 export const CONTAINER_ID = /^[a-f0-9]{64}$/;
