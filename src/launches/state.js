@@ -1,13 +1,14 @@
 // Launch step machine rules (docs/launch-site.md, "Worker and helper" and "Failure and rollback paths"). Pure: no
 // database, SSH or clock. The engine (engine.js) persists what these decide in site_launches/site_launch_steps.
-export const STEP_ORDER = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'first_backup']);
+export const STEP_ORDER = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup']);
 // Steps that run on the server as one short launch job each; save and first_backup run inside the tick.
-export const SERVER_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'teardown']);
-// A failure here before the site is saved tears everything down. A certificate failure never does: the site stays on HTTP.
+export const SERVER_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'maintenance', 'teardown']);
+// A failure here before the site is saved tears everything down. A certificate failure never does (the site stays on
+// HTTP), and neither does a maintenance page that could not be set up (the site page offers it as usual).
 export const FATAL_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'save']);
-export const LABELS = Object.freeze({ check: 'Check the server', fetch: 'Get the site', build: 'Build', start: 'Start', check_health: 'Check it works', web: 'nginx', certificate: 'Certificate', save: 'Save the site', first_backup: 'First backup', teardown: 'Remove what the launch made' });
+export const LABELS = Object.freeze({ check: 'Check the server', fetch: 'Get the site', build: 'Build', start: 'Start', check_health: 'Check it works', web: 'nginx', certificate: 'Certificate', save: 'Save the site', maintenance: 'Maintenance page', first_backup: 'First backup', teardown: 'Remove what the launch made' });
 // Seconds a helper call may take before DockNest stops waiting (the step fails and, before save, everything is torn down).
-export const STEP_LIMITS = Object.freeze({ check: 180, fetch: 660, build: 1800, start: 600, check_health: 120, web: 180, certificate: 300, teardown: 1800 });
+export const STEP_LIMITS = Object.freeze({ check: 180, fetch: 660, build: 1800, start: 600, check_health: 120, web: 180, certificate: 300, maintenance: 300, teardown: 1800 });
 export const HEALTH = Object.freeze({ pollSeconds: 10, limitSeconds: 600 });
 export const REMOVE_WINDOW_MS = 24 * 3600_000;
 export const RATE = Object.freeze({ perServer: 3, windowMs: 3600_000 });
@@ -26,6 +27,8 @@ export function nextAction(launch, steps, nowMs) {
   const teardown = map.teardown;
   if (launch.state === 'queued') return launch.cancel_requested ? { type: 'cancel' } : { type: 'none' };
   if (teardown?.state === 'done') return { type: 'finish', to: launch.options?.removing ? 'removed' : launch.cancel_requested && !launch.failed_step ? 'cancelled' : 'failed' };
+  // A teardown that failed, or that a stopped worker left behind (interruptLaunchSteps marks it failed), is never re-run
+  // blindly: the launch goes to needs_attention and the owner presses Try again.
   if (teardown?.state === 'failed') return launch.state === 'needs_attention' ? { type: 'none' } : { type: 'finish', to: 'needs_attention' };
   if (launch.state === 'needs_attention') return { type: 'none' }; // the owner presses Try again
   if (launch.state !== 'running') return { type: 'none' };
@@ -40,7 +43,7 @@ export function nextAction(launch, steps, nowMs) {
     const step = map[name];
     if (!step || ['done', 'skipped'].includes(step.state)) continue;
     if (name === 'certificate' && ['waiting', 'failed'].includes(step.state)) continue; // never blocks the launch
-    if (name === 'first_backup' && step.state === 'failed') continue;
+    if (['first_backup', 'maintenance'].includes(name) && step.state === 'failed') continue;
     if (name === 'check_health' && step.state === 'waiting') {
       if (Date.parse(step.result?.deadline ?? '') <= nowMs) return { type: 'fail', step: name, reason: `The site did not answer within ${Math.round(HEALTH.limitSeconds / 60)} minutes.` };
       return step.next_at && Date.parse(step.next_at) > nowMs ? { type: 'wait' } : { type: 'queue', step: name };

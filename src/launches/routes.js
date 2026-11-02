@@ -16,7 +16,7 @@ const common = {
   env: z.record(z.string().max(200), z.string().max(10_000)).optional(),
 };
 const checkBody = z.object(common).strict();
-const launchBody = z.object({ ...common, testServerId: uuid.nullable().optional(), backupTime: z.string().max(5).optional(), trustConfirmed: z.boolean().optional() }).strict();
+const launchBody = z.object({ ...common, testServerId: uuid.nullable().optional(), backupTime: z.string().max(5).optional(), trustConfirmed: z.boolean().optional(), cleanShutdownConfirmed: z.boolean().optional() }).strict();
 const empty = z.object({}).strict();
 
 const handle = fn => async (req, res, next) => {

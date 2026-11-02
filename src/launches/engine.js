@@ -13,8 +13,9 @@ import { isIP } from 'node:net';
 import { db, id, audit, transaction } from '../db.js';
 import { seal, open } from '../crypto.js';
 import { deploymentHeld } from '../deployment-hold.js';
-import { transport, enqueueBackup } from '../engine.js';
-import { moveActive, installActive } from '../installs.js';
+import { transport, enqueueBackup, setupMaintenance, movingSite } from '../engine.js';
+import { classify } from '../alerts/addresses.js';
+import { moveActive, installActive, installInfo, INSTALL_PACKAGES } from '../installs.js';
 import { cleanupHeld } from '../cleanup-hold.js';
 import { maintenanceDefaults, normalizeMaintenance } from '../../shared/maintenance-design.js';
 import { firstDueAt } from '../restore-tests/settings.js';
@@ -63,7 +64,7 @@ function recordFailure(launch, step, reason) {
   if (launch.failed_step || launch.reason) return;
   setLaunch(launch.id, { failed_step: step, reason: plainReason(reason) });
 }
-const SAFE_RESULT = ['services', 'commit', 'images', 'containerCount', 'containerNames', 'composeFiles', 'certName', 'state', 'removed', 'left', 'file', 'jobId', 'backupId', 'deadline', 'interrupted', 'recovered', 'gate', 'checks'];
+const SAFE_RESULT = ['tries', 'services', 'commit', 'images', 'containerCount', 'containerNames', 'composeFiles', 'certName', 'state', 'removed', 'left', 'file', 'jobId', 'backupId', 'deadline', 'interrupted', 'recovered', 'gate', 'checks'];
 const journalResult = (previous, extra) => Object.fromEntries(Object.entries({ ...previous, ...extra }).filter(([key]) => SAFE_RESULT.includes(key)));
 
 // ---------- input ----------
@@ -111,23 +112,27 @@ async function helper(server, request, { signal } = {}) {
     throw Object.assign(new Error(error?.remoteReported ? plainReason(error.message) : error?.hostKeyRejected ? `The saved host key for ${server.name} no longer matches. Check the server on the Servers page.` : `The connection to ${server.name} failed or was lost.`), { remote: true });
   }
 }
-// Helper refusals ({ ok:false, code, reason }) become one plain sentence; unknown codes get their own sanitised reason.
+// Helper refusals ({ ok:false, code, reason }): remote/helper/launch.py answers a code from its fixed LAUNCH_REASONS table
+// with that table's sentence. A few codes get a sentence that names the domain; any other reason is sanitised.
 const REFUSALS = {
-  SLUG_EXISTS: () => 'The site folder already exists on this server. Choose another domain or remove the folder.',
-  DOMAIN_SERVED: domain => `nginx on this server already serves ${domain}. DockNest never takes over another site.`,
+  NGINX_DOMAIN_SERVED: domain => `nginx on this server already serves ${domain} (or a wildcard or default site that matches it). DockNest never takes over another site.`,
   CERT_LINEAGE_EXISTS: domain => `A certificate for ${domain} already exists on this server, so DockNest does not create another.`,
-  GIT_TOO_OLD: () => 'The git on this server is too old for a safe clone. Update git, then check again.',
-  SUBMODULES: () => 'This repository uses Git submodules, which DockNest does not support.',
-  LFS: () => 'This repository uses Git LFS, which DockNest does not support.',
-  REPO_TOO_LARGE: () => 'The repository is larger than 2 GB, so DockNest stopped the clone.',
-  SYMLINK_ESCAPE: () => 'The repository has a symbolic link that points outside it, so DockNest refused it.',
-  NAME_COLLISION: () => 'A container, volume or network with one of the names in this Compose file already exists on this server.',
-  NO_SPACE: () => 'The server does not have enough free space for this site.',
-  PORT_TAKEN: () => 'The local port DockNest chose was taken meanwhile. Launch again.',
-  GATE_UNAVAILABLE: () => 'This server cannot check the Compose file safely yet, so DockNest did not launch it.',
-  NO_ARM_BUILD: () => 'This image has no build for this server\'s processor.',
+  PORT_IN_USE: () => 'The local port DockNest chose was taken meanwhile. Launch again.',
 };
 const refusalText = (answer, domain) => (Object.hasOwn(REFUSALS, answer?.code) ? REFUSALS[answer.code](domain) : plainReason(answer?.reason, 'The server refused this step.'));
+// launch-poll answers a short code (and the service) as its reason; these are the sentences.
+const POLL_REASONS = {
+  NO_CONTAINERS: () => 'No container of the site is running.',
+  RESTARTING: service => `${service ?? 'A service'} is restarting.`,
+  CRASH_LOOP: service => `${service ?? 'A service'} keeps crashing and restarting.`,
+  SERVICE_STOPPED: service => `${service ?? 'A service'} stopped.`,
+  UNHEALTHY: service => `${service ?? 'A service'} reports that it is unhealthy.`,
+  HEALTH_STARTING: service => `Waiting for ${service ?? 'a service'} to report healthy.`,
+  NO_ANSWER: () => 'Waiting for the site to answer on its local port.',
+  HTTP_ERROR: () => 'The site answers with a server error.',
+  SETTLING: () => 'The site answers; waiting a moment to see it stays up.',
+};
+const pollText = (answer, fallback) => (Object.hasOwn(POLL_REASONS, answer?.reason) ? POLL_REASONS[answer.reason](typeof answer.service === 'string' ? answer.service.slice(0, 63) : null) : plainReason(answer?.reason, fallback));
 const refused = answer => answer && typeof answer === 'object' && answer.ok === false;
 const cleanCode = code => (/^[A-Z][A-Z0-9_]{1,40}$/.test(String(code)) ? code : 'REFUSED');
 
@@ -136,7 +141,7 @@ function checksOf(facts, domain) {
   return (Array.isArray(facts?.checks) ? facts.checks : []).slice(0, 40).map(item => ({
     id: String(item?.id ?? 'check').slice(0, 40), ok: item?.ok === true, ...(item?.ok === true ? {} : { code: cleanCode(item?.code) }),
     text: item?.ok === true ? plainReason(item?.reason, '') : refusalText(item, domain),
-    ...(item?.install ? { install: { package: typeof item.install === 'string' ? item.install : item.install.package } } : {}),
+    ...(item?.install && INSTALL_PACKAGES.includes(typeof item.install === 'string' ? item.install : item.install.package) ? { install: installInfo(facts, typeof item.install === 'string' ? item.install : item.install.package) } : {}),
   }));
 }
 function servicesOf(answer) {
@@ -144,12 +149,14 @@ function servicesOf(answer) {
     .map(item => ({ name: item.name, ports: (Array.isArray(item.ports) ? item.ports : []).filter(port => Number.isInteger(port) && port > 0 && port < 65536).slice(0, 20), build: item.build === true }));
 }
 // The DNS record the owner adds: A to the server's IPv4 address, AAAA to its IPv6 address (IPv6-only servers get AAAA only).
-function dnsView(facts, domain) {
-  const ips = (Array.isArray(facts?.serverIps) ? facts.serverIps : []).filter(value => isIP(value));
+// Private, CGNAT, loopback and documentation addresses never go into a public record (classify, src/alerts/addresses.js).
+function dnsView(facts, domain, serverHost = null) {
+  const reported = (Array.isArray(facts?.serverIps) ? facts.serverIps : []).filter(value => isIP(value));
+  const ips = [...reported.filter(value => classify(value) === 'public'), ...(serverHost && isIP(serverHost) && classify(serverHost) === 'public' && !reported.includes(serverHost) ? [serverHost] : [])];
   const answers = { A: (facts?.dnsAnswers?.A ?? []).filter(value => isIP(value) === 4), AAAA: (facts?.dnsAnswers?.AAAA ?? []).filter(value => isIP(value) === 6) };
-  const v4 = ips.find(value => isIP(value) === 4) ?? null, v6 = ips.find(value => isIP(value) === 6 && !/^f[cde]|^::1$/i.test(value)) ?? null;
+  const v4 = ips.find(value => isIP(value) === 4) ?? null, v6 = ips.find(value => isIP(value) === 6) ?? null;
   const records = [...(v4 ? [{ type: 'A', name: domain, value: v4 }] : []), ...(v6 ? [{ type: 'AAAA', name: domain, value: v6 }] : [])];
-  const pointsHere = [...answers.A, ...answers.AAAA].length > 0 && [...answers.A, ...answers.AAAA].every(value => ips.includes(value));
+  const pointsHere = [...answers.A, ...answers.AAAA].length > 0 && [...answers.A, ...answers.AAAA].every(value => ips.includes(value) || reported.includes(value));
   return { records, answers, pointsHere };
 }
 // A free 127.0.0.1 port: not listening on the server (launch-facts usedPorts) and not reserved by another live launch.
@@ -162,7 +169,7 @@ export function chooseLoopbackPort(serverId, used = [], random = Math.random) {
 
 // ---------- check ----------
 async function readFacts(server, input, launchId) {
-  const request = { operation: 'launch-facts', launchId, slug: input.slug, domain: input.domain, source: input.source, ...(input.repo ? { repo: repoRequest(input) } : {}), ...(input.composeText ? { composeText: input.composeText } : {}) };
+  const request = { operation: 'launch-facts', launchId, slug: input.slug, domain: input.domain, source: input.source, ...(input.webService ? { webService: input.webService } : {}), ...(input.repo ? { repo: repoRequest(input) } : {}), ...(input.composeText ? { composeText: input.composeText } : {}) };
   const deployKey = keyRequest(input, server.id);
   if (deployKey) request.deployKey = deployKey;
   try { return await helper(server, request); }
@@ -189,7 +196,7 @@ export async function checkLaunch(serverId, body) {
     ok: !refused(facts) && checks.every(item => item.ok) && gate.ok, slug: input.slug, folder: `${SITE_ROOT}/${input.slug}`, domain: input.domain, www: `www.${input.domain}`,
     checks: shown, gate, services, composeName: typeof facts?.composeName === 'string' ? facts.composeName.slice(0, 63) : null,
     refHead: typeof facts?.refHead === 'string' && /^[0-9a-f]{40,64}$/.test(facts.refHead) ? facts.refHead : null,
-    dns: dnsView(facts, input.domain), testServers: testServerChoices(serverId),
+    dns: dnsView(facts, input.domain, server.host), testServers: testServerChoices(serverId),
   };
 }
 const CHECK_TITLES = { server: 'Server', docker: 'Docker', compose: 'Docker Compose', git: 'Git', nginx: 'nginx', certbot: 'certbot', buildx: 'Builds', space: 'Free space', ports: 'Ports 80 and 443', dns: 'DNS', domain: 'Domain', certificate: 'Certificate', repository: 'Repository', slug: 'Site folder', launch: 'Another launch' };
@@ -206,6 +213,8 @@ const backupTime = text => { const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(St
 // POST /api/servers/:id/launch. The check is run again here (the browser is never trusted).
 export async function startLaunch(serverId, body, actor) {
   const server = serverFor(serverId), input = launchInput(serverId, body);
+  if (!input.webPort) throw new LaunchInputError('INVALID_PORT', 'Enter the container port that serves the website.', 'webPort');
+  if (body.cleanShutdownConfirmed !== true) throw new LaunchInputError('SHUTDOWN_CONFIRM_REQUIRED', 'Confirm that the app saves its data when its containers stop, so backups are consistent.', 'cleanShutdownConfirmed');
   if (input.source === 'git' && body.trustConfirmed !== true) throw httpError(400, 'TRUST_REQUIRED', `Confirm that you trust this repository: it builds and runs its code on ${server.name}.`);
   if (body.backupTime !== undefined && !backupTime(body.backupTime)) throw new LaunchInputError('INVALID_TIME', 'Enter the backup time as HH:MM.', 'backupTime');
   if (body.testServerId !== undefined && body.testServerId !== null && (body.testServerId === serverId || !serverRow(body.testServerId))) throw new LaunchInputError('INVALID_TEST_SERVER', 'Choose another connected server for restore tests.', 'testServerId');
@@ -218,13 +227,14 @@ export async function startLaunch(serverId, body, actor) {
   };
   refuseBusy();
   const launchId = id(), facts = await readFacts(server, input, launchId);
-  if (refused(facts)) throw httpError(409, cleanCode(facts.code), refusalText(facts, input.domain));
   const gate = gateOf(facts);
+  if (refused(facts) && gate.ok) throw httpError(409, cleanCode(facts.code), refusalText(facts, input.domain));
+  if (!input.webService && servicesOf(facts).length > 1) throw new LaunchInputError('INVALID_SERVICE', 'Choose the service that serves the website.', 'webService');
   if (!gate.ok) throw httpError(422, gate.refusals[0]?.code ?? 'GATE_REFUSED', 'The Compose file asks for something DockNest does not allow.', { refusals: gate.refusals });
   const failing = checksOf(facts, input.domain).filter(item => !item.ok);
   if (failing.length) throw httpError(409, failing[0].code ?? 'CHECK_FAILED', failing[0].text, { checks: failing });
   const loopback = chooseLoopbackPort(serverId, Array.isArray(facts?.usedPorts) ? facts.usedPorts : []);
-  const at = now(), options = { allowPrivate: input.allowPrivate, testServerId: body.testServerId ?? null, backupTime: body.backupTime ?? null, envKeys: Object.keys(input.env), dns: dnsView(facts, input.domain).records };
+  const at = now(), options = { allowPrivate: input.allowPrivate, testServerId: body.testServerId ?? null, backupTime: body.backupTime ?? null, envKeys: Object.keys(input.env), dns: dnsView(facts, input.domain, server.host).records };
   // The sealed job payload: only what the fetch step needs and nothing that is stored elsewhere.
   const payload = seal(JSON.stringify({ ...(input.composeText ? { composeText: input.composeText } : {}), env: input.env }));
   try {
@@ -259,13 +269,13 @@ export function cancelLaunch(launchId, actor) {
       db.prepare("UPDATE site_launch_steps SET payload=NULL WHERE launch_id=? AND step='fetch'").run(launchId);
       setLaunch(launchId, { state: 'cancelled', cancel_requested: true, finished_at: now() });
     } else {
-      // A start step that no worker has claimed yet is withdrawn, so the site never starts.
-      setStep(launchId, 'start', { state: 'pending' }, 'launch_queued');
+      // Queued steps before start that no worker has claimed yet are withdrawn, so the site never starts.
+      for (const name of ['check', 'fetch', 'build', 'start']) setStep(launchId, name, { state: 'pending' }, 'launch_queued');
       setLaunch(launchId, { cancel_requested: true });
     }
     audit(actor, 'launch.cancel', launchId, { server: launch.server_id });
   });
-  advanceLaunch(launchId);
+  safeAdvance(launchId);
   return launchView(launchId);
 }
 // POST /api/launches/:id/check-dns: runs the certificate step again ("Check again", also "Try again" after a failure).
@@ -284,7 +294,13 @@ export function removeLaunch(launchId, actor) {
     const launch = launchFor(launchId), steps = loadSteps(launchId);
     if (!['done', 'waiting_dns'].includes(launch.state) || launch.options.removing || busyStep(steps)) throw httpError(409, 'REMOVE_NOT_ALLOWED', 'This launch cannot be removed now.');
     if (!launch.remove_until || Date.parse(launch.remove_until) <= launchTransport.now()) throw httpError(409, 'REMOVE_EXPIRED', 'Remove launch was offered for 24 hours after the launch. Remove the site from its settings instead.');
-    if (launch.site_id && db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required','move_queued','move_running')").get(launch.site_id)) throw httpError(409, 'SITE_BUSY', 'The site has a job running. Remove the launch when it has finished.');
+    const site = launch.site_id ? db.prepare('SELECT id,server_id FROM sites WHERE id=?').get(launch.site_id) : null;
+    if (!site || db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'REMOVE_NOT_ALLOWED', 'The site of this launch was already removed.');
+    if (site.server_id !== launch.server_id || db.prepare("SELECT 1 FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned')").get(site.id) || movingSite(site.id)) throw httpError(409, 'SITE_MOVED', 'The site has been moved or is being moved, so Remove launch no longer applies. Remove the site from its settings instead.');
+    if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required','move_queued','move_running','test_queued','test_running')").get(site.id)) throw httpError(409, 'SITE_BUSY', 'The site has a job running. Remove the launch when it has finished.');
+    // Schedules go off now, so no backup or restore test of the site starts while it is torn down.
+    db.prepare('UPDATE policies SET enabled=0,next_run=NULL WHERE site_id=?').run(site.id);
+    db.prepare('UPDATE restore_test_settings SET enabled=0,next_due_at=NULL WHERE site_id=?').run(site.id);
     setLaunch(launchId, { options: { ...launch.options, removing: true } });
     setStep(launchId, 'teardown', { state: 'launch_queued', detail: null, result: {} });
     audit(actor, 'launch.remove', launchId, { server: launch.server_id, site: launch.site_id });
@@ -360,6 +376,10 @@ export function tickLaunches() {
     try { advanceLaunch(launchId); } catch (error) { console.error(`Launch ${launchId} could not advance: ${error.code ?? error.name}`); }
   }
 }
+// For callers that must not fail after their own work is done (a worker job, an owner action): the next tick retries.
+function safeAdvance(launchId) {
+  try { advanceLaunch(launchId); } catch (error) { console.error(`Launch ${launchId} could not advance: ${error.code ?? error.name}`); }
+}
 export function advanceLaunch(launchId) {
   for (let guard = 0; guard < 12; guard++) {
     const launch = loadLaunch(launchId);
@@ -405,7 +425,11 @@ export function advanceLaunch(launchId) {
         return;
       }
       case 'save':
-        saveSite(launch, steps);
+        try { saveSite(launch, steps); }
+        catch (error) {
+          console.error(`Launch ${launchId} could not save its site: ${error.code ?? error.name}`);
+          setStep(launchId, 'save', { state: 'failed', finished_at: now(), attempt: 1, detail: 'DockNest could not save the site record, so it removes what the launch made.' });
+        }
         continue;
       case 'first_backup':
         if (!firstBackup(launch, steps, action.poll)) return;
@@ -441,19 +465,39 @@ function quietTime(serverId, chosen) {
   return { hour: 3, minute: 0 };
 }
 const policyZone = serverId => db.prepare('SELECT p.timezone FROM policies p JOIN sites s ON s.id=p.site_id WHERE s.server_id=? ORDER BY s.created_at LIMIT 1').get(serverId)?.timezone ?? 'UTC';
+const certificateState = steps => ({ done: 'issued', failed: 'failed' })[steps.find(step => step.step === 'certificate')?.state] ?? 'waiting';
+// The site's URLs follow the certificate: https once issued, http after a failure (the domain points here). While DNS
+// does not point here yet the health check uses the containers only (a URL that cannot reach this server would fail
+// every backup's health check), and Check again switches it on.
+export function siteUrls(domain, certificate) {
+  if (certificate === 'issued') return { healthUrl: `https://${domain}/`, publicUrl: `https://${domain}` };
+  if (certificate === 'failed') return { healthUrl: `http://${domain}/`, publicUrl: `http://${domain}` };
+  return { healthUrl: '', publicUrl: `http://${domain}` };
+}
+function updateSiteUrls(siteId, domain, certificate) {
+  const row = db.prepare('SELECT config FROM sites WHERE id=?').get(siteId);
+  if (!row) return;
+  const config = parseJson(row.config, null);
+  if (!config) return;
+  const urls = siteUrls(domain, certificate);
+  db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...config, healthUrl: urls.healthUrl, maintenance: { ...(config.maintenance ?? {}), publicUrl: urls.publicUrl } }), siteId);
+}
 export function siteConfig(launch, steps, siteId) {
   const fetch = steps.find(step => step.step === 'fetch')?.result ?? {}, start = steps.find(step => step.step === 'start')?.result ?? {};
   const folder = `${SITE_ROOT}/${launch.slug}`;
   const services = fetch.services ?? [];
   const containers = (start.containerNames?.length ? start.containerNames : services.map(service => `${launch.slug}-${service.name}-1`)).filter(name => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)).slice(0, 30);
-  const composeFiles = (start.composeFiles?.length ? start.composeFiles : [`${folder}/${launch.compose_path ?? 'compose.yaml'}`]).filter(path => typeof path === 'string' && path.startsWith(folder + '/') && !path.split('/').includes('..')).slice(0, 20);
+  // The helper answers the real Compose file and the override (both in the site folder); without them, the layout it uses.
+  const composeFiles = (start.composeFiles?.length ? start.composeFiles : [`${folder}/app/${launch.compose_path ?? 'compose.yaml'}`]).filter(path => typeof path === 'string' && path.startsWith(folder + '/') && !path.split('/').includes('..')).slice(0, 20);
   const maintenanceRow = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const stagingRoot = '/var/lib/docknest';
   return {
-    kind: 'docker', containers, stagingRoot, deliveryMode: 'staged', exclusiveSourcesConfirmed: false, stopTimeout: 60, shutdownProfile: 'generic', cleanShutdownConfirmed: false, unresolvedDependencies: [], services: [],
-    configFiles: launch.options.envKeys?.length ? [`${folder}/.env`] : [], mountExclusions: [], mountExclusionsConfirmed: false, restoreReferences: [], temporaryMemoryFolders: [], composeFiles,
-    externalReferencesConfirmed: false, maintenanceRequired: true, domains: [launch.domain], healthUrl: '',
-    maintenance: { required: true, directory: `${stagingRoot}/maintenance/${siteId}`, publicUrl: `https://${launch.domain}`, healthUrl: '', probeOrigin: false, readableFlag: false },
+    // DockNest created the whole project, so nothing outside it writes its data and its references are known (confirmed
+    // here and recorded in the launch.saved audit); the clean shutdown was confirmed by the owner at Launch.
+    kind: 'docker', containers, stagingRoot, deliveryMode: 'staged', exclusiveSourcesConfirmed: true, stopTimeout: 60, shutdownProfile: 'generic', cleanShutdownConfirmed: true, unresolvedDependencies: [], services: [],
+    configFiles: [`${folder}/.env`], mountExclusions: [], mountExclusionsConfirmed: false, restoreReferences: [], temporaryMemoryFolders: [], composeFiles,
+    externalReferencesConfirmed: true, maintenanceRequired: true, domains: [launch.domain], ...siteUrls(launch.domain, certificateState(steps)),
+    maintenance: { required: true, directory: `${stagingRoot}/maintenance/${siteId}`, publicUrl: siteUrls(launch.domain, certificateState(steps)).publicUrl, healthUrl: '', probeOrigin: false, readableFlag: false },
     maintenancePage: maintenanceRow ? normalizeMaintenance(JSON.parse(maintenanceRow.value)) : maintenanceDefaults,
     launch: { id: launch.id, folder },
   };
@@ -474,17 +518,27 @@ function saveSite(launch, steps) {
       .run(siteId, testServer ? 1 : 0, testServer?.id ?? null, testServer ? firstDueAt(siteId, 'weekly', launchTransport.now()) : null, reason, at, launch.created_by);
     db.prepare('UPDATE site_launches SET site_id=?,updated_at=? WHERE id=?').run(siteId, at, launch.id);
     setStep(launch.id, 'save', { state: 'done', started_at: at, finished_at: at, attempt: 1 });
-    audit('worker', 'launch.saved', launch.id, { server: launch.server_id, site: siteId, schedule, restoreTests: !!testServer });
+    audit('worker', 'launch.saved', launch.id, { server: launch.server_id, site: siteId, schedule, restoreTests: !!testServer, confirmed: ['exclusiveSources', 'externalReferences', 'cleanShutdown'] });
   });
 }
 // The first backup is a normal backup job, queued once the hold is released (save done). Returns true to advance again.
+export const FIRST_BACKUP_TRIES = 200; // about 10 minutes of worker ticks
 function firstBackup(launch, steps, poll) {
   const step = steps.find(item => item.step === 'first_backup');
   if (!poll) {
     if (deploymentHeld(db)) return false;
     let job;
     try { job = enqueueBackup(launch.site_id, 'launch:' + launch.id); }
-    catch { return false; } // other work on the site first; the next tick tries again
+    catch (error) {
+      const tries = (step.result.tries ?? 0) + 1;
+      // 409 (removed or moving site) and a missing site never change; other work on the site first is retried.
+      if (error?.status === 409 || /not found/i.test(String(error?.message)) || tries >= FIRST_BACKUP_TRIES) {
+        setStep(launch.id, 'first_backup', { state: 'failed', finished_at: now(), detail: 'The first backup could not be queued. The daily backup runs as scheduled; open the site to back it up now.', result: { ...step.result, tries } });
+        return true;
+      }
+      setStep(launch.id, 'first_backup', { result: { ...step.result, tries } });
+      return false;
+    }
     setStep(launch.id, 'first_backup', { state: 'waiting', started_at: now(), attempt: step.attempt + 1, result: { jobId: job.id } });
     return false;
   }
@@ -519,17 +573,26 @@ export async function executeLaunchStep(claimed) {
     for (const skip of outcome.skip ?? []) setStep(launchId, skip, { state: 'skipped', finished_at: now() }, 'pending');
   });
   audit('worker', `launch.step.${name}.${outcome.state}`, launchId, { server: launch?.server_id });
-  advanceLaunch(launchId);
+  // Try again on a launch that needs you, failing again: alert again (detection reads this audit row).
+  if (name === 'teardown' && outcome.state === 'failed' && launch?.state === 'needs_attention') audit('worker', 'launch.needs_attention', launchId, { server: launch.server_id, again: true });
+  safeAdvance(launchId);
 }
 export const launchLimits = { scale: 1 };
+// The maintenance page setup of 2.13 (src/engine.js setupMaintenance: deploy, nginx integration, test, rollback); tests replace it.
+export const launchMaintenance = { setup: (siteId, actor) => setupMaintenance(siteId, actor) };
 const base = (launch, operation) => ({ operation, launchId: launch.id, slug: launch.slug, domain: launch.domain, source: launch.source });
 const launchRepo = launch => (launch.source === 'git' ? { url: launch.repo_url, ref: launch.ref, composePath: launch.compose_path, allowPrivate: !!launch.options.allowPrivate } : undefined);
 const launchKey = launch => (launch.deploy_key_id ? (({ privateKey, hostKeyLine }) => ({ privateKey, hostKeyLine }))(deployKeyForLaunch(launch.deploy_key_id, launch.server_id)) : undefined);
 const failedWith = (answer, launch) => ({ state: 'failed', detail: refusalText(answer, launch.domain) });
 
+// The sealed job payload. A payload that cannot be opened gives one fixed sentence (never the parser's text).
+function readPayload(step) {
+  if (!step?.payload) return {};
+  try { return JSON.parse(open(step.payload)); } catch { throw new Error('DockNest could not read the launch details. Start a new launch.'); }
+}
 const RUN = {
   async check(launch, steps, server, signal) {
-    const fetch = steps.find(step => step.step === 'fetch'), payload = fetch?.payload ? JSON.parse(open(fetch.payload)) : {};
+    const fetch = steps.find(step => step.step === 'fetch'), payload = readPayload(fetch);
     const key = launch.source === 'git' && launch.deploy_key_id ? launchKey(launch) : undefined;
     const facts = await helper(server, { ...base(launch, 'launch-facts'), ...(launch.source === 'git' ? { repo: launchRepo(launch) } : { composeText: payload.composeText }), ...(key ? { deployKey: key } : {}) }, { signal });
     if (refused(facts)) return failedWith(facts, launch);
@@ -541,10 +604,11 @@ const RUN = {
   async fetch(launch, steps, server, signal) {
     const fetch = steps.find(step => step.step === 'fetch');
     if (!fetch.payload) return { state: 'failed', detail: 'The launch details were already removed. Start a new launch.' };
-    const payload = JSON.parse(open(fetch.payload));
-    const answer = await helper(server, { ...base(launch, 'launch-fetch'), ...(launch.source === 'git' ? { repo: launchRepo(launch) } : { composeText: payload.composeText }), env: payload.env ?? {}, ...(launch.deploy_key_id ? { deployKey: launchKey(launch) } : {}) }, { signal });
-    if (refused(answer)) return failedWith(answer, launch);
+    const payload = readPayload(fetch);
+    const answer = await helper(server, { ...base(launch, 'launch-fetch'), ...(launch.source === 'git' ? { repo: launchRepo(launch) } : { composeText: payload.composeText }), env: payload.env ?? {}, ...(launch.web_service ? { webService: launch.web_service } : {}), ...(launch.deploy_key_id ? { deployKey: launchKey(launch) } : {}) }, { signal });
+    // Gate refusals come with ok:false (GATE_REFUSED): read them first so the owner sees which service and setting.
     const gate = gateOf(answer);
+    if (refused(answer) && gate.ok) return failedWith(answer, launch);
     if (!gate.ok) return { state: 'failed', detail: `The Compose file asks for something DockNest does not allow (${gate.refusals.map(item => [item.service, item.code].filter(Boolean).join(': ')).slice(0, 3).join(', ') || 'gate'}).`, result: { gate: gate.refusals } };
     const services = servicesOf(answer);
     if (!services.length) return { state: 'failed', detail: 'The Compose file has no services.' };
@@ -569,9 +633,9 @@ const RUN = {
     const step = steps.find(item => item.step === 'check_health');
     const deadline = step.result.deadline ?? iso(launchTransport.now() + HEALTH.limitSeconds * 1000 * launchLimits.scale);
     const answer = await helper(server, { ...base(launch, 'launch-poll'), loopbackPort: launch.loopback_port }, { signal });
-    if (refused(answer) || answer?.state === 'failed') return { state: 'failed', detail: answer?.state === 'failed' ? plainReason(answer.reason, 'The site did not start.') : refusalText(answer, launch.domain), result: { deadline } };
+    if (refused(answer) || answer?.state === 'failed') return { state: 'failed', detail: answer?.state === 'failed' ? pollText(answer, 'The site did not start.') : refusalText(answer, launch.domain), result: { deadline } };
     if (answer?.state === 'passed') return { state: 'done', result: { deadline } };
-    return { state: 'waiting', detail: plainReason(answer?.reason, 'Waiting for the site to answer.'), result: { deadline }, nextAt: iso(launchTransport.now() + HEALTH.pollSeconds * 1000 * launchLimits.scale) };
+    return { state: 'waiting', detail: pollText(answer, 'Waiting for the site to answer.'), result: { deadline }, nextAt: iso(launchTransport.now() + HEALTH.pollSeconds * 1000 * launchLimits.scale) };
   },
   async web(launch, _steps, server, signal) {
     const answer = await helper(server, { ...base(launch, 'launch-web'), loopbackPort: launch.loopback_port }, { signal });
@@ -580,12 +644,17 @@ const RUN = {
   },
   // Never fatal: dns_waiting -> waiting (Check again), failed -> failed with the reason (Try again); the site stays on HTTP.
   async certificate(launch, _steps, server, signal) {
-    const answer = await helper(server, base(launch, 'launch-certificate'), { signal });
+    const answer = await helper(server, { ...base(launch, 'launch-certificate'), serverIps: (launch.options.dns ?? []).map(record => record.value) }, { signal });
     const certName = typeof answer?.certName === 'string' ? answer.certName.slice(0, 80) : null;
     const settled = ['waiting_dns', 'done'].includes(launch.state);
-    if (answer?.state === 'issued') return { state: 'done', result: { state: 'issued', certName }, ...(settled ? { launch: { state: 'done' } } : {}) };
+    if (answer?.state === 'issued') { if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'issued'); return { state: 'done', result: { state: 'issued', certName }, ...(settled ? { launch: { state: 'done' } } : {}) }; }
     if (answer?.state === 'dns_waiting') return { state: 'waiting', detail: `${launch.domain} does not point to this server yet. Add the DNS record, then press Check again.`, result: { state: 'dns_waiting' }, ...(settled ? { launch: { state: 'waiting_dns' } } : {}) };
-    return { state: 'failed', detail: refused(answer) ? refusalText(answer, launch.domain) : plainReason(answer?.reason, 'The certificate could not be issued. The site works on HTTP; press Try again later.'), result: { state: 'failed' } };
+    if (launch.site_id) updateSiteUrls(launch.site_id, launch.domain, 'failed');
+    return { state: 'failed', detail: refused(answer) ? refusalText(answer, launch.domain) : plainReason(answer?.reason, 'The certificate could not be issued.') + ' The site works on HTTP; press Try again later.', result: { state: 'failed' } };
+  },
+  async maintenance(launch) {
+    try { await launchMaintenance.setup(launch.site_id, 'launch:' + launch.id); return { state: 'done' }; }
+    catch { return { state: 'failed', detail: 'The maintenance page could not be set up automatically. The site works; set it up from the site page.' }; }
   },
   async teardown(launch, _steps, server, signal) {
     const answer = await helper(server, { ...base(launch, 'launch-teardown'), keepBackup: true }, { signal });
@@ -602,8 +671,11 @@ async function recover(launch, steps, step, server, signal) {
   let status;
   try { status = await helper(server, base(launch, 'launch-status'), { signal }); }
   catch (error) { return { state: 'failed', detail: `DockNest stopped while ${LABELS[step.step].toLowerCase()} ran and could not check the server: ${error.message}`, result: { recovered: 1 } }; }
-  const resumable = status?.resumable === true || (Array.isArray(status?.resumable) && status.resumable.includes(step.step));
-  if (resumable && step.step !== 'fetch') {
+  // A step runs again only when the server's journal is consistent for it (remote/helper/launch.py launch-status: not
+  // busy, `resumable` not false, and the journal phase is one this step can continue from); otherwise everything goes.
+  const RESUMABLE_PHASES = { check: [null], build: ['fetched', 'built'], start: ['built', 'started'], check_health: ['started'], web: ['started', 'web'], certificate: ['web', 'certificate'], maintenance: ['web', 'certificate'] };
+  const resumable = status?.busy !== true && status?.resumable !== false && (RESUMABLE_PHASES[step.step] ?? []).includes(status?.phase ?? null);
+  if (resumable) {
     const outcome = await RUN[step.step](launch, steps, server, signal);
     return { ...outcome, result: { ...(outcome.result ?? {}), recovered: 1 } };
   }
