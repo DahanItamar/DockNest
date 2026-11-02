@@ -36,6 +36,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis.
 - Per-site schedules, retention, and pinned backups.
 - Restore to a separate copy; DockNest does not replace a live site by itself.
+- Restore copies, restore tests and moves keep the original's protections (read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor), or refuse with a clear reason.
 - Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. See [restore tests](docs/restore-tests-guide.md).
 - Keep up to three extra copies of each backup on other storage, for example SFTP plus S3, each with its own retention.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
@@ -47,6 +48,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
 - Storage page with space per site and per destination, and growth over time.
+- Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything a site, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
+- Hardening score: each site gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the site. See [hardening score](docs/hardening-score.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.
@@ -59,7 +62,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 
 **Alerts**
-- Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, or a new version is out.
+- Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, a site's certificate is about to expire or failed to renew, or a new version is out.
 - Save the login once in Administration, Connections (encrypted, never shown again), then add an alert node on the Map, draw a line from DockNest, a server or a site, and pick the events. See [alerts](docs/alerts.md).
 
 **Security**
@@ -185,7 +188,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Alerts](docs/alerts.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
