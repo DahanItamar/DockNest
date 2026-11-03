@@ -20,7 +20,10 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   const fileSha = async path => (await sh(`sha256sum '${path}' | cut -c1-64`)).trim();
   const inspect = (container, format) => run('exec', host, 'docker', 'inspect', '--format', format, container);
   const userId = randomUUID(), sessionHash = 'f'.repeat(64), who = { userId, sessionHash };
-  db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,'admin')").run(userId, 'safe-edit@example.invalid', 'x', 'x', '[]', new Date().toISOString(), 'Safe Edit QA');
+  // The TOTP secret is sealed with the manager key like every real account: later scenarios export a recovery kit, which
+  // checks that every sealed value in the database opens with that key (src/recovery-kit.js validateKey).
+  const { seal } = await import('../src/crypto.js');
+  db.prepare("INSERT INTO users(id,email,password_hash,totp_secret,recovery_codes,enrolled,created_at,name,role) VALUES(?,?,?,?,?,1,?,?,'admin')").run(userId, 'safe-edit@example.invalid', 'x', seal('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'), '[]', new Date().toISOString(), 'Safe Edit QA');
 
   // Images: 1.0 and 1.1 are healthy, broken never becomes healthy, migrate writes to its data then fails its health check.
   await sh("mkdir -p /edit-images && cd /edit-images && printf 'FROM docknest-fixture:local\\nENV EDIT_VERSION=1.1\\n' > Dockerfile.ok && printf 'FROM docknest-fixture:local\\nHEALTHCHECK --interval=2s --timeout=2s --retries=2 CMD exit 1\\n' > Dockerfile.broken && printf 'FROM docknest-fixture:local\\nHEALTHCHECK --interval=2s --timeout=2s --retries=2 CMD exit 1\\nCMD [\"sh\",\"-c\",\"python -c \\\\\"import sqlite3;d=sqlite3.connect(\\x27/site/database.sqlite\\x27);d.execute(\\x27CREATE TABLE IF NOT EXISTS records(value TEXT)\\x27);d.execute(\\x27UPDATE records SET value=\\x22migrated\\x22\\x27);d.commit()\\\\\" && exec python /app/app.py\"]\\n' > Dockerfile.migrate");
