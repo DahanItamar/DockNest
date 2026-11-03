@@ -95,12 +95,14 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await run('exec', source, 'sh', '-c', "pkill -f '^timeout 20 docker events' || true");
   await until(async () => (await eventsProcesses()) === 0, 'the capture docker events process did not stop', 30);
   const bundle = writeHelperBundle(join(directory, 'heal-helper'));
-  await run('cp', bundle, source + ':/tmp/docknest-heal-helper.py');
+  await run('exec', source, 'mkdir', '-p', '/opt');
+  // Not /tmp: docker cp writes beneath a tmpfs mount, so the file would not be visible inside the container.
+  await run('cp', bundle, source + ':/opt/docknest-heal-helper.py');
   const line = webLine();
   const capturedLines = captured.split(/\r?\n/).filter(Boolean);
   assert.ok(typeof line === 'string' && line.length > 0, `no unhealthy event line for healshop-web-1 among ${capturedLines.length} captured lines (${capturedLines.filter(text => text.includes('health_status')).length} health events)`);
   // On failure this one call prints Python's traceback (no secrets: the line holds only names, an ID and a time).
-  const parse = 'import json,sys,traceback\ntry:\n import importlib.util as u\n s=u.spec_from_file_location("helper","/tmp/docknest-heal-helper.py");h=u.module_from_spec(s);s.loader.exec_module(h)\n print(json.dumps(h.heal_event(sys.argv[1],[{"name":"healshop-web-1","project":"healshop","service":"web"}])))\nexcept Exception:\n traceback.print_exc();sys.exit(1)\n';
+  const parse = 'import json,sys,traceback\ntry:\n import importlib.util as u\n s=u.spec_from_file_location("helper","/opt/docknest-heal-helper.py");h=u.module_from_spec(s);s.loader.exec_module(h)\n print(json.dumps(h.heal_event(sys.argv[1],[{"name":"healshop-web-1","project":"healshop","service":"web"}])))\nexcept Exception:\n traceback.print_exc();sys.exit(1)\n';
   let output;
   try { output = await quietRun('exec', source, 'python3', '-c', parse, line); }
   catch (error) { console.error('Self-heal: the helper could not parse the live event line:\n' + String(error.stderr ?? error.message).slice(0, 4000)); throw error; }
@@ -305,5 +307,5 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   streams.stopStreams();
   assert.equal(pumping, false);
   db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id=?').run(siteId);
-  await run('exec', source, 'sh', '-c', 'docker compose -p healshop -f /heal-fixture/compose.yaml down -v >/dev/null 2>&1 || true; rm -f /tmp/docknest-heal-helper.py');
+  await run('exec', source, 'sh', '-c', 'docker compose -p healshop -f /heal-fixture/compose.yaml down -v >/dev/null 2>&1 || true; rm -f /opt/docknest-heal-helper.py');
 }
