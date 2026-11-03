@@ -441,8 +441,8 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.equal(preview.fingerprint, (await sh(gitHost, 'ssh-keygen -lf /etc/ssh/git_host_ed25519.pub')).split(/\s+/)[1], 'the host key read from the server matches the Git host');
     const created = await deployKeys.createDeployKey({ name: 'QA deploy key', gitHost: sshHost, serverId: lserver.id, allowPrivate: true, fingerprint: preview.fingerprint }, 'qa');
     const keyId = created.key.id;
-    await writeTo(gitHost, '/tmp/deploy.pub', created.key.publicKey + '\n');
-    await sh(gitHost, 'cat /tmp/deploy.pub >> /home/git/.ssh/authorized_keys && rm /tmp/deploy.pub');
+    await writeTo(gitHost, '/opt/deploy.pub', created.key.publicKey + '\n');
+    await sh(gitHost, 'cat /opt/deploy.pub >> /home/git/.ssh/authorized_keys && rm /opt/deploy.pub');
     // A wrong pinned host key is refused, and no key file is left behind.
     const pinned = db.prepare('SELECT host_key_line,host_key_sha256 FROM deploy_keys WHERE id=?').get(keyId);
     await sh(gitHost, 'rm -f /tmp/wrong /tmp/wrong.pub && ssh-keygen -q -t ed25519 -N "" -f /tmp/wrong');
