@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: 'Run only this Linux integration scenario (self-heal), or leave empty for the full suite'
+        description: 'Run only this Linux integration scenario (self-heal or launch), or leave empty for the full suite'
         type: string
         required: false
         default: ''
