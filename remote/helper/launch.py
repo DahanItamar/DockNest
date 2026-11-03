@@ -584,7 +584,8 @@ try:
             mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
     for path,fd in keep:
         os.makedirs(path,mode=0o755,exist_ok=True)
-        mount('--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
+        # -c (--no-canonicalize): libmount would otherwise resolve the fd link to its real path, which the tmpfs above hides.
+        mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
         os.close(fd)
 except OSError:os._exit(97)
 os.execvp(argv[0],argv)
@@ -609,8 +610,7 @@ def launch_sandboxed(argv,keep):
 def launch_model(slug,files,project_dir,env_file):
     # Every file Compose may read for this launch lives in the env file's folder (the site folder or a check folder).
     argv=launch_sandboxed(launch_compose_base(slug,files,project_dir,env_file)+['config','--format','json'],[os.path.dirname(str(env_file))])
-    code,stdout,_dbg=launch_exec(argv,120)
-    if code:open('/opt/dbg-launch.log','ab').write(('%s %s'%(code,_dbg[:900])).encode())
+    code,stdout,_=launch_exec(argv,120)
     if code==97:launch_refuse('SANDBOX_UNAVAILABLE')
     if code!=0:launch_refuse('COMPOSE_INVALID')
     try:model=json.loads(stdout)

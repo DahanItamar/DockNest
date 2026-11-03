@@ -288,7 +288,6 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     // ---------- probe: the helper's gate works, so a clean pasted file passes ----------
     const control = await check('control', BASE_COMPOSE);
     if (control.gate.refusals.some(item => item.code === 'GATE_UNAVAILABLE')) throw new Error(GATE_MISSING);
-    console.error('TEMPDEBUG log: '+await sh(lhost,'cat /opt/dbg-launch.log 2>&1; ls -l $(which mount); mount --version 2>&1 | head -2; apk info -W /bin/mount /usr/bin/mount 2>&1; apk search -q mount | head').catch(e=>'none'));
     assert.equal(control.ok, true, JSON.stringify([control.blockers, control.gate]));
     assert.deepEqual(control.services.map(service => service.name), ['web']);
     record('Launch fixture: launch host with nginx, certbot and git; HTTPS and SSH Git servers with run-time keys; bystanders; the privilege gate is in the bundled helper');
