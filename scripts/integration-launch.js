@@ -485,19 +485,19 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     await until(() => listening(lhost, 443), 'The foreign 443 listener did not start', 30);
     await mapName(domainOf('busy'), lip);
     answer = await call({ operation: 'launch-facts', launchId: randomUUID(), slug: slugOf('busy'), domain: domainOf('busy'), source: 'compose' });
-    assert.ok(answer.usedPorts.includes(443) && answer.ports['443'] !== null, 'Check sees that 443 is in use');
-    const busy = await start(composeBody('busy', BASE_COMPOSE));
-    await drive(ended(busy), 'The launch with 443 taken');
-    const busyLaunch = launches.loadLaunch(busy);
-    assert.ok(['done', 'waiting_dns'].includes(busyLaunch.state), `${busyLaunch.state}: ${busyLaunch.reason}`);
+    assert.equal(answer.ports['443'].holder, 'other', JSON.stringify(answer.ports));
+    assert.match(answer.ports['443'].process ?? '', /^python/, 'the holder is named by its process name only');
+    assert.equal(answer.ports['80'].holder, 'nginx', 'the server nginx on port 80 is fine');
+    const busyCheck = await check('busy', BASE_COMPOSE);
+    assert.equal(busyCheck.ok, false);
+    assert.equal(busyCheck.checks.find(item => item.id === 'port443')?.code, 'PORT_IN_USE', JSON.stringify(busyCheck.checks));
+    await assert.rejects(start(composeBody('busy', BASE_COMPOSE)), error => error.code === 'PORT_IN_USE', 'Launch is refused while 443 is taken');
     assert.equal(await sh(lhost, 'curl -s http://127.0.0.1:443/'), 'foreign-443', 'the other program on 443 is untouched and still answers');
-    assert.match(await pageOf('busy'), new RegExp(NGINX_MARK), 'the site still answers on port 80');
     await sh(lhost, 'nginx -t');
-    console.log(`NOTE port 443 taken: certificate step ended ${steps(busy).certificate.state}`);
     await assertBystanders();
     await sh(lhost, "pkill -f 'http.server 443' || true");
     await until(async () => !(await listening(lhost, 443)), 'The foreign 443 listener did not stop', 30);
-    record('Port 443 held by another program: Check reports it, the launch ends in a defined state, the other program keeps answering, nginx stays valid and the site still answers on port 80');
+    record('Port 443 held by another program: Check blocks with PORT_IN_USE naming the process, Launch is refused, the other program keeps answering and nginx stays valid');
 
     // ---------- 9. other jobs queue behind a launch ----------
     { const queued = enqueueBackup(bystander, 'qa'), job = claimJob(); assert.equal(job.id, queued.id); await executeJob(job); assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id).status, 'completed', db.prepare('SELECT error FROM jobs WHERE id=?').get(job.id).error); }

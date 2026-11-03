@@ -41,6 +41,7 @@ class Host:
         self.fail=kw.get('fail',{});self.dns=kw.get('dns',PUBLIC_V4);self.tools=set(kw.get('tools',{'ssh','nginx','certbot','git','docker','buildx','unshare','mount'}))
         self.ports=kw.get('ports',[]);self.addresses=kw.get('addresses',['203.0.113.10']);self.keyscan=kw.get('keyscan','')
         self.containers=kw.get('containers',[]);self.gate=kw.get('gate');self.on_call=kw.get('on_call')
+        self.ss=kw.get('ss',{});self.proc=kw.get('proc',{})  # port -> `ss -ltnpH` output / process names from /proc
         self.labels={}  # docker object -> launch label, for teardown
     def site(self,slug='shop'):return self.sites/slug
     def start_journal(self,**extra):
@@ -94,6 +95,7 @@ class Host:
             if words[2]=='inspect':return out(0 if self.existing.get('builder') else 1)
             return out()
         if words[0]=='nginx' and words[1]=='-T':return out(stdout=self.nginx_dump.encode())
+        if words[0]=='ss':return out(stdout=self.ss.get(int(words[-1].rsplit(':',1)[1]),'').encode())
         if words[0]=='ssh-keyscan' or 'ssh-keyscan' in words:return out(stdout=self.keyscan.encode())
         return out()
     def which(self,name,path=None):
@@ -112,7 +114,8 @@ class Host:
             patch('helper.host_addresses',return_value=self.addresses),patch('helper.nginx_conf_dir',return_value=str(self.conf)),
             patch('helper.process_running',return_value=False),patch('helper.os_release',return_value={'id':'ubuntu','versionId':'24.04'}),
             patch('helper.package_manager',return_value='apt'),patch('helper.time.sleep',side_effect=AssertionError('no sleeping')),
-            patch('helper.inspect',side_effect=lambda ids:[c for c in self.containers if c['Id'] in ids])]
+            patch('helper.inspect',side_effect=lambda ids:[c for c in self.containers if c['Id'] in ids]),
+            patch('helper.launch_port_users_proc',side_effect=lambda port:list(self.proc.get(port,[])))]
         if self.gate is not None:patches.append(patch('helper.edit_gate',side_effect=self.gate,create=True))
         if os.name!='posix':patches.append(patch('helper.atomic_json',side_effect=lambda path,value:pathlib.Path(path).write_text(json.dumps(value))))  # Windows cannot open a folder to fsync it
         for item in patches:item.start()
@@ -625,6 +628,36 @@ class TeardownTests(unittest.TestCase):
         self.assertEqual(empty,{'ok':True,'journal':False,'present':[],'phase':None})
 
 class FactsTests(unittest.TestCase):
+    def test_ports_80_and_443_name_their_real_holder(self):
+        ss={80:'LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:(("nginx",pid=812,fd=6),("nginx",pid=811,fd=6))\nLISTEN 0 511 [::]:80 [::]:* users:(("nginx",pid=811,fd=7))\n',
+            443:'LISTEN 0 5 0.0.0.0:443 0.0.0.0:* users:(("python3",pid=990,fd=3))\n'}
+        host=Host(self,tools={'ss','nginx','certbot','git','docker','buildx'},ss=ss,ports=[80,443])
+        result=host.run('launch-facts',source='compose',domain='shop.example.com')
+        self.assertEqual(result['ports'],{'80':{'port':80,'holder':'nginx','process':'nginx'},'443':{'port':443,'holder':'other','process':'python3'}})
+        self.assertEqual([c['argv'] for c in host.argvs('ss')],[['ss','-ltnpH','sport = :80'],['ss','-ltnpH','sport = :443']])
+        # Nothing listening, and a port Docker publishes without a listening socket.
+        host=Host(self,tools={'ss','nginx','certbot','git','docker','buildx'},ports=[443])
+        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports'],{'80':{'port':80,'holder':'none'},'443':{'port':443,'holder':'other'}})
+        # A LISTEN row whose process ss cannot show still blocks, without a name; docker-proxy keeps its own name.
+        host=Host(self,tools={'ss','nginx','certbot','git','docker','buildx'},ss={80:'LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n',443:'LISTEN 0 4096 0.0.0.0:443 0.0.0.0:* users:(("docker-proxy",pid=77,fd=4))\n'},ports=[80,443])
+        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports'],{'80':{'port':80,'holder':'other'},'443':{'port':443,'holder':'other','process':'docker-proxy'}})
+    def test_port_holder_without_ss_uses_proc_and_never_a_command_line(self):
+        host=Host(self,proc={80:['nginx','nginx'],443:['apache2']},ports=[80,443])
+        result=host.run('launch-facts',source='compose',domain='shop.example.com')
+        self.assertEqual(result['ports'],{'80':{'port':80,'holder':'nginx','process':'nginx'},'443':{'port':443,'holder':'other','process':'apache2'}})
+        self.assertEqual(host.argvs('ss'),[],'ss is not installed')
+        # An unreadable or odd process name: still another program, and the name is not passed on.
+        host=Host(self,proc={80:[''],443:['bad name;rm -rf /']},ports=[80,443])
+        result=host.run('launch-facts',source='compose',domain='shop.example.com')
+        self.assertEqual(result['ports'],{'80':{'port':80,'holder':'other'},'443':{'port':443,'holder':'other'}})
+        # nginx next to another program on the same port is another program.
+        host=Host(self,proc={443:['nginx','caddy']},ports=[443])
+        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports']['443'],{'port':443,'holder':'other','process':'caddy'})
+    def test_ss_listener_lines_are_parsed_by_their_local_port_only(self):
+        with patch('helper.shutil.which',return_value='/usr/bin/ss'),patch('helper.launch_exec',return_value=(0,b'LISTEN 0 5 127.0.0.1:4430 0.0.0.0:* users:(("other",pid=1,fd=3))\n',b'')):
+            self.assertEqual(helper.launch_port_users_ss(443),[])
+        with patch('helper.shutil.which',return_value='/usr/bin/ss'),patch('helper.launch_exec',return_value=(1,b'',b'')):
+            self.assertIsNone(helper.launch_port_users_ss(443),'a failing ss falls back to /proc')
     def test_facts_for_a_server_without_docker(self):
         host=Host(self,tools={'nginx'},git_version='2.36.6')
         result=host.run('launch-facts',source='git',domain='shop.example.com',repo={'url':'https://github.com/o/r.git'})

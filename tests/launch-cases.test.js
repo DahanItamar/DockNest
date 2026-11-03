@@ -72,3 +72,21 @@ test('the loopback port avoids listening ports and ports of other live launches 
   const port = engine.chooseLoopbackPort(server, [20000, 20002], () => 0);
   assert.equal(port, 20003);
 });
+
+test('ports 80 and 443 held by another program block Check and Launch; the server nginx does not', async () => {
+  script = { 'launch-facts': { ...baseFacts, ports: { 80: { port: 80, holder: 'nginx', process: 'nginx' }, 443: { port: 443, holder: 'other', process: 'python3' } } } };
+  const server = serverRow('ports-busy');
+  const answer = await engine.checkLaunch(server, git('busy.example.com'));
+  assert.equal(answer.ok, false);
+  const row = answer.checks.find(item => item.id === 'port443');
+  assert.deepEqual({ ok: row.ok, code: row.code, text: row.text, title: row.title, status: row.status }, { ok: false, code: 'PORT_IN_USE', text: 'Port 443 is used by python3. Stop it, then Check again.', title: 'Port 443', status: 'block' });
+  assert.equal(answer.checks.find(item => item.id === 'port80'), undefined, 'the server nginx on port 80 is fine');
+  assert.ok(answer.blockers.includes('Port 443 is used by python3. Stop it, then Check again.'));
+  await assert.rejects(engine.startLaunch(server, git('busy.example.com'), 'admin'), error => error.status === 409 && error.code === 'PORT_IN_USE');
+  script = { 'launch-facts': { ...baseFacts, ports: { 80: { port: 80, holder: 'other' }, 443: { port: 443, holder: 'other', process: 'x; rm -rf /' } } } };
+  const unnamed = await engine.checkLaunch(server, git('busy.example.com'));
+  assert.deepEqual(unnamed.checks.filter(item => item.code === 'PORT_IN_USE').map(item => item.text), ['Port 80 is used by another program. Stop it, then Check again.', 'Port 443 is used by another program. Stop it, then Check again.']);
+  script = { 'launch-facts': { ...baseFacts, ports: { 80: { port: 80, holder: 'nginx', process: 'nginx' }, 443: { port: 443, holder: 'none' } } } };
+  assert.equal((await engine.checkLaunch(server, git('free.example.com'))).ok, true);
+  script = {};
+});

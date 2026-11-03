@@ -952,6 +952,63 @@ def launch_host_key_op(req):
     alias=launch_known_name(name,port)
     digest=__import__('base64').b64encode(hashlib.sha256(__import__('base64').b64decode(keys[kind])).digest()).decode().rstrip('=')
     launch_answer({'hostKeyLine':'%s %s %s'%(alias,kind,keys[kind]),'sha256':'SHA256:'+digest,'keyType':kind})
+LAUNCH_PROCESS_NAME=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:+-]{0,31}')
+def launch_port_users_ss(port):
+    """Process names holding a listening TCP socket on `port`, from `ss -ltnpH` (iproute2). None when ss is missing or fails."""
+    if not shutil.which('ss',path=LAUNCH_PATH):return None
+    try:
+        code,stdout,_=launch_exec(['ss','-ltnpH','sport = :%d'%port],15)
+    except Exception:return None
+    if code!=0:return None
+    names=[];listening=False
+    for line in stdout.decode('utf-8','replace').splitlines()[:200]:
+        fields=line.split()
+        if len(fields)<4:continue
+        local=fields[3] if fields[0]=='LISTEN' else fields[2]
+        if not local.endswith(':%d'%port):continue
+        listening=True
+        found=re.findall(r'\(\("([^"]{1,64})",pid=\d+',line)
+        names+=found or ['']  # a listener whose process ss cannot show counts as another program
+    return names if listening else []
+def launch_port_users_proc(port):
+    """Fallback without ss: listening sockets on `port` from /proc/net/tcp{,6}, mapped to processes through /proc/*/fd."""
+    inodes=set()
+    for name in ('/proc/net/tcp','/proc/net/tcp6'):
+        try:lines=pathlib.Path(name).read_text().splitlines()[1:]
+        except OSError:continue
+        for line in lines:
+            parts=line.split()
+            if len(parts)>9 and parts[3]=='0A':
+                try:
+                    if int(parts[1].rsplit(':',1)[1],16)==port:inodes.add(parts[9])
+                except ValueError:pass
+    if not inodes:return []
+    names=[]
+    try:pids=[entry for entry in os.listdir('/proc') if entry.isdigit()]
+    except OSError:return ['']
+    for pid in pids[:65536]:
+        try:fds=os.listdir('/proc/%s/fd'%pid)
+        except OSError:continue
+        for fd in fds:
+            try:link=os.readlink('/proc/%s/fd/%s'%(pid,fd))
+            except OSError:continue
+            if link.startswith('socket:[') and link[8:-1] in inodes:
+                try:names.append(pathlib.Path('/proc/%s/comm'%pid).read_text().strip())
+                except OSError:names.append('')
+                break
+    return names or ['']  # a listener whose process cannot be read counts as another program
+def launch_port_holder(port,ports):
+    """Who holds `port`: {port, holder: 'none'|'nginx'|'other', process?}. Only the process name (never a command line,
+    which can hold secrets). Ports Docker publishes are 'other': named docker-proxy when that process was seen, unnamed
+    when only a NAT rule publishes them."""
+    names=launch_port_users_ss(port)
+    if names is None:names=launch_port_users_proc(port)
+    if not names:
+        return {'port':port,'holder':'other'} if port in ports else {'port':port,'holder':'none'}  # published by Docker without a socket: no name
+    clean=[n for n in names if LAUNCH_PROCESS_NAME.fullmatch(n or '')]
+    other=[n for n in clean if n!='nginx']
+    if clean and not other and len(clean)==len(names):return {'port':port,'holder':'nginx','process':'nginx'}
+    return {'port':port,'holder':'other',**({'process':other[0]} if other else {})}
 def launch_facts_op(req):
     """Read-only facts for Check. Never returns environment values, Compose text or key material."""
     lid,slug=launch_ids(req);domain=launch_domain(req);names=launch_names(req,domain)
@@ -963,7 +1020,7 @@ def launch_facts_op(req):
     osr=os_release();manager=package_manager(osr['id'])
     existing=next((p for p in [LAUNCH_SITES,*LAUNCH_SITES.parents] if p.exists()),pathlib.Path('/'))
     free=shutil.disk_usage(existing).free
-    ports=listening_ports();nginx_running=process_running('nginx')
+    ports=listening_ports()
     checks=[]
     def check(cid,ok,code=None,install=None):
         item={'id':cid,'ok':bool(ok)}
@@ -994,7 +1051,7 @@ def launch_facts_op(req):
     facts={'tools':{'docker':bool(docker_version),'compose':bool(compose_text),'git':bool(git_text),'nginx':nginx,'certbot':certbot,'buildx':bool(buildx)},
         'versions':{'docker':docker_version,'compose':compose_text,'git':git_text,'gitMinimum':'%d.%d.%d'%LAUNCH_GIT_MIN,'buildx':buildx},
         'os':osr,'packageManager':manager,'freeBytes':free,'usedPorts':sorted(int(p) for p in ports),
-        'ports':{'80':None if 80 not in ports else ('nginx' if nginx_running else 'other'),'443':None if 443 not in ports else ('nginx' if nginx_running else 'other')},
+        'ports':{str(p):launch_port_holder(p,ports) for p in (80,443)},
         'nginxDomains':conflicts,'certLineages':lineages,'dnsAnswers':launch_dns(domain),'serverIps':host_addresses(),'checks':checks,'warnings':warnings}
     if req.get('source')=='git':
         check('git',git_text,'GIT_MISSING','git')
