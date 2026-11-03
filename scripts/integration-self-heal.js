@@ -47,7 +47,9 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   // pgrep pattern: ps prints each command line once, its own line is "ps -o pid,args", and the match is anchored to
   // the start of the command, so nothing that merely mentions the pattern is counted.
   const processList = async () => (await quietRun('exec', source, 'ps', '-o', 'pid,args')).split('\n').map(text => text.trim()).filter(Boolean);
-  const isStream = text => /^\d+\s+(?:\S*\/)?docker events --filter type=container --filter event=health_status\b/.test(text);
+  // The watchdog scenario (integration-milestones.js) wraps /usr/local/bin/docker and keeps the real binary as docker-real,
+  // so the process the wrapper execs shows up as docker-real.
+  const isStream = text => /^\d+\s+(?:\S*\/)?docker(?:-real)? events --filter type=container --filter event=health_status\b/.test(text);
   const eventsProcesses = async () => (await processList()).filter(isStream).length;
   // When a count is wrong, show what does run (command lines only, cut short; they carry no secrets).
   const showEventsProcesses = async () => { try { console.error('Self-heal: processes mentioning docker events: ' + JSON.stringify((await processList()).filter(text => text.includes('events')).map(text => text.slice(0, 160)))); } catch { /* best effort */ } };
