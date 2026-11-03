@@ -519,7 +519,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
         <span className={'map-caption'+(bad?' bad':'')}>{bad?why(siteChecks[r.id]):pending?.targetId===r.id?'New home for '+byId.sites[pending.siteId]?.name:serverFacts(s,mine.length)}</span>
         {s.status==='connected'?<span className="sr-only">Connected</span>:<span className="map-caption warn">{!s.status||s.status==='unchecked'?'Not checked yet':'Needs attention'}</span>}</span>
       </div>
-      {canMove&&<button type="button" className="map-plus" aria-label={'Add a site to '+s.name} style={at(r.x+r.w+14,r.y+r.h/2+14)} onPointerDown={e=>e.stopPropagation()} onClick={e=>{opener.current=e.currentTarget;setFlow({kind:'launch',serverId:r.id})}}><IconPlus size={16} stroke={2} aria-hidden="true"/></button>}
+      {canMove&&<button type="button" className="map-plus" aria-label={'New site on '+s.name} style={at(r.x+r.w+14,r.y+r.h/2+14)} onPointerDown={e=>e.stopPropagation()} onClick={e=>openPanel({kind:'add-server',id:r.id},e.currentTarget)}><IconPlus size={16} stroke={2} aria-hidden="true"/></button>}
       {mine.map(renderSite)}
      </div>})}
     {layout.unassigned.length>0&&<div role="group" aria-label="Not on a server" className="map-group">{layout.unassigned.map(renderSite)}</div>}

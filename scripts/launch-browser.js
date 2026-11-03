@@ -116,10 +116,9 @@ async function gotoMap(page){
 // Desktop: the "+" beside the server opens New site with that server. Phone: Add site on the server, then the New site row.
 async function openNew(page,server='Commerce host'){
  await gotoMap(page);
- if(phone(page)){
-  await page.locator('.map-list-group',{hasText:server}).getByRole('button',{name:'Add site'}).click();
-  await page.getByRole('button',{name:/New site/}).click();
- }else await page.getByRole('button',{name:'Add a site to '+server}).click();
+ if(phone(page))await page.locator('.map-list-group',{hasText:server}).getByRole('button',{name:'Add site'}).click();
+ else await page.getByRole('button',{name:'New site on '+server}).click();
+ await page.locator('.map-row',{hasText:'New site'}).click();
  await page.getByRole('heading',{name:'New site'}).waitFor();
 }
 const dialog=page=>page.locator('dialog[open]').last();
@@ -501,7 +500,10 @@ try{
   const {context,page}=await open({width:1440,height:900});
   await gotoMap(page);
   assert.equal(await page.locator('.map-plus').count(),2,'a + beside every server, also one with sites');
-  await page.getByRole('button',{name:'Add a site to Content host'}).click();
+  await page.getByRole('button',{name:'New site on Content host'}).click();
+  // The add panel keeps the discovery path: found sites are listed under the New site row
+  await page.getByText(/Found on this server/).waitFor();
+  await page.locator('.map-row',{hasText:'New site'}).click();
   await page.getByRole('heading',{name:'New site'}).waitFor();
   await context.close();
  });

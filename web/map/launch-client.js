@@ -1,4 +1,4 @@
-// The only place that knows the launch API (docs/launch-site.md, "API"). `api` is the app's fetch helper: api(path, body, method).
+// The only place that knows the launch API. `api` is the app's fetch helper: api(path, body, method).
 export function createLaunchClient(api){
  const id=x=>encodeURIComponent(x);
  return {
@@ -32,7 +32,6 @@ export const busyLaunch=l=>!!l&&((l.steps||[]).some(s=>['queued','running'].incl
 export const settled=l=>!!l&&LAUNCH_STOP.has(l.state)&&!busyLaunch(l);
 export const STEP_LABEL={check:'Check',fetch:'Fetch source',build:'Build',start:'Start',check_health:'Health check',web:'nginx',certificate:'Certificate',save:'Save site',first_backup:'First backup',maintenance:'Maintenance page',teardown:'Clean up'};
 export const LAUNCH_STEPS=Object.entries(STEP_LABEL).filter(([k])=>k!=='teardown');
-const STATUS_LINE_UNUSED={check:'Checking the server…',fetch:'Fetching the source…',build:'Building the image…',start:'Starting the containers…',check_health:'Waiting for the site to answer…',web:'Setting up nginx…',certificate:'Getting the certificate…',save:'Saving the site…',first_backup:'Running the first backup…',teardown:'Cleaning up…'};
 // The sentence under the progress bar: the step that is running now.
 export const statusLine=l=>l?.statusLine||'Starting…';
 // Check rows as the engine answers them: {title, status: ok|block, value}. A failing row says "Needs fixing"; its own
@@ -48,10 +47,6 @@ export function blockersOf(result){
  const out=[...(result?.blockers||[])].filter(Boolean);
  for(const r of result?.gate?.refusals||[])out.push((GATE_TEXT[r.code]||'The Compose file asks for something DockNest does not allow')+(r.service?` (${r.service})`:''));
  return out;
-}
-// A check row's status word from the server, as the shared status states.
-export function rowState(status){
- return {ok:'success',success:'success',info:'success',block:'failed',fail:'failed',failed:'failed',missing:'failed',warn:'needs-review',checking:'running',running:'running'}[status]||'queued';
 }
 export const STATE_WORD={success:'Fine',failed:'Needs fixing',running:'Checking','needs-review':'Warning',queued:'Waiting'};
 

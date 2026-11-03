@@ -19,6 +19,7 @@ const engine = await import('../src/launches/engine.js');
 const keys = await import('../src/launches/deploy-keys.js');
 const { claimLaunch } = await import('../src/launches/claim.js');
 const ui = await import('../web/map/launch-client.js');
+const dkui = await import('../web/connections/deploy-keys-client.js');
 const listener = app.listen(0, '127.0.0.1'); await new Promise(resolve => listener.once('listening', resolve));
 const base = `http://127.0.0.1:${listener.address().port}/api`;
 test.after(() => listener.close());
@@ -32,6 +33,15 @@ const api = async (method, route, body) => {
   const response = await fetch(base + route, { method, headers: { Cookie: 'dbm_session=' + token, Origin: process.env.APP_ORIGIN, 'x-csrf-token': 'csrf', 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 };
+// The app's fetch helper (web/main.jsx api): api(path, body, method); a refusal throws with status, code and data.
+const uiApi = async (path, body, method) => {
+  const response = await fetch(base + path, { method: method || (body ? 'POST' : 'GET'), headers: { Cookie: 'dbm_session=' + token, Origin: process.env.APP_ORIGIN, 'x-csrf-token': 'csrf', 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: response.status, code: data.code, data });
+  return data;
+};
+const launches = ui.createLaunchClient(uiApi), deployKeys = dkui.createDeployKeysClient(uiApi);
+const refused = promise => promise.then(() => assert.fail('expected a refusal'), error => error);
 const serverRow = name => { const id = randomUUID(); db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(id, name, '198.51.100.20', 22, 'root', 'k', '0'.repeat(64), at()); return id; };
 const server = serverRow('Commerce host'), spare = serverRow('Content host');
 
@@ -57,70 +67,74 @@ engine.launchMaintenance.setup = async () => ({ files: ['nginx'] });
 const form = (extra = {}) => ({ tab: 'compose', compose: 'services:\n  web:\n    image: nginx:1.27\n  db:\n    image: mariadb:11\n', env: [{ key: 'DB_PASSWORD', value: 'x' }], service: '', domain: 'Shop2.Example.com', repo: '', ref: 'main', composePath: 'compose.yaml', keyId: '', allowPrivate: false, shutdown: true, ...extra });
 
 test('the check answer holds what the check sheet reads', async () => {
-  const body = ui.bodyOf(form());
-  const { status, body: result } = await api('POST', `/servers/${server}/launch/check`, body);
-  assert.equal(status, 200);
+  const result = await launches.check(server, ui.bodyOf(form()));
   for (const key of ['ok', 'blockers', 'warnings', 'builds', 'checks', 'services', 'gate', 'dns', 'testServers']) assert.ok(key in result, key);
   assert.ok(Array.isArray(result.dns.records) && 'pointsHere' in result.dns);
   const rows = ui.checkRows(result);
-  assert.ok(rows.length >= 2 && rows.every(row => row.title && ['success', 'failed', 'needs-review'].includes(row.state)));
+  const docker = rows.find(row => row.title === 'Docker');
+  assert.ok(docker && docker.state === 'success', 'Docker row is fine');
+  assert.ok(rows.find(row => row.id === 'dns'), 'a DNS row');
   assert.deepEqual(result.services.map(x => x.name), ['web', 'db']);
   assert.deepEqual(result.testServers.map(x => x.id), [spare]);
 });
 
 test('a refusal gives blockers and install offers in the shape the sheet reads', async () => {
   script['launch-facts'] = facts({ tools: { docker: true, compose: true, git: true, nginx: false, certbot: true, buildx: true }, checks: [{ id: 'nginx', ok: false, code: 'NGINX_MISSING', install: 'nginx' }] });
-  const { body: result } = await api('POST', `/servers/${server}/launch/check`, ui.bodyOf(form()));
+  const result = await launches.check(server, ui.bodyOf(form()));
   script = {};
   assert.equal(result.ok, false);
   assert.ok(ui.blockersOf(result).length > 0);
   const offer = result.checks.find(item => item.install);
-  if (offer) assert.equal(offer.install.package, 'nginx');
-  if (offer) assert.ok('supported' in offer.install);
+  assert.ok(offer, 'the failing nginx check carries an install offer');
+  assert.equal(offer.install.package, 'nginx');
+  assert.ok('supported' in offer.install);
+  const row = ui.checkRows(result).find(item => item.id === 'nginx');
+  assert.equal(row.state, 'failed');
+  assert.equal(row.value, 'Needs fixing');
 });
 
 test('the launch body is accepted, needs the confirmations and the port, and the view holds what the timeline reads', async () => {
   const start = ui.startBody(form(), { service: 'web', port: 80, testServerId: spare, trust: false });
   const missing = { ...start }; delete missing.cleanShutdownConfirmed;
-  assert.equal((await api('POST', `/servers/${server}/launch`, missing)).body.code, 'SHUTDOWN_CONFIRM_REQUIRED');
+  assert.equal((await refused(launches.start(server, missing))).code, 'SHUTDOWN_CONFIRM_REQUIRED');
   const noPort = { ...start }; delete noPort.webPort;
-  assert.equal((await api('POST', `/servers/${server}/launch`, { ...noPort, webPort: undefined })).body.code, 'INVALID_PORT');
-  const started = await api('POST', `/servers/${server}/launch`, start);
-  assert.equal(started.status, 202);
-  const id = started.body.launch.id;
-  const view = (await api('GET', `/launches/${id}`)).body;
+  assert.equal((await refused(launches.start(server, noPort))).code, 'INVALID_PORT');
+  const started = await launches.start(server, start);
+  const id = started.launch.id;
+  assert.ok(id, 'the answer names the launch the screens open');
+  const view = await launches.get(id);
   for (const key of ['state', 'domain', 'steps', 'progress', 'statusLine', 'dns', 'certificate', 'backups', 'restoreTests', 'actions', 'removing', 'reason']) assert.ok(key in view, key);
   assert.ok(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup'].every(step => view.steps.some(x => x.step === step && ui.STEP_LABEL[step])), 'every step has a label');
   const drive = async () => { for (let index = 0; index < 60; index++) { engine.tickLaunches(); const claimed = claimLaunch(); if (!claimed) return; await engine.executeLaunchStep(claimed); } };
   await drive();
   // The first backup is a normal backup job: play the worker finishing it.
-  const siteId = (await api('GET', `/launches/${id}`)).body.siteId;
+  const siteId = (await launches.get(id)).siteId;
   for (const job of db.prepare("SELECT id FROM jobs WHERE site_id=? AND type='backup' AND status='queued'").all(siteId)) {
     db.prepare('UPDATE jobs SET status=?,stage=?,finished_at=? WHERE id=?').run('completed', 'completed', at(), job.id);
     db.prepare("INSERT INTO backups(id,site_id,job_id,captured_at,path,size,checksum,manifest,verified,created_at) VALUES(?,?,?,?,'x.enc',1,?,'{}',1,?)").run(randomUUID(), siteId, job.id, at(), 'a'.repeat(64), at());
   }
   await drive();
-  const done = (await api('GET', `/launches/${id}`)).body;
+  const done = await launches.get(id);
   assert.ok(['done', 'waiting_dns'].includes(done.state), done.state + ' ' + done.reason);
   assert.ok(ui.settled(done) || done.actions.checkDns);
   assert.ok(done.removeUntil && done.actions.remove);
   assert.ok('enabled' in done.restoreTests && done.certificate.state);
-  const state = (await api('GET', '/state')).body;
+  const state = await uiApi('/state');
   const site = state.sites.find(x => x.id === done.siteId);
   assert.ok(site?.launch?.id === id && site.launch.removeUntil && site.launch.launchedAt, 'the site carries launch {id, launchedAt, removeUntil}');
-  const list = (await api('GET', `/servers/${server}/launch`)).body.launches;
-  assert.ok(Array.isArray(list) && list.every(x => ui.stateText(x)));
+  const list = (await launches.forServer(server)).launches;
+  assert.ok(Array.isArray(list) && list.length > 0 && list.every(x => ui.stateText(x)));
 });
 
 test('the Git body is accepted: repo object, https takes no key, trust is confirmed', async () => {
   const git = form({ tab: 'git', repo: 'https://git.example.com/shop/demo.git', ref: 'v1.0', composePath: 'deploy/compose.yaml', domain: 'git-shop.example.com' });
-  const check = await api('POST', `/servers/${server}/launch/check`, ui.bodyOf(git));
-  assert.equal(check.status, 200);
+  const check = await launches.check(server, ui.bodyOf(git));
+  assert.ok('ok' in check);
   const body = ui.startBody(git, { service: 'web', port: 80, trust: true });
   assert.equal(body.trustConfirmed, true);
   assert.equal(body.repo.url, 'https://git.example.com/shop/demo.git');
   const without = { ...body }; delete without.trustConfirmed;
-  assert.equal((await api('POST', `/servers/${server}/launch`, without)).body.code, 'TRUST_REQUIRED');
+  assert.equal((await refused(launches.start(server, without))).code, 'TRUST_REQUIRED');
 });
 
 const hostBlob = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from('ssh-ed25519'), Buffer.from([0, 0, 0, 32]), randomBytes(32)]);
@@ -128,26 +142,22 @@ const fingerprint = 'SHA256:' + createHash('sha256').update(hostBlob).digest('ba
 keys.deployKeyTransport.remote = async (_server, request) => ({ hostKeyLine: `${request.gitHost} ssh-ed25519 ${hostBlob.toString('base64')}`, sha256: fingerprint });
 
 test('deploy keys: host key preview, create with the confirmed fingerprint, host key of a key, repin', async () => {
-  const preview = await api('POST', '/deploy-keys/host-key', { gitHost: 'github.com', serverId: server });
-  assert.equal(preview.status, 200);
-  assert.equal(preview.body.fingerprint, fingerprint);
-  const mismatch = await api('POST', '/deploy-keys', { name: 'Shop', gitHost: 'github.com', serverId: server, fingerprint: 'SHA256:' + 'A'.repeat(43) });
-  assert.equal(mismatch.body.code, 'HOST_KEY_CHANGED');
-  assert.equal(mismatch.body.hostKey.fingerprint, fingerprint);
-  const created = await api('POST', '/deploy-keys', { name: 'Shop', gitHost: 'github.com', serverId: server, fingerprint });
-  assert.equal(created.status, 201);
-  const key = created.body.key;
+  const where = dkui.whereBody({ gitHost: 'github.com', serverId: server });
+  const preview = await deployKeys.hostKey(where);
+  assert.equal(preview.fingerprint, fingerprint);
+  const mismatch = await refused(deployKeys.create(dkui.createBody({ name: 'Shop', where, fingerprint: 'SHA256:' + 'A'.repeat(43) })));
+  assert.equal(mismatch.code, 'HOST_KEY_CHANGED');
+  assert.equal(mismatch.data.hostKey.fingerprint, fingerprint);
+  const { key } = await deployKeys.create(dkui.createBody({ name: 'Shop', where, fingerprint }));
   for (const field of ['id', 'name', 'gitHost', 'publicKey', 'hostKey', 'pinnedFromServerId', 'pinnedFromServerName', 'createdAt']) assert.ok(field in key, field);
   assert.equal(key.hostKey.sha256, fingerprint);
-  const list = (await api('GET', '/deploy-keys')).body.keys;
-  assert.ok(list.some(x => x.id === key.id && x.publicKey));
-  const read = (await api('POST', `/deploy-keys/${key.id}/host-key`, { serverId: spare })).body;
+  assert.ok((await deployKeys.list()).keys.some(x => x.id === key.id && x.publicKey));
+  const read = await deployKeys.hostKey(key.id, dkui.whereBody({ serverId: spare }));
   assert.equal(read.fingerprint, fingerprint);
   assert.equal(read.changed, false);
   assert.equal(read.previous.fingerprint, fingerprint);
   assert.ok('serverName' in read.previous && 'serverId' in read.previous);
-  const moved = await api('POST', `/deploy-keys/${key.id}/repin`, { serverId: spare, fingerprint });
-  assert.equal(moved.status, 200);
-  assert.ok(moved.body.replacedPin?.text, 'moving the pin names the server that needs to confirm again');
-  assert.equal((await api('DELETE', `/deploy-keys/${key.id}`)).status, 200);
+  const moved = await deployKeys.repin(key.id, dkui.repinBody({ where: dkui.whereBody({ serverId: spare }), fingerprint }));
+  assert.ok(moved.replacedPin?.text, 'moving the pin names the server that needs to confirm again');
+  await deployKeys.remove(key.id);
 });

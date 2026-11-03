@@ -5,26 +5,12 @@ import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
 import {ago} from './client.js';
 import {useReauth} from './ConnectionDialog.jsx';
+import {createDeployKeysClient,whereBody,createBody,repinBody} from './deploy-keys-client.js';
 import './deploy-keys.css';
 
-// Deploy keys (docs/launch-site.md, "Deploy keys"): one section on the Connections page, administrators only.
+// Deploy keys: one section on the Connections page, administrators only.
 // A key is created in three steps: name, Git host and the server to read the host key from; the host key's SHA-256 to
 // confirm; then the public key to add at the Git host as a read-only deploy key. The private key stays sealed in DockNest.
-export function createDeployKeysClient(api){
- const id=x=>encodeURIComponent(x);
- return {
-  list:()=>api('/deploy-keys'),
-  // Reads the Git host's SSH key as the server sees it and answers {fingerprint,type}; stores nothing. With a key id
-  // it also answers {changed, previous:{fingerprint,serverId,serverName,pinnedAt}} for the pinned key.
-  hostKey:(a,b)=>b===undefined?api('/deploy-keys/host-key',a):api('/deploy-keys/'+id(a)+'/host-key',b),
-  // The key is created only when the host key still has the confirmed fingerprint (else 409 HOST_KEY_CHANGED with hostKey.fingerprint).
-  create:body=>api('/deploy-keys',body),
-  // Pins the host key again; may answer replacedPin {serverId,serverName,text} when the pin moved from another server.
-  repin:(keyId,body)=>api('/deploy-keys/'+id(keyId)+'/repin',body),
-  remove:keyId=>api('/deploy-keys/'+id(keyId),undefined,'DELETE')
- };
-}
-
 function Dlg({labelId,title,onClose,foot,confirm,children}){
  const ref=useRef(null);
  useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
@@ -48,7 +34,7 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
  const [fp,setFp]=useState(''),[key,setKey]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[copied,copy]=useCopy();
  const hostName=host.trim().toLowerCase(),server=servers.find(s=>s.id===serverId);
  const ready=name.trim().length>0&&hostName.length>0&&!!serverId;
- const where={gitHost:hostName,serverId,...(priv?{allowPrivate:true}:{})};
+ const where=whereBody({gitHost:hostName,serverId,priv});
  // Next: the server reads the Git host's key and answers its SHA-256; nothing is stored yet.
  async function next(){
   setBusy(true);setError('');
@@ -59,7 +45,7 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
  // Pin key: the server reads the key again and creates the pair only if it is still the one that was confirmed.
  async function pin(){
   setBusy(true);setError('');
-  await guard.run(async()=>{const r=await client.create({name:name.trim(),...where,fingerprint:fp});setKey(r.key);setStep('pub');onCreated?.()},e=>{
+  await guard.run(async()=>{const r=await client.create(createBody({name:name.trim(),where,fingerprint:fp}));setKey(r.key);setStep('pub');onCreated?.()},e=>{
    if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.fingerprint)setFp(e.data.hostKey.fingerprint);
    setError(e.message||'The key could not be created.');
   });
@@ -91,14 +77,14 @@ function NewKeyDialog({client,connections,servers,onClose,onCreated}){
 // Pin the host key again: read it (from the pinned server, or another one), compare with the pinned key, confirm.
 function RepinDialog({client,connections,item,servers,onClose,onDone}){
  const guard=useReauth(connections,{verifyLabel:'Verify'}),[serverId,setServerId]=useState(item.pinnedFromServerId||servers[0]?.id||''),[state,setState]=useState({loading:true}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[priv,setPriv]=useState(false),[showPriv,setShowPriv]=useState(false),[moved,setMoved]=useState(null);
- const where={serverId,...(priv?{allowPrivate:true}:{})};
+ const where=whereBody({serverId,priv});
  useEffect(()=>{
   let live=true;setState({loading:true});
-  client.hostKey(item.id,{serverId,...(priv?{allowPrivate:true}:{})}).then(r=>{if(live)setState({fingerprint:r.fingerprint,previous:r.previous})}).catch(e=>{if(!live)return;if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);setState({error:e.message||'The host key could not be read.'})});
+  client.hostKey(item.id,whereBody({serverId,priv})).then(r=>{if(live)setState({fingerprint:r.fingerprint,previous:r.previous})}).catch(e=>{if(!live)return;if(e.code==='PRIVATE_ADDRESS')setShowPriv(true);setState({error:e.message||'The host key could not be read.'})});
   return()=>{live=false};
  },[client,item.id,serverId,priv]);
  const pinned=state.previous?.fingerprint||item.hostKey?.sha256,sameKey=state.fingerprint&&state.fingerprint===pinned,sameServer=serverId===item.pinnedFromServerId,nothing=sameKey&&sameServer;
- async function go(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.repin(item.id,{...where,fingerprint:state.fingerprint});if(r?.replacedPin)setMoved(r.replacedPin);else await onDone()},e=>{
+ async function go(){setBusy(true);setError('');await guard.run(async()=>{const r=await client.repin(item.id,repinBody({where,fingerprint:state.fingerprint}));if(r?.replacedPin)setMoved(r.replacedPin);else await onDone()},e=>{
    if(e.code==='HOST_KEY_CHANGED'&&e.data?.hostKey?.fingerprint)setState(s=>({...s,fingerprint:e.data.hostKey.fingerprint}));
    setError(e.message||'The host key could not be pinned.');
   });setBusy(false)}

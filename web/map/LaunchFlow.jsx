@@ -7,7 +7,7 @@ import {installChecks,PACKAGE_NAME} from './moves-client.js';
 import {createLaunchClient,LAUNCH_STEPS,STEP_LABEL,STATE_WORD,serviceNames,ENV_KEY,ENV_REFUSED,domainOk,friendlyLaunch,clock,elapsed,agoText,untilText,checkRows,blockersOf,statusLine,settled,busyLaunch,sshUrl,bodyOf,startBody} from './launch-client.js';
 import './launch.css';
 
-// Launch a new site from the Map (docs/launch-site.md). The Map's "New site" opens this flow on a server:
+// Launch a new site from the Map. The Map's "New site" opens this flow on a server:
 // source (Compose file or Git repository), check, trust warning with a fresh sign-in check, then a timeline.
 // The check, the launch and each refresh are plain requests; the timeline refreshes only while a launch is running.
 const EMPTY={tab:'compose',compose:'',env:[],service:'',domain:'',repo:'',ref:'main',composePath:'compose.yaml',keyId:'',allowPrivate:false,shutdown:false};
@@ -70,14 +70,15 @@ function Source({server,form,set,keys,narrow,err,privateHint,onCancel,onCheck}){
 function Check({server,form,result,client,loading,onCancel,onAgain,onInstall,onCommand,onLaunched}){
  const guard=useGuard(client,{verifyLabel:'Verify'}),[busy,setBusy]=useState(false),[err,setErr]=useState('');
  const services=result?.services||[],tests=result?.testServers||[];
- const [pick,setPick]=useState({service:services.find(x=>x.name===form.service)?.name||'',port:'',test:tests[0]?.id||''});
+ const chosen=form.service||(form.tab==='compose'?serviceNames(form.compose)[0]:'')||'';
+ const [pick,setPick]=useState({service:services.find(x=>x.name===chosen)?.name||'',port:'',test:tests[0]?.id||''});
  const blocked=!loading&&!result?.ok,installs=installChecks(result||{}),git=form.tab==='git',trust=git||!!result?.builds;
  const rows=loading?['Docker','Compose','nginx','Certbot','DNS'].map((t,i)=>[t,<State state={i===0?'running':'queued'}>{i===0?'Checking':'Waiting'}</State>]):checkRows(result).map(c=>[c.title,<State state={c.state}>{c.value}</State>]);
  const blockers=blockersOf(result),svc=services.find(x=>x.name===pick.service)||services[0],ports=svc?.ports||[];
  const portValue=pick.port||ports[0]||'',portOk=Number.isInteger(Number(portValue))&&Number(portValue)>=1&&Number(portValue)<=65535&&String(portValue).trim()!=='';
  const go=()=>{setBusy(true);setErr('');return guard.run(async()=>{
    const body=startBody(form,{service:svc?.name,port:portValue,testServerId:tests.length?(pick.test||null):undefined,trust});
-   const r=await client.start(server.id,body);onLaunched(r?.launch?.id);
+   const r=await client.start(server.id,body);if(!r?.launch?.id)throw new Error('The launch did not start. Try again.');onLaunched(r.launch.id);
   },e=>setErr(friendlyLaunch(e))).finally(()=>setBusy(false))};
  return <Sheet className="ln-dialog" title={loading?`Checking ${server.name}`:blocked?'Cannot launch yet':'Ready to launch'} labelId="ln-check-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={loading||blocked||busy||guard.waiting||!form.shutdown||!portOk} onClick={go}>Launch</button></>}>
   {blocked&&<AlertPanel variant="error" action={<div className="rp-actions">{installs.filter(c=>c.install.supported!==false).map((c,i)=><button key={c.install.package} type="button" className={i===0?'primary':undefined} onClick={()=>onInstall(c)}>Install {PACKAGE_NAME[c.install.package]}</button>)}{installs.some(c=>c.install.command)?<button type="button" onClick={()=>onCommand(installs.find(c=>c.install.command))}>Show command</button>:null}{!installs.some(c=>c.install.supported!==false||c.install.command)&&<button type="button" onClick={onAgain}>Check again</button>}</div>}>{blockers.join(' ')||'Something must be fixed before this site can launch.'}</AlertPanel>}
@@ -111,18 +112,25 @@ export function stepsOf(l){
 const restoreText=l=>l?.restoreTests?.enabled?'Weekly':'Off';
 
 export function LaunchProgress({server,client,launchId,onClose,onBack}){
- const [l,setL]=useState(null),[err,setErr]=useState(''),[busy,setBusy]=useState(false),[tick,setTick]=useState(0),[copied,setCopied]=useState(false);
+ const [l,setL]=useState(null),[err,setErr]=useState(''),[busy,setBusy]=useState(false),[tick,setTick]=useState(0),[copied,setCopied]=useState(false),[fatal,setFatal]=useState('');
  useEffect(()=>{
   let stop=false,t;
   const poll=async()=>{
+   if(!launchId){setFatal('This launch could not be found.');return}
    try{const m=await client.get(launchId);if(stop)return;setL(m);setErr('');if(!settled(m))t=setTimeout(poll,2000)}
-   catch(e){if(stop)return;setErr(e.message);t=setTimeout(poll,4000)}
+   catch(e){if(stop)return;
+    // A refused or missing launch will not get better by asking again.
+    if([400,403,404].includes(e.status)){setFatal(e.message||'This launch could not be found.');return}
+    setErr(e.message);t=setTimeout(poll,4000)}
   };
   poll();return()=>{stop=true;clearTimeout(t)};
  },[client,launchId,tick]);
  const state=l?.state,acts=l?.actions||{},domain=l?.domain||'',steps=stepsOf(l),now=Date.now();
  const finish=()=>onClose(settled(l));
  async function act(fn){setBusy(true);setErr('');try{await fn();setTick(n=>n+1)}catch(e){setErr(friendlyLaunch(e))}setBusy(false)}
+ if(fatal&&!l)return <Sheet className="ln-dialog" title="Launch" labelId="ln-gone-title" onClose={()=>onClose(false)} actions={<button type="button" className="primary" onClick={()=>onClose(false)}>Close</button>}>
+  <Note kind="error" icon={IconCircleX} role="alert">{fatal}</Note>
+ </Sheet>;
  const records=l?.dns?(l.dns.records?.length?l.dns.records:[l.dns]):[];
  async function copy(){try{await navigator.clipboard.writeText(records.map(d=>`${d.type} ${d.name} ${d.value}`).join('\n'));setCopied(true)}catch{setCopied(false)}}
  const errNote=err&&<Note kind="error" icon={IconCircleX} role="alert">{err}</Note>;
@@ -183,14 +191,14 @@ export function LaunchFlow({server,api,narrow,onClose}){
  const toCheck=()=>setStage('check');
  if(stage==='source')return <Source server={server} form={form} set={set} keys={keys} narrow={narrow} err={err} privateHint={privateHint} onCancel={()=>close(false)} onCheck={check}/>;
  if(stage==='checking')return <Check key="loading" server={server} form={form} loading client={client} onCancel={cancelCheck}/>;
- if(stage==='check')return <Check key="result" server={server} form={form} result={result} client={client} onCancel={()=>close(false)} onAgain={check} onInstall={c=>{setIns(c);setStage('install')}} onCommand={c=>{setIns(c);setStage('command')}} onLaunched={id=>{setLaunchId(id);setStage('progress')}}/>;
+ if(stage==='check')return <Check key="result" server={server} form={form} result={result} client={client} onCancel={()=>close(false)} onAgain={check} onInstall={c=>{setIns(c);setStage('install')}} onCommand={c=>{setIns(c);setStage('command')}} onLaunched={id=>{setLaunchId(id);setForm(f=>({...f,env:f.env.map(r=>({...r,value:''}))}));setStage('progress')}}/>;
  if(stage==='install')return <InstallConfirmDialog server={server} check={{...ins,serverId:server.id}} client={client} onCancel={toCheck} onStarted={jobId=>{setIns(i=>({...i,jobId}));setStage('install-run')}} onCheckAgain={check}/>;
  if(stage==='install-run')return <InstallProgressDialog server={server} pkg={ins.install.package} client={client} jobId={ins.jobId} onClose={toCheck} onCheckAgain={check}/>;
  if(stage==='command')return <CommandDialog server={server} check={ins} onClose={toCheck} onCheckAgain={check}/>;
  return <LaunchProgress server={server} client={client} launchId={launchId} onClose={close} onBack={()=>{setStage('source')}}/>;
 }
 
-// The Remove launch offer on a launched site's details (docs/launch-site.md, "After launch"): 24 hours after the launch.
+// The Remove launch offer on a launched site's details: 24 hours after the launch.
 export function LaunchOffer({launch,onRemove}){
  return <section className="hd-section">
   <span className="t-caption">Launched {agoText(launch.launchedAt)}. Removable until {untilText(launch.removeUntil)}.</span>
