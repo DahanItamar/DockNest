@@ -637,7 +637,10 @@ class FactsTests(unittest.TestCase):
         self.assertEqual([c['argv'] for c in host.argvs('ss')],[['ss','-ltnpH','sport = :80'],['ss','-ltnpH','sport = :443']])
         # Nothing listening, and a port Docker publishes without a listening socket.
         host=Host(self,tools={'ss','nginx','certbot','git','docker','buildx'},ports=[443])
-        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports'],{'80':{'port':80,'holder':'none'},'443':{'port':443,'holder':'other','process':'docker'}})
+        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports'],{'80':{'port':80,'holder':'none'},'443':{'port':443,'holder':'other'}})
+        # A LISTEN row whose process ss cannot show still blocks, without a name; docker-proxy keeps its own name.
+        host=Host(self,tools={'ss','nginx','certbot','git','docker','buildx'},ss={80:'LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n',443:'LISTEN 0 4096 0.0.0.0:443 0.0.0.0:* users:(("docker-proxy",pid=77,fd=4))\n'},ports=[80,443])
+        self.assertEqual(host.run('launch-facts',source='compose',domain='shop.example.com')['ports'],{'80':{'port':80,'holder':'other'},'443':{'port':443,'holder':'other','process':'docker-proxy'}})
     def test_port_holder_without_ss_uses_proc_and_never_a_command_line(self):
         host=Host(self,proc={80:['nginx','nginx'],443:['apache2']},ports=[80,443])
         result=host.run('launch-facts',source='compose',domain='shop.example.com')

@@ -967,7 +967,8 @@ def launch_port_users_ss(port):
         local=fields[3] if fields[0]=='LISTEN' else fields[2]
         if not local.endswith(':%d'%port):continue
         listening=True
-        names+=re.findall(r'\(\("([^"]{1,64})",pid=\d+',line)
+        found=re.findall(r'\(\("([^"]{1,64})",pid=\d+',line)
+        names+=found or ['']  # a listener whose process ss cannot show counts as another program
     return names if listening else []
 def launch_port_users_proc(port):
     """Fallback without ss: listening sockets on `port` from /proc/net/tcp{,6}, mapped to processes through /proc/*/fd."""
@@ -998,11 +999,12 @@ def launch_port_users_proc(port):
     return names or ['']  # a listener whose process cannot be read counts as another program
 def launch_port_holder(port,ports):
     """Who holds `port`: {port, holder: 'none'|'nginx'|'other', process?}. Only the process name (never a command line,
-    which can hold secrets). Ports Docker publishes (docker-proxy, or nat rules without a socket) are 'other'."""
+    which can hold secrets). Ports Docker publishes are 'other': named docker-proxy when that process was seen, unnamed
+    when only a NAT rule publishes them."""
     names=launch_port_users_ss(port)
     if names is None:names=launch_port_users_proc(port)
     if not names:
-        return {'port':port,'holder':'other','process':'docker'} if port in ports else {'port':port,'holder':'none'}
+        return {'port':port,'holder':'other'} if port in ports else {'port':port,'holder':'none'}  # published by Docker without a socket: no name
     clean=[n for n in names if LAUNCH_PROCESS_NAME.fullmatch(n or '')]
     other=[n for n in clean if n!='nginx']
     if clean and not other and len(clean)==len(names):return {'port':port,'holder':'nginx','process':'nginx'}
