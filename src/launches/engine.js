@@ -308,10 +308,13 @@ export function removeLaunch(launchId, actor) {
     const site = launch.site_id ? db.prepare('SELECT id,server_id FROM sites WHERE id=?').get(launch.site_id) : null;
     if (!site || db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'REMOVE_NOT_ALLOWED', 'The site of this launch was already removed.');
     if (site.server_id !== launch.server_id || db.prepare("SELECT 1 FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned')").get(site.id) || movingSite(site.id)) throw httpError(409, 'SITE_MOVED', 'The site has been moved or is being moved, so Remove launch no longer applies. Remove the site from its settings instead.');
-    if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required','move_queued','move_running','test_queued','test_running')").get(site.id)) throw httpError(409, 'SITE_BUSY', 'The site has a job running. Remove the launch when it has finished.');
+    if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required','move_queued','move_running','test_queued','test_running','edit_queued','edit_running','edit_waiting','heal_queued','heal_running')").get(site.id)) throw httpError(409, 'SITE_BUSY', 'The site has a job running. Remove the launch when it has finished.');
+    if (db.prepare('SELECT 1 FROM site_edits WHERE site_id=? AND result IS NULL').get(site.id)) throw httpError(409, 'SITE_BUSY', 'A Safe Edit of the site has not finished. Remove the launch when it has.');
     // Schedules go off now, so no backup or restore test of the site starts while it is torn down.
     db.prepare('UPDATE policies SET enabled=0,next_run=NULL WHERE site_id=?').run(site.id);
     db.prepare('UPDATE restore_test_settings SET enabled=0,next_due_at=NULL WHERE site_id=?').run(site.id);
+    // Self-heal must not restart a container while the site is torn down.
+    db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id=?').run(site.id);
     setLaunch(launchId, { options: { ...launch.options, removing: true } });
     setStep(launchId, 'teardown', { state: 'launch_queued', detail: null, result: {} });
     audit(actor, 'launch.remove', launchId, { server: launch.server_id, site: launch.site_id });

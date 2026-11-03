@@ -21,7 +21,7 @@ SECRET='pa$$ w0rd"\'x'
 PUBLIC_V4=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('8.8.8.8',443))]
 
 def default_model(root,slug='shop'):
-    return {'name':slug,'services':{'web':{'image':'nginx:alpine','ports':[{'target':80,'published':'8080','host_ip':'','protocol':'tcp'}]},
+    return {'name':slug,'services':{'web':{'image':'nginx:alpine','ports':[{'target':80,'published':'8080','host_ip':'127.0.0.1','protocol':'tcp'}]},
         'db':{'image':'postgres:16','volumes':[{'type':'volume','source':'db','target':'/var/lib/postgresql/data'}]}},
         'volumes':{'db':{'name':slug+'_db'}},'networks':{'default':{'name':slug+'_default'}}}
 
@@ -390,7 +390,18 @@ class GateTests(unittest.TestCase):
         model=lambda h:{'services':{'web':{'image':'x','ports':[{'target':80,'published':'80','host_ip':''}]},'db':{'image':'y','ports':[{'target':5432,'published':'5432','host_ip':'0.0.0.0'}]},'cache':{'image':'z','ports':[{'target':6379,'published':'6379','host_ip':'127.0.0.1'}]}}}
         result=Host(self,gate=gate_ok,model=model).run('launch-fetch',source='compose',composeText='x: 1\n',webService='web')
         self.assertEqual(result['gate']['refusals'],[{'code':'PORT_NOT_LOOPBACK','service':'db','field':'services.db.ports'}])
-        self.assertTrue(Host(self,gate=gate_ok,model=model).run('launch-fetch',source='compose',composeText='x: 1\n')['ok'],'without the web service the rule waits for start')
+        everyone=Host(self,gate=gate_ok,model=model).run('launch-fetch',source='compose',composeText='x: 1\n')
+        self.assertEqual([r['service'] for r in everyone['gate']['refusals'] if r['code']=='PORT_NOT_LOOPBACK'],['web','db'],'without a web service every service is checked at once')
+    def test_bare_and_malformed_ports_are_not_loopback(self):
+        # "5432" resolves to {target:5432} with no host_ip: Docker publishes it on 0.0.0.0.
+        cases={'bare container port':[{'target':5432,'mode':'ingress','protocol':'tcp'}],'empty host_ip':[{'target':80,'published':'80','host_ip':''}],
+            'not a dict':['5432'],'ipv6 any':[{'target':80,'published':'80','host_ip':'::'}]}
+        for name,ports in cases.items():
+            self.assertEqual(helper.launch_port_problems({'services':{'db':{'image':'y','ports':ports}}},'web'),[{'code':'PORT_NOT_LOOPBACK','service':'db','field':'services.db.ports'}],name)
+        ok=[{'target':80,'published':'8080','host_ip':'127.0.0.1'},{'target':81,'published':'8081','host_ip':'::1'}]
+        self.assertEqual(helper.launch_port_problems({'services':{'db':{'image':'y','ports':ok}}},'web'),[])
+        # The web service is skipped: its ports are replaced through !override.
+        self.assertEqual(helper.launch_port_problems({'services':{'web':{'image':'x','ports':[{'target':80}]}}},'web'),[])
     def test_env_file_outside_the_site_is_refused(self):
         model=lambda h:{'services':{'web':{'image':'x','env_file':[{'path':'/root/.ssh/id_rsa','required':True}]}}}
         result=Host(self,gate=gate_ok,model=model).run('launch-fetch',source='compose',composeText='x: 1\n')

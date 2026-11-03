@@ -196,3 +196,15 @@ test('a self-heal restart is claimable while a launch step runs on the same serv
   setLaunch(launchId, 'needs_attention');
   assert.equal(db.prepare(CLAIMABLE_HEAL_SQL).get()?.id, heal, 'nor by a launch that needs attention');
 });
+
+test('claimLaunch waits for a running Safe Edit step, a Safe Edit between health polls and a running self-heal restart on its server', () => {
+  for (const status of ['edit_running', 'edit_waiting', 'heal_running']) {
+    reset();
+    const server = serverRow('claim-' + status), site = siteRow(server, 'busy');
+    const first = launch(server);
+    const busy = job(site, status, status === 'heal_running' ? 'self-heal' : 'site-edit');
+    assert.equal(claimLaunch(), null, `a ${status} job holds the launch`);
+    finish(busy);
+    assert.equal(claimLaunch()?.launchId, first, `the launch starts once ${status} has ended`);
+  }
+});

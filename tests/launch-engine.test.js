@@ -559,3 +559,25 @@ test('the site URLs follow the certificate: none while DNS waits, http after a f
 test('alert text for launch.needs_you names only the server', () => {
   assert.equal(messageFor({ type: 'launch.needs_you', serverName: 'web-1' }), 'Launch needs you: DockNest could not remove everything a failed launch made on web-1. Open DockNest to try again.');
 });
+
+test('Remove launch is refused while a Safe Edit or a self-heal restart is queued or running, and turns self-heal off when it starts', async () => {
+  const server = serverRow('remove-busy-srv'); script = {};
+  const id = (await admin('POST', `/servers/${server}/launch`, pasted('busy.example.com'))).body.launch.id;
+  await drive();
+  const siteId = db.prepare('SELECT site_id FROM site_launches WHERE id=?').get(id).site_id;
+  finishBackups(siteId); await drive();
+  for (const [status, type] of [['edit_queued', 'site-edit'], ['edit_running', 'site-edit'], ['edit_waiting', 'site-edit'], ['heal_queued', 'self-heal'], ['heal_running', 'self-heal']]) {
+    const jobId = `busy-${status}`;
+    db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,?,?,'queued',?,'{}')").run(jobId, siteId, type, status, new Date().toISOString());
+    const refused = await admin('POST', `/launches/${id}/remove`, {});
+    assert.deepEqual([refused.status, refused.body.code], [409, 'SITE_BUSY'], status);
+    db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(jobId);
+  }
+  const at = new Date().toISOString();
+  db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,created_by,created_at) VALUES('open-edit',?,?,'queued','admin',?)").run(siteId, server, at);
+  assert.equal((await admin('POST', `/launches/${id}/remove`, {})).body.code, 'SITE_BUSY', 'an unfinished Safe Edit');
+  db.prepare("UPDATE site_edits SET state='done',result='applied' WHERE id='open-edit'").run();
+  db.prepare("INSERT INTO self_heal_settings(site_id,enabled,updated_at) VALUES(?,1,?)").run(siteId, at);
+  assert.equal((await admin('POST', `/launches/${id}/remove`, {})).status, 202);
+  assert.equal(db.prepare('SELECT enabled FROM self_heal_settings WHERE site_id=?').get(siteId).enabled, 0, 'self-heal is off for the site being torn down');
+});

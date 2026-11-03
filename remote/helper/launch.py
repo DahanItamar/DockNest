@@ -725,8 +725,9 @@ def launch_port_problems(model,web_service=None):
     refusals=[]
     for name,service in model['services'].items():
         if name==web_service:continue
+        # Any entry counts, published or not: a bare container port ("5432") is published by Docker on 0.0.0.0.
         for port in service.get('ports') or []:
-            if isinstance(port,dict) and port.get('published') not in (None,'') and port.get('host_ip') not in ('127.0.0.1','::1'):
+            if not isinstance(port,dict) or port.get('host_ip') not in ('127.0.0.1','::1'):
                 refusals.append({'code':'PORT_NOT_LOOPBACK','service':name,'field':'services.%s.ports'%name});break
     return refusals
 def launch_env_file_problems(model,site):
@@ -759,8 +760,8 @@ def launch_collisions(model,slug,lid):
             if value in existing[kind] and value not in own[kind]:refusals.append({'code':'NAME_COLLISION','service':None,'field':'%s.%s'%(kind,value)})
     return refusals
 def launch_checks(model,lid,slug,site,repo_root,web_service=None,protected=()):
-    # The port rule needs the web service (its ports are replaced by the loopback port): always at start, at fetch when given.
-    refusals=launch_build_problems(model,repo_root,slug)+(launch_port_problems(model,web_service) if web_service else [])+launch_env_file_problems(model,site)
+    # The port rule skips the web service (its ports are replaced by the loopback port); with none named, every service is checked.
+    refusals=launch_build_problems(model,repo_root,slug)+launch_port_problems(model,web_service)+launch_env_file_problems(model,site)
     refusals+=launch_secret_bind_problems(model,protected)
     refusals+=launch_runtime_gate(model,site)
     refusals+=launch_collisions(model,slug,lid)

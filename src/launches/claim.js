@@ -12,7 +12,7 @@ import { CLEANUP_HELD } from '../cleanup-hold.js';
 const ENDED_MOVE = "('draft','rolled_back','cancelled','failed','switched_back','cleaned')";
 export const CLAIMABLE_LAUNCH_SQL = `SELECT st.launch_id,st.step,st.attempt,l.server_id FROM site_launch_steps st JOIN site_launches l ON l.id=st.launch_id
  WHERE st.state='launch_queued' AND l.state IN ('queued','running','waiting_dns','done','needs_attention')
- AND NOT EXISTS(SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running','test_running') AND l.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),'')))
+ AND NOT EXISTS(SELECT 1 FROM jobs a WHERE a.status IN ('running','recovery_required','move_running','test_running','edit_running','edit_waiting','heal_running') AND l.server_id IN (COALESCE((SELECT server_id FROM sites WHERE id=a.site_id),''),COALESCE(json_extract(a.details,'$.targetServerId'),''),COALESCE(json_extract(a.details,'$.sourceServerId'),'')))
  AND NOT EXISTS(SELECT 1 FROM site_moves m WHERE (m.source_server_id=l.server_id OR m.target_server_id=l.server_id) AND m.state NOT IN ${ENDED_MOVE})
  AND NOT EXISTS(SELECT 1 FROM server_installs i WHERE i.server_id=l.server_id AND i.status='running')
  AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE t.server_id=l.server_id AND ${TEST_HELD})

@@ -613,10 +613,10 @@ test('a downgrade to a release before Launch is refused while a launch is unfini
   let result = f.run('--version', 'v2.4.0');
   assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await f.read('schema'), '17');
   result = f.run('--version', 'v2.3.0');
-  assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /A launch has not finished on 1 site\. 2\.3\.0 cannot continue or remove it/);
+  assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /1 launch has not finished\. 2\.3\.0 cannot continue or remove it/);
   assert.equal((await f.status()).reason, 'jobs-did-not-finish'); assert.equal(f.head(), 'v2.4.0'); assert.notEqual(await f.read('hold'), 'true');
   await writeFile(join(f.state, 'open-launches'), '2\n');
-  assert.match(f.run('--version', 'v2.1.0').stderr, /A launch has not finished on 2 sites/);
+  assert.match(f.run('--version', 'v2.1.0').stderr, /2 launches have not finished/);
   await writeFile(join(f.state, 'fail-open-launches'), '');
   result = f.run('--version', 'v2.3.0');
   assert.equal(result.status, 2); assert.match(result.stderr, /Could not check the state volume for unfinished launches/);

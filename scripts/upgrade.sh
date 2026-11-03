@@ -219,7 +219,7 @@ refuse_open_launches() {
   [ "${TARGET_SCHEMA:-0}" -lt "$LAUNCH_SCHEMA" ] && [ "${DB_SCHEMA:-0}" -ge "$LAUNCH_SCHEMA" ] || return 0
   count=$(open_launches)
   case "$count" in ''|*[!0-9]*) $1; fail 2 'Could not check the state volume for unfinished launches. Downgrade refused; nothing was changed.' jobs-did-not-finish ;; esac
-  [ "$count" = 0 ] || { $1; fail 2 "A launch has not finished on $count site$([ "$count" = 1 ] || echo s). $TO cannot continue or remove it, so the downgrade is refused. Let it finish or remove it in the dashboard, then retry. Nothing was changed." jobs-did-not-finish; }
+  [ "$count" = 0 ] || { $1; fail 2 "$count launch$([ "$count" = 1 ] || echo es) ha$([ "$count" = 1 ] && echo s || echo ve) not finished. $TO cannot continue or remove it, so the downgrade is refused. Let it finish or remove it in the dashboard, then retry. Nothing was changed." jobs-did-not-finish; }
 }
 db_schema() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});console.log(d.prepare("PRAGMA user_version").get().user_version);d.close()' 2>/dev/null | tail -n 1; }
 # healthy VERSION SECONDS: the API reports VERSION and the worker runs. VERSION "legacy" means a release without
