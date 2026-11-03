@@ -47,13 +47,20 @@ When it is unclear who owns something, it stays.
 - A clean stops starting new removals after 30 minutes; anything left is listed as not removed (Time limit reached).
   Scan again to continue.
 - A preview is valid for 15 minutes and can be used once, by the administrator who made it. Scan again after that.
-- Cleanup waits while a backup, restore, restore test or site move uses the server, and only one cleanup runs per server.
+- Cleanup waits while a backup, restore, restore test, site move, Safe Edit or self-heal restart uses the server, and
+  only one cleanup runs per server. An unfinished Safe Edit holds its server between its steps too (for example while
+  it waits for the site to become healthy).
   On the server it also refuses while any backup job folder is unfinished or any restore staging folder exists, however
   old: a folder an interrupted job left behind blocks cleanup until DockNest's recovery finishes it.
 - Nothing starts while a clean runs. DockNest puts a hold on the server for the length of the clean: backups, restores,
-  restore tests, move steps and installs queued meanwhile wait and start right after it, they never fail. A hold left
-  by a crash expires after 45 minutes. On the server, every backup, restore, restore test and move step shares a lock
-  that the clean takes exclusively, so the two can never overlap even if the hold were missed.
+  restore tests, move steps, Safe Edit steps, self-heal restarts and installs queued meanwhile wait and start right
+  after it, they never fail. A hold left by a crash expires after 45 minutes. On the server, every backup, restore,
+  restore test and move step, and Safe Edit's prepare, apply and rollback and the self-heal restart, share a lock that
+  the clean takes exclusively, so the two can never overlap even if the hold were missed. A Safe Edit step that meets a
+  running clean answers "busy" and is tried again (a rollback is never left stuck); a self-heal restart is recorded as
+  "A server cleanup was running" and tried again after its 60 seconds.
+- The clean stops when DockNest stops waiting for it: DockNest keeps the SSH session's input open for the whole clean,
+  and a dropped connection or a stopped DockNest ends the clean on the server.
 - Build cache is the one group cleaned as a whole: DockNest runs `docker builder prune --filter until=24h` without
   `--all`, so BuildKit removes only cache no build references. Build cache never holds site data; the next build may be
   slower.

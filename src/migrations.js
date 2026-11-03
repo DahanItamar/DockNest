@@ -241,6 +241,37 @@ CREATE TABLE IF NOT EXISTS site_certificates (site_id TEXT PRIMARY KEY REFERENCE
 export const hardeningSchema = `
 CREATE TABLE IF NOT EXISTS site_hardening (site_id TEXT PRIMARY KEY REFERENCES sites(id),checked_at TEXT NOT NULL,facts TEXT NOT NULL CHECK (length(facts) <= 262144));
 `;
+// Safe Edit (docs/safe-edit.md, "Data model"). Additive only: new tables, indexes and triggers, no rows, nothing altered.
+// - site_edits: one append-only row per edit. `changes` holds field paths, environment key names and file hashes, never a
+//   value; `progress` holds the step machine's non-secret position. The partial unique index keeps one unfinished edit
+//   per site; the triggers keep history append-only and the outcome written once.
+// - site_edit_steps: the per-step journal shown as the timeline.
+// - site_compose_invocations: the one recorded Compose invocation per site (security review item 13), reused by check,
+//   apply and rollback. No row means DockNest derives it from the containers' Compose labels when it is first needed.
+export const safeEditsSchema = `
+CREATE TABLE IF NOT EXISTS site_edits (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),server_id TEXT NOT NULL REFERENCES servers(id),job_id TEXT REFERENCES jobs(id),backup_id TEXT REFERENCES backups(id) ON DELETE SET NULL,state TEXT NOT NULL CHECK (state IN ('queued','running','checking','rolling_back','done','needs_attention','cancelled')),result TEXT CHECK (result IS NULL OR result IN ('applied','rolled_back','failed','cancelled')),failed_step TEXT CHECK (failed_step IS NULL OR failed_step IN ('backup','prepare','apply','check_health','finish','roll_back')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),changes TEXT NOT NULL DEFAULT '{}' CHECK (length(changes) <= 4096),progress TEXT NOT NULL DEFAULT '{}' CHECK (length(progress) <= 4096),health_seconds INTEGER CHECK (health_seconds IS NULL OR (typeof(health_seconds) = 'integer' AND health_seconds >= 0)),time_limit_seconds INTEGER NOT NULL DEFAULT 120 CHECK (typeof(time_limit_seconds) = 'integer' AND time_limit_seconds BETWEEN 60 AND 600),data_rollback INTEGER NOT NULL DEFAULT 0 CHECK (data_rollback IN (0,1)),cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0,1)),created_by TEXT NOT NULL,created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,CHECK ((result IS NULL) = (state NOT IN ('done','cancelled'))));
+CREATE UNIQUE INDEX IF NOT EXISTS site_edits_site_active ON site_edits(site_id) WHERE result IS NULL;
+CREATE INDEX IF NOT EXISTS site_edits_site_created ON site_edits(site_id,created_at,id);
+CREATE TABLE IF NOT EXISTS site_edit_steps (edit_id TEXT NOT NULL REFERENCES site_edits(id),step TEXT NOT NULL CHECK (step IN ('backup','prepare','apply','check_health','finish','roll_back')),state TEXT NOT NULL CHECK (state IN ('pending','running','done','failed','skipped')),started_at TEXT,finished_at TEXT,detail TEXT CHECK (detail IS NULL OR length(detail) <= 500),PRIMARY KEY (edit_id,step));
+CREATE TRIGGER IF NOT EXISTS site_edits_no_delete BEFORE DELETE ON site_edits BEGIN SELECT RAISE(ABORT,'safe edit history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_edit_steps_no_delete BEFORE DELETE ON site_edit_steps BEGIN SELECT RAISE(ABORT,'safe edit steps are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_edits_result_once BEFORE UPDATE OF result,failed_step,reason,changes ON site_edits WHEN OLD.result IS NOT NULL AND (NEW.result IS NOT OLD.result OR NEW.failed_step IS NOT OLD.failed_step OR NEW.reason IS NOT OLD.reason OR NEW.changes IS NOT OLD.changes) BEGIN SELECT RAISE(ABORT,'a safe edit result is written once'); END;
+CREATE TABLE IF NOT EXISTS site_compose_invocations (site_id TEXT PRIMARY KEY REFERENCES sites(id),kind TEXT NOT NULL CHECK (kind IN ('compose','container')),invocation TEXT NOT NULL CHECK (length(invocation) <= 8192),source TEXT NOT NULL CHECK (source IN ('launch','labels','site')),recorded_at TEXT NOT NULL);
+`;
+// Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
+// altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
+// of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
+// UPDATE and the DELETE of a row newer than 90 days; the worker's existing maintenance step deletes older rows.
+// server_id carries no foreign key so the history never blocks removing a server; container_id is the Docker ID the
+// event named, used only to refuse restarting a container that was recreated in the meantime.
+export const selfHealSchema = `
+CREATE TABLE IF NOT EXISTS self_heal_settings (site_id TEXT PRIMARY KEY REFERENCES sites(id),enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),max_restarts INTEGER NOT NULL DEFAULT 3 CHECK (typeof(max_restarts) = 'integer' AND max_restarts BETWEEN 1 AND 10),window_minutes INTEGER NOT NULL DEFAULT 60 CHECK (typeof(window_minutes) = 'integer' AND window_minutes BETWEEN 10 AND 1440),watched TEXT NOT NULL DEFAULT '[]' CHECK (length(watched) <= 4096),last_event_at TEXT,updated_at TEXT NOT NULL,updated_by TEXT);
+CREATE TABLE IF NOT EXISTS self_heal_events (id TEXT PRIMARY KEY,site_id TEXT NOT NULL REFERENCES sites(id),server_id TEXT NOT NULL CHECK (length(server_id) <= 64),container TEXT NOT NULL CHECK (length(container) <= 128),container_id TEXT CHECK (container_id IS NULL OR length(container_id) <= 64),kind TEXT NOT NULL CHECK (kind IN ('unhealthy','restarted','restart_failed','recovered','skipped','limit_reached')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),job_id TEXT REFERENCES jobs(id),at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS self_heal_events_site ON self_heal_events(site_id,at,id);
+CREATE INDEX IF NOT EXISTS self_heal_events_at ON self_heal_events(at,id);
+CREATE TRIGGER IF NOT EXISTS self_heal_events_no_update BEFORE UPDATE ON self_heal_events BEGIN SELECT RAISE(ABORT,'self-heal history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS self_heal_events_keep_recent BEFORE DELETE ON self_heal_events WHEN OLD.at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days') BEGIN SELECT RAISE(ABORT,'self-heal history is kept for 90 days'); END;
+`;
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -282,6 +313,13 @@ export const migrations = [
   // Hardening score (docs/hardening-score.md): one new table, so 2.13 code ignores it. Purely additive: renumber before
   // release if another migration lands first.
   { version: 14, name: 'site-hardening', compatible: true, up: db => db.exec(hardeningSchema) },
+  // Pre-release 2.15 databases ran a no-op placeholder 13 and Safe Edit and self-heal as 14 and 15, so they skip 13 and 14
+  // above. Both statements are CREATE ... IF NOT EXISTS, so 15 and 16 first make sure 2.14's tables exist (a no-op on
+  // every released database). No release ever shipped the placeholder.
+  // Safe Edit (docs/safe-edit.md): new tables, indexes and triggers only, so 2.14 code ignores them.
+  { version: 15, name: 'safe-edits', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(safeEditsSchema); } },
+  // Self-heal (docs/self-heal.md): new tables, an index and triggers only, so 2.14 code ignores them.
+  { version: 16, name: 'self-heal', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(selfHealSchema); } },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

@@ -52,9 +52,15 @@ test('release.yml publishes final vX.Y.Z tags only, after Verify and a candidate
   // Verify runs for main pushes (the run the release gate reads) and pull requests, never a tag push (a second run on
   // the tagged SHA hid the first). The slow Linux job is skipped only on draft pull requests.
   const ci = await workflow('ci.yml'), ciOn = ci.slice(ci.indexOf('\non:'), ci.indexOf('\nconcurrency:'));
-  assert.match(ciOn, /\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {4}types: \[opened, synchronize, reopened, ready_for_review\]$/);
+  assert.match(ciOn, /\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {4}types: \[opened, synchronize, reopened, ready_for_review\]\n/);
   assert.doesNotMatch(ciOn, /tags/);
-  assert.match(ci, /\n {2}linux-integration:\n {4}if: github\.event_name == 'push' \|\| github\.event\.pull_request\.draft == false\n/);
+  // A manual run (workflow_dispatch, optional `only` scenario) runs the Linux integration job alone: every other job and
+  // the beta gate are skipped on it, and the release gate above accepts only a push run, so it can never stand in for
+  // the Verify result of main.
+  assert.match(ciOn, /\n {2}workflow_dispatch:\n {4}inputs:\n {6}only:\n/);
+  assert.match(ci, /\n {2}linux-integration:\n {4}if: github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event\.pull_request\.draft == false\n/);
+  for (const job of ['privacy', 'check', 'browser', 'upgrade', 'controlled-beta-gate', 's3-integration']) assert.match(ci, new RegExp(`\n {2}${job}:\n {4}if: github\.event_name != 'workflow_dispatch'\n`), `${job} is skipped on a manual run`);
+  assert.match(ci, /INTEGRATION_ONLY: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.only \|\| '' \}\}/);
   assert.match(text, /^permissions:\n {2}contents: read\n/m);
 });
 

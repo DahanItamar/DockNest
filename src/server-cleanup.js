@@ -24,7 +24,8 @@ const testFields = () => (testMinAgeSeconds === null ? {} : { minAgeSeconds: tes
 export const CLEANUP_KINDS = Object.freeze(['containers', 'images', 'volumes', 'buildCache']);
 const PREVIEW_MS = 15 * 60_000, MAX_PREVIEWS = 50, MAX_ITEMS = 500, MAX_REFS = 2000;
 const REF = /^[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}$/;
-const ACTIVE_JOB = "('queued','running','recovery_required','move_queued','move_running','test_queued','test_running')";
+// Safe Edit steps (edit_*) and self-heal restarts (heal_*, 2.15) are active work on their server too.
+const ACTIVE_JOB = "('queued','running','recovery_required','move_queued','move_running','test_queued','test_running','edit_queued','edit_running','edit_waiting','heal_queued','heal_running')";
 // A move that is copying, switching or undoing uses both servers. A completed move only keeps its stopped old copy,
 // which the protection lists below cover, so it does not block a clean.
 const RUNNING_MOVE = "('queued','running','waiting','rolling_back','recovery_required','switching_back')";
@@ -67,8 +68,10 @@ export function protectionFor(serverId) {
 // Why a clean must wait: work that uses this server, or another clean of it.
 export function busyReason(serverId) {
   const job = db.prepare(`SELECT j.type FROM jobs j WHERE j.status IN ${ACTIVE_JOB} AND ? IN (COALESCE((SELECT server_id FROM sites WHERE id=j.site_id),''),COALESCE(json_extract(j.details,'$.targetServerId'),''),COALESCE(json_extract(j.details,'$.sourceServerId'),'')) LIMIT 1`).get(serverId);
-  if (job) return { restore: 'A restore is running on this server.', 'restore-test': 'A restore test is running on this server.', 'site-move': 'A site move is running on this server.' }[job.type] ?? 'A backup is running on this server.';
+  if (job) return { restore: 'A restore is running on this server.', 'restore-test': 'A restore test is running on this server.', 'site-move': 'A site move is running on this server.', 'site-edit': 'A Safe Edit is running on this server.', 'self-heal': 'A self-heal restart is running on this server.' }[job.type] ?? 'A backup is running on this server.';
   if (heldBy(serverId)) return 'A restore test is running on this server.';
+  // An unfinished Safe Edit holds its server between its steps too (docs/safe-edit.md).
+  if (db.prepare('SELECT 1 FROM site_edits e JOIN sites s ON s.id=e.site_id WHERE e.result IS NULL AND s.server_id=?').get(serverId)) return 'A Safe Edit is running on this server.';
   if (db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state IN ${RUNNING_MOVE}`).get(serverId, serverId)) return 'A site move is running on this server.';
   if (installActive(serverId)) return 'An install is running on this server.';
   if (cleanupHeld(serverId)) return 'A cleanup is already running on this server.';
@@ -127,7 +130,8 @@ export async function cleanServer(serverId, body, actor) {
   previews.delete(token);  // used once, whatever happens next
   try {
     let result;
-    try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-apply', protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }); }
+    // stdin stays open while the clean runs, so a dropped connection or a stopped API ends the clean on the server.
+    try { result = await transport.remote(server, { ...testFields(), operation: 'cleanup-apply', watchStdin: true, protect: protectionFor(server.id), items: chosen.map(({ kind, id, fingerprint }) => ({ kind, id, fingerprint })) }, () => {}, () => {}, { keepStdinOpen: true }); }
     catch (error) {
       audit(actor, 'server.cleanup', server.id, { result: error.remoteReported ? 'refused' : 'failed', requested: chosen.length, removed: 0, bytes: 0 });
       if (error.remoteReported) throw httpError(409, error.message, 'CLEANUP_REFUSED');

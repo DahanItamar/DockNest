@@ -4,6 +4,16 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Safe Edit (beta): administrators can change a site's Compose file, environment values, published ports and image tag from DockNest. Saving takes a backup first, shows the maintenance page, applies the change and checks the site comes up. If it does not, DockNest puts the previous version back by itself. When the image changed, it also puts the data back in place from a safety copy it made on the server just before the change (the copy is removed afterwards). Environment values are write-only: never shown, stored or logged. See [docs/safe-edit-guide.md](docs/safe-edit-guide.md).
+- Two alert events: **Change undone** and **Change needs you**. Existing alert lines do not gain them.
+- Self-heal (off by default, per site): when Docker marks a container of a site unhealthy, DockNest restarts it, up to 3 times an hour by default and at least 60 seconds apart, and never while a backup, restore, move, Safe Edit or maintenance is in progress. Two new alert events, "Container restarted" (first restart in a window) and "Self-heal stopped"; existing alert lines do not get them automatically. Works only while DockNest is running. See [docs/self-heal-guide.md](docs/self-heal-guide.md).
+
+### Changed
+
+- `scripts/upgrade.sh` refuses to go back to a release before 2.15 while a Safe Edit is unfinished, and waits for Safe Edit and self-heal steps like for other running work.
+
 ## [2.14.0] - 2026-11-02
 
 See [docs/releases/2026-11-02-v2.14.0.md](docs/releases/2026-11-02-v2.14.0.md).

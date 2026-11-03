@@ -33,6 +33,14 @@ const catalogue = Object.freeze({
   'certificate.expiring': 'The certificate expires in {days}. Renew it before visitors see a warning.',
   'certificate.expiring:expired': 'The certificate has expired, so visitors see a security warning. Renew it now.',
   'certificate.renewal_failed': 'certbot could not renew the certificate. Check certbot on the server before it expires.',
+  // Safe Edit (docs/safe-edit.md). Never the changed values or the step's own reason.
+  'edit.rolled_back': 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.',
+  'edit.needs_you': 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.',
+  // Self-heal (docs/self-heal.md). The code is 'failed' for a restart that did not work, the reason for "gave up".
+  'self_heal.restarted': 'A container failed its health check and DockNest restarted it.',
+  'self_heal.restarted:failed': 'A container failed its health check and DockNest could not restart it. Open DockNest to see why.',
+  'self_heal.gave_up': 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.',
+  'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this site.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

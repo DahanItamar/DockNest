@@ -52,6 +52,8 @@
     "test:zip": "node scripts/zip-dialog-browser.js",
     "test:hardening": "node scripts/hardening-browser.js",
     "test:restore-tests": "node scripts/restore-tests-browser.js",
+    "test:safe-edit": "node scripts/safe-edit-browser.js",
+    "test:self-heal": "node scripts/self-heal-browser.js",
     "test:auth": "node scripts/auth-browser.js"
   },
   "dependencies": {
