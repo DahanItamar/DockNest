@@ -197,7 +197,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
   let pruned = false, held = '';
   row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!pruned && current.progress.applyStarted) { pruned = true; held = await sh(`docker ps -a --filter label=docknest.edit.hold=${editId} --format '{{.Names}} {{.State}}'`); await sh('docker image prune -af >/dev/null 2>&1 || true'); } } });
-  assert.match(held, new RegExp(`docknest-edit-hold-${editId.slice(0, 8)}-web created`), 'a created, never started holder container keeps the old image ID');
+  assert.match(held, new RegExp(`docknest-edit-hold-${editId}-[0-9a-f]+ created`), 'a created, never started holder container keeps the old image ID');
   assert.equal(row.result, 'rolled_back', row.reason ?? '');
   assert.equal(await inspect('editshop-web-1', '{{.Config.Image}}'), 'edit-app:1.1', 'rolled back without pulling (the tag exists only locally)');
   assert.equal((await sh("docker ps -a --filter label=com.docker.compose.project=editshop --filter label=com.docker.compose.service=cache -q")).trim(), '', 'the service the candidate added is removed');
