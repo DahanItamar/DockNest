@@ -103,8 +103,12 @@ case "$1" in
   name=""; domain=""
   while [ $# -gt 0 ]; do case "$1" in --cert-name) name="$2"; shift;; -d) [ -n "$domain" ] || domain="$2"; shift;; esac; shift; done
   dir=/etc/letsencrypt/live/$name; mkdir -p "$dir" /etc/letsencrypt/renewal /etc/letsencrypt/accounts
-  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" -subj "/CN=$domain" -addext "subjectAltName=DNS:$domain" -days 2 >/dev/null 2>&1 || exit 1
-  cp "$dir/fullchain.pem" "$dir/cert.pem"; cp "$dir/fullchain.pem" "$dir/chain.pem"; echo "# test double" > "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
+  # Signed by a CA made at run time and trusted by this host (see the install step), so the helper's HTTPS probe verifies it.
+  openssl req -newkey rsa:2048 -nodes -keyout "$dir/privkey.pem" -out "$dir/req.csr" -subj "/CN=$domain" >/dev/null 2>&1 || exit 1
+  printf 'subjectAltName=DNS:%s
+' "$domain" > "$dir/ext.cnf"
+  openssl x509 -req -in "$dir/req.csr" -CA /etc/docknest-qa-ca/ca.pem -CAkey /etc/docknest-qa-ca/ca.key -CAcreateserial -out "$dir/cert.pem" -days 2 -extfile "$dir/ext.cnf" >/dev/null 2>&1 || exit 1
+  rm -f "$dir/req.csr" "$dir/ext.cnf"; cp "$dir/cert.pem" "$dir/fullchain.pem"; cp /etc/docknest-qa-ca/ca.pem "$dir/chain.pem"; echo "# test double" > "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
  delete)
   name=""; while [ $# -gt 0 ]; do case "$1" in --cert-name) name="$2"; shift;; esac; shift; done
   rm -rf "/etc/letsencrypt/live/$name" "/etc/letsencrypt/archive/$name" "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
@@ -211,6 +215,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       await sh(lhost, 'docker rm -f qa-pebble qa-pebble-chall >/dev/null 2>&1; docker network rm qa-pebble >/dev/null 2>&1; rm -f /etc/letsencrypt/cli.ini; true');
       await writeTo(lhost, '/usr/local/bin/certbot', CERTBOT_DOUBLE, '755');
       await sh(lhost, 'mkdir -p /etc/letsencrypt/accounts && : > /var/log/docknest-qa-certbot.log');
+      await sh(lhost, "mkdir -p /etc/docknest-qa-ca && cd /etc/docknest-qa-ca && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-launch-ca -days 2 -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1 && cp ca.pem /usr/local/share/ca-certificates/docknest-qa-launch-ca.crt && update-ca-certificates >/dev/null 2>&1");
       partial(`Pebble was not available (${String(error.message).split('\n')[0].slice(0, 120)}): certificates are asserted up to the certbot call; the issuance itself was a test double`);
     }
     const certLog = () => sh(lhost, 'cat /var/log/docknest-qa-certbot.log 2>/dev/null || true');
