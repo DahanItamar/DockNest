@@ -527,7 +527,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.ok(movePreview.id, 'a draft move exists');
     for (let round = 0; round < 4; round++) {
       launches.tickLaunches(); restoreTests.tickRestoreTests();
-      assert.equal(claimJob(), null, 'no backup is claimed while the launch holds the server');
+      assert.ok(!claimJob(), 'no backup is claimed while the launch holds the server');
       await sleep(250);
     }
     assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(waitingBackup.id).status, 'queued', 'the backup waits');
