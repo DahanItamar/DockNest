@@ -33,6 +33,7 @@ Common refusals and fixes:
 | Build setting is not allowed | Remove unsupported build settings. Builds may use only a local context and Dockerfile, arguments, target, labels and platforms. |
 | Name collision | Change the Compose project, container, volume or network name so it does not use an existing name. |
 | Domain is already served by nginx | Choose another domain or remove the existing nginx site first. |
+| Port 80 or 443 is used by another program | Stop it, then select **Check again**. |
 | Existing certificate | Use another domain, or remove the certificate only when it is no longer needed. |
 
 Before **Launch**, confirm that the app saves its data when its containers stop, so backups are consistent. For a Git source, also confirm that you trust the repository: DockNest builds and runs its code on the server.
