@@ -12,6 +12,7 @@ const run = async (...args) => {
   catch(error) {
     if(args.includes('nginx')) throw new Error('Nginx fixture configuration/start failed: '+String(error.stderr).slice(0,1000));
     if(args.some(arg=>arg.includes('full-site.zip')))throw new Error('ZIP fixture verification failed: '+String(error.stderr).slice(0,1200));
+    console.error('TEMPDEBUG cmd: '+args.join(' ').slice(0,300)+' | stderr: '+String(error.stderr).slice(0,600));
     throw error;
   }
 };
