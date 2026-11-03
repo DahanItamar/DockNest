@@ -159,9 +159,12 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.1', 'edit-app:1.0'));
   ({ editId } = await applyChange(shop, change));
   let handEdited = false;
-  row = await drive(editId, undefined, { during: async current => { if (!handEdited && current.progress.backupJobId) { handEdited = true; await sh("printf '# second hand edit\\n' >> /srv/editshop/compose.yaml"); } } });
+  let handEditedSha = null;
+  row = await drive(editId, undefined, { during: async current => { if (!handEdited && current.progress.backupJobId) { handEdited = true; await sh("printf '# second hand edit\\n' >> /srv/editshop/compose.yaml"); handEditedSha = await fileSha('/srv/editshop/compose.yaml'); } } });
   assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The files changed during the backup.');
-  assert.match(await cat('/srv/editshop/compose.yaml'), /# second hand edit\n$/, 'the hand edit is kept, never rolled over');
+  // run() trims stdout, so the file is compared by its SHA-256 (byte for byte) right after the hand edit and now.
+  assert.equal(await fileSha('/srv/editshop/compose.yaml'), handEditedSha, 'the hand edit is kept byte for byte, never rolled over');
+  assert.ok((await cat('/srv/editshop/compose.yaml')).endsWith('# second hand edit'), 'the hand edit is the last line');
   record('Safe Edit conflicts: a hand edit between load and review is refused (reload), and one made during the backup step stops the edit before anything is written');
 
   // ---------- 6. the worker is killed during apply: the next worker rolls back ----------

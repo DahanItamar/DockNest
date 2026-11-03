@@ -793,6 +793,29 @@ class LocalImages(EditCase):
         check=self.run_op('edit-check',files=files,env=[]);self.assertTrue(check['ok'],check)
         self.refused(self.run_op('edit-prepare',files=files,env=[],reviewedModelSha256=check['verdict']['reviewedModelSha256']),'PULL_FAILED')
 
+class HandEdits(EditCase):
+    """A file changed on the server is never overwritten: FILE_CHANGED at prepare or apply leaves it byte for byte."""
+    prepare=Lifecycle.prepare;journal=Lifecycle.journal
+    def hand_edit(self):
+        with open(self.compose,'ab') as f:f.write(b'\n')
+        return pathlib.Path(self.compose).read_bytes()
+    def test_hand_edit_before_prepare_is_left_untouched(self):
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}));env=[{'file':self.envfile,'key':'DB_PASSWORD','value':SECRET}]
+        check=self.run_op('edit-check',files=files,env=env);self.assertTrue(check['ok'],check)
+        edited=self.hand_edit()
+        self.refused(self.run_op('edit-prepare',files=files,env=env,reviewedModelSha256=check['verdict']['reviewedModelSha256']),'FILE_CHANGED')
+        self.assertEqual(pathlib.Path(self.compose).read_bytes(),edited)
+        self.assertTrue(self.run_op('edit-finish')['ok']);self.assertEqual(pathlib.Path(self.compose).read_bytes(),edited,'finish never writes a site file')
+    def test_hand_edit_after_prepare_is_left_untouched_by_apply_rollback_and_finish(self):
+        digest,_=self.prepare()
+        edited=self.hand_edit();env_before=pathlib.Path(self.envfile).read_bytes()
+        result=self.run_op('edit-apply',reviewedModelSha256=digest)
+        self.assertEqual((result['ok'],result['code']),(False,'FILE_CHANGED'))
+        self.assertEqual(pathlib.Path(self.compose).read_bytes(),edited,'apply refused before writing anything')
+        self.assertEqual(pathlib.Path(self.envfile).read_bytes(),env_before)
+        self.assertEqual(self.run_op('edit-status')['files'],'mixed')
+        self.assertTrue(self.run_op('edit-finish')['ok']);self.assertEqual(pathlib.Path(self.compose).read_bytes(),edited)
+
 class Poll(EditCase):
     def poll(self,**extra):
         req={'services':['web','db'],'windowStartedAt':helper.time.time()-30,'timeLimitSeconds':120,'final':False,**extra}
