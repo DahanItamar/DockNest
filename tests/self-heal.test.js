@@ -312,6 +312,10 @@ test('one re-check is scheduled when a wait ends: the settle time, a failed rest
     // Three attempts in this 10-minute window: the limit. One re-check when the oldest attempt leaves the window.
     healthy(f); now += 61_000; unhealthy(f);
     assert.match(history(f.siteId).at(-1), /limit_reached:limit$/);
+    // More events and ticks inside the window never give up again (once per container per window).
+    for (let round = 0; round < 3; round++) { now += 20_000; healthy(f); unhealthy(f); heal.tickSelfHeal(); }
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE target=? AND action='self_heal.gave_up' AND json_extract(detail,'$.container')='shop-web-1'").get(f.siteId).n, 1, 'one gave_up in the window');
+    assert.equal(history(f.siteId).filter(item => item.endsWith('limit_reached:limit')).length, 4, 'each new episode inside the window records its limit, without another gave_up');
     assert.equal(timers.length, 1); const wait = timers[0].ms;
     assert.ok(wait > 0 && wait <= 10 * 60_000, String(wait));
     now += wait; await fire();
