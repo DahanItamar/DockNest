@@ -74,6 +74,10 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'touch', '/tmp/ok');
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web did not become healthy again', 30);
   capture.kill();
+  // Killing the local docker exec client leaves the remote `timeout 20 docker events` running; stop it so the stream
+  // counts below see only the helper's own process. The `sh -c` line starts with "sh", so the pattern never matches itself.
+  await run('exec', source, 'sh', '-c', "pkill -f '^timeout 20 docker events' || true");
+  await until(async () => (await eventsProcesses()) === 0, 'the capture docker events process did not stop', 30);
   const bundle = writeHelperBundle(join(directory, 'heal-helper'));
   await run('cp', bundle, source + ':/tmp/docknest-heal-helper.py');
   const line = captured.split('\n').find(text => text.includes('health_status: unhealthy'));
