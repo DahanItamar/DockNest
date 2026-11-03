@@ -179,6 +179,13 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await run('exec', source, 'docker', 'compose', '-p', 'healshop', '-f', '/heal-fixture/compose.yaml', 'rm', '-s', '-f', 'flaky', 'flap');
   db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...config, containers: ['healshop-web-1'] }), siteId);
   db.prepare('UPDATE self_heal_settings SET watched=? WHERE site_id=?').run(JSON.stringify(watched.filter(item => item.name === 'healshop-web-1')), siteId);
+  // The limit cases are done. The cases below each need web to be restarted (or queued) again inside the same
+  // 10-minute window: case 3, 4, 6 (an interrupted restart counts, then the snapshot restart), recreated and the
+  // daemon restart make about 7 attempts on top of case 1. With N=2 the engine would rightly answer limit_reached and
+  // queue nothing, so the rest of the scenario runs with the highest allowed limit (10).
+  db.prepare('UPDATE self_heal_settings SET max_restarts=10 WHERE site_id=?').run(siteId);
+  const webAttempts = () => db.prepare("SELECT COUNT(*) AS n FROM self_heal_events WHERE site_id=? AND container='healshop-web-1' AND (kind IN ('restarted','restart_failed') OR (kind='skipped' AND reason IN ('unreachable','locked','maintenance_flag','cleanup')))").get(siteId).n;
+  const webQueued = () => Boolean(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued' AND json_extract(details,'$.container')='healshop-web-1'").get(siteId));
   record('Self-heal: a flapping container is throttled to one acted-on event per window and never restarted beyond its limit');
 
   // 3. A backup running on the site while the container turns unhealthy: skipped, no restart; the restart follows later.
@@ -200,12 +207,14 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web is not healthy before the queued-backup case', 60);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
   // Let the stream record the event and queue the restart, without claiming it (no pump).
-  await until(async () => { streams.syncStreams(); heal.tickSelfHeal(); return Boolean(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued'").get(siteId)); }, 'no restart was queued for the queued-backup case', 60);
+  assert.ok(webAttempts() < 10, `web still has restarts left in this window (${webAttempts()} used)`);
+  const item8Start = new Date().toISOString();
+  await until(async () => { streams.syncStreams(); heal.tickSelfHeal(); return webQueued(); }, 'no restart was queued for the queued-backup case', 60);
   {
     const backup = enqueueBackup(siteId, 'qa');
     const first = claimJob();
     assert.equal(first.id, backup.id, 'the queued restart yields to the queued backup');
-    assert.ok(events(siteId, 'skipped', 'healshop-web-1').some(row => row.reason === 'work_queued'));
+    assert.ok(events(siteId, 'skipped', 'healshop-web-1').some(row => row.reason === 'work_queued' && row.at >= item8Start), 'the restart was recorded as skipped (work_queued) now');
     const restartsDuring = events(siteId, 'restarted').length;
     await executeJob(first);
     assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(first.id).status, 'completed', db.prepare('SELECT error FROM jobs WHERE id=?').get(first.id).error ?? '');
@@ -295,7 +304,8 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
   await until(async () => (await health('healshop-web-1')) === 'unhealthy', 'web did not turn unhealthy', 30);
   // Let the stream record the event and queue the restart without claiming it.
-  await until(async () => { streams.syncStreams(); heal.tickSelfHeal(); return Boolean(db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='heal_queued'").get(siteId)); }, 'no queued restart', 30);
+  assert.ok(webAttempts() < 10, `web still has restarts left in this window (${webAttempts()} used)`);
+  await until(async () => { streams.syncStreams(); heal.tickSelfHeal(); return webQueued(); }, 'no queued restart', 30);
   // The stream stops first, so the new container's healthy event cannot close the episode before the claim.
   streams.stopStreams();
   await run('exec', source, 'docker', 'compose', '-p', 'healshop', '-f', '/heal-fixture/compose.yaml', 'up', '-d', '--force-recreate', 'web');
