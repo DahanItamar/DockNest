@@ -508,7 +508,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.equal(await sh(lhost, 'curl -s http://127.0.0.1:443/'), 'foreign-443', 'the other program on 443 is untouched and still answers');
     await sh(lhost, 'nginx -t');
     await assertBystanders();
-    await sh(lhost, "pkill -f 'http.server 443' || true");
+    await sh(lhost, "pkill -f '[h]ttp.server 443' || true");
     await until(async () => !(await listening(lhost, 443)), 'The foreign 443 listener did not stop', 30);
     await sh(lhost, 'mv /root/qa-held/docknest-*.conf /etc/nginx/conf.d/ && rm -f /etc/nginx/conf.d/qa-standin.conf && nginx -t && nginx -s reload');
     await until(() => listening(lhost, 443), 'nginx did not listen on 443 again', 30);
@@ -589,7 +589,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     evidence.launch = { certificates: pebble ? 'pebble' : 'test double', launches: db.prepare('SELECT COUNT(*) AS n FROM site_launches WHERE server_id=?').get(lserver.id).n };
   } finally {
-    await sh(gitHost, "pkill -f git-http.py; pkill -f 'http.server 8099'; pkill -f sshd_config_git; true").catch(() => {});
+    await sh(gitHost, "pkill -f '[g]it-http.py'; pkill -f '[h]ttp.server 8099'; pkill -f '[s]shd_config_git'; true").catch(() => {});
     if (trigger) { try { db.exec('DROP TRIGGER qa_block_launch_site'); } catch {} }
     await run('rm', '-f', '-v', lhost).catch(() => {});
     await run('network', 'disconnect', '-f', net, gitHost).catch(() => {});
