@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- The Hardening findings window now shows the full container name and fix on every screen size, instead of cutting them off.
+
 ## [2.15.0] - 2026-11-03
 
 See [docs/releases/2026-11-03-v2.15.0.md](docs/releases/2026-11-03-v2.15.0.md).
