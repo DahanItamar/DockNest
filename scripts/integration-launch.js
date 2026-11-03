@@ -286,6 +286,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const trapHits = () => sh(gitHost, "grep -c trap.git /tmp/trap.log || true");
 
     // ---------- probe: the helper's gate works, so a clean pasted file passes ----------
+    try { console.error('TEMPDEBUG env: '+(await sh(lhost, 'docker compose version 2>&1; ls -la /usr/local/lib/docker/cli-plugins /usr/lib/docker/cli-plugins /root/.docker/cli-plugins 2>&1; which docker; mkdir -p /srv/dbg && printf "services:\n  web:\n    image: nginx\n" > /srv/dbg/c.yaml && printf "" > /srv/dbg/e.env && docker compose -p dbg -f /srv/dbg/c.yaml --project-directory /srv/dbg --env-file /srv/dbg/e.env config --format json 2>&1 | head -20')).slice(0,1500)); } catch (e) { console.error('TEMPDEBUG env failed '+String(e.stderr).slice(0,500)); }
     const control = await check('control', BASE_COMPOSE);
     if (control.gate.refusals.some(item => item.code === 'GATE_UNAVAILABLE')) throw new Error(GATE_MISSING);
     assert.equal(control.ok, true, JSON.stringify([control.blockers, control.gate]));
