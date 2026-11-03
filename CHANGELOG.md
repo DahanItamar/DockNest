@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- The Hardening findings window now shows the full container name and fix on every screen size, instead of cutting them off.
+
+## [2.15.0] - 2026-11-03
+
+See [docs/releases/2026-11-03-v2.15.0.md](docs/releases/2026-11-03-v2.15.0.md).
+
 ### Added
 
 - Safe Edit (beta): administrators can change a site's Compose file, environment values, published ports and image tag from DockNest. Saving takes a backup first, shows the maintenance page, applies the change and checks the site comes up. If it does not, DockNest puts the previous version back by itself. When the image changed, it also puts the data back in place from a safety copy it made on the server just before the change (the copy is removed afterwards). Environment values are write-only: never shown, stored or logged. See [docs/safe-edit-guide.md](docs/safe-edit-guide.md).
