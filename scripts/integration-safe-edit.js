@@ -196,12 +196,14 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   change.files[0].text = change.files[0].text.replace('volumes:\n  data: {}\n', '  cache:\n    image: edit-app:1.0\nvolumes:\n  data: {}\n');
   ({ editId } = await applyChange(shop, change, { timeLimitSeconds: 60 }));
   let pruned = false, held = '';
-  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!pruned && current.progress.applyStarted) { pruned = true; held = await sh(`docker ps -a --filter label=docknest.edit.hold=${editId} --format '{{.Names}} {{.State}}'`); await sh('docker image prune -af >/dev/null 2>&1 || true'); } } });
+  row = await drive(editId, undefined, { minutes: 15, during: async current => { if (!pruned && current.progress.phase === 'check_health') { pruned = true; held = await sh(`docker ps -a --filter label=docknest.edit.hold=${editId} --format '{{.Names}} {{.State}}'`); await sh('docker image prune -af >/dev/null 2>&1 || true'); } } });
   assert.match(held, new RegExp(`docknest-edit-hold-${editId}-[0-9a-f]+ created`), 'a created, never started holder container keeps the old image ID');
   assert.equal(row.result, 'rolled_back', row.reason ?? '');
   assert.equal(await inspect('editshop-web-1', '{{.Config.Image}}'), 'edit-app:1.1', 'rolled back without pulling (the tag exists only locally)');
   assert.equal((await sh("docker ps -a --filter label=com.docker.compose.project=editshop --filter label=com.docker.compose.service=cache -q")).trim(), '', 'the service the candidate added is removed');
   assert.equal((await sh(`docker ps -aq --filter label=docknest.edit.hold=${editId}`)).trim(), '', 'finish removes the holder containers');
+  // The prune also removed the local-only test images nothing used; later scenarios need them again.
+  for (const [tag, file] of [['broken', 'broken'], ['migrate', 'migrate']]) await run('exec', host, 'docker', 'build', '-q', '-t', `edit-app:${tag}`, '-f', `/edit-images/Dockerfile.${file}`, '/edit-images');
   record('Safe Edit 16: rollback never pulls (pull_policy: always, local-only tag), survives docker image prune -a between prepare and rollback, and removes the service the candidate added');
 
   // ---------- 7. the rollback itself fails: needs attention, the maintenance page stays ----------
