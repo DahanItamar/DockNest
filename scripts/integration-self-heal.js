@@ -39,7 +39,9 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   const startedAt = name => inspect(name, '{{.State.StartedAt}}');
   const idOf = name => inspect(name, '{{.Id}}');
   const events = (siteId, kind, container) => db.prepare(`SELECT * FROM self_heal_events WHERE site_id=?${kind ? ' AND kind=?' : ''}${container ? ' AND container=?' : ''} ORDER BY at,rowid`).all(...[siteId, kind, container].filter(Boolean));
-  const gaveUps = (siteId, reason) => db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='self_heal.gave_up' AND target=? AND json_extract(detail,'$.reason')=?").get(siteId, reason).n;
+  // gave_up is once per container per window, so it is always counted for one container: the flaky and the flapping
+  // services can both reach their limit in the same window, each legitimately giving up once.
+  const gaveUps = (siteId, reason, container) => db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='self_heal.gave_up' AND target=? AND json_extract(detail,'$.reason')=? AND json_extract(detail,'$.container')=?").get(siteId, reason, container).n;
   const runtime = () => { try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='self_heal_runtime'").get()?.value ?? '{}'); } catch { return {}; } };
   const streamState = () => runtime().servers?.[server.id]?.state;
   // The helper starts exactly `docker events --filter type=container --filter event=health_status --format <template>`
@@ -154,7 +156,8 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   assert.equal(events(siteId, 'restarted', 'healshop-flaky-1').length + events(siteId, 'restart_failed', 'healshop-flaky-1').length, 2, 'exactly N restarts');
   const restartedRows = events(siteId, 'restarted', 'healshop-flaky-1');
   assert.ok(Date.parse(restartedRows[1].at) - Date.parse(restartedRows[0].at) >= timing.minGapMs, 'the gap between restarts holds');
-  assert.equal(gaveUps(siteId, 'limit'), 1);
+  assert.equal(gaveUps(siteId, 'limit', 'healshop-flaky-1'), 1, 'flaky gave up once in its window');
+  assert.ok(gaveUps(siteId, 'limit', 'healshop-web-1') === 0, 'web recovered after one restart and never gave up');
   // Alerts: the first restart of each container in its window, and one gave_up per container per window.
   const outbox = Object.fromEntries(db.prepare("SELECT event,COUNT(*) AS n FROM alert_outbox WHERE event LIKE 'self_heal.%' GROUP BY event").all().map(row => [row.event, row.n]));
   const restartedContainers = db.prepare("SELECT COUNT(DISTINCT container) AS n FROM self_heal_events WHERE site_id=? AND kind IN ('restarted','restart_failed')").get(siteId).n;
@@ -168,6 +171,9 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await pump(30_000);
   const flapRows = events(siteId, null, 'healshop-flap-1');
   assert.ok(flapRows.filter(row => ['restarted', 'restart_failed'].includes(row.kind)).length <= 2, 'a flapping container never exceeds the limit');
+  // Flapping fast, it may well use up its 2 restarts in this window: then it gives up exactly once, never more.
+  assert.ok(gaveUps(siteId, 'limit', 'healshop-flap-1') <= 1, 'the flapping container gave up at most once in its window');
+  assert.equal(gaveUps(siteId, 'limit', 'healshop-flap-1'), flapRows.some(row => row.kind === 'limit_reached') ? 1 : 0, 'a limit_reached row and one gave_up go together');
   assert.ok(flapRows.length - flapBefore <= (Date.now() - flapStart) / timing.throttleMs * 2 + 4, `the throttle bounds the history (${flapRows.length - flapBefore} rows)`);
   // From here on the site is the web service only (a backup below needs every site container to start healthy).
   await run('exec', source, 'docker', 'compose', '-p', 'healshop', '-f', '/heal-fixture/compose.yaml', 'rm', '-s', '-f', 'flaky', 'flap');
@@ -295,7 +301,7 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await run('exec', source, 'docker', 'compose', '-p', 'healshop', '-f', '/heal-fixture/compose.yaml', 'up', '-d', '--force-recreate', 'web');
   const job = claimJob(); assert.equal(job.type, 'self-heal'); await executeJob(job);
   assert.equal(events(siteId, 'skipped', 'healshop-web-1').at(-1).reason, 'recreated');
-  assert.equal(gaveUps(siteId, 'recreated'), 1);
+  assert.equal(gaveUps(siteId, 'recreated', 'healshop-web-1'), 1);
   record('Self-heal: a container recreated with a new ID during self-heal is not restarted; gave_up is recorded with "container recreated"');
 
   // Item 8: worker SIGKILL leaves no orphan `docker events` on the server.
