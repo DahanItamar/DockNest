@@ -84,7 +84,9 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   let captured = ''; capture.stdout.on('data', chunk => { captured += chunk; });
   await wait(1000);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
-  await until(async () => captured.includes('health_status: unhealthy'), 'docker events printed no unhealthy event', 30);
+  // The flaky and flapping services turn unhealthy too, often first: pick the web container's own unhealthy line.
+  const webLine = () => captured.split(/\r?\n/).find(text => { try { const value = JSON.parse(text); return value?.name === 'healshop-web-1' && value?.action === 'health_status: unhealthy'; } catch { return false; } });
+  await until(async () => Boolean(webLine()), 'docker events printed no unhealthy event for healshop-web-1', 30);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'touch', '/tmp/ok');
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web did not become healthy again', 30);
   capture.kill();
@@ -94,8 +96,16 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   await until(async () => (await eventsProcesses()) === 0, 'the capture docker events process did not stop', 30);
   const bundle = writeHelperBundle(join(directory, 'heal-helper'));
   await run('cp', bundle, source + ':/tmp/docknest-heal-helper.py');
-  const line = captured.split('\n').find(text => text.includes('health_status: unhealthy'));
-  const parsed = JSON.parse(await run('exec', source, 'python3', '-c', 'import json,sys;sys.path.insert(0,"/tmp");import importlib.util as u;s=u.spec_from_file_location("helper","/tmp/docknest-heal-helper.py");h=u.module_from_spec(s);s.loader.exec_module(h);print(json.dumps(h.heal_event(sys.argv[1],[{"name":"healshop-web-1","project":"healshop","service":"web"}])))', line));
+  const line = webLine();
+  const capturedLines = captured.split(/\r?\n/).filter(Boolean);
+  assert.ok(typeof line === 'string' && line.length > 0, `no unhealthy event line for healshop-web-1 among ${capturedLines.length} captured lines (${capturedLines.filter(text => text.includes('health_status')).length} health events)`);
+  // On failure this one call prints Python's traceback (no secrets: the line holds only names, an ID and a time).
+  const parse = 'import json,sys,traceback\ntry:\n import importlib.util as u\n s=u.spec_from_file_location("helper","/tmp/docknest-heal-helper.py");h=u.module_from_spec(s);s.loader.exec_module(h)\n print(json.dumps(h.heal_event(sys.argv[1],[{"name":"healshop-web-1","project":"healshop","service":"web"}])))\nexcept Exception:\n traceback.print_exc();sys.exit(1)\n';
+  let output;
+  try { output = await quietRun('exec', source, 'python3', '-c', parse, line); }
+  catch (error) { console.error('Self-heal: the helper could not parse the live event line:\n' + String(error.stderr ?? error.message).slice(0, 4000)); throw error; }
+  const parsed = JSON.parse(output);
+  assert.ok(parsed && typeof parsed === 'object', `heal_event returned ${output.slice(0, 40)} for the live web line`);
   assert.deepEqual(Object.keys(parsed).sort(), ['at', 'container', 'id', 'status', 'timeNano']);
   assert.equal(parsed.container, 'healshop-web-1'); assert.equal(parsed.status, 'unhealthy'); assert.equal(parsed.id, await idOf('healshop-web-1'));
   evidence.selfHealDocker = evidence.docker;
