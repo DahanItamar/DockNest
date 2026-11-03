@@ -483,6 +483,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     launches.checkDnsAgain(site, 'qa');
     await drive(() => launches.loadLaunch(site).state === 'done', 'Check again with DNS');
     assert.equal(steps(site).certificate.state, 'done');
+    console.error('TEMPDEBUG built: '+await sh(lhost,'cat /etc/nginx/conf.d/docknest-built*.conf | cut -c1-120; ls /etc/letsencrypt/live; tail -5 /var/log/nginx/error.log; nginx -t 2>&1; grep built /etc/hosts'));
     assert.match(await httpsOf('built'), /launch-git-ok/);
     assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(built.launch.site_id).config).healthUrl, `https://${domainOf('built')}/`);
     record('Waiting for DNS: the site works on HTTP, no certificate is asked for, Check again with DNS still missing waits, and Check again once the domain points here issues the certificate and switches the site to https');
