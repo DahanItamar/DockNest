@@ -74,7 +74,10 @@ rm -rf /srv/git /tmp/work; mkdir -p /srv/git /tmp/work
 publish() { (cd /tmp/work/$1 && git init -q -b main . && git add -A && git commit -q -m seed); }
 bare() { git clone -q --bare /tmp/work/$1 /srv/git/$1.git && git -C /srv/git/$1.git update-server-info; }
 web() { mkdir -p /tmp/work/$1; printf 'launch-git-ok\n' > /tmp/work/$1/index.html
-  printf 'FROM busybox:1.36\nCOPY index.html /www/index.html\nHEALTHCHECK --interval=2s --timeout=2s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1\nCMD ["httpd","-f","-p","8080","-h","/www"]\n' > /tmp/work/$1/Dockerfile
+  # busybox httpd as PID 1 ignores SIGTERM, so Docker would kill it (exit 137) and DockNest rightly refuses that as a clean
+  # shutdown. A well-behaved app exits 0 on SIGTERM; this small wrapper does that.
+  printf '#!/bin/sh\ntrap "exit 0" TERM INT\nhttpd -f -p 8080 -h /www &\nwait $!\n' > /tmp/work/$1/run.sh
+  printf 'FROM busybox:1.36\nCOPY index.html /www/index.html\nCOPY run.sh /run.sh\nHEALTHCHECK --interval=2s --timeout=2s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1\nCMD ["sh","/run.sh"]\n' > /tmp/work/$1/Dockerfile
   printf 'services:\n  web:\n    build: .\n    expose:\n      - "8080"\n' > /tmp/work/$1/compose.yaml; }
 plain() { mkdir -p /tmp/work/$1; printf 'services:\n  web:\n    image: busybox:1.36\n    command: ["httpd","-f","-p","8080","-h","/tmp"]\n    expose:\n      - "8080"\n%b' "${'$'}{2:-}" > /tmp/work/$1/compose.yaml; }
 # public: builds and runs
