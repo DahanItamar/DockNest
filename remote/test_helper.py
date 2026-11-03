@@ -330,6 +330,16 @@ class MaintenanceSetupTests(unittest.TestCase):
             edits=maintenance_nginx_edits(['shop.example.com'],'include x;',folders=[str(folder)],root=d)
             self.assertEqual(list(edits),[os.path.realpath(launched)])
             self.assertIn('include x;',edits[os.path.realpath(launched)])
+    def test_settled_probe_waits_for_the_new_configuration_and_gives_up(self):
+        import helper
+        from unittest.mock import patch
+        answers=[(200,b'site'),(200,b'site'),(503,b'dbm-maintenance-v1')]
+        with patch('helper.public_probe',side_effect=lambda m,d:answers.pop(0)) as probe,patch('helper.time.sleep'):
+            self.assertEqual(helper.settled_probe({},[],lambda code,page:code==503),(503,b'dbm-maintenance-v1'))
+            self.assertEqual(probe.call_count,3)
+        with patch('helper.public_probe',return_value=(200,b'site')) as probe,patch('helper.time.sleep'),patch('helper.time.monotonic',side_effect=[0,1,2,9]):
+            self.assertEqual(helper.settled_probe({},[],lambda code,page:code==503),(200,b'site'))
+            self.assertEqual(probe.call_count,3)
     def test_snippet_serves_the_page_only_while_the_flag_exists(self):
         from helper import maintenance_snippet
         text=maintenance_snippet('8df5710b-9e0d-422a-87a4-d57d45de133b','/var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b')

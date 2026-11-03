@@ -274,7 +274,6 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     };
     async function assertLaunched(launchId, tag, { dnsMapped }) {
       const launch = launches.loadLaunch(launchId), done = steps(launchId);
-      console.error('TEMPDEBUG nginx: '+await sh(lhost,'cat /opt/dbg-launch.log 2>&1').catch(e=>'none'));
       assert.equal(launch.state, dnsMapped ? 'done' : 'waiting_dns', JSON.stringify([launch.reason, Object.values(done).map(s => [s.step, s.state, s.detail])]));
       for (const name of ['check', 'fetch', 'start', 'check_health', 'web', 'save', 'maintenance', 'first_backup']) assert.equal(done[name].state, 'done', `${name}: ${done[name].detail}`);
       assert.equal(done.certificate.state, dnsMapped ? 'done' : 'waiting');

@@ -161,6 +161,14 @@ def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root
             if text!=real.read_text():edits[str(real)]=text
     if not found:raise ValueError('The site\'s domains were not found in this server\'s nginx configuration.')
     return edits
+def settled_probe(m,domains,accepted,seconds=8):
+    """public_probe, repeated for a few seconds until the answer is the expected one. `nginx -s reload` returns before the
+    new workers take over, and the flag file is seen at once, so the first probe can still meet the old configuration."""
+    deadline=time.monotonic()+seconds
+    while True:
+        status,body=public_probe(m,domains)
+        if accepted(status,body) or time.monotonic()>=deadline:return status,body
+        time.sleep(0.5)
 def setup_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{});site=str(req['siteId']);uuid.UUID(site)
     if os.geteuid()!=0:raise ValueError('Setting up the maintenance page requires root on the server')
@@ -191,12 +199,10 @@ def setup_maintenance(req):
         try:nginx_reload()
         except Exception:raise ValueError('nginx rejected the maintenance page settings, so DockNest put the configuration back.')
         flag.touch(mode=0o644)
-        status,body=public_probe(m,domains)
-        if status!=503 or b'dbm-maintenance-v1' not in body:
-            open('/opt/dbg-launch.log','ab').write(subprocess.run('echo URL '+m.get('publicUrl','')+'; echo STATUS %d; curl -ski -H "Host: '%status+urllib.parse.urlsplit(m.get('publicUrl','')).netloc+'" '+urllib.parse.urlsplit(m.get('publicUrl','')).scheme+'://127.0.0.1/ | head -12; tail -5 /var/log/nginx/error.log; ls -la '+str(directory)+'; stat -c %U:%a /var/lib/docknest; grep -c . /etc/nginx/nginx.conf; cat /run/nginx/nginx.pid; ps aux | grep -c nginx',shell=True,capture_output=True).stdout[:7000])
-            raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
+        status,body=settled_probe(m,domains,lambda code,page:code==503 and b'dbm-maintenance-v1' in page)
+        if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
         flag.unlink()
-        status,body=public_probe(m,domains)
+        status,body=settled_probe(m,domains,lambda code,page:code==200 and b'dbm-maintenance-v1' not in page)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('The site did not come back normally after the test (HTTP %d), so DockNest put the configuration back.'%status)
     except BaseException:
         flag.unlink(missing_ok=True)
