@@ -483,12 +483,16 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     launches.checkDnsAgain(site, 'qa');
     await drive(() => launches.loadLaunch(site).state === 'done', 'Check again with DNS');
     assert.equal(steps(site).certificate.state, 'done');
-    console.error('TEMPDEBUG built: '+await sh(lhost,'cat /etc/nginx/conf.d/docknest-built*.conf | cut -c1-120; ls /etc/letsencrypt/live; tail -5 /var/log/nginx/error.log; nginx -t 2>&1; grep built /etc/hosts'));
+    await until(async () => /launch-git-ok/.test(await httpsOf('built')), 'The built site did not answer over HTTPS after the certificate', 20);
     assert.match(await httpsOf('built'), /launch-git-ok/);
     assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(built.launch.site_id).config).healthUrl, `https://${domainOf('built')}/`);
     record('Waiting for DNS: the site works on HTTP, no certificate is asked for, Check again with DNS still missing waits, and Check again once the domain points here issues the certificate and switches the site to https');
 
     // ---------- 6. port 443 already in use ----------
+    // The HTTPS sites launched above make nginx listen on 443. A port held by another program needs 443 free of nginx, so
+    // their nginx files are set aside for this section (nginx keeps listening on 80 through a stand-in) and put back after.
+    await sh(lhost, "mkdir -p /root/qa-held && mv /etc/nginx/conf.d/docknest-*.conf /root/qa-held/ && printf 'server { listen 80; server_name qa-standin.docknest.test; return 204; }\n' > /etc/nginx/conf.d/qa-standin.conf && nginx -t && nginx -s reload");
+    await until(async () => !(await listening(lhost, 443)), 'nginx kept listening on 443', 30);
     await sh(lhost, 'mkdir -p /tmp/foreign && printf foreign-443 > /tmp/foreign/index.html');
     await run('exec', '-d', lhost, 'python3', '-m', 'http.server', '443', '--bind', '0.0.0.0', '--directory', '/tmp/foreign');
     await until(() => listening(lhost, 443), 'The foreign 443 listener did not start', 30);
@@ -506,6 +510,8 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     await assertBystanders();
     await sh(lhost, "pkill -f 'http.server 443' || true");
     await until(async () => !(await listening(lhost, 443)), 'The foreign 443 listener did not stop', 30);
+    await sh(lhost, 'mv /root/qa-held/docknest-*.conf /etc/nginx/conf.d/ && rm -f /etc/nginx/conf.d/qa-standin.conf && nginx -t && nginx -s reload');
+    await until(() => listening(lhost, 443), 'nginx did not listen on 443 again', 30);
     record('Port 443 held by another program: Check blocks with PORT_IN_USE naming the process, Launch is refused, the other program keeps answering and nginx stays valid');
 
     // ---------- 9. other jobs queue behind a launch ----------
