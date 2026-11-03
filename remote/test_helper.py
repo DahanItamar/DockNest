@@ -326,6 +326,8 @@ class MaintenanceSetupTests(unittest.TestCase):
             folder=pathlib.Path(d)/'conf.d';folder.mkdir()
             launched=folder/'docknest-shop.conf';launched.write_text('# Managed by DockNest launch 1234;\nserver { listen 80; server_name shop.example.com; }\n')
             other=folder/'docknest-move.conf';other.write_text('server { server_name shop.example.com; }')
+            moved=folder/'docknest-move-site.conf';moved.write_text('# Managed by DockNest move 0b6e1c2a-1f3d-4e5a-9c8b-7d6f5e4a3b21; safe to delete after the move is cleaned up.\nserver { server_name shop.example.com; }\n')
+            lookalike=folder/'docknest-fake.conf';lookalike.write_text('# Managed by DockNest launch ; x\nserver { server_name shop.example.com; }\n')
             import os
             edits=maintenance_nginx_edits(['shop.example.com'],'include x;',folders=[str(folder)],root=d)
             self.assertEqual(list(edits),[os.path.realpath(launched)])
@@ -346,6 +348,9 @@ class MaintenanceSetupTests(unittest.TestCase):
         self.assertIn('if (-f /var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b/enabled)',text)
         self.assertIn('if ($uri = /__docknest_maintenance.html) { set $dn_maint_8df5710b9e0d 0; }',text)
         self.assertIn('location = /__docknest_maintenance.html { internal; alias',text)
+        # A certificate renewal during a backup must still reach the ACME challenge folder.
+        self.assertIn('if ($uri ~ ^/\\.well-known/acme-challenge/) { set $dn_maint_8df5710b9e0d 0; }',text)
+        self.assertLess(text.index('acme-challenge'),text.index('if ($dn_maint_8df5710b9e0d) { return 503; }'))
     @unittest.skipUnless(__import__('os').name=='posix','Needs root-style file ownership calls')
     def test_failed_visitor_test_puts_every_file_back(self):
         import helper

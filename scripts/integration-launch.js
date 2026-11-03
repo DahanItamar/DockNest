@@ -201,8 +201,9 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     // Certificates: Pebble where its images can be pulled, otherwise a recorded certbot double (reported as PARTIAL).
     try {
-      const tag = process.env.DOCKNEST_PEBBLE_TAG || 'v2.7.0';
-      const image = name => `ghcr.io/letsencrypt/${name}:${tag}`;
+      // Pebble 2.10.1 (tags have no leading v), pinned by the digest of the multi-arch image index.
+      const digests = { pebble: 'sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199', 'pebble-challtestsrv': 'sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b' };
+      const image = name => `ghcr.io/letsencrypt/${name}@${digests[name]}`;
       await run('exec', lhost, 'docker', 'pull', '-q', image('pebble')); await run('exec', lhost, 'docker', 'pull', '-q', image('pebble-challtestsrv'));
       await writeTo(lhost, '/pebble-config.json', JSON.stringify({ pebble: { listenAddress: '0.0.0.0:14000', managementListenAddress: '0.0.0.0:15000', certificate: 'test/certs/localhost/cert.pem', privateKey: 'test/certs/localhost/key.pem', httpPort: 80, tlsPort: 443, ocspResponderURL: '', externalAccountBindingRequired: false } }));
       await run('exec', lhost, 'docker', 'network', 'create', 'qa-pebble');
@@ -212,6 +213,8 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       await sh(lhost, 'mkdir -p /etc/letsencrypt');
       await writeTo(lhost, '/etc/letsencrypt/cli.ini', 'server = https://127.0.0.1:14000/dir\nno-verify-ssl = true\nemail = qa@example.invalid\nagree-tos = true\nno-eff-email = true\n');
       await sh(lhost, 'certbot register --non-interactive >/dev/null 2>&1');
+      // Pebble's issuing root is made at start-up; the host trusts it so the helper's verified HTTPS probe accepts the certificates.
+      await sh(lhost, 'curl -sk https://127.0.0.1:15000/roots/0 > /usr/local/share/ca-certificates/docknest-qa-pebble-root.crt && update-ca-certificates >/dev/null 2>&1');
       pebble = true;
     } catch (error) {
       await sh(lhost, 'docker rm -f qa-pebble qa-pebble-chall >/dev/null 2>&1; docker network rm qa-pebble >/dev/null 2>&1; rm -f /etc/letsencrypt/cli.ini; true');
@@ -410,6 +413,17 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const shop = await start(composeBody('shop', composeSite));
     await drive(ended(shop), 'The pasted Compose launch');
     const { launch: shopLaunch, backup: shopBackup } = await assertLaunched(shop, 'shop', { dnsMapped: true });
+    // While the maintenance page is on (a backup), visitors get it, but a certificate challenge is still served as usual.
+    {
+      const flag = `/var/lib/docknest/maintenance/${shopLaunch.site_id}/enabled`, acme = `/var/lib/docknest/acme/launch-${shopLaunch.id}/.well-known/acme-challenge`;
+      const http = path => sh(lhost, `curl -s -o /tmp/qa-body -w '%{http_code}' -H 'Host: ${domainOf('shop')}' http://127.0.0.1${path}; echo; cat /tmp/qa-body`);
+      try {
+        await sh(lhost, `mkdir -p ${acme} && printf qa-challenge-token > ${acme}/qa-token && touch ${flag}`);
+        assert.match(await http('/'), /^503/, 'visitors get the maintenance page while it is on');
+        assert.equal(await http('/.well-known/acme-challenge/qa-token'), '200\nqa-challenge-token', 'the ACME challenge path is served during maintenance');
+      } finally { await sh(lhost, `rm -f ${flag} ${acme}/qa-token`); }
+      assert.match(await http('/'), /^301/, 'the site is back to normal without the flag');
+    }
     assert.equal(await run('exec', lhost, 'docker', 'inspect', '--format', '{{.State.Running}}', containerOf('shop')), 'true', 'the container runs');
     const bindings = JSON.parse(await run('exec', lhost, 'docker', 'inspect', '--format', '{{json .HostConfig.PortBindings}}', containerOf('shop')));
     assert.ok(Object.values(bindings).flat().every(item => item.HostIp === '127.0.0.1'), 'published ports are on 127.0.0.1 only');

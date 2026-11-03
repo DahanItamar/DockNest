@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, VERSION, emit, private_staging_base, run, sync_maintenance_flag)
+    LAUNCH_HEADER_PATTERN, NOFOLLOW, VERSION, emit, private_staging_base, run, sync_maintenance_flag)
 from .paths import (
     lexical, maintenance_directory_problem, maintenance_link_escape, warn, within)
 from .net import (
@@ -135,9 +135,10 @@ def maintenance_snippet(site,directory):
     suffix=site.replace('-','')[:12]
     return ('# Managed by DockNest: maintenance page for site %s. DockNest switches it on only during a backup.\n'
         'set $dn_maint_%s 0;\nif (-f %s/enabled) { set $dn_maint_%s 1; }\n'
-        'if ($uri = /__docknest_maintenance.html) { set $dn_maint_%s 0; }\nif ($dn_maint_%s) { return 503; }\n'
+        'if ($uri = /__docknest_maintenance.html) { set $dn_maint_%s 0; }\n'
+        'if ($uri ~ ^/\\.well-known/acme-challenge/) { set $dn_maint_%s 0; }\nif ($dn_maint_%s) { return 503; }\n'
         'error_page 503 /__docknest_maintenance.html;\n'
-        'location = /__docknest_maintenance.html { internal; alias %s/maintenance.html; default_type text/html; add_header Retry-After 30 always; add_header Cache-Control no-store always; }\n')%(site,suffix,directory,suffix,suffix,suffix,directory)
+        'location = /__docknest_maintenance.html { internal; alias %s/maintenance.html; default_type text/html; add_header Retry-After 30 always; add_header Cache-Control no-store always; }\n')%(site,suffix,directory,suffix,suffix,suffix,suffix,directory)
 def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root='/etc/nginx'):
     """Planned edits {path: new text}. Only files under /etc/nginx; redirect-only blocks are left alone."""
     wanted={d.lower() for d in domains};edits={};found=False
@@ -151,7 +152,7 @@ def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root
             text=edits.get(str(real)) or real.read_text()
             # Other files DockNest writes (moves, ...) are left alone. A site launched by DockNest is served by a file it
             # wrote itself, marked by this header (launch.py LAUNCH_HEADER); that file takes the include too.
-            if entry.name.startswith('docknest-') and not text.startswith('# Managed by DockNest launch '):continue
+            if entry.name.startswith('docknest-') and not LAUNCH_HEADER_PATTERN.match(text):continue
             blocks=[b for b in nginx_server_blocks(text) if b['names']&wanted]
             if not blocks:continue
             found=True

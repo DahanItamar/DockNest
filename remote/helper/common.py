@@ -21,6 +21,9 @@ def sync_directory(path):
     finally:os.close(directory)
 
 SHARED_SYSTEM_FOLDERS={'/','/var','/var/lib','/root','/home','/srv','/opt','/etc','/tmp','/usr','/var/www'}
+# First line of the nginx file a launch writes; the %s is the launch id. Maintenance setup recognises it too.
+LAUNCH_HEADER='# Managed by DockNest launch %s;'
+LAUNCH_HEADER_PATTERN=re.compile(re.escape(LAUNCH_HEADER).replace('%s','[0-9a-f-]+'))
 def private_staging_base(base,traverse=False):
     """The shared staging folder: root-owned, never readable or writable by others.
     Others may only pass through it (0711), so nginx can reach a maintenance page kept under it."""
