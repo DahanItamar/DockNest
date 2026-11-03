@@ -28,7 +28,7 @@ process.env.NODE_ENV = 'test';
 process.env.SECURE_COOKIES = 'false';
 process.env.BACKUP_STORAGE = 'unconfigured';
 await writeFile(process.env.MASTER_KEY_FILE, randomBytes(32).toString('base64'), { mode: 0o600 });
-const evidence = { formatVersion:2,release:process.env.GITHUB_SHA||(await exec('git',['rev-parse','HEAD'])).stdout.trim(),at:new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target, remote SFTP storage and S3-compatible storage', checks: [] };
+const evidence = { formatVersion:2,release:process.env.GITHUB_SHA||(await exec('git',['rev-parse','HEAD'])).stdout.trim(),at:new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target, remote SFTP storage and S3-compatible storage', checks: [], partial: [] };
 let db;
 async function until(check, message, seconds = 90) {
   const end = Date.now() + seconds * 1000;
@@ -304,7 +304,8 @@ try {
   await until(async()=>Boolean((await verifyRecovery({...interrupted,status:'recovery_required'})).healthVerified),'Watchdog did not restore health and maintenance state',30);
   assert.equal(await run('exec',hosts[0],'docker','inspect','--format','{{.State.Running}}','site-b'),'true');
   record('Detached Linux watchdog terminates a stuck capture, restarts the original site and clears maintenance after health; central job remains locked until verified recovery');
-  evidence.status = 'passed';
+  evidence.status = evidence.partial.length ? 'passed (partial)' : 'passed';
+  if (evidence.partial.length) console.log('PASSED (PARTIAL): ' + evidence.partial.join('; '));
 } catch (error) {
   evidence.status = 'failed';
   // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.

@@ -119,7 +119,6 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
   // ---------- 0. the privilege gate must be in the helper this test ships ----------
   const bundle = await readFile(writeHelperBundle(), 'utf8');
   if (!/^\s*def edit_gate\s*\(/m.test(bundle)) throw new Error(GATE_MISSING);
-  evidence.partial ??= [];
   const partial = text => { evidence.partial.push(text); console.log('PARTIAL ' + text); };
 
   const { enqueueBackup, claimJob, executeJob, testServer, verifyEncrypted } = await import('../src/engine.js');
@@ -154,6 +153,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const key = await prepareServerKey(), publicFile = join(directory, lhost + '.pub');
     await writeFile(publicFile, key.publicKey + '\n');
     await run('cp', publicFile, lhost + ':/root/.ssh/authorized_keys');
+    await rm(publicFile, { force: true });
     await run('exec', lhost, 'chown', 'root:root', '/root/.ssh/authorized_keys'); await run('exec', lhost, 'chmod', '600', '/root/.ssh/authorized_keys');
     const hostPublic = await run('exec', lhost, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub');
     lserver = { id: randomUUID(), name: lhost, host: '127.0.0.1', port: Number((await run('port', lhost, '22/tcp')).split(':').at(-1)), username: 'root', private_key: seal(key.privateKey), host_key: createHash('sha256').update(Buffer.from(hostPublic.split(' ')[1], 'base64')).digest('hex') };
@@ -294,15 +294,17 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     // ---------- 4. allow-list refusals (pasted Compose, at Check) ----------
     const unsafe = [
-      ['privileged', BASE_COMPOSE + '    privileged: true\n'],
-      ['host network', BASE_COMPOSE + '    network_mode: host\n'],
-      ['docker.sock', BASE_COMPOSE + '    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n'],
-      ['an /etc bind', BASE_COMPOSE + '    volumes:\n      - /etc:/host-etc\n'],
+      ['privileged', BASE_COMPOSE + '    privileged: true\n', /privileged/i],
+      ['host network', BASE_COMPOSE + '    network_mode: host\n', /network|namespace|host/i],
+      ['docker.sock', BASE_COMPOSE + '    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n', /volume|bind|mount|sock/i],
+      ['an /etc bind', BASE_COMPOSE + '    volumes:\n      - /etc:/host-etc\n', /volume|bind|mount|path/i],
     ];
-    for (const [what, compose] of unsafe) {
+    for (const [what, compose, expected] of unsafe) {
       const result = await check('refuse', compose), refusal = refusalOf(result);
       assert.equal(result.ok, false, `${what} is refused`);
-      assert.ok(refusal && refusal.code !== 'GATE_UNAVAILABLE', `${what}: ${JSON.stringify(refusal)}`);
+      assert.equal(refusal?.from, 'gate', `${what}: ${JSON.stringify(refusal)}`);
+      assert.notEqual(refusal.code, 'GATE_UNAVAILABLE', what);
+      assert.match(`${refusal.field ?? ''} ${refusal.code}`, expected, `${what} is refused for its own setting: ${JSON.stringify(refusal)}`);
     }
     let result = await check('refuse', 'services:\n  web:\n    image: nginx:1.27-alpine\n    build:\n      context: .\n      network: host\n');
     assert.deepEqual([result.ok, refusalOf(result).code, /build\.network/.test(refusalOf(result).field)], [false, 'BUILD_SETTING_REFUSED', true]);
@@ -344,7 +346,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const hitsBefore = await trapHits();
     answer = await facts(gitRepo('redirect'));
     assert.equal(repoCheck(answer).ok, false);
-    assert.ok(['REDIRECT_REFUSED', 'FETCH_FAILED', 'REPO_NOT_FOUND'].includes(repoCheck(answer).code), repoCheck(answer).code);
+    assert.equal(repoCheck(answer).code, 'REDIRECT_REFUSED');
     assert.equal(await trapHits(), hitsBefore, 'the private address a redirect pointed at was never contacted');
     // Rebinding: Check resolves the Git host to the real server, then the name moves to the metadata address before fetch.
     const rebindId = randomUUID(), rebindSlug = 'rebind-docknest-test';
@@ -393,7 +395,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       assert.deepEqual([started.ok, started.code], [false, 'GATE_REFUSED'], 'a bind source that became a link to /etc is refused at start');
       assert.equal(await sh(lhost, `docker ps -aq --filter label=com.docker.compose.project=${slug}`), '');
     });
-    record('Repository content: RUN --network=host, a symlink leaving the repository, and a .env with COMPOSE_FILE are refused or ignored; a bind source swapped for a link to /etc is refused at start; teardown restores the server exactly');
+    record('Repository content: RUN --network=host, a symlink leaving the repository, and a .env with COMPOSE_FILE are refused or ignored; a bind source swapped for a link to /etc is refused at start; teardown restores the server exactly. Limit: the clone runs with core.symlinks=false, so the helper SYMLINK_ESCAPE branch cannot be reached from a repository or a pasted file; the swap case covers the link-as-bind-source risk');
 
     // ---------- 1 and 12. pasted Compose launch with nginx, certificate, first backup ----------
     const composeSite = BASE_COMPOSE + '    volumes:\n      - data:/data\nvolumes:\n  data: {}\n';
@@ -572,6 +574,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     evidence.launch = { certificates: pebble ? 'pebble' : 'test double', launches: db.prepare('SELECT COUNT(*) AS n FROM site_launches WHERE server_id=?').get(lserver.id).n };
   } finally {
+    await sh(gitHost, "pkill -f git-http.py; pkill -f 'http.server 8099'; pkill -f sshd_config_git; true").catch(() => {});
     if (trigger) { try { db.exec('DROP TRIGGER qa_block_launch_site'); } catch {} }
     await run('rm', '-f', '-v', lhost).catch(() => {});
     await run('network', 'disconnect', '-f', net, gitHost).catch(() => {});
