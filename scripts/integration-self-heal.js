@@ -201,6 +201,10 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   // - web healthy, the stream connected with exactly one docker events process, and web's last episode closed.
   let clockOffset = 0;
   async function freshCase(name) {
+    // Earlier scenarios in the full run can leave work unfinished on this server (the watchdog case keeps its job locked
+    // until verified recovery). The claim rules rightly hold new work behind it, so end it here; this touches test rows only.
+    const leftover = db.prepare("UPDATE jobs SET status='failed',finished_at=COALESCE(finished_at,?) WHERE site_id<>? AND site_id IN (SELECT id FROM sites WHERE server_id=?) AND status IN ('queued','running','recovery_required','move_queued','move_running','test_queued','edit_queued','edit_running','edit_waiting','heal_queued','heal_running')").run(new Date().toISOString(), siteId, server.id).changes;
+    if (leftover) console.log(`Self-heal: ended ${leftover} unfinished job(s) left on the server by earlier scenarios before ${name}`);
     db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=COALESCE(finished_at,?) WHERE site_id=? AND status IN ('queued','running','recovery_required','heal_queued','heal_running','edit_queued','edit_running','edit_waiting')").run(new Date(Date.now() - 10 * 60_000).toISOString(), siteId);
     clockOffset += 11 * 60_000;
     heal.healClock.now = () => realClock() + clockOffset;
@@ -238,6 +242,8 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   {
     const backup = enqueueBackup(siteId, 'qa');
     const first = claimJob();
+    if (!first) console.log('Self-heal: nothing claimable; unfinished work on the server:', JSON.stringify({ jobs: db.prepare("SELECT j.type,j.status FROM jobs j JOIN sites s ON s.id=j.site_id WHERE s.server_id=? AND j.status NOT IN ('completed','failed','cancelled')").all(server.id), tests: db.prepare("SELECT state FROM restore_tests WHERE server_id=? ORDER BY rowid DESC LIMIT 3").all(server.id) }));
+    assert.ok(first, 'a job was claimed for the queued-backup case');
     assert.equal(first.id, backup.id, 'the queued restart yields to the queued backup');
     assert.ok(events(siteId, 'skipped', 'healshop-web-1').some(row => row.reason === 'work_queued' && row.at >= item8Start), 'the restart was recorded as skipped (work_queued) now');
     const restartsDuring = events(siteId, 'restarted', 'healshop-web-1').length;
