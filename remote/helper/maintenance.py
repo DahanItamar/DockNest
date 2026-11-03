@@ -192,7 +192,9 @@ def setup_maintenance(req):
         except Exception:raise ValueError('nginx rejected the maintenance page settings, so DockNest put the configuration back.')
         flag.touch(mode=0o644)
         status,body=public_probe(m,domains)
-        if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
+        if status!=503 or b'dbm-maintenance-v1' not in body:
+            open('/opt/dbg-launch.log','ab').write(subprocess.run('nginx -T 2>&1 | head -150; ls -ld /var/lib/docknest /var/lib/docknest/maintenance; ls -la '+str(directory)+'; ps aux | grep nginx | head -5',shell=True,capture_output=True).stdout[:7000])
+            raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
         flag.unlink()
         status,body=public_probe(m,domains)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('The site did not come back normally after the test (HTTP %d), so DockNest put the configuration back.'%status)
