@@ -45,7 +45,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (17 modules)"]
+  subgraph Source["remote/helper/ (19 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -93,7 +93,7 @@ classDiagram
     atomic_json() complete_recovery()
   }
   class main["__main__"] {
-    main(req) dispatch of 54 operations
+    main(req) dispatch of 64 operations
     move_lock() stop_after_stdin()
     restore-chain entry point
   }
@@ -103,6 +103,7 @@ classDiagram
   class restore_test { restore_test_prepare/run/teardown() start_reaper() }
   class edit { edit_operation() edit_gate() edit_env_apply() edit_apply() edit_rollback() }
   class heal { health_events() self_heal_resolve() self_heal_restart() }
+  class launch { launch_facts() launch_fetch() launch_build() launch_start() launch_runtime_gate() launch_teardown() }
   class databases { sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
   class incremental { plan_incremental() incremental_commit() }
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
@@ -118,6 +119,8 @@ classDiagram
   main --> restore_test
   main --> edit
   main --> heal
+  main --> launch
+  launch --> edit
   heal --> incremental
   main --> install
   main --> staging

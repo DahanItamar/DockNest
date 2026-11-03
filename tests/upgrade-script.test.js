@@ -601,6 +601,31 @@ test('a downgrade to a release before Safe Edit is refused while an edit is unfi
   assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.1.0');
 });
 
+// Launching sites (docs/launch-site.md): a release before migration 17 never resumes or tears down a launch.
+// 2.15.0 (schema 16) and 2.14.0 (schema 14) are such releases; unfinished means queued, running or needs_attention.
+test('a downgrade to a release before Launch is refused while a launch is unfinished or cannot be checked; upgrades never ask', { skip: !shell }, async t => {
+  const f = await fixture(t), origin = join(f.root, 'origin');
+  await writeFile(join(origin, 'package.json'), pkg('2.3.0', '2.0.0')); await writeFile(join(origin, 'src/migrations.js'), migrations([1, -2, -15, -16]));
+  git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'v2.3.0'); git(origin, 'tag', 'v2.3.0');
+  await writeFile(join(origin, 'package.json'), pkg('2.4.0', '2.0.0')); await writeFile(join(origin, 'src/migrations.js'), migrations([1, -2, -15, -16, -17]));
+  git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'v2.4.0'); git(origin, 'tag', 'v2.4.0');
+  await writeFile(join(f.state, 'open-launches'), '1\n'); // an upgrade does not look at launches at all
+  let result = f.run('--version', 'v2.4.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(await f.read('schema'), '17');
+  result = f.run('--version', 'v2.3.0');
+  assert.equal(result.status, 2, result.stderr + result.stdout); assert.match(result.stderr, /A launch has not finished on 1 site\. 2\.3\.0 cannot continue or remove it/);
+  assert.equal((await f.status()).reason, 'jobs-did-not-finish'); assert.equal(f.head(), 'v2.4.0'); assert.notEqual(await f.read('hold'), 'true');
+  await writeFile(join(f.state, 'open-launches'), '2\n');
+  assert.match(f.run('--version', 'v2.1.0').stderr, /A launch has not finished on 2 sites/);
+  await writeFile(join(f.state, 'fail-open-launches'), '');
+  result = f.run('--version', 'v2.3.0');
+  assert.equal(result.status, 2); assert.match(result.stderr, /Could not check the state volume for unfinished launches/);
+  assert.equal(f.head(), 'v2.4.0'); assert.notEqual(await f.read('hold'), 'true');
+  await rm(join(f.state, 'fail-open-launches')); await writeFile(join(f.state, 'open-launches'), '0\n');
+  result = f.run('--version', 'v2.3.0');
+  assert.equal(result.status, 0, result.stderr + result.stdout); assert.equal(f.head(), 'v2.3.0');
+});
+
 test('image mode: --expect-image-digest pulls and persists name:X.Y.Z@sha256, records RepoDigests; upgrade-only checks the running image', { skip: !shell }, async t => {
   const f = await fixture(t), env = join(f.work, '.env'), digest = n => 'sha256:' + String(n).repeat(64);
   await writeFile(join(f.state, 'image-mode'), '');

@@ -8,8 +8,8 @@
 // Pebble where its images can be pulled; otherwise certbot is replaced by a recorded test double and that part is
 // reported as PARTIAL, never as passed (see evidence.partial).
 //
-// The privilege gate (edit_gate, Safe Edit, 2.15) must be in the bundled helper: without it every launch is refused with
-// GATE_UNAVAILABLE, so this script fails at once with a clear message. It never skips a scenario and calls it passed.
+// The privilege gate (edit_gate, Safe Edit, 2.15) is in the bundled helper. If it were ever missing, every launch would be
+// refused with GATE_UNAVAILABLE, so this script fails at once with a clear message. It never skips a scenario and calls it passed.
 // Keys, certificates and passwords are generated at run time; nothing secret is written to this file. Seeded
 // timestamps are in the past. Not runnable on Windows (needs the Docker-in-Docker hosts).
 import assert from 'node:assert/strict';
@@ -293,18 +293,18 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     record('Launch fixture: launch host with nginx, certbot and git; HTTPS and SSH Git servers with run-time keys; bystanders; the privilege gate is in the bundled helper');
 
     // ---------- 4. allow-list refusals (pasted Compose, at Check) ----------
+    // The exact code and field edit_gate (remote/helper/edit.py) returns for each: the service and setting only, no value.
     const unsafe = [
-      ['privileged', BASE_COMPOSE + '    privileged: true\n', /privileged/i],
-      ['host network', BASE_COMPOSE + '    network_mode: host\n', /network|namespace|host/i],
-      ['docker.sock', BASE_COMPOSE + '    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n', /volume|bind|mount|sock/i],
-      ['an /etc bind', BASE_COMPOSE + '    volumes:\n      - /etc:/host-etc\n', /volume|bind|mount|path/i],
+      ['privileged', BASE_COMPOSE + '    privileged: true\n', 'PRIVILEGE_ADDED', 'services.web.privileged'],
+      ['host network', BASE_COMPOSE + '    network_mode: host\n', 'PRIVILEGE_ADDED', 'services.web.network_mode'],
+      ['docker.sock', BASE_COMPOSE + '    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n', 'PATH_REFUSED', 'services.web.volumes'],
+      ['an /etc bind', BASE_COMPOSE + '    volumes:\n      - /etc:/host-etc\n', 'PATH_REFUSED', 'services.web.volumes'],
+      ['cap_add', BASE_COMPOSE + '    cap_add:\n      - SYS_ADMIN\n', 'PRIVILEGE_ADDED', 'services.web.cap_add'],
     ];
-    for (const [what, compose, expected] of unsafe) {
+    for (const [what, compose, code, field] of unsafe) {
       const result = await check('refuse', compose), refusal = refusalOf(result);
       assert.equal(result.ok, false, `${what} is refused`);
-      assert.equal(refusal?.from, 'gate', `${what}: ${JSON.stringify(refusal)}`);
-      assert.notEqual(refusal.code, 'GATE_UNAVAILABLE', what);
-      assert.match(`${refusal.field ?? ''} ${refusal.code}`, expected, `${what} is refused for its own setting: ${JSON.stringify(refusal)}`);
+      assert.deepEqual(refusal, { from: 'gate', code, field }, `${what} is refused for its own setting: ${JSON.stringify(refusal)}`);
     }
     let result = await check('refuse', 'services:\n  web:\n    image: nginx:1.27-alpine\n    build:\n      context: .\n      network: host\n');
     assert.deepEqual([result.ok, refusalOf(result).code, /build\.network/.test(refusalOf(result).field)], [false, 'BUILD_SETTING_REFUSED', true]);
@@ -318,7 +318,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.deepEqual([result.ok, refusalOf(result)?.code], [false, 'COMPOSE_EXTENDS_REFUSED']);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM site_launches WHERE server_id=?").get(lserver.id).n, 0, 'a refused Check starts nothing');
     await assertBystanders();
-    record('Pasted Compose refusals at Check: privileged, network_mode host, docker.sock, /etc bind, build.network host, volume and container name collisions, include and extends; the clean file passes');
+    record('Pasted Compose refusals at Check: privileged, network_mode host, docker.sock, /etc bind, cap_add, build.network host, volume and container name collisions, include and extends; the clean file passes');
 
     // ---------- 11. compose config sandbox ----------
     await sh(lhost, "printf 'QA_OUTSIDE=1\\n' > /root/qa-outside.env && printf 'services:\\n  web:\\n    image: nginx:1.27-alpine\\n    env_file: /root/qa-outside.env\\n' > /tmp/qa-env.yaml && docker compose -f /tmp/qa-env.yaml config -q");

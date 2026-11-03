@@ -18,6 +18,8 @@ const schema = db => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_maste
 const contents = (db, tables) => Object.fromEntries(tables.map(name => [name, db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all().map(row => ({ ...row }))]));
 // The released 2.14.0 schema: migrations 1 to 14 (13 site-certificates, 14 site-hardening).
 const before = migrations.filter(migration => migration.version <= 14);
+// 2.15.0's release: migrations 1 to 16. Migration 17 (launch, 2.16) has its own tests in launch-migration.test.js.
+const release215 = migrations.filter(migration => migration.version <= 16);
 const selfHeal = ['self_heal_events', 'self_heal_events_at', 'self_heal_events_keep_recent', 'self_heal_events_no_update', 'self_heal_events_site', 'self_heal_settings'];
 const safeEdits = ['site_compose_invocations', 'site_edit_steps', 'site_edit_steps_no_delete', 'site_edits', 'site_edits_no_delete', 'site_edits_result_once', 'site_edits_site_active', 'site_edits_site_created'];
 const added = [...selfHeal, ...safeEdits].sort();
@@ -40,9 +42,9 @@ function fixture(db) {
 test('migration 16 is self-heal, compatible, and the versions are 1..16 with 2.14.0 at 13 and 14', () => {
   const migration = migrations.find(item => item.version === 16);
   assert.equal(migration.name, 'self-heal'); assert.equal(migration.compatible, true);
-  assert.deepEqual(migrations.filter(item => item.version >= 13).map(item => [item.version, item.name]), [[13, 'site-certificates'], [14, 'site-hardening'], [15, 'safe-edits'], [16, 'self-heal']]);
+  assert.deepEqual(migrations.filter(item => item.version >= 13 && item.version <= 16).map(item => [item.version, item.name]), [[13, 'site-certificates'], [14, 'site-hardening'], [15, 'safe-edits'], [16, 'self-heal']]);
   assert.deepEqual(migrations.map(item => item.version), migrations.map((_, index) => index + 1));
-  assert.equal(schemaVersion, 16); assert.equal(compatFloor(migrations), 1, 'self-heal does not raise the compatibility floor');
+  assert.ok(schemaVersion >= 16); assert.equal(compatFloor(release215), 1, 'self-heal does not raise the compatibility floor');
 });
 
 test('a 2.14.0 database (schema 14) upgrades with every row unchanged, self-heal off, and a second start is a no-op', () => temporary(async directory => {
@@ -52,7 +54,7 @@ test('a 2.14.0 database (schema 14) upgrades with every row unchanged, self-heal
     migrate(db, { file, list: before, log: quiet });
     fixture(db);
     const old = schema(db), tables = old.filter(row => row.type === 'table').map(row => row.name), rows = contents(db, tables);
-    const result = migrate(db, { file, log: quiet });
+    const result = migrate(db, { file, list: release215, log: quiet });
     assert.equal(result.from, 14); assert.equal(result.to, 16); assert.ok(result.snapshot, 'a pre-upgrade snapshot is taken');
     const withoutFloor = value => Object.fromEntries(Object.entries(value).map(([name, list]) => [name, name === 'settings' ? list.filter(row => row.key !== 'schema_compat_floor') : list]));
     assert.deepEqual(withoutFloor(contents(db, tables)), withoutFloor(rows), 'no existing row changes');
@@ -61,7 +63,7 @@ test('a 2.14.0 database (schema 14) upgrades with every row unchanged, self-heal
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM self_heal_settings').get().n, 0, 'off for every site');
     // Idempotent: a restart migrates nothing, and re-running the DDL changes nothing.
     const after = schema(db);
-    assert.deepEqual(migrate(db, { file, log: quiet }), { from: 16, to: 16, snapshot: null });
+    assert.deepEqual(migrate(db, { file, list: release215, log: quiet }), { from: 16, to: 16, snapshot: null });
     migrations.find(item => item.version === 15).up(db); migrations.find(item => item.version === 16).up(db);
     assert.deepEqual(schema(db), after);
     // Rolling back: older code accepts the newer, compatible schema without touching it.
@@ -108,7 +110,7 @@ test('the real 2.14.0 code builds the schema-14 database, it upgrades to 16 unch
     assert.equal(old.migrate(db, { file, log: quiet }).to, 14);
     fixture(db);
     const oldSchema = schema(db), tables = oldSchema.filter(row => row.type === 'table').map(row => row.name), rows = contents(db, tables);
-    assert.equal(migrate(db, { file, log: quiet }).to, 16);
+    assert.equal(migrate(db, { file, list: release215, log: quiet }).to, 16);
     const strip = value => Object.fromEntries(Object.entries(value).map(([name, list]) => [name, name === 'settings' ? list.filter(row => row.key !== 'schema_compat_floor') : list]));
     assert.deepEqual(strip(contents(db, tables)), strip(rows));
     for (const row of oldSchema) assert.deepEqual(schema(db).find(item => item.name === row.name), row, 'unchanged: ' + row.name);
@@ -130,7 +132,7 @@ test('a pre-release 2.15 database (placeholder 13, Safe Edit 14, self-heal 15) g
         db.exec('PRAGMA foreign_keys=ON');
         assert.equal(migrate(db, { file, list: prerelease.filter(item => item.version <= upTo), log: quiet }).to, upTo);
         for (const name of ['site_certificates', 'site_hardening']) assert.equal(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), undefined, `the pre-release v${upTo} has no ${name}`);
-        assert.equal(migrate(db, { file, log: quiet }).to, 16);
+        assert.equal(migrate(db, { file, list: release215, log: quiet }).to, 16);
         for (const name of ['site_certificates', 'site_hardening', 'site_edits', 'self_heal_settings']) assert.ok(db.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(name), `${name} after a pre-release v${upTo}`);
       } finally { db.close(); }
     }

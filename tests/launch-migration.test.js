@@ -23,13 +23,15 @@ async function withDatabase(upTo, work) {
 }
 const NEW_OBJECTS = ['deploy_keys', 'site_launch_steps', 'site_launch_steps_jobs', 'site_launch_steps_no_delete', 'site_launches', 'site_launches_no_delete', 'site_launches_reason_once', 'site_launches_server_active', 'site_launches_server_created', 'site_launches_server_slug'];
 
-test('migrations 15 and 16 are reserved no-ops for 2.15 and 17 is one compatible site-launches line; the floor stays 1', async () => {
+test('migrations 15 and 16 are 2.15 safe-edits and self-heal, 17 is one compatible site-launches line; the floor stays 1', async () => {
   const source = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/);
-  for (const version of [15, 16]) {
+  for (const [version, name] of [[15, 'safe-edits'], [16, 'self-heal']]) {
     const lines = source.filter(line => new RegExp(`^\\s*\\{\\s*version:\\s*${version}\\b`).test(line));
     assert.equal(lines.length, 1);
-    assert.match(lines[0], new RegExp(`^ {2}\\{ version: ${version}, name: 'reserved-2\\.15', compatible: true, up: \\(\\) => \\{\\} \\},$`));
+    assert.match(lines[0], new RegExp(`^ {2}\\{ version: ${version}, name: '${name}', compatible: true, up: db => `));
   }
+  assert.ok(!source.some(line => /reserved-2\.15/.test(line)), 'no reserved placeholder is left');
+  assert.ok(migrations.every(migration => migration.compatible !== false), 'every migration stays compatible');
   assert.match(source.filter(line => /^\s*\{\s*version:\s*17\b/.test(line))[0], /^ {2}\{ version: 17, name: 'site-launches', compatible: true, up: siteLaunches \},$/);
   assert.ok(schemaVersion >= 17); assert.equal(compatFloor(migrations), 1);
   assert.deepEqual(migrations.slice(0, 17).map(migration => migration.version), Array.from({ length: 17 }, (_, index) => index + 1), 'versions stay contiguous');
@@ -41,9 +43,10 @@ test('a 14-schema (2.14.x) database gains only the launch objects, keeps every r
   db.prepare("INSERT INTO sites VALUES('site','s','shop','{}','2026-01-01')").run();
   for (const [installId, pkg, status] of [['i1', 'nginx', 'completed'], ['i2', 'certbot', 'failed'], ['i3', 'docker', 'queued']]) db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,error,created_at) VALUES(?,?,?,?,?,'[]','admin',?,'2026-01-02')").run(installId, 's', pkg, status, status, status === 'failed' ? 'reason' : null);
   assert.throws(() => db.prepare("INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,created_at) VALUES('x','s','git','queued','queued','[]','a','x')").run(), /CHECK constraint failed/, '2.14 refuses git');
+  migrate(db, { file, list: migrations.slice(0, 16), log: quiet }); // 2.15's Safe Edit and self-heal tables first
   const before = schema(db), installs = db.prepare('SELECT * FROM server_installs ORDER BY id').all().map(row => ({ ...row }));
   const result = migrate(db, { file, list: migrations.slice(0, 17), now: () => new Date('2026-11-02T08:00:00.000Z'), log: quiet });
-  assert.equal(result.from, 14); assert.equal(result.to, 17); assert.match(result.snapshot, /state-v14-to-v17-/);
+  assert.equal(result.from, 16); assert.equal(result.to, 17); assert.match(result.snapshot, /state-v16-to-v17-/);
   for (const row of before.filter(item => !item.name.startsWith('server_installs'))) assert.deepEqual(schema(db).find(item => item.name === row.name), row, `${row.name} keeps its definition`);
   assert.deepEqual(schema(db).map(row => row.name).filter(name => !before.some(row => row.name === name)).sort(), NEW_OBJECTS);
   assert.deepEqual(db.prepare('SELECT * FROM server_installs ORDER BY id').all().map(row => ({ ...row })), installs, 'install rows are copied unchanged');
@@ -59,7 +62,7 @@ test('a 14-schema (2.14.x) database gains only the launch objects, keeps every r
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
 }));
 
-test('2.15-era code can keep using the database: the reserved versions are no-ops and a schema at 17 is compatible', () => withDatabase(16, async (db, file) => {
+test('2.15 code can keep using the database: a schema at 17 is compatible with a list that stops at 16', () => withDatabase(16, async (db, file) => {
   assert.deepEqual(schema(db).filter(row => NEW_OBJECTS.includes(row.name)), [], 'nothing launch-related before 17');
   migrate(db, { file, list: migrations.slice(0, 17), log: quiet });
   // An older list (up to 16) on a 17 database continues without changes because 17 is compatible.
@@ -128,6 +131,7 @@ test('a 2.14.0-shaped database with rows across its tables migrates to 17 with e
   for (const row of installs) run('INSERT INTO server_installs(id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', ...row);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(row => row.name);
   const before = allRows(db, tables), shapeBefore = tableShape(db, 'server_installs');
+  migrate(db, { file, list: migrations.slice(0, 16), log: quiet }); // 15 (safe-edits) and 16 (self-heal) apply first, as on a 2.15 install
   assert.ok(Object.values(before).filter(rows => rows.length).length >= 12, 'the fixture has rows in most tables');
   migrate(db, { file, list: migrations.slice(0, 17), log: quiet });
   assert.deepEqual(allRows(db, tables), before, 'no row of any 2.14 table changes, server_installs included (ids and every value)');

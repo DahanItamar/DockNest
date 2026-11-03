@@ -209,6 +209,18 @@ refuse_open_edits() {
   case "$count" in ''|*[!0-9]*) $1; fail 2 'Could not check the state volume for unfinished Safe Edits. Downgrade refused; nothing was changed.' jobs-did-not-finish ;; esac
   [ "$count" = 0 ] || { $1; fail 2 "A Safe Edit has not finished on $count site$([ "$count" = 1 ] || echo s). $TO cannot see it, so the downgrade is refused. Let it finish or resolve it in the dashboard, then retry. Nothing was changed." jobs-did-not-finish; }
 }
+# Unfinished launches (docs/launch-site.md): site_launches in state queued, running or needs_attention, or a launch step still
+# launch_queued or launch_running; 0 before migration 17 created the tables. \x27 is a quote inside the single-quoted script.
+open_launches() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});const has=n=>d.prepare("SELECT 1 FROM sqlite_master WHERE type=? AND name=?").get("table",n);console.log(has("site_launches")&&has("site_launch_steps")?d.prepare("SELECT COUNT(*) AS n FROM site_launches WHERE state IN (\x27queued\x27,\x27running\x27,\x27needs_attention\x27) OR id IN (SELECT launch_id FROM site_launch_steps WHERE state IN (\x27launch_queued\x27,\x27launch_running\x27))").get().n:0);d.close()' 2>/dev/null | tail -n 1; }
+# A release before migration 17 never resumes, finishes or tears down a launch, so whatever it had made on the server would
+# stay there: going back to one is refused until every launch has ended. Checked before and again after the hold.
+LAUNCH_SCHEMA=17
+refuse_open_launches() {
+  [ "${TARGET_SCHEMA:-0}" -lt "$LAUNCH_SCHEMA" ] && [ "${DB_SCHEMA:-0}" -ge "$LAUNCH_SCHEMA" ] || return 0
+  count=$(open_launches)
+  case "$count" in ''|*[!0-9]*) $1; fail 2 'Could not check the state volume for unfinished launches. Downgrade refused; nothing was changed.' jobs-did-not-finish ;; esac
+  [ "$count" = 0 ] || { $1; fail 2 "A launch has not finished on $count site$([ "$count" = 1 ] || echo s). $TO cannot continue or remove it, so the downgrade is refused. Let it finish or remove it in the dashboard, then retry. Nothing was changed." jobs-did-not-finish; }
+}
 db_schema() { docker compose run --rm --no-deps -T --entrypoint node worker -e 'const {DatabaseSync}=require("node:sqlite");const d=new DatabaseSync("/data/state.sqlite",{readOnly:true});console.log(d.prepare("PRAGMA user_version").get().user_version);d.close()' 2>/dev/null | tail -n 1; }
 # healthy VERSION SECONDS: the API reports VERSION and the worker runs. VERSION "legacy" means a release without
 # /api/version (v2.0.0 answers 401 there), where /healthz is the only signal.
@@ -718,6 +730,7 @@ if [ "$DB_SCHEMA" -gt "$COMPATIBLE" ]; then
   fi
 fi
 refuse_open_edits :
+refuse_open_launches :
 if [ "$DRY_RUN" = 1 ]; then
   FINISHED=1; echo "Dry run: would upgrade $FROM to $TO. Nothing was fetched, held, written or changed."
   # The plan for after a successful upgrade: this run adds one backup and the running image becomes the previous one.
@@ -743,6 +756,7 @@ if docker compose exec -T worker test -f src/worker-status.js >/dev/null 2>&1; t
   docker compose exec -T worker node src/worker-status.js || { [ "$FORCE" = 1 ] || { release_hold; HOLD=0; fail 3 'The worker reports active work. Retry when it is idle (or use --force).' jobs-did-not-finish; }; }
 fi
 refuse_open_edits 'release_open_hold'
+refuse_open_launches 'release_open_hold'
 HINT="docker compose exec api node scripts/deployment-preflight.js release   # lifts the hold set by this script"
 
 phase backup 'Saving configuration and secrets for rollback'

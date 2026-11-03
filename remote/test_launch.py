@@ -40,7 +40,7 @@ class Host:
         self.nginx_dump=kw.get('nginx_dump','# configuration file /etc/nginx/nginx.conf:\nevents {}\nhttp { include /etc/nginx/conf.d/*.conf; }\n')
         self.fail=kw.get('fail',{});self.dns=kw.get('dns',PUBLIC_V4);self.tools=set(kw.get('tools',{'ssh','nginx','certbot','git','docker','buildx','unshare','mount'}))
         self.ports=kw.get('ports',[]);self.addresses=kw.get('addresses',['203.0.113.10']);self.keyscan=kw.get('keyscan','')
-        self.containers=kw.get('containers',[]);self.gate=kw.get('gate');self.on_call=kw.get('on_call')
+        self.containers=kw.get('containers',[]);self.gate=kw.get('gate');self.nogate=kw.get('nogate');self.on_call=kw.get('on_call')
         self.ss=kw.get('ss',{});self.proc=kw.get('proc',{})  # port -> `ss -ltnpH` output / process names from /proc
         self.labels={}  # docker object -> launch label, for teardown
     def site(self,slug='shop'):return self.sites/slug
@@ -117,6 +117,7 @@ class Host:
             patch('helper.inspect',side_effect=lambda ids:[c for c in self.containers if c['Id'] in ids]),
             patch('helper.launch_port_users_proc',side_effect=lambda port:list(self.proc.get(port,[])))]
         if self.gate is not None:patches.append(patch('helper.edit_gate',side_effect=self.gate,create=True))
+        if self.nogate:patches.append(patch('helper.edit_gate',None))  # the bundle without Safe Edit's gate
         if os.name!='posix':patches.append(patch('helper.atomic_json',side_effect=lambda path,value:pathlib.Path(path).write_text(json.dumps(value))))  # Windows cannot open a folder to fsync it
         for item in patches:item.start()
         try:helper.main(request)
@@ -342,9 +343,31 @@ class FetchTests(unittest.TestCase):
 
 class GateTests(unittest.TestCase):
     def test_without_the_safe_edit_gate_the_launch_is_refused(self):
-        self.assertFalse(callable(getattr(helper,'edit_gate',None)),'remove this test when 2.15 lands; the lead wires real gate tests')
-        result=Host(self).run('launch-fetch',source='compose',composeText='services: {}\n')
+        # Fail closed: a helper without edit_gate (patched out here) refuses instead of skipping the check.
+        result=Host(self,nogate=True).run('launch-fetch',source='compose',composeText='services: {}\n')
         self.assertEqual((result['ok'],result['code']),(False,'GATE_UNAVAILABLE'))
+    def test_the_bundle_carries_the_real_safe_edit_gate(self):
+        self.assertTrue(callable(helper.edit_gate))
+        self.assertEqual(helper.edit_gate.__code__.co_varnames[:5],('current','candidate','roots','current_env','candidate_env'))
+    def real_gate(self,service,**top):
+        """launch-fetch through the bundled edit_gate (nothing patched): the refusals the owner would see."""
+        model=lambda h:{'name':'shop','services':{'web':{'image':'nginx:alpine',**service}},**top}
+        return Host(self,model=model).run('launch-fetch',source='compose',composeText='x: 1\n')
+    def test_real_gate_refuses_host_access_and_reports_the_field(self):
+        cases={
+            'privileged':({'privileged':True},'PRIVILEGE_ADDED','services.web.privileged'),
+            'network_mode host':({'network_mode':'host'},'PRIVILEGE_ADDED','services.web.network_mode'),
+            'docker.sock':({'volumes':[{'type':'bind','source':'/var/run/docker.sock','target':'/var/run/docker.sock'}]},'PATH_REFUSED','services.web.volumes'),
+            '/etc bind':({'volumes':[{'type':'bind','source':'/etc','target':'/host-etc'}]},'PATH_REFUSED','services.web.volumes'),
+            'cap_add':({'cap_add':['SYS_ADMIN']},'PRIVILEGE_ADDED','services.web.cap_add')}
+        for name,(service,code,field) in cases.items():
+            result=self.real_gate(service)
+            self.assertEqual((result['ok'],result['code']),(False,'GATE_REFUSED'),name)
+            self.assertEqual(result['gate']['refusals'],[{'code':code,'service':'web','field':field}],name)
+    def test_real_gate_passes_a_clean_nginx_compose_file(self):
+        result=self.real_gate({'ports':[{'target':80,'published':'8080','host_ip':'127.0.0.1','protocol':'tcp'}],'volumes':[{'type':'volume','source':'html','target':'/usr/share/nginx/html'}]},volumes={'html':{'name':'shop_html'}})
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(helper.launch_runtime_gate({'name':'shop','services':{'web':{'image':'nginx:alpine'}}},pathlib.Path('/srv/docknest/shop')),[])
     def test_gate_is_called_with_the_site_folder_as_the_only_before(self):
         calls=[]
         def gate(current,candidate,roots,current_env,candidate_env):
@@ -798,7 +821,7 @@ class ReviewTests(unittest.TestCase):
         result=host.run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
         self.assertEqual(result['gate'],{'ok':True,'refusals':[]});self.assertEqual(result['composeName'],'wp')
         self.assertEqual(result['warnings'],[{'code':'NGINX_IP_LISTEN','listen':'192.0.2.10:80'}])
-        nogate=Host(self).run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
+        nogate=Host(self,nogate=True).run('launch-facts',source='compose',domain='shop.example.com',composeText='services: {}\n')
         self.assertEqual(nogate['gate']['refusals'][0]['code'],'GATE_UNAVAILABLE')
     def test_unreadable_lineages_count_as_conflicts(self):
         host=Host(self);(host.le/'live'/'old').mkdir(parents=True)
