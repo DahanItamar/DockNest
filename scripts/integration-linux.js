@@ -84,6 +84,16 @@ try {
   db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(destinationId,'Remote QA Storage',storageServer.host,storageServer.port,'root',storageServer.host_key,'password',seal(storagePassword),storageOptions.root,1e12,'connected',storageNow,storageNow);
   db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(destinationId);
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
+  // INTEGRATION_ONLY=self-heal (test-only, for a quick re-run of one scenario through workflow_dispatch): the hosts and
+  // the remote storage above are what the self-heal scenario needs (it builds its own site image). Unset, the full run
+  // below is unchanged. Partial evidence is marked as such and never reads as a full pass.
+  const only = process.env.INTEGRATION_ONLY || '';
+  if (only) {
+    if (only !== 'self-heal') throw new Error(`INTEGRATION_ONLY supports only "self-heal", not "${only.slice(0, 40)}"`);
+    evidence.only = only;
+    const {runSelfHealScenario}=await import('./integration-self-heal.js');
+    await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
+  } else {
   await run('cp','remote',hosts[0]+':/qa-helper');
   // The tests import the built helper (one file, as servers receive it) from bundle/ (remote/helper_path.py).
   await run('exec',hosts[0],'mkdir','-p','/qa-helper/bundle');
@@ -307,7 +317,9 @@ try {
   // Last: its Docker daemon restart case stops every container on the source host.
   const {runSelfHealScenario}=await import('./integration-self-heal.js');
   await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
-  evidence.status = 'passed';
+  }
+  evidence.status = only ? 'partial' : 'passed';
+  if (only) evidence.onlyResult = 'passed';
 } catch (error) {
   evidence.status = 'failed';
   // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.

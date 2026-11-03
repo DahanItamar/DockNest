@@ -10,6 +10,16 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Manual run of the Linux integration job only, optionally one scenario: `only=self-heal` (scripts/integration-linux.js
+  # INTEGRATION_ONLY). Test-only and never a merge signal: every other job and the beta gate are skipped on it, so the
+  # checks that pull requests and main require are unchanged.
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Run only this Linux integration scenario (self-heal), or leave empty for the full suite'
+        type: string
+        required: false
+        default: ''
 concurrency:
   group: verify-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -17,6 +27,7 @@ permissions:
   contents: read
 jobs:
   privacy:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -34,6 +45,7 @@ jobs:
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks git . --log-opts="--all" --redact=100 --max-archive-depth=2 --no-banner
   check:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -48,6 +60,7 @@ jobs:
       - run: npm run check
       - run: docker build -t docknest:ci .
   browser:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -85,7 +98,7 @@ jobs:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000
   linux-integration:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-26.04
     # Safe Edit scenarios (scripts/integration-safe-edit.js) add about 20 minutes of real health windows.
     timeout-minutes: 95
@@ -100,12 +113,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:integration
+        env:
+          INTEGRATION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.only || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: linux-integration-results
           path: data/qa/linux-integration.json
   upgrade:
+    if: github.event_name != 'workflow_dispatch'
     # Starts this commit on metadata written by every final release since minUpgradeFrom, then checks the downgrade
     # guard and snapshot rollback. Not a required check unless branch protection adds it.
     runs-on: ubuntu-26.04
@@ -129,6 +145,7 @@ jobs:
       - name: Upgrade script against a Compose test double
         run: node --test tests/upgrade-script.test.js
   controlled-beta-gate:
+    if: github.event_name != 'workflow_dispatch'
     needs: [privacy, check, browser, linux-integration]
     runs-on: ubuntu-26.04
     steps:
@@ -158,6 +175,7 @@ jobs:
   # separate from controlled-beta-gate. Upstream MinIO images and binaries are
   # archived, so this pins the maintained Pigsty fork by digest.
   s3-integration:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
