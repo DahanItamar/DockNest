@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, VERSION, emit, private_staging_base, run, sync_maintenance_flag)
+    LAUNCH_HEADER_PATTERN, NOFOLLOW, VERSION, emit, private_staging_base, run, sync_maintenance_flag)
 from .paths import (
     lexical, maintenance_directory_problem, maintenance_link_escape, warn, within)
 from .net import (
@@ -135,9 +135,10 @@ def maintenance_snippet(site,directory):
     suffix=site.replace('-','')[:12]
     return ('# Managed by DockNest: maintenance page for site %s. DockNest switches it on only during a backup.\n'
         'set $dn_maint_%s 0;\nif (-f %s/enabled) { set $dn_maint_%s 1; }\n'
-        'if ($uri = /__docknest_maintenance.html) { set $dn_maint_%s 0; }\nif ($dn_maint_%s) { return 503; }\n'
+        'if ($uri = /__docknest_maintenance.html) { set $dn_maint_%s 0; }\n'
+        'if ($uri ~ ^/\\.well-known/acme-challenge/) { set $dn_maint_%s 0; }\nif ($dn_maint_%s) { return 503; }\n'
         'error_page 503 /__docknest_maintenance.html;\n'
-        'location = /__docknest_maintenance.html { internal; alias %s/maintenance.html; default_type text/html; add_header Retry-After 30 always; add_header Cache-Control no-store always; }\n')%(site,suffix,directory,suffix,suffix,suffix,directory)
+        'location = /__docknest_maintenance.html { internal; alias %s/maintenance.html; default_type text/html; add_header Retry-After 30 always; add_header Cache-Control no-store always; }\n')%(site,suffix,directory,suffix,suffix,suffix,suffix,directory)
 def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root='/etc/nginx'):
     """Planned edits {path: new text}. Only files under /etc/nginx; redirect-only blocks are left alone."""
     wanted={d.lower() for d in domains};edits={};found=False
@@ -145,10 +146,13 @@ def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
         for entry in sorted(directory.iterdir()):
-            if entry.name.startswith(('docknest-','.')):continue
+            if entry.name.startswith('.'):continue
             real=pathlib.Path(os.path.realpath(entry))
             if not real.is_file() or not real.is_relative_to(os.path.realpath(root)) or real.stat().st_size>1024*1024:continue
             text=edits.get(str(real)) or real.read_text()
+            # Other files DockNest writes (moves, ...) are left alone. A site launched by DockNest is served by a file it
+            # wrote itself, marked by this header (launch.py LAUNCH_HEADER); that file takes the include too.
+            if entry.name.startswith('docknest-') and not LAUNCH_HEADER_PATTERN.match(text):continue
             blocks=[b for b in nginx_server_blocks(text) if b['names']&wanted]
             if not blocks:continue
             found=True
@@ -158,6 +162,14 @@ def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root
             if text!=real.read_text():edits[str(real)]=text
     if not found:raise ValueError('The site\'s domains were not found in this server\'s nginx configuration.')
     return edits
+def settled_probe(m,domains,accepted,seconds=8):
+    """public_probe, repeated for a few seconds until the answer is the expected one. `nginx -s reload` returns before the
+    new workers take over, and the flag file is seen at once, so the first probe can still meet the old configuration."""
+    deadline=time.monotonic()+seconds
+    while True:
+        status,body=public_probe(m,domains)
+        if accepted(status,body) or time.monotonic()>=deadline:return status,body
+        time.sleep(0.5)
 def setup_maintenance(req):
     cfg=req['config'];m=cfg.get('maintenance',{});site=str(req['siteId']);uuid.UUID(site)
     if os.geteuid()!=0:raise ValueError('Setting up the maintenance page requires root on the server')
@@ -188,10 +200,10 @@ def setup_maintenance(req):
         try:nginx_reload()
         except Exception:raise ValueError('nginx rejected the maintenance page settings, so DockNest put the configuration back.')
         flag.touch(mode=0o644)
-        status,body=public_probe(m,domains)
+        status,body=settled_probe(m,domains,lambda code,page:code==503 and b'dbm-maintenance-v1' in page)
         if status!=503 or b'dbm-maintenance-v1' not in body:raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
         flag.unlink()
-        status,body=public_probe(m,domains)
+        status,body=settled_probe(m,domains,lambda code,page:code==200 and b'dbm-maintenance-v1' not in page)
         if status!=200 or b'dbm-maintenance-v1' in body:raise ValueError('The site did not come back normally after the test (HTTP %d), so DockNest put the configuration back.'%status)
     except BaseException:
         flag.unlink(missing_ok=True)

@@ -74,7 +74,10 @@ rm -rf /srv/git /tmp/work; mkdir -p /srv/git /tmp/work
 publish() { (cd /tmp/work/$1 && git init -q -b main . && git add -A && git commit -q -m seed); }
 bare() { git clone -q --bare /tmp/work/$1 /srv/git/$1.git && git -C /srv/git/$1.git update-server-info; }
 web() { mkdir -p /tmp/work/$1; printf 'launch-git-ok\n' > /tmp/work/$1/index.html
-  printf 'FROM busybox:1.36\nCOPY index.html /www/index.html\nHEALTHCHECK --interval=2s --timeout=2s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1\nCMD ["httpd","-f","-p","8080","-h","/www"]\n' > /tmp/work/$1/Dockerfile
+  # busybox httpd as PID 1 ignores SIGTERM, so Docker would kill it (exit 137) and DockNest rightly refuses that as a clean
+  # shutdown. A well-behaved app exits 0 on SIGTERM; this small wrapper does that.
+  printf '#!/bin/sh\ntrap "exit 0" TERM INT\nhttpd -f -p 8080 -h /www &\nwait $!\n' > /tmp/work/$1/run.sh
+  printf 'FROM busybox:1.36\nCOPY index.html /www/index.html\nCOPY run.sh /run.sh\nHEALTHCHECK --interval=2s --timeout=2s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1\nCMD ["sh","/run.sh"]\n' > /tmp/work/$1/Dockerfile
   printf 'services:\n  web:\n    build: .\n    expose:\n      - "8080"\n' > /tmp/work/$1/compose.yaml; }
 plain() { mkdir -p /tmp/work/$1; printf 'services:\n  web:\n    image: busybox:1.36\n    command: ["httpd","-f","-p","8080","-h","/tmp"]\n    expose:\n      - "8080"\n%b' "${'$'}{2:-}" > /tmp/work/$1/compose.yaml; }
 # public: builds and runs
@@ -103,8 +106,11 @@ case "$1" in
   name=""; domain=""
   while [ $# -gt 0 ]; do case "$1" in --cert-name) name="$2"; shift;; -d) [ -n "$domain" ] || domain="$2"; shift;; esac; shift; done
   dir=/etc/letsencrypt/live/$name; mkdir -p "$dir" /etc/letsencrypt/renewal /etc/letsencrypt/accounts
-  openssl req -x509 -newkey rsa:2048 -nodes -keyout "$dir/privkey.pem" -out "$dir/fullchain.pem" -subj "/CN=$domain" -addext "subjectAltName=DNS:$domain" -days 2 >/dev/null 2>&1 || exit 1
-  cp "$dir/fullchain.pem" "$dir/cert.pem"; cp "$dir/fullchain.pem" "$dir/chain.pem"; echo "# test double" > "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
+  # Signed by a CA made at run time and trusted by this host (see the install step), so the helper's HTTPS probe verifies it.
+  openssl req -newkey rsa:2048 -nodes -keyout "$dir/privkey.pem" -out "$dir/req.csr" -subj "/CN=$domain" >/dev/null 2>&1 || exit 1
+  printf 'subjectAltName=DNS:%s\n' "$domain" > "$dir/ext.cnf"
+  openssl x509 -req -in "$dir/req.csr" -CA /etc/docknest-qa-ca/ca.pem -CAkey /etc/docknest-qa-ca/ca.key -CAcreateserial -out "$dir/cert.pem" -days 2 -extfile "$dir/ext.cnf" >/dev/null 2>&1 || exit 1
+  rm -f "$dir/req.csr" "$dir/ext.cnf"; cp "$dir/cert.pem" "$dir/fullchain.pem"; cp /etc/docknest-qa-ca/ca.pem "$dir/chain.pem"; echo "# test double" > "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
  delete)
   name=""; while [ $# -gt 0 ]; do case "$1" in --cert-name) name="$2"; shift;; esac; shift; done
   rm -rf "/etc/letsencrypt/live/$name" "/etc/letsencrypt/archive/$name" "/etc/letsencrypt/renewal/$name.conf"; exit 0;;
@@ -174,18 +180,18 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     await sh(gitHost, 'apk add --no-cache git git-daemon openssl >/dev/null && git config --system safe.directory "*"');
     await sh(gitHost, 'test -x "$(git --exec-path)/git-http-backend"').catch(() => { throw new Error('The Git server host has no git-http-backend'); });
     await sh(gitHost, "(id git >/dev/null 2>&1 || adduser -D -s /bin/sh git) && sed -i 's/^git:!:/git:*:/' /etc/shadow && mkdir -p /home/git/.ssh && chmod 700 /home/git/.ssh && touch /home/git/.ssh/authorized_keys && chmod 600 /home/git/.ssh/authorized_keys && chown -R git:git /home/git");
-    await sh(gitHost, `mkdir -p /tmp/pki && cd /tmp/pki && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-ca -days 2 -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1 && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr -subj /CN=${GIT_HOST} >/dev/null 2>&1 && printf 'subjectAltName=DNS:${GIT_HOST}\\n' > ext.cnf && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile ext.cnf >/dev/null 2>&1`);
+    await sh(gitHost, `mkdir -p /opt/pki && cd /opt/pki && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-ca -days 2 -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1 && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr -subj /CN=${GIT_HOST} >/dev/null 2>&1 && printf 'subjectAltName=DNS:${GIT_HOST}\\n' > ext.cnf && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile ext.cnf >/dev/null 2>&1`);
     await writeTo(gitHost, '/git-http.py', GIT_HTTP_SERVER); await writeTo(gitHost, '/git-repos.sh', GIT_REPOS);
     await sh(gitHost, 'sh /git-repos.sh');
     await sh(gitHost, 'mkdir -p /tmp/trap && ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/git_host_ed25519');
     await writeTo(gitHost, '/etc/ssh/sshd_config_git', 'Port 2222\nHostKey /etc/ssh/git_host_ed25519\nPermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nAllowUsers git\nAuthorizedKeysFile /home/git/.ssh/authorized_keys\nPidFile /run/sshd-git.pid\n');
     await run('exec', '-d', gitHost, '/usr/sbin/sshd', '-D', '-e', '-f', '/etc/ssh/sshd_config_git');
-    await run('exec', '-d', gitHost, 'sh', '-c', `exec python3 /git-http.py /srv/git /tmp/pki/srv.pem /tmp/pki/srv.key http://${gip}:8099 > /tmp/git-http.log 2>&1`);
+    await run('exec', '-d', gitHost, 'sh', '-c', `exec python3 /git-http.py /srv/git /opt/pki/srv.pem /opt/pki/srv.key http://${gip}:8099 > /tmp/git-http.log 2>&1`);
     await run('exec', '-d', gitHost, 'sh', '-c', 'cd /tmp/trap && exec python3 -m http.server 8099 --bind 0.0.0.0 > /tmp/trap.log 2>&1');
     for (const port of [2222, 8443, 8099]) await until(() => listening(gitHost, port), `The Git server did not listen on ${port}`, 60);
     // The launch host trusts the run-time CA and finds the Git server by name (the helper resolves it like any server).
     await sh(lhost, 'mkdir -p /usr/local/share/ca-certificates');
-    await run('cp', gitHost + ':/tmp/pki/ca.pem', join(directory, 'qa-ca.pem'));
+    await run('cp', gitHost + ':/opt/pki/ca.pem', join(directory, 'qa-ca.pem'));
     await run('cp', join(directory, 'qa-ca.pem'), lhost + ':/usr/local/share/ca-certificates/docknest-qa-ca.crt');
     await rm(join(directory, 'qa-ca.pem'), { force: true });
     await sh(lhost, 'update-ca-certificates >/dev/null 2>&1');
@@ -195,8 +201,9 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     // Certificates: Pebble where its images can be pulled, otherwise a recorded certbot double (reported as PARTIAL).
     try {
-      const tag = process.env.DOCKNEST_PEBBLE_TAG || 'v2.7.0';
-      const image = name => `ghcr.io/letsencrypt/${name}:${tag}`;
+      // Pebble 2.10.1 (tags have no leading v), pinned by the digest of the multi-arch image index.
+      const digests = { pebble: 'sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199', 'pebble-challtestsrv': 'sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b' };
+      const image = name => `ghcr.io/letsencrypt/${name}@${digests[name]}`;
       await run('exec', lhost, 'docker', 'pull', '-q', image('pebble')); await run('exec', lhost, 'docker', 'pull', '-q', image('pebble-challtestsrv'));
       await writeTo(lhost, '/pebble-config.json', JSON.stringify({ pebble: { listenAddress: '0.0.0.0:14000', managementListenAddress: '0.0.0.0:15000', certificate: 'test/certs/localhost/cert.pem', privateKey: 'test/certs/localhost/key.pem', httpPort: 80, tlsPort: 443, ocspResponderURL: '', externalAccountBindingRequired: false } }));
       await run('exec', lhost, 'docker', 'network', 'create', 'qa-pebble');
@@ -206,11 +213,14 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       await sh(lhost, 'mkdir -p /etc/letsencrypt');
       await writeTo(lhost, '/etc/letsencrypt/cli.ini', 'server = https://127.0.0.1:14000/dir\nno-verify-ssl = true\nemail = qa@example.invalid\nagree-tos = true\nno-eff-email = true\n');
       await sh(lhost, 'certbot register --non-interactive >/dev/null 2>&1');
+      // Pebble's issuing root is made at start-up; the host trusts it so the helper's verified HTTPS probe accepts the certificates.
+      await sh(lhost, 'curl -sk https://127.0.0.1:15000/roots/0 > /usr/local/share/ca-certificates/docknest-qa-pebble-root.crt && update-ca-certificates >/dev/null 2>&1');
       pebble = true;
     } catch (error) {
       await sh(lhost, 'docker rm -f qa-pebble qa-pebble-chall >/dev/null 2>&1; docker network rm qa-pebble >/dev/null 2>&1; rm -f /etc/letsencrypt/cli.ini; true');
       await writeTo(lhost, '/usr/local/bin/certbot', CERTBOT_DOUBLE, '755');
       await sh(lhost, 'mkdir -p /etc/letsencrypt/accounts && : > /var/log/docknest-qa-certbot.log');
+      await sh(lhost, "mkdir -p /etc/docknest-qa-ca && cd /etc/docknest-qa-ca && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-launch-ca -days 2 -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign >/dev/null 2>&1 && cp ca.pem /usr/local/share/ca-certificates/docknest-qa-launch-ca.crt && update-ca-certificates >/dev/null 2>&1");
       partial(`Pebble was not available (${String(error.message).split('\n')[0].slice(0, 120)}): certificates are asserted up to the certbot call; the issuance itself was a test double`);
     }
     const certLog = () => sh(lhost, 'cat /var/log/docknest-qa-certbot.log 2>/dev/null || true');
@@ -403,6 +413,17 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const shop = await start(composeBody('shop', composeSite));
     await drive(ended(shop), 'The pasted Compose launch');
     const { launch: shopLaunch, backup: shopBackup } = await assertLaunched(shop, 'shop', { dnsMapped: true });
+    // While the maintenance page is on (a backup), visitors get it, but a certificate challenge is still served as usual.
+    {
+      const flag = `/var/lib/docknest/maintenance/${shopLaunch.site_id}/enabled`, acme = `/var/lib/docknest/acme/launch-${shopLaunch.id}/.well-known/acme-challenge`;
+      const http = path => sh(lhost, `curl -s -o /tmp/qa-body -w '%{http_code}' -H 'Host: ${domainOf('shop')}' http://127.0.0.1${path}; echo; cat /tmp/qa-body`);
+      try {
+        await sh(lhost, `mkdir -p ${acme} && printf qa-challenge-token > ${acme}/qa-token && touch ${flag}`);
+        assert.match(await http('/'), /^503/, 'visitors get the maintenance page while it is on');
+        assert.equal(await http('/.well-known/acme-challenge/qa-token'), '200\nqa-challenge-token', 'the ACME challenge path is served during maintenance');
+      } finally { await sh(lhost, `rm -f ${flag} ${acme}/qa-token`); }
+      assert.match(await http('/'), /^301/, 'the site is back to normal without the flag');
+    }
     assert.equal(await run('exec', lhost, 'docker', 'inspect', '--format', '{{.State.Running}}', containerOf('shop')), 'true', 'the container runs');
     const bindings = JSON.parse(await run('exec', lhost, 'docker', 'inspect', '--format', '{{json .HostConfig.PortBindings}}', containerOf('shop')));
     assert.ok(Object.values(bindings).flat().every(item => item.HostIp === '127.0.0.1'), 'published ports are on 127.0.0.1 only');
@@ -441,8 +462,8 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.equal(preview.fingerprint, (await sh(gitHost, 'ssh-keygen -lf /etc/ssh/git_host_ed25519.pub')).split(/\s+/)[1], 'the host key read from the server matches the Git host');
     const created = await deployKeys.createDeployKey({ name: 'QA deploy key', gitHost: sshHost, serverId: lserver.id, allowPrivate: true, fingerprint: preview.fingerprint }, 'qa');
     const keyId = created.key.id;
-    await writeTo(gitHost, '/tmp/deploy.pub', created.key.publicKey + '\n');
-    await sh(gitHost, 'cat /tmp/deploy.pub >> /home/git/.ssh/authorized_keys && rm /tmp/deploy.pub');
+    await writeTo(gitHost, '/opt/deploy.pub', created.key.publicKey + '\n');
+    await sh(gitHost, 'cat /opt/deploy.pub >> /home/git/.ssh/authorized_keys && rm /opt/deploy.pub');
     // A wrong pinned host key is refused, and no key file is left behind.
     const pinned = db.prepare('SELECT host_key_line,host_key_sha256 FROM deploy_keys WHERE id=?').get(keyId);
     await sh(gitHost, 'rm -f /tmp/wrong /tmp/wrong.pub && ssh-keygen -q -t ed25519 -N "" -f /tmp/wrong');
@@ -475,11 +496,16 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     launches.checkDnsAgain(site, 'qa');
     await drive(() => launches.loadLaunch(site).state === 'done', 'Check again with DNS');
     assert.equal(steps(site).certificate.state, 'done');
+    await until(async () => /launch-git-ok/.test(await httpsOf('built')), 'The built site did not answer over HTTPS after the certificate', 20);
     assert.match(await httpsOf('built'), /launch-git-ok/);
     assert.equal(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(built.launch.site_id).config).healthUrl, `https://${domainOf('built')}/`);
     record('Waiting for DNS: the site works on HTTP, no certificate is asked for, Check again with DNS still missing waits, and Check again once the domain points here issues the certificate and switches the site to https');
 
     // ---------- 6. port 443 already in use ----------
+    // The HTTPS sites launched above make nginx listen on 443. A port held by another program needs 443 free of nginx, so
+    // their nginx files are set aside for this section (nginx keeps listening on 80 through a stand-in) and put back after.
+    await sh(lhost, "mkdir -p /root/qa-held && mv /etc/nginx/conf.d/docknest-*.conf /root/qa-held/ && printf 'server { listen 80; server_name qa-standin.docknest.test; return 204; }\n' > /etc/nginx/conf.d/qa-standin.conf && nginx -t && nginx -s reload");
+    await until(async () => !(await listening(lhost, 443)), 'nginx kept listening on 443', 30);
     await sh(lhost, 'mkdir -p /tmp/foreign && printf foreign-443 > /tmp/foreign/index.html');
     await run('exec', '-d', lhost, 'python3', '-m', 'http.server', '443', '--bind', '0.0.0.0', '--directory', '/tmp/foreign');
     await until(() => listening(lhost, 443), 'The foreign 443 listener did not start', 30);
@@ -495,8 +521,10 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.equal(await sh(lhost, 'curl -s http://127.0.0.1:443/'), 'foreign-443', 'the other program on 443 is untouched and still answers');
     await sh(lhost, 'nginx -t');
     await assertBystanders();
-    await sh(lhost, "pkill -f 'http.server 443' || true");
+    await sh(lhost, "pkill -f '[h]ttp.server 443' || true");
     await until(async () => !(await listening(lhost, 443)), 'The foreign 443 listener did not stop', 30);
+    await sh(lhost, 'mv /root/qa-held/docknest-*.conf /etc/nginx/conf.d/ && rm -f /etc/nginx/conf.d/qa-standin.conf && nginx -t && nginx -s reload');
+    await until(() => listening(lhost, 443), 'nginx did not listen on 443 again', 30);
     record('Port 443 held by another program: Check blocks with PORT_IN_USE naming the process, Launch is refused, the other program keeps answering and nginx stays valid');
 
     // ---------- 9. other jobs queue behind a launch ----------
@@ -512,7 +540,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     assert.ok(movePreview.id, 'a draft move exists');
     for (let round = 0; round < 4; round++) {
       launches.tickLaunches(); restoreTests.tickRestoreTests();
-      assert.equal(claimJob(), null, 'no backup is claimed while the launch holds the server');
+      assert.ok(!claimJob(), 'no backup is claimed while the launch holds the server');
       await sleep(250);
     }
     assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(waitingBackup.id).status, 'queued', 'the backup waits');
@@ -574,7 +602,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
 
     evidence.launch = { certificates: pebble ? 'pebble' : 'test double', launches: db.prepare('SELECT COUNT(*) AS n FROM site_launches WHERE server_id=?').get(lserver.id).n };
   } finally {
-    await sh(gitHost, "pkill -f git-http.py; pkill -f 'http.server 8099'; pkill -f sshd_config_git; true").catch(() => {});
+    await sh(gitHost, "pkill -f '[g]it-http.py'; pkill -f '[h]ttp.server 8099'; pkill -f '[s]shd_config_git'; true").catch(() => {});
     if (trigger) { try { db.exec('DROP TRIGGER qa_block_launch_site'); } catch {} }
     await run('rm', '-f', '-v', lhost).catch(() => {});
     await run('network', 'disconnect', '-f', net, gitHost).catch(() => {});

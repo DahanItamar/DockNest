@@ -71,7 +71,6 @@ LAUNCH_REFUSED_NETS=tuple(ipaddress.ip_network(n) for n in ('0.0.0.0/8','127.0.0
     '100.100.100.200/32','100.100.100.100/32','168.63.129.16/32','224.0.0.0/4','240.0.0.0/4','fd00:ec2::/32','2001::/32','2001:2::/48','2001:10::/28','2001:20::/28','2001:db8::/32','3fff::/20','::/128','::1/128','fe80::/10','ff00::/8'))
 LAUNCH_PRIVATE_NETS=tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','100.64.0.0/10','fc00::/7','fec0::/10'))
 LAUNCH_KINDS=('paths','keys','images','builders','containers','volumes','networks','nginx','certificates')
-LAUNCH_HEADER='# Managed by DockNest launch %s;'
 LAUNCH_REASONS={
     'INVALID_REQUEST':'DockNest sent a request the server did not accept.',
     'NOT_ROOT':'DockNest must sign in as root to launch a site.',
@@ -584,7 +583,8 @@ try:
             mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
     for path,fd in keep:
         os.makedirs(path,mode=0o755,exist_ok=True)
-        mount('--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
+        # -c (--no-canonicalize): libmount would otherwise resolve the fd link to its real path, which the tmpfs above hides.
+        mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
         os.close(fd)
 except OSError:os._exit(97)
 os.execvp(argv[0],argv)
