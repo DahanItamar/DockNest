@@ -26,6 +26,10 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   const streams = await import('../src/self-heal/streams.js');
   const { timing } = await import('../src/self-heal/limits.js');
   const store = await import('../src/alerts/store.js');
+  // Whatever happens below, nothing of this scenario may keep the process alive: streams (SSH connections and their
+  // reconnect timers), re-check timers and child processes are stopped in the finally block.
+  const children = [];
+  try {
   const [source] = hosts, server = servers[0];
   // The same properties with shorter waits: a 5 s gap instead of 60 s, a 5 s settle instead of 2 minutes, a 2 s throttle.
   Object.assign(timing, { minGapMs: 5000, settleMs: 5000, throttleMs: 2000 });
@@ -38,9 +42,15 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   const gaveUps = (siteId, reason) => db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='self_heal.gave_up' AND target=? AND json_extract(detail,'$.reason')=?").get(siteId, reason).n;
   const runtime = () => { try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='self_heal_runtime'").get()?.value ?? '{}'); } catch { return {}; } };
   const streamState = () => runtime().servers?.[server.id]?.state;
-  // Anchored at the start of the command line, so the `sh -c` running pgrep (whose own line contains the pattern) never
-  // counts itself.
-  const eventsProcesses = async () => Number((await run('exec', source, 'sh', '-c', "pgrep -f '^docker events --filter type=container' | wc -l")).trim());
+  // The helper starts exactly `docker events --filter type=container --filter event=health_status --format <template>`
+  // (remote/helper/heal.py, subprocess.Popen with that argv). Counted from `ps -o pid,args` in this process, not with a
+  // pgrep pattern: ps prints each command line once, its own line is "ps -o pid,args", and the match is anchored to
+  // the start of the command, so nothing that merely mentions the pattern is counted.
+  const processList = async () => (await quietRun('exec', source, 'ps', '-o', 'pid,args')).split('\n').map(text => text.trim()).filter(Boolean);
+  const isStream = text => /^\d+\s+(?:\S*\/)?docker events --filter type=container --filter event=health_status\b/.test(text);
+  const eventsProcesses = async () => (await processList()).filter(isStream).length;
+  // When a count is wrong, show what does run (command lines only, cut short; they carry no secrets).
+  const showEventsProcesses = async () => { try { console.error('Self-heal: processes mentioning docker events: ' + JSON.stringify((await processList()).filter(text => text.includes('events')).map(text => text.slice(0, 160)))); } catch { /* best effort */ } };
   // The worker loop in this process: open/close streams, queue restarts, claim and run one job, repeat.
   let pumping = false;
   async function pump(ms, stop = () => false) {
@@ -80,7 +90,7 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   // The live event format of this Docker, parsed by the helper's own parser (security review item 4).
   // The exact narrow template the helper streams with (remote/helper/heal.py HEAL_EVENT_FORMAT).
   const eventFormat = /^HEAL_EVENT_FORMAT='(.*)'$/m.exec(helperSource().toString('utf8'))[1];
-  const capture = spawn('docker', ['exec', source, 'timeout', '20', 'docker', 'events', '--filter', 'type=container', '--filter', 'event=health_status', '--format', eventFormat], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const capture = spawn('docker', ['exec', source, 'timeout', '20', 'docker', 'events', '--filter', 'type=container', '--filter', 'event=health_status', '--format', eventFormat], { stdio: ['ignore', 'pipe', 'ignore'] }); children.push(capture);
   let captured = ''; capture.stdout.on('data', chunk => { captured += chunk; });
   await wait(1000);
   await run('exec', source, 'docker', 'exec', 'healshop-web-1', 'rm', '-f', '/tmp/ok');
@@ -123,7 +133,10 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   const channel = store.createChannel({ kind: 'telegram', name: 'QA phone', credentialId: credential.id, config: { chatId: '-1001234567890' } }, 'qa');
   store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: siteId, events: ['self_heal.restarted', 'self_heal.gave_up'] }, 'qa');
   await connected();
-  assert.equal(await eventsProcesses(), 1, 'one docker events process for the server');
+  assert.equal(streamState(), 'connected');
+  // The helper starts docker events before it reports the snapshot, so the process exists once the stream is connected.
+  try { await until(async () => (await eventsProcesses()) === 1, 'one docker events process for the server', 15); }
+  catch (error) { await showEventsProcesses(); throw error; }
 
   // 1. Health check fails after a file is removed: restarted within 20 s, recovered after the entrypoint restores it.
   let before = await startedAt('healshop-web-1'), t0 = Date.now();
@@ -286,7 +299,7 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   // Item 8: worker SIGKILL leaves no orphan `docker events` on the server.
   streams.stopStreams();
   await until(async () => (await eventsProcesses()) === 0, 'docker events still runs after the stream stopped', 30);
-  const child = spawn(process.execPath, ['--no-addons', '--input-type=module', '-e', "const s=await import('./src/self-heal/streams.js');s.syncStreams();setInterval(()=>{},1000);"], { env: process.env, stdio: 'ignore' });
+  const child = spawn(process.execPath, ['--no-addons', '--input-type=module', '-e', "const s=await import('./src/self-heal/streams.js');s.syncStreams();setInterval(()=>{},1000);"], { env: process.env, stdio: 'ignore' }); children.push(child);
   await until(async () => (await eventsProcesses()) === 1, 'the child worker did not open its stream', 60);
   child.kill('SIGKILL');
   await until(async () => (await eventsProcesses()) === 0, 'a SIGKILLed worker left docker events running on the server', 60);
@@ -308,4 +321,9 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   assert.equal(pumping, false);
   db.prepare('UPDATE self_heal_settings SET enabled=0 WHERE site_id=?').run(siteId);
   await run('exec', source, 'sh', '-c', 'docker compose -p healshop -f /heal-fixture/compose.yaml down -v >/dev/null 2>&1 || true; rm -f /opt/docknest-heal-helper.py');
+  } finally {
+    try { streams.stopStreams(); } catch { /* stopping */ }
+    try { heal.haltSelfHeal(); } catch { /* stopping */ }
+    for (const child of children) { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+  }
 }

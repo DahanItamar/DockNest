@@ -322,3 +322,6 @@ try {
   await writeFile('data/qa/linux-integration.json', JSON.stringify(evidence, null, 2) + '\n');
   await rm(directory, { recursive: true, force: true });
 }
+// Exit explicitly once evidence is written: a failed scenario may leave SSH connections, timers or child processes
+// (self-heal streams reconnecting to removed hosts) that would otherwise keep the job running until its timeout.
+process.exit(process.exitCode ?? 0);
