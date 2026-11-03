@@ -232,6 +232,8 @@ class FetchTests(unittest.TestCase):
         spec=json.loads(sandbox[9]);self.assertEqual(spec['keep'],[str(site)])
         self.assertTrue({str(host.sites),str(host.launches),'/etc/docknest','/root','/home','/var/lib/docker/volumes'}<=set(spec['hide']))
         compile(helper.LAUNCH_SANDBOX_CODE,'<sandbox>','exec')
+        # -c: libmount must not resolve the fd link to its real path, which the tmpfs mounted above it hides.
+        self.assertIn("mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,))",helper.LAUNCH_SANDBOX_CODE)
         self.assertEqual(config['argv'][len(sandbox):],['docker','compose','-p','shop','-f',str(site/'app'/'compose.yaml'),'--project-directory',str(site/'app'),'--env-file',str(site/'.env'),'config','--format','json'])
         self.assertEqual(config['env']['PATH'],helper.LAUNCH_PATH)
         self.assertFalse(any(k.startswith(('DOCKER_','COMPOSE_FILE','COMPOSE_PROJECT')) for k in config['env']))

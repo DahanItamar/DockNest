@@ -278,7 +278,6 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     async function assertLaunched(launchId, tag, { dnsMapped }) {
       const launch = launches.loadLaunch(launchId), done = steps(launchId);
       assert.equal(launch.state, dnsMapped ? 'done' : 'waiting_dns', JSON.stringify([launch.reason, Object.values(done).map(s => [s.step, s.state, s.detail])]));
-      console.error('TEMPDEBUG jobs: '+JSON.stringify(db.prepare('SELECT status,stage,error,details FROM jobs ORDER BY created_at DESC LIMIT 2').all()).slice(0,1500));
       for (const name of ['check', 'fetch', 'start', 'check_health', 'web', 'save', 'maintenance', 'first_backup']) assert.equal(done[name].state, 'done', `${name}: ${done[name].detail}`);
       assert.equal(done.certificate.state, dnsMapped ? 'done' : 'waiting');
       assert.ok(launch.site_id, 'the site is saved');
