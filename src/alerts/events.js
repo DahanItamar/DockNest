@@ -5,7 +5,7 @@ import { classify } from './addresses.js';
 import { reasonFor } from './reasons.js';
 // Alert events: the fixed catalogue, the short plain message for each and the rule matching (docs/alerts.md).
 // Messages carry only names the owner typed (site, server) and a time. Never hostnames, addresses, paths, logs or errors.
-export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed']);
+export const EVENTS = Object.freeze(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'server.unreachable', 'server.disk_low', 'update.available', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'restore_test.needs_you', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed', 'launch.needs_you']);
 export const SOURCE_KINDS = Object.freeze(['docknest', 'server', 'site']);
 // Disk threshold: low when more than 90 percent is used or less than 5 GB is free.
 export const DISK_USED_PERCENT = 90;
@@ -61,6 +61,8 @@ export function messageFor(event) {
       if (event.code === 'expired') return `Certificate expired: ${site}. Visitors see a security warning. Renew it now.`;
       return `Certificate expires soon: ${site} in ${daysText(event.daysLeft)}. Renew it before visitors see a warning.`;
     case 'certificate.renewal_failed': return `Certificate renewal failed: ${site} on ${server}. Check certbot on the server.`;
+    // Launches (docs/launch-site.md): a teardown that did not finish; {server} is the server of the launch.
+    case 'launch.needs_you': return `Launch needs you: DockNest could not remove everything a failed launch made on ${server}. Open DockNest to try again.`;
     default: return null;
   }
 }
@@ -81,10 +83,10 @@ export function ruleMatches(rule, event) {
 // - reason: one fixed sentence from the reasons catalogue (reasons.js), keyed by event type and `event.code` / `event.detail`.
 // - time: the event's time of day in its time zone, for example "03:00 UTC" ('' for events without one).
 // - url: the job deep link, only when APP_ORIGIN is not a loopback address (no link a phone cannot open).
-const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'certificate.expiring': 'Certificate expires soon', 'certificate.renewal_failed': 'Certificate renewal failed' };
+const TITLES = { 'backup.failed': 'Backup failed', 'backup.succeeded': 'Backup finished', 'move.needs_you': 'Move waiting for you', 'server.unreachable': 'Server unreachable', 'server.disk_low': 'Low disk space', 'restore_test.failed': 'Restore test failed', 'restore_test.couldnt_run': "Restore test couldn't run", 'restore_test.recovered': 'Restore test passed again', 'restore_test.needs_you': 'Restore test needs you', 'backup.copy_failed': 'Backup copy failed', 'backup.copy_recovered': 'Backup copy saved', 'backup.copy_gave_up': 'Backup copy stopped', 'certificate.expiring': 'Certificate expires soon', 'certificate.renewal_failed': 'Certificate renewal failed', 'launch.needs_you': 'Launch needs you' };
 const timed = new Set(['backup.failed', 'backup.succeeded', 'server.unreachable', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up']);
 const siteEvents = new Set(['backup.failed', 'backup.succeeded', 'move.finished', 'move.needs_you', 'restore_test.failed', 'restore_test.couldnt_run', 'restore_test.recovered', 'backup.copy_failed', 'backup.copy_recovered', 'backup.copy_gave_up', 'certificate.expiring', 'certificate.renewal_failed']);
-const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you']);
+const serverEvents = new Set([...siteEvents, 'server.unreachable', 'server.disk_low', 'restore_test.needs_you', 'launch.needs_you']);
 export const loopbackOrigin = origin => {
   try { const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase(); return host === 'localhost' || host.endsWith('.localhost') || (isIP(host) !== 0 && classify(host) === 'refused'); } catch { return true; }
 };

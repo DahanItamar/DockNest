@@ -230,4 +230,6 @@ PEER_CERTIFICATES={}
 CHAIN_LINKS={}
 STOPPING=False;MOVE_ID='';SNAPSHOT_FILTER=''
 MOVE_LOCK=None
+# Process ids (each its own process group) of the launch's git and build children, so the stdin watcher can end them.
+LAUNCH_CHILDREN=set()
 CLEANUP_SHARED=None

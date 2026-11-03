@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HELPER_MODULES = Object.freeze(['common', 'guides', 'paths', 'databases', 'backup', 'incremental', 'net',
-  'maintenance', 'discovery', 'restore', 'staging', 'move', 'install', 'restore_test', 'cleanup', '__main__']);
+  'maintenance', 'discovery', 'restore', 'staging', 'move', 'install', 'restore_test', 'cleanup', 'launch', '__main__']);
 const source = fileURLToPath(new URL('../remote/helper/', import.meta.url));
 const OPEN = '# <build:header>', CLOSE = '# </build:header>';
 
