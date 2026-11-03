@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-11-03
+
+See [docs/releases/2026-11-03-v2.16.0.md](docs/releases/2026-11-03-v2.16.0.md).
+
 ### Added
 
 - Launch a new Docker site from the Map with a Compose file or a Git repository. DockNest checks the source and server, sets up nginx and HTTPS when DNS is ready, then starts backups and optional restore tests.
