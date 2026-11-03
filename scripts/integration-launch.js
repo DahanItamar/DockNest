@@ -174,18 +174,18 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     await sh(gitHost, 'apk add --no-cache git git-daemon openssl >/dev/null && git config --system safe.directory "*"');
     await sh(gitHost, 'test -x "$(git --exec-path)/git-http-backend"').catch(() => { throw new Error('The Git server host has no git-http-backend'); });
     await sh(gitHost, "(id git >/dev/null 2>&1 || adduser -D -s /bin/sh git) && sed -i 's/^git:!:/git:*:/' /etc/shadow && mkdir -p /home/git/.ssh && chmod 700 /home/git/.ssh && touch /home/git/.ssh/authorized_keys && chmod 600 /home/git/.ssh/authorized_keys && chown -R git:git /home/git");
-    await sh(gitHost, `mkdir -p /tmp/pki && cd /tmp/pki && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-ca -days 2 -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1 && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr -subj /CN=${GIT_HOST} >/dev/null 2>&1 && printf 'subjectAltName=DNS:${GIT_HOST}\\n' > ext.cnf && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile ext.cnf >/dev/null 2>&1`);
+    await sh(gitHost, `mkdir -p /opt/pki && cd /opt/pki && openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -subj /CN=docknest-qa-ca -days 2 -addext basicConstraints=critical,CA:TRUE >/dev/null 2>&1 && openssl req -newkey rsa:2048 -nodes -keyout srv.key -out srv.csr -subj /CN=${GIT_HOST} >/dev/null 2>&1 && printf 'subjectAltName=DNS:${GIT_HOST}\\n' > ext.cnf && openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile ext.cnf >/dev/null 2>&1`);
     await writeTo(gitHost, '/git-http.py', GIT_HTTP_SERVER); await writeTo(gitHost, '/git-repos.sh', GIT_REPOS);
     await sh(gitHost, 'sh /git-repos.sh');
     await sh(gitHost, 'mkdir -p /tmp/trap && ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/git_host_ed25519');
     await writeTo(gitHost, '/etc/ssh/sshd_config_git', 'Port 2222\nHostKey /etc/ssh/git_host_ed25519\nPermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nAllowUsers git\nAuthorizedKeysFile /home/git/.ssh/authorized_keys\nPidFile /run/sshd-git.pid\n');
     await run('exec', '-d', gitHost, '/usr/sbin/sshd', '-D', '-e', '-f', '/etc/ssh/sshd_config_git');
-    await run('exec', '-d', gitHost, 'sh', '-c', `exec python3 /git-http.py /srv/git /tmp/pki/srv.pem /tmp/pki/srv.key http://${gip}:8099 > /tmp/git-http.log 2>&1`);
+    await run('exec', '-d', gitHost, 'sh', '-c', `exec python3 /git-http.py /srv/git /opt/pki/srv.pem /opt/pki/srv.key http://${gip}:8099 > /tmp/git-http.log 2>&1`);
     await run('exec', '-d', gitHost, 'sh', '-c', 'cd /tmp/trap && exec python3 -m http.server 8099 --bind 0.0.0.0 > /tmp/trap.log 2>&1');
     for (const port of [2222, 8443, 8099]) await until(() => listening(gitHost, port), `The Git server did not listen on ${port}`, 60);
     // The launch host trusts the run-time CA and finds the Git server by name (the helper resolves it like any server).
     await sh(lhost, 'mkdir -p /usr/local/share/ca-certificates');
-    await run('cp', gitHost + ':/tmp/pki/ca.pem', join(directory, 'qa-ca.pem'));
+    await run('cp', gitHost + ':/opt/pki/ca.pem', join(directory, 'qa-ca.pem'));
     await run('cp', join(directory, 'qa-ca.pem'), lhost + ':/usr/local/share/ca-certificates/docknest-qa-ca.crt');
     await rm(join(directory, 'qa-ca.pem'), { force: true });
     await sh(lhost, 'update-ca-certificates >/dev/null 2>&1');
