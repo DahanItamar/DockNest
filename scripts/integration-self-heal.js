@@ -10,7 +10,16 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { writeHelperBundle, helperSource } from '../src/helper-bundle.js';
 
-export async function runSelfHealScenario({ run, until, hosts, servers, db, directory, record, evidence }) {
+export async function runSelfHealScenario({ run: harnessRun, until, hosts, servers, db, directory, record, evidence }) {
+  // integration-linux.js reports a failed fixture command only as "Docker fixture command failed". Name the command
+  // here (argv only: these commands carry no secrets; their output is never printed), so CI shows which one failed.
+  const argv = args => args.map(arg => String(arg).replace(/\s+/g, ' ').slice(0, 300)).join(' ');
+  const run = async (...args) => {
+    try { return await harnessRun(...args); }
+    catch (error) { console.error(`Self-heal fixture command failed: docker ${argv(args)}`.slice(0, 2000)); throw error; }
+  };
+  // For probes that are expected to fail now and then (a container being recreated): no log line.
+  const quietRun = harnessRun;
   const { enqueueBackup, claimJob, executeJob } = await import('../src/engine.js');
   const { remote } = await import('../src/ssh.js');
   const heal = await import('../src/self-heal/engine.js');
@@ -22,7 +31,7 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   Object.assign(timing, { minGapMs: 5000, settleMs: 5000, throttleMs: 2000 });
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const inspect = async (name, format) => run('exec', source, 'docker', 'inspect', '--format', format, name);
-  const health = name => inspect(name, '{{if .State.Health}}{{.State.Health.Status}}{{end}}').catch(() => '');
+  const health = name => quietRun('exec', hosts[0], 'docker', 'inspect', '--format', '{{if .State.Health}}{{.State.Health.Status}}{{end}}', name).catch(() => '');
   const startedAt = name => inspect(name, '{{.State.StartedAt}}');
   const idOf = name => inspect(name, '{{.Id}}');
   const events = (siteId, kind, container) => db.prepare(`SELECT * FROM self_heal_events WHERE site_id=?${kind ? ' AND kind=?' : ''}${container ? ' AND container=?' : ''} ORDER BY at,rowid`).all(...[siteId, kind, container].filter(Boolean));
@@ -50,7 +59,12 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   const connected = () => pump(60_000, () => streamState() === 'connected').then(ok => assert.ok(ok, 'the stream connects'));
 
   // Fixture: an image whose health check passes while /tmp/ok exists; its entrypoint recreates the file on every start,
-  // so a restart fixes it. A second service always fails its health check.
+  // so a restart fixes it. A second service always fails its health check. It builds on the harness's site image, which
+  // earlier scenarios may have pruned (Safe Edit's image prune, server cleanup): rebuild that from the same source the
+  // harness uses (tests/integration/site) when it is missing, so this scenario never depends on what ran before it.
+  await run('exec', source, 'sh', '-c', 'rm -rf /heal-fixture && mkdir -p /heal-fixture');
+  await run('cp', 'tests/integration/site', source + ':/heal-fixture/site');
+  await run('exec', source, 'sh', '-c', 'docker image inspect docknest-fixture:local >/dev/null 2>&1 || docker build -q -t docknest-fixture:local /heal-fixture/site >/dev/null');
   await run('exec', source, 'sh', '-c', [
     'mkdir -p /heal-fixture',
     "printf 'FROM docknest-fixture:local\\nHEALTHCHECK --interval=1s --timeout=2s --retries=2 CMD test -f /tmp/ok\\nCMD [\"sh\",\"-c\",\"touch /tmp/ok; exec python /app/app.py\"]\\n' > /heal-fixture/Dockerfile",
@@ -269,7 +283,7 @@ export async function runSelfHealScenario({ run, until, hosts, servers, db, dire
   // Item 8: the Docker daemon restarts while streaming: the stream reconnects and heals again.
   await connected();
   await run('exec', source, 'sh', '-c', 'pkill dockerd; for i in $(seq 1 30); do pgrep dockerd >/dev/null || break; sleep 1; done; setsid nohup dockerd-entrypoint.sh >/tmp/dockerd.log 2>&1 &');
-  await until(async () => (await run('exec', source, 'docker', 'info', '--format', '{{.OSType}}')) === 'linux', 'the Docker daemon did not come back', 90);
+  await until(async () => (await quietRun('exec', source, 'docker', 'info', '--format', '{{.OSType}}')) === 'linux', 'the Docker daemon did not come back', 90);
   await until(async () => (await health('healshop-web-1')) === 'healthy', 'web did not come back with the daemon', 90);
   assert.ok(await pump(120_000, () => streamState() === 'connected' && runtime().servers?.[server.id]?.since && Date.parse(runtime().servers[server.id].since) > Date.now() - 120_000), 'the stream did not reconnect after the daemon restart');
   const daemonRestarts = events(siteId, 'restarted', 'healshop-web-1').length;
