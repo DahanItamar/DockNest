@@ -20,7 +20,7 @@ jobs:
   # successfully for exactly that commit, and the Release validation workflow, dispatched from main with that commit as
   # its candidate, succeeded. The write permissions exist only in the publish job, which needs this one.
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read    # check out the tagged commit and main's history
@@ -75,7 +75,7 @@ jobs:
           echo "::error::No successful Release validation run for candidate $GITHUB_SHA; run it from main with that commit as the candidate before tagging"; exit 1
   publish:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: write   # create the GitHub Release and upload its manifest
