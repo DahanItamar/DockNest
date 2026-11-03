@@ -6,8 +6,9 @@ import { randomUUID } from 'node:crypto';
 // Versioned metadata schema. PRAGMA user_version lives in the database header, changes inside the same
 // transaction as the DDL, survives VACUUM INTO/backup copies and is readable without knowing any table,
 // so a schema_migrations table would add nothing but a second source of truth. v2.0.0 databases report 0.
-// `compatible: true` marks a purely additive migration (new tables/indexes only) that older code can ignore, so
-// downgrading across it needs no data discard. Rules: never edit or renumber a released migration; append a new entry. Migration 1 is the v2.0.0
+// `compatible: true` marks a migration that older code can ignore, so downgrading across it needs no data discard:
+// new tables, indexes and triggers, or (migration 17 only) a row-for-row rebuild of a child table that keeps every
+// column, value, index and foreign key and only widens a CHECK list, so every row older code could write is still valid. Rules: never edit or renumber a released migration; append a new entry. Migration 1 is the v2.0.0
 // startup schema and stays idempotent: it is re-applied on every start exactly as v2.0.0 did, so
 // additive CREATE ... IF NOT EXISTS objects may still be appended to it. Anything else needs a new entry.
 const baselineSchema = `
@@ -272,6 +273,62 @@ CREATE INDEX IF NOT EXISTS self_heal_events_at ON self_heal_events(at,id);
 CREATE TRIGGER IF NOT EXISTS self_heal_events_no_update BEFORE UPDATE ON self_heal_events BEGIN SELECT RAISE(ABORT,'self-heal history is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS self_heal_events_keep_recent BEFORE DELETE ON self_heal_events WHEN OLD.at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days') BEGIN SELECT RAISE(ABORT,'self-heal history is kept for 90 days'); END;
 `;
+// Launch a new site (docs/launch-site.md, "Data model" and "Security review changes" items 10, 11 and 17). New tables,
+// indexes and triggers, plus one rebuild: server_installs gains 'git' in its package CHECK list. SQLite cannot widen a
+// CHECK in place, so the rows are copied into an identical table whose list also allows 'git'. Older code reads and
+// writes it exactly as before (it never asks for 'git'), so the migration stays compatible.
+// - deploy_keys: the private key is sealed with the master key and never leaves the API; pinned_from_server_id is the
+//   server whose network view the Git host key was read from (item 17).
+// - site_launches: never the pasted Compose text or environment values (those live only in the sealed `payload` of the
+//   fetch step, wiped after it). `commit_sha` is the spec's `commit` (a reserved word in SQLite).
+// - site_launch_steps: the launch's jobs (item 11: jobs.site_id is NOT NULL). launch_queued/launch_running are the job
+//   statuses; `maintenance` sets up the maintenance page after save (never fatal); `teardown` is the journal-first
+//   undo, also used by Remove launch.
+export const LAUNCH_STEPS = Object.freeze(['check', 'fetch', 'build', 'start', 'check_health', 'web', 'certificate', 'save', 'maintenance', 'first_backup', 'teardown']);
+export const LAUNCH_STATES = Object.freeze(['queued', 'running', 'waiting_dns', 'done', 'failed', 'cancelled', 'removed', 'needs_attention']);
+const launchStepList = LAUNCH_STEPS.map(step => `'${step}'`).join(',');
+export const siteLaunchesSchema = `
+CREATE TABLE IF NOT EXISTS deploy_keys (id TEXT PRIMARY KEY,name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),git_host TEXT NOT NULL CHECK (length(git_host) BETWEEN 1 AND 262),host_key_line TEXT NOT NULL CHECK (length(host_key_line) <= 8192),host_key_sha256 TEXT NOT NULL CHECK (length(host_key_sha256) <= 80),public_key TEXT NOT NULL CHECK (length(public_key) <= 1024),fingerprint TEXT NOT NULL CHECK (length(fingerprint) <= 80),sealed_private_key TEXT NOT NULL CHECK (length(sealed_private_key) <= 8192),pinned_from_server_id TEXT REFERENCES servers(id) ON DELETE SET NULL,pinned_at TEXT NOT NULL,created_by TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS site_launches (id TEXT PRIMARY KEY,server_id TEXT NOT NULL REFERENCES servers(id),site_id TEXT REFERENCES sites(id),slug TEXT NOT NULL CHECK (length(slug) BETWEEN 1 AND 40),source TEXT NOT NULL CHECK (source IN ('compose','git')),repo_url TEXT CHECK (repo_url IS NULL OR length(repo_url) <= 512),ref TEXT CHECK (ref IS NULL OR length(ref) <= 200),commit_sha TEXT CHECK (commit_sha IS NULL OR length(commit_sha) <= 64),compose_path TEXT CHECK (compose_path IS NULL OR length(compose_path) <= 300),deploy_key_id TEXT REFERENCES deploy_keys(id) ON DELETE SET NULL,domain TEXT NOT NULL CHECK (length(domain) BETWEEN 1 AND 253),web_service TEXT CHECK (web_service IS NULL OR length(web_service) <= 63),web_port INTEGER CHECK (web_port IS NULL OR (typeof(web_port) = 'integer' AND web_port BETWEEN 1 AND 65535)),loopback_port INTEGER CHECK (loopback_port IS NULL OR (typeof(loopback_port) = 'integer' AND loopback_port BETWEEN 1024 AND 65535)),state TEXT NOT NULL CHECK (state IN ('queued','running','waiting_dns','done','failed','cancelled','removed','needs_attention')),failed_step TEXT CHECK (failed_step IS NULL OR failed_step IN (${launchStepList})),reason TEXT CHECK (reason IS NULL OR length(reason) <= 300),options TEXT NOT NULL DEFAULT '{}' CHECK (length(options) <= 8192),cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0,1)),created_by TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,remove_until TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS site_launches_server_active ON site_launches(server_id) WHERE state IN ('queued','running');
+CREATE UNIQUE INDEX IF NOT EXISTS site_launches_server_slug ON site_launches(server_id,slug) WHERE state NOT IN ('failed','cancelled','removed');
+CREATE INDEX IF NOT EXISTS site_launches_server_created ON site_launches(server_id,created_at);
+CREATE TABLE IF NOT EXISTS site_launch_steps (launch_id TEXT NOT NULL REFERENCES site_launches(id),step TEXT NOT NULL CHECK (step IN (${launchStepList})),state TEXT NOT NULL CHECK (state IN ('pending','launch_queued','launch_running','waiting','done','failed','skipped')),attempt INTEGER NOT NULL DEFAULT 0 CHECK (typeof(attempt) = 'integer' AND attempt >= 0),started_at TEXT,finished_at TEXT,next_at TEXT,detail TEXT CHECK (detail IS NULL OR length(detail) <= 500),result TEXT NOT NULL DEFAULT '{}' CHECK (length(result) <= 16384),payload TEXT CHECK (payload IS NULL OR length(payload) <= 262144),PRIMARY KEY (launch_id,step));
+CREATE INDEX IF NOT EXISTS site_launch_steps_jobs ON site_launch_steps(state) WHERE state IN ('launch_queued','launch_running');
+CREATE TRIGGER IF NOT EXISTS site_launches_no_delete BEFORE DELETE ON site_launches BEGIN SELECT RAISE(ABORT,'launch history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_launch_steps_no_delete BEFORE DELETE ON site_launch_steps BEGIN SELECT RAISE(ABORT,'launch steps are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS site_launches_reason_once BEFORE UPDATE OF reason,failed_step ON site_launches WHEN (OLD.reason IS NOT NULL AND NEW.reason IS NOT OLD.reason) OR (OLD.failed_step IS NOT NULL AND NEW.failed_step IS NOT OLD.failed_step) BEGIN SELECT RAISE(ABORT,'a launch failure is written once'); END;
+`;
+// The rebuild runs inside migrate()'s transaction, so a failure anywhere rolls the whole migration back. SQLite asks for
+// foreign_keys=OFF around a rebuild because DROP TABLE on a *parent* table runs an implicit DELETE that would fire
+// ON DELETE actions in its children. server_installs is a child only (it references servers, nothing references it;
+// checked below, fail closed), so dropping it touches no other row and foreign_keys stays ON: every copied row is
+// checked against servers as it is inserted, and foreign_key_check must come back empty before the migration finishes.
+export function serverInstallsReferrers(db) {
+  return db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('server_installs','server_installs_v17')").all()
+    .filter(({ name }) => db.prepare('SELECT "table" FROM pragma_foreign_key_list(?)').all(name).some(row => row.table === 'server_installs')).map(row => row.name);
+}
+function siteLaunches(db) {
+  db.exec(siteLaunchesSchema);
+  // Widen the install package list (adds 'git'): same columns in the same order, same values, same index, same foreign key.
+  if ((db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='server_installs'").get()?.sql ?? '').includes("'git'")) return;
+  const referrers = serverInstallsReferrers(db);
+  if (referrers.length) throw new Error(`server_installs is referenced by ${referrers.join(', ')}; refusing to rebuild it.`);
+  // A trigger or view anywhere that names server_installs would be rewritten or broken by the rename; refuse instead.
+  const dependents = db.prepare("SELECT type,name FROM sqlite_master WHERE type IN ('view','trigger') AND sql LIKE '%server_installs%'").all();
+  if (dependents.length) throw new Error(`server_installs is used by ${dependents.map(row => `${row.type} ${row.name}`).join(', ')}; DockNest did not change the database. See docs/upgrading.md.`);
+  // Rows whose server is gone cannot exist while foreign keys are on (ON DELETE CASCADE); if one does, stop with a plain
+  // reason before anything changes (the snapshot and the old schema stay) instead of dropping it.
+  if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs has rows whose server no longer exists; DockNest did not change the database. See docs/upgrading.md.');
+  const rows = db.prepare('SELECT COUNT(*) AS n FROM server_installs').get().n;
+  db.exec(`CREATE TABLE server_installs_v17 (id TEXT PRIMARY KEY,server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,package TEXT NOT NULL CHECK (package IN ('nginx','docker','compose','certbot','git')),status TEXT NOT NULL CHECK (status IN ('queued','running','completed','failed')),stage TEXT NOT NULL CHECK (length(stage) <= 32),steps TEXT NOT NULL CHECK (length(steps) <= 8192),actor TEXT NOT NULL,error TEXT CHECK (error IS NULL OR length(error) <= 1024),created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT);
+INSERT INTO server_installs_v17(id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at) SELECT id,server_id,package,status,stage,steps,actor,error,created_at,started_at,finished_at FROM server_installs;
+DROP TABLE server_installs;
+ALTER TABLE server_installs_v17 RENAME TO server_installs;
+CREATE INDEX IF NOT EXISTS server_installs_status ON server_installs(status,created_at);`);
+  if (db.prepare('SELECT COUNT(*) AS n FROM server_installs').get().n !== rows) throw new Error('server_installs rebuild lost rows; nothing was changed.');
+  if (db.prepare('PRAGMA foreign_key_check(server_installs)').all().length) throw new Error('server_installs rebuild found rows without their server; nothing was changed.');
+}
 export const migrations = [
   { version: 1, name: 'baseline', repeatable: true, up: baseline },
   // Fingerprint of the helper bundle copied onto hosts by boot recovery, to flag stale copies after upgrades.
@@ -320,6 +377,9 @@ export const migrations = [
   { version: 15, name: 'safe-edits', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(safeEditsSchema); } },
   // Self-heal (docs/self-heal.md): new tables, an index and triggers only, so 2.14 code ignores them.
   { version: 16, name: 'self-heal', compatible: true, up: db => { db.exec(siteCertificatesSchema); db.exec(hardeningSchema); db.exec(selfHealSchema); } },
+  // Launch a new site (docs/launch-site.md): new tables, indexes and triggers, and server_installs widened to allow
+  // 'git', so 2.15 code ignores the new objects and keeps using installs as before.
+  { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

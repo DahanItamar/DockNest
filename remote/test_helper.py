@@ -320,12 +320,37 @@ class MaintenanceSetupTests(unittest.TestCase):
             site.write_text(text)
             self.assertEqual(maintenance_nginx_edits(['example.com'],'include /etc/nginx/docknest/x.conf;',folders=[str(folder)],root=d),{})
             with self.assertRaisesRegex(ValueError,'not found'):maintenance_nginx_edits(['missing.example'],'include x;',folders=[str(folder)],root=d)
+    def test_include_also_goes_into_the_file_a_launch_wrote(self):
+        from helper import maintenance_nginx_edits
+        with tempfile.TemporaryDirectory() as d:
+            folder=pathlib.Path(d)/'conf.d';folder.mkdir()
+            launched=folder/'docknest-shop.conf';launched.write_text('# Managed by DockNest launch 1234;\nserver { listen 80; server_name shop.example.com; }\n')
+            other=folder/'docknest-move.conf';other.write_text('server { server_name shop.example.com; }')
+            moved=folder/'docknest-move-site.conf';moved.write_text('# Managed by DockNest move 0b6e1c2a-1f3d-4e5a-9c8b-7d6f5e4a3b21; safe to delete after the move is cleaned up.\nserver { server_name shop.example.com; }\n')
+            lookalike=folder/'docknest-fake.conf';lookalike.write_text('# Managed by DockNest launch ; x\nserver { server_name shop.example.com; }\n')
+            import os
+            edits=maintenance_nginx_edits(['shop.example.com'],'include x;',folders=[str(folder)],root=d)
+            self.assertEqual(list(edits),[os.path.realpath(launched)])
+            self.assertIn('include x;',edits[os.path.realpath(launched)])
+    def test_settled_probe_waits_for_the_new_configuration_and_gives_up(self):
+        import helper
+        from unittest.mock import patch
+        answers=[(200,b'site'),(200,b'site'),(503,b'dbm-maintenance-v1')]
+        with patch('helper.public_probe',side_effect=lambda m,d:answers.pop(0)) as probe,patch('helper.time.sleep'):
+            self.assertEqual(helper.settled_probe({},[],lambda code,page:code==503),(503,b'dbm-maintenance-v1'))
+            self.assertEqual(probe.call_count,3)
+        with patch('helper.public_probe',return_value=(200,b'site')) as probe,patch('helper.time.sleep'),patch('helper.time.monotonic',side_effect=[0,1,2,9]):
+            self.assertEqual(helper.settled_probe({},[],lambda code,page:code==503),(200,b'site'))
+            self.assertEqual(probe.call_count,3)
     def test_snippet_serves_the_page_only_while_the_flag_exists(self):
         from helper import maintenance_snippet
         text=maintenance_snippet('8df5710b-9e0d-422a-87a4-d57d45de133b','/var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b')
         self.assertIn('if (-f /var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b/enabled)',text)
         self.assertIn('if ($uri = /__docknest_maintenance.html) { set $dn_maint_8df5710b9e0d 0; }',text)
         self.assertIn('location = /__docknest_maintenance.html { internal; alias',text)
+        # A certificate renewal during a backup must still reach the ACME challenge folder.
+        self.assertIn('if ($uri ~ ^/\\.well-known/acme-challenge/) { set $dn_maint_8df5710b9e0d 0; }',text)
+        self.assertLess(text.index('acme-challenge'),text.index('if ($dn_maint_8df5710b9e0d) { return 503; }'))
     @unittest.skipUnless(__import__('os').name=='posix','Needs root-style file ownership calls')
     def test_failed_visitor_test_puts_every_file_back(self):
         import helper

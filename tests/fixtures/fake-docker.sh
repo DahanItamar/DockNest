@@ -125,6 +125,8 @@ case "$1" in
     case "$*" in
       # Unfinished Safe Edits (scripts/upgrade.sh open_edits); "fail-open-edits" makes the query print nothing.
       *site_edits*) [ -e "$S/fail-open-edits" ] || read_state open-edits 0 ;;
+      # Unfinished launches (scripts/upgrade.sh open_launches); "fail-open-launches" makes the query print nothing.
+      *site_launches*) [ -e "$S/fail-open-launches" ] || read_state open-launches 0 ;;
       *--entrypoint\ node*) read_state schema 0 ;;
       *ls\ /data/upgrade-snapshots*) read_state snapshots ;;
       *state.sqlite.restoring*) echo "restored ${*##* }" >> "$S/restores" ;;

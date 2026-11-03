@@ -12,7 +12,8 @@ const PUBLISHED_NETWORK_FILES=new Set(['src/moves/dns.js','scripts/audit-reposit
 // Special-purpose addresses outside the ranges above that the alert outbound policy must name to refuse them: the 6to4
 // relay anycast block (RFC 7526) and the Azure host endpoint. Allowed only as these exact values and only in these files.
 const outboundPolicyAddresses=['192.88.99.0','192.88.99.1','168.63.129.16'];
-const OUTBOUND_POLICY_FILES=new Set(['src/alerts/addresses.js','tests/alert-outbound.test.js','docs/alert-channels.md','scripts/audit-repository.js']);
+// The launch helper refuses the same addresses for Git hosts (remote/helper/launch.py, docs/launch-site.md).
+const OUTBOUND_POLICY_FILES=new Set(['src/alerts/addresses.js','tests/alert-outbound.test.js','docs/alert-channels.md','scripts/audit-repository.js','remote/helper/launch.py','remote/test_launch.py']);
 const allowedAddress=(value,path)=>{
  const [a,b,c]=value.split('.').map(Number);
  return a===0||a===10||a===127||(a===172&&b>=16&&b<=31)||(a===192&&b===168)||(a===192&&b===0&&c===2)||(a===198&&b===51&&c===100)||(a===203&&b===0&&c===113)||protocolReserved(a,b,c)||['1.1.1.1','8.8.8.8','255.255.255.255'].includes(value)||(PUBLISHED_NETWORK_FILES.has(path)&&publishedNetworks.includes(value))||(OUTBOUND_POLICY_FILES.has(path)&&outboundPolicyAddresses.includes(value));

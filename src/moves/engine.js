@@ -14,6 +14,7 @@ import { storageCapacity } from '../storage.js';
 import { transport, siteInfo, enqueueBackup, uploadBackupTo, maintenanceHtml, jobRunners, discardIncrementalState, editingSite } from '../engine.js';
 import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
+import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
@@ -212,10 +213,11 @@ export function previewView(moveId, { result, plan, hash, target, site }) {
 }
 
 // POST /api/moves/:id/start. The preview is re-run here (the client is never trusted) and must still match.
-// A package install on either server of a move must finish first; both touch the same host.
+// A package install or a launch on either server of a move must finish first; both touch the same host.
 function refuseWhileInstalling(move) {
   for (const serverId of [move.source_server_id, move.target_server_id]) {
     if (installActive(serverId)) throw httpError(409, `DockNest is installing software on ${server(serverId)?.name ?? 'a server'} for this move. Start the move when the install has finished.`, { code: 'INSTALL_RUNNING' });
+    if (launchActive(serverId) || launchHeld(serverId)) throw httpError(409, `DockNest is launching a new site on ${server(serverId)?.name ?? 'a server'}. Start the move when the launch has finished.`, { code: 'LAUNCH_RUNNING' });
   }
 }
 export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = false }, actor) {

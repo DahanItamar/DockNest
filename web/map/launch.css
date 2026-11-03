@@ -1,0 +1,33 @@
+/* Launch a new site (docs/launch-site.md). Dialogs render inside .map-root; every rule is scoped to the launch dialogs. */
+.map-root .ln-dialog,.map-root .ln-dialog .map-dialog-body{scrollbar-width:none}
+.map-root .ln-dialog::-webkit-scrollbar,.map-root .ln-dialog .map-dialog-body::-webkit-scrollbar{display:none}
+.map-root .ln-dialog .map-dialog-body>*{flex-shrink:0}
+.map-root .ln-dialog .alert-panel{margin:0}
+.map-root .ln-dialog .rp-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+.map-root .ln-dialog .rp-actions button{white-space:nowrap}
+.map-root .ln-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.map-root .ln-grid-one{grid-template-columns:1fr}
+.map-root .ln-grid>*{min-width:0}
+.map-root .ln-editor{flex:none;resize:none;line-height:var(--lh-body);white-space:pre;overflow:auto;scrollbar-width:none}
+.map-root .ln-editor::-webkit-scrollbar{display:none}
+.map-root .ln-state{display:inline-flex;align-items:center;gap:8px}
+.map-root .ln-fact,.map-root .ln-row{align-items:center}
+.map-root .ln-row select{width:160px}
+.map-root .ln-dialog .data-table td input{min-height:40px;height:40px;padding:8px 12px}
+.map-root .ln-rows{padding:0 16px}
+.map-root .ln-row{min-height:56px;box-sizing:border-box}
+.map-root .ln-row dt{color:var(--text-primary);font-size:var(--fs-body)}
+.map-root .ln-row-wrap{flex-wrap:wrap}
+.map-root .ln-row-wide{display:flex;align-items:center;justify-content:flex-end;gap:4px;flex:1 1 100%}
+.map-root .ln-row-wide input{flex:1;min-width:0;min-height:44px}
+.map-root .ln-add{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;padding:12px 16px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted)}
+.map-root .ln-add-actions{display:flex;gap:4px}
+.map-root .ln-add .ln-bad{grid-column:1/-1;color:var(--error)}
+@media(max-width:767px){
+ .map-root .ln-grid-wide{grid-template-columns:1fr 1.4fr}
+ .map-root .ln-dialog .data-table td input{min-height:44px;height:44px}
+ .map-root .ln-add{grid-template-columns:1fr}
+ .map-root .ln-add-actions{justify-content:flex-end}
+ .map-root .ln-dialog .rp-actions button{flex:1}
+ .map-root .ln-row select{width:140px}
+}

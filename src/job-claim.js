@@ -1,6 +1,7 @@
 // The job claimJob (src/engine.js) would start next: queued, and neither its server(s) nor a started restore test's
 // server is held by running, recovery_required, move_running or edit_running work (a Safe Edit step, docs/safe-edit.md),
-// or by a server cleanup (src/cleanup-hold.js). Shared with the backup-copy step, which steps
+// or by a server cleanup (src/cleanup-hold.js) or by a launch (src/launches/hold.js: queued jobs, scheduled backups too, wait
+// behind it). Shared with the backup-copy step, which steps
 // aside only for a job that would really start (src/backup-copies.js).
 //
 // Self-heal restarts (docs/self-heal.md, "Security review changes" item 1) are site-scoped, not server-scoped:
@@ -19,13 +20,15 @@
 import { db } from './db.js';
 import { HELD as TEST_HELD } from './restore-tests/hold.js';
 import { CLEANUP_HELD } from './cleanup-hold.js';
+import { LAUNCH_HELD } from './launches/hold.js';
 
 // A package install on the site's server (Docker itself may be replaced) also holds restarts, and a running restart holds
 // installs on its server (src/installs.js).
-// A server cleanup (src/cleanup-hold.js) holds restarts on its server like every other job.
+// A server cleanup (src/cleanup-hold.js) holds restarts on its server like every other job. A launch does not: it can build for
+// up to 30 minutes, and healing other sites must not wait for it.
 const HEAL_CLAIMABLE=`j.status='heal_queued' AND NOT EXISTS(SELECT 1 FROM jobs a WHERE a.site_id=j.site_id AND a.id<>j.id AND a.status IN ('running','recovery_required','move_running','edit_running','edit_waiting','heal_running')) AND NOT EXISTS(SELECT 1 FROM server_installs i WHERE i.status='running' AND i.server_id=(SELECT server_id FROM sites WHERE id=j.site_id)) AND NOT ${CLEANUP_HELD("COALESCE((SELECT server_id FROM sites WHERE id=j.site_id),'')")}`;
 const NO_HEAL_RUNNING="(j.type='restore-test' OR NOT EXISTS(SELECT 1 FROM jobs h WHERE h.site_id=j.site_id AND h.status='heal_running'))";
-export const CLAIMABLE_JOB_SQL=`SELECT j.* FROM jobs j WHERE (${HEAL_CLAIMABLE}) OR (j.status IN ('queued','move_queued','test_queued','edit_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running','edit_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE ${TEST_HELD} AND t.server_id IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) AND NOT (j.type='restore-test' AND json_extract(j.details,'$.testId')=t.id)) AND NOT ${CLEANUP_HELD("COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id),'')")} AND NOT ${CLEANUP_HELD("COALESCE(json_extract(j.details,'$.sourceServerId'),'')")} AND ${NO_HEAL_RUNNING}) ORDER BY j.status<>'heal_queued',j.type='restore-test',j.created_at LIMIT 1`;
+export const CLAIMABLE_JOB_SQL=`SELECT j.* FROM jobs j WHERE (${HEAL_CLAIMABLE}) OR (j.status IN ('queued','move_queued','test_queued','edit_queued') AND NOT EXISTS(SELECT 1 FROM jobs a JOIN sites s ON a.site_id=s.id WHERE a.status IN ('running','recovery_required','move_running','edit_running') AND (COALESCE(json_extract(a.details,'$.targetServerId'),s.server_id) IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) OR json_extract(a.details,'$.sourceServerId') IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')))) AND NOT EXISTS(SELECT 1 FROM restore_tests t WHERE ${TEST_HELD} AND t.server_id IN (COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id)),json_extract(j.details,'$.sourceServerId')) AND NOT (j.type='restore-test' AND json_extract(j.details,'$.testId')=t.id)) AND NOT ${CLEANUP_HELD("COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id),'')")} AND NOT ${CLEANUP_HELD("COALESCE(json_extract(j.details,'$.sourceServerId'),'')")} AND NOT ${LAUNCH_HELD("COALESCE(json_extract(j.details,'$.targetServerId'),(SELECT server_id FROM sites WHERE id=j.site_id),'')")} AND NOT ${LAUNCH_HELD("COALESCE(json_extract(j.details,'$.sourceServerId'),'')")} AND ${NO_HEAL_RUNNING}) ORDER BY j.status<>'heal_queued',j.type='restore-test',j.created_at LIMIT 1`;
 // Only a self-heal restart: the worker starts these at once when an event queues one, beside any running job of another
 // site, so a long backup elsewhere never delays a restart (src/self-heal/engine.js healNow).
 export const CLAIMABLE_HEAL_SQL=`SELECT j.* FROM jobs j WHERE ${HEAL_CLAIMABLE} ORDER BY j.created_at LIMIT 1`;

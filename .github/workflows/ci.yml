@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: 'Run only this Linux integration scenario (self-heal), or leave empty for the full suite'
+        description: 'Run only this Linux integration scenario (self-heal or launch), or leave empty for the full suite'
         type: string
         required: false
         default: ''
@@ -112,6 +112,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      # The maintenance page embeds a font from dist/ (src/engine.js maintenanceHtml); the launch scenario sets it up.
+      - run: npm run build
       - run: npm run test:integration
         env:
           INTEGRATION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.only || '' }}

@@ -28,7 +28,7 @@ process.env.NODE_ENV = 'test';
 process.env.SECURE_COOKIES = 'false';
 process.env.BACKUP_STORAGE = 'unconfigured';
 await writeFile(process.env.MASTER_KEY_FILE, randomBytes(32).toString('base64'), { mode: 0o600 });
-const evidence = { formatVersion:2,release:process.env.GITHUB_SHA||(await exec('git',['rev-parse','HEAD'])).stdout.trim(),at:new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target, remote SFTP storage and S3-compatible storage', checks: [] };
+const evidence = { formatVersion:2,release:process.env.GITHUB_SHA||(await exec('git',['rev-parse','HEAD'])).stdout.trim(),at:new Date().toISOString(), fixture: 'isolated Linux Docker-in-Docker with source, restore target, remote SFTP storage and S3-compatible storage', checks: [], partial: [] };
 let db;
 async function until(check, message, seconds = 90) {
   const end = Date.now() + seconds * 1000;
@@ -84,15 +84,20 @@ try {
   db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(destinationId,'Remote QA Storage',storageServer.host,storageServer.port,'root',storageServer.host_key,'password',seal(storagePassword),storageOptions.root,1e12,'connected',storageNow,storageNow);
   db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(destinationId);
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
-  // INTEGRATION_ONLY=self-heal (test-only, for a quick re-run of one scenario through workflow_dispatch): the hosts and
+  // INTEGRATION_ONLY=self-heal or launch (test-only, for a quick re-run of one scenario through workflow_dispatch): the hosts and
   // the remote storage above are what the self-heal scenario needs (it builds its own site image). Unset, the full run
   // below is unchanged. Partial evidence is marked as such and never reads as a full pass.
   const only = process.env.INTEGRATION_ONLY || '';
   if (only) {
-    if (only !== 'self-heal') throw new Error(`INTEGRATION_ONLY supports only "self-heal", not "${only.slice(0, 40)}"`);
+    if (!['self-heal','launch'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal" or "launch", not "${only.slice(0, 40)}"`);
     evidence.only = only;
-    const {runSelfHealScenario}=await import('./integration-self-heal.js');
-    await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
+    if (only === 'launch') {
+      const {runLaunchScenario}=await import('./integration-launch.js');
+      await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
+    } else {
+      const {runSelfHealScenario}=await import('./integration-self-heal.js');
+      await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
+    }
   } else {
   await run('cp','remote',hosts[0]+':/qa-helper');
   // The tests import the built helper (one file, as servers receive it) from bundle/ (remote/helper_path.py).
@@ -293,6 +298,8 @@ try {
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
+  const {runLaunchScenario}=await import('./integration-launch.js');
+  await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
   const wrapper=join(directory,'tar-wrapper');
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');
@@ -318,8 +325,9 @@ try {
   const {runSelfHealScenario}=await import('./integration-self-heal.js');
   await runSelfHealScenario({run,until,hosts,servers,db,directory,record,evidence});
   }
-  evidence.status = only ? 'partial' : 'passed';
+  evidence.status = only ? 'partial' : evidence.partial.length ? 'passed (partial)' : 'passed';
   if (only) evidence.onlyResult = 'passed';
+  if (!only && evidence.partial.length) console.log('PASSED (PARTIAL): ' + evidence.partial.join('; '));
 } catch (error) {
   evidence.status = 'failed';
   // Do not print subprocess arguments/output: SSH/setup commands can contain credentials.

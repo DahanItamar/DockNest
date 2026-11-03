@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle,IconBell,IconPlugConnected} from '@tabler/icons-react';
+import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExport,IconBox,IconAppWindow,IconInfoCircle,IconBell,IconPlugConnected,IconPlus} from '@tabler/icons-react';
 import {IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {containerName,containerGroups} from '../container-groups.js';
@@ -52,11 +52,12 @@ export function useDiscovery(api,server,sites){
  },[state,sites,server.id]);
  return {...state,choices,again:()=>setRun(n=>n+1)};
 }
-export function AddToServer({found,onPick,onDragItem}){
+export function AddToServer({found,onPick,onDragItem,onNewSite}){
  const [q,setQ]=useState('');
  const rows=found.choices.filter(c=>c.name.toLowerCase().includes(q.trim().toLowerCase()));
  return <>
   <Search value={q} onChange={setQ}/>
+  {onNewSite&&<ul className="map-rows"><Row icon={IconPlus} title="New site" caption="From a Compose file or a Git repository" onClick={onNewSite}/></ul>}
   <h3 className="map-group-title">Found on this server ({found.choices.length})</h3>
   <div role="status" aria-live="polite">{found.loading&&<p className="map-caption">Looking for sites{'…'}</p>}{found.error&&<Note kind="error" icon={IconInfoCircle}>{found.error}</Note>}
    {!found.loading&&!found.error&&!found.choices.length&&<p className="map-caption">No sites left to add on this server.</p>}

@@ -35,12 +35,17 @@ from .heal import (
     health_events, self_heal_restart, self_heal_resolve)
 from .cleanup import (
     cleanup_apply, cleanup_scan, cleanup_shared)
-# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, CLEANUP_SHARED, EVENT_STREAM, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
+from .launch import (
+    LAUNCH_UUID, launch_build, launch_certificate, launch_facts, launch_fetch, launch_host_key_entry, launch_poll,
+    launch_start, launch_status, launch_teardown, launch_web)
+# Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, CLEANUP_SHARED, EVENT_STREAM, LAUNCH_CHILDREN, MOVE_ID, MOVE_LOCK, SNAPSHOT_FILTER, STOPPING
 # </build:header>
 LOCKED_TEST_OPS={'restore-test-prepare','restore-test-run','restore-test-teardown'}
 # Steps that create or need Docker resources hold the shared cleanup lock for their whole run (remote/helper/cleanup.py).
 # Safe Edit's prepare (pull), apply and rollback and a self-heal restart (2.15) start or replace containers, so they take it too.
-CLEANUP_SHARED_OPS={'capture','capture-stream','prepare-restore','restore','restore-test-prepare','restore-test-run','edit-prepare','edit-apply','edit-rollback','self-heal-restart'}
+CLEANUP_SHARED_OPS={'capture','capture-stream','prepare-restore','restore','restore-test-prepare','restore-test-run','edit-prepare','edit-apply','edit-rollback','self-heal-restart','launch-fetch','launch-build','launch-start','launch-teardown'}
+# Launch steps that DockNest may stop through stdin (docs/launch-site.md); their git and build children are ended too.
+WATCHED_LAUNCH_OPS={'launch-fetch','launch-build','launch-start','launch-teardown'}
 LOCKED_MOVE_OPS={'deploy-restore','deploy-teardown','move-test','move-resume-source','move-retire-source','move-finalize-target','move-certificate','move-stop-target','move-unretire-source','move-remove-old'}
 def move_lock(mid,wait=False):
     import fcntl
@@ -63,6 +68,9 @@ def stop_after_stdin(read=None,limit=180):
     STOPPING=True
     try:signal.signal(signal.SIGTERM,signal.SIG_IGN);os.killpg(os.getpgrp(),signal.SIGTERM)
     except Exception:pass
+    for pid in list(LAUNCH_CHILDREN):
+        try:os.killpg(pid,signal.SIGTERM)
+        except Exception:pass
     deadline=time.time()+limit;previous=None
     while time.time()<deadline:
         current=docker_snapshot()
@@ -96,6 +104,8 @@ def main(req):
         MOVE_LOCK=test_lock(tid,200 if req['operation']=='restore-test-teardown' else 0)
         SNAPSHOT_FILTER='label='+TEST_LABEL+'='+tid
         if req.get('watchStdin'):watch_stdin()
+    if req.get('operation') in WATCHED_LAUNCH_OPS and req.get('watchStdin') and isinstance(req.get('launchId'),str) and LAUNCH_UUID.fullmatch(req['launchId']):
+        SNAPSHOT_FILTER='label=docknest.launch='+req['launchId'];watch_stdin()
     op=req['operation']
     CAPTURE_DIAGNOSTICS=op in ['capture','capture-stream'] and bool(req.get('diagnostics'))
     if op=='capture-stream':EVENT_STREAM=sys.stderr
@@ -170,6 +180,16 @@ def main(req):
         # DockNest keeps stdin open while the clean runs: a dropped connection or a stopped API ends it.
         if req.get('watchStdin'):watch_stdin()
         cleanup_apply(req)
+    elif op=='launch-host-key':launch_host_key_entry(req)
+    elif op=='launch-facts':launch_facts(req)
+    elif op=='launch-fetch':launch_fetch(req)
+    elif op=='launch-build':launch_build(req)
+    elif op=='launch-start':launch_start(req)
+    elif op=='launch-poll':launch_poll(req)
+    elif op=='launch-web':launch_web(req)
+    elif op=='launch-certificate':launch_certificate(req)
+    elif op=='launch-teardown':launch_teardown(req)
+    elif op=='launch-status':launch_status(req)
     else:raise ValueError('Unsupported helper operation')
 if __name__=='__main__' and sys.argv[1:2]==['restore-chain']:
     # Recovery kit, run by hand as root: python3 helper.py restore-chain <decrypted chain folder> <new empty folder>.

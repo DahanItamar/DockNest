@@ -41,6 +41,8 @@ const catalogue = Object.freeze({
   'self_heal.restarted:failed': 'A container failed its health check and DockNest could not restart it. Open DockNest to see why.',
   'self_heal.gave_up': 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.',
   'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this site.',
+  // Launches (docs/launch-site.md): the teardown of a failed launch did not finish, so the server stays held.
+  'launch.needs_you': 'A failed launch could not remove everything it made. Open DockNest and press Try again.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

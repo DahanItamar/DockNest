@@ -246,6 +246,23 @@ unfinished. If a server was left mid-edit anyway, it keeps its journal under `/v
 Self-heal is new in 2.15 and is off for every site ([self-heal-guide.md](self-heal-guide.md)). Migration 16
 (compatible) only adds its settings and history tables. Going back to 2.14 ignores them and any queued restart, which
 then never runs; `scripts/upgrade.sh` waits for a running restart like for any other job.
+## Launching sites in 2.16
+
+Migration 17 (`site-launches`, compatible) adds the launch and deploy key tables. It also rebuilds `server_installs`
+so it can hold Git installs. Every row is copied with its values, and the index and the link to its server are kept.
+If an install row points to a server that no longer exists, the upgrade stops before changing anything and the
+previous release keeps working. Delete that row (`DELETE FROM server_installs WHERE server_id NOT IN (SELECT id FROM
+servers)`) and upgrade again.
+
+Rolling back to 2.15 or 2.14 is a compatible rollback:
+
+- The older release ignores the launch and deploy key tables.
+- Sites made by a launch are normal sites and keep backing up.
+- Git install rows stay in the install history. A Git install still queued when you roll back fails with "DockNest
+  cannot install that.", because the older helper does not know Git. Nothing is installed.
+
+**Finish launches before rolling back.** A launch that is still running or needs attention is not resumed or torn
+down by an older release, so whatever it had created stays on the server until 2.16 runs again.
 
 ## Protected mounts are no longer copied (2.11.1)
 

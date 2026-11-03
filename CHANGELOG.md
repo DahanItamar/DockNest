@@ -4,6 +4,17 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Launch a new Docker site from the Map with a Compose file or a Git repository. DockNest checks the source and server, sets up nginx and HTTPS when DNS is ready, then starts backups and optional restore tests.
+- Private Git launches can use a read-only deploy key with a confirmed Git host key.
+- Alert event **Launch needs you**, sent when a failed launch could not remove everything it made on the server.
+
+### Changed
+
+- `scripts/upgrade.sh` also refuses to go back to a release before 2.16 while a launch is queued, running or needs attention, because older releases cannot resume or remove it.
+- The maintenance page now lets certificate renewal checks through, so a renewal during a backup no longer fails. Existing sites get this the next time their maintenance page is set up.
+
 ### Fixed
 
 - The Hardening findings window now shows the full container name and fix on every screen size, instead of cutting them off.

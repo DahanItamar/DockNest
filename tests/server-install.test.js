@@ -66,7 +66,7 @@ test('the package table is distro packages only, and the helper has the identica
   const source = await readFile(new URL('../remote/helper/install.py', import.meta.url), 'utf8');
   const helperTable = JSON.parse(/INSTALL_PLAN_JSON=r'''(.*?)'''/s.exec(source)[1]);
   assert.deepEqual(helperTable, plan.PACKAGE_MAP);
-  assert.deepEqual([...plan.INSTALL_PACKAGES], ['nginx', 'docker', 'compose', 'certbot']);
+  assert.deepEqual([...plan.INSTALL_PACKAGES], ['nginx', 'docker', 'compose', 'certbot', 'git']);
   for (const packages of Object.values(plan.PACKAGE_MAP)) for (const names of Object.values(packages)) for (const name of names) assert.match(name, /^[a-z0-9][a-z0-9.+-]*$/);
 });
 
@@ -96,6 +96,13 @@ const matrix = [
   ['rocky', '9.4', 'dnf', 'certbot', false, ''],
   ['almalinux', '9.4', 'dnf', 'docker', false, ''],
   ['rhel', '9.4', 'dnf', 'compose', false, ''],
+  // Git for launches from a repository (docs/launch-site.md): in every supported distro's own repositories.
+  ['ubuntu', '24.04', 'apt', 'git', true, 'sudo apt-get update && sudo apt-get install -y --no-install-recommends git'],
+  ['debian', '12', 'apt', 'git', true, 'sudo apt-get update && sudo apt-get install -y --no-install-recommends git'],
+  ['fedora', '41', 'dnf', 'git', true, 'sudo dnf install -y git'],
+  ['rocky', '9.4', 'dnf', 'git', true, 'sudo dnf install -y git'],
+  ['rhel', '9.4', 'dnf', 'git', true, 'sudo dnf install -y git'],
+  ['alpine', '3.20', null, 'git', false, ''],
   ['alpine', '3.20', null, 'nginx', false, ''],
   ['linuxmint', '21', 'apt', 'nginx', false, ''],
   ['ubuntu', '24.04', null, 'nginx', false, ''],

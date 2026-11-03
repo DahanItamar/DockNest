@@ -15,6 +15,7 @@ import { transport } from './engine.js';
 import { heldBy } from './restore-tests/hold.js';
 import { cleanupHeld, takeCleanupHold, releaseCleanupHold } from './cleanup-hold.js';
 import { installActive } from './installs.js';
+import { launchHeld, launchActive } from './launches/hold.js';
 
 export const serverCleanupRoutes = express.Router();
 // Test only: the Linux integration test cannot wait an hour for its fixtures to age. DockNest itself never calls this.
@@ -74,6 +75,7 @@ export function busyReason(serverId) {
   if (db.prepare('SELECT 1 FROM site_edits e JOIN sites s ON s.id=e.site_id WHERE e.result IS NULL AND s.server_id=?').get(serverId)) return 'A Safe Edit is running on this server.';
   if (db.prepare(`SELECT 1 FROM site_moves WHERE (source_server_id=? OR target_server_id=?) AND state IN ${RUNNING_MOVE}`).get(serverId, serverId)) return 'A site move is running on this server.';
   if (installActive(serverId)) return 'An install is running on this server.';
+  if (launchHeld(serverId) || launchActive(serverId)) return 'A new site is being launched on this server.';
   if (cleanupHeld(serverId)) return 'A cleanup is already running on this server.';
   return null;
 }

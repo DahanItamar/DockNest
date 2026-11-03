@@ -75,7 +75,9 @@ test('a 2.10.1 database with backups: nothing changes, no copies, and the defaul
     const before = schema(old), tables = before.filter(row => row.type === 'table').map(row => row.name), contents = Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')]));
     const result = migrate(old, { file, now: () => new Date('2026-10-28T08:00:00.000Z'), log: quiet });
     assert.deepEqual([result.from, result.to], [10, schemaVersion]); assert.match(result.snapshot, new RegExp(`state-v10-to-v${schemaVersion}-`));
-    for (const row of before) assert.deepEqual(schema(old).find(item => item.name === row.name), row, 'existing objects keep their definition');
+    // Migration 17 (docs/launch-site.md) widens server_installs to allow 'git'; that is its only change.
+    const asBefore = row => (row?.name === 'server_installs' ? { ...row, sql: row.sql.replace('CREATE TABLE "server_installs"', 'CREATE TABLE server_installs').replace(",'certbot','git')", ",'certbot')") } : row);
+    for (const row of before) assert.deepEqual(asBefore(schema(old).find(item => item.name === row.name)), row, 'existing objects keep their definition');
     assert.deepEqual(Object.fromEntries(tables.map(name => [name, rowsOf(old, name).filter(row => name !== 'settings' || row.key !== 'schema_compat_floor')])), contents, 'no row of an existing table changes');
     for (const table of ['site_storage', 'site_storage_copies', 'backup_copies', 'backup_main_removed', 'manager_backup_copies']) assert.equal(rowsOf(old, table).length, 0, table + ' starts empty');
     assert.equal(old.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get().value, '1');

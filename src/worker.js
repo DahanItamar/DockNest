@@ -16,6 +16,8 @@ import { tickRestoreTestSchedule } from './restore-tests/scheduler.js';
 import { tickSiteEdits, recoverInterruptedSiteEdits } from './site-edits/engine.js';
 import { claimInstall, executeInstall, failInterruptedInstalls } from './installs.js';
 import { tickAlerts, tickReachability } from './alerts/detect.js';
+import { claimLaunch, interruptLaunchSteps } from './launches/claim.js';
+import { tickLaunches, executeLaunchStep } from './launches/engine.js';
 import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks, haltSelfHeal } from './self-heal/engine.js';
 import { syncStreams, stopStreams } from './self-heal/streams.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
@@ -36,6 +38,8 @@ recoverInterruptedRestoreTests();
 recoverInterruptedSiteEdits();
 // An install was a single helper call; it is not resumed. The person is told and can try again.
 failInterruptedInstalls();
+// A launch step that was running is marked failed; the launch asks its server (launch-status) before resuming or tearing down.
+interruptLaunchSteps();
 // A self-heal restart is one helper call; an interrupted one is failed, counts toward the limit and is not retried.
 recoverInterruptedHeals();
 // Any job still 'running' belonged to a worker that no longer holds the lease.
@@ -63,7 +67,7 @@ for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){co
 try{
  let reconcileAt=0;
  const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}try{purgeSelfHealEvents();}catch{/* Self-heal history older than 90 days is deleted at the next maintenance. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickLaunches();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimLaunch:()=>claimLaunch(),executeLaunch:executeLaunchStep,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);stopStreams();cancelRechecks();await healRunner.running;if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);

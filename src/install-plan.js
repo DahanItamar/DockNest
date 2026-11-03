@@ -1,15 +1,15 @@
 // Pure rules for "Install on server" (docs/moving-sites.md): which packages DockNest may install where, and the line a
 // person would run themselves. No I/O, so the move preflight can use it. What actually runs is decided in
 // remote/helper/install.py (INSTALL_PLAN_JSON); tests/server-install.test.js keeps the two package tables identical.
-export const INSTALL_PACKAGES = Object.freeze(['nginx', 'docker', 'compose', 'certbot']);
-const LABELS = { nginx: 'nginx', docker: 'Docker', compose: 'Docker Compose', certbot: 'certbot' };
+export const INSTALL_PACKAGES = Object.freeze(['nginx', 'docker', 'compose', 'certbot', 'git']);
+const LABELS = { nginx: 'nginx', docker: 'Docker', compose: 'Docker Compose', certbot: 'certbot', git: 'Git' };
 export const installLabel = name => LABELS[name];
 
 // Distro packages only: no curl|sh, no third-party repositories. Keep identical to INSTALL_PLAN_JSON in
 // remote/helper/install.py; tests/server-install.test.js compares the two.
 export const PACKAGE_MAP = Object.freeze({
-  apt: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['docker.io'], compose: ['docker-compose-v2'] },
-  dnf: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['moby-engine'], compose: [] },
+  apt: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['docker.io'], compose: ['docker-compose-v2'], git: ['git'] },
+  dnf: { nginx: ['nginx'], certbot: ['certbot', 'python3-certbot-nginx'], docker: ['moby-engine'], compose: [], git: ['git'] },
 });
 const APT_IDS = ['debian', 'ubuntu'], DNF_IDS = ['fedora', 'rhel', 'rocky', 'almalinux'];
 const idText = /^[a-z0-9][a-z0-9._-]{0,39}$/;
@@ -31,7 +31,7 @@ export function installSupported(manager, osId, versionId, name) {
   }
   if (manager === 'dnf') {
     if (!DNF_IDS.includes(osId)) return false;
-    return name === 'nginx' || (osId === 'fedora' && (name === 'certbot' || name === 'docker'));
+    return name === 'nginx' || name === 'git' || (osId === 'fedora' && (name === 'certbot' || name === 'docker'));
   }
   return false;
 }
@@ -42,8 +42,9 @@ export function installCommand(manager, osId, name) {
   if (!packages?.length) return '';
   if (manager === 'apt' && APT_IDS.includes(osId)) return `sudo apt-get update && sudo apt-get install -y --no-install-recommends ${packages.join(' ')}`;
   if (manager === 'dnf' && DNF_IDS.includes(osId)) {
-    // RHEL, Rocky and Alma do not ship these in their own repositories (they need EPEL or a vendor repository).
-    if (osId !== 'fedora' && name !== 'nginx') return '';
+    // RHEL, Rocky and Alma do not ship these in their own repositories (they need EPEL or a vendor repository); nginx and
+    // git are in their base repositories.
+    if (osId !== 'fedora' && name !== 'nginx' && name !== 'git') return '';
     return `sudo dnf install -y ${packages.join(' ')}`;
   }
   return '';
