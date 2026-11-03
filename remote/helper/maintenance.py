@@ -145,10 +145,13 @@ def maintenance_nginx_edits(domains,include_line,folders=NGINX_SITE_FOLDERS,root
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
         for entry in sorted(directory.iterdir()):
-            if entry.name.startswith(('docknest-','.')):continue
+            if entry.name.startswith('.'):continue
             real=pathlib.Path(os.path.realpath(entry))
             if not real.is_file() or not real.is_relative_to(os.path.realpath(root)) or real.stat().st_size>1024*1024:continue
             text=edits.get(str(real)) or real.read_text()
+            # Other files DockNest writes (moves, ...) are left alone. A site launched by DockNest is served by a file it
+            # wrote itself, marked by this header (launch.py LAUNCH_HEADER); that file takes the include too.
+            if entry.name.startswith('docknest-') and not text.startswith('# Managed by DockNest launch '):continue
             blocks=[b for b in nginx_server_blocks(text) if b['names']&wanted]
             if not blocks:continue
             found=True

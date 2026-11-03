@@ -320,6 +320,16 @@ class MaintenanceSetupTests(unittest.TestCase):
             site.write_text(text)
             self.assertEqual(maintenance_nginx_edits(['example.com'],'include /etc/nginx/docknest/x.conf;',folders=[str(folder)],root=d),{})
             with self.assertRaisesRegex(ValueError,'not found'):maintenance_nginx_edits(['missing.example'],'include x;',folders=[str(folder)],root=d)
+    def test_include_also_goes_into_the_file_a_launch_wrote(self):
+        from helper import maintenance_nginx_edits
+        with tempfile.TemporaryDirectory() as d:
+            folder=pathlib.Path(d)/'conf.d';folder.mkdir()
+            launched=folder/'docknest-shop.conf';launched.write_text('# Managed by DockNest launch 1234;\nserver { listen 80; server_name shop.example.com; }\n')
+            other=folder/'docknest-move.conf';other.write_text('server { server_name shop.example.com; }')
+            import os
+            edits=maintenance_nginx_edits(['shop.example.com'],'include x;',folders=[str(folder)],root=d)
+            self.assertEqual(list(edits),[os.path.realpath(launched)])
+            self.assertIn('include x;',edits[os.path.realpath(launched)])
     def test_snippet_serves_the_page_only_while_the_flag_exists(self):
         from helper import maintenance_snippet
         text=maintenance_snippet('8df5710b-9e0d-422a-87a4-d57d45de133b','/var/lib/docknest/maintenance/8df5710b-9e0d-422a-87a4-d57d45de133b')
