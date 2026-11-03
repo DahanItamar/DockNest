@@ -62,6 +62,10 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving sites](docs/moving-sites.md).
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 
+**Safe changes (beta)**
+- Administrators change a site's Compose file, environment values, published ports or image tag from DockNest. Each change takes a backup first, shows the maintenance page, checks the site comes up and undoes the change by itself when it does not. Environment values are write-only, and a change can never add privileges the site did not have. See [Safe Edit](docs/safe-edit-guide.md).
+- Self-heal (off by default): when Docker marks a container of a site unhealthy, DockNest restarts it a few times per hour at most and tells you through your alert lines. It never restarts during a backup, restore, move or change of that site, and works while DockNest is running. See [self-heal](docs/self-heal-guide.md).
+
 **Alerts**
 - Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, a site's certificate is about to expire or failed to renew, or a new version is out.
 - Save the login once in Administration, Connections (encrypted, never shown again), then add an alert node on the Map, draw a line from DockNest, a server or a site, and pick the events. See [alerts](docs/alerts.md).
@@ -189,7 +193,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |

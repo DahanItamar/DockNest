@@ -3,7 +3,7 @@ import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,Ico
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
-export function Sheet({title,labelId,onClose,children,actions,className}){
+export function Sheet({title,labelId,onClose,children,actions,className,fixedHead}){
  const ref=useRef(null);
  // Focus the title on open, so no button shows a focus ring until the user moves focus
  useEffect(()=>{const d=ref.current;if(d&&!d.open){d.showModal();d.querySelector('h2')?.focus()}return()=>{if(d?.open)d.close()}},[]);
@@ -16,7 +16,7 @@ export function Sheet({title,labelId,onClose,children,actions,className}){
   else if(!e.shiftKey&&(a===last||!ref.current.contains(a))){e.preventDefault();first.focus();}
  }
  return <dialog ref={ref} className={className?"map-dialog "+className:"map-dialog"} aria-labelledby={labelId} onKeyDown={trap} onCancel={e=>{e.preventDefault();onClose?.()}}>
-  <div className="map-dialog-body"><h2 id={labelId} tabIndex={-1}>{title}</h2>{children}</div>
+  {fixedHead?<><div className="map-dialog-head"><h2 id={labelId} tabIndex={-1}>{title}</h2></div><div className="map-dialog-body">{children}</div></>:<div className="map-dialog-body"><h2 id={labelId} tabIndex={-1}>{title}</h2>{children}</div>}
   <div className="map-dialog-foot">{actions}</div>
  </dialog>;
 }
