@@ -4,6 +4,17 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Launch a new Docker site from the Map with a Compose file or a Git repository. DockNest checks the source and server, sets up nginx and HTTPS when DNS is ready, then starts backups and optional restore tests.
+- Private Git launches can use a read-only deploy key with a confirmed Git host key.
+- Alert event **Launch needs you**, sent when a failed launch could not remove everything it made on the server.
+
+### Changed
+
+- `scripts/upgrade.sh` also refuses to go back to a release before 2.16 while a launch is queued, running or needs attention, because older releases cannot resume or remove it.
+- The maintenance page now lets certificate renewal checks through, so a renewal during a backup no longer fails. Existing sites get this the next time their maintenance page is set up.
+
 ### Fixed
 
 - The Hardening findings window now shows the full container name and fix on every screen size, instead of cutting them off.
@@ -17,15 +28,10 @@ See [docs/releases/2026-11-03-v2.15.0.md](docs/releases/2026-11-03-v2.15.0.md).
 - Safe Edit (beta): administrators can change a site's Compose file, environment values, published ports and image tag from DockNest. Saving takes a backup first, shows the maintenance page, applies the change and checks the site comes up. If it does not, DockNest puts the previous version back by itself. When the image changed, it also puts the data back in place from a safety copy it made on the server just before the change (the copy is removed afterwards). Environment values are write-only: never shown, stored or logged. See [docs/safe-edit-guide.md](docs/safe-edit-guide.md).
 - Two alert events: **Change undone** and **Change needs you**. Existing alert lines do not gain them.
 - Self-heal (off by default, per site): when Docker marks a container of a site unhealthy, DockNest restarts it, up to 3 times an hour by default and at least 60 seconds apart, and never while a backup, restore, move, Safe Edit or maintenance is in progress. Two new alert events, "Container restarted" (first restart in a window) and "Self-heal stopped"; existing alert lines do not get them automatically. Works only while DockNest is running. See [docs/self-heal-guide.md](docs/self-heal-guide.md).
-- Launch a new Docker site from the Map with a Compose file or a Git repository. DockNest checks the source and server, sets up nginx and HTTPS when DNS is ready, then starts backups and optional restore tests.
-- Private Git launches can use a read-only deploy key with a confirmed Git host key.
-- Alert event **Launch needs you**, sent when a failed launch could not remove everything it made on the server.
 
 ### Changed
 
 - `scripts/upgrade.sh` refuses to go back to a release before 2.15 while a Safe Edit is unfinished, and waits for Safe Edit and self-heal steps like for other running work.
-- `scripts/upgrade.sh` also refuses to go back to a release before 2.16 while a launch is queued, running or needs attention, because older releases cannot resume or remove it.
-- The maintenance page now lets certificate renewal checks through, so a renewal during a backup no longer fails. Existing sites get this the next time their maintenance page is set up.
 
 ## [2.14.0] - 2026-11-02
 
