@@ -10,6 +10,8 @@ See [docs/releases/2026-11-02-v2.14.0.md](docs/releases/2026-11-02-v2.14.0.md).
 
 ### Added
 
+- Launch a new Docker site from the Map with a Compose file or a Git repository. DockNest checks the source and server, sets up nginx and HTTPS when DNS is ready, then starts backups and optional restore tests.
+- Private Git launches can use a read-only deploy key with a confirmed Git host key.
 - Server cleanup on the Storage page: scan a server, see how much space stopped containers, dangling images, unused anonymous volumes and old build cache take, and remove them after you confirm. Anything a site, backup, restore test, move or kept old copy still needs, and DockNest itself, is never removed. See [docs/server-cleanup.md](docs/server-cleanup.md).
 - Certificate alerts: get an alert when a site's TLS certificate expires within 14 days (change it under Connections settings) or when certbot fails to renew it. DockNest reads certificate dates only while it already backs up, checks or discovers a site, so nothing new runs on your servers. Tick the two new events on an alert line in the Map. See [docs/alerts.md](docs/alerts.md#certificates).
 - Hardening score: each Docker site now gets a security grade from A to F, with a one-line fix for each finding (privileged mode, Docker socket, root user, open ports, memory limit, image tag, healthcheck, privilege escalation, extra capabilities). It shows on each site card and in the Map, updates on server scans and backups, and never changes the site. See [docs/hardening-score.md](docs/hardening-score.md).
