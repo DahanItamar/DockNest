@@ -181,3 +181,18 @@ test('git install rows are read like any install, and a queued one fails plainly
   const row = findInstall(queued);
   assert.equal(row.status, 'failed'); assert.equal(row.error, 'DockNest cannot install that.');
 });
+
+test('a self-heal restart is claimable while a launch step runs on the same server (a launch can build for 30 minutes)', async () => {
+  const { CLAIMABLE_HEAL_SQL } = await import('../src/job-claim.js');
+  reset();
+  const server = serverRow('heal-srv'), site = siteRow(server, 'healed');
+  const launchId = launch(server, { state: 'running', steps: { check: 'done', fetch: 'done', build: 'launch_running' } });
+  assert.equal(launchHeld(server), true, 'the launch holds the server for every other job');
+  const backup = job(site);
+  assert.equal(claimJob() ?? null, null, 'a backup waits behind the launch');
+  const heal = job(site, 'heal_queued', 'self-heal');
+  db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(backup);
+  assert.equal(db.prepare(CLAIMABLE_HEAL_SQL).get()?.id, heal, 'the restart is not held by the launch');
+  setLaunch(launchId, 'needs_attention');
+  assert.equal(db.prepare(CLAIMABLE_HEAL_SQL).get()?.id, heal, 'nor by a launch that needs attention');
+});
