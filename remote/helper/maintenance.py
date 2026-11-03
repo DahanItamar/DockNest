@@ -193,7 +193,7 @@ def setup_maintenance(req):
         flag.touch(mode=0o644)
         status,body=public_probe(m,domains)
         if status!=503 or b'dbm-maintenance-v1' not in body:
-            open('/opt/dbg-launch.log','ab').write(subprocess.run('nginx -T 2>&1 | head -150; ls -ld /var/lib/docknest /var/lib/docknest/maintenance; ls -la '+str(directory)+'; ps aux | grep nginx | head -5',shell=True,capture_output=True).stdout[:7000])
+            open('/opt/dbg-launch.log','ab').write(subprocess.run('echo URL '+m.get('publicUrl','')+'; echo STATUS %d; curl -ski -H "Host: '%status+urllib.parse.urlsplit(m.get('publicUrl','')).netloc+'" '+urllib.parse.urlsplit(m.get('publicUrl','')).scheme+'://127.0.0.1/ | head -12; tail -5 /var/log/nginx/error.log; ls -la '+str(directory)+'; stat -c %U:%a /var/lib/docknest; grep -c . /etc/nginx/nginx.conf; cat /run/nginx/nginx.pid; ps aux | grep -c nginx',shell=True,capture_output=True).stdout[:7000])
             raise ValueError('Visitors did not get the maintenance page during the test (HTTP %d), so DockNest put the configuration back. A CDN or another proxy in front of nginx can cause this.'%status)
         flag.unlink()
         status,body=public_probe(m,domains)
