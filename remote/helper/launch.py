@@ -609,7 +609,9 @@ def launch_sandboxed(argv,keep):
 def launch_model(slug,files,project_dir,env_file):
     # Every file Compose may read for this launch lives in the env file's folder (the site folder or a check folder).
     argv=launch_sandboxed(launch_compose_base(slug,files,project_dir,env_file)+['config','--format','json'],[os.path.dirname(str(env_file))])
-    code,stdout,_=launch_exec(argv,120)
+    code,stdout,_dbg=launch_exec(argv,120)
+    if code:open('/opt/dbg-launch.log','ab').write(('%s %s
+'%(code,_dbg[:900])).encode())
     if code==97:launch_refuse('SANDBOX_UNAVAILABLE')
     if code!=0:launch_refuse('COMPOSE_INVALID')
     try:model=json.loads(stdout)

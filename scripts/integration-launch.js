@@ -286,9 +286,9 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     const trapHits = () => sh(gitHost, "grep -c trap.git /tmp/trap.log || true");
 
     // ---------- probe: the helper's gate works, so a clean pasted file passes ----------
-    try { await writeTo(lhost, '/opt/sb.py', "import json,os,subprocess,sys\nspec=json.loads(sys.argv[1]);argv=sys.argv[2:]\ndef mount(*a):\n    r=subprocess.run(['mount',*a],capture_output=True)\n    print('mount',a,r.returncode,r.stderr[:200])\nmount('--make-rprivate','/')\nfor p in spec['hide']:\n    if os.path.isdir(p) and not os.path.islink(p): mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','x',p)\nfor p in spec['keep']:\n    fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY)\n    mount('--bind','/proc/self/fd/%d'%fd,p)\n    mount('-o','remount,bind,ro,nosuid,nodev',p)\nos.execvp(argv[0],argv)\n"); console.error('TEMPDEBUG sb: '+(await sh(lhost, `printf 'services:\n  web:\n    image: nginx\n' > /srv/dbg/c.yaml; unshare --mount --propagation private -- python3 -I /opt/sb.py '{"keep":["/srv/dbg"],"hide":["/root","/home","/srv/docknest"]}' docker compose -p dbg -f /srv/dbg/c.yaml --project-directory /srv/dbg --env-file /srv/dbg/e.env config --format json 2>&1 | head -30`)).slice(0,2500)); } catch (e) { console.error('TEMPDEBUG sb failed '+String(e.stderr).slice(0,800)); }
     const control = await check('control', BASE_COMPOSE);
     if (control.gate.refusals.some(item => item.code === 'GATE_UNAVAILABLE')) throw new Error(GATE_MISSING);
+    console.error('TEMPDEBUG log: '+await sh(lhost,'cat /opt/dbg-launch.log 2>&1').catch(e=>'none'));
     assert.equal(control.ok, true, JSON.stringify([control.blockers, control.gate]));
     assert.deepEqual(control.services.map(service => service.name), ['web']);
     record('Launch fixture: launch host with nginx, certbot and git; HTTPS and SSH Git servers with run-time keys; bystanders; the privilege gate is in the bundled helper');
