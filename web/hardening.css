@@ -13,6 +13,8 @@ dialog.hd-dialog::-webkit-scrollbar{display:none}
 .hd-dialog .modal-foot{margin-top:0}
 .hd-dialog code{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-primary)}
 .hd-fix-inline{display:none}
+.hd-dialog .hd-table td{height:auto;min-height:var(--row-height);padding-block:10px;vertical-align:top;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.hd-dialog .hd-table td .status{white-space:normal;height:auto}
 @media(max-width:767px){
  .hd-dialog .hd-table .table-wrap{overflow-x:visible}
  .hd-dialog .hd-table .data-table{min-width:0}
