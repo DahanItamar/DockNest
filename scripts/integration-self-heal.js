@@ -242,7 +242,7 @@ export async function runSelfHealScenario({ run: harnessRun, until, hosts, serve
   {
     const backup = enqueueBackup(siteId, 'qa');
     const first = claimJob();
-    if (!first) console.log('Self-heal: nothing claimable; unfinished work on the server:', JSON.stringify({ jobs: db.prepare("SELECT j.type,j.status FROM jobs j JOIN sites s ON s.id=j.site_id WHERE s.server_id=? AND j.status NOT IN ('completed','failed','cancelled')").all(server.id), tests: db.prepare("SELECT state FROM restore_tests WHERE server_id=? ORDER BY rowid DESC LIMIT 3").all(server.id) }));
+    if (!first) console.log('Self-heal: nothing claimable; unfinished work on the server:', JSON.stringify({ jobs: db.prepare("SELECT j.type,j.status FROM jobs j JOIN sites s ON s.id=j.site_id WHERE s.server_id=? AND j.status NOT IN ('completed','failed','cancelled')").all(server.id), tests: db.prepare("SELECT step,result,cleanup FROM restore_tests WHERE server_id=? ORDER BY created_at DESC LIMIT 3").all(server.id) }));
     assert.ok(first, 'a job was claimed for the queued-backup case');
     assert.equal(first.id, backup.id, 'the queued restart yields to the queued backup');
     assert.ok(events(siteId, 'skipped', 'healshop-web-1').some(row => row.reason === 'work_queued' && row.at >= item8Start), 'the restart was recorded as skipped (work_queued) now');
