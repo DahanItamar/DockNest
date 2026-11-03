@@ -688,7 +688,7 @@ const RUN = {
   async maintenance(launch, _steps, _server, signal) {
     const stopped = new Promise((_resolve, reject) => { if (signal?.aborted) reject(Object.assign(new Error('stopped'), { stopped: true })); signal?.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { stopped: true })), { once: true }); });
     try { await Promise.race([launchMaintenance.setup(launch.site_id, 'launch:' + launch.id), stopped]); return { state: 'done' }; }
-    catch (error) { return { state: 'failed', detail: error?.stopped ? 'Setting up the maintenance page took too long. The site works; set it up from the site page.' : 'The maintenance page could not be set up automatically. The site works; set it up from the site page.' }; }
+    catch (error) { console.error('TEMPDEBUG maint: '+String(error?.message).slice(0,500)+' '+String(error?.stack).split('|').slice(0,6).join('|').slice(0,600)); return { state: 'failed', detail: error?.stopped ? 'Setting up the maintenance page took too long. The site works; set it up from the site page.' : 'The maintenance page could not be set up automatically. The site works; set it up from the site page.' }; }
   },
   async teardown(launch, _steps, server, signal) {
     const answer = await helper(server, { ...base(launch, 'launch-teardown'), keepBackup: true }, { signal });
