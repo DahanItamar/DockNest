@@ -1,0 +1,4 @@
+/* Deploy keys section of the Connections page. Public keys and fingerprints wrap instead of scrolling sideways. */
+.cx-form pre.command-preview.cx-wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.cx-form .cx-check{display:flex;align-items:center;gap:8px}
+.cx-form .cx-check input{width:auto;min-height:0;flex:none}

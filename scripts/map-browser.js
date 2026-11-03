@@ -460,7 +460,7 @@ async function panelChecks(page,scheme){
  await page.getByRole('dialog',{name:'Connect a server'}).waitFor();
  await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('dialog').waitFor({state:'detached'});
  // "+" on a server: discovered sites that are not added yet
- assert.equal(await page.locator('.map-plus').count(),2,'+ only on the two servers with nothing connected');
+ assert.equal(await page.locator('.map-plus').count(),4,'+ beside every server, also those with sites');
  await page.locator('[data-node="server:a"]').focus();await page.keyboard.press('Enter');await panel.getByRole('button',{name:'Add a site found here'}).click();
  await panel.getByRole('heading',{name:'Add to itamar-Srv'}).waitFor();
  await panel.getByText('Found on this server (3)').waitFor();
@@ -468,7 +468,7 @@ async function panelChecks(page,scheme){
  assert.equal(await panel.getByText('Discover again').count(),1);
  await size();await shot(page,scheme,'1440-2d-add-server');
  await panel.getByRole('searchbox',{name:'Search'}).fill('crm');
- assert.equal(await panel.locator('.map-row').count(),1,'search filters sites');
+ assert.equal(await panel.locator('.map-row').filter({hasNotText:'New site'}).count(),1,'search filters sites');
  await panel.getByRole('searchbox',{name:'Search'}).fill('');
  // Footer: "Not listed?" on the left, "Discover again" on the right edge
  const pb=await panel.boundingBox(),nl=await panel.getByText('Not listed?').boundingBox(),da=await panel.getByRole('button',{name:'Discover again'}).boundingBox();

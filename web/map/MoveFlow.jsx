@@ -3,7 +3,7 @@ import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,Ico
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
-export function Sheet({title,labelId,onClose,children,actions}){
+export function Sheet({title,labelId,onClose,children,actions,className}){
  const ref=useRef(null);
  // Focus the title on open, so no button shows a focus ring until the user moves focus
  useEffect(()=>{const d=ref.current;if(d&&!d.open){d.showModal();d.querySelector('h2')?.focus()}return()=>{if(d?.open)d.close()}},[]);
@@ -15,14 +15,14 @@ export function Sheet({title,labelId,onClose,children,actions}){
   if(e.shiftKey&&(a===first||!ref.current.contains(a))){e.preventDefault();last.focus();}
   else if(!e.shiftKey&&(a===last||!ref.current.contains(a))){e.preventDefault();first.focus();}
  }
- return <dialog ref={ref} className="map-dialog" aria-labelledby={labelId} onKeyDown={trap} onCancel={e=>{e.preventDefault();onClose?.()}}>
+ return <dialog ref={ref} className={className?"map-dialog "+className:"map-dialog"} aria-labelledby={labelId} onKeyDown={trap} onCancel={e=>{e.preventDefault();onClose?.()}}>
   <div className="map-dialog-body"><h2 id={labelId} tabIndex={-1}>{title}</h2>{children}</div>
   <div className="map-dialog-foot">{actions}</div>
  </dialog>;
 }
 
 // Same check as the Update Center: the shared password and a fresh authenticator code (POST /api/auth/reauth).
-function ReauthBox({client,onVerified,onCancel}){
+function ReauthBox({client,onVerified,onCancel,verifyLabel='Verify and continue'}){
  const [password,setPassword]=useState(''),[code,setCode]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
  async function verify(){
   setBusy(true);setError('');
@@ -35,17 +35,17 @@ function ReauthBox({client,onVerified,onCancel}){
   <label className="map-field">Password<input type="password" name="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} aria-invalid={!!error||undefined}/></label>
   <label className="map-field">Authenticator code<input name="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={!!error||undefined}/></label>
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
-  <div className="map-reauth-actions"><button type="button" onClick={onCancel}>Not now</button><button type="button" className="primary" disabled={busy||!password||code.trim().length<6} onClick={verify}>Verify and continue</button></div>
+  <div className="map-reauth-actions"><button type="button" onClick={onCancel}>Not now</button><button type="button" className="primary" disabled={busy||!password||code.trim().length<6} onClick={verify}>{verifyLabel}</button></div>
  </div>;
 }
 // run(fn, onError): runs fn; if the server asks for a fresh sign-in check, shows the check inside the dialog and retries fn once verified.
-export function useGuard(client){
+export function useGuard(client,{verifyLabel}={}){
  const [need,setNeed]=useState(null);
  const run=async(fn,onError)=>{
   try{return await fn()}
   catch(e){if(e.code==='REAUTH_REQUIRED'){setNeed({fn,onError});return}if(onError)onError(e);else throw e}
  };
- const prompt=need&&<ReauthBox client={client} onCancel={()=>setNeed(null)} onVerified={async()=>{const n=need;setNeed(null);await run(n.fn,n.onError)}}/>;
+ const prompt=need&&<ReauthBox verifyLabel={verifyLabel} client={client} onCancel={()=>setNeed(null)} onVerified={async()=>{const n=need;setNeed(null);await run(n.fn,n.onError)}}/>;
  return {run,prompt,waiting:!!need};
 }
 

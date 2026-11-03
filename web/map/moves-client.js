@@ -34,7 +34,7 @@ export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(
 export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your site will be offline for a long time. Tick the box to continue.'
  :e?.code==='SITE_MOVING'?'This site is already being moved. Wait for that move to finish.'
  :e?.message||'Something went wrong.';
-export const PACKAGE_NAME={nginx:'nginx',docker:'Docker',compose:'Compose',certbot:'Certbot'};
+export const PACKAGE_NAME={nginx:'nginx',docker:'Docker',compose:'Compose',certbot:'Certbot',git:'Git'};
 // Preflight checks that offer an install: {id,title,text,install:{package,command,supported}}
 export const installChecks=p=>[...(p?.advanced?.checks||[]),...(p?.checks||[])].filter(c=>c?.install&&PACKAGE_NAME[c.install.package]);
 // Steps of an install job. Accepts details as an object or a JSON string.

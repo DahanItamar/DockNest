@@ -18,14 +18,14 @@ const defaultOf=f=>f.default??(f.type==='select'?f.options?.[0]:f.key==='port'?5
 const listOf=v=>String(v||'').split(/[,;\s]+/).map(x=>x.trim()).filter(Boolean);
 const wire=(field,v)=>field.type==='number'?(v===''?v:Number(v)):field.type==='email-list'?listOf(v):String(v).trim();
 
-export function useReauth(client){
+export function useReauth(client,{verifyLabel}={}){
  const [need,setNeed]=useState(null);
  const run=async(fn,onError)=>{try{return await fn()}catch(e){if(e.code==='REAUTH_REQUIRED'){setNeed({fn,onError});return}onError?.(e)}};
- const box=need&&<ReauthBox client={client} onCancel={()=>setNeed(null)} onVerified={async()=>{const n=need;setNeed(null);await run(n.fn,n.onError)}}/>;
+ const box=need&&<ReauthBox verifyLabel={verifyLabel} client={client} onCancel={()=>setNeed(null)} onVerified={async()=>{const n=need;setNeed(null);await run(n.fn,n.onError)}}/>;
  return {run,box,waiting:!!need};
 }
 // The same check as the Update Center and the move flow: the shared password and a fresh authenticator code.
-function ReauthBox({client,onVerified,onCancel}){
+function ReauthBox({client,onVerified,onCancel,verifyLabel='Verify and continue'}){
  const [password,setPassword]=useState(''),[code,setCode]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),first=useRef(null);
  useEffect(()=>{first.current?.focus()},[]);
  async function verify(){setBusy(true);setError('');try{await client.reauth(password,code.trim());await onVerified()}catch(e){setError(e.status===401?'That password or code was not right. Try again.':e.message||'The check did not go through.');setBusy(false)}}
@@ -35,7 +35,7 @@ function ReauthBox({client,onVerified,onCancel}){
   <label className="field"><span>Password</span><input ref={first} type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} aria-invalid={!!error||undefined}/></label>
   <label className="field"><span>Authenticator code</span><input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={!!error||undefined}/></label>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
-  <div className="cx-reauth-actions"><button type="button" onClick={onCancel}>Not now</button><button type="button" className="primary" disabled={busy||!password||code.trim().length<6} onClick={verify}>Verify and continue</button></div>
+  <div className="cx-reauth-actions"><button type="button" onClick={onCancel}>Not now</button><button type="button" className="primary" disabled={busy||!password||code.trim().length<6} onClick={verify}>{verifyLabel}</button></div>
  </section>;
 }
 
