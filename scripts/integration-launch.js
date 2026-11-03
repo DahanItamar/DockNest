@@ -204,11 +204,13 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       // Pebble 2.10.1 (tags have no leading v), pinned by the digest of the multi-arch image index.
       const digests = { pebble: 'sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199', 'pebble-challtestsrv': 'sha256:12ce21884def456bcf9786542113949e1f19dc7738d2c70e156c2d0c38a1405b' };
       const image = name => `ghcr.io/letsencrypt/${name}@${digests[name]}`;
+      // These images set the program as ENTRYPOINT; repeating its name would pass it to the program as an argument.
+      const program = async name => ((await run('exec', lhost, 'docker', 'image', 'inspect', '--format', '{{json .Config.Entrypoint}}', image(name))) === 'null' ? [name] : []);
       await run('exec', lhost, 'docker', 'pull', '-q', image('pebble')); await run('exec', lhost, 'docker', 'pull', '-q', image('pebble-challtestsrv'));
       await writeTo(lhost, '/pebble-config.json', JSON.stringify({ pebble: { listenAddress: '0.0.0.0:14000', managementListenAddress: '0.0.0.0:15000', certificate: 'test/certs/localhost/cert.pem', privateKey: 'test/certs/localhost/key.pem', httpPort: 80, tlsPort: 443, ocspResponderURL: '', externalAccountBindingRequired: false } }));
       await run('exec', lhost, 'docker', 'network', 'create', 'qa-pebble');
-      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble-chall', '--network', 'qa-pebble', image('pebble-challtestsrv'), 'pebble-challtestsrv', '-defaultIPv4', lip, '-defaultIPv6', '', '-http01', '', '-https01', '', '-tlsalpn01', '', '-doh', '');
-      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble', '--network', 'qa-pebble', '-p', '127.0.0.1:14000:14000', '-e', 'PEBBLE_VA_NOSLEEP=1', '-v', '/pebble-config.json:/test/config/pebble-config.json:ro', image('pebble'), 'pebble', '-config', '/test/config/pebble-config.json', '-dnsserver', 'qa-pebble-chall:8053');
+      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble-chall', '--network', 'qa-pebble', image('pebble-challtestsrv'), ...await program('pebble-challtestsrv'), '-defaultIPv4', lip, '-defaultIPv6', '', '-http01', '', '-https01', '', '-tlsalpn01', '', '-doh', '');
+      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble', '--network', 'qa-pebble', '-p', '127.0.0.1:14000:14000', '-p', '127.0.0.1:15000:15000', '-e', 'PEBBLE_VA_NOSLEEP=1', '-v', '/pebble-config.json:/test/config/pebble-config.json:ro', image('pebble'), ...await program('pebble'), '-config', '/test/config/pebble-config.json', '-dnsserver', 'qa-pebble-chall:8053');
       await until(async () => (await sh(lhost, 'curl -sk https://127.0.0.1:14000/dir')).includes('newAccount'), 'Pebble did not start', 60);
       await sh(lhost, 'mkdir -p /etc/letsencrypt');
       await writeTo(lhost, '/etc/letsencrypt/cli.ini', 'server = https://127.0.0.1:14000/dir\nno-verify-ssl = true\nemail = qa@example.invalid\nagree-tos = true\nno-eff-email = true\n');
@@ -217,6 +219,8 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       await sh(lhost, 'curl -sk https://127.0.0.1:15000/roots/0 > /usr/local/share/ca-certificates/docknest-qa-pebble-root.crt && update-ca-certificates >/dev/null 2>&1');
       pebble = true;
     } catch (error) {
+      // Pebble's and the test DNS server's logs hold no secrets; they say why it did not start.
+      for (const container of ['qa-pebble', 'qa-pebble-chall']) console.log(`PEBBLE LOG ${container}: ` + (await sh(lhost, `docker logs --tail 40 ${container} 2>&1`).catch(e => 'none: ' + String(e.stderr || e.message).slice(0, 200))).replace(/\s+/g, ' ').slice(0, 1500));
       await sh(lhost, 'docker rm -f qa-pebble qa-pebble-chall >/dev/null 2>&1; docker network rm qa-pebble >/dev/null 2>&1; rm -f /etc/letsencrypt/cli.ini; true');
       await writeTo(lhost, '/usr/local/bin/certbot', CERTBOT_DOUBLE, '755');
       await sh(lhost, 'mkdir -p /etc/letsencrypt/accounts && : > /var/log/docknest-qa-certbot.log');
