@@ -136,8 +136,19 @@ const pollText = (answer, fallback) => (Object.hasOwn(POLL_REASONS, answer?.reas
 const refused = answer => answer && typeof answer === 'object' && answer.ok === false;
 const cleanCode = code => (/^[A-Z][A-Z0-9_]{1,40}$/.test(String(code)) ? code : 'REFUSED');
 
+// Ports 80 and 443 held by anything other than the server's nginx block the launch (launch-facts `ports`: holder and
+// the process name only).
+function portChecks(facts) {
+  return [80, 443].map(port => facts?.ports?.[String(port)]).filter(item => item && item.holder === 'other').map(item => {
+    const name = typeof item.process === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,31}$/.test(item.process) ? item.process : 'another program';
+    return { id: `port${item.port === 443 ? 443 : 80}`, ok: false, code: 'PORT_IN_USE', text: `Port ${item.port === 443 ? 443 : 80} is used by ${name}. Stop it, then Check again.` };
+  });
+}
 // The checks shown before Launch, in the move shape: { id, ok, code?, text, install? }.
 function checksOf(facts, domain) {
+  return [...checkRows(facts, domain), ...portChecks(facts)];
+}
+function checkRows(facts, domain) {
   return (Array.isArray(facts?.checks) ? facts.checks : []).slice(0, 40).map(item => ({
     id: String(item?.id ?? 'check').slice(0, 40), ok: item?.ok === true, ...(item?.ok === true ? {} : { code: cleanCode(item?.code) }),
     text: item?.ok === true ? plainReason(item?.reason, '') : refusalText(item, domain),
@@ -199,7 +210,7 @@ export async function checkLaunch(serverId, body) {
     dns: dnsView(facts, input.domain, server.host), testServers: testServerChoices(serverId),
   };
 }
-const CHECK_TITLES = { server: 'Server', docker: 'Docker', compose: 'Docker Compose', git: 'Git', nginx: 'nginx', certbot: 'certbot', buildx: 'Builds', space: 'Free space', ports: 'Ports 80 and 443', dns: 'DNS', domain: 'Domain', certificate: 'Certificate', repository: 'Repository', slug: 'Site folder', launch: 'Another launch' };
+const CHECK_TITLES = { port80: 'Port 80', port443: 'Port 443', server: 'Server', docker: 'Docker', compose: 'Docker Compose', git: 'Git', nginx: 'nginx', certbot: 'certbot', buildx: 'Builds', space: 'Free space', ports: 'Ports 80 and 443', dns: 'DNS', domain: 'Domain', certificate: 'Certificate', repository: 'Repository', slug: 'Site folder', launch: 'Another launch' };
 function gateOf(answer) {
   const gate = answer?.gate;
   if (!gate || typeof gate !== 'object') return { ok: true, refusals: [] };
