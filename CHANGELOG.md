@@ -17,6 +17,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - `scripts/upgrade.sh` refuses to go back to a release before 2.15 while a Safe Edit is unfinished, and waits for Safe Edit and self-heal steps like for other running work.
 - `scripts/upgrade.sh` also refuses to go back to a release before 2.16 while a launch is queued, running or needs attention, because older releases cannot resume or remove it.
+- The maintenance page now lets certificate renewal checks through, so a renewal during a backup no longer fails. Existing sites get this the next time their maintenance page is set up.
 
 ## [2.14.0] - 2026-11-02
 
