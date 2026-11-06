@@ -18,8 +18,10 @@ from .restore_test import (
 # copy, a restore test, a move or a kept old copy still needs is protected, and so is DockNest itself. When ownership is
 # unclear the item is kept: only anonymous volumes are offered, never named ones. The clean re-reads the server and
 # re-checks each item right before removing it, so a preview that went stale can only skip items, never widen.
-# Build cache is the one exception to item-by-item: `docker builder prune` without --all and with an age filter, which
-# BuildKit applies only to cache no build is using. It never holds site data.
+# Build cache is the one exception to item-by-item: `docker builder prune --all` with an age filter, which BuildKit
+# applies only to cache no build is using. It never holds site data. Without --all, BuildKit keeps every cache record a
+# tagged image was built from, which is most of it, so the scan showed space a clean could never free. The scan counts
+# the same records the prune removes: not in use, not shared, last used more than a day ago.
 CLEANUP_KINDS=('containers','images','volumes','buildCache')
 CLEANUP_STOPPED={'exited','created','dead'}
 CLEANUP_OWN_LABEL_PREFIXES=('docknest.','docker-backup-manager.','io.github.dahanitamar.docknest')
@@ -33,6 +35,7 @@ CLEANUP_SHARED_WAIT=120
 CLEANUP_APPLY_SECONDS=1800
 CLEANUP_REMOVE_TIMEOUT=120
 CLEANUP_BUILD_CACHE_AGE='24h'
+CLEANUP_BUILD_CACHE_SECONDS=86400
 CLEANUP_MAX_ITEMS=500
 CLEANUP_WALK_LIMIT=200000
 CLEANUP_WALK_SECONDS=20
@@ -55,6 +58,25 @@ def cleanup_size(text):
     if not match:return None
     try:return int(float(match.group(1))*{'B':1,'kB':1e3,'KB':1e3,'MB':1e6,'GB':1e9,'TB':1e12,'PB':1e15}[match.group(2)])
     except (ValueError,KeyError):return None
+def cleanup_cache_time(text):
+    """`docker system df -v` build cache times ('2026-10-22 15:23:21.156936 +0000 UTC') as epoch seconds; None when unreadable."""
+    import datetime
+    match=re.match(r'(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)(?:\.\d+)?\s*([+-]\d{4})?',str(text or '').strip())
+    if not match:return None
+    try:return datetime.datetime.strptime(match.group(1)+' '+match.group(2)+' '+(match.group(3) or '+0000'),'%Y-%m-%d %H:%M:%S %z').timestamp()
+    except ValueError:return None
+def build_cache_bytes(rows,now):
+    """Bytes `docker builder prune --all --filter until=24h` can free: records no build is using, not shared with
+    another record, last used (or, never used, created) more than a day ago. A record whose age or size is unreadable
+    is not counted, so the figure never promises more than the prune removes."""
+    total=0
+    for row in rows if isinstance(rows,list) else []:
+        if not isinstance(row,dict) or str(row.get('InUse')).lower()=='true' or str(row.get('Shared')).lower()=='true':continue
+        used=cleanup_cache_time(row.get('LastUsedAt')) or cleanup_cache_time(row.get('CreatedAt'))
+        size=cleanup_size(row.get('Size'))
+        if used is None or size is None or now-used<CLEANUP_BUILD_CACHE_SECONDS:continue
+        total+=size
+    return total
 def cleanup_digest(*parts):return hashlib.sha256('\0'.join(str(p) for p in parts).encode()).hexdigest()[:32]
 def own_labels(labels):return any(key.startswith(CLEANUP_OWN_LABEL_PREFIXES) for key in (labels or {}))
 def cleanup_refs(value,limit=2000):
@@ -148,10 +170,16 @@ def cleanup_facts(protect,now=None):
     volumes=docker_json('volume','inspect',*names) if names else []
     build=None
     try:
-        for line in docker('system','df','--format','{{json .}}').decode().splitlines():
-            row=json.loads(line) if line.strip() else {}
-            if row.get('Type')=='Build Cache':build=cleanup_size(row.get('Reclaimable'))
+        usage=json.loads(docker('system','df','-v','--format','json').decode() or '{}')
+        if isinstance(usage,dict) and isinstance(usage.get('BuildCache'),list):build=build_cache_bytes(usage['BuildCache'],now)
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):build=None
+    if build is None:
+        # Older Docker without a JSON per-record listing: its "Reclaimable" total is the upper bound the page shows as "Up to".
+        try:
+            for line in docker('system','df','--format','{{json .}}').decode().splitlines():
+                row=json.loads(line) if line.strip() else {}
+                if row.get('Type')=='Build Cache':build=cleanup_size(row.get('Reclaimable'))
+        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):build=None
     snapshots,active=cleanup_activity(protect['stagingRoots'],now)
     return {'containers':containers,'images':images,'volumes':volumes,'buildCacheBytes':build,'snapshotImages':snapshots,'journals':cleanup_journals(),'active':active,'now':now}
 
@@ -309,7 +337,7 @@ def remove_item(item,timeout=CLEANUP_REMOVE_TIMEOUT):
     command={'containers':['rm'],'images':['image','rm'],'volumes':['volume','rm']}[item['kind']]
     run(['docker',*command,item['id']],timeout=max(1,int(timeout)))
 def prune_build_cache(timeout=600):
-    output=run(['docker','builder','prune','--force','--filter','until='+CLEANUP_BUILD_CACHE_AGE],timeout=max(1,int(timeout))).decode(errors='replace')
+    output=run(['docker','builder','prune','--all','--force','--filter','until='+CLEANUP_BUILD_CACHE_AGE],timeout=max(1,int(timeout))).decode(errors='replace')
     match=re.search(r'Total(?: reclaimed space)?:\s*([0-9.]+\s*[kKMGTP]?B)',output)
     return cleanup_size(match.group(1)) if match else None
 def active_message(kind):

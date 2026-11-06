@@ -13,7 +13,7 @@ Administrators only. Open **Storage**, scroll to **Server cleanup**, pick a serv
 | Stopped containers | Exited, created or dead containers that nothing below protects |
 | Dangling images | Images without a tag that no container uses |
 | Unused volumes | Anonymous volumes (64-character names) that no container mounts |
-| Build cache | Build cache no build is using, older than one day (shown as "up to": Docker's figure is an upper bound) |
+| Build cache | Build cache no build is using and that was last used more than a day ago (shown as "up to": Docker's sizes are approximate) |
 
 Each group lists its items with their size. Untick a group to leave it out. **Kept items** lists what DockNest found but
 will not remove, with the reason.
@@ -61,9 +61,11 @@ When it is unclear who owns something, it stays.
   "A server cleanup was running" and tried again after its 60 seconds.
 - The clean stops when DockNest stops waiting for it: DockNest keeps the SSH session's input open for the whole clean,
   and a dropped connection or a stopped DockNest ends the clean on the server.
-- Build cache is the one group cleaned as a whole: DockNest runs `docker builder prune --filter until=24h` without
-  `--all`, so BuildKit removes only cache no build references. Build cache never holds site data; the next build may be
-  slower.
+- Build cache is the one group cleaned as a whole: DockNest runs `docker builder prune --all --filter until=24h`, so
+  BuildKit removes the cache no build is using and that was not used in the last day, including the cache of images
+  that still exist. The scan counts the same records (from `docker system df -v`), so what it shows is what a clean
+  frees; on Docker versions without that listing it shows Docker's reclaimable total instead. Build cache never holds
+  site data; the next build of each project may be slower once.
 
 Sizes are what Docker reports. Images can share layers, so the space actually freed by images can be smaller than the
 sum shown. A volume too large to count quickly shows Unknown, and so does any volume left when the scan's one-minute
