@@ -130,9 +130,9 @@ class Protection(unittest.TestCase):
 
 class FakeDocker:
     """A server whose state can change between the scan and the clean."""
-    def __init__(self,containers=(),images=(),volumes=(),build_cache=None):
+    def __init__(self,containers=(),images=(),volumes=(),build_cache=None,store='[["Backing Filesystem","extfs"],["Supports d_type","true"]]'):
         self.containers={c['Id']:c for c in containers};self.images={i['Id']:i for i in images};self.volumes={v['Name']:v for v in volumes};self.calls=[]
-        self.build_cache=build_cache
+        self.build_cache=build_cache;self.store=store
     def __call__(self,*args):
         self.calls.append(list(args))
         if args[:2]==('ps','-aq'):
@@ -150,6 +150,7 @@ class FakeDocker:
             used={m.get('Name') for c in self.containers.values() for m in c['Mounts']}
             return '\n'.join(n for n in self.volumes if n not in used).encode()
         if args[:2]==('volume','inspect'):return json.dumps([self.volumes[n] for n in args[2:] if n in self.volumes]).encode() if any(n in self.volumes for n in args[2:]) else self.missing()
+        if args[0]=='info':return self.store.encode() if self.store is not None else self.missing()
         if args[:3]==('system','df','-v'):return json.dumps({'BuildCache':self.build_cache}).encode() if self.build_cache is not None else self.missing()
         if args[:2]==('system','df'):return json.dumps({'Type':'Build Cache','Reclaimable':'2MB'}).encode()
         if args[0]=='rm':self.containers.pop(args[1]);return b''
@@ -215,6 +216,19 @@ class Clean(unittest.TestCase):
         self.assertNotIn('buildCache',{i['kind'] for i in self.scan(fresh)['items']},'nothing a clean would remove, nothing offered')
         legacy=FakeDocker()
         self.assertEqual({i['kind']:i for i in self.scan(legacy)['items']}['buildCache']['bytes'],2_000_000,'older Docker: its reclaimable total')
+    def test_containerd_image_store_or_an_unknown_store_offers_no_build_cache(self):
+        old=helper.time.strftime('%Y-%m-%d %H:%M:%S +0000 UTC',helper.time.gmtime(NOW-2*86400))
+        cache=[{'InUse':'false','Shared':'false','Size':'9GB','LastUsedAt':old}]
+        # Docker 29 default: cache and image layers are the same snapshots, so the 9 GB is mostly not freeable junk.
+        for store in ['[["driver-type","io.containerd.snapshotter.v1"]]',None,'"odd"']:
+            fake=FakeDocker([container('c1','tmp')],build_cache=cache,store=store)
+            kinds={i['kind'] for i in self.scan(fake)['items']}
+            self.assertNotIn('buildCache',kinds,store);self.assertIn('containers',kinds)
+        self.assertEqual(self.scan(FakeDocker(build_cache=cache,store='null'))['items'][0]['bytes'],9_000_000_000,'no driver status at all: classic store')
+        # A clean asked for build cache anyway (a preview from before the update) skips it instead of pruning.
+        fake=FakeDocker(build_cache=cache,store='[["driver-type","io.containerd.snapshotter.v1"]]')
+        done=self.run_op(helper.cleanup_apply,{'items':[{'kind':'buildCache','id':'build-cache','fingerprint':'build-cache'}]},fake)
+        self.assertEqual(done['results'][0]['status'],'skipped');self.assertEqual(self.run_calls,[],'nothing pruned')
     def test_item_that_became_protected_by_a_new_move_journal_is_skipped(self):
         fake=FakeDocker([container('c1','tmp')])
         items=[i for i in self.scan(fake)['items'] if i['kind']=='containers']
