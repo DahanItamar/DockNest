@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.16.1] - 2026-11-06
+
+See [docs/releases/2026-11-06-v2.16.1.md](docs/releases/2026-11-06-v2.16.1.md).
+
 ### Fixed
 
 - Server cleanup now removes the build cache it shows. It used to keep the cache of images that still exist, so most of the "Build cache" figure stayed after every clean. The scan now counts only cache a clean removes: unused and not used in the last day.
