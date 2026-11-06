@@ -21,7 +21,8 @@ from .restore_test import (
 # Build cache is the one exception to item-by-item: `docker builder prune --all` with an age filter, which BuildKit
 # applies only to cache no build is using. It never holds site data. Without --all, BuildKit keeps every cache record a
 # tagged image was built from, which is most of it, so the scan showed space a clean could never free. The scan counts
-# the same records the prune removes: not in use, not shared, last used more than a day ago.
+# the same records the prune removes: not in use, not shared, last used more than a day ago. On the containerd image
+# store build cache is not offered at all (see image_store): there its size is mostly image layers counted twice.
 CLEANUP_KINDS=('containers','images','volumes','buildCache')
 CLEANUP_STOPPED={'exited','created','dead'}
 CLEANUP_OWN_LABEL_PREFIXES=('docknest.','docker-backup-manager.','io.github.dahanitamar.docknest')
@@ -160,6 +161,30 @@ def docker_json(*args):
     output=docker(*args).decode()
     return json.loads(output) if output.strip() else []
 def docker_lines(*args):return docker(*args).decode().split()
+def image_store():
+    """'containerd' when Docker keeps images in the containerd image store (the default from Docker 29), 'classic' for
+    the older graph drivers, None when Docker does not say. In the containerd store, build cache records and image
+    layers are the same snapshots: Docker reports their sizes twice, and pruning the cache frees almost nothing while
+    an image still holds the layers (9 GB shown, 0.5 GB freed on a real server). So build cache is offered only on the
+    classic store, and never when the store is unknown: a scan lists only space a clean really frees."""
+    try:status=json.loads(docker('info','--format','{{json .DriverStatus}}').decode() or 'null')
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):return None
+    if not isinstance(status,list):return 'classic' if status is None else None
+    pairs=[p for p in status if isinstance(p,list) and len(p)==2]
+    return 'containerd' if any(str(k)=='driver-type' and 'containerd' in str(v) for k,v in pairs) else 'classic'
+def build_cache_facts(now):
+    """Bytes the build cache prune frees on the classic store; None when Docker cannot say."""
+    try:
+        usage=json.loads(docker('system','df','-v','--format','json').decode() or '{}')
+        if isinstance(usage,dict) and isinstance(usage.get('BuildCache'),list):return build_cache_bytes(usage['BuildCache'],now)
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):pass
+    # Older Docker without a JSON per-record listing: its "Reclaimable" total is the upper bound the page shows as "Up to".
+    try:
+        for line in docker('system','df','--format','{{json .}}').decode().splitlines():
+            row=json.loads(line) if line.strip() else {}
+            if row.get('Type')=='Build Cache':return cleanup_size(row.get('Reclaimable'))
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):pass
+    return None
 def cleanup_facts(protect,now=None):
     now=time.time() if now is None else now
     ids=docker_lines('ps','-aq','--no-trunc')
@@ -168,18 +193,7 @@ def cleanup_facts(protect,now=None):
     images=docker_json('image','inspect',*image_ids) if image_ids else []
     names=docker_lines('volume','ls','-q','--filter','dangling=true')
     volumes=docker_json('volume','inspect',*names) if names else []
-    build=None
-    try:
-        usage=json.loads(docker('system','df','-v','--format','json').decode() or '{}')
-        if isinstance(usage,dict) and isinstance(usage.get('BuildCache'),list):build=build_cache_bytes(usage['BuildCache'],now)
-    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):build=None
-    if build is None:
-        # Older Docker without a JSON per-record listing: its "Reclaimable" total is the upper bound the page shows as "Up to".
-        try:
-            for line in docker('system','df','--format','{{json .}}').decode().splitlines():
-                row=json.loads(line) if line.strip() else {}
-                if row.get('Type')=='Build Cache':build=cleanup_size(row.get('Reclaimable'))
-        except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError):build=None
+    build=build_cache_facts(now) if image_store()=='classic' else None
     snapshots,active=cleanup_activity(protect['stagingRoots'],now)
     return {'containers':containers,'images':images,'volumes':volumes,'buildCacheBytes':build,'snapshotImages':snapshots,'journals':cleanup_journals(),'active':active,'now':now}
 

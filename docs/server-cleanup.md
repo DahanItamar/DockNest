@@ -13,7 +13,7 @@ Administrators only. Open **Storage**, scroll to **Server cleanup**, pick a serv
 | Stopped containers | Exited, created or dead containers that nothing below protects |
 | Dangling images | Images without a tag that no container uses |
 | Unused volumes | Anonymous volumes (64-character names) that no container mounts |
-| Build cache | Build cache no build is using and that was last used more than a day ago (shown as "up to": Docker's sizes are approximate) |
+| Build cache | Build cache no build is using and that was last used more than a day ago (shown as "up to": Docker's sizes are approximate). Not shown on servers where Docker uses the containerd image store (see below) |
 
 Each group lists its items with their size. Untick a group to leave it out. **Kept items** lists what DockNest found but
 will not remove, with the reason.
@@ -66,6 +66,10 @@ When it is unclear who owns something, it stays.
   that still exist. The scan counts the same records (from `docker system df -v`), so what it shows is what a clean
   frees; on Docker versions without that listing it shows Docker's reclaimable total instead. Build cache never holds
   site data; the next build of each project may be slower once.
+- Build cache is not offered on servers where Docker keeps images in the containerd image store (the default from
+  Docker 29, shown by `docker info` as `driver-type: io.containerd.snapshotter.v1`), nor when DockNest cannot tell which
+  store Docker uses. In that store build cache and image layers are the same files: Docker counts them twice, and
+  pruning the cache frees almost nothing while the images still exist. A scan lists only space a clean really frees.
 
 Sizes are what Docker reports. Images can share layers, so the space actually freed by images can be smaller than the
 sum shown. A volume too large to count quickly shows Unknown, and so does any volume left when the scan's one-minute

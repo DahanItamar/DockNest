@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Server cleanup no longer offers build cache on servers where Docker uses the containerd image store (the default from Docker 29). There, Docker counts image layers again as build cache, so the scan showed gigabytes that a clean could not free.
+
 ## [2.16.1] - 2026-11-06
 
 See [docs/releases/2026-11-06-v2.16.1.md](docs/releases/2026-11-06-v2.16.1.md).
