@@ -108,6 +108,19 @@ class Protection(unittest.TestCase):
         self.assertEqual(helper.cleanup_size('1.5GB'),1_500_000_000);self.assertEqual(helper.cleanup_size('0B'),0);self.assertEqual(helper.cleanup_size('512kB (40%)'),512_000)
         self.assertIsNone(helper.cleanup_size('n/a'));self.assertIsNone(helper.cleanup_time('yesterday'))
         self.assertEqual(helper.cleanup_time('2020-01-01T00:00:00Z'),1577836800);self.assertEqual(helper.cleanup_time('2020-01-01T02:00:00+02:00'),1577836800)
+    def test_build_cache_counts_only_what_the_prune_removes(self):
+        day=lambda seconds:helper.time.strftime('%Y-%m-%d %H:%M:%S.123456789 +0000 UTC',helper.time.gmtime(NOW-seconds))
+        rows=[{'InUse':'false','Shared':'false','Size':'1GB','LastUsedAt':day(2*86400),'CreatedAt':day(9*86400)},
+            {'InUse':'false','Shared':'false','Size':'2MB','LastUsedAt':'','CreatedAt':day(3*86400)},
+            {'InUse':'false','Shared':'false','Size':'5GB','LastUsedAt':day(3600),'CreatedAt':day(9*86400)},
+            {'InUse':'true','Shared':'false','Size':'7GB','LastUsedAt':day(9*86400)},
+            {'InUse':'false','Shared':'true','Size':'9GB','LastUsedAt':day(9*86400)},
+            {'InUse':'false','Shared':'false','Size':'n/a','LastUsedAt':day(9*86400)},
+            {'InUse':'false','Shared':'false','Size':'3GB','LastUsedAt':'soon'},'junk']
+        self.assertEqual(helper.build_cache_bytes(rows,NOW),1_002_000_000,'old and unused only: not used within a day, not in use, not shared, nothing unreadable')
+        self.assertEqual(helper.build_cache_bytes(None,NOW),0)
+        self.assertEqual(helper.cleanup_cache_time('2020-01-01 02:00:00.5 +0200 +0200'),1577836800)
+        self.assertIsNone(helper.cleanup_cache_time(''))
     def test_protection_lists_are_validated(self):
         for bad in [{'containers':'shop'},{'containers':['bad name']},{'volumes':[1]},{'stagingRoots':['relative']}]:
             with self.assertRaises(ValueError):helper.cleanup_protect({'protect':bad})
@@ -117,8 +130,9 @@ class Protection(unittest.TestCase):
 
 class FakeDocker:
     """A server whose state can change between the scan and the clean."""
-    def __init__(self,containers=(),images=(),volumes=()):
+    def __init__(self,containers=(),images=(),volumes=(),build_cache=None):
         self.containers={c['Id']:c for c in containers};self.images={i['Id']:i for i in images};self.volumes={v['Name']:v for v in volumes};self.calls=[]
+        self.build_cache=build_cache
     def __call__(self,*args):
         self.calls.append(list(args))
         if args[:2]==('ps','-aq'):
@@ -136,6 +150,7 @@ class FakeDocker:
             used={m.get('Name') for c in self.containers.values() for m in c['Mounts']}
             return '\n'.join(n for n in self.volumes if n not in used).encode()
         if args[:2]==('volume','inspect'):return json.dumps([self.volumes[n] for n in args[2:] if n in self.volumes]).encode() if any(n in self.volumes for n in args[2:]) else self.missing()
+        if args[:3]==('system','df','-v'):return json.dumps({'BuildCache':self.build_cache}).encode() if self.build_cache is not None else self.missing()
         if args[:2]==('system','df'):return json.dumps({'Type':'Build Cache','Reclaimable':'2MB'}).encode()
         if args[0]=='rm':self.containers.pop(args[1]);return b''
         if args[:2]==('image','rm'):self.images.pop(args[2]);return b''
@@ -189,7 +204,17 @@ class Clean(unittest.TestCase):
         self.assertEqual(by[('containers','c1')]['reason'],'changed')
         self.assertEqual(by[('buildCache','build-cache')]['status'],'removed')
         self.assertIn('sha256:junk',fake.images);self.assertIn(ANON,fake.volumes);self.assertIn('c1',fake.containers)
-        self.assertEqual([c.args[0] for c in self.run_calls],[['docker','builder','prune','--force','--filter','until=24h']],'build cache: unused only (no --all), older than a day')
+        self.assertEqual([c.args[0] for c in self.run_calls],[['docker','builder','prune','--all','--force','--filter','until=24h']],'build cache: every unused record older than a day, not only dangling ones')
+    def test_scan_sizes_build_cache_from_its_records_and_falls_back_to_the_docker_total(self):
+        old=helper.time.strftime('%Y-%m-%d %H:%M:%S +0000 UTC',helper.time.gmtime(NOW-2*86400))
+        new=helper.time.strftime('%Y-%m-%d %H:%M:%S +0000 UTC',helper.time.gmtime(NOW-60))
+        fake=FakeDocker(build_cache=[{'InUse':'false','Shared':'false','Size':'3MB','LastUsedAt':old},{'InUse':'false','Shared':'false','Size':'8GB','LastUsedAt':new}])
+        items={i['kind']:i for i in self.scan(fake)['items']}
+        self.assertEqual(items['buildCache']['bytes'],3_000_000,'the scan shows what the clean frees, not cache used today')
+        fresh=FakeDocker(build_cache=[{'InUse':'false','Shared':'false','Size':'8GB','LastUsedAt':new}])
+        self.assertNotIn('buildCache',{i['kind'] for i in self.scan(fresh)['items']},'nothing a clean would remove, nothing offered')
+        legacy=FakeDocker()
+        self.assertEqual({i['kind']:i for i in self.scan(legacy)['items']}['buildCache']['bytes'],2_000_000,'older Docker: its reclaimable total')
     def test_item_that_became_protected_by_a_new_move_journal_is_skipped(self):
         fake=FakeDocker([container('c1','tmp')])
         items=[i for i in self.scan(fake)['items'] if i['kind']=='containers']
