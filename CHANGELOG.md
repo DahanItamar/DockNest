@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Security
+
+- Safe Edit now checks a changed Compose file in an isolated view of the server that shows only the site's own files, with no network and no Docker access. A change that pulls in services or volumes the file does not list itself is refused. Nothing new is downloaded. A site whose Compose files read files from outside its own folders may now show "Change it by hand" instead of the editor.
+
 ## [2.16.2] - 2026-11-07
 
 See [docs/releases/2026-11-07-v2.16.2.md](docs/releases/2026-11-07-v2.16.2.md).

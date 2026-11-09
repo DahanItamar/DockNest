@@ -121,6 +121,13 @@ DockNest refuses a change with one plain reason when it would:
   characters): "The change adds characters that cannot be checked safely." Characters the file already has may stay.
   Environment values typed in the Environment tab are not Compose text and may use any characters except line breaks,
   so non-ASCII passwords work there.
+- bring in a service, volume, config or secret that the changed files do not list themselves (through an `include`
+  or `extends`). Ones the site already gets this way stay allowed.
+
+DockNest reads every change in an isolated view of the server that shows only the site's own files, with no network
+and no Docker access. If the site's Compose files need a file from somewhere else (for example an `include` from a
+shared folder), or the server has no `unshare` command, the editor says DockNest "could not read this site's Compose
+files in an isolated view" and you change the files by hand.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."
 If it changes while the backup runs, the change stops before anything is written: "The files changed during the

@@ -83,7 +83,7 @@ Next free number at merge time (currently 13; 2.14 may take it first, then renum
   usable and why not. Needs re-verification within 5 minutes because Compose text may hold secrets.
 - `POST /api/sites/:id/edit/review` body `{ files?: [{path, sha256, text}], env?: [{file, key, value?|remove}] }`.
   Runs the gate on the server (helper `edit-check`), answers `{ token, diff, summary, warnings }` or 422 with one plain
-  reason and `code` (`PRIVILEGE_ADDED`, `PATH_REFUSED`, `FILE_CHANGED`, `COMPOSE_INVALID`, `SERVICE_REMOVED`,
+  reason and `code` (`PRIVILEGE_ADDED`, `PATH_REFUSED`, `FILE_CHANGED`, `COMPOSE_INVALID`, `ISOLATION_FAILED`, `COMPOSE_UNDECLARED`, `SERVICE_REMOVED`,
   `PORT_IN_USE`). The diff masks environment values as `(changed)`.
 - `POST /api/sites/:id/edit/apply` body `{ token, timeLimitSeconds? }`: 403 `REAUTH_REQUIRED`, 409 `SITE_BUSY` /
   `MOVE_RUNNING` / `EDIT_RUNNING`, else 202 `{ edit: { id } }`.
@@ -142,6 +142,19 @@ The security review (2026-11-02) tightened the design. Where this section and th
    before the full pass. Remote includes off (`COMPOSE_EXPERIMENTAL_GIT_REMOTE=0`, `COMPOSE_EXPERIMENTAL_OCI_REMOTE=0`).
    Compose runs under `env -i` with a fixed `PATH`. The resolved JSON and Compose's stderr never leave the helper; the
    API receives only the gate verdict, field paths and a fixed reason.
+   **Isolated view (#168).** Both passes over a candidate, and the re-gate at apply, run in a private mount and network
+   namespace (`unshare --mount --net`, the launch sandbox technique; no image is pulled, so it works offline).
+   `/srv`, `/opt`, `/mnt`, `/media`, `/home`, `/root`, `/run`, `/tmp`, `/var/log`, Docker's and DockNest's state are
+   empty tmpfs mounts; only the site's folders, its Compose and env files, the check folder, the files the current
+   model already reads (`env_file`, file secrets and configs) and the Compose plugin folders are bound back,
+   read-only. No network, no Docker socket. The site's current files still resolve on the host (they define what the
+   site already has). Without `unshare`/`mount`, or when the current files do not resolve in the view (for example an
+   `include` from outside the site's folders), every tab says `ISOLATION_FAILED` and nothing is edited (fail closed).
+   **Declared names.** The resolved `services`, `volumes`, `configs` and `secrets` of the candidate must be names its
+   own files declare at the top level (JSON exactly, block YAML by indentation; a section written another way counts
+   as declaring nothing). A name that is not declared is refused with `COMPOSE_UNDECLARED`, unless the current files
+   already resolve the same undeclared name (an existing `include` or merge keeps working). The text rules stay as the
+   first layer.
 4. **Dangerous services are frozen.** A service that already has host-escape settings (`privileged`, host
    namespaces, `docker.sock`, a bind of `/` or a protected path, added capabilities beyond Docker's defaults) cannot get
    a new image, command, entrypoint or environment through Safe Edit: "This service has host access. Change it by hand."
