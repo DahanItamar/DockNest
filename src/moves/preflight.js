@@ -141,10 +141,9 @@ export function evaluateMove(facts, options = {}) {
       else if (!target.apparmorLoaded.includes(profile)) add('security', 'block', 'Security settings', `${site.name} uses the AppArmor profile ${profile}, which is not loaded on ${target.name}. Load it there, then check again.`);
     }
     // A Compose security_opt names a seccomp profile file; the copied Compose files need it at the same path.
-    for (const path of hardening?.seccomp ?? []) {
-      if (!Array.isArray(target.seccompPresent)) add('security', 'block', 'Security settings', `DockNest could not check seccomp profiles on ${target.name}. Update DockNest on both servers, then check again.`);
-      else if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
-    }
+    const seccomp = hardening?.seccomp ?? [];
+    if (seccomp.length && !Array.isArray(target.seccompPresent)) add('security', 'block', 'Security settings', `DockNest could not check seccomp profiles on ${target.name}. Update DockNest on both servers, then check again.`);
+    else for (const path of seccomp) if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
     if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the site's security settings.");
     // Docker's host-wide AppArmor default is a server setting, not the site's: noted, never enforced.
     if (hardening?.hostAppArmor?.length && target.apparmorEnabled === false) add('security', 'info', 'AppArmor', `${site.name} runs under the ${hardening.hostAppArmor.join(', ')} AppArmor profile on ${source.name} by default. ${target.name} has no AppArmor, so the copy runs without it.`, { advanced: true });
