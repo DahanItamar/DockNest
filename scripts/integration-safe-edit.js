@@ -75,6 +75,28 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
   const webCompose = (image, extra = '') => `services:\n  web:\n    image: ${image}\n    restart: unless-stopped\n    ports:\n      - "127.0.0.1:8301:8080"\n    volumes:\n      - data:/site\n${extra}volumes:\n  data: {}\n`;
   const shop = await composeSite('editshop', { '/srv/editshop/compose.yaml': webCompose('edit-app:1.0') });
   const oldImage = await imageId('editshop-web-1');
+  // The isolated view (#168) on a real host: the helper's own sandbox, with mount errors and Compose's stderr kept, so
+  // a failure here says why (a mount step = exit 97, or Compose itself, for example if it needed the Docker socket).
+  {
+    const { writeHelperBundle } = await import('../src/helper-bundle.js');
+    const { mkdtemp } = await import('node:fs/promises'), { tmpdir } = await import('node:os'), { join } = await import('node:path');
+    const local = writeHelperBundle(await mkdtemp(join(tmpdir(), 'docknest-view-')));
+    await sh('mkdir -p /root/docknest-view');
+    await run('cp', local, `${host}:/root/docknest-view/helper.py`);
+    const probe = [
+      'import sys,json,subprocess', "sys.path.insert(0,'/root/docknest-view')", 'import helper as h',
+      "inv={'project':'editshop','files':['/srv/editshop/compose.yaml'],'projectDirectory':'/srv/editshop','envFiles':[]}",
+      "argv=h.edit_isolated(h.edit_compose_base(inv)+['config','--format','json'],h.edit_isolation_keep(inv,['/srv/editshop']),inv)",
+      "argv[argv.index(h.EDIT_SANDBOX_CODE)]=h.EDIT_SANDBOX_CODE.replace('stderr=subprocess.DEVNULL,pass_fds','pass_fds')",
+      'r=subprocess.run(argv,capture_output=True,text=True,env=h.edit_env(inv))',
+      "print(json.dumps({'code':r.returncode,'stderr':r.stderr[-3000:],'services':sorted(json.loads(r.stdout)['services']) if r.returncode==0 else None}))",
+    ].join('\n');
+    const seen = JSON.parse(await run('exec', host, 'python3', '-I', '-c', probe));
+    await sh('rm -rf /root/docknest-view');
+    assert.equal(seen.code, 0, `isolated docker compose config failed (exit ${seen.code}): ${seen.stderr}`);
+    assert.deepEqual(seen.services, ['web']);
+    record('Safe Edit isolated view: real docker compose config resolves a site with no network, no Docker socket, a fresh /proc and only the site folder visible');
+  }
   let loaded = await view(shop);
   assert.equal(loaded.kind, 'compose'); assert.deepEqual(loaded.services.map(service => service.name), ['web']);
   let change = await editCompose(shop, 'compose.yaml', text => text.replace('edit-app:1.0', 'edit-app:1.1'));

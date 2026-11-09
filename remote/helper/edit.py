@@ -478,6 +478,7 @@ try:
     mount('--make-rprivate','/')
     system=['/'+name for name in spec['system']]
     # Everything is opened and resolved before the first mount changes what the paths mean.
+    null=os.open('/dev/null',os.O_RDONLY|os.O_CLOEXEC)
     keep=[]
     for path in spec['keep']+spec['devices']:  # parents before children
         if any(within(path,k) for k,_,_ in keep):continue  # already shown by a kept folder
@@ -499,8 +500,8 @@ try:
     for path in sorted(set(wanted),key=lambda p:(p.count('/'),p)):
         if any(within(path,h) for h in hidden):continue
         mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
-    for path in spec['blank']:
-        if os.path.isfile(path) and not os.path.islink(path):mount('--bind','/dev/null',path)
+    for path in spec['blank']:  # /dev is hidden by now: bound from the descriptor opened before
+        if os.path.isfile(path) and not os.path.islink(path):mount('-c','--bind','/proc/self/fd/%d'%null,path,fds=(null,))
     for path,fd,folder in keep:
         if not any(within(path,h) for h in hidden):os.close(fd);continue  # still visible as it is
         # No kept folder contains this path, so its parent is a fresh tmpfs: placeholders never touch real files.
