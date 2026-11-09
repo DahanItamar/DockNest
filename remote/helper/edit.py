@@ -471,14 +471,16 @@ EDIT_SANDBOX_DEVICES=('/dev/null','/dev/zero','/dev/random','/dev/urandom')
 EDIT_SANDBOX_CODE=r'''
 import json,os,stat,subprocess,sys
 spec=json.loads(sys.argv[1]);argv=sys.argv[2:]
+# Opened once, before /dev is hidden: subprocess.DEVNULL would open /dev/null again after it is gone.
+null=os.open('/dev/null',os.O_RDWR|os.O_CLOEXEC)
 def mount(*args,fds=()):
-    if subprocess.run(['mount',*args],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=fds).returncode:os._exit(97)
+    if subprocess.run(['mount',*args],stdin=null,stdout=null,stderr=null,pass_fds=fds).returncode:
+        sys.stderr.write('sandbox: mount %s failed\n'%args[0]);os._exit(97)
 def within(path,root):return root=='/' or path==root or path.startswith(root+'/')
 try:
     mount('--make-rprivate','/')
     system=['/'+name for name in spec['system']]
     # Everything is opened and resolved before the first mount changes what the paths mean.
-    null=os.open('/dev/null',os.O_RDONLY|os.O_CLOEXEC)
     keep=[]
     for path in spec['keep']+spec['devices']:  # parents before children
         if any(within(path,k) for k,_,_ in keep):continue  # already shown by a kept folder
@@ -494,7 +496,7 @@ try:
             if path.count('/')==1 and any(within(target,s) for s in system):continue  # /bin -> usr/bin
             path=target
         if not os.path.isdir(path) or os.path.islink(path):continue
-        if path=='/' or path in system:os._exit(97)
+        if path=='/' or path in system:sys.stderr.write('sandbox: a hide path resolves to a system folder\n');os._exit(97)
         wanted.append(path)
     hidden=[]
     for path in sorted(set(wanted),key=lambda p:(p.count('/'),p)):
@@ -513,7 +515,7 @@ try:
         mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,))
         if path not in spec['devices']:mount('-o','remount,bind,ro,nosuid,nodev',path)  # /dev/null stays writable
         os.close(fd)
-except OSError:os._exit(97)
+except OSError as error:sys.stderr.write('sandbox: %s errno %s\n'%(type(error).__name__,error.errno));os._exit(97)
 os.execvp(argv[0],argv)
 '''
 def edit_sandbox_ready():

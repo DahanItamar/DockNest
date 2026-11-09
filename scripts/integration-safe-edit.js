@@ -87,7 +87,7 @@ export async function runSafeEditScenario({ run, until, hosts, servers, db, reco
       'import sys,json,subprocess', "sys.path.insert(0,'/root/docknest-view')", 'import helper as h',
       "inv={'project':'editshop','files':['/srv/editshop/compose.yaml'],'projectDirectory':'/srv/editshop','envFiles':[]}",
       "argv=h.edit_isolated(h.edit_compose_base(inv)+['config','--format','json'],h.edit_isolation_keep(inv,['/srv/editshop']),inv)",
-      "argv[argv.index(h.EDIT_SANDBOX_CODE)]=h.EDIT_SANDBOX_CODE.replace('stderr=subprocess.DEVNULL,pass_fds','pass_fds')",
+      "argv[argv.index(h.EDIT_SANDBOX_CODE)]=h.EDIT_SANDBOX_CODE.replace('stderr=null,pass_fds','pass_fds')",
       'r=subprocess.run(argv,capture_output=True,text=True,env=h.edit_env(inv))',
       "print(json.dumps({'code':r.returncode,'stderr':r.stderr[-3000:],'services':sorted(json.loads(r.stdout)['services']) if r.returncode==0 else None}))",
     ].join('\n');
