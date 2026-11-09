@@ -22,6 +22,8 @@ from .restore_test import (
     IMAGE_TAG)
 from .discovery import (
     temporary_mounts, tmpfs_argument)
+from .launch import (
+    launch_plugin_dirs)
 # Mutable state used here lives in common: SNAPSHOT_FILTER, STOPPING
 # </build:header>
 """Safe Edit operations. Final contract (shared with src/site-edits/engine.js):
@@ -115,6 +117,8 @@ EDIT_REASONS={
     'APPLY_FAILED':'Docker could not start the changed site.',
     'ROLLBACK_FAILED':'The previous version could not be put back.',
     'FAILED':'Safe Edit could not run on the server.',
+    'ISOLATION_FAILED':"DockNest could not read this site's Compose files in an isolated view of the server, so it cannot check a change safely. Change it by hand.",
+    'COMPOSE_UNDECLARED':'Docker Compose read a service, volume, config or secret that the changed files do not list themselves (an include or extends). Change it by hand.',
 }
 class EditRefused(Exception):
     def __init__(self,code,field=None,reason=None):
@@ -451,12 +455,131 @@ def edit_env_file_paths(service):
         if isinstance(item,str):yield item,True
         elif isinstance(item,dict) and isinstance(item.get('path'),str):yield item['path'],item.get('required',True) is not False
         else:edit_refuse('COMPOSE_INVALID')
-def edit_config(inv,files,envs,first):
+# ---- isolated Compose view (#168): defence in depth behind the text rules ----
+# A candidate is resolved by `docker compose config` in a private mount and network namespace. The trees where other
+# sites, DockNest's state, home folders, Docker's data and sockets live are empty tmpfs mounts; only this site's own
+# folders, its Compose and env files, the check folder and the files the current model already reads are bound back,
+# read-only. No network (unshare --net) and no Docker socket (/run is hidden). No image is pulled: it is the same
+# namespace technique as the launch sandbox (launch.py), so it works offline. Exit 97 = the view could not be built.
+EDIT_SANDBOX_HIDE=('/srv','/opt','/mnt','/media','/home','/root','/run','/var/run','/tmp','/var/tmp','/var/log','/var/backups',
+    '/var/lib/docker','/var/lib/containerd','/var/lib/docknest','/var/lib/docker-backup-manager','/etc/docknest')
+EDIT_SANDBOX_CODE=r'''
+import json,os,stat,subprocess,sys
+spec=json.loads(sys.argv[1]);argv=sys.argv[2:]
+def mount(*args,fds=()):
+    if subprocess.run(['mount',*args],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=fds).returncode:os._exit(97)
+try:
+    mount('--make-rprivate','/')
+    keep=[]
+    for path in spec['keep']:
+        try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        except OSError:continue  # missing, or a symbolic link: not shown (Compose then fails to read it, fail closed)
+        mode=os.fstat(fd).st_mode
+        if stat.S_ISDIR(mode) or stat.S_ISREG(mode):keep.append((path,fd,stat.S_ISDIR(mode)))
+        else:os.close(fd)
+    hidden=[]
+    for path in spec['hide']:
+        if os.path.isdir(path) and not os.path.islink(path) and not any(path==h or path.startswith(h+'/') for h in hidden):
+            mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
+    for path,fd,folder in keep:
+        if folder:os.makedirs(path,mode=0o755,exist_ok=True)
+        else:
+            os.makedirs(os.path.dirname(path),mode=0o755,exist_ok=True)
+            os.close(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW|os.O_CLOEXEC,0o600))
+        # -c (--no-canonicalize): libmount would otherwise resolve the fd link to its real path, which the tmpfs above hides.
+        mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
+        os.close(fd)
+except OSError:os._exit(97)
+os.execvp(argv[0],argv)
+'''
+def edit_sandbox_ready():
+    return os.name=='posix' and all(shutil.which(tool,path=EDIT_PATH) for tool in ('unshare','mount'))
+def edit_isolated(argv,keep,inv=None):
+    """argv wrapped in the isolated view. ISOLATION_FAILED without unshare or mount (fail closed)."""
+    if not edit_sandbox_ready():edit_refuse('ISOLATION_FAILED')
+    plugins=launch_plugin_dirs()
+    if inv and inv.get('dockerConfig'):plugins.append(posixpath.join(inv['dockerConfig'],'cli-plugins'))
+    folders=sorted(dict.fromkeys(lexical(k) for k in [*keep,*plugins] if isinstance(k,str) and k.startswith('/')),key=lambda p:(p.count('/'),p))
+    python=sys.executable if sys.executable and os.path.isabs(sys.executable) else 'python3'
+    return ['unshare','--mount','--net','--propagation','private','--',python,'-I','-c',EDIT_SANDBOX_CODE,
+        json.dumps({'keep':folders,'hide':list(EDIT_SANDBOX_HIDE)}),*argv]
+def edit_isolation_keep(inv,roots,model=None,extra=()):
+    """What the isolated view shows: the site's folders, Compose and env files, and the files the current model already
+    reads (env_file, file-based secrets and configs), so what a site has today keeps resolving."""
+    keep=[*roots,inv['projectDirectory'],*(posixpath.dirname(f) for f in inv['files']),*inv['envFiles'],*extra]
+    for service in ((model or {}).get('services') or {}).values():
+        if isinstance(service,dict):
+            keep+=[lexical(v if v.startswith('/') else posixpath.join(inv['projectDirectory'],v)) for v,_ in edit_env_file_paths(service) if '$' not in v]
+    for kind in ('secrets','configs'):
+        for item in ((model or {}).get(kind) or {}).values():
+            if isinstance(item,dict) and isinstance(item.get('file'),str) and '$' not in item['file']:
+                keep.append(lexical(item['file'] if item['file'].startswith('/') else posixpath.join(inv['projectDirectory'],item['file'])))
+    return [k for k in keep if not edit_path_refused(k)]
+def edit_config(inv,files,envs,first,isolate=None):
+    """isolate: None runs Compose on the host (the site's current files); a keep list runs it in the isolated view."""
     flags=['--no-interpolate','--no-env-resolution','--no-path-resolution'] if first else ['--no-env-resolution']
-    try:model=json.loads(edit_compose(inv,['config','--format','json',*flags],files,envs))
-    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,ValueError,OSError):edit_refuse('COMPOSE_INVALID')
+    tail=['config','--format','json',*flags]
+    try:
+        if isolate is None:model=json.loads(edit_compose(inv,tail,files,envs))
+        else:model=json.loads(edit_exec(edit_isolated(edit_compose_base(inv,files,envs)+tail,isolate,inv),180,edit_env(inv)))
+    except subprocess.CalledProcessError as failed:
+        edit_refuse('ISOLATION_FAILED' if isolate is not None and failed.returncode==97 else 'COMPOSE_INVALID')
+    except (subprocess.TimeoutExpired,ValueError,OSError):edit_refuse('COMPOSE_INVALID')
     if not isinstance(model,dict) or not isinstance(model.get('services'),dict):edit_refuse('COMPOSE_INVALID')
     return model
+# The candidate's own declaration (#168): names under the top-level services, volumes, configs and secrets of each file,
+# read from the text (JSON exactly; block YAML by indentation; None when a file does not spell a section plainly).
+EDIT_DECLARED_KINDS=('services','volumes','configs','secrets')
+EDIT_TOP_SECTION=re.compile(r'''^(["']?)(services|volumes|configs|secrets)\1[ \t]*:(.*)$''')
+EDIT_CHILD_KEY=re.compile(r'''^(?:[!&][^\s]*[ \t]+)*(?:"([^"\\\n]*)"|'([^'\n]*)'|([^\s"'#:\-?\[\]{},&*!|>%@`][^:#]*?))[ \t]*:(?:[ \t]|$)''')
+def edit_declared(text):
+    text=edit_without_bom(text or '')
+    try:data=json.loads(text)
+    except ValueError:data=None
+    if data is not None:
+        if not isinstance(data,dict):return {k:None for k in EDIT_DECLARED_KINDS}
+        return {k:set(data[k]) if isinstance(data.get(k),dict) else set() if data.get(k) is None else None for k in EDIT_DECLARED_KINDS}
+    found={k:set() for k in EDIT_DECLARED_KINDS};section=None;indent=None
+    for line in text.replace('\r\n','\n').split('\n'):
+        stripped=line.strip()
+        if not stripped or stripped.startswith('#'):continue
+        if line[0] not in ' \t':
+            section=None;indent=None
+            if stripped in ('---','...'):continue
+            match=EDIT_TOP_SECTION.match(line)
+            if not match:continue
+            rest=match[3].strip()
+            if not rest or rest.startswith('#'):section=match[2]
+            elif re.fullmatch(r'(?:\{\}|null|~)[ \t]*(?:#.*)?',rest) is None:found[match[2]]=None
+            continue
+        if section is None or found[section] is None:continue
+        width=len(line)-len(line.lstrip(' '))
+        if line[width:width+1]=='\t':found[section]=None;continue
+        if indent is None:indent=width
+        if width>indent:continue
+        match=EDIT_CHILD_KEY.match(stripped) if width==indent else None
+        if not match:found[section]=None;continue
+        name=match[1] if match[1] is not None else match[2] if match[2] is not None else match[3].strip()
+        if name!='<<':found[section].add(name)
+    return found
+def edit_undeclared(texts,model):
+    """{kind: names in the resolved model that no file declares itself} (all of them for a kind a file hides)."""
+    declared={k:set() for k in EDIT_DECLARED_KINDS}
+    for text in texts:
+        for kind,names in edit_declared(text).items():
+            declared[kind]=None if names is None or declared[kind] is None else declared[kind]|names
+    result={}
+    for kind in EDIT_DECLARED_KINDS:
+        resolved=set(model.get(kind)) if isinstance(model.get(kind),dict) else set()
+        result[kind]=resolved if declared[kind] is None else resolved-declared[kind]
+    return result
+def edit_declared_check(original_texts,current_first,candidate_texts,candidate_first):
+    """Refuse a resolved service, volume, config or secret the candidate does not declare itself (an include or extends
+    the text rules missed), unless the current files already resolve it the same way."""
+    before=edit_undeclared(original_texts,current_first);after=edit_undeclared(candidate_texts,candidate_first)
+    for kind in EDIT_DECLARED_KINDS:
+        extra=sorted(after[kind]-before[kind])
+        if extra:edit_refuse('COMPOSE_UNDECLARED','%s.%s'%(kind,extra[0]))
 def edit_first_pass_checks(first,current_first,inv,roots):
     """env_file and file-based secrets/configs are validated before the full (interpolating) pass."""
     existing={p for s in ((current_first or {}).get('services') or {}).values() if isinstance(s,dict) for p,_ in edit_env_file_paths(s)}
@@ -627,12 +750,13 @@ def edit_env_targets(inv):
     if inv['envFiles']:return list(inv['envFiles'])
     default=posixpath.join(inv['projectDirectory'],'.env')
     return [default] if os.path.isfile(default) and not os.path.islink(default) else []
-def edit_resolve(inv,roots,key,files=None,envs=None,overrides=None,current_first=None,existing=False):
+def edit_resolve(inv,roots,key,files=None,envs=None,overrides=None,current_first=None,existing=False,isolate=None):
     """Two passes: references checked on the uninterpolated model, then the full model. existing=True for the
-    site's current files (what it already reads stays allowed, protected paths never are)."""
-    first=edit_config(inv,files,envs,True)
+    site's current files (what it already reads stays allowed, protected paths never are). isolate: a keep list to
+    run both passes in the isolated view."""
+    first=edit_config(inv,files,envs,True,isolate)
     edit_first_pass_checks(first,first if existing else current_first,inv,roots)
-    model=edit_config(inv,files,envs,False)
+    model=edit_config(inv,files,envs,False,isolate)
     return first,model,edit_env_digests(model,key,overrides or {})
 # ---- guided tabs (Ports, Image): where the one line to change is, or why the change belongs in Compose ----
 EDIT_VAR=re.compile(r'\$\{?([A-Za-z_][A-Za-z0-9_]*)')
@@ -698,6 +822,10 @@ def edit_compose_load(req,inv,roots):
         try:
             key=edit_model_key()
             first,model,_=edit_resolve(inv,roots,key,existing=True)
+            # Every change is checked in the isolated view, so a site whose current files do not resolve there (no
+            # unshare, or an include from outside its folders) cannot be edited; the tabs say so up front.
+            try:edit_config(inv,None,None,True,edit_isolation_keep(inv,roots,model))
+            except EditRefused:unusable(['compose','env','ports','image'],'ISOLATION_FAILED')
             running=edit_project_containers(inv)
             guided=edit_guided(first,{f['path']:f['text'] for f in files})
             for name,service in sorted(model['services'].items()):
@@ -775,7 +903,16 @@ def edit_compose_check(req,inv,roots,key,keep=False):
                 edit_private_write(target,env[path]);envs.append(str(target));written[path]=env[path]
             else:envs.append(path)
         if not inv['envFiles'] and not any(p in env for p in targets):envs=[]
-        _,candidate,candidate_env=edit_resolve(inv,roots,key,files,envs,written,current_first)
+        view=edit_isolation_keep(inv,roots,current,[folder.as_posix()])
+        try:candidate_first,candidate,candidate_env=edit_resolve(inv,roots,key,files,envs,written,current_first,isolate=view)
+        except EditRefused as refused:
+            # The site's current files must resolve in the same view; if they do not, say so instead of blaming the change.
+            if refused.code=='COMPOSE_INVALID':
+                try:edit_config(inv,None,None,True,view)
+                except EditRefused:edit_refuse('ISOLATION_FAILED')
+            raise
+        texts=lambda replaced:[(replaced.get(p) if p in replaced else edit_read(p)[0]).decode('utf-8','replace') for p in inv['files']]
+        edit_declared_check(texts({}),current_first,texts(compose),candidate_first)
         frozen=edit_gate(current,candidate,roots,current_env,candidate_env)
         new_ports=edit_new_ports(edit_published(current),edit_published(candidate),req.get('sshPort'))
         before={path:info['sha256'] for path,(_,info) in originals.items()}
@@ -1258,7 +1395,7 @@ def edit_restore_files(edit_id,journal):
         edit_atomic_write(record['path'],data,record['uid'],record['gid'],record['mode'],edit_id[:8])
 def edit_reference(journal,inv,roots,key):
     """Gate on the REAL files in the real folder (item 5): same resolution, same gate, same digest."""
-    _,model,env_digests=edit_resolve(inv,roots,key,None,None,None,journal['currentFirst'])
+    _,model,env_digests=edit_resolve(inv,roots,key,None,None,None,journal['currentFirst'],isolate=edit_isolation_keep(inv,roots,journal['currentModel']))
     edit_gate(journal['currentModel'],model,roots,journal['currentEnv'],env_digests)
     before={r['path']:r['sha256'] for r in journal['files']}
     return edit_digest(key,'compose',model,env_digests,before)
