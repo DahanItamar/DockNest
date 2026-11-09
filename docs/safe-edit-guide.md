@@ -33,6 +33,12 @@ Environment values are write-only. A key shows **Saved**; **Replace** takes a ne
 or logs a value: it goes from your browser to the server over SSH and is written there with mode 0600 and the
 file's original owner.
 
+**Remove** (the bin icon) deletes a variable from the environment file; the row shows **Will be removed** until you
+press **Keep**. Review shows the key as a removed line and warns that the variable is deleted (restoring the backup
+brings it back). When several services use it, the warning names them. DockNest refuses to remove a variable the
+Compose file needs and gives no default for (`${NAME}` or `${NAME:?...}`); edit the file first. The value is never
+sent to the browser or logged.
+
 Not possible with Safe Edit: building images, editing Dockerfiles, nginx, certificates, DNS or data folders, removing
 a service or renaming the project ("Remove it by hand"). Adding a service is allowed.
 
@@ -53,10 +59,21 @@ a service or renaming the project ("Remove it by hand"). Adding a service is all
    attention and the site stays behind the maintenance page. The site keeps running during the pull.
 4. **Apply.** The maintenance page goes on, the files are written, and the services start with the new version.
 5. **Check health.** Every service that ran before runs, is healthy where it has a health check, still runs after 60
-   seconds, and the site's health URL (if set) answers. Time limit: 2 minutes, 1 to 10 in Advanced.
+   seconds, and the site's health URL (if set) answers. Time limit: 2 minutes; Advanced settings on Review sets it from 60 to 600 seconds. A long limit (over 5 minutes) and a limit shorter than copying the site's data would take both show a warning.
 6. **Finish.** The maintenance page goes off.
 
 You can cancel until Apply starts. After that, rollback is the undo.
+
+## Undo a change
+
+After a change that replaced the Compose file, **Undo change** on the finished edit puts the file back as it was. It
+is its own change: a backup first, the same checks as a normal replace, the maintenance page, a health check and an
+automatic rollback, and it appears in the history. Only the newest applied change of a site can be undone, and only
+while the Compose file on the server is still exactly what that change wrote. If a newer change was made, the button
+is off ("Undo that one first"); if the file was edited outside DockNest, the undo is refused so nothing you wrote by hand
+is overwritten. Undo restores the Compose file only: environment values that the change set stay, and data is not
+rewound (when the change updated an image, the undo takes its own data safety copy like any image change). Changes
+made before this feature, and changes that did not end applied, cannot be undone.
 
 ## When the change does not come up
 
