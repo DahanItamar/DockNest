@@ -1,8 +1,8 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {Check,X,Plus,Trash,Pencil,CheckCircle2} from '../icons.jsx';
+import {Check,X,Plus,Trash,Pencil,CheckCircle2,ChevronDown,Undo} from '../icons.jsx';
 import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
 import {Sheet,Note,useGuard} from '../map/MoveFlow.jsx';
-import {createSafeEditClient,TABS,TAB_KEY,ACTIVE,STATUS_LINE,friendlyError,outcomeOf,percent,runningStep,locate,setHostPort,setImage,validPort,validKey,warningView,healthText} from './safe-edit-client.js';
+import {createSafeEditClient,TABS,TAB_KEY,ACTIVE,STATUS_LINE,friendlyError,outcomeOf,percent,runningStep,locate,setHostPort,setImage,validPort,validKey,warningView,healthText,LIMIT,validLimit,limitText,limitWarnings,whenText} from './safe-edit-client.js';
 import {Rows,Timeline,Diff,useNarrow} from './parts.jsx';
 import '../map/map.css';
 import '../job-details.css';
@@ -27,6 +27,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
  const [tab,setTab]=useState('Compose'),[problem,setProblem]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  const [review,setReview]=useState(null),[editId,setEditId]=useState(initialEditId||null),[edit,setEdit]=useState(null);
  const [pollStopped,setPollStopped]=useState(false);
+ const [removed,setRemoved]=useState({}),[limit,setLimit]=useState(String(LIMIT.default)),[advOpen,setAdvOpen]=useState(false),[undoing,setUndoing]=useState(null);
  const seq=useRef(0),done=useRef(false);
 
  const load=useCallback(()=>{
@@ -39,7 +40,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
    const files=(v.files||[]).filter(f=>typeof f.text==='string');
    setView(v);
    setTexts(Object.fromEntries(files.map(f=>[f.path,f.text])));setFile(files[0]?.path||'');
-   setReplaced({});setDraft(null);setAdded([]);setEditing({});
+   setReplaced({});setRemoved({});setDraft(null);setAdded([]);setEditing({});
    const rowsP=[],rowsI=[];
    for(const s of v.services||[]){
     // The server's file and line win; the UI's own locator is the fallback.
@@ -65,7 +66,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
  const files=(view?.files||[]).filter(f=>typeof f.text==='string');
  const changedFiles=files.filter(f=>texts[f.path]!==f.text);
  const envFile=view?.env?.[0]?.file;
- const envChanges=[...Object.entries(replaced).map(([k,value])=>{const [f,key]=k.split('\n');return {file:f,key,value}}),...added.filter(a=>envFile&&validKey(a.key)&&a.value).map(a=>({file:envFile,key:a.key,value:a.value}))];
+ const envChanges=[...Object.entries(replaced).map(([k,value])=>{const [f,key]=k.split('\n');return {file:f,key,value}}),...Object.keys(removed).map(k=>{const [f,key]=k.split('\n');return {file:f,key,remove:true}}),...added.filter(a=>envFile&&validKey(a.key)&&a.value).map(a=>({file:envFile,key:a.key,value:a.value}))];
  // A single-container site has no Compose text: its ports and image travel as containerChanges.
  const containerChanges=useMemo(()=>{
   if(!isContainer)return null;
@@ -75,25 +76,35 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   return Object.keys(out).length?out:null;
  },[isContainer,images,ports]);
  const dirty=changedFiles.length>0||envChanges.length>0||!!containerChanges;
- const touch=()=>{setProblem(p=>p?.kind==='blocked'?null:p)};
+ const touch=()=>{setProblem(p=>p?.kind==='blocked'||p?.kind==='required'?null:p)};
 
  async function startReview(){
   setBusy(true);setError('');
   await guard.run(async()=>{
    const r=await client.review(site.id,{...(changedFiles.length?{files:changedFiles.map(f=>({path:f.path,sha256:f.sha256,text:texts[f.path]}))}:{}),...(envChanges.length?{env:envChanges}:{}),...(containerChanges?{containerChanges}:{})});
-   setReview(r);setStage('review');
+   setReview(r);setLimit(String(LIMIT.default));setAdvOpen(false);setStage('review');
   },e=>{
    if(e.status===422){
     const f=String(e.field||'');
     if(!isContainer)setTab(t=>f.startsWith('env')?'Environment':f.startsWith('files')||e.code==='FILE_CHANGED'?'Compose':t);
-    setProblem(e.code==='FILE_CHANGED'?{kind:'conflict',text:'This file changed on the server.'}:{kind:'blocked',text:e.message||'This change cannot be applied.'});
+    setProblem(e.code==='FILE_CHANGED'?{kind:'conflict',text:'This file changed on the server.'}:e.code==='ENV_REQUIRED'?{kind:'required',text:e.message}:{kind:'blocked',text:e.message||'This change cannot be applied.'});
    }else setError(friendlyError(e));
   });
   setBusy(false);
  }
- async function apply(){
+ // `rv`: the review to apply (an undo has its own); `seconds`: the time limit, left out for the server's default.
+ async function apply(rv,seconds){
   setBusy(true);setError('');
-  await guard.run(async()=>{const r=await client.apply(site.id,review.token);setEdit(null);done.current=false;setPollStopped(false);setEditId(r.edit.id);setStage('progress')},e=>{if(e.code==='REVIEW_EXPIRED'){setReview(null);setStage('edit');setError(friendlyError(e))}else setError(friendlyError(e))});
+  await guard.run(async()=>{const r=await client.apply(site.id,rv.token,seconds);setEdit(null);done.current=false;setPollStopped(false);setUndoing(null);setEditId(r.edit.id);setStage('progress')},e=>{
+   if(rv.undoOf)setUndoing({failure:{code:e.code,text:friendlyError(e)}});
+   else if(e.code==='REVIEW_EXPIRED'){setReview(null);setStage('edit');setError(friendlyError(e))}else setError(friendlyError(e));
+  });
+  setBusy(false);
+ }
+ // Undo of a finished edit's Compose replace: the server builds the review from the files as they were.
+ async function startUndo(){
+  setBusy(true);setError('');setUndoing({loading:true});setStage('undo');
+  await guard.run(async()=>{setUndoing({review:await client.undoReview(edit.id)})},e=>setUndoing({failure:{code:e.code,text:friendlyError(e)}}));
   setBusy(false);
  }
  async function act(fn){setBusy(true);setError('');await guard.run(async()=>{await fn();await refresh()},e=>setError(friendlyError(e)));setBusy(false)}
@@ -141,9 +152,13 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   const rows=[...rowsE.map(({key,id})=>{
    const on=draft?.id===id;
    const input=<input type="password" aria-label={'New value for '+key} autoComplete="new-password" className="se-input" value={draft?.value||''} onChange={e=>setDraft({id,value:e.target.value})} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();saveDraft()}if(e.key==='Escape'){e.stopPropagation();setDraft(null)}}} autoFocus/>;
-   const acts=on?<><IconButton label={'Save '+key} icon={Check} disabled={!draft.value} onClick={saveDraft}/><IconButton label="Cancel" icon={X} onClick={()=>setDraft(null)}/></>:<IconButton label={'Replace '+key} icon={Pencil} onClick={()=>setDraft({id,value:''})}/>;
-   const text=replaced[id]!==undefined?'Replaced':'Saved';
-   return {key:id,cells:[<code>{key}</code>,on?input:text,acts],label:<code>{key}</code>,value:on?<>{input}{acts}</>:<>{text}{acts}</>,wrap:on};
+   const gone=!!removed[id];
+   const acts=on?<><IconButton label={'Save '+key} icon={Check} disabled={!draft.value} onClick={saveDraft}/><IconButton label="Cancel" icon={X} onClick={()=>setDraft(null)}/></>
+    :gone?<IconButton label={'Keep '+key} icon={Undo} onClick={()=>{setRemoved(r=>{const n={...r};delete n[id];return n});touch()}}/>
+    :<><IconButton label={'Replace '+key} icon={Pencil} onClick={()=>setDraft({id,value:''})}/><IconButton label={'Remove '+key} icon={Trash} onClick={()=>{setRemoved(r=>({...r,[id]:true}));setReplaced(r=>{const n={...r};delete n[id];return n});if(draft?.id===id)setDraft(null);touch()}}/></>;
+   const text=gone?'Will be removed':replaced[id]!==undefined?'Replaced':'Saved';
+   const name=gone?<span className="se-gone"><code>{key}</code></span>:<code>{key}</code>;
+   return {key:id,cells:[name,on?input:text,<span className="se-cell">{acts}</span>],label:name,value:on?<>{input}{acts}</>:<>{text}{acts}</>,wrap:on};
   }),...added.map(a=>{
    const bad=a.key!==''&&!validKey(a.key);
    const k=<input className="se-input" aria-label="Variable name" aria-invalid={bad||undefined} autoComplete="off" spellCheck="false" value={a.key} onChange={e=>{setAdded(l=>l.map(x=>x.id===a.id?{...x,key:e.target.value}:x));touch()}}/>;
@@ -196,16 +211,47 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
  if(stage==='edit')return <Shell onClose={onClose} title={title} actions={<Foot a="Cancel" onA={onClose} b="Review" onB={startReview} disabled={!dirty||!!problem||busy}/>}>
   {tabBar}
   {problem?.kind==='blocked'&&<AlertPanel variant="error">{problem.text}</AlertPanel>}
+  {problem?.kind==='required'&&<AlertPanel variant="error" action={!isContainer&&<div className="rp-actions"><button type="button" onClick={()=>setTab('Compose')}>Open Compose</button></div>}>{problem.text}</AlertPanel>}
   {problem?.kind==='conflict'&&<AlertPanel variant="error" action={<div className="rp-actions"><button type="button" onClick={load}>Reload</button></div>}>{problem.text}</AlertPanel>}
   {tabBody[tab]()}
   {error&&<Note kind="error" icon={X} role="alert">{error}</Note>}
   {guard.prompt}
  </Shell>;
  if(stage==='review'&&review){
-  const s=review.summary||{};
-  return <Shell onClose={onClose} title="Review changes" actions={<Foot a="Back" onA={()=>setStage('edit')} b="Apply" onB={apply} disabled={busy}/>}>
+  const s=review.summary||{},okLimit=validLimit(limit),seconds=Number(limit);
+  return <Shell onClose={onClose} title="Review changes" actions={<Foot a="Back" onA={()=>setStage('edit')} b="Apply" onB={()=>apply(review,seconds)} disabled={busy||!okLimit}/>}>
    <Diff diff={review.diff}/>
-   {(review.warnings||[]).map((w,i)=>{const v=warningView(w);return <AlertPanel key={w.code+i} variant="warning" title={v.title}>{v.text}</AlertPanel>})}
+   {[...(review.warnings||[]).map(warningView),...limitWarnings(limit,s.dataBytes)].map((v,i)=><AlertPanel key={v.title+i} variant="warning" title={v.title}>{v.text}</AlertPanel>)}
+   <dl className="def-list se-defs">
+    <div className="def-row"><dt>Backup first</dt><dd>Yes</dd></div>
+    <div className="def-row"><dt>Health check</dt><dd>{healthText(s.health)}</dd></div>
+    <div className="def-row"><dt>Rollback</dt><dd>Automatic</dd></div>
+    <div className="def-row"><dt>Data rollback</dt><dd>{s.dataRollback?(s.dataBytes!=null?'Yes, '+size(s.dataBytes):'Yes'):'No'}</dd></div>
+    <div className="def-row"><dt>Time limit</dt><dd>{okLimit?limitText(seconds):'Not valid'}</dd></div>
+   </dl>
+   <div className="map-advanced">
+    <button type="button" className="map-disclose" aria-expanded={advOpen} aria-controls="se-adv" onClick={()=>setAdvOpen(!advOpen)}>Advanced settings<ChevronDown size={18} stroke={1.75} aria-hidden="true" className={advOpen?'open':''}/></button>
+    {advOpen&&<div id="se-adv" className="map-adv-body"><section><h3>Time limit</h3>
+     <label className="map-field"><span className="map-caption">Seconds DockNest waits for the site to answer before it rolls back. {LIMIT.min} to {LIMIT.max}.</span>
+      <span className="se-unit"><input type="number" className="se-input" inputMode="numeric" aria-label="Time limit in seconds" aria-invalid={!okLimit||undefined} value={limit} onChange={e=>setLimit(e.target.value)}/><span>seconds</span></span></label>
+     {!okLimit&&<p className="se-hint bad">Use {LIMIT.min} to {LIMIT.max} seconds.</p>}
+    </section></div>}
+   </div>
+   {error&&<Note kind="error" icon={X} role="alert">{error}</Note>}
+   {guard.prompt}
+  </Shell>;
+ }
+ if(stage==='undo'){
+  const u=undoing||{},rv=u.review,back=()=>{setStage('progress');setUndoing(null)},cancel=<button type="button" onClick={back}>Cancel</button>;
+  if(u.failure)return <Shell onClose={onClose} title="Undo this change?" actions={<>{cancel}<button type="button" disabled>Undo change</button></>}>
+   <AlertPanel variant="error" action={u.failure.code==='UNDO_CHANGED'&&<div className="rp-actions"><button type="button" disabled={busy} onClick={startUndo}>Reload</button></div>}>{u.failure.text}</AlertPanel>{guard.prompt}</Shell>;
+  if(!rv)return <Shell onClose={onClose} title="Undo this change?" actions={<>{cancel}<button type="button" disabled>Undo change</button></>}>{guard.prompt||<div className="inc-load" role="status" aria-live="polite"><StatusLabel state="running">Checking the file</StatusLabel></div>}</Shell>;
+  const s=rv.summary||{};
+  return <Shell onClose={onClose} title="Undo this change?" actions={<>{cancel}<button type="button" className="primary" disabled={busy} onClick={()=>apply(rv)}>Undo change</button></>}>
+   <p>The Compose file goes back to how it was on {whenText(edit?.createdAt)}.</p>
+   {edit?.imageChanged&&<AlertPanel variant="warning" title="Data is not rewound">Undo restores the Compose file only. Data stays as it is now.</AlertPanel>}
+   <Diff diff={rv.diff}/>
+   {(rv.warnings||[]).map(warningView).map((v,i)=><AlertPanel key={v.title+i} variant="warning" title={v.title}>{v.text}</AlertPanel>)}
    <dl className="def-list se-defs">
     <div className="def-row"><dt>Backup first</dt><dd>Yes</dd></div>
     <div className="def-row"><dt>Health check</dt><dd>{healthText(s.health)}</dd></div>
@@ -217,23 +263,34 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   </Shell>;
  }
  // Progress and outcome.
+ const isUndo=!!edit?.undoOf;
  const outcome=outcomeOf(edit),stepNow=runningStep(edit),acts=edit?.actions||{};
  const again=()=>{done.current=false;setEdit(null);setEditId(null);setReview(null);load()};
  const fail=error&&<Note kind="error" icon={X} role="alert">{error}</Note>;
  if(!edit)return <Shell onClose={onClose} title="Applying changes" actions={<Foot a="Close" onA={onClose}/>}>{fail||<div className="inc-load" role="status"><StatusLabel state="running">Reading status</StatusLabel></div>}</Shell>;
- if(outcome==='applying')return <Shell onClose={onClose} title="Applying changes" actions={<>{acts.cancel&&<button type="button" disabled={busy} onClick={()=>act(()=>client.cancel(edit.id))}>Cancel</button>}<button type="button" onClick={onClose}>Close</button></>}>
+ if(outcome==='applying')return <Shell onClose={onClose} title={isUndo?'Undoing the change':'Applying changes'} actions={<>{acts.cancel&&<button type="button" disabled={busy} onClick={()=>act(()=>client.cancel(edit.id))}>Cancel</button>}<button type="button" onClick={onClose}>Close</button></>}>
   <div className="map-bar" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent(edit)}><span style={{width:percent(edit)+'%'}}/></div>
   <p className="map-status" role="status">{STATUS_LINE[stepNow]||STATUS_LINE.apply}</p>
   <Timeline edit={edit}/>
   <p className="map-caption">You can leave this page.</p>
   {fail}{guard.prompt}
  </Shell>;
- if(outcome==='done')return <Shell onClose={onClose} title={site.name} actions={<Foot b="Close" onB={onClose}/>}><Note kind="ok" icon={CheckCircle2} role="status">Change applied</Note><Timeline edit={edit}/></Shell>;
+ if(outcome==='done'){
+  const u=edit.undo;
+  return <Shell onClose={onClose} title={site.name} actions={<>{canEdit&&u&&<button type="button" disabled={!acts.undo||busy} onClick={startUndo}>Undo change</button>}<button type="button" className="primary" onClick={onClose}>Close</button></>}>
+   <Note kind="ok" icon={CheckCircle2} role="status">{isUndo?'Change undone':'Change applied'}</Note>
+   {canEdit&&u?.available===false&&<AlertPanel variant="info">A newer change was made{u.newerAt?' on '+whenText(u.newerAt):''}. Undo that one first.</AlertPanel>}
+   <Timeline edit={edit}/>
+   {canEdit&&u?.available&&<p className="map-caption">You can undo this until the site changes again.</p>}
+   {fail}{guard.prompt}
+  </Shell>;
+ }
  if(outcome==='attention')return <Shell onClose={onClose} title="Needs your attention" actions={<Foot a="Close" onA={onClose}/>}>
   <AlertPanel variant="error" action={(acts.retry||acts.restoreBackup)&&<div className="rp-actions">{acts.retry&&<button type="button" className="primary" disabled={busy} onClick={()=>act(()=>client.retryRollback(edit.id))}>Try again</button>}{acts.restoreBackup&&<button type="button" disabled={busy} onClick={()=>act(()=>client.restoreBackup(edit.id))}>Restore backup</button>}</div>}>{edit.reason||'Rollback failed. The maintenance page is on.'}{edit.dataCopyNote&&<small className="se-note">{edit.dataCopyNote}</small>}</AlertPanel>
   {edit.restore&&<AlertPanel variant="info">{edit.restore.running?'Restoring the backup. Follow it in Jobs.':'The restore was started. Follow it in Jobs.'}</AlertPanel>}
   <Timeline edit={edit}/>{fail}{guard.prompt}
  </Shell>;
- const words={rolled:['Rolled back','The change did not work. The previous version runs again.'],failed:['Change stopped','Nothing was changed.'],cancelled:['Cancelled','Nothing was changed.']}[outcome]||['Change stopped','Nothing was changed.'];
- return <Shell onClose={onClose} title={words[0]} actions={<Foot a="Close" onA={onClose} b={canEdit?'Edit again':undefined} onB={again}/>}><AlertPanel variant="error">{edit.reason||words[1]}</AlertPanel><Timeline edit={edit}/></Shell>;
+ const slow=edit.failedStep==='check_health'&&edit.timeLimitSeconds?`The site did not answer within ${limitText(edit.timeLimitSeconds)}. The previous version runs again.`:null;
+ const words={rolled:['Rolled back',isUndo?'The undo did not work. The version from before the undo runs again.':slow||'The change did not work. The previous version runs again.'],failed:['Change stopped','Nothing was changed.'],cancelled:['Cancelled','Nothing was changed.']}[outcome]||['Change stopped','Nothing was changed.'];
+ return <Shell onClose={onClose} title={words[0]} actions={<Foot a="Close" onA={onClose} b={canEdit?'Edit again':undefined} onB={again}/>}><AlertPanel variant="error">{outcome==='rolled'&&(isUndo||slow)?words[1]:edit.reason||words[1]}</AlertPanel><Timeline edit={edit}/></Shell>;
 }

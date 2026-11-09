@@ -51,3 +51,11 @@
 .se-root td.num .se-cell{width:100%}
 
 .se-root .se-note{display:block;margin-top:4px;font-size:var(--fs-caption);line-height:var(--lh-caption)}
+
+/* Advanced settings (time limit) and a variable marked for removal. */
+.se-root .se-input[aria-invalid=true]{border-color:var(--error)}
+.se-root .se-hint{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-muted)}
+.se-root .se-hint.bad{color:var(--error)}
+.se-root .se-unit{display:flex;align-items:center;gap:8px}
+.se-root .se-unit .se-input{width:104px;text-align:right}
+.se-root .se-gone code{text-decoration:line-through;color:var(--text-muted)}

@@ -10,8 +10,12 @@ export function createSafeEditClient(api){
   // change: {files?:[{path,sha256,text}], env?:[{file,key,value}], containerChanges?:{image?,ports?}}
   // -> {token, diff:{files:[{path,hunks}],env:[{file,key,change,value}]}, summary, warnings:[{code,message,port?}]} or 422 {code,error}
   review:(siteId,change)=>api('/sites/'+id(siteId)+'/edit/review',change),
+  // timeLimitSeconds: 60 to 600 (the server's default is 120 when left out).
   // 202 {edit:{id}}; 403 REAUTH_REQUIRED; 409 SITE_BUSY | MOVE_RUNNING | EDIT_RUNNING
-  apply:(siteId,token)=>api('/sites/'+id(siteId)+'/edit/apply',{token}),
+  apply:(siteId,token,timeLimitSeconds)=>api('/sites/'+id(siteId)+'/edit/apply',{token,...(timeLimitSeconds?{timeLimitSeconds}:{})}),
+  // The review of undoing one finished edit's Compose replace (same answer as review, plus undoOf);
+  // 409 UNDO_CHANGED | UNDO_NEWER | UNDO_UNAVAILABLE. Apply it with apply().
+  undoReview:editId=>api('/site-edits/'+id(editId)+'/undo/review',{}),
   // {id,state,result,reason,backupId,steps:[{step,label,state,startedAt,finishedAt,detail}],actions:{cancel,retry,restoreBackup},restore}
   get:editId=>api('/site-edits/'+id(editId)),
   // {items:[{id,state,result,changed:[],env:{added,replaced,removed},createdAt}], nextCursor}
@@ -33,13 +37,31 @@ const FRIENDLY={
  MOVE_RUNNING:'This site is being moved. Wait for the move to finish.',
  EDIT_RUNNING:'Another change to this site is still running.',
  REVIEW_EXPIRED:'This review expired. Review the change again.',
+ UNDO_NEWER:'A newer change was made. Undo that one first.',
+ UNDO_UNAVAILABLE:'This change cannot be undone.',
  RATE_LIMITED:'Too many changes for this site. Try again later.'
 };
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
 
 // Review warnings: a short title in front of the server's sentence.
-const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',LARGE_DATA_COPY:'Large data copy',NO_HEALTH_CHECK:'No health check'};
+const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',LARGE_DATA_COPY:'Large data copy',NO_HEALTH_CHECK:'No health check',ENV_REMOVED:'Variable removed',ENV_SHARED:'Shared variable'};
 export const warningView=w=>({title:WARNING_TITLE[w.code]||'Check this',text:w.code==='PUBLIC_PORT'?w.message+' Check your firewall.':w.message});
+// The apply time limit (Advanced settings on Review): whole seconds, 60 to 600, default 120.
+export const LIMIT={min:60,max:600,default:120};
+export const validLimit=v=>/^\d{1,3}$/.test(String(v).trim())&&Number(v)>=LIMIT.min&&Number(v)<=LIMIT.max;
+export const limitText=s=>s%60===0?`${s/60} minute${s===60?'':'s'}`:`${s} seconds`;
+const COPY_BYTES_PER_SECOND=20*1024*1024;// the server's conservative copy speed (src/site-edits/state.js COPY)
+const gb=n=>n>=1024**3?(n/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(n/1024**2))+' MB';
+// Warnings the chosen limit adds: a long wait, or a limit shorter than copying the data would take.
+export function limitWarnings(seconds,dataBytes){
+ if(!validLimit(seconds))return [];
+ const s=Number(seconds),out=[];
+ if(s>300)out.push({code:'LONG_LIMIT',title:'Longer wait',text:`The site can stay offline for up to ${limitText(s)} before it rolls back.`});
+ if(Number.isFinite(dataBytes)&&dataBytes>0&&dataBytes/COPY_BYTES_PER_SECOND>s)out.push({code:'SHORT_LIMIT',title:'Short time limit',text:`Copying ${gb(dataBytes)} of data may need more than ${s} seconds. If it does not finish, the change rolls back.`});
+ return out;
+}
+// "9 Nov, 09:12": when something happened, in the viewer's own format.
+export const whenText=iso=>{const d=new Date(iso);return Number.isNaN(d.getTime())?'':d.toLocaleString([],{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'})};
 export const healthText=health=>({url:'The health URL answers',docker:'Docker health check'}[health]||'Running and stable');
 
 // Steps shown in the timeline: the prepare step only when it matters, roll back only once it starts.
@@ -57,6 +79,7 @@ export function outcomeOf(edit){
  return {applied:'done',rolled_back:'rolled',failed:'failed',cancelled:'cancelled'}[edit.result]||'failed';
 }
 export const historyChanges=e=>{
+ if(e.undoOf)return 'Undid a change';
  const names=[...(e.changed||[]).map(p=>String(p).replace(/^services\./,'')),...['added','replaced','removed'].flatMap(k=>e.env?.[k]||[])];
  return names.length?names.slice(0,3).join(', ')+(names.length>3?' and more':''):'Changed the site';
 };
