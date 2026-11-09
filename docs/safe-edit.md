@@ -142,13 +142,19 @@ The security review (2026-11-02) tightened the design. Where this section and th
    before the full pass. Remote includes off (`COMPOSE_EXPERIMENTAL_GIT_REMOTE=0`, `COMPOSE_EXPERIMENTAL_OCI_REMOTE=0`).
    Compose runs under `env -i` with a fixed `PATH`. The resolved JSON and Compose's stderr never leave the helper; the
    API receives only the gate verdict, field paths and a fixed reason.
-   **Isolated view (#168).** Both passes over a candidate, and the re-gate at apply, run in a private mount and network
-   namespace (`unshare --mount --net`, the launch sandbox technique; no image is pulled, so it works offline).
-   `/srv`, `/opt`, `/mnt`, `/media`, `/home`, `/root`, `/run`, `/tmp`, `/var/log`, Docker's and DockNest's state are
-   empty tmpfs mounts; only the site's folders, its Compose and env files, the check folder, the files the current
-   model already reads (`env_file`, file secrets and configs) and the Compose plugin folders are bound back,
-   read-only. No network, no Docker socket. The site's current files still resolve on the host (they define what the
-   site already has). Without `unshare`/`mount`, or when the current files do not resolve in the view (for example an
+   **Isolated view (#168).** Both passes over a candidate, and the re-gate at apply, run in private mount, network and
+   PID namespaces (`unshare --mount --net --pid --fork --mount-proc`, the launch sandbox technique; no image is
+   pulled, so it works offline). Every top-level folder except `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc` and a fresh
+   `/proc` is an empty tmpfs (so `/srv`, `/opt`, `/var`, `/run`, `/home`, `/root`, `/data`, `/dev`, `/sys`, a moved
+   Docker data-root and any other site folder are hidden); `/etc/ssh`, `/etc/docker`, `/etc/docknest`,
+   `/etc/letsencrypt`, `/etc/ssl/private` and `/etc/sudoers.d` are hidden and `/etc/shadow`, `/etc/gshadow`,
+   `/etc/sudoers` read as empty. A hide path that is a symbolic link is hidden at its real target. Only the site's
+   folders, its Compose and env files, the check folder, the files the current model already reads (`env_file`, file
+   secrets and configs), the Compose plugin folders and `/dev/null`, `zero`, `random`, `urandom` are bound back,
+   read-only (a file inside a kept folder is not bound again). No network, no Docker socket. The site's current
+   files still resolve on the host (they define what the site already has); their bytes are read once and must be
+   unchanged at the end of the check, else `FILE_CHANGED`. Without `unshare`/`mount` or the namespace rights (Snap
+   Docker, an unprivileged LXC container), or when the current files do not resolve in the view (for example an
    `include` from outside the site's folders), every tab says `ISOLATION_FAILED` and nothing is edited (fail closed).
    **Declared names.** The resolved `services`, `volumes`, `configs` and `secrets` of the candidate must be names its
    own files declare at the top level (JSON exactly, block YAML by indentation; a section written another way counts

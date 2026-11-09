@@ -126,7 +126,8 @@ DockNest refuses a change with one plain reason when it would:
 
 DockNest reads every change in an isolated view of the server that shows only the site's own files, with no network
 and no Docker access. If the site's Compose files need a file from somewhere else (for example an `include` from a
-shared folder), or the server has no `unshare` command, the editor says DockNest "could not read this site's Compose
+shared folder), or the server cannot make the isolated view (no `unshare` command, Docker installed from Snap, or
+DockNest running inside an unprivileged LXC container), the editor says DockNest "could not read this site's Compose
 files in an isolated view" and you change the files by hand.
 
 If a file was changed on the server after you opened it, Review says "This file changed on the server. Reload it."

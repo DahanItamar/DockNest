@@ -885,13 +885,16 @@ class Isolation(EditCase):
         result=self.check();self.assertTrue(result['ok'],result)
         self.assertEqual(len(self.fake.isolated),2,'both passes of the candidate are isolated')
         for item in self.fake.isolated:
-            self.assertEqual(item['prefix'][:6],['unshare','--mount','--net','--propagation','private','--'])
-            self.assertEqual(item['prefix'][7:9],['-I','-c']);self.assertEqual(item['args'][:3],['docker','compose','-p'])
+            self.assertEqual(item['prefix'][:9],['unshare','--mount','--net','--pid','--fork','--mount-proc','--propagation','private','--'])
+            self.assertEqual(item['prefix'][10:12],['-I','-c']);self.assertEqual(item['args'][:3],['docker','compose','-p'])
             self.assertIn('config',item['args']);self.assertTrue(self.candidate_call(item['args']))
             self.assertIn(self.root,item['spec']['keep'])
             # mkdtemp adds a drive letter on Windows, so the check folder is only an absolute POSIX path on Linux.
             if os.name=='posix':self.assertTrue(any('/.check-' in k for k in item['spec']['keep']))
-            for hidden in ('/run','/home','/root','/srv','/opt','/var/lib/docker','/var/lib/docknest'):self.assertIn(hidden,item['spec']['hide'])
+            # Every top-level folder but these is hidden, wherever other sites or Docker's data live.
+            self.assertEqual(set(item['spec']['system']),{'usr','bin','sbin','lib','lib32','lib64','libx32','etc','proc'})
+            for hidden in ('/etc/ssh','/etc/docker','/etc/docknest'):self.assertIn(hidden,item['spec']['hide'])
+            self.assertIn('/etc/shadow',item['spec']['blank']);self.assertIn('/dev/null',item['spec']['devices'])
             self.assertFalse(any(helper.edit_path_refused(k) for k in item['spec']['keep']))
         host=[c['args'] for c in self.fake.calls if 'config' in c['args'] and not self.candidate_call(c['args'])]
         self.assertTrue(host,'the current files still resolve on the host')
@@ -927,6 +930,11 @@ class Isolation(EditCase):
         def included(model,first):model['services']['shared']={'image':'alpine:3'};return model
         self.fake.config_hook=included
         self.assertTrue(self.check()['ok'])
+    def test_a_hand_edit_while_checking_is_file_changed(self):
+        def edit_on_disk(model,first):
+            if not self.candidate_call(self.fake.calls[-1]['args']):pathlib.Path(self.compose).write_text(compose_doc(self.services)+' ')
+            return model
+        self.fake.config_hook=edit_on_disk;self.refused(self.check(),'FILE_CHANGED')
     def test_a_declared_new_service_and_volume_pass(self):
         services=self.edited(**{'web.image':'shop:2.0'});services['cache']={'image':'redis:7'}
         result=self.check(services,volumes={'cache_data':{}});self.assertTrue(result['ok'],result)
@@ -938,6 +946,52 @@ class Isolation(EditCase):
         applied=self.run_op('edit-apply',reviewedModelSha256=digest);self.assertTrue(applied['ok'],applied)
         regate=self.fake.isolated[before:];self.assertEqual(len(regate),2)
         self.assertTrue(all(self.compose in item['args'] for item in regate))
+
+CHECK_VIEW=r'''
+import json,os,sys
+site,other=sys.argv[1],sys.argv[2]
+def readable(path):
+    try:open(path).read();return True
+    except OSError:return False
+def writable(path):
+    try:open(path,'a').close();return True
+    except OSError:return False
+print(json.dumps({'env':readable(site+'/.env'),'compose':readable(site+'/compose.yaml'),'siteWritable':writable(site+'/.env'),
+    'other':readable(other+'/secret.txt'),'pids':sorted(int(p) for p in os.listdir('/proc') if p.isdigit()),
+    'devnull':writable('/dev/null'),'run':os.listdir('/run') if os.path.isdir('/run') else []}))
+'''
+@unittest.skipUnless(os.name=='posix' and shutil.which('unshare') and os.path.exists('/usr/bin/python3'),'needs Linux with unshare')
+class RealSandbox(unittest.TestCase):
+    """Runs EDIT_SANDBOX_CODE for real (as root, or as root of a user namespace when the kernel allows it)."""
+    def setUp(self):
+        self.prefix=[] if os.geteuid()==0 else ['unshare','--user','--map-root-user']
+        probe=subprocess.run(self.prefix+list(helper.EDIT_UNSHARE)+['true'],capture_output=True)
+        if probe.returncode:self.skipTest('namespaces are not available here')
+        BUILD.mkdir(exist_ok=True)
+        self.tmp=os.path.realpath(tempfile.mkdtemp(prefix='edit-sandbox-',dir=str(BUILD)))
+        self.site=self.tmp+'/site';self.other=self.tmp+'/other'
+        os.makedirs(self.site);os.makedirs(self.other)
+        pathlib.Path(self.site+'/.env').write_text('A=1\n');pathlib.Path(self.site+'/compose.yaml').write_text('services: {}\n')
+        pathlib.Path(self.other+'/secret.txt').write_text('other site\n')
+    def tearDown(self):shutil.rmtree(self.tmp,ignore_errors=True)
+    def view(self,spec):
+        argv=self.prefix+list(helper.EDIT_UNSHARE)+[sys.executable,'-I','-c',helper.EDIT_SANDBOX_CODE,json.dumps(spec),'/usr/bin/python3','-I','-c',CHECK_VIEW,self.site,self.other]
+        out=subprocess.run(argv,capture_output=True,text=True,timeout=60)
+        self.assertEqual(out.returncode,0,out.stderr[-2000:])
+        return json.loads(out.stdout)
+    def test_site_and_its_env_file_resolve_and_a_sibling_site_is_hidden(self):
+        # A kept folder and a file inside it (finding 1: no placeholder may be created on the read-only bind).
+        seen=self.view(helper.edit_sandbox_spec([self.site,self.site+'/.env',self.site+'/compose.yaml']))
+        self.assertTrue(seen['env']);self.assertTrue(seen['compose']);self.assertFalse(seen['siteWritable'])
+        self.assertFalse(seen['other'],'another site is hidden wherever it lives');self.assertEqual(seen['run'],[],'no Docker socket')
+        self.assertTrue(seen['devnull']);self.assertLessEqual(len(seen['pids']),4,'a fresh /proc shows only the sandbox')
+    def test_a_symlinked_hide_path_is_hidden_at_its_target(self):
+        os.symlink(self.other,self.tmp+'/link')
+        spec=helper.edit_sandbox_spec([self.site])
+        top=self.tmp.split('/')[1];spec['system'].append(top)  # keep the test's own top-level folder visible
+        self.assertTrue(self.view(spec)['other'],'visible without the hide entry')
+        spec['hide'].append(self.tmp+'/link')
+        self.assertFalse(self.view(spec)['other'])
 
 class Declared(unittest.TestCase):
     def test_block_yaml(self):

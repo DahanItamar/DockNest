@@ -456,53 +456,78 @@ def edit_env_file_paths(service):
         elif isinstance(item,dict) and isinstance(item.get('path'),str):yield item['path'],item.get('required',True) is not False
         else:edit_refuse('COMPOSE_INVALID')
 # ---- isolated Compose view (#168): defence in depth behind the text rules ----
-# A candidate is resolved by `docker compose config` in a private mount and network namespace. The trees where other
-# sites, DockNest's state, home folders, Docker's data and sockets live are empty tmpfs mounts; only this site's own
-# folders, its Compose and env files, the check folder and the files the current model already reads are bound back,
-# read-only. No network (unshare --net) and no Docker socket (/run is hidden). No image is pulled: it is the same
-# namespace technique as the launch sandbox (launch.py), so it works offline. Exit 97 = the view could not be built.
-EDIT_SANDBOX_HIDE=('/srv','/opt','/mnt','/media','/home','/root','/run','/var/run','/tmp','/var/tmp','/var/log','/var/backups',
-    '/var/lib/docker','/var/lib/containerd','/var/lib/docknest','/var/lib/docker-backup-manager','/etc/docknest')
+# A candidate is resolved by `docker compose config` in private mount, network and PID namespaces (a fresh /proc, so
+# /proc/<pid>/root of host processes is out of reach). Every top-level folder except the system ones (/usr, /bin, /sbin,
+# /lib*, /etc) is an empty tmpfs: other sites wherever they live (/srv, /opt, /var/www, /data, ...), Docker's data and
+# sockets (/var, /run), home folders, /dev and /sys. Secret corners of /etc are hidden too. A hide path that is a
+# symbolic link is hidden at its real target. Only this site's own folders, its Compose and env files, the check
+# folder, the files the current model already reads, the Compose plugin folders and /dev/null, zero, random, urandom
+# are bound back, read-only. No network, no Docker socket. No image is pulled: the same namespace technique as the
+# launch sandbox (launch.py), so it works offline. Exit 97 = the view could not be built (fail closed).
+EDIT_SANDBOX_SYSTEM=('usr','bin','sbin','lib','lib32','lib64','libx32','etc','proc')
+EDIT_SANDBOX_HIDE=('/etc/docker','/etc/docknest','/etc/ssh','/etc/letsencrypt','/etc/ssl/private','/etc/sudoers.d')
+EDIT_SANDBOX_BLANK=('/etc/shadow','/etc/gshadow','/etc/sudoers')
+EDIT_SANDBOX_DEVICES=('/dev/null','/dev/zero','/dev/random','/dev/urandom')
 EDIT_SANDBOX_CODE=r'''
 import json,os,stat,subprocess,sys
 spec=json.loads(sys.argv[1]);argv=sys.argv[2:]
 def mount(*args,fds=()):
     if subprocess.run(['mount',*args],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,pass_fds=fds).returncode:os._exit(97)
+def within(path,root):return root=='/' or path==root or path.startswith(root+'/')
 try:
     mount('--make-rprivate','/')
+    system=['/'+name for name in spec['system']]
+    # Everything is opened and resolved before the first mount changes what the paths mean.
     keep=[]
-    for path in spec['keep']:
+    for path in spec['keep']+spec['devices']:  # parents before children
+        if any(within(path,k) for k,_,_ in keep):continue  # already shown by a kept folder
         try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
         except OSError:continue  # missing, or a symbolic link: not shown (Compose then fails to read it, fail closed)
         mode=os.fstat(fd).st_mode
-        if stat.S_ISDIR(mode) or stat.S_ISREG(mode):keep.append((path,fd,stat.S_ISDIR(mode)))
+        if stat.S_ISDIR(mode) or stat.S_ISREG(mode) or (stat.S_ISCHR(mode) and path in spec['devices']):keep.append((path,fd,stat.S_ISDIR(mode)))
         else:os.close(fd)
+    wanted=[]
+    for path in ['/'+name for name in sorted(os.listdir('/')) if '/'+name not in system]+spec['hide']:
+        if os.path.islink(path):
+            target=os.path.realpath(path)
+            if path.count('/')==1 and any(within(target,s) for s in system):continue  # /bin -> usr/bin
+            path=target
+        if not os.path.isdir(path) or os.path.islink(path):continue
+        if path=='/' or path in system:os._exit(97)
+        wanted.append(path)
     hidden=[]
-    for path in spec['hide']:
-        if os.path.isdir(path) and not os.path.islink(path) and not any(path==h or path.startswith(h+'/') for h in hidden):
-            mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
+    for path in sorted(set(wanted),key=lambda p:(p.count('/'),p)):
+        if any(within(path,h) for h in hidden):continue
+        mount('-t','tmpfs','-o','size=1m,mode=0755,nosuid,nodev,noexec','docknest-sandbox',path);hidden.append(path)
+    for path in spec['blank']:
+        if os.path.isfile(path) and not os.path.islink(path):mount('--bind','/dev/null',path)
     for path,fd,folder in keep:
+        if not any(within(path,h) for h in hidden):os.close(fd);continue  # still visible as it is
+        # No kept folder contains this path, so its parent is a fresh tmpfs: placeholders never touch real files.
         if folder:os.makedirs(path,mode=0o755,exist_ok=True)
         else:
             os.makedirs(os.path.dirname(path),mode=0o755,exist_ok=True)
             os.close(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW|os.O_CLOEXEC,0o600))
         # -c (--no-canonicalize): libmount would otherwise resolve the fd link to its real path, which the tmpfs above hides.
-        mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,));mount('-o','remount,bind,ro,nosuid,nodev',path)
+        mount('-c','--bind','/proc/self/fd/%d'%fd,path,fds=(fd,))
+        if path not in spec['devices']:mount('-o','remount,bind,ro,nosuid,nodev',path)  # /dev/null stays writable
         os.close(fd)
 except OSError:os._exit(97)
 os.execvp(argv[0],argv)
 '''
 def edit_sandbox_ready():
     return os.name=='posix' and all(shutil.which(tool,path=EDIT_PATH) for tool in ('unshare','mount'))
-def edit_isolated(argv,keep,inv=None):
-    """argv wrapped in the isolated view. ISOLATION_FAILED without unshare or mount (fail closed)."""
-    if not edit_sandbox_ready():edit_refuse('ISOLATION_FAILED')
+EDIT_UNSHARE=('unshare','--mount','--net','--pid','--fork','--mount-proc','--propagation','private','--')
+def edit_sandbox_spec(keep,inv=None):
     plugins=launch_plugin_dirs()
     if inv and inv.get('dockerConfig'):plugins.append(posixpath.join(inv['dockerConfig'],'cli-plugins'))
     folders=sorted(dict.fromkeys(lexical(k) for k in [*keep,*plugins] if isinstance(k,str) and k.startswith('/')),key=lambda p:(p.count('/'),p))
+    return {'keep':folders,'hide':list(EDIT_SANDBOX_HIDE),'system':list(EDIT_SANDBOX_SYSTEM),'blank':list(EDIT_SANDBOX_BLANK),'devices':list(EDIT_SANDBOX_DEVICES)}
+def edit_isolated(argv,keep,inv=None):
+    """argv wrapped in the isolated view. ISOLATION_FAILED without unshare or mount (fail closed)."""
+    if not edit_sandbox_ready():edit_refuse('ISOLATION_FAILED')
     python=sys.executable if sys.executable and os.path.isabs(sys.executable) else 'python3'
-    return ['unshare','--mount','--net','--propagation','private','--',python,'-I','-c',EDIT_SANDBOX_CODE,
-        json.dumps({'keep':folders,'hide':list(EDIT_SANDBOX_HIDE)}),*argv]
+    return [*EDIT_UNSHARE,python,'-I','-c',EDIT_SANDBOX_CODE,json.dumps(edit_sandbox_spec(keep,inv)),*argv]
 def edit_isolation_keep(inv,roots,model=None,extra=()):
     """What the isolated view shows: the site's folders, Compose and env files, and the files the current model already
     reads (env_file, file-based secrets and configs), so what a site has today keeps resolving."""
@@ -887,6 +912,13 @@ def edit_compose_check(req,inv,roots,key,keep=False):
     version,recent=edit_compose_version(inv)
     if not recent:edit_refuse('COMPOSE_TOO_OLD')
     compose,env,originals,changes=edit_candidates(req,inv,roots)
+    # The current Compose bytes the declared-name check compares against: read once, before the current files are
+    # resolved, and checked unchanged after (a hand edit in between is FILE_CHANGED, not a silent mismatch).
+    def current_bytes():
+        try:return {p:edit_read(p)[0] for p in inv['files']}
+        except FileNotFoundError:edit_refuse('FILE_CHANGED')
+    current_texts=current_bytes()
+    if any(current_texts[p]!=originals[p][0] for p in compose):edit_refuse('FILE_CHANGED')
     current_first,current,current_env=edit_resolve(inv,roots,key,existing=True)
     folder=pathlib.Path(tempfile.mkdtemp(prefix='.check-',dir=str(edit_root())))
     try:
@@ -911,7 +943,8 @@ def edit_compose_check(req,inv,roots,key,keep=False):
                 try:edit_config(inv,None,None,True,view)
                 except EditRefused:edit_refuse('ISOLATION_FAILED')
             raise
-        texts=lambda replaced:[(replaced.get(p) if p in replaced else edit_read(p)[0]).decode('utf-8','replace') for p in inv['files']]
+        if current_bytes()!=current_texts:edit_refuse('FILE_CHANGED')
+        texts=lambda replaced:[(replaced[p] if p in replaced else current_texts[p]).decode('utf-8','replace') for p in inv['files']]
         edit_declared_check(texts({}),current_first,texts(compose),candidate_first)
         frozen=edit_gate(current,candidate,roots,current_env,candidate_env)
         new_ports=edit_new_ports(edit_published(current),edit_published(candidate),req.get('sshPort'))
