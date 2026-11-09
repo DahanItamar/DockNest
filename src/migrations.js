@@ -259,6 +259,13 @@ CREATE TRIGGER IF NOT EXISTS site_edit_steps_no_delete BEFORE DELETE ON site_edi
 CREATE TRIGGER IF NOT EXISTS site_edits_result_once BEFORE UPDATE OF result,failed_step,reason,changes ON site_edits WHEN OLD.result IS NOT NULL AND (NEW.result IS NOT OLD.result OR NEW.failed_step IS NOT OLD.failed_step OR NEW.reason IS NOT OLD.reason OR NEW.changes IS NOT OLD.changes) BEGIN SELECT RAISE(ABORT,'a safe edit result is written once'); END;
 CREATE TABLE IF NOT EXISTS site_compose_invocations (site_id TEXT PRIMARY KEY REFERENCES sites(id),kind TEXT NOT NULL CHECK (kind IN ('compose','container')),invocation TEXT NOT NULL CHECK (length(invocation) <= 8192),source TEXT NOT NULL CHECK (source IN ('launch','labels','site')),recorded_at TEXT NOT NULL);
 `;
+// Undo a Replace of the Compose file (docs/safe-edit.md): one row per edit that wrote Compose files. `payload` holds the
+// files as they were before the edit, sealed with the master key; it is emptied (row kept as a marker) once a newer edit
+// is applied, and the row goes when the edit does not end applied. Additive only: one new table.
+export const safeEditUndoSchema = `
+CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -380,6 +387,8 @@ export const migrations = [
   // Launch a new site (docs/launch-site.md): new tables, indexes and triggers, and server_installs widened to allow
   // 'git', so 2.15 code ignores the new objects and keeps using installs as before.
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
+  // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
+  { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
