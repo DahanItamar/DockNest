@@ -14,7 +14,7 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     architecture?: string, packageBytes: number, ports?: PortBinding[], bindPaths?: string[],
  *     names?: { containers?: string[], volumes?: string[], networks?: string[] }, nginxDirectives?: string[],
  *     maintenanceReady?: boolean, env?: EnvFinding[], timings?: { backupSeconds?: number, restoreSeconds?: number },
- *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[] } },
+ *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] } },
  *   source: { id: string, name: string, addresses?: string[] },
  *   target: { id: string, name: string, reachable: boolean, hostKeyOk?: boolean, uid?: number, architecture?: string,
  *     dockerVersion?: string|null, composeVersion?: string|null, freeBytes: number, totalBytes?: number,
@@ -22,7 +22,7 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     conflicts?: { containers?: string[], volumes?: string[], networks?: string[] },
  *     nginx?: { installed: boolean, configOk?: boolean, serverNames?: string[] }, webPortOwner?: 'nginx'|'other'|null,
  *     certbot?: { installed: boolean, account?: boolean }, stagingWritable?: boolean, addresses?: string[],
- *     transferBytesPerSecond?: number, apparmorLoaded?: string[], apparmorEnabled?: boolean },
+ *     transferBytesPerSecond?: number, apparmorLoaded?: string[], apparmorEnabled?: boolean, seccompPresent?: string[] },
  *   state: { sameServer?: boolean, busy?: boolean, archived?: boolean, deploymentHold?: boolean, activeMove?: boolean },
  *   backupStorage?: { freeBytes: number },
  *   dns: { mode: 'manual'|'cloudflare', records?: { type: 'A'|'AAAA'|'CNAME', name: string, value: string, proxied?: boolean }[] },
@@ -139,6 +139,11 @@ export function evaluateMove(facts, options = {}) {
     for (const profile of hardening?.apparmor ?? []) {
       if (!Array.isArray(target.apparmorLoaded)) add('security', 'block', 'Security settings', `DockNest could not check AppArmor on ${target.name}. Update DockNest on both servers, then check again.`);
       else if (!target.apparmorLoaded.includes(profile)) add('security', 'block', 'Security settings', `${site.name} uses the AppArmor profile ${profile}, which is not loaded on ${target.name}. Load it there, then check again.`);
+    }
+    // A Compose security_opt names a seccomp profile file; the copied Compose files need it at the same path.
+    for (const path of hardening?.seccomp ?? []) {
+      if (!Array.isArray(target.seccompPresent)) add('security', 'block', 'Security settings', `DockNest could not check seccomp profiles on ${target.name}. Update DockNest on both servers, then check again.`);
+      else if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
     }
     if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the site's security settings.");
     // Docker's host-wide AppArmor default is a server setting, not the site's: noted, never enforced.
