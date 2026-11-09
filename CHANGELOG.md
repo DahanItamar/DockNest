@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Moving a Compose site whose security settings name a seccomp profile file now checks that the file exists on the new server before the move starts, instead of failing at the end.
+
 ## [2.16.2] - 2026-11-07
 
 See [docs/releases/2026-11-07-v2.16.2.md](docs/releases/2026-11-07-v2.16.2.md).
