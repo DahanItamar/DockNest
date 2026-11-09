@@ -125,6 +125,10 @@ export function tabsUsed({ files = [], env = [], changed = [] }) {
 const names = list => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
 export const sharedText = (key, services) => `${key} is used by ${names(services)}. ${services.length === 2 ? 'Both lose it.' : services.length === 3 ? 'All three lose it.' : `All ${services.length} lose it.`}`;
 export const removedText = (key, fileName) => `${key} is ${fileName ? `deleted from the ${fileName} file` : 'removed from the container'}. Restoring the backup brings it back.`;
+export const passThroughText = (key, services) => `${names(services)} ${services.length === 1 ? 'passes' : 'pass'} ${key} through from the server. After removal ${services.length === 1 ? 'it starts' : 'they start'} without it.`;
+export const unsetText = key => `${key} is not set in the environment file, and the Compose file needs it. Set it first.`;
+export const NO_UNDO = 'The Compose files are too large to keep a copy, so this change cannot be undone afterwards.';
+export const UNDO_MAX_BYTES = 3_000_000; // the table allows 4 MiB of sealed text; JSON escaping and base64 grow the files
 export const requiredText = (key, fileName) => `${key} is required by ${fileName} and has no default. Edit the file first.`;
 export const UNDO = Object.freeze({
   changed: 'The Compose file changed outside DockNest since this edit. Undoing now would overwrite those changes.',

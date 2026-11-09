@@ -44,7 +44,7 @@ const FRIENDLY={
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
 
 // Review warnings: a short title in front of the server's sentence.
-const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',LARGE_DATA_COPY:'Large data copy',NO_HEALTH_CHECK:'No health check',ENV_REMOVED:'Variable removed',ENV_SHARED:'Shared variable'};
+const WARNING_TITLE={PUBLIC_PORT:'New published port',INLINE_SECRETS:'Secrets in the file',LARGE_DATA_COPY:'Large data copy',NO_HEALTH_CHECK:'No health check',ENV_REMOVED:'Variable removed',ENV_PASSTHROUGH:'Variable removed',NO_UNDO:'No undo',ENV_SHARED:'Shared variable'};
 export const warningView=w=>({title:WARNING_TITLE[w.code]||'Check this',text:w.code==='PUBLIC_PORT'?w.message+' Check your firewall.':w.message});
 // The apply time limit (Advanced settings on Review): whole seconds, 60 to 600, default 120.
 export const LIMIT={min:60,max:600,default:120};

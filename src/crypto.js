@@ -10,16 +10,19 @@ export function key() {
   }
   return cachedKey;
 }
-export function seal(text) {
+// `aad`: optional additional authenticated data, so a sealed value only opens where it was meant to (never stored).
+export function seal(text, aad = null) {
   const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key(), iv);
+  if (aad !== null) cipher.setAAD(Buffer.from(String(aad), 'utf8'));
   const body = Buffer.concat([cipher.update(String(text), 'utf8'), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64');
 }
-export function open(encoded) {
+export function open(encoded, aad = null) {
   const blob = Buffer.from(encoded, 'base64');
   if (blob.length < 28) throw new Error('Invalid encrypted value');
   const cipher = createDecipheriv('aes-256-gcm', key(), blob.subarray(0, 12));
   cipher.setAuthTag(blob.subarray(12, 28));
+  if (aad !== null) cipher.setAAD(Buffer.from(String(aad), 'utf8'));
   return Buffer.concat([cipher.update(blob.subarray(28)), cipher.final()]).toString('utf8');
 }
 export function passwordHash(password) {

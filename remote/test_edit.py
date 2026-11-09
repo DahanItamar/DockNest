@@ -252,6 +252,28 @@ class EnvRules(EditCase):
         pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
         use=self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')
         self.assertFalse(use['required']);self.assertIn('web',use['services']);self.assertNotIn('proxy',use['services'])
+    def test_restoring_a_reference_to_an_unset_variable_is_reported(self):
+        # The site no longer reads DB_PASSWORD and the env file no longer has it; a candidate (an undo) that reads it again
+        # without a default is reported, one that reads variables the env file defines is not.
+        current=self.edited();current['db']['environment']={}
+        pathlib.Path(self.compose).write_bytes(compose_doc(current).encode())
+        pathlib.Path(self.envfile).write_bytes(self.env_text.replace('export DB_PASSWORD="old pass#1"\n','').encode())
+        result=self.run_op('edit-check',files=self.candidate(self.services),checkUnsetRefs=True)
+        self.assertTrue(result['ok'],result);self.assertEqual(result['verdict']['unsetRefs'],['DB_PASSWORD'])
+        plain=self.run_op('edit-check',files=self.candidate(self.services))
+        self.assertNotIn('unsetRefs',plain['verdict'],'only asked for by an undo')
+        defined=pathlib.Path(self.envfile).read_bytes()+b'DB_PASSWORD=x\n'
+        pathlib.Path(self.envfile).write_bytes(defined)
+        self.assertEqual(self.run_op('edit-check',files=self.candidate(self.services),checkUnsetRefs=True)['verdict']['unsetRefs'],[])
+    def test_a_reference_the_site_already_reads_unset_is_not_reported(self):
+        pathlib.Path(self.envfile).write_bytes(self.env_text.replace('export DB_PASSWORD="old pass#1"\n','').encode())
+        result=self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:${TAG}'})),checkUnsetRefs=True)
+        self.assertEqual(result['verdict']['unsetRefs'],[])
+    def test_pass_through_services_are_listed_apart(self):
+        services=self.edited();services['web']['environment']=['MODE'];services['proxy']['environment']={'X':'${MODE:-a}'}
+        pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
+        use=self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')
+        self.assertEqual(use['passThrough'],['web']);self.assertIn('proxy',use['services'])
     def test_no_env_use_without_a_removal(self):
         result=self.check_env([{'file':self.envfile,'key':'TAG','value':'2.0'}])
         self.assertNotIn('envUse',result['verdict'])

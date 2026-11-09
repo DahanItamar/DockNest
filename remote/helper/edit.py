@@ -495,17 +495,23 @@ def edit_env_use(first,model,removed):
     (so the site cannot run without it). `services`: the services that read it by reference, pass-through or env_file."""
     use={}
     for key,path in removed:
+        passing=set()
         refs=edit_var_refs({k:v for k,v in first.items() if k!='services'});required=any(not default for name,default in refs if name==key);names=set()
         for name,service in (first.get('services') or {}).items():
             if not isinstance(service,dict):continue
             found=[d for n,d in edit_var_refs(service) if n==key]
             if found:names.add(name)
             if found and not all(found):required=True
-            if edit_passes_through(service,key):names.add(name)
+            if edit_passes_through(service,key):names.add(name);passing.add(name)
         for name,service in (model.get('services') or {}).items():
             if isinstance(service,dict) and any(lexical(value)==path for value,_ in edit_env_file_paths(service)):names.add(name)
-        use[key]={'required':required,'services':sorted(names)}
+        use[key]={'required':required,'services':sorted(names),'passThrough':sorted(passing)}
     return use
+def edit_unset_refs(candidate_first,current_first,defined):
+    """Variables the candidate Compose reads without a default that no env file defines and the current Compose did not
+    already read that way: restoring such a reference (an undo) would start a service with an empty value."""
+    def needed(model):return {n for n,default in edit_var_refs(model) if not default}
+    return sorted(needed(candidate_first)-needed(current_first or {})-set(defined))
 def edit_env_digests(model,key,overrides):
     """Keyed digest of every service env_file (the full pass runs with --no-env-resolution), using candidate bytes
     for files this edit rewrites."""
@@ -818,6 +824,13 @@ def edit_compose_check(req,inv,roots,key,keep=False):
             'newPorts':new_ports,'hashes':hashes,'frozen':frozen,'reviewedModelSha256':digest}
         removed=[(i['key'],i['file']) for i in (req.get('env') or []) if isinstance(i,dict) and i.get('remove') is True]
         if removed:verdict['envUse']=edit_env_use(candidate_first,candidate,removed)
+        if req.get('checkUnsetRefs') is True:
+            defined=set()
+            for path in targets:
+                try:data=env[path] if path in env else edit_read(path)[0]
+                except (FileNotFoundError,OSError):continue
+                defined.update(edit_env_keys(data.decode('utf-8','replace')))
+            verdict['unsetRefs']=edit_unset_refs(candidate_first,current_first,defined)
         context={'currentFirst':current_first,'folder':folder,'files':files,'envs':envs,'compose':compose,'env':env,'originals':originals,'current':current,'candidate':candidate,'currentEnv':current_env}
         return verdict,context
     finally:

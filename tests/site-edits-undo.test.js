@@ -127,7 +127,7 @@ let server = COMPOSE;
 const serve = text => { server = text; answers['edit-load'] = () => loadAnswer(server); };
 test.beforeEach(() => serve(COMPOSE));
 const replaceBody = (from, to) => ({ files: [{ path: FILE, sha256: sha(from), text: to }] });
-const checked = (from, to, extra = {}) => verdict({ imageChanged: false, changed: ['services.web.image'], hashes: [{ path: FILE, before: sha(from), after: sha(to) }], ...extra });
+const checked = (from, to, extra = {}) => verdict({ imageChanged: false, changed: ['services.web.image'], hashes: [{ path: FILE, before: sha(from), after: sha(to) }], unsetRefs: [], ...extra });
 // Applies a Compose replace, drives it to the end and makes the server hold the new text.
 async function replaceCompose(siteId, from, to, who = admin) {
   answers['edit-check'] = () => checked(from, to);
@@ -144,6 +144,9 @@ const detail = async (editId, who = admin) => (await json(await who('GET', `/sit
 const undoReview = async (editId, who = admin) => json(await who('POST', `/site-edits/${editId}/undo/review`, {}));
 const undoRow = editId => db.prepare('SELECT * FROM site_edit_undo WHERE edit_id=?').get(editId);
 
+// Ends unfinished edits the way the engine does (result written, undo copy settled), not by a raw UPDATE.
+const endEdits = () => { for (const row of db.prepare('SELECT id FROM site_edits WHERE result IS NULL').all()) { db.prepare("UPDATE site_edits SET result='cancelled',state='cancelled' WHERE id=?").run(row.id); db.prepare('DELETE FROM site_edit_undo WHERE edit_id=?').run(row.id); } };
+
 // ---------- the apply time limit ----------
 test('the apply time limit is 60 to 600 seconds and is stored on the edit; the default is 120', async () => {
   const { siteId } = site();
@@ -154,9 +157,9 @@ test('the apply time limit is 60 to 600 seconds and is stored on the edit; the d
   };
   for (const bad of [59, 601, 90.5, '120', 0]) assert.equal((await send(bad)).body.code, 'INVALID', String(bad));
   const low = await send(60); assert.equal(low.status, 202); assert.equal(edit(low.body.edit.id).time_limit_seconds, 60);
-  db.prepare("UPDATE site_edits SET result='cancelled',state='cancelled' WHERE result IS NULL").run();
+  endEdits();
   const high = await send(600); assert.equal(high.status, 202); assert.equal(edit(high.body.edit.id).time_limit_seconds, 600);
-  db.prepare("UPDATE site_edits SET result='cancelled',state='cancelled' WHERE result IS NULL").run();
+  endEdits();
   const normal = await send(); assert.equal(edit(normal.body.edit.id).time_limit_seconds, 120);
 });
 
@@ -350,4 +353,80 @@ test('undo keeps the guards of a Replace: a busy site refuses it and the token i
   const busy = await json(await admin('POST', `/sites/${siteId}/edit/apply`, { token: reviewed.body.token }));
   assert.equal(busy.status, 409); assert.equal(busy.body.code, 'SITE_BUSY');
   assert.equal(tokens.tokenCount(), 1, 'put back for a busy site');
+});
+
+// ---------- review fixes ----------
+test('an undo that would put back a reference to a variable the edit removed is refused', async () => {
+  const { siteId } = site();
+  const WITH_REF = COMPOSE + '    environment:\n      PASS: ${DB_PASSWORD}\n';
+  serve(WITH_REF);
+  // Edit 1 drops the reference (and DB_PASSWORD is gone from the env file): the undo would restore the empty secret.
+  const first = await replaceCompose(siteId, WITH_REF, COMPOSE);
+  answers['edit-check'] = () => checked(COMPOSE, WITH_REF, { unsetRefs: ['DB_PASSWORD'] });
+  calls = [];
+  const refused = await undoReview(first);
+  assert.equal(refused.status, 422); assert.equal(refused.body.code, 'ENV_REQUIRED'); assert.equal(refused.body.field, 'env.DB_PASSWORD');
+  assert.equal(refused.body.error, 'DB_PASSWORD is not set in the environment file, and the Compose file needs it. Set it first.');
+  assert.equal(calls.find(call => call.operation === 'edit-check').checkUnsetRefs, true, 'the helper is asked');
+  assert.equal(tokens.tokenCount(), 0);
+  // Without the helper\'s answer an undo fails closed.
+  answers['edit-check'] = () => { const answer = checked(COMPOSE, WITH_REF); delete answer.verdict.unsetRefs; return answer; };
+  assert.equal((await undoReview(first)).body.code, 'COMPOSE_INVALID');
+  // Nothing missing: it goes ahead.
+  answers['edit-check'] = () => checked(COMPOSE, WITH_REF);
+  assert.equal((await undoReview(first)).status, 200);
+  // A normal Replace never asks.
+  calls = []; answers['edit-check'] = () => checked(COMPOSE, NEW);
+  await review(siteId, replaceBody(COMPOSE, NEW));
+  assert.equal(calls.find(call => call.operation === 'edit-check').checkUnsetRefs, undefined);
+});
+
+test('files too big for the undo copy: the edit still applies, with a warning, and cannot be undone', async () => {
+  const { siteId } = site();
+  // Ten files of 250 KB whose quotes double when escaped: the copy would not fit its table.
+  const paths = Array.from({ length: 10 }, (_, index) => `/srv/shop/c${index}.yaml`);
+  const before = '"'.repeat(250 * 1024), after = '#'.repeat(250 * 1024);
+  answers['edit-load'] = () => ({ ...loadAnswer(COMPOSE), files: paths.map((path, index) => ({ path, inode: index + 1, sha256: sha(before), text: before })) });
+  answers['edit-check'] = () => verdict({ imageChanged: false, changed: [], hashes: paths.map(path => ({ path, before: sha(before), after: sha(after) })) });
+  const reviewed = await review(siteId, { files: paths.map(path => ({ path, sha256: sha(before), text: after })) });
+  assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+  assert.ok(reviewed.body.warnings.some(item => item.code === 'NO_UNDO' && /cannot be undone afterwards/.test(item.message)));
+  const applied = await json(await admin('POST', `/sites/${siteId}/edit/apply`, { token: reviewed.body.token }));
+  assert.equal(applied.status, 202, JSON.stringify(applied.body));
+  await drive(60);
+  assert.equal(edit(applied.body.edit.id).result, 'applied');
+  assert.equal(undoRow(applied.body.edit.id), undefined);
+  assert.equal((await detail(applied.body.edit.id)).undo, null);
+  // A normal-size change keeps its copy and no warning.
+  serve(COMPOSE);
+  answers['edit-check'] = () => checked(COMPOSE, NEW);
+  assert.equal((await review(siteId, replaceBody(COMPOSE, NEW))).body.warnings.some(item => item.code === 'NO_UNDO'), false);
+});
+
+test('the undo copy opens only for its own edit and site (authenticated data)', async () => {
+  const { siteId } = site();
+  const first = await replaceCompose(siteId, COMPOSE, NEW);
+  const { open } = await import('../src/crypto.js');
+  const sealed = undoRow(first).payload;
+  assert.throws(() => open(sealed), 'not without its context');
+  assert.throws(() => open(sealed, `site_edit_undo:${randomUUID()}:${siteId}`));
+  assert.throws(() => open(sealed, `site_edit_undo:${first}:${randomUUID()}`));
+  assert.match(open(sealed, `site_edit_undo:${first}:${siteId}`), /shop:1\.0/);
+  // Moved to another edit's row, it does not open: the undo is refused instead of restoring the wrong files.
+  const second = await replaceCompose(siteId, NEW, NEWER);
+  db.prepare('UPDATE site_edit_undo SET payload=? WHERE edit_id=?').run(sealed, second);
+  answers['edit-check'] = () => checked(NEWER, COMPOSE);
+  const swapped = await undoReview(second);
+  assert.notEqual(swapped.status, 200);
+});
+
+test('removing a variable that services pass through from the server gets a stronger warning naming them', async () => {
+  const { siteId } = site();
+  answers['edit-check'] = envCheck({ required: false, services: ['web', 'db'], passThrough: ['web'] });
+  const one = (await review(siteId, removal())).body.warnings.find(item => item.code === 'ENV_PASSTHROUGH');
+  assert.equal(one.message, 'web passes DB_PASSWORD through from the server. After removal it starts without it.');
+  answers['edit-check'] = envCheck({ required: false, services: ['web', 'db'], passThrough: ['web', 'db'] });
+  const warnings = (await review(siteId, removal())).body.warnings;
+  assert.equal(warnings.find(item => item.code === 'ENV_PASSTHROUGH').message, 'web and db pass DB_PASSWORD through from the server. After removal they start without it.');
+  assert.equal(warnings.some(item => ['ENV_REMOVED', 'ENV_SHARED'].includes(item.code)), false, 'one warning per key');
 });

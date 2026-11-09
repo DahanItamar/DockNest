@@ -73,7 +73,7 @@ while the Compose file on the server is still exactly what that change wrote. If
 is off ("Undo that one first"); if the file was edited outside DockNest, the undo is refused so nothing you wrote by hand
 is overwritten. Undo restores the Compose file only: environment values that the change set stay, and data is not
 rewound (when the change updated an image, the undo takes its own data safety copy like any image change). Changes
-made before this feature, and changes that did not end applied, cannot be undone.
+made before this feature, changes that did not end applied, and changes whose files are too large to keep a copy of (Review warns) cannot be undone. An undo is also refused when it would put back a reference to a variable that is no longer set in the environment file.
 
 ## When the change does not come up
 
