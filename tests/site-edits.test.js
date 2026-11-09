@@ -145,7 +145,7 @@ test('load is administrators only, needs a recent re-verification and CSRF on wr
   assert.equal(load.watchStdin, true); assert.equal(load.options.keepStdinOpen, true);
   const editId = await apply(siteId);
   const seen = await json(await operator('GET', `/site-edits/${editId}`));
-  assert.equal(seen.status, 200); assert.deepEqual(seen.body.actions, { cancel: false, retry: false, restoreBackup: false });
+  assert.equal(seen.status, 200); assert.deepEqual(seen.body.actions, { cancel: false, retry: false, restoreBackup: false, undo: false });
   assert.equal((await json(await admin('GET', `/site-edits/${editId}`))).body.actions.cancel, true);
   assert.equal((await json(await operator('POST', `/site-edits/${editId}/cancel`, {}))).body.code, 'ADMIN_REQUIRED');
   assert.equal((await json(await operator('GET', `/sites/${siteId}/edits`))).status, 200);
@@ -214,7 +214,7 @@ test('a file edited by hand between load and review is refused as changed; reloa
 
 test('review: diff with environment values masked, summary, warnings and a token; nothing is stored', async () => {
   const { siteId } = site();
-  answers['edit-check'] = () => verdict({ changed: ['services.web.image', 'services.web.ports'], newPorts: [{ host: 8081, allAddresses: true }] });
+  answers['edit-check'] = () => verdict({ changed: ['services.web.image', 'services.web.ports'], newPorts: [{ host: 8081, allAddresses: true }], envUse: { TAG: { required: false, services: ['web'] } } });
   const text = COMPOSE.replace('shop:1.0', 'shop:1.1').replace('8080:80', '8081:80') + '    environment:\n      API_TOKEN: abc123\n';
   await admin('GET', `/sites/${siteId}/edit`); // records the invocation once
   const before = everything();
@@ -229,8 +229,8 @@ test('review: diff with environment values masked, summary, warnings and a token
   assert.deepEqual(reviewed.body.summary.tabs.sort(), ['compose', 'env', 'image', 'ports']);
   assert.deepEqual(reviewed.body.summary.envChanged, { added: ['NEW_KEY'], replaced: ['DB_PASSWORD'], removed: ['TAG'] });
   assert.equal(reviewed.body.summary.dataRollback, true); assert.equal(reviewed.body.summary.maintenance, true); assert.equal(reviewed.body.summary.health, 'docker');
-  assert.deepEqual(reviewed.body.warnings.map(item => item.code), ['PUBLIC_PORT', 'INLINE_SECRETS']);
-  assert.deepEqual(reviewed.body.warnings[1].keys, ['API_TOKEN']);
+  assert.deepEqual(reviewed.body.warnings.map(item => item.code), ['PUBLIC_PORT', 'ENV_REMOVED', 'INLINE_SECRETS']);
+  assert.deepEqual(reviewed.body.warnings[2].keys, ['API_TOKEN']);
   assert.match(reviewed.body.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(everything(), before, 'review writes nothing to SQLite');
   // The values went only to the helper, over stdin.
@@ -367,7 +367,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='site.edit.needs_attention' AND target=?").get(siteId));
   assert.doesNotMatch(everything(), /corrupted|\/var\/lib\/docknest\/edits/);
   let detail = (await json(await admin('GET', `/site-edits/${editId}`))).body;
-  assert.deepEqual(detail.actions, { cancel: false, retry: true, restoreBackup: true }); assert.equal(detail.maintenance, 'on');
+  assert.deepEqual(detail.actions, { cancel: false, retry: true, restoreBackup: true, undo: false }); assert.equal(detail.maintenance, 'on');
   assert.equal(detail.dataCopyKept, true); assert.equal(detail.dataCopyNote, 'A safety copy of the data is kept on the server.');
   // The site stays locked: no backup, restore or second edit.
   assert.equal((await json(await admin('POST', `/sites/${siteId}/backup`))).body.code, 'SITE_EDITING');
@@ -391,7 +391,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   const restored = await json(await admin('POST', `/site-edits/${second}/restore-backup`, {}));
   assert.equal(restored.status, 202); assert.equal(restores.at(-1).actor, 'edit:' + second);
   detail = (await json(await admin('GET', `/site-edits/${second}`))).body;
-  assert.deepEqual(detail.actions, { cancel: false, retry: false, restoreBackup: false }); assert.equal(detail.restore.running, true);
+  assert.deepEqual(detail.actions, { cancel: false, retry: false, restoreBackup: false, undo: false }); assert.equal(detail.restore.running, true);
   assert.equal((await json(await admin('POST', `/site-edits/${second}/retry`, {}))).body.code, 'RESTORE_RUNNING');
   await drive(4);
   row = edit(second);
