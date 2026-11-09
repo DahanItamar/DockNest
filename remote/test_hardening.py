@@ -176,6 +176,19 @@ class MovePreflightFactTests(unittest.TestCase):
         self.assertEqual(probe['apparmorLoaded'],['site-profile']);self.assertTrue(probe['apparmorEnabled'])
         with patch('helper.APPARMOR_PROFILES','/nonexistent/apparmor'),patch('helper.docker',return_value=b''):self.assertFalse(helper.target_probe({'paths':[],'names':{}})['apparmorEnabled'])
 
+    def test_compose_seccomp_paths_are_listed_and_the_target_reports_present_ones(self):
+        with tempfile.TemporaryDirectory() as d:
+            compose=pathlib.Path(d)/'compose.yaml'
+            compose.write_text('services:\n  web:\n    security_opt:\n      - seccomp:/etc/docker/web.json\n      - "seccomp=/opt/p/db.json"\n'
+                '      - seccomp=${PROFILE}/x.json\n      - seccomp:unconfined\n    # - seccomp:/old/commented.json\n  db: {security_opt: [seccomp:/srv/a/../b.json, no-new-privileges]}\n')
+            self.assertEqual(helper.compose_seccomp_paths([str(compose),str(pathlib.Path(d)/'missing.yaml')]),['/etc/docker/web.json','/opt/p/db.json'])
+        files={'/etc/docker/web.json','/a/../etc/x.json'}
+        with patch('helper.docker',return_value=b''),patch('helper.os.path.isfile',side_effect=files.__contains__),patch('helper.os.path.islink',return_value=False):
+            probe=helper.target_probe({'paths':[],'names':{},'seccomp':['/etc/docker/web.json','/opt/absent.json','relative.json','/a/../etc/x.json',7]})
+        self.assertEqual(probe['seccompPresent'],['/etc/docker/web.json'])
+        with patch('helper.docker',return_value=b''),patch('helper.os.path.islink',return_value=True):
+            self.assertEqual(helper.target_probe({'paths':[],'names':{},'seccomp':['/etc/docker/web.json']})['seccompPresent'],[],'a link is not the profile')
+
 @unittest.skipUnless(os.name=='posix','Restore test journals sync directories (POSIX only)')
 class RestoreTestCopyTests(unittest.TestCase):
     """A hardened site is testable: the restore test copy gets the original's protections and is checked."""

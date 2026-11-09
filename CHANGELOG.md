@@ -10,6 +10,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Safe Edit: remove an environment variable (bin icon next to Replace). Review shows what is removed and which services use it, and DockNest refuses to remove a variable the Compose file needs.
 - Safe Edit: an Advanced setting on Review for the time limit (60 to 600 seconds), with a warning for very long or too short limits. A rollback after a timeout now says which limit was used.
 
+### Fixed
+
+- Moving a Compose site whose security settings name a seccomp profile file now checks that the file exists on the new server before the move starts, instead of failing at the end.
+
 ## [2.16.2] - 2026-11-07
 
 See [docs/releases/2026-11-07-v2.16.2.md](docs/releases/2026-11-07-v2.16.2.md).
