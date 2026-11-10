@@ -106,7 +106,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const sf = sourceFacts.site;
   let targetFacts = null, hostKeyOk = true;
   if (target.id !== source.id) {
-    try { targetFacts = await remote(target, { operation: 'move-facts', role: 'target', config: { stagingRoot: cfg.stagingRoot || '/var/lib/docknest' }, probe: { paths: sf.bindPaths, names: { ...sf.names, composeProject: sf.compose?.project ?? null }, apparmor: sf.hardening?.apparmor ?? [] } }); }
+    try { targetFacts = await remote(target, { operation: 'move-facts', role: 'target', config: { stagingRoot: cfg.stagingRoot || '/var/lib/docknest' }, probe: { paths: sf.bindPaths, names: { ...sf.names, composeProject: sf.compose?.project ?? null }, apparmor: sf.hardening?.apparmor ?? [], seccomp: sf.hardening?.seccomp ?? [] } }); }
     catch (error) { hostKeyOk = !error.hostKeyRejected; }
   }
   const backup = lastBackup(site.id);
@@ -127,7 +127,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
       ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
       timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
-    target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, reservedPorts }
+    target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
     state: { sameServer: target.id === source.id, busy: !!db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type<>'site-move' AND status IN ('queued','running','recovery_required')").get(site.id) || !!editingSite(site.id),
       archived: !!db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id), deploymentHold: deploymentHeld(db),

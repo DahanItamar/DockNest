@@ -2,6 +2,7 @@
 
 - Mutable runtime state (anything rebound with `global` or changed in place) is defined only in common.py.
 - The built helper loads in a safe order: no top-level statement uses a name defined after it.
+- No top-level name is defined in two modules (they share one namespace once built).
 - The built helper starts like the original: shebang, the same docstring, VERSION=1 (also the backup formatVersion).
 """
 import ast, importlib.util, pathlib, unittest
@@ -36,6 +37,17 @@ class Bundle(unittest.TestCase):
         for name, tree in MODULES.items():
             if name != 'common':
                 self.assertFalse(top_assigned(tree) & state, name + '.py must not define shared state')
+
+    def test_no_top_level_name_is_defined_in_two_modules(self):
+        # The modules share one namespace in the built helper, so a second definition would silently replace the first.
+        owners={}
+        for name,tree in sorted(MODULES.items()):
+            for node in tree.body:
+                if isinstance(node,(ast.Import,ast.ImportFrom)):continue
+                for bound in verify.bound(node):owners.setdefault(bound,[]).append(name)
+        twice={bound:mods for bound,mods in owners.items() if len(mods)>1}
+        self.assertEqual(twice,{},'defined more than once across remote/helper modules')
+        verify.split(ast.parse(pathlib.Path(helper.__file__).read_text(encoding='utf8')))  # exits on a name bound twice
 
     def test_built_helper_loads_in_a_safe_order(self):
         source = pathlib.Path(helper.__file__).read_text(encoding='utf8')

@@ -625,6 +625,44 @@ def edit_first_pass_checks(first,current_first,inv,roots):
             if isinstance(item,dict) and isinstance(item.get('file'),str):
                 current=((current_first or {}).get(kind) or {}).get(key)
                 if current!=item:edit_check_reference(item['file'],inv,roots,'%s.%s'%(kind,key))
+# ---- environment variable removal: where a removed key is still used ----
+EDIT_VAR_REF=re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(:?[-?+])?|\$([A-Za-z_][A-Za-z0-9_]*)')
+def edit_var_refs(value):
+    """[(name, has_default)] for every ${NAME}, ${NAME:-x} and $NAME in the strings of a value ($$ is a literal dollar).
+    No default means bare or the required forms ${NAME:?} and ${NAME?}: without the variable Compose fails or gives it an empty value."""
+    found=[]
+    if isinstance(value,str):
+        for match in EDIT_VAR_REF.finditer(value.replace('$$','')):found.append((match[1] or match[3],match[2] in (':-','-',':+','+')))
+    elif isinstance(value,dict):
+        for item in value.values():found+=edit_var_refs(item)
+    elif isinstance(value,list):
+        for item in value:found+=edit_var_refs(item)
+    return found
+def edit_passes_through(service,name):
+    env=service.get('environment')
+    return (isinstance(env,list) and name in env) or (isinstance(env,dict) and name in env and env[name] is None)
+def edit_env_use(first,model,removed):
+    """removed: [(key, env file path)] -> {key: {required, services}}. `required`: some reference to the key has no default
+    (so the site cannot run without it). `services`: the services that read it by reference, pass-through or env_file."""
+    use={}
+    for key,path in removed:
+        passing=set()
+        refs=edit_var_refs({k:v for k,v in first.items() if k!='services'});required=any(not default for name,default in refs if name==key);names=set()
+        for name,service in (first.get('services') or {}).items():
+            if not isinstance(service,dict):continue
+            found=[d for n,d in edit_var_refs(service) if n==key]
+            if found:names.add(name)
+            if found and not all(found):required=True
+            if edit_passes_through(service,key):names.add(name);passing.add(name)
+        for name,service in (model.get('services') or {}).items():
+            if isinstance(service,dict) and any(lexical(value)==path for value,_ in edit_env_file_paths(service)):names.add(name)
+        use[key]={'required':required,'services':sorted(names),'passThrough':sorted(passing)}
+    return use
+def edit_unset_refs(candidate_first,current_first,defined):
+    """Variables the candidate Compose reads without a default that no env file defines and the current Compose did not
+    already read that way: restoring such a reference (an undo) would start a service with an empty value."""
+    def needed(model):return {n for n,default in edit_var_refs(model) if not default}
+    return sorted(needed(candidate_first)-needed(current_first or {})-set(defined))
 def edit_env_digests(model,key,overrides):
     """Keyed digest of every service env_file (the full pass runs with --no-env-resolution), using candidate bytes
     for files this edit rewrites."""
@@ -957,6 +995,15 @@ def edit_compose_check(req,inv,roots,key,keep=False):
         hashes+=[{'path':p,'before':edit_keyed(key,originals[p][0]),'after':edit_keyed(key,env[p]),'keyed':True} for p in env]
         verdict={'changed':edit_changes(current,candidate),'envChanged':changes,'imageChanged':bool(edit_existing_image_changes(current,candidate)),
             'newPorts':new_ports,'hashes':hashes,'frozen':frozen,'reviewedModelSha256':digest}
+        removed=[(i['key'],i['file']) for i in (req.get('env') or []) if isinstance(i,dict) and i.get('remove') is True]
+        if removed:verdict['envUse']=edit_env_use(candidate_first,candidate,removed)
+        if req.get('checkUnsetRefs') is True:
+            defined=set()
+            for path in targets:
+                try:data=env[path] if path in env else edit_read(path)[0]
+                except (FileNotFoundError,OSError):continue
+                defined.update(edit_env_keys(data.decode('utf-8','replace')))
+            verdict['unsetRefs']=edit_unset_refs(candidate_first,current_first,defined)
         context={'currentFirst':current_first,'folder':folder,'files':files,'envs':envs,'compose':compose,'env':env,'originals':originals,'current':current,'candidate':candidate,'currentEnv':current_env}
         return verdict,context
     finally:

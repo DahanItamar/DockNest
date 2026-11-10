@@ -246,7 +246,21 @@ def source_site_facts(cfg,tokens):
     return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
         'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
-        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':hardening_facts(cs)}
+        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []}}
+# A seccomp profile path in a Compose security_opt entry: absolute, no variables, ends at a quote, space, comma or ].
+COMPOSE_SECCOMP=re.compile(r'seccomp[:=]\s*(/[A-Za-z0-9._/@+-]{1,4095})(?=["\'\s,\]]|$)')
+def compose_seccomp_paths(files):
+    """Absolute seccomp profile paths the site's Compose files name. Docker stores a profile's contents, but the
+    copied Compose files name the path, which must exist on the target too (the move preflight checks it there)."""
+    paths=[]
+    for name in files[:20]:
+        try:
+            with open(name,'rb') as f:text=f.read(1024*1024).decode('utf8','replace')
+        except OSError:continue
+        for line in text.splitlines():
+            line=re.sub(r'(^|\s)#.*','',line)
+            paths+=[m for m in COMPOSE_SECCOMP.findall(line) if '..' not in pathlib.PurePosixPath(m).parts]
+    return sorted(set(paths))[:30]
 def hardening_facts(cs):
     """What the copy must keep (common.hardening), for the preflight: settings no copy can have, AppArmor profiles the
     target must have loaded."""
@@ -270,7 +284,9 @@ def target_probe(probe):
     project=names.get('composeProject')
     if isinstance(project,str) and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}',project):conflicts['composeProjects']=[project] if docker('ps','-aq','--filter','label=com.docker.compose.project='+project).decode().split() else []
     wanted=[str(p) for p in (probe.get('apparmor') or [])[:30] if isinstance(p,str) and APPARMOR_PROFILE.fullmatch(p)]
-    return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES)}
+    seccomp=[p for p in (probe.get('seccomp') or [])[:30] if isinstance(p,str) and COMPOSE_SECCOMP.fullmatch('seccomp='+p) and '..' not in pathlib.PurePosixPath(p).parts]
+    return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES),
+        'seccompPresent':[p for p in seccomp if os.path.isfile(p) and not os.path.islink(p)]}
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
     cfg=req.get('config') or {}

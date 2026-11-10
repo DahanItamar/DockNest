@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from '../auth.js';
 import { LIMITS } from './state.js';
-import { editView, reviewSiteEdit, applySiteEdit, cancelSiteEdit, retrySiteEdit, restoreSiteEditBackup } from './engine.js';
+import { editView, reviewSiteEdit, reviewUndoSiteEdit, applySiteEdit, cancelSiteEdit, retrySiteEdit, restoreSiteEditBackup } from './engine.js';
 import { detailOf, historyOf, historyQuery } from './views.js';
 
 // The review body carries whole Compose files (at most 10 of 256 KB) and environment values (at most 200 of 8 KB), so it
@@ -68,5 +68,6 @@ siteEditRoutes.get('/site-edits/:id', handle(async (req, res) => {
 }));
 const empty = req => z.object({}).strict().parse(req.body ?? {});
 siteEditRoutes.post('/site-edits/:id/cancel', requireAdmin, requireRecentAuth, handle(async (req, res) => { empty(req); res.json(cancelSiteEdit(uuid.parse(req.params.id), req.user.id)); }));
+siteEditRoutes.post('/site-edits/:id/undo/review', requireAdmin, requireRecentAuth, rateLimit('site-edit-review', 60, 10 * 60_000), handle(async (req, res) => { empty(req); res.json(await reviewUndoSiteEdit(uuid.parse(req.params.id), bound(req))); }));
 siteEditRoutes.post('/site-edits/:id/retry', requireAdmin, requireRecentAuth, handle(async (req, res) => { empty(req); res.status(202).json(retrySiteEdit(uuid.parse(req.params.id), req.user.id)); }));
 siteEditRoutes.post('/site-edits/:id/restore-backup', requireAdmin, requireRecentAuth, handle(async (req, res) => { empty(req); res.status(202).json(await restoreSiteEditBackup(uuid.parse(req.params.id), req.user.id)); }));

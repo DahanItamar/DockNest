@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { db } from '../db.js';
 import { LABELS, SAY, cancellable } from './state.js';
-import { loadEdit, loadSteps } from './engine.js';
+import { loadEdit, loadSteps, undoStateOf } from './engine.js';
 
 const actorName = userId => db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name ?? null;
 const restoreActive = edit => { const jobId = edit.progress?.restoreJobId; return !!jobId && ['queued', 'running'].includes(db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId)?.status); };
@@ -12,7 +12,7 @@ export function summaryOf(edit) {
   return {
     id: edit.id, siteId: edit.site_id, state: edit.state, result: edit.result, failedStep: edit.failed_step, reason: edit.reason,
     tabs: edit.changes?.tabs ?? [], changed: edit.changes?.changed ?? [], env: edit.changes?.env ?? { added: [], replaced: [], removed: [] },
-    imageChanged: !!edit.changes?.imageChanged, dataRollback: !!edit.data_rollback, healthSeconds: edit.health_seconds,
+    imageChanged: !!edit.changes?.imageChanged, undoOf: edit.changes?.undoOf ?? null, dataRollback: !!edit.data_rollback, healthSeconds: edit.health_seconds,
     createdBy: { id: edit.created_by, name: actorName(edit.created_by) }, createdAt: edit.created_at, startedAt: edit.started_at, finishedAt: edit.finished_at,
   };
 }
@@ -35,10 +35,13 @@ export function detailOf(editId, { admin = false } = {}) {
     dataBytes: Number.isSafeInteger(edit.progress.dataBytes) ? edit.progress.dataBytes : null,
     dataCopyNote: null,
     steps: loadSteps(edit.id).map(step => ({ step: step.step, label: LABELS[step.step], state: step.state, startedAt: step.started_at, finishedAt: step.finished_at, detail: step.detail })),
+    // Undo of the Compose replace this edit made: { available } or { available: false, newerAt }; null when it has none.
+    undo: admin ? undoStateOf(edit) : null,
     actions: {
       cancel: admin && cancellable(edit) && !edit.cancel_requested,
       retry: admin && edit.state === 'needs_attention' && !restoring,
       restoreBackup: admin && edit.state === 'needs_attention' && !!edit.backup_id && !restoring,
+      undo: admin && undoStateOf(edit)?.available === true,
     },
   };
   if (detail.dataCopyKept) detail.dataCopyNote = SAY.dataCopyKept;

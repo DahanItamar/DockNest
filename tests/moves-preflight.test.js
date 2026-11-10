@@ -207,6 +207,10 @@ test('security settings: a copy keeps them, so unreproducible settings and missi
   assert.equal(profile(f => { f.target.apparmorLoaded = ['site-profile']; }).canStart, true);
   assert.equal(profile(f => { f.target.apparmorLoaded = []; }).sentence, 'Shop uses the AppArmor profile site-profile, which is not loaded on new-srv. Load it there, then check again.');
   assert.match(profile(() => {}).sentence, /could not check AppArmor on new-srv/, 'an older target helper is never assumed to have it');
+  const seccomp = change => evaluateMove(facts(f => { f.site.hardening = { hardened: true, problems: [], apparmor: [], seccomp: ['/etc/docker/web.json'] }; change(f); }));
+  assert.equal(seccomp(f => { f.target.seccompPresent = ['/etc/docker/web.json']; }).canStart, true);
+  assert.equal(seccomp(f => { f.target.seccompPresent = []; }).sentence, 'Shop uses the seccomp profile /etc/docker/web.json, which is not on new-srv. Copy the file to the same path there, then check again.');
+  assert.match(seccomp(() => {}).sentence, /could not check seccomp profiles on new-srv/, 'an older target helper is never assumed to have it');
   const host = change => only(evaluateMove(facts(f => { f.site.hardening = { hardened: false, problems: [], apparmor: [], hostAppArmor: ['docker-default'] }; change(f); })), 'security');
   assert.deepEqual(host(f => { f.target.apparmorEnabled = false; }).map(item => [item.status, item.text]), [['info', 'Shop runs under the docker-default AppArmor profile on old-srv by default. new-srv has no AppArmor, so the copy runs without it.']]);
   assert.deepEqual(host(f => { f.target.apparmorEnabled = true; }), []); assert.deepEqual(host(() => {}), [], 'unknown is not claimed');

@@ -36,7 +36,7 @@ ships with the "beta" label, like moves and restore tests did.
 | Secrets | Environment values are never sent to the browser. Rows show **Saved**; **Replace** takes a new value. Values travel browser to API to SSH stdin only, and are written 0600 with the original owner. Decided (lead). |
 | Gate | An allow-list first (the move lists: an unknown key is refused), then the candidate is resolved on the server and compared with the current model; anything that adds privilege is refused, and services that already have host access are frozen (Security review changes, items 1-4). Decided (lead). |
 | Order | Validate, backup, pull, maintenance on, write, gate again on the real files, `compose up -d --no-build --pull never`, health check, maintenance off. The pull happens before the maintenance page, so downtime is only the restart. Decided (lead). |
-| Healthy | The restore test rules: every service that ran before runs, is Docker-healthy where it has a health check, still runs after 60 seconds, and the site's health URL (if set) answers 200-399 from the server. Time limit 2 minutes by default, 1-10 in Advanced. Decided (lead). |
+| Healthy | The restore test rules: every service that ran before runs, is Docker-healthy where it has a health check, still runs after 60 seconds, and the site's health URL (if set) answers 200-399 from the server. Time limit 2 minutes by default, 60-600 seconds in Advanced (Review step). Decided (lead). |
 | Rollback | Automatic on any failure after the first write: original files back (byte for byte, owner and mode), previous image IDs pinned, `compose up`, health check again. When an image changed, the site's data is put back from a server-local safety copy (see "Data safety copy" below; owner decision 1). |
 | Rollback fails | The site stays behind the maintenance page, the edit becomes `needs_attention`, `edit.needs_you` alerts, and **Restore backup** offers the pre-change backup through the normal (isolated) restore. A data safety copy, if one was made, is kept on the server and the panel says so. Decided (lead). |
 | Locks | A Safe Edit is a site job (`site-edit`, statuses `edit_queued`/`edit_running`): no backup, restore, move or other edit of the site runs at the same time; refused during an unfinished move and a deployment hold. Self-heal is paused for the site while it runs. Decided (lead). |
@@ -72,6 +72,10 @@ Next free number at merge time (currently 13; 2.14 may take it first, then renum
   started_at, finished_at, detail CHECK length <= 500, PRIMARY KEY(edit_id, step))`.
 - Partial unique index `site_edits(site_id) WHERE result IS NULL`. Keyset index `(site_id, created_at, id)`.
 - Triggers: refuse `DELETE`; refuse changing `result`, `failed_step`, `reason`, `changes` once `result` is set.
+- `site_edit_undo(edit_id PK → site_edits, site_id → sites, payload, created_at)` (migration `safe-edit-undo`, 18): the
+  Compose files as they were before an edit that wrote Compose files, sealed with the master key (this is the only place
+  Compose text is stored, because an undo needs it). `payload` is emptied when a newer edit is applied, and the row is
+  deleted when the edit does not end applied. No row, no undo (edits before this feature).
 - The candidate files are never stored in SQLite. Between Review and Apply they live in memory in the API for 15
   minutes keyed by a one-use token, sealed with the master key; the worker receives them through the job's sealed
   `details.payload`, which is wiped (set to `{}`) when the `apply` step finishes or the edit ends.
@@ -87,6 +91,13 @@ Next free number at merge time (currently 13; 2.14 may take it first, then renum
   `PORT_IN_USE`). The diff masks environment values as `(changed)`.
 - `POST /api/sites/:id/edit/apply` body `{ token, timeLimitSeconds? }`: 403 `REAUTH_REQUIRED`, 409 `SITE_BUSY` /
   `MOVE_RUNNING` / `EDIT_RUNNING`, else 202 `{ edit: { id } }`.
+- Review answers with `warnings` that include `ENV_REMOVED` / `ENV_SHARED` for removed variables (services named from the
+  helper's `envUse`), and refuses with 422 `ENV_REQUIRED` when the Compose file needs the variable and gives no default.
+- `POST /api/site-edits/:id/undo/review` (administrator, re-verification, empty body): the review of putting an applied
+  edit's Compose files back, built on the server from the sealed copy. 409 `UNDO_NEWER` (a newer applied edit exists),
+  `UNDO_CHANGED` (a file is no longer byte for byte what the edit wrote, by SHA-256 on the server), `UNDO_UNAVAILABLE`.
+  It runs the same review as a Replace; apply uses the normal apply route and re-checks that the edit is still the newest.
+  The detail of an edit carries `undo` (`{ available }` or `{ available: false, newerAt }`), `undoOf` and `actions.undo`.
 - `GET /api/site-edits/:id` (steps, state, result, reason; any signed-in user for its site), `GET /api/sites/:id/edits`
   (history, keyset paging), `POST /api/site-edits/:id/cancel` (only before `apply` starts).
 
