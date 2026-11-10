@@ -210,7 +210,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
       await writeTo(lhost, '/pebble-config.json', JSON.stringify({ pebble: { listenAddress: '0.0.0.0:14000', managementListenAddress: '0.0.0.0:15000', certificate: 'test/certs/localhost/cert.pem', privateKey: 'test/certs/localhost/key.pem', httpPort: 80, tlsPort: 443, ocspResponderURL: '', externalAccountBindingRequired: false } }));
       await run('exec', lhost, 'docker', 'network', 'create', 'qa-pebble');
       await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble-chall', '--network', 'qa-pebble', image('pebble-challtestsrv'), ...await program('pebble-challtestsrv'), '-defaultIPv4', lip, '-defaultIPv6', '', '-http01', '', '-https01', '', '-tlsalpn01', '', '-doh', '');
-      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble', '--network', 'qa-pebble', '-p', '127.0.0.1:14000:14000', '-p', '127.0.0.1:15000:15000', '-e', 'PEBBLE_VA_NOSLEEP=1', '-v', '/pebble-config.json:/test/config/pebble-config.json:ro', image('pebble'), ...await program('pebble'), '-config', '/test/config/pebble-config.json', '-dnsserver', 'qa-pebble-chall:8053');
+      await run('exec', lhost, 'docker', 'run', '-d', '--name', 'qa-pebble', '--network', 'qa-pebble', '-p', '127.0.0.1:14000:14000', '-p', '127.0.0.1:15000:15000', '-e', 'PEBBLE_VA_NOSLEEP=1', '-e', 'PEBBLE_WFE_NONCEREJECT=0', '-v', '/pebble-config.json:/test/config/pebble-config.json:ro', image('pebble'), ...await program('pebble'), '-config', '/test/config/pebble-config.json', '-dnsserver', 'qa-pebble-chall:8053');
       await until(async () => (await sh(lhost, 'curl -sk https://127.0.0.1:14000/dir')).includes('newAccount'), 'Pebble did not start', 60);
       await sh(lhost, 'mkdir -p /etc/letsencrypt');
       await writeTo(lhost, '/etc/letsencrypt/cli.ini', 'server = https://127.0.0.1:14000/dir\nno-verify-ssl = true\nemail = qa@example.invalid\nagree-tos = true\nno-eff-email = true\n');
@@ -577,7 +577,7 @@ export async function runLaunchScenario({ run, until, hosts, servers, db, record
     db.exec('DROP TRIGGER qa_block_launch_site'); trigger = false;
     const lateLaunch = launches.loadLaunch(late);
     assert.deepEqual([lateLaunch.state, lateLaunch.failed_step], ['failed', 'save'], lateLaunch.reason);
-    assert.equal(steps(late).certificate.state, 'done', 'the nginx file and the certificate had been made');
+    assert.equal(steps(late).certificate.state, 'done', `the nginx file and the certificate had been made (certificate step: ${JSON.stringify(steps(late).certificate)})`);
     assert.deepEqual(await snapshot(), beforeSave, 'teardown removed the container, volume, network, folder, nginx file and its own certbot lineage; the bystander lineage and everything else is untouched');
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM backups b JOIN sites s ON s.id=b.site_id WHERE s.name=?").get(domainOf('late')).n, 0);
     await assertBystanders();
