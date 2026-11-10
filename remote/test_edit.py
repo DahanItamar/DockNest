@@ -42,7 +42,15 @@ class FakeDocker:
         self.base=base;self.calls=[];self.version=b'2.29.1\n';self.pull_fail=False;self.up_fail=False
         self.containers=[];self.volumes=['shop_data'];self.networks=['shop_default'];self.tags={};self.created=[]
         self.on_up=None;self.single=None;self.config_hook=None;self.env_file_seen=None;self.stops=[];self.holders={};self.missing={'shop:2.0','ghost:5.1'};self.registry={'shop:2.0','ghost:5.1'};self.pulled=[]
+        self.isolated=[];self.isolation_fail=0;self.isolated_hook=None
     def __call__(self,args,timeout=120,env=None):
+        if args[0]=='unshare':
+            # The isolated view (#168): recorded, then answered like the plain Compose call it wraps.
+            spec=json.loads(args[args.index('-c')+2]);inner=args[args.index('-c')+3:]
+            self.isolated.append({'prefix':list(args[:args.index('-c')+1]),'spec':spec,'args':inner})
+            if self.isolation_fail:raise subprocess.CalledProcessError(self.isolation_fail,['unshare','--mount'])
+            if self.isolated_hook:self.isolated_hook(spec,inner)
+            args=inner
         self.calls.append({'args':list(args),'env':dict(env or {})})
         if args[:2]!=['docker','compose'] or args[2:4]==['version','--short']:return self.docker(args[1:])
         tail=args[args.index('--project-directory')+2:]
@@ -149,7 +157,7 @@ class EditCase(unittest.TestCase):
         self.events=io.StringIO();self.maint=[]
         self.patches=[patch('helper.edit_exec',side_effect=self.fake),patch('helper.EVENT_STREAM',self.events),patch('helper.EDITS_ROOT',pathlib.Path(posix(self.tmp)+'/edits')),
             patch('helper.INCREMENTAL_ROOT',pathlib.Path(posix(self.tmp)+'/incremental')),patch('helper.listening_ports',return_value=[22,8080,3306]),
-            patch('helper.maintenance',side_effect=lambda cfg,enabled:self.maint.append(enabled)),patch('helper.skip_refused_probes',return_value={})]
+            patch('helper.maintenance',side_effect=lambda cfg,enabled:self.maint.append(enabled)),patch('helper.skip_refused_probes',return_value={}),patch('helper.edit_sandbox_ready',return_value=True)]
         if os.name!='posix':self.patches.append(patch('helper.atomic_json',side_effect=lambda path,value:pathlib.Path(path).write_bytes(json.dumps(value).encode())))
         for p in self.patches:p.start()
     def tearDown(self):
@@ -925,6 +933,141 @@ class SingleContainer(EditCase):
         self.fake.single['HostConfig']['Privileged']=True
         load=self.run_op('edit-load');self.assertFalse(load['usable']['env']);self.assertEqual(load['reasons']['env'],'UNSUPPORTED_CONTAINER')
         self.refused(self.run_op('edit-check',env=[{'file':'container','key':'MODE','value':'x'}]),'UNSUPPORTED_CONTAINER')
+
+class Isolation(EditCase):
+    """#168: candidates resolve in an isolated view; the resolved names must be ones the changed files declare."""
+    def check(self,services=None,**top):
+        return self.run_op('edit-check',files=self.candidate(services if services is not None else self.edited(**{'web.image':'shop:2.0'}),**top),env=[])
+    def candidate_call(self,args):return '.check-' in ' '.join(args)
+    def test_candidate_runs_isolated_and_the_current_files_on_the_host(self):
+        result=self.check();self.assertTrue(result['ok'],result)
+        self.assertEqual(len(self.fake.isolated),2,'both passes of the candidate are isolated')
+        for item in self.fake.isolated:
+            self.assertEqual(item['prefix'][:9],['unshare','--mount','--net','--pid','--fork','--mount-proc','--propagation','private','--'])
+            self.assertEqual(item['prefix'][10:12],['-I','-c']);self.assertEqual(item['args'][:3],['docker','compose','-p'])
+            self.assertIn('config',item['args']);self.assertTrue(self.candidate_call(item['args']))
+            self.assertIn(self.root,item['spec']['keep'])
+            # mkdtemp adds a drive letter on Windows, so the check folder is only an absolute POSIX path on Linux.
+            if os.name=='posix':self.assertTrue(any('/.check-' in k for k in item['spec']['keep']))
+            # Every top-level folder but these is hidden, wherever other sites or Docker's data live.
+            self.assertEqual(set(item['spec']['system']),{'usr','bin','sbin','lib','lib32','lib64','libx32','etc','proc'})
+            for hidden in ('/etc/ssh','/etc/docker','/etc/docknest'):self.assertIn(hidden,item['spec']['hide'])
+            self.assertIn('/etc/shadow',item['spec']['blank']);self.assertIn('/dev/null',item['spec']['devices'])
+            self.assertFalse(any(helper.edit_path_refused(k) for k in item['spec']['keep']))
+        host=[c['args'] for c in self.fake.calls if 'config' in c['args'] and not self.candidate_call(c['args'])]
+        self.assertTrue(host,'the current files still resolve on the host')
+        compile(helper.EDIT_SANDBOX_CODE,'<sandbox>','exec')
+    def test_an_undo_check_runs_isolated_too(self):
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
+        result=self.run_op('edit-check',files=files,env=[],checkUnsetRefs=True);self.assertTrue(result['ok'],result)
+        self.assertEqual(len(self.fake.isolated),2)
+    def test_no_unshare_fails_closed_in_load_and_check(self):
+        with patch('helper.edit_sandbox_ready',return_value=False):
+            self.refused(self.check(),'ISOLATION_FAILED')
+            load=self.run_op('edit-load')
+        self.assertEqual(load['reasons'],{'compose':'ISOLATION_FAILED','env':'ISOLATION_FAILED','ports':'ISOLATION_FAILED','image':'ISOLATION_FAILED'})
+        self.assertFalse(any(load['usable'].values()))
+    def test_view_that_cannot_be_built_is_isolation_failed(self):
+        self.fake.isolation_fail=97;self.refused(self.check(),'ISOLATION_FAILED')
+    def test_candidate_failure_is_compose_invalid_unless_the_current_files_fail_too(self):
+        def candidate_only(spec,args):
+            if self.candidate_call(args):raise subprocess.CalledProcessError(1,['docker','compose'])
+        self.fake.isolated_hook=candidate_only;self.refused(self.check(),'COMPOSE_INVALID')
+        def always(spec,args):raise subprocess.CalledProcessError(1,['docker','compose'])
+        self.fake.isolated_hook=always;self.refused(self.check(),'ISOLATION_FAILED')
+        self.assertEqual(self.run_op('edit-load')['reasons'].get('compose'),'ISOLATION_FAILED')
+    def test_load_is_usable_when_the_view_resolves(self):
+        load=self.run_op('edit-load');self.assertTrue(load['usable']['compose'],load);self.assertTrue(self.fake.isolated)
+    def test_a_service_or_volume_the_candidate_does_not_declare_is_refused(self):
+        def sneaky(model,first):
+            if self.candidate_call(self.fake.calls[-1]['args']):model['services']['sneaky']={'image':'alpine:3'}
+            return model
+        self.fake.config_hook=sneaky
+        result=self.check();self.refused(result,'COMPOSE_UNDECLARED');self.assertEqual(result['field'],'services.sneaky')
+        def volume(model,first):
+            if self.candidate_call(self.fake.calls[-1]['args']):model.setdefault('volumes',{})['loot']={}
+            return model
+        self.fake.config_hook=volume;result=self.check();self.refused(result,'COMPOSE_UNDECLARED');self.assertEqual(result['field'],'volumes.loot')
+    def test_what_the_current_files_already_resolve_keeps_working(self):
+        def included(model,first):model['services']['shared']={'image':'alpine:3'};return model
+        self.fake.config_hook=included
+        self.assertTrue(self.check()['ok'])
+    def test_a_hand_edit_while_checking_is_file_changed(self):
+        def edit_on_disk(model,first):
+            if not self.candidate_call(self.fake.calls[-1]['args']):pathlib.Path(self.compose).write_text(compose_doc(self.services)+' ')
+            return model
+        self.fake.config_hook=edit_on_disk;self.refused(self.check(),'FILE_CHANGED')
+    def test_a_declared_new_service_and_volume_pass(self):
+        services=self.edited(**{'web.image':'shop:2.0'});services['cache']={'image':'redis:7'}
+        result=self.check(services,volumes={'cache_data':{}});self.assertTrue(result['ok'],result)
+    def test_apply_regates_in_the_isolated_view(self):
+        files=self.candidate(self.edited(**{'web.image':'shop:2.0'}))
+        check=self.run_op('edit-check',files=files,env=[]);digest=check['verdict']['reviewedModelSha256']
+        self.assertTrue(self.run_op('edit-prepare',files=files,env=[],reviewedModelSha256=digest)['ok'])
+        before=len(self.fake.isolated)
+        applied=self.run_op('edit-apply',reviewedModelSha256=digest);self.assertTrue(applied['ok'],applied)
+        regate=self.fake.isolated[before:];self.assertEqual(len(regate),2)
+        self.assertTrue(all(self.compose in item['args'] for item in regate))
+
+CHECK_VIEW=r'''
+import json,os,sys
+site,other=sys.argv[1],sys.argv[2]
+def readable(path):
+    try:open(path).read();return True
+    except OSError:return False
+def writable(path):
+    try:open(path,'a').close();return True
+    except OSError:return False
+print(json.dumps({'env':readable(site+'/.env'),'compose':readable(site+'/compose.yaml'),'siteWritable':writable(site+'/.env'),
+    'other':readable(other+'/secret.txt'),'pids':sorted(int(p) for p in os.listdir('/proc') if p.isdigit()),
+    'devnull':writable('/dev/null'),'run':os.listdir('/run') if os.path.isdir('/run') else []}))
+'''
+@unittest.skipUnless(os.name=='posix' and shutil.which('unshare') and os.path.exists('/usr/bin/python3'),'needs Linux with unshare')
+class RealSandbox(unittest.TestCase):
+    """Runs EDIT_SANDBOX_CODE for real (as root, or as root of a user namespace when the kernel allows it)."""
+    def setUp(self):
+        self.prefix=[] if os.geteuid()==0 else ['unshare','--user','--map-root-user']
+        probe=subprocess.run(self.prefix+list(helper.EDIT_UNSHARE)+['true'],capture_output=True)
+        if probe.returncode:self.skipTest('namespaces are not available here')
+        BUILD.mkdir(exist_ok=True)
+        self.tmp=os.path.realpath(tempfile.mkdtemp(prefix='edit-sandbox-',dir=str(BUILD)))
+        self.site=self.tmp+'/site';self.other=self.tmp+'/other'
+        os.makedirs(self.site);os.makedirs(self.other)
+        pathlib.Path(self.site+'/.env').write_text('A=1\n');pathlib.Path(self.site+'/compose.yaml').write_text('services: {}\n')
+        pathlib.Path(self.other+'/secret.txt').write_text('other site\n')
+    def tearDown(self):shutil.rmtree(self.tmp,ignore_errors=True)
+    def view(self,spec):
+        argv=self.prefix+list(helper.EDIT_UNSHARE)+[sys.executable,'-I','-c',helper.EDIT_SANDBOX_CODE,json.dumps(spec),'/usr/bin/python3','-I','-c',CHECK_VIEW,self.site,self.other]
+        out=subprocess.run(argv,capture_output=True,text=True,timeout=60)
+        self.assertEqual(out.returncode,0,out.stderr[-2000:])
+        return json.loads(out.stdout)
+    def test_site_and_its_env_file_resolve_and_a_sibling_site_is_hidden(self):
+        # A kept folder and a file inside it (finding 1: no placeholder may be created on the read-only bind).
+        seen=self.view(helper.edit_sandbox_spec([self.site,self.site+'/.env',self.site+'/compose.yaml']))
+        self.assertTrue(seen['env']);self.assertTrue(seen['compose']);self.assertFalse(seen['siteWritable'])
+        self.assertFalse(seen['other'],'another site is hidden wherever it lives');self.assertEqual(seen['run'],[],'no Docker socket')
+        self.assertTrue(seen['devnull']);self.assertLessEqual(len(seen['pids']),4,'a fresh /proc shows only the sandbox')
+    def test_a_symlinked_hide_path_is_hidden_at_its_target(self):
+        os.symlink(self.other,self.tmp+'/link')
+        spec=helper.edit_sandbox_spec([self.site])
+        top=self.tmp.split('/')[1];spec['system'].append(top)  # keep the test's own top-level folder visible
+        self.assertTrue(self.view(spec)['other'],'visible without the hide entry')
+        spec['hide'].append(self.tmp+'/link')
+        self.assertFalse(self.view(spec)['other'])
+
+class Declared(unittest.TestCase):
+    def test_block_yaml(self):
+        text=('# head\nname: shop\nservices:\n  web:\n    image: x\n    command: |\n      a: b\n  # note\n  "db": {image: y}\n'
+              "  &a 'cache':\n    image: z\n  <<: *x\nvolumes:\n  data:\nconfigs: {}\nsecrets: # none\nx-k: 1\n")
+        self.assertEqual(helper.edit_declared(text),{'services':{'web','db','cache'},'volumes':{'data'},'configs':set(),'secrets':set()})
+    def test_json_and_sections_it_cannot_read(self):
+        self.assertEqual(helper.edit_declared('{"services":{"a":{}},"volumes":null}'),{'services':{'a'},'volumes':set(),'configs':set(),'secrets':set()})
+        for text in ('services: {a: {image: x}}\n','services:\n  - a\n','services:\n    a:\n      image: x\n  b:\n','services:\n\ta:\n'):
+            self.assertIsNone(helper.edit_declared(text)['services'],text)
+    def test_undeclared(self):
+        model={'services':{'web':{},'inc':{}},'volumes':{'v':{}},'networks':{'default':{}}}
+        self.assertEqual(helper.edit_undeclared(['services:\n  web:\n    image: x\n'],model),{'services':{'inc'},'volumes':{'v'},'configs':set(),'secrets':set()})
+        self.assertEqual(helper.edit_undeclared(['services: {web: {}}\n'],model)['services'],{'web','inc'})
 
 if __name__=='__main__':
     unittest.main()

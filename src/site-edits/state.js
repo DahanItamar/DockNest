@@ -72,8 +72,10 @@ export const REASONS = Object.freeze({
   DATA_UNREADABLE: 'Some of the site\'s data cannot be read, so it cannot be copied safely. Change the image by hand.',
   YAML_REFUSED: 'This change uses YAML that DockNest cannot check safely (an escaped or complex key, a top-level merge or flow mapping). Change it by hand.',
   DATA_COPY_SPACE: 'Not enough free disk space for the safety copy. Nothing was changed.',
+  ISOLATION_FAILED: 'DockNest could not read this site\'s Compose files in an isolated view of the server, so it cannot check a change safely. Change it by hand.',
+  COMPOSE_UNDECLARED: 'Docker Compose read a service, volume, config or secret that the changed files do not list themselves (an include or extends). Change it by hand.',
 });
-export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST', 'DATA_NOT_LOCAL', 'OWN_SITE', 'DATA_TOO_LARGE', 'DATA_UNREADABLE', 'YAML_REFUSED']);
+export const REVIEW_CODES = Object.freeze(['PRIVILEGE_ADDED', 'PATH_REFUSED', 'FILE_CHANGED', 'COMPOSE_INVALID', 'SERVICE_REMOVED', 'PORT_IN_USE', 'SERVICE_FROZEN', 'ENV_REFUSED', 'COMPOSE_TOO_OLD', 'FILE_TOO_LARGE', 'UNKNOWN_SETTING', 'SYMLINK_REFUSED', 'NO_ENV_FILE', 'NOT_COMPOSE', 'UNSUPPORTED_CONTAINER', 'INVALID_REQUEST', 'DATA_NOT_LOCAL', 'OWN_SITE', 'DATA_TOO_LARGE', 'DATA_UNREADABLE', 'YAML_REFUSED', 'ISOLATION_FAILED', 'COMPOSE_UNDECLARED']);
 export const FIELD = /^[A-Za-z0-9_.\-[\]]{1,200}$/;
 export const reasonFor = (code, fallback = 'The change could not be checked. Try again.') => (Object.hasOwn(REASONS, code) ? REASONS[code] : fallback);
 export const helperCode = value => (typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(value) ? (value === 'FILE_CHANGED_APPLY' ? 'FILE_CHANGED' : value) : null);
