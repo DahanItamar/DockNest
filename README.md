@@ -63,7 +63,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
 
 **Safe changes (beta)**
-- Administrators change a site's Compose file, environment values, published ports or image tag from DockNest. Each change takes a backup first, shows the maintenance page, checks the site comes up and undoes the change by itself when it does not. Environment values are write-only, and a change can never add privileges the site did not have. See [Safe Edit](docs/safe-edit-guide.md).
+- Administrators change a site's Compose file, environment values, published ports or image tag from DockNest. Each change takes a backup first, shows the maintenance page, checks the site comes up and undoes the change by itself when it does not. Environment values are write-only (they can be replaced or removed), a finished Compose change can be undone, and a change can never add privileges the site did not have. See [Safe Edit](docs/safe-edit-guide.md).
 - Self-heal (off by default): when Docker marks a container of a site unhealthy, DockNest restarts it a few times per hour at most and tells you through your alert lines. It never restarts during a backup, restore, move or change of that site, and works while DockNest is running. See [self-heal](docs/self-heal-guide.md).
 
 **Alerts**

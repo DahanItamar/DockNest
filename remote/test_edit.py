@@ -219,6 +219,64 @@ class EnvRules(EditCase):
         self.refused(self.check_env([{'file':self.envfile,'key':'NOPE','remove':True}]),'ENV_REFUSED')
         self.refused(self.check_env([{'file':self.envfile,'key':'K%d'%i,'value':'v'} for i in range(201)]),'ENV_REFUSED')
         self.refused(self.check_env([{'file':self.envfile,'key':'K%d'%i,'value':'v'} for i in range(198)]),'ENV_REFUSED')  # file would hold 201 keys
+    def remove_use(self,key,services=None,env_text=None):
+        if env_text is not None:pathlib.Path(self.envfile).write_bytes(env_text.encode())
+        files=self.candidate(services) if services is not None else []
+        result=self.run_op('edit-check',files=files,env=[{'file':self.envfile,'key':key,'remove':True}])
+        self.assertTrue(result['ok'],result);self.assertEqual(result['verdict']['envChanged']['removed'],[key])
+        return result['verdict']['envUse'][key]
+    def test_var_refs_read_defaults_required_forms_and_escapes(self):
+        self.assertEqual(helper.edit_var_refs('${A} $B ${C:-x} ${D-x} ${E:?no} ${F?no} ${G:+y} $$H ${I:-${J}}'),
+            [('A',False),('B',False),('C',True),('D',True),('E',False),('F',False),('G',True),('I',True),('J',False)])
+        self.assertEqual(helper.edit_var_refs({'a':['$K',{'b':'x${L}'}],'n':3}),[('K',False),('L',False)])
+    def test_removing_a_variable_reports_whether_compose_needs_it_and_who_reads_it(self):
+        use=self.remove_use('DB_PASSWORD')
+        self.assertTrue(use['required']);self.assertIn('db',use['services'])
+        self.assertTrue(self.remove_use('TAG')['required'])
+        self.assertFalse(self.remove_use('UNUSED',env_text=self.env_text+'UNUSED=1\n')['required'])
+    def test_a_variable_with_a_default_is_not_required_and_every_reader_is_named(self):
+        services=self.edited();services['web']['environment']={'MODE':'${MODE:-prod}'};services['proxy']['environment']={'MODE':'${MODE-prod}'}
+        pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
+        use=self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')
+        self.assertFalse(use['required']);self.assertEqual(use['services'],['proxy','web'],'web also through its env_file')
+    def test_a_required_form_and_a_removed_reference_in_the_same_review(self):
+        services=self.edited();services['web']['environment']={'MODE':'${MODE:?set MODE}'}
+        pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
+        self.assertTrue(self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')['required'])
+        # The same review also gives the variable a default in the Compose file: no longer required.
+        fixed=self.edited();fixed['web']['environment']={'MODE':'${MODE:-prod}'}
+        result=self.run_op('edit-check',files=self.candidate(fixed),env=[{'file':self.envfile,'key':'MODE','remove':True}])
+        self.assertFalse(result['verdict']['envUse']['MODE']['required'])
+    def test_pass_through_and_escaped_dollars(self):
+        services=self.edited();services['web']['environment']=['MODE'];services['proxy']['environment']={'X':'$$MODE'}
+        pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
+        use=self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')
+        self.assertFalse(use['required']);self.assertIn('web',use['services']);self.assertNotIn('proxy',use['services'])
+    def test_restoring_a_reference_to_an_unset_variable_is_reported(self):
+        # The site no longer reads DB_PASSWORD and the env file no longer has it; a candidate (an undo) that reads it again
+        # without a default is reported, one that reads variables the env file defines is not.
+        current=self.edited();current['db']['environment']={}
+        pathlib.Path(self.compose).write_bytes(compose_doc(current).encode())
+        pathlib.Path(self.envfile).write_bytes(self.env_text.replace('export DB_PASSWORD="old pass#1"\n','').encode())
+        result=self.run_op('edit-check',files=self.candidate(self.services),checkUnsetRefs=True)
+        self.assertTrue(result['ok'],result);self.assertEqual(result['verdict']['unsetRefs'],['DB_PASSWORD'])
+        plain=self.run_op('edit-check',files=self.candidate(self.services))
+        self.assertNotIn('unsetRefs',plain['verdict'],'only asked for by an undo')
+        defined=pathlib.Path(self.envfile).read_bytes()+b'DB_PASSWORD=x\n'
+        pathlib.Path(self.envfile).write_bytes(defined)
+        self.assertEqual(self.run_op('edit-check',files=self.candidate(self.services),checkUnsetRefs=True)['verdict']['unsetRefs'],[])
+    def test_a_reference_the_site_already_reads_unset_is_not_reported(self):
+        pathlib.Path(self.envfile).write_bytes(self.env_text.replace('export DB_PASSWORD="old pass#1"\n','').encode())
+        result=self.run_op('edit-check',files=self.candidate(self.edited(**{'web.image':'shop:${TAG}'})),checkUnsetRefs=True)
+        self.assertEqual(result['verdict']['unsetRefs'],[])
+    def test_pass_through_services_are_listed_apart(self):
+        services=self.edited();services['web']['environment']=['MODE'];services['proxy']['environment']={'X':'${MODE:-a}'}
+        pathlib.Path(self.compose).write_bytes(compose_doc(services).encode())
+        use=self.remove_use('MODE',env_text=self.env_text+'MODE=dev\n')
+        self.assertEqual(use['passThrough'],['web']);self.assertIn('proxy',use['services'])
+    def test_no_env_use_without_a_removal(self):
+        result=self.check_env([{'file':self.envfile,'key':'TAG','value':'2.0'}])
+        self.assertNotIn('envUse',result['verdict'])
     def test_value_change_is_reported_by_key_only(self):
         result=self.check_env([{'file':self.envfile,'key':'DB_PASSWORD','value':SECRET},{'file':self.envfile,'key':'NEW_KEY','value':SECRET}])
         self.assertTrue(result['ok'],result)

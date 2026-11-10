@@ -4,6 +4,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Safe Edit: an **Undo change** button on a finished edit that replaced the Compose file. It puts the file back as it was, as its own change with a backup first and an automatic rollback. Only the newest change can be undone, and not after the file was edited outside DockNest.
+- Safe Edit: remove an environment variable (bin icon next to Replace). Review shows what is removed and which services use it, and DockNest refuses to remove a variable the Compose file needs.
+- Safe Edit: an Advanced setting on Review for the time limit (60 to 600 seconds), with a warning for very long or too short limits. A rollback after a timeout now says which limit was used.
+
 ### Fixed
 
 - Moving a Compose site whose security settings name a seccomp profile file now checks that the file exists on the new server before the move starts, instead of failing at the end.

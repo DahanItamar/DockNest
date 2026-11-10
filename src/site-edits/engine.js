@@ -11,11 +11,13 @@
 // - An unfinished edit holds the site (partial unique index; requireNotEditing in src/engine.js), also while it needs
 //   attention. Data rollback (owner decision): only when an existing service's image changed, in place from the safety
 //   copy edit-apply takes on the server (remote/helper/edit.py); Restore backup in needs_attention is the normal restore.
+import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import { db, id, audit, transaction } from '../db.js';
 import { deploymentHeld } from '../deployment-hold.js';
 import { seal, open } from '../crypto.js';
 import { transport, siteInfo, enqueueBackup, enqueueRestore, jobRunners, movingSite, busySite, editingSite } from '../engine.js';
-import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES, REASONS, SAY, FIELD, ENV_KEY, ENV_REFUSED_PREFIX, stateFor, cancellable, reasonFor, helperCode, changesRecord, tabsUsed } from './state.js';
+import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES, REASONS, SAY, UNDO, FIELD, ENV_KEY, ENV_REFUSED_PREFIX, stateFor, cancellable, reasonFor, helperCode, changesRecord, tabsUsed, sharedText, removedText, requiredText, passThroughText, unsetText, NO_UNDO, UNDO_MAX_BYTES } from './state.js';
 import { resolveInvocation, storedInvocation, allowedRoots, invocationHash, helperInvocation } from './invocation.js';
 import { issueToken, takeToken } from './tokens.js';
 import { reviewDiff, inlineSecretKeys } from './diff.js';
@@ -79,11 +81,17 @@ function conclude(edit, result, { failedStep = null, reason = null } = {}) {
     if (!changed) return false;
     db.prepare(`UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE ${editJobs} AND status IN ('edit_waiting','edit_queued')`).run(at, edit.id);
     wipePayloads(edit.id);
+    settleUndo(edit, result);
     if (failedStep && result !== 'rolled_back') { const row = loadSteps(edit.id).find(step => step.step === failedStep); if (row && row.state !== 'failed') setStep(edit.id, failedStep, 'failed', text); }
     for (const row of loadSteps(edit.id)) if (['pending', 'running'].includes(row.state)) setStep(edit.id, row.step, 'skipped');
     audit('worker', 'site.edit.' + result, edit.site_id, { edit: edit.id, ...(failedStep ? { step: failedStep } : {}), ...auditChanges(edit) });
     return true;
   });
+}
+// The undo copy of the Compose files (site_edit_undo): only an applied edit keeps it, and only until a newer edit is applied.
+function settleUndo(edit, result) {
+  if (result !== 'applied') { db.prepare('DELETE FROM site_edit_undo WHERE edit_id=?').run(edit.id); return; }
+  db.prepare('UPDATE site_edit_undo SET payload=NULL WHERE site_id=? AND edit_id<>? AND payload IS NOT NULL').run(edit.site_id, edit.id);
 }
 const wipePayloads = editId => db.prepare(`UPDATE jobs SET details=json_set(details,'$.payload',json('{}')) WHERE ${editJobs} AND json_type(details,'$.payload')='text'`).run(editId);
 
@@ -481,12 +489,22 @@ export function checkEnvEntries(env) {
 
 // POST /api/sites/:id/edit/review: the gate runs on the server; the answer is the diff (values masked), a summary,
 // warnings and a one-use token. Nothing is stored.
-export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
-  const files = body.files ?? [], env = body.env ?? [], containerChanges = body.containerChanges ?? null;
+export async function reviewSiteEdit(siteId, body, { userId, sessionHash }, { undo = null } = {}) {
+  let files = body.files ?? [];
+  const env = body.env ?? [], containerChanges = body.containerChanges ?? null;
   checkEnvEntries(env);
   const ctx = await editContext(siteId);
   const loaded = normalizeLoad(await helperRead(ctx.server, { ...ctx.base, operation: 'edit-load' }));
   const envFiles = new Set(loaded.env.map(item => item.file)), byPath = new Map(loaded.files.map(file => [file.path, file]));
+  // An undo is a normal Replace of the files an edit wrote, back to what they were: every guard below runs on it. It only
+  // goes ahead while each file on the server is still byte for byte what that edit wrote (fail closed).
+  if (undo) {
+    files = undo.files.map(item => {
+      const current = byPath.get(item.path);
+      if (!current || !current.sha256 || current.sha256 !== item.afterSha) throw httpError(409, 'UNDO_CHANGED', UNDO.changed);
+      return { path: item.path, sha256: current.sha256, text: item.before };
+    });
+  }
   for (const file of files) {
     const original = byPath.get(file.path);
     if (!original || envFiles.has(file.path)) throw refuse('PATH_REFUSED', 'files', 'Only the site\'s own Compose files can be edited here.');
@@ -499,7 +517,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   // Ports and image of a single-container site travel as containerChanges (there is no Compose text to edit).
   if (containerChanges && ctx.resolved.kind !== 'container') throw refuse('NOT_EDITABLE', 'containerChanges', 'Ports and image of a Compose site change in its Compose file.');
   if (!changedFiles.length && !envChanges.length && !containerChanges) throw httpError(422, 'NO_CHANGES', 'Nothing changed.');
-  const request = { ...ctx.base, operation: 'edit-check', files: changedFiles.map(({ path, sha256, text }) => ({ path, sha256, text })), env: envChanges.map(entry => (entry.remove ? { file: entry.file, key: entry.key, remove: true } : { file: entry.file, key: entry.key, value: entry.value })), ...(containerChanges ? { containerChanges } : {}) };
+  const request = { ...ctx.base, operation: 'edit-check', ...(undo ? { checkUnsetRefs: true } : {}), files: changedFiles.map(({ path, sha256, text }) => ({ path, sha256, text })), env: envChanges.map(entry => (entry.remove ? { file: entry.file, key: entry.key, remove: true } : { file: entry.file, key: entry.key, value: entry.value })), ...(containerChanges ? { containerChanges } : {}) };
   const answer = await helperRead(ctx.server, request, { refusalIsAnswer: true });
   if (answer?.ok !== true) {
     const code = helperCode(answer?.code), known = code && REVIEW_CODES.includes(code) ? code : 'COMPOSE_INVALID';
@@ -519,14 +537,40 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
   const healthChecks = loaded.services.some(service => service.healthcheck), healthUrl = !!ctx.site.config.healthUrl;
   const warnings = [];
   for (const port of newPorts) if (port.allAddresses) warnings.push({ code: 'PUBLIC_PORT', port: port.host, message: `Port ${port.host} is reachable from the internet.` });
+  // Removed variables: Compose may need them (refused), or services lose them (warned). The helper reports use by key name only.
+  const nameOf = file => (file === 'container' ? null : posix.basename(file));
+  const mentions = key => new RegExp('\\$\\{?' + key + '(?![A-Za-z0-9_])');
+  const composeTexts = loaded.files.map(file => ({ path: file.path, text: changedFiles.find(item => item.path === file.path)?.text ?? file.text })).filter(item => typeof item.text === 'string');
+  const known = new Set(loaded.services.map(service => service.name));
+  for (const entry of envChanges.filter(item => item.remove)) {
+    const use = verdict.envUse?.[entry.key];
+    if (ctx.resolved.kind === 'compose' && (!use || typeof use !== 'object')) throw httpError(422, 'COMPOSE_INVALID', REASONS.COMPOSE_INVALID, { field: `env.${entry.key}` });
+    if (use?.required === true) throw refuse('ENV_REQUIRED', `env.${entry.key}`, requiredText(entry.key, posix.basename(composeTexts.find(item => mentions(entry.key).test(item.text))?.path ?? 'the Compose file')));
+    const readers = [...new Set(Array.isArray(use?.services) ? use.services.filter(name => typeof name === 'string' && known.has(name)) : [])].slice(0, 20);
+    const passing = [...new Set(Array.isArray(use?.passThrough) ? use.passThrough.filter(name => known.has(name)) : [])].slice(0, 20);
+    if (passing.length) { warnings.push({ code: 'ENV_PASSTHROUGH', key: entry.key, services: passing, message: passThroughText(entry.key, passing) }); continue; }
+    warnings.push(readers.length > 1 ? { code: 'ENV_SHARED', key: entry.key, services: readers, message: sharedText(entry.key, readers) } : { code: 'ENV_REMOVED', key: entry.key, message: removedText(entry.key, nameOf(entry.file)) });
+  }
+  // An undo puts back Compose text that may read a variable the edit made unnecessary and removed: it must not start a
+  // service with an empty value, so the helper reports references without a default that no environment file defines.
+  if (undo) {
+    if (!Array.isArray(verdict.unsetRefs)) throw httpError(422, 'COMPOSE_INVALID', REASONS.COMPOSE_INVALID);
+    const missing = verdict.unsetRefs.find(name => typeof name === 'string' && ENV_KEY.test(name));
+    if (missing) throw refuse('ENV_REQUIRED', `env.${missing}`, unsetText(missing));
+  }
   const secretKeys = [...new Set(changedFiles.flatMap(file => inlineSecretKeys(file.text)))];
   if (secretKeys.length) warnings.push({ code: 'INLINE_SECRETS', keys: secretKeys.slice(0, 20), message: 'Move secrets to Environment: they are safer there.' });
   if (dataBytes !== null && dataBytes >= 1024 ** 3) warnings.push({ code: 'LARGE_DATA_COPY', bytes: dataBytes, message: 'The safety copy of the data is large, so the change takes longer and needs that much free disk space.' });
   if (!healthChecks && !healthUrl) warnings.push({ code: 'NO_HEALTH_CHECK', message: 'This site has no health check or health URL, so only "running and stable" counts.' });
   const summary = { tabs, changed, envChanged, imageChanged, dataRollback: imageChanged, dataBytes, maintenance: true, newPorts, health: healthUrl ? 'url' : healthChecks ? 'docker' : 'running', timeLimitSeconds: LIMITS.timeLimit.default, files: hashes };
   const diff = reviewDiff({ originals: loaded.files, files: changedFiles, env: envChanges.map(entry => ({ ...entry, existed: existing.get(entry.file).has(entry.key) })) });
-  const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })) };
-  const meta = { dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged }), imageChanged };
+  // What the Compose files were before this edit, for its Undo (sealed with the candidate; the apply step saves it sealed).
+  const undoFiles = changedFiles.map(file => ({ path: file.path, before: byPath.get(file.path).text, afterSha: createHash('sha256').update(file.text, 'utf8').digest('hex') }));
+  // The undo copy must fit its table; if it does not, the edit still applies, it just cannot be undone afterwards.
+  let keepUndo = undoFiles;
+  if (Buffer.byteLength(JSON.stringify({ files: undoFiles }), 'utf8') > UNDO_MAX_BYTES) { keepUndo = []; warnings.push({ code: 'NO_UNDO', message: NO_UNDO }); }
+  const candidate = { files: request.files, env: request.env, ...(containerChanges ? { containerChanges } : {}), reviewedModelSha256, originalHashes: hashes.map(({ path, before }) => ({ path, before })), undoFiles: keepUndo };
+  const meta = { dataBytes, invocationSha: invocationHash(ctx.resolved), invocation: ctx.base.invocation, allowedRoots: ctx.roots, services: loaded.services.map(service => service.name), changes: changesRecord({ tabs, changed, envChanged, hashes, imageChanged, undoOf: undo?.edit.id }), imageChanged, undoOf: undo?.edit.id ?? null };
   const { token, expiresAt } = issueToken({ userId, sessionHash, siteId, hashes, candidate, meta });
   return { token, expiresAt: iso(expiresAt), diff, summary, warnings };
 }
@@ -536,7 +580,7 @@ export async function reviewSiteEdit(siteId, body, { userId, sessionHash }) {
 export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLimit.default }, { userId, sessionHash }) {
   const { site } = siteFor(siteId);
   const taken = takeToken(token, { userId, sessionHash, siteId });
-  const editId = id(), jobId = id(), at = iso(clock()), { meta, candidate } = taken;
+  const editId = id(), jobId = id(), at = iso(clock()), { meta, candidate: { undoFiles = [], ...candidate } } = taken;
   try {
     atomic(() => {
       if (deploymentHeld(db)) throw httpError(409, 'DEPLOYMENT_HOLD', 'An update is in progress. Try again when it finishes.');
@@ -547,13 +591,16 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
       if (recent >= LIMITS.editsPerHour) throw httpError(429, 'RATE_LIMITED', 'This site had 10 changes in the last hour. Try again later.');
       const stored = storedInvocation(siteId);
       if (!stored || invocationHash(stored) !== meta.invocationSha) throw httpError(409, 'REVIEW_EXPIRED', 'The site\'s Compose setup changed. Review the change again.');
+      // An undo goes through only while the edit it reverts is still the newest applied one (the files' hashes are checked on the server).
+      if (meta.undoOf && !undoStateOf(loadEdit(meta.undoOf))?.available) throw httpError(409, 'REVIEW_EXPIRED', 'The site changed since this review. Review the undo again.');
       db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,changes,progress,time_limit_seconds,data_rollback,created_by,created_at) VALUES(?,?,?,'queued',?,?,?,?,?,?)")
         .run(editId, siteId, site.server_id, JSON.stringify(meta.changes), JSON.stringify({ phase: 'backup', invocationSha: meta.invocationSha, ...(Number.isSafeInteger(meta.dataBytes) ? { dataBytes: meta.dataBytes } : {}) }), timeLimitSeconds, meta.imageChanged ? 1 : 0, userId, at);
       for (const step of STEPS) db.prepare("INSERT INTO site_edit_steps(edit_id,step,state) VALUES(?,?,'pending')").run(editId, step);
       const details = { editId, step: 'backup', targetServerId: site.server_id, invocation: meta.invocation, allowedRoots: meta.allowedRoots, services: meta.services, payload: seal(JSON.stringify(candidate)) };
       db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'site-edit','edit_waiting','backup',?,?)").run(jobId, siteId, at, JSON.stringify(details));
       db.prepare('UPDATE site_edits SET job_id=? WHERE id=?').run(jobId, editId);
-      audit(userId, 'site.edit.requested', siteId, { edit: editId, tabs: meta.changes.tabs, fields: meta.changes.changed, envKeys: meta.changes.env, files: meta.changes.files, dataRollback: !!meta.imageChanged, timeLimitSeconds });
+      if (undoFiles.length) db.prepare('INSERT INTO site_edit_undo(edit_id,site_id,payload,created_at) VALUES(?,?,?,?)').run(editId, siteId, seal(JSON.stringify({ files: undoFiles }), `site_edit_undo:${editId}:${siteId}`), at);
+      audit(userId, 'site.edit.requested', siteId, { edit: editId, ...(meta.undoOf ? { undoOf: meta.undoOf } : {}), tabs: meta.changes.tabs, fields: meta.changes.changed, envKeys: meta.changes.env, files: meta.changes.files, dataRollback: !!meta.imageChanged, timeLimitSeconds });
     });
   } catch (error) {
     if (/UNIQUE constraint failed: site_edits\.site_id/.test(error.message)) { taken.restore(); throw httpError(409, 'EDIT_RUNNING', 'This site already has a change in progress.'); }
@@ -563,6 +610,25 @@ export function applySiteEdit(siteId, { token, timeLimitSeconds = LIMITS.timeLim
   return { edit: { id: editId } };
 }
 
+// Undo of a Replace of the Compose files. Only the newest applied edit of a site can be undone, and only while the files on
+// the server are still what that edit wrote (checked by hash in the review, and again by the helper when it prepares).
+// null: not undoable (no undo copy: older edits, edits that did not end applied). { available, newerAt }.
+export function undoStateOf(edit) {
+  if (!edit || edit.result !== 'applied' || !db.prepare('SELECT 1 FROM site_edit_undo WHERE edit_id=?').get(edit.id)) return null;
+  const newer = db.prepare("SELECT created_at,finished_at FROM site_edits WHERE site_id=? AND result='applied' AND (created_at,id)>(?,?) ORDER BY created_at DESC,id DESC LIMIT 1").get(edit.site_id, edit.created_at, edit.id);
+  if (newer) return { available: false, newerAt: newer.finished_at ?? newer.created_at };
+  return db.prepare('SELECT payload FROM site_edit_undo WHERE edit_id=? AND payload IS NOT NULL').get(edit.id) ? { available: true } : null;
+}
+// POST /api/site-edits/:id/undo/review: the same review as any Replace (diff, summary, warnings, one-use token), built from
+// the files as they were before the edit. Apply goes through the normal apply route.
+export async function reviewUndoSiteEdit(editId, bound) {
+  const target = editFor(editId), state = undoStateOf(target);
+  if (!state) throw httpError(409, 'UNDO_UNAVAILABLE', UNDO.unavailable);
+  if (!state.available) throw httpError(409, 'UNDO_NEWER', UNDO.newer, { newerAt: state.newerAt });
+  const payload = parseJson(open(db.prepare('SELECT payload FROM site_edit_undo WHERE edit_id=?').get(target.id).payload, `site_edit_undo:${target.id}:${target.site_id}`), null);
+  if (!Array.isArray(payload?.files) || !payload.files.length) throw httpError(409, 'UNDO_UNAVAILABLE', UNDO.unavailable);
+  return { ...(await reviewSiteEdit(target.site_id, {}, bound, { undo: { edit: target, files: payload.files } })), undoOf: target.id };
+}
 const editFor = editId => loadEdit(String(editId)) ?? (() => { throw httpError(404, 'NOT_FOUND', 'Safe Edit not found.'); })();
 export function cancelSiteEdit(editId, actor) {
   const edit = editFor(editId);

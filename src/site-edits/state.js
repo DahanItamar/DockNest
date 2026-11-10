@@ -102,8 +102,8 @@ export const SAY = Object.freeze({
 
 // The `changes` column: tabs used, changed field paths, env key names and file hashes. Never a value. Trimmed to fit the
 // 4096-character limit (field paths first, then file hashes) with `truncated: true`.
-export function changesRecord({ tabs, changed = [], envChanged = {}, hashes = [], imageChanged = false }) {
-  const record = { tabs: [...new Set(tabs)].filter(tab => TABS.includes(tab)), changed: changed.filter(path => FIELD.test(path)).slice(0, 200), env: { added: [...(envChanged.added ?? [])], replaced: [...(envChanged.replaced ?? [])], removed: [...(envChanged.removed ?? [])] }, files: hashes.map(({ path, before, after }) => ({ path: String(path).slice(0, 512), before, after })), imageChanged: !!imageChanged };
+export function changesRecord({ tabs, changed = [], envChanged = {}, hashes = [], imageChanged = false, undoOf = null }) {
+  const record = { tabs: [...new Set(tabs)].filter(tab => TABS.includes(tab)), changed: changed.filter(path => FIELD.test(path)).slice(0, 200), env: { added: [...(envChanged.added ?? [])], replaced: [...(envChanged.replaced ?? [])], removed: [...(envChanged.removed ?? [])] }, files: hashes.map(({ path, before, after }) => ({ path: String(path).slice(0, 512), before, after })), imageChanged: !!imageChanged, ...(typeof undoOf === 'string' && /^[0-9a-f-]{36}$/.test(undoOf) ? { undoOf } : {}) };
   for (const key of ['added', 'replaced', 'removed']) record.env[key] = record.env[key].filter(name => ENV_KEY.test(name)).slice(0, 200);
   while (JSON.stringify(record).length > 4096 && record.changed.length) { record.changed.pop(); record.truncated = true; }
   while (JSON.stringify(record).length > 4096 && record.files.length) { record.files.pop(); record.truncated = true; }
@@ -120,3 +120,18 @@ export function tabsUsed({ files = [], env = [], changed = [] }) {
   if (changed.some(path => /\.ports(\.|\[|$)/.test(path))) tabs.add('ports');
   return [...tabs];
 }
+
+// Wording for removed environment variables and the undo of a Compose replace (one plain sentence each, never a value).
+const names = list => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
+export const sharedText = (key, services) => `${key} is used by ${names(services)}. ${services.length === 2 ? 'Both lose it.' : services.length === 3 ? 'All three lose it.' : `All ${services.length} lose it.`}`;
+export const removedText = (key, fileName) => `${key} is ${fileName ? `deleted from the ${fileName} file` : 'removed from the container'}. Restoring the backup brings it back.`;
+export const passThroughText = (key, services) => `${names(services)} ${services.length === 1 ? 'passes' : 'pass'} ${key} through from the server. After removal ${services.length === 1 ? 'it starts' : 'they start'} without it.`;
+export const unsetText = key => `${key} is not set in the environment file, and the Compose file needs it. Set it first.`;
+export const NO_UNDO = 'The Compose files are too large to keep a copy, so this change cannot be undone afterwards.';
+export const UNDO_MAX_BYTES = 3_000_000; // the table allows 4 MiB of sealed text; JSON escaping and base64 grow the files
+export const requiredText = (key, fileName) => `${key} is required by ${fileName} and has no default. Edit the file first.`;
+export const UNDO = Object.freeze({
+  changed: 'The Compose file changed outside DockNest since this edit. Undoing now would overwrite those changes.',
+  newer: 'A newer change was made. Undo that one first.',
+  unavailable: 'This change cannot be undone.',
+});

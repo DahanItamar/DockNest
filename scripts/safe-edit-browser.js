@@ -61,12 +61,13 @@ const stepsOf=(phase)=>{
  if(phase==='rolled')return [S('backup','done',0,48),S('apply','done',1,12),S('check_health','failed',2,120,'No answer from the health check'),S('roll_back','done',4,19),S('finish','skipped')];
  return [S('backup','done',0,48),S('apply','done',1,12),S('check_health','failed',2,120,'No answer from the health check'),S('roll_back','failed',4,31,'The old version did not start'),S('finish','skipped')];
 };
-const editFor=phase=>({id:'e1',siteId:sites[0].id,state:phase==='running'?'running':phase==='attention'?'needs_attention':'done',result:phase==='done'?'applied':phase==='rolled'?'rolled_back':null,
+const editFor=phase=>({...editBase(phase),...(mock.editExtra||{})});
+const editBase=phase=>({id:'e1',siteId:sites[0].id,state:phase==='running'?'running':phase==='attention'?'needs_attention':'done',result:phase==='done'?'applied':phase==='rolled'?'rolled_back':null,
  reason:phase==='rolled'?'No healthy answer in 2 minutes. The previous version runs again.':phase==='attention'?'Rollback failed. The maintenance page is on.':null,backupId:'demo-recovery-0',steps:stepsOf(phase),dataCopyNote:phase==='attention'?'A copy of the data is kept on the server.':null,restore:phase==='attention'&&mock.restored?{jobId:'j1',running:true}:null,actions:{cancel:phase==='running'&&!!mock.cancelable&&!mock.operator,retry:phase==='attention'&&!mock.operator,restoreBackup:phase==='attention'&&!mock.restored&&!mock.operator}});
 
 let mock;
 function freshMock(){
- mock={reviewMode:'ok',phase:'running',needReauth:false,reverified:false,loadReauth:false,loadFail:false,hold:null,view:viewFor(),requests:[],loads:0,retries:0,cancels:0,restored:0,polls:0,dataRollback:false,
+ mock={review:null,editExtra:null,undoMode:null,undoReview:null,reviewMode:'ok',phase:'running',needReauth:false,reverified:false,loadReauth:false,loadFail:false,hold:null,view:viewFor(),requests:[],loads:0,retries:0,cancels:0,restored:0,polls:0,dataRollback:false,
   history:[{id:'e1',state:'done',result:'applied',createdAt:ago(180),changed:['services.web.image'],env:{added:[],replaced:[],removed:[]}},{id:'e2',state:'done',result:'rolled_back',createdAt:ago(60*30),changed:['services.web.ports'],env:{added:[],replaced:['SECRET_KEY'],removed:[]}}]};
 }
 freshMock();
@@ -94,6 +95,8 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
     if(mock.reviewMode==='unreachable')return json(route,{code:'SERVER_UNREACHABLE',error:'The server could not be reached. Try again.'},502);
     if(mock.reviewMode==='blocked')return json(route,{code:'PRIVILEGE_ADDED',error:'This change adds privileged mode. Edit it by hand.'},422);
     if(mock.reviewMode==='conflict')return json(route,{code:'FILE_CHANGED',error:'This file changed on the server. Reload it.'},422);
+    if(mock.reviewMode==='required')return json(route,{code:'ENV_REQUIRED',field:'env.SMTP_PASSWORD',error:'SMTP_PASSWORD is required by compose.yaml and has no default. Edit the file first.'},422);
+    if(mock.review)return json(route,mock.review);
     return json(route,{token:'tok-1',diff:DIFF,summary:{health:'url',dataRollback:mock.dataRollback,dataBytes:mock.dataRollback?1288490188:null},warnings:[{code:'PUBLIC_PORT',port:9090,message:'Port 9090 is reachable from the internet.'},...(mock.dataRollback?[{code:'LARGE_DATA_COPY',bytes:1288490188,message:'The safety copy of the data is large.'}]:[])]});
    }
    if(mock.needReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
@@ -106,6 +109,10 @@ async function open({role='admin',width=1280,scheme='light',start='Map'}={}){
    if(mock.loadFail)return json(route,{error:'Could not read the files.'},502);
    if(mock.loadReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
    return json(route,mock.view);
+  }
+  if(endpoint==='/api/site-edits/e1/undo/review'&&method==='POST'){
+   if(mock.undoMode==='changed')return json(route,{code:'UNDO_CHANGED',error:'The Compose file changed outside DockNest since this edit. Undoing now would overwrite those changes.'},409);
+   return json(route,mock.undoReview);
   }
   if(/^\/api\/site-edits\/e1\/(cancel|retry|restore-backup)$/.test(endpoint)&&mock.actionReauth&&!mock.reverified)return json(route,{code:'REAUTH_REQUIRED',error:'Confirm it is you.'},403);
   if(endpoint==='/api/site-edits/e1/cancel'){mock.cancels++;return json(route,{ok:true},202)}
@@ -288,6 +295,202 @@ async function boards(width,scheme){
  await dlg(page).getByRole('button',{name:'Restore backup'}).click();
  await dlg(page).getByText('Restoring the backup. Follow it in Jobs.').waitFor();
  assert.equal(mock.restored,1);assert.equal(await dlg(page).getByRole('button',{name:'Restore backup'}).count(),0);
+ assert.deepEqual(offOrigin,[],'no off-origin requests');
+ await context.close();
+}
+
+// Issue 187: the Advanced time limit, removing an environment variable and undoing a Compose replace (boards 01 to 23).
+const apply187=page=>dlg(page).getByRole('button',{name:'Apply',exact:true});
+const reviewDiffRemoved={files:[],env:[{file:ENV,key:'SMTP_PASSWORD',change:'removed',value:null}]};
+async function boards187(width,scheme){
+ freshMock();
+ const {context,page,offOrigin}=await open({width,scheme});
+ const tag=`${width} ${scheme} 187`;
+ // 01 to 08: the time limit lives under Advanced settings on Review.
+ await startEdit(page,width);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+ await dlg(page).getByText('Review changes').waitFor();
+ assert.match(await dlg(page).innerText(),/Time limit\s*2 minutes/);
+ const disclose=dlg(page).getByRole('button',{name:'Advanced settings'});
+ assert.equal(await disclose.getAttribute('aria-expanded'),'false');
+ await shot(page,'187-01','limit-closed',width,scheme);await layout(page,'limit closed '+tag);
+ await disclose.click();
+ const field=dlg(page).getByLabel('Time limit in seconds');
+ assert.equal(await field.inputValue(),'120');
+ await dlg(page).getByText('Seconds DockNest waits for the site to answer before it rolls back. 60 to 600.').waitFor();
+ await shot(page,'187-02','limit-open',width,scheme);await layout(page,'limit open '+tag);
+ await field.fill('300');
+ assert.match(await dlg(page).innerText(),/Time limit\s*5 minutes/);
+ assert.equal(await dlg(page).getByText('Longer wait').count(),0,'300 seconds is not a long wait');
+ await field.fill('30');
+ await dlg(page).getByText('Use 60 to 600 seconds.').waitFor();
+ assert.equal(await apply187(page).isDisabled(),true,'Apply is off below the minimum');
+ assert.equal(await field.getAttribute('aria-invalid'),'true');
+ assert.equal(await field.evaluate(el=>getComputedStyle(el).borderTopColor),await page.evaluate(()=>{const s=document.createElement('i');s.style.color='var(--error)';document.body.append(s);const c=getComputedStyle(s).color;s.remove();return c}),'a red border');
+ await shot(page,'187-04','limit-bad',width,scheme);await layout(page,'limit bad '+tag);
+ await field.fill('601');assert.equal(await apply187(page).isDisabled(),true,'Apply is off above the maximum');
+ await field.fill('600');
+ await dlg(page).getByText('The site can stay offline for up to 10 minutes before it rolls back.').waitFor();
+ assert.equal(await dlg(page).locator('.alert-warning').getByText('Longer wait').count(),1);
+ await shot(page,'187-05','limit-long',width,scheme);await layout(page,'limit long '+tag);
+ await field.fill('240');
+ assert.equal(await apply187(page).isDisabled(),false);
+ mock.phase='running';await apply187(page).click();
+ await dlg(page).getByText('Applying the change…').waitFor();
+ assert.equal(mock.requests.at(-1).body.timeLimitSeconds,240,'the chosen limit goes to the API');
+ mock.phase='done';await dlg(page).getByText('Change applied').waitFor({timeout:9000});
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ // 06: a short limit for a large data copy.
+ mock.dataRollback=true;
+ await startEdit(page,width);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+ await dlg(page).getByText('Review changes').waitFor();
+ await dlg(page).getByRole('button',{name:'Advanced settings'}).click();
+ await dlg(page).getByLabel('Time limit in seconds').fill('60');
+ await dlg(page).getByText('Short time limit').waitFor();
+ assert.match(await dlg(page).innerText(),/Copying 1\.2 GB of data may need more than 60 seconds\. If it does not finish, the change rolls back\./);
+ await shot(page,'187-06','limit-short',width,scheme);await layout(page,'limit short '+tag);
+ mock.dataRollback=false;
+ // 07: the rolled-back message names the limit that was chosen.
+ mock.editExtra={failedStep:'check_health',timeLimitSeconds:300,reason:'The site did not become healthy in 5 minutes.'};
+ mock.phase='rolled';await apply187(page).click();
+ await dlg(page).getByText('The site did not answer within 5 minutes. The previous version runs again.').waitFor();
+ await shot(page,'187-07','limit-rolled',width,scheme);await layout(page,'limit rolled '+tag);
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ mock.editExtra=null;
+
+ // 09 to 15: removing an environment variable.
+ await startEdit(page,width);
+ await dlg(page).getByRole('tab',{name:'Environment'}).click();
+ const rowFor=key=>dlg(page).locator('tr',{hasText:key}).or(dlg(page).locator('.def-row',{hasText:key})).first();
+ for(const key of ['APP_ENV','DATABASE_URL','SECRET_KEY','SMTP_PASSWORD']){
+  await dlg(page).getByRole('button',{name:'Replace '+key}).waitFor();
+  await dlg(page).getByRole('button',{name:'Remove '+key}).waitFor();
+ }
+ assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),true);
+ await shot(page,'187-09','env-rows',width,scheme);await layout(page,'env rows '+tag);
+ await dlg(page).getByRole('button',{name:'Remove SMTP_PASSWORD'}).click();
+ await dlg(page).getByText('Will be removed').waitFor();
+ assert.equal(await dlg(page).locator('.se-gone code').textContent(),'SMTP_PASSWORD');
+ assert.equal(await dlg(page).locator('.se-gone code').evaluate(el=>getComputedStyle(el).textDecorationLine),'line-through');
+ assert.equal(await dlg(page).getByRole('button',{name:'Replace SMTP_PASSWORD'}).count(),0,'a removed row has Keep only');
+ assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),false,'Review turns on');
+ await shot(page,'187-10','env-marked',width,scheme);await layout(page,'env marked '+tag);
+ await dlg(page).getByRole('button',{name:'Keep SMTP_PASSWORD'}).click();
+ assert.equal(await dlg(page).getByText('Will be removed').count(),0);
+ assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),true,'Keep undoes the mark');
+ // A replace in progress is dropped by Remove.
+ await dlg(page).getByRole('button',{name:'Replace SMTP_PASSWORD'}).click();
+ await dlg(page).getByLabel('New value for SMTP_PASSWORD').fill(OTHER);
+ await dlg(page).getByRole('button',{name:'Save SMTP_PASSWORD'}).click();
+ await dlg(page).getByText('Replaced').waitFor();
+ await dlg(page).getByRole('button',{name:'Remove SMTP_PASSWORD'}).click();
+ // 11: Review shows the removed key and the warning.
+ mock.review={token:'tok-r',diff:reviewDiffRemoved,summary:{health:'url',dataRollback:false,dataBytes:null},warnings:[{code:'ENV_REMOVED',key:'SMTP_PASSWORD',message:'SMTP_PASSWORD is deleted from the .env file. Restoring the backup brings it back.'}]};
+ await review(page);
+ await dlg(page).getByText('Variable removed').waitFor();
+ assert.deepEqual(mock.requests.at(-1).body.env,[{file:ENV,key:'SMTP_PASSWORD',remove:true}],'only the key and remove travel');
+ assert.equal(await dlg(page).locator('.se-diff-line.del').count(),1,'the removed key is a red line');
+ assert.equal(await dlg(page).locator('.alert-warning').count(),1);
+ assert.match(await dlg(page).innerText(),/SMTP_PASSWORD is deleted from the \.env file\. Restoring the backup brings it back\./);
+ await shot(page,'187-11','env-review',width,scheme);await layout(page,'env review '+tag);
+ // 14: several services use the variable.
+ await dlg(page).getByRole('button',{name:'Back',exact:true}).click();
+ mock.review={...mock.review,warnings:[{code:'ENV_SHARED',key:'TZ',services:['web','worker','cron'],message:'TZ is used by web, worker and cron. All three lose it.'}]};
+ await review(page);await dlg(page).getByText('Shared variable').waitFor();
+ await shot(page,'187-14','env-shared',width,scheme);await layout(page,'env shared '+tag);
+ await dlg(page).getByRole('button',{name:'Back',exact:true}).click();
+ // 13: the server refuses a variable the Compose file requires.
+ mock.reviewMode='required';await review(page);
+ await dlg(page).getByText('SMTP_PASSWORD is required by compose.yaml and has no default. Edit the file first.').waitFor();
+ assert.equal(await dlg(page).getByRole('button',{name:'Review',exact:true}).isDisabled(),true,'Review stays off');
+ assert.equal(await dlg(page).locator('.alert-error').count(),1,'a red panel');
+ await shot(page,'187-13','env-required',width,scheme);await layout(page,'env required '+tag);
+ await dlg(page).getByRole('button',{name:'Open Compose'}).click();
+ await dlg(page).locator('textarea.se-code').waitFor();
+ mock.reviewMode='ok';
+ // 15: an unsaved new row just drops.
+ await dlg(page).getByRole('tab',{name:'Environment'}).click();
+ await dlg(page).getByRole('button',{name:'Add variable'}).click();
+ await dlg(page).getByLabel('Variable name').fill('NEW_FLAG');
+ await dlg(page).getByRole('button',{name:'Remove NEW_FLAG'}).click();
+ assert.equal(await dlg(page).getByLabel('Variable name').count(),0);
+ assert.equal(await dlg(page).getByText('Will be removed').count(),1,'only the saved row is marked');
+ assert.ok(!(await page.content()).includes(OTHER),'no value is rendered');
+ await dlg(page).getByRole('button',{name:'Cancel',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ mock.review=null;
+
+ // 16 to 23: undo of a Compose replace.
+ const undoEdit={undo:{available:true},actions:{cancel:false,retry:false,restoreBackup:false,undo:true},createdAt:ago(60*26),imageChanged:false};
+ const finish=async(extra)=>{
+  await startEdit(page,width);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
+  mock.editExtra=extra;mock.phase='done';await apply187(page).click();
+  await dlg(page).getByText('Change applied').waitFor({timeout:9000});
+ };
+ await finish(undoEdit);
+ const foot=await dlg(page).locator('.map-dialog-foot button').allTextContents();
+ assert.deepEqual(foot,['Undo change','Close'],'Undo change sits left of Close');
+ assert.equal(await dlg(page).getByRole('button',{name:'Close',exact:true}).getAttribute('class'),'primary');
+ assert.equal(await dlg(page).getByRole('button',{name:'Undo change'}).getAttribute('class')||'','','a secondary button');
+ await dlg(page).getByText('You can undo this until the site changes again.').waitFor();
+ await shot(page,'187-16','undo-offer',width,scheme);await layout(page,'undo offer '+tag);
+ // 17: confirm.
+ mock.undoReview={token:'tok-u',undoOf:'e1',diff:{files:[{path:'compose.yaml',hunks:[{oldStart:22,newStart:22,lines:[{type:'context',text:'  web:'},{type:'remove',text:'    image: demo/shop:1.5'},{type:'add',text:'    image: demo/shop:1.4'}]}]}],env:[]},summary:{health:'url',dataRollback:false,dataBytes:null},warnings:[]};
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();
+ await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ assert.match(await dlg(page).innerText(),/The Compose file goes back to how it was on .+\./);
+ assert.match(await dlg(page).innerText(),/Backup first\s*Yes/);assert.match(await dlg(page).innerText(),/Rollback\s*Automatic/);
+ assert.equal(await dlg(page).getByText('Data is not rewound').count(),0);
+ await shot(page,'187-17','undo-confirm',width,scheme);await layout(page,'undo confirm '+tag);
+ // Cancel goes back to the finished edit.
+ await dlg(page).getByRole('button',{name:'Cancel',exact:true}).click();
+ await dlg(page).getByText('Change applied').waitFor();
+ // 18: progress; 19: success.
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ mock.editExtra={...undoEdit,undoOf:'e0',undo:{available:true}};mock.phase='running';
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();
+ await dlg(page).getByRole('heading',{name:'Undoing the change'}).waitFor();
+ await dlg(page).getByText('Applying the change…').waitFor();
+ assert.equal(mock.requests.at(-1).kind,'apply');assert.equal(mock.requests.at(-1).body.token,'tok-u');
+ assert.equal(mock.requests.at(-1).body.timeLimitSeconds,undefined,'an undo uses the default limit');
+ await shot(page,'187-18','undo-progress',width,scheme);await layout(page,'undo progress '+tag);
+ mock.phase='done';await dlg(page).getByText('Change undone').waitFor({timeout:9000});
+ await shot(page,'187-19','undo-done',width,scheme);await layout(page,'undo done '+tag);
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ // 20: the undo did not come up.
+ await finish(undoEdit);
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ mock.editExtra={undoOf:'e0',failedStep:'check_health',timeLimitSeconds:120};mock.phase='rolled';
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();
+ await dlg(page).getByText('The undo did not work. The version from before the undo runs again.').waitFor({timeout:9000});
+ await shot(page,'187-20','undo-rolled',width,scheme);await layout(page,'undo rolled '+tag);
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ // 21: a newer change was made.
+ await finish({undo:{available:false,newerAt:ago(60*20)},actions:{cancel:false,retry:false,restoreBackup:false,undo:false}});
+ assert.equal(await dlg(page).getByRole('button',{name:'Undo change'}).isDisabled(),true,'Undo is off');
+ await dlg(page).getByText(/A newer change was made on .+\. Undo that one first\./).waitFor();
+ assert.equal(await dlg(page).locator('.alert-info').count(),1);
+ await shot(page,'187-21','undo-newer',width,scheme);await layout(page,'undo newer '+tag);
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ // 22: the file was edited outside DockNest.
+ await finish(undoEdit);mock.undoMode='changed';
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();
+ await dlg(page).getByText('The Compose file changed outside DockNest since this edit. Undoing now would overwrite those changes.').waitFor();
+ assert.equal(await dlg(page).getByRole('button',{name:'Undo change'}).isDisabled(),true);
+ await shot(page,'187-22','undo-changed',width,scheme);await layout(page,'undo changed '+tag);
+ mock.undoMode=null;await dlg(page).getByRole('button',{name:'Reload'}).click();
+ await dlg(page).getByRole('heading',{name:'Undo this change?'}).waitFor();
+ await dlg(page).getByText('The Compose file goes back to how it was on').waitFor();
+ await dlg(page).getByRole('button',{name:'Cancel',exact:true}).click();
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ // 23: the edit changed an image.
+ await finish({...undoEdit,imageChanged:true});
+ await dlg(page).getByRole('button',{name:'Undo change'}).click();
+ await dlg(page).getByText('Data is not rewound').waitFor();
+ assert.match(await dlg(page).innerText(),/Undo restores the Compose file only\. Data stays as it is now\./);
+ assert.equal(await dlg(page).locator('.alert-warning').count(),1);
+ await shot(page,'187-23','undo-image',width,scheme);await layout(page,'undo image '+tag);
+ await dlg(page).getByRole('button',{name:'Cancel',exact:true}).click();
+ await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
+ mock.editExtra=null;
  assert.deepEqual(offOrigin,[],'no off-origin requests');
  await context.close();
 }
@@ -594,7 +797,7 @@ async function realApi(){
 browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 try{
  if(REAL){await realApi();console.log('Safe Edit browser suite passed against the real API.');process.exit(0)}
- for(const width of [1280,390])for(const scheme of ['light','dark'])await boards(width,scheme);
+ for(const width of [1280,390])for(const scheme of ['light','dark']){await boards(width,scheme);await boards187(width,scheme)}
  for(const scheme of ['light','dark'])await existingDialogUnchanged(scheme);
  await roles();
  assert.deepEqual(errors,[],'no page errors');
