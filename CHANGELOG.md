@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.16.3] - 2026-11-10
+
+See [docs/releases/2026-11-10-v2.16.3.md](docs/releases/2026-11-10-v2.16.3.md).
+
 ### Added
 
 - Safe Edit: an **Undo change** button on a finished edit that replaced the Compose file. It puts the file back as it was, as its own change with a backup first and an automatic rollback. Only the newest change can be undone, and not after the file was edited outside DockNest.
