@@ -279,7 +279,6 @@ export const CATALOGUE=Object.freeze([
  "SFTP storage requires a host, username and mounted credential file",
  "SIGTERM acceptance requires explicit SQLite file checks",
  "SQLite database must be inside a captured persistent mount",
- "SQLite database path is unreadable or contains a symbolic link",
  "SQLite database path must be a regular absolute file path",
  "SQLite file proof is limited to declared generic applications",
  "SQLite rollback journal needs recovery before offline capture",

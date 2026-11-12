@@ -14,7 +14,8 @@ def sqlite_file_source(filename,container):
     if not matches:raise ValueError('SQLite database must be inside a captured persistent mount')
     mount=max(matches,key=lambda value:len(value['Destination']));relative=os.path.relpath(filename,mount['Destination'])
     source=pathlib.Path(mount['Source']) if relative=='.' else pathlib.Path(mount['Source'])/relative
-    if source.resolve()!=source or not source.is_file():raise ValueError('SQLite database path is unreadable or contains a symbolic link')
+    if source.is_symlink() or source.resolve()!=source:raise ValueError('SQLite database path contains a symbolic link: '+filename)
+    if not source.is_file():raise ValueError('SQLite database file is missing or not a regular file: '+filename)
     with source.open('rb') as file:
         if file.read(16)!=b'SQLite format 3\x00':raise ValueError('Declared file is not a SQLite format-3 database')
     return source,mount

@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
+
 ## [2.16.3] - 2026-11-10
 
 See [docs/releases/2026-11-10-v2.16.3.md](docs/releases/2026-11-10-v2.16.3.md).
