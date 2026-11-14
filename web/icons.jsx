@@ -4,3 +4,4 @@ export {IconFilter as Filter, IconBrandGithub as BrandGithub} from '@tabler/icon
 export {IconHome as Home,IconArrowLeft as ArrowLeft,IconLogin as LogIn} from '@tabler/icons-react';
 export {IconEye as Eye,IconEyeOff as EyeOff} from '@tabler/icons-react';
 export {IconPencil as Pencil,IconArrowBackUp as Undo} from '@tabler/icons-react';
+export {IconSettings as Settings} from '@tabler/icons-react';

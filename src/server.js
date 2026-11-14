@@ -284,8 +284,19 @@ async function sitePathRefusal(req, saved, next, siteId) {
   const refused = fields.filter(field => !found[field] || changes[field].some(value => !found[field].has(value)));
   return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of a site, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
 }
+// Only lists that are new or changed are checked: a stored list that was already odd must not block unrelated edits.
+export function sqliteListProblem(next, saved) {
+  const before = new Map((Array.isArray(saved) ? saved : []).map(service => [service.container, JSON.stringify(service.sqliteFiles || [])]));
+  for (const service of next || []) {
+    if (before.get(service.container) === JSON.stringify(service.sqliteFiles)) continue;
+    if (new Set(service.sqliteFiles).size !== service.sqliteFiles.length) return 'A SQLite file is listed twice for ' + service.container + '.';
+    if (service.sqliteSigtermConfirmed && !service.sqliteFiles.length) return 'SIGTERM acceptance requires explicit SQLite file checks for ' + service.container + '. Keep at least one file.';
+  }
+  return '';
+}
 app.post('/api/sites', async (req, res) => {
-  const data = siteSchema.parse(req.body); getServer(data.serverId); const siteId = id();
+  const data = siteSchema.parse(req.body); getServer(data.serverId);
+  { const problem = sqliteListProblem(data.config.services, []); if (problem) return res.status(400).json({ error: problem }); } const siteId = id();
   const settings = normalizedSite(data, siteId);
   const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
   if (refusal) return res.status(403).json(refusal);
@@ -293,12 +304,15 @@ app.post('/api/sites', async (req, res) => {
   db.prepare('INSERT INTO policies VALUES (?,0,?,?,7,NULL)').run(siteId, '0 2 * * *', 'Asia/Jerusalem');
   audit(req.user.id, 'site.create', siteId); res.status(201).json(getSite(siteId));
 });
+// The current saved site: the failed-backup fix view reads it right before it changes a SQLite list.
+app.get('/api/sites/:id', (req, res) => res.json(getSite(req.params.id)));
 app.patch('/api/sites/:id', async (req, res) => {
   const site = getSite(req.params.id), data = siteSchema.parse(req.body); getServer(data.serverId);
   requireNotMoving(site.id);
   // The site form does not edit the SQLite check mode; keep the saved choice.
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
+  { const problem = sqliteListProblem(data.config.services, (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.services); if (problem) return res.status(400).json({ error: problem }); }
   if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);

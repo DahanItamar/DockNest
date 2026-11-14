@@ -7,7 +7,31 @@ import {containerName,containerGroups} from './container-groups.js';
 import {normalizeDomain} from '../shared/domains.js';
 import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
+import {HardDrive as Database,Plus} from './icons.jsx';
+import {sqliteGroups,sqliteProblem,mergeSqliteFiles} from './sqlite-files.js';
 const containerStatus=container=>typeof container.state==='object'?container.state.status:container.state||container.State?.Status||'unknown';
+
+function SqliteFiles({services,texts,setTexts,split,setSplit,adding,setAdding}){
+ if(!services.length)return null;
+ const groups=sqliteGroups(services).flatMap(group=>group.shared&&split.includes(group.key)?group.containers.map(container=>({...group,key:container,containers:[container],shared:false})):[group]);
+ const edit=(group,value)=>setTexts(previous=>({...previous,...Object.fromEntries(group.containers.map(container=>[container,value]))}));
+ return <section className="sq-section" aria-label="SQLite databases"><h4>SQLite databases</h4>
+  <p className="hint">Files DockNest checks and captures while the service is stopped. One absolute path per line.</p>
+  {groups.map(group=>{
+   const text=texts[group.containers[0]]??'',empty=!group.files.length&&!text.trim()&&!group.containers.some(container=>adding.includes(container));
+   if(empty&&!group.version)return null;
+   return <section className="sq-group" key={group.key} aria-label={group.shared?'Shared SQLite list':'SQLite files for '+group.containers[0]}>
+    <div className="sq-head"><b><Database size={20} stroke={1.75} aria-hidden="true"/>{group.shared?'Shared list':group.containers[0]}</b><small>{group.version?'SQLite '+group.version:'No SQLite declared'}</small></div>
+    <div className="sq-body">
+     {group.shared&&<div className="sq-tags">{group.containers.map(container=><span className="sq-tag" key={container}>{container}</span>)}</div>}
+     {empty?(group.version?<button type="button" className="sq-link" onClick={()=>setAdding(previous=>[...previous,...group.containers])}><Plus size={16} stroke={1.75} aria-hidden="true"/>Add database file</button>:null)
+      :<label className="field"><span>Database files</span><textarea rows={3} aria-label={'Database files for '+(group.shared?group.containers.join(', '):group.containers[0])} value={text} onChange={event=>edit(group,event.target.value)} spellCheck={false}/><small>{group.shared?'Both services declare these files. Changes apply to '+(group.containers.length===2?'both.':'all of them.'):'Paths inside the container. Links are not allowed.'}</small></label>}
+     {group.shared&&<button type="button" className="sq-link" onClick={()=>setSplit(previous=>[...previous,group.key])}>Edit separately</button>}
+    </div>
+   </section>;
+  })}
+ </section>;
+}
 
 export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
  const [autoMaintenance,setAutoMaintenance]=useState(true);
@@ -18,6 +42,8 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
  const [browser,setBrowser]=useState('');
  const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[scan,setScan]=useState(0);
  const [settings,setSettings]=useState({probeOrigin:!!initialSite?.config.maintenance?.probeOrigin,name:initialSite?.name||'',healthUrl:initialSite?.config.healthUrl||'',domains:initialSite?.config.domains?.join(', ')||'',shutdownProfile:initialSite?.config.shutdownProfile||'generic',stagingRoot:initialSite?.config.stagingRoot||'/var/lib/docknest',deliveryMode:initialSite?.config.deliveryMode||'staged',configFiles:initialSite?.config.configFiles?.join('\n')||'',composeFiles:initialSite?.config.composeFiles?.join('\n')||'',externalReferencesConfirmed:false,cleanShutdownConfirmed:!!initialSite?.config.cleanShutdownConfirmed,exclusiveSourcesConfirmed:!!initialSite?.config.exclusiveSourcesConfirmed});
+ const savedServices=Array.isArray(initialSite?.config.services)?initialSite.config.services:[];
+ const [sqliteText,setSqliteText]=useState(()=>Object.fromEntries(savedServices.map(service=>[service.container,(service.sqliteFiles||[]).join('\n')]))),[sqliteSplit,setSqliteSplit]=useState([]),[sqliteAdding,setSqliteAdding]=useState([]);
  const nameEdited=useRef(!!initialSite),firstDiscovery=useRef(true),filesEdited=useRef({composeFiles:!!initialSite?.config.composeFiles?.length,configFiles:!!initialSite?.config.configFiles?.length});
  const healthEdited=useRef(!!initialSite),domainsEdited=useRef(!!initialSite);
  const publicEdited=useRef(!!initialSite),[publicUrl,setPublicUrl]=useState(initialSite?.config.maintenance?.publicUrl||initialSite?.config.maintenancePublicUrl||(initialSite?.config.domains?.[0]?'https://'+initialSite.config.domains[0]:''));
@@ -71,12 +97,13 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
   if(!serverId||!hasSelection||loading)return;
   if(step===1&&error)return;
   if(step===2&&detected.compose&&!settings.composeFiles.trim()){setError('Select the Compose project file below so this site can be backed up.');return;}
+  if(step===2&&!isStatic){const problem=sqliteProblem(savedServices.filter(service=>selected.includes(service.container)),sqliteText);if(problem){setError(problem);return;}}
   if(step<3){setStep(step+1);return;}
   setBusy(true);
   const paths=value=>value.split('\n').map(path=>path.trim()).filter(Boolean);
   const domains=settings.domains.split(',').map(normalizeDomain).filter(Boolean);
   try{
-   const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,kind:isStatic?'static':'docker',...(isStatic?{documentRoot:staticRoot}:{}),containers:selected,temporaryMemoryFolders:temporaryFolders,stagingRoot:settings.stagingRoot,deliveryMode:settings.deliveryMode,maintenanceRequired:!isStatic,maintenanceProbeOrigin:!!settings.probeOrigin,maintenancePublicUrl:isStatic?settings.healthUrl:publicUrl,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:!isStatic,healthUrl:settings.healthUrl,publicUrl:isStatic?settings.healthUrl:publicUrl}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
+   const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,...(savedServices.length?{services:mergeSqliteFiles(savedServices,Object.fromEntries(Object.entries(sqliteText).filter(([container])=>selected.includes(container))))}:{}),kind:isStatic?'static':'docker',...(isStatic?{documentRoot:staticRoot}:{}),containers:selected,temporaryMemoryFolders:temporaryFolders,stagingRoot:settings.stagingRoot,deliveryMode:settings.deliveryMode,maintenanceRequired:!isStatic,maintenanceProbeOrigin:!!settings.probeOrigin,maintenancePublicUrl:isStatic?settings.healthUrl:publicUrl,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:!isStatic,healthUrl:settings.healthUrl,publicUrl:isStatic?settings.healthUrl:publicUrl}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
    if(!initialSite&&!isStatic&&canSetUpMaintenance&&autoMaintenance&&domains.length){
     try{await api('/sites/'+site.id+'/maintenance/setup',{});onSaved(site,'Site added with its maintenance page, tested on your domain. Set its schedule when ready.');}
     catch(error){if(error.status===401){onSessionExpired();return;}onSaved(site,'Site added. The maintenance page was not set up: '+error.message+' Backups still work; visitors may see an error for a few seconds during each one.');}
@@ -132,11 +159,12 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
     {browser&&<ConfigurationFiles key={serverId+selected.join(',')+browser} api={api} serverId={serverId} containers={selected} directory={detected.directory} onSessionExpired={onSessionExpired} onClose={()=>setBrowser('')} onChoose={path=>{filesEdited.current[browser]=true;setSettings(previous=>({...previous,[browser]:[...new Set([...previous[browser].split('\n').filter(Boolean),path])].join('\n'),externalReferencesConfirmed:false}));setBrowser('');}}/>}
    </section>
    <Field label="Backup delivery" name="deliveryMode" value={settings.deliveryMode} onChange={update} options={[['staged','Create a temporary copy, then upload'],['direct','Stream directly to backup storage']]} help={settings.deliveryMode==='direct'?(isStatic?'Streams compressed, encrypted data without a full temporary copy. Website files must remain unchanged during capture.':'Saves source disk space. Services stay in maintenance during verification and transfer; slow storage can extend downtime. Small recovery journals and Docker snapshots still use local space.'):'Creates temporary archives on the source server. Docker services restart before compression and upload; enough local space is required.'}/>
-   <details><summary>Advanced backup settings</summary>
+   <details open={savedServices.some(service=>service.sqliteFiles?.length)||undefined}><summary>Advanced backup settings</summary>
     <Field label="Domains (comma separated)" name="domains" value={settings.domains} onChange={update} onBlur={()=>setSettings(previous=>({...previous,domains:previous.domains.split(',').map(normalizeDomain).filter(Boolean).join(', ')}))} help="Enter www.blog.example.invalid or paste https://www.blog.example.invalid. Separate multiple domains with commas. Used for the maintenance page."/>
     {!isStatic&&<><Field label="Shutdown profile" name="shutdownProfile" value={settings.shutdownProfile} onChange={update} options={[[ 'generic','Generic services'],['postgres','PostgreSQL'],['mysql','MySQL']]} help="Generic requires you to verify clean shutdown in the next step. Choose a database profile only when it matches this site's database."/>
     <label className="check"><input type="checkbox" name="probeOrigin" checked={!!settings.probeOrigin} onChange={update}/> Check the website through this server's local proxy</label><p className="hint">Use when a CDN blocks automated probes. Keeps the website hostname and verifies its HTTPS certificate, while connecting to 127.0.0.1 on the source server. Verify CDN behavior separately.</p></>}
     <Field label="Staging directory" name="stagingRoot" value={settings.stagingRoot} onChange={update} required help="Local capture and recovery directory. Direct delivery keeps only small journals here. Permanent backups use the selected storage destination."/>
+    {!isStatic&&<SqliteFiles services={savedServices.filter(service=>selected.includes(service.container))} texts={sqliteText} setTexts={setSqliteText} split={sqliteSplit} setSplit={setSqliteSplit} adding={sqliteAdding} setAdding={setSqliteAdding}/>}
    </details>
   </>}
   {step===3&&<>

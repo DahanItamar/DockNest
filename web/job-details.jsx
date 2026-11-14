@@ -6,6 +6,8 @@ import {StatusLabel,AlertPanel} from './system.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildJobReport} from './report/builders.js';
 import {catalogued,EXPLAIN} from './report/catalogue.js';
+import {SqliteFix} from './sqlite-fix.jsx';
+import {sqliteFailure} from './sqlite-files.js';
 
 // Human labels for recorded result fields. Unknown keys fall back to sentence case.
 export const FIELD_LABELS={backupId:'Backup ID',restoreId:'Restore ID',targetServerId:'Target server ID',downtimeSeconds:'Service downtime',sourceReady:'Source ready',verification:'Verification',integrity:'Package integrity',isolatedRestore:'Isolated restore',application:'Application check',status:'Status',method:'Method',networkMode:'Network mode',containerIds:'Container IDs',result:'Result',error:'Error',scope:'Check scope',checks:'Checks',passed:'Passed',restoreTested:'Restore tested',diagnostics:'Diagnostics',failure:'Failure point',lastStage:'Last stage',errorType:'Error type',remoteReported:'Reported by server',at:'Recorded at'};
@@ -177,7 +179,7 @@ export function BackupDetails({backup,siteName}){
  </div>;
 }
 
-export function JobDetails({job,siteName,onRefresh,siteKind,containers,storageType}){
+export function JobDetails({job,siteName,onRefresh,siteKind,containers,storageType,site,policy,downtimeSeconds,onRemovePath,onOpenSettings,onBackup}){
  const [view,setView]=useState('readable'),[refreshing,setRefreshing]=useState(false),[feedback,setFeedback]=useState(''),[failure,setFailure]=useState('');
  const times={createdAt:job.createdAt??job.created_at,startedAt:job.startedAt??job.started_at,finishedAt:job.finishedAt??job.finished_at},siteId=job.siteId??job.site_id;
  const bad=['failed','recovery_required'].includes(job.status),done=job.status==='completed',running=['running','queued'].includes(job.status);
@@ -197,7 +199,8 @@ export function JobDetails({job,siteName,onRefresh,siteKind,containers,storageTy
    <div className="dn-actions"><button type="button" onClick={refresh} disabled={refreshing} aria-busy={refreshing}>{refreshing?'Refreshing…':'Refresh'}</button>{view==='json'&&<button type="button" onClick={copy}>Copy</button>}<button type="button" onClick={()=>setView(view==='json'?'readable':'json')}>{view==='json'?'Back to summary':'View JSON'}</button></div></section>
   {view==='json'?<pre className="dn-json" tabIndex={0} aria-label="Original job JSON">{json}</pre>:<div className="dn-jd-body">
    <Facts items={[['Started',dateTime(times.startedAt||times.createdAt)],['Duration',running&&times.startedAt?<Elapsed from={times.startedAt}/>:times.startedAt&&times.finishedAt?duration((Date.parse(times.finishedAt)-Date.parse(times.startedAt))/1000):'—'],['Site paused',paused?<PausedFor window={paused}/>:'Not paused'],['Stage',sentence(job.stage||'—')]]}/>
-   {job.error&&<AlertPanel variant="error" title="What happened" action={<><span className="dn-next"><b>Next step</b> {explanation.next}</span>{bad&&<div className="rp-actions"><ReportProblem summary={job.status==='recovery_required'?'Recovery review':'Failed '+type.toLowerCase()} excerptSource={catalogued(job.error)?null:{error:job.error}} excerptLabel="Include the error message" build={(facts,opts)=>buildJobReport({...facts,...opts,...jobFailureFacts(job),siteKind,containers,storage:storageType,message:job.error,explanation:explanation.meaning})}/></div>}</>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
+   {job.error&&job.status==='failed'&&site&&sqliteFailure(job.error)&&<SqliteFix job={job} site={site} policy={policy} downtimeSeconds={downtimeSeconds} onRemovePath={onRemovePath} onOpenSettings={onOpenSettings} onBackup={onBackup}/>}
+   {job.error&&!(job.status==='failed'&&site&&sqliteFailure(job.error))&&<AlertPanel variant="error" title="What happened" action={<><span className="dn-next"><b>Next step</b> {explanation.next}</span>{bad&&<div className="rp-actions"><ReportProblem summary={job.status==='recovery_required'?'Recovery review':'Failed '+type.toLowerCase()} excerptSource={catalogued(job.error)?null:{error:job.error}} excerptLabel="Include the error message" build={(facts,opts)=>buildJobReport({...facts,...opts,...jobFailureFacts(job),siteKind,containers,storage:storageType,message:job.error,explanation:explanation.meaning})}/></div>}</>}><span className="dn-err-line">{explanation.meaning}</span><span className="dn-err-msg">{job.error}</span>{details.failure&&typeof details.failure==='object'&&'lastStage' in details.failure&&<FailurePoint failure={details.failure}/>}</AlertPanel>}
    <TransferProgress job={job}/>
    {Array.isArray(details.diagnostics)&&details.diagnostics.length>0&&<section className="dn-card"><h4>Steps</h4><StepTimeline items={details.diagnostics}/></section>}
    {Object.keys(result).length>0&&<section className="dn-card"><h4>Result</h4><ReadableFields value={result}/></section>}

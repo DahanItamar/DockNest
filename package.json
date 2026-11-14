@@ -55,7 +55,8 @@
     "test:safe-edit": "node scripts/safe-edit-browser.js",
     "test:self-heal": "node scripts/self-heal-browser.js",
     "test:auth": "node scripts/auth-browser.js",
-    "test:launch": "node scripts/launch-browser.js"
+    "test:launch": "node scripts/launch-browser.js",
+    "test:jobs-sqlite": "node scripts/jobs-sqlite-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/roboto": "^5.3.0",
