@@ -16,6 +16,11 @@ class OnlineSqliteTests(unittest.TestCase):
         self.container={'Id':'c1','Mounts':[{'Destination':'/data','Source':str(self.root)}]}
     def tearDown(self):shutil.rmtree(self.root)
 
+    def test_missing_or_linked_database_names_the_declared_file(self):
+        with self.assertRaisesRegex(ValueError,'missing or not a regular file: /data/gone.db$'):helper.sqlite_file_source('/data/gone.db',self.container)
+        (self.root/'link.db').symlink_to(self.root/'small.db')
+        with self.assertRaisesRegex(ValueError,'symbolic link: /data/link.db$'):helper.sqlite_file_source('/data/link.db',self.container)
+
     def test_only_large_wal_databases_are_checked_online(self):
         self.assertFalse(sqlite_checked_online(self.root/'big.db'))
         with patch('helper.SQLITE_OFFLINE_CHECK_MAX_BYTES',1024):
