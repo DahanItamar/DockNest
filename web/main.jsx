@@ -172,12 +172,10 @@ const tests=useRestoreTests(api,(state?.sites||[]).map(x=>x.id),!!auth?.authenti
 const [testInfo,setTestInfo]=useState({}),[openTests,setOpenTests]=useState([]),testSeen=useRef({});
 useEffect(()=>{
  if(!auth?.authenticated||locked||!state?.jobs)return;
- for(const entry of groupTestJobs(state.jobs).filter(x=>x.kind==='test').slice(0,40)){
-  const signature=testSignature(entry);
-  if(testSeen.current[entry.testId]===signature)continue;
-  testSeen.current[entry.testId]=signature;
-  tests.client.detail(entry.testId).then(detail=>setTestInfo(previous=>({...previous,[entry.testId]:detail}))).catch(()=>{testSeen.current[entry.testId]=undefined});
- }
+ const queue=groupTestJobs(state.jobs).filter(x=>x.kind==='test').slice(0,40).filter(entry=>{const signature=testSignature(entry);if(testSeen.current[entry.testId]===signature)return false;testSeen.current[entry.testId]=signature;return true;});
+ // At most four reads at a time; each test is read again only when its step jobs change.
+ const worker=async()=>{for(let entry=queue.shift();entry;entry=queue.shift()){const signature=testSignature(entry);try{const detail=await tests.client.detail(entry.testId);if(testSeen.current[entry.testId]===signature)setTestInfo(previous=>({...previous,[entry.testId]:detail}))}catch{if(testSeen.current[entry.testId]===signature)testSeen.current[entry.testId]=undefined}}};
+ const workers=Math.min(4,queue.length);for(let i=0;i<workers;i++)worker();
 },[state?.jobs,auth?.authenticated,locked]);
 
 function clearSession(message=''){csrf='';setSignIn(false);setAuth({authenticated:false,message});setState(null);setModal(null);setPlan(null);setNotice('');setError(message);setRoute('Overview');}
@@ -222,13 +220,13 @@ function testRow(entry){
   {isOpen&&info.steps.map(step=>{const [state,label]=STEP_STATE[step.state]||STEP_STATE.pending,bad=step.state==='failed',reason=bad?(step.detail||info.reason):'';return <tr key={step.step} className={'test-step'+(bad?' is-fail':'')}><td className="step" colSpan={2} data-label="">{step.label||STEP_LABELS[step.step]||step.step}{reason&&<span className="test-step-reason">{reason}</span>}</td><td data-label="Status"><StatusLabel state={state}>{label}</StatusLabel></td><td data-label="Time" className="num">{stepDuration(step)||'—'}</td><td data-label=""/></tr>;})}
  </React.Fragment>;
 }
-function jobs(xs){return table(['Job / site','Status','Stage','Started','Details'],groupTestJobs(xs).map(entry=>entry.kind==='job'?jobRow(entry.job):testRow(entry)),'Jobs',{columns:[null,'168px','208px','200px','216px'],numeric:[3]});}
+function jobs(xs){return table(['Job / site','Status','Stage','Started','Details'],groupTestJobs(xs).map(entry=>entry.kind==='job'?jobRow(entry.job):testRow(entry)),'Jobs',{columns:[null,'136px','176px','208px','216px'],numeric:[3]});}
 function jobFixProps(job){
  const siteId=job.siteId||job.site_id,site=s.sites.find(x=>x.id===siteId);
  if(!site)return {};
  const lastBackup=s.backups.find(x=>(x.siteId||x.site_id)===siteId),downtime=lastBackup?.manifest?.downtimeSeconds;
  return {site,policy:s.policies.find(x=>(x.siteId||x.site_id)===siteId),downtimeSeconds:Number.isFinite(downtime)?downtime:undefined,
-  onRemovePath:async path=>{try{await api('/sites/'+site.id,{serverId:site.serverId||site.server_id,name:site.name,config:{...site.config,services:removeSqlitePath(site.config?.services,path).services}},'PATCH')}catch(e){if(e.status===401){clearSession('Your session ended. Sign in again.')}throw e}await refresh()},
+  onRemovePath:async path=>{try{const fresh=await api('/sites/'+site.id);const {services,containers}=removeSqlitePath(fresh.config?.services,path);if(containers.length)await api('/sites/'+site.id,{serverId:fresh.serverId||fresh.server_id,name:fresh.name,config:{...fresh.config,services}},'PATCH')}catch(e){if(e.status===401){clearSession('Your session ended. Sign in again.')}throw e}await refresh()},
   onOpenSettings:()=>open({type:'site',title:'Edit site configuration',item:site}),
   onBackup:async()=>{const r=await action('/sites/'+site.id+'/backup',{},'Backup queued. Follow progress in Jobs.');if(r)setModal(null)}};
 }

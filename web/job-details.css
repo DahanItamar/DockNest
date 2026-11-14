@@ -135,11 +135,11 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .path-box{display:grid;gap:4px;padding:12px;border:1px solid var(--alert-error-border);border-radius:var(--radius);background:var(--surface);color:var(--text-primary)}
 .path-box code{font-size:var(--fs-body);line-height:var(--lh-body);color:var(--heading);font-weight:500;overflow-wrap:anywhere}
 .path-box small{color:var(--text-muted);display:block}
-.dn-jd .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.dn-jd .btn-row{display:flex;gap:8px;flex-wrap:wrap}
 .dn-jd .btn-row button{min-height:var(--control-height);white-space:nowrap;display:inline-flex;align-items:center;gap:8px}
-.dn-jd .later{display:grid;gap:2px;color:var(--text-secondary);margin-top:4px}
+.dn-jd .later{display:grid;gap:0;color:var(--text-secondary)}
 .dn-jd .later small{display:block}
-.dn-jd .sq-quiet{min-height:32px;padding:0 10px 0 0;border:0;background:none;color:var(--link);font-weight:500}
+.dn-jd .sq-quiet{min-height:24px;padding:0 10px 0 0;border:0;background:none;color:var(--link);font-weight:500}
 .dn-jd .sq-quiet:hover{background:none;text-decoration:underline}
 .sq-confirm{width:min(480px,calc(100vw - 32px))}
 .sq-confirm .modal-body{display:grid;gap:12px}

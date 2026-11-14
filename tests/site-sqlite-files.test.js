@@ -47,4 +47,13 @@ test('relative paths, duplicate files, and an empty list under SIGTERM acceptanc
   assert.equal((await patch([service('web', { sqliteFiles: [] }), service('worker')])).status, 200, 'an empty list is fine without SIGTERM acceptance');
 });
 
+test('a stored list that was already odd does not block an unrelated edit, but changing it is checked', async () => {
+  const site = await (await call('/sites', 'POST', body([service('web'), service('worker')]))).json();
+  const legacy = [service('web', { sqliteFiles: ['/data/a.db', '/data/a.db'] }), service('worker', { sqliteFiles: [], sqliteSigtermConfirmed: true })];
+  db.prepare('UPDATE sites SET config=? WHERE id=?').run(JSON.stringify({ ...site.config, services: legacy }), site.id);
+  const patch = (name, services) => call('/sites/' + site.id, 'PATCH', { serverId: host, name, config: { ...site.config, services } });
+  assert.equal((await patch('Renamed', legacy)).status, 200);
+  assert.equal((await patch('Renamed again', [service('web', { sqliteFiles: ['/data/a.db', '/data/a.db', '/data/b.db'] }), legacy[1]])).status, 400);
+});
+
 test.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); await rm(directory, { recursive: true, force: true }); });

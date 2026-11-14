@@ -37,10 +37,12 @@ try{
  await page.route('**/api/updates/progress',r=>r.fulfill({json:{}}));
  await page.route('**/api/state',r=>r.fulfill({json:state}));
  await page.route('**/api/servers/host/discover',r=>r.fulfill({json:{containers:names.map(name=>({name,image:name,state:'running'})),staticSites:[]}}));
+ await page.route('**/api/connections',r=>r.fulfill({json:{connections:[],settings:{allowPrivateNetwork:false,operatorsManage:true,certificateDays:14},legacyChanged:false,limits:{connections:60,nodes:40,lines:200},role:'admin'}}));
+ await page.route('**/api/connections/providers',r=>r.fulfill({json:{providers:[]}}));
  await page.route('**/api/restore-tests/T2',r=>r.fulfill({json:testDetail('T2',true)}));
  await page.route('**/api/restore-tests/T1',r=>r.fulfill({json:testDetail('T1',false)}));
  const saved=[];let queued=0;
- await page.route('**/api/sites/site',r=>{if(r.request().method()!=='PATCH')return r.fallback();const body=r.request().postDataJSON();saved.push(body);site.config=body.config;return r.fulfill({json:site});});
+ await page.route('**/api/sites/site',r=>{if(r.request().method()==='GET')return r.fulfill({json:site});if(r.request().method()!=='PATCH')return r.fallback();const body=r.request().postDataJSON();saved.push(body);site.config=body.config;return r.fulfill({json:site});});
  await page.route('**/api/sites/site/backup',r=>{queued+=1;return r.fulfill({json:{id:'new'}});});
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5177');
  const nav=name=>page.getByRole('navigation').getByRole('button',{name,exact:true}).click();
@@ -138,7 +140,10 @@ try{
  await failedStep.getByText('Check health').waitFor();
  assert.match(await failedStep.textContent(),/did not answer on \/health/);
  assert.equal(await page.locator('tr.test-step').count(),6);
- await page.screenshot({path:shots+'/jobs-1440.png'});
+ await page.setViewportSize({width:1280,height:1000});
+ assert.deepEqual(await page.locator('tbody td').evaluateAll(x=>x.filter(n=>n.scrollWidth>n.clientWidth+1).map(n=>n.textContent.slice(0,30)+n.scrollWidth+'>'+n.clientWidth)),[],'no cell is clipped at 1280');
+ assert.deepEqual(await page.locator('tbody .job-site').evaluateAll(x=>x.filter(n=>n.scrollWidth>n.clientWidth).length),0,'site names are not truncated at 1280');
+ await page.screenshot({path:shots+'/jobs-1280.png'});
  await page.setViewportSize({width:390,height:900});await page.screenshot({path:shots+'/jobs-390.png',fullPage:true});
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'jobs: no horizontal scroll at 390');
  await page.setViewportSize({width:1440,height:1000});
@@ -146,6 +151,15 @@ try{
  assert.equal(await page.locator('tr.test-step').count(),0);
  await page.locator('tbody tr',{hasText:'restore test'}).first().getByRole('button',{name:'View job'}).click();
  await page.getByText('Restore test failed').waitFor();
+ // 4. Connections settings: exactly one line between the two switch rows, in both themes and widths.
+ await page.keyboard.press('Escape');await nav('Connections');
+ await page.getByRole('heading',{name:'Connections settings'}).waitFor();
+ for(const theme of ['light','dark'])for(const width of [1280,390]){
+  await page.setViewportSize({width,height:900});await page.evaluate(t=>document.documentElement.setAttribute('data-theme',t),theme);
+  const lines=await page.locator('.cx-switch-row').evaluateAll(rows=>rows.map(r=>{const c=getComputedStyle(r);return [c.borderTopWidth,c.borderBottomWidth]}));
+  assert.deepEqual(lines[0],['0px','1px']);assert.equal(lines[1][0],'0px','second row adds no top line');assert.notEqual(await page.locator('.cx-switch-row').first().evaluate(r=>getComputedStyle(r).borderBottomColor),'rgba(0, 0, 0, 0)');
+  await page.waitForTimeout(300);await page.locator('.cx-settings').screenshot({path:`${shots}/connections-${width}-${theme}.png`});
+ }
  assert.deepEqual(errors,[]);
  console.log('Jobs and SQLite passed: per-service SQLite editor with shared group, failed-backup fix view with confirmed removal, one row per restore test.');
 }finally{await browser.close();}

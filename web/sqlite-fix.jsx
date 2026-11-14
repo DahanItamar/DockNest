@@ -15,7 +15,7 @@ function ConfirmRemove({path,services,busy,error,onCancel,onConfirm}){
    <p>DockNest will stop checking and capturing this file, so it is no longer health-checked. Other files and databases stay protected.</p>
    <p>The change applies from the next backup.</p>
    {error&&<AlertPanel variant="error" title="The path was not removed">{error}</AlertPanel>}
-   <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button><button type="button" className="primary" onClick={onConfirm} disabled={busy}>{busy?'Removing…':'Remove path'}</button></div>
+   <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={onConfirm} disabled={busy}>{busy?'Removing…':'Remove path'}</button></div>
   </div>
  </dialog>;
 }

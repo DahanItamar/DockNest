@@ -22,6 +22,8 @@ export function sqliteProblem(services,texts){
  for(const service of Array.isArray(services)?services:[]){
   if(!(service.container in texts))continue;
   const paths=pathLines(texts[service.container]);
+  // A saved list the person did not touch is never judged here.
+  if(JSON.stringify(paths)===JSON.stringify(service.sqliteFiles||[]))continue;
   if(paths.some(path=>!/^\/[a-zA-Z0-9_./-]+$/.test(path)||path.split('/').includes('..')||path.startsWith('//')))return service.container+': use absolute paths with letters, numbers and . _ - /, one per line.';
   if(new Set(paths).size!==paths.length)return service.container+': a file is listed twice.';
   if(paths.length>30)return service.container+': list up to 30 files.';
