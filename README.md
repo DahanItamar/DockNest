@@ -33,7 +33,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 ## Features
 
 **Backup and restore**
-- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis.
+- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis. SQLite files you declare are checked and captured, and you can edit that list per service in the site settings.
 - Per-site schedules, retention, and pinned backups.
 - Restore to a separate copy; DockNest does not replace a live site by itself.
 - Restore copies, restore tests and moves keep the original's protections (read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor), or refuse with a clear reason.

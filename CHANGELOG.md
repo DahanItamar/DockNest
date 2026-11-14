@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.16.4] - 2026-11-14
+
+See [docs/releases/2026-11-14-v2.16.4.md](docs/releases/2026-11-14-v2.16.4.md).
+
 ### Added
 
 - Edit the SQLite database files of each service in the site settings (Advanced backup settings). Services that declare the same files share one list.
@@ -13,7 +17,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Fixed
 
 - Restore tests now work for sites with fixed container IP addresses, and for sites where one container shares another's network (a sidecar). The test copy ignores the fixed addresses and the sidecar joins its partner's isolated copy.
-- Restores, restore tests and moves no longer refuse a folder or mount path that contains a comma or a double quote.
+- Restores, restore tests, moves and Safe Edit no longer refuse a folder or mount path that contains a comma or a double quote.
 - Connections settings no longer shows a double line between its two switches.
 - Helper containers named like postgres-exporter or redis-commander are no longer mistaken for databases and refused when you back up a site. Anything else that looks like a database, and any container that really runs one, still needs its database settings.
 - A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
