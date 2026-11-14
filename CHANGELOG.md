@@ -7,9 +7,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Added
 
 - Edit the SQLite database files of each service in the site settings (Advanced backup settings). Services that declare the same files share one list.
+- A failed backup caused by a missing or linked SQLite file now shows the file and the service, with **Remove path** and **Open settings** buttons.
+- Jobs: a restore test is one row with its steps folded under it, the failed step highlighted.
 
 ### Fixed
 
+- Connections settings no longer shows a double line between its two switches.
 - A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
 
 ## [2.16.3] - 2026-11-10
