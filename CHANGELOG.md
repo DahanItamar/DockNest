@@ -6,6 +6,8 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- Restore tests now work for sites with fixed container IP addresses, and for sites where one container shares another's network (a sidecar). The test copy ignores the fixed addresses and the sidecar joins its partner's isolated copy.
+- Restores, restore tests and moves no longer refuse a folder or mount path that contains a comma or a double quote.
 - A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
 
 ## [2.16.3] - 2026-11-10

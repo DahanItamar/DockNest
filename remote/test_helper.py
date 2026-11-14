@@ -3,7 +3,7 @@ import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, network_peers, mount_field, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
@@ -486,6 +486,33 @@ class RestoreNetworkTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace',msg=networks):restore_network_plan([c,self.container('db',{})])
         self.assertEqual(restore_network_plan([self.container('app',{'bridge':{},'none':{}},NetworkMode='bridge')]),[{}])
         restore_network_plan([self.container('app',{'shop_default':{}},NetworkMode='shop_default'),self.container('db',{'shop.back-1':{}})])
+    def test_a_static_ip_is_ignored_only_for_an_isolated_restore_test_copy(self):
+        static={'back':{'IPAMConfig':{'IPv4Address':'172.20.0.2','IPv6Address':'fd00::2'},'Aliases':['db']}}
+        cs=[self.container('db',static),self.container('web',{'back':{}})]
+        self.assertEqual(restore_network_plan(cs,isolated=True),[{'back':['db']},{'back':['web']}])
+        for refused in (lambda:restore_network_plan(cs),lambda:restore_network_plan([cs[0]]),lambda:restore_network_plan(cs,isolated=False)):
+            with self.assertRaisesRegex(ValueError,'Static IP'):refused()
+    def test_a_peer_network_mode_is_allowed_only_in_an_isolated_test_and_only_inside_the_group(self):
+        web={'Id':'a'*64,'Name':'/web','Config':{'Hostname':'web'},'HostConfig':{'NetworkMode':'bridge'},'NetworkSettings':{'Networks':{'app':{'Aliases':['web']}}}}
+        for mode in ('container:'+'a'*64,'container:'+'a'*12,'container:web'):
+            side=self.container('side',{},NetworkMode=mode);side['Id']='b'*64
+            self.assertEqual(network_peers([web,side]),{1:0},mode)
+            self.assertEqual(restore_network_plan([web,side],isolated=True),[{'app':['web']},{}],mode)
+            for refused in (lambda:restore_network_plan([web,side]),lambda:restore_network_plan([web,side],isolated=False)):
+                with self.assertRaisesRegex(ValueError,'Host privileges or shared namespace'):refused()
+        # A peer outside the group, itself, a short or unknown id and a mode that is not a container all stay refused.
+        for mode in ('container:elsewhere','container:'+'c'*64,'container:side','container:'+'a'*11,'container:','host'):
+            side=self.container('side',{},NetworkMode=mode);side['Id']='b'*64
+            self.assertEqual(network_peers([web,side]),{})
+            with self.assertRaises(ValueError,msg=mode):restore_network_plan([web,side],isolated=True)
+    def test_a_peer_does_not_lift_any_other_refusal(self):
+        web={'Id':'a'*64,'Name':'/web','Config':{'Hostname':'web'},'HostConfig':{'NetworkMode':'bridge'},'NetworkSettings':{'Networks':{}}}
+        for host in ({'Privileged':True},{'CapAdd':['SYS_ADMIN']},{'PidMode':'host'},{'Devices':[{'PathOnHost':'/dev/x'}]}):
+            side=self.container('side',{},NetworkMode='container:web',**host);side['Id']='b'*64
+            with self.assertRaises(ValueError,msg=host):restore_network_plan([web,side],isolated=True)
+        bad=dict(web,HostConfig={'NetworkMode':'host'})
+        side=self.container('side',{},NetworkMode='container:web');side['Id']='b'*64
+        with self.assertRaises(ValueError):restore_network_plan([bad,side],isolated=True)
     def test_only_capabilities_every_container_already_has_are_accepted(self):
         # The copy gets the original's CapDrop and CapAdd (test_hardening.py), so only a CapAdd beyond the defaults is refused.
         for added in [['CAP_CHOWN','CAP_SETGID','CAP_SETUID'],['chown','NET_BIND_SERVICE'],['CAP_KILL']]:
@@ -1282,3 +1309,18 @@ class PrivilegeBitTests(unittest.TestCase):
             os.chmod(root/'cgi',0o700);self.assertNotEqual(tree_digest(root),before)
 
 if __name__=='__main__':unittest.main()
+
+
+class MountFieldTests(unittest.TestCase):
+    def test_plain_values_are_passed_on_unchanged(self):
+        for value in ('/srv/app','/srv/my app',"/srv/it's",'/a=b'):self.assertEqual(mount_field('src',value),'src='+value)
+    def test_commas_and_quotes_are_csv_quoted_the_way_docker_reads_them(self):
+        import csv
+        for value in ('/a,b','/a,,b','a,b,c','/he said "hi"','/q"','"/lead','/a, b "x",y'):
+            field=mount_field('dst',value);option=','.join(['type=bind',mount_field('src','/x,y'),field,'readonly'])
+            self.assertEqual(next(csv.reader([option])),['type=bind','src=/x,y','dst='+value,'readonly'],value)
+        self.assertEqual(mount_field('src','/a,b'),'"src=/a,b"')
+        self.assertEqual(mount_field('src','/a"b'),'"src=/a""b"')
+    def test_line_breaks_in_a_path_that_needs_quoting_are_refused(self):
+        for value in ('/a,b\nc','/a"b\r'):
+            with self.assertRaises(ValueError):mount_field('src',value)

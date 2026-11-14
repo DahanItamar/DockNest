@@ -192,6 +192,58 @@ class RestoreTests(unittest.TestCase):
             for c in box.docker.containers.values():
                 self.assertEqual(c['args'][c['args'].index('--network')+1],name);self.assertIn('--dns',c['args'])
             self.assertEqual(box.state()['restored']['running'],['dbm-test-'+TID[:12]+'-1-id','dbm-test-'+TID[:12]+'-0-id'],'restart order, stopped services stay stopped')
+    def sidecar_manifest(self,static_ip=False,destination='/data'):
+        m=manifest();web,side=m['containers'][0],container(1,'proxy')
+        web['Id']='a'*64;side['Id']='b'*64
+        web['NetworkSettings']['Networks']={'app_default':{'Aliases':['web'],**({'IPAMConfig':{'IPv4Address':'172.20.0.9'}} if static_ip else {})}}
+        web['HostConfig']['NetworkMode']='app_default'
+        side['HostConfig']['NetworkMode']='container:'+web['Id'];side['NetworkSettings']['Networks']={}
+        web['Mounts'][0]['Destination']=destination;side['Mounts'][0]['Destination']=destination
+        # The sidecar is listed first: the peer must still be created and started first.
+        m['containers']=[side,web];m['snapshotImages']=['sha256:snap0','sha256:snap1']
+        m['backupPlan']={'services':[],'restartOrder':[side['Id'],web['Id']]}
+        return m
+    def test_a_sidecar_joins_its_peers_copy_and_is_created_and_started_after_it(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,self.sidecar_manifest()) as box:
+            box.prepare();result=box.restore()
+            self.assertEqual(result['outcome'],'ok',result)
+            names=['dbm-test-'+TID[:12]+'-0','dbm-test-'+TID[:12]+'-1']
+            created=[c[c.index('--name')+1] for c in box.docker.calls if c[0]=='create']
+            self.assertEqual(created,[names[1],names[0]],'the peer is created first')
+            side=box.docker.containers[names[0]+'-id']['args'];peer=box.docker.containers[names[1]+'-id']['args']
+            self.assertEqual(side[side.index('--network')+1],'container:'+names[1])
+            self.assertNotIn('--dns',side);self.assertNotIn('--network-alias',side)
+            [(network,_)]=box.docker.networks.items()
+            self.assertEqual(peer[peer.index('--network')+1],network)
+            self.assertEqual(box.state()['restored']['containers'][0]['name'],names[0],'results stay in the original order')
+            box.start();starts=[e[1] for e in box.docker.events if e[0]=='start']
+            self.assertEqual(starts,[names[1]+'-id',names[0]+'-id'],'the peer starts first')
+    def test_a_sidecar_test_never_gets_internet(self):
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,self.sidecar_manifest()) as box:
+            box.prepare();result=box.restore(internet=True)
+            self.assertEqual(result['outcome'],'couldnt_run',result);self.assertIn('Allow internet is refused',result['summary'] if 'summary' in result else json.dumps(result))
+            self.assertEqual(box.docker.containers,{})
+    def test_a_peer_outside_the_group_is_still_refused(self):
+        m=self.sidecar_manifest();m['containers'][0]['HostConfig']['NetworkMode']='container:'+'f'*64
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,m) as box:
+            box.prepare();result=box.restore()
+            self.assertEqual(result['outcome'],'couldnt_run',result);self.assertEqual(box.docker.containers,{})
+    def test_static_ip_addresses_are_dropped_in_the_isolated_copy(self):
+        m=manifest(True);m['containers'][0]['NetworkSettings']['Networks']['app_default']['IPAMConfig']={'IPv4Address':'172.20.0.9','IPv6Address':'fd00::9'}
+        with tempfile.TemporaryDirectory() as t,Sandbox(t,m) as box:
+            box.prepare();result=box.restore()
+            self.assertEqual(result['outcome'],'ok',result)
+            for c in box.docker.containers.values():
+                self.assertNotIn('--ip',c['args']);self.assertNotIn('--ip6',c['args'])
+    def test_mount_paths_with_commas_and_quotes_are_csv_quoted(self):
+        for destination,expected in (('/da,ta','"dst=/da,ta"'),('/da"ta','"dst=/da""ta"'),('/my data','dst=/my data')):
+            with tempfile.TemporaryDirectory() as t,Sandbox(t,manifest()) as box:
+                box.manifest['containers'][0]['Mounts'][0]['Destination']=destination
+                box.prepare();result=box.restore()
+                self.assertEqual(result['outcome'],'ok',(destination,result))
+                [c]=box.docker.containers.values();args=c['args']
+                mount=args[args.index('--mount')+1]
+                self.assertTrue(mount.startswith('type=bind,src='),mount);self.assertIn(','+expected,mount)
     def test_images_and_tags_are_journalled_before_load_and_moved_tags_are_restored(self):
         with tempfile.TemporaryDirectory() as t,Sandbox(t,tags=['shop:latest','fresh:1']) as box:
             box.docker.images|={'sha256:old','sha256:orig'};box.docker.tags['shop:latest']='sha256:old'

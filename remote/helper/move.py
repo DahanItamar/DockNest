@@ -5,7 +5,7 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
-    hardening_args, inspect, run, target_hardening_problem, verify_hardening)
+    hardening_args, inspect, mount_field, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
 from .databases import (
@@ -612,8 +612,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
             args+=hardening_args(c,d)
             for m in c['Mounts']:
-                if ',' in m['Source'] or ',' in m['Destination']:raise ValueError('Mount paths with commas need a manual move')
-                mount=('type=volume,src='+m['Name'] if m['Type']=='volume' else 'type=bind,src='+m['Source'])+',dst='+m['Destination']
+                mount=','.join(['type=volume',mount_field('src',m['Name'])] if m['Type']=='volume' else ['type=bind',mount_field('src',m['Source'])])+','+mount_field('dst',m['Destination'])
                 if not m.get('RW',True):mount+=',readonly'
                 args+=['--mount',mount]
             for host in hc.get('ExtraHosts') or []:
