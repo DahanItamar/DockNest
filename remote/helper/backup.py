@@ -182,8 +182,8 @@ def revalidate_sources(plan):
     for source in plan['sources']:
         if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
-DATABASE_IMAGE_WORDS=('postgres','postgis','timescaledb','pgvecto','pgvector','vectorchord','mysql','mariadb','mongo','redis','valkey','cockroach','cassandra','elasticsearch')
-DATABASE_TOOL_WORDS=frozenset(['exporter','commander','express','backup','backups','admin','ui','gui','webui','insight','sidecar','cli','client','dump','dumper','restore','monitor','dashboard','studio','redisinsight'])
+DATABASE_IMAGE_WORDS=('postgres','postgis','timescaledb','pgvecto','pgvector','vectorchord','mysql','mariadb','mongo','redis','valkey','keydb','dragonfly','opensearch','cockroach','cassandra','elasticsearch')
+DATABASE_TOOL_WORDS=frozenset(['exporter','commander','express','backup','backups','dump','dumper','restore','sidecar','insight','redisinsight'])
 def image_looks_like_database(image):
     """Fail closed: true unless the image's own name is clearly a helper tool.
 
