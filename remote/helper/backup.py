@@ -182,7 +182,7 @@ def revalidate_sources(plan):
     for source in plan['sources']:
         if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
-DATABASE_IMAGE_WORDS=('postgres','postgis','timescaledb','pgvecto','pgvector','vectorchord','mysql','mariadb','mongo','redis','valkey','keydb','dragonfly','opensearch','cockroach','cassandra','elasticsearch')
+DATABASE_IMAGE_WORDS=('postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch')
 DATABASE_TOOL_WORDS=frozenset(['exporter','commander','express','backup','backups','dump','dumper','restore','sidecar','insight','redisinsight'])
 def image_looks_like_database(image):
     """Fail closed: true unless the image's own name is clearly a helper tool.
@@ -190,9 +190,9 @@ def image_looks_like_database(image):
     The name is the last path part without tag and digest. A name made of a database word plus a tool word
     (postgres-exporter, redis-commander, mysql-backup) is a tool. Any other image that mentions a database word
     anywhere (registry, namespace, name or tag), such as postgres, bitnami/postgresql-repmgr or an unknown variant, stays a database."""
-    whole=(image or '').lower().split('@',1)[0]
+    whole=(image or '').lower()
     if not any(word in whole for word in DATABASE_IMAGE_WORDS):return False
-    name=whole.rsplit('/',1)[-1].split(':',1)[0]
+    name=whole.split('@',1)[0].rsplit('/',1)[-1].split(':',1)[0]
     if any(word in name for word in DATABASE_IMAGE_WORDS) and set(re.split(r'[-_.]+',name))&DATABASE_TOOL_WORDS:return False
     return True
 
