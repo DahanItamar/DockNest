@@ -150,7 +150,6 @@ export const CATALOGUE=Object.freeze([
  "Mount contains a symlink to uncaptured external data",
  "Mount exclusions require a current selected source and an exact child path",
  "Mount exclusions require reviewed generic application services; native database adapters retain full capture",
- "Mount paths with commas require offline restore",
  "Mount source symlink requires a capture adapter",
  "Native data check did not return one count",
  "Native database shutdown evidence missing from the current stop",

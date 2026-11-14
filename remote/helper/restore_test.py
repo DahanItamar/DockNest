@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, atomic_json, docker, emit, hardening_args, inspect, run, verify_hardening)
+    NOFOLLOW, atomic_json, docker, emit, hardening_args, inspect, mount_field, run, verify_hardening)
 from .databases import (
     cached_sqlite_file_proof, data_checks, restart_services)
 from .backup import (
@@ -13,7 +13,7 @@ from .discovery import (
     temporary_mounts, tmpfs_argument)
 from .restore import (
     MountLayoutError, chain_length, chain_paths, external_restore_plan, extract_mount, image_archives,
-    mount_bytes, restore_network_plan, safe_extract, unpack_verified)
+    mount_bytes, network_peers, restore_network_plan, safe_extract, unpack_verified)
 from .move import (
     save_state)
 from .install import (
@@ -355,7 +355,7 @@ def restore_test_restore(req):
     containers=manifest['containers']
     if internet and internet_problem(containers):raise TestOutcome('couldnt_run',internet_problem(containers),checks)
     if internet and not (shutil.which('nsenter') and shutil.which('iptables') and shutil.which('ip6tables')):raise TestOutcome('couldnt_run','The test server needs nsenter, iptables and ip6tables to block outgoing mail inside the copy, so the test does not run with internet.',checks)
-    try:plans=restore_network_plan(containers)
+    try:plans=restore_network_plan(containers,isolated=True)
     except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise TestOutcome('failed','The backup is missing snapshot images.',checks)
     multi=len(containers)>1
@@ -379,9 +379,8 @@ def restore_test_restore(req):
                 if error.kind=='overlap':raise TestOutcome('couldnt_run','Overlapping mount paths need a reviewed offline restore.',checks)
                 raise TestOutcome('failed','A mount archive must hold exactly one entry.',checks)
             except ValueError as error:raise backup_side(error)
-            if ',' in str(source) or ',' in m['Destination']:raise TestOutcome('couldnt_run','Mount paths with commas need a reviewed offline restore.',checks)
-            mount='type=bind,src='+str(source)+',dst='+m['Destination']
-            if not m.get('RW',True):mount+=',readonly'
+            try:mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
+            except ValueError as error:raise TestOutcome('couldnt_run',str(error),checks)
             args+=['--mount',mount]
         definitions.append((name,args+[manifest['snapshotImages'][i]]))
     sqlite_cache={}
@@ -423,13 +422,25 @@ def restore_test_restore(req):
     if internet:
         egress=prefix+'-egress';test_journal(d,state,'networks',egress)
         docker('network','create','--driver','bridge','--label',TEST_LABEL+'='+tid,egress)
-    for i,(name,args) in enumerate(definitions):
+    # A container that shares a peer's network (`container:<peer>`, only in this group, never with internet) joins the
+    # peer's copy; the peer is created first.
+    peers=network_peers(containers);order=[]
+    def place(i,seen=()):
+        if i in order:return
+        if i in seen:raise TestOutcome('couldnt_run','Containers join each other in a network loop.',checks)
+        if i in peers:place(peers[i],seen+(i,))
+        order.append(i)
+    for i in range(len(definitions)):place(i)
+    created=[None]*len(definitions)
+    for i in order:
+        name,args=definitions[i]
         primary=next(iter(plans[i]),None) if plans[i] else ('' if '' in networks else None)
         if primary is not None:
             args[args.index('--network')+1]=networks[primary]
             args[1:1]=[part for alias in (plans[i].get(primary) or []) for part in ['--network-alias',alias]]
+        elif i in peers and not internet:args[args.index('--network')+1]='container:'+definitions[peers[i]][0]
         test_journal(d,state,'containers',name)
-        cid=docker(*args).decode().strip();created.append(cid)
+        cid=docker(*args).decode().strip();created[i]=cid
         for original,aliases in list(plans[i].items())[1:]:
             docker('network','connect',*[part for alias in aliases for part in ['--alias',alias]],networks[original],cid)
     try:verify_hardening(containers,created)
@@ -437,6 +448,7 @@ def restore_test_restore(req):
     ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
+    if any(containers[i]['State'].get('Running') and not containers[j]['State'].get('Running') for i,j in peers.items()):raise TestOutcome('couldnt_run','A container shares the network of one that was stopped in the backup.',checks)
     state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet,'egress':egress}
     save_state(d,state)
     emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks})
@@ -471,11 +483,20 @@ def test_contracts(manifest,restored):
     mapping={c['Id']:item['id'] for c,item in zip(manifest['containers'],restored['containers'])}
     contracts=[{**s,'container':mapping[s['container']],'dependsOn':[mapping[x] for x in s.get('dependsOn',[]) if x in mapping]} for s in manifest.get('backupPlan',{}).get('services',[]) if s.get('container') in mapping]
     return mapping,contracts
+def peer_contracts(manifest,restored,contracts):
+    """A container that shares a peer's network starts only after that peer is running: add the peer as a dependency
+    (as a generic service when the container has no contract of its own)."""
+    ids=[item['id'] for item in restored['containers']];result={c['container']:{**c,'dependsOn':list(c.get('dependsOn',[]))} for c in contracts}
+    for i,j in network_peers(manifest['containers']).items():
+        item=result.setdefault(ids[i],{'container':ids[i],'engine':'generic','dependsOn':[]})
+        if ids[j] not in item['dependsOn']:item['dependsOn'].append(ids[j])
+    return list(result.values())
 def restore_test_start(req):
     """Start containers in the captured restart order; a level starts once the level before it is healthy."""
     tid=test_id(req);d,state,restored=restored_state(tid)
     if test_disk_low(tid):raise TestOutcome('couldnt_run',DISK_LOW)
-    _,contracts=test_contracts(test_manifest(tid),restored)
+    manifest=test_manifest(tid);_,contracts=test_contracts(manifest,restored)
+    contracts=peer_contracts(manifest,restored,contracts)
     running=restored['running']
     started=(lambda ids:isolate_egress(tid,ids,restored['egress'])) if restored.get('internet') else None
     try:restart_services(running,contracts,started=started)

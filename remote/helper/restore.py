@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    atomic_json, complete_recovery, docker, emit, extra_capabilities, hardening_args, inspect, run, verify_hardening)
+    atomic_json, complete_recovery, docker, emit, extra_capabilities, hardening_args, inspect, mount_field, run, verify_hardening)
 from .paths import (
     excluded_path, mount_table)
 from .databases import (
@@ -179,18 +179,35 @@ def chain_paths(req,root):
     return {} if n is None else {'remotePaths':[str(root/('payload-%d.tar.gz'%k)) for k in range(n)]}
 # A copy (restore, restore test, move) gets the original's CapDrop and CapAdd (common.hardening_args), so only a CapAdd
 # beyond Docker's defaults (common.DEFAULT_CAPABILITIES) is refused: that copy would hold host privileges.
-def restore_network_plan(containers):
+def network_peers(containers):
+    """{index: peer index} for each container whose network mode joins another container of the same group
+    (`container:<name or id>`, which is how Compose writes `network_mode: service:<x>`). A peer outside the group,
+    itself, or an ambiguous id prefix is not listed."""
+    peers={}
+    for i,c in enumerate(containers):
+        mode=(c.get('HostConfig') or {}).get('NetworkMode') or ''
+        if not mode.startswith('container:'):continue
+        ref=mode[len('container:'):]
+        found=[j for j,o in enumerate(containers) if j!=i and ref and (o.get('Id')==ref or (len(ref)>=12 and str(o.get('Id') or '').startswith(ref)) or str(o.get('Name') or '').lstrip('/')==ref)]
+        if len(found)==1:peers[i]=found[0]
+    return peers
+def restore_network_plan(containers,isolated=False):
+    """Per container, the networks a copy joins with its aliases. `isolated` is for restore-test copies only, which
+    live on their own internal networks: a static IP is then ignored (the copy gets an address of its own) and a
+    `container:<peer>` mode is allowed when the peer is in the same group (see network_peers). Production restores
+    and moves never pass it."""
     if not 1<=len(containers)<=30:raise ValueError('Restore requires 1 to 30 containers')
+    peers=network_peers(containers) if isolated else {}
     plans=[]
-    for c in containers:
+    for index,c in enumerate(containers):
         hc=c['HostConfig'];mode=hc.get('NetworkMode','')
-        if hc.get('Privileged') or hc.get('Devices') or extra_capabilities(hc.get('CapAdd')) or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or mode.startswith('container:'):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
+        if hc.get('Privileged') or hc.get('Devices') or extra_capabilities(hc.get('CapAdd')) or hc.get('PidMode')=='host' or hc.get('IpcMode')=='host' or mode=='host' or (mode.startswith('container:') and index not in peers):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
         networks={}
         for name,n in c.get('NetworkSettings',{}).get('Networks',{}).items():
             if name=='none':continue
             # A network key names the network a copy joins: host or another container's namespace is refused here too.
             if name=='host' or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*',str(name)):raise ValueError('Host privileges or shared namespace networking cannot be restored automatically')
-            if n.get('IPAMConfig'):raise ValueError('Static IP assignments require a reviewed offline restore')
+            if n.get('IPAMConfig') and not isolated:raise ValueError('Static IP assignments require a reviewed offline restore')
             aliases=list(dict.fromkeys([c['Name'].lstrip('/'),c.get('Config',{}).get('Hostname','')]+(n.get('Aliases') or [])))
             if any(not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',alias) for alias in aliases if alias):raise ValueError('Unsupported network alias requires offline restore')
             networks[name]=[alias for alias in aliases if alias]
@@ -576,13 +593,11 @@ def restore(req):
         args+=hardening_args(c,root)
         for j,m in enumerate(c['Mounts']):
             source=extract_mount(unpacked,i,j,m,sources,root)
-            if ',' in str(source) or ',' in m['Destination']:raise ValueError('Mount paths with commas require offline restore')
-            mount='type=bind,src='+str(source)+',dst='+m['Destination']
-            if not m.get('RW',True):mount+=',readonly'
+            mount=','.join(['type=bind',mount_field('src',str(source)),mount_field('dst',m['Destination'])]+([] if m.get('RW',True) else ['readonly']))
             args+=['--mount',mount]
         for reference in external['references']:
             for destination in reference['destinations']:
-                if destination['container']==c['Id']:args+=['--mount','type=bind,src='+reference['source']+',dst='+destination['destination']+',readonly']
+                if destination['container']==c['Id']:args+=['--mount',','.join(['type=bind',mount_field('src',reference['source']),mount_field('dst',destination['destination']),'readonly'])]
         definitions.append((name,args+[manifest['snapshotImages'][i]]))
     sqlite_checks=[];sqlite_cache={}
     for service in manifest.get('backupPlan',{}).get('services',[]):

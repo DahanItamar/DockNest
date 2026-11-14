@@ -140,6 +140,17 @@ def seccomp_profile(value,name):
     except ValueError:profile=None
     if not isinstance(profile,dict):raise ValueError('Container %s has a seccomp profile DockNest cannot read.'%name)
     return json.dumps(profile,sort_keys=True,separators=(',',':'))
+def mount_field(key,value):
+    """One `key=value` field of a `docker --mount` option. Docker reads the whole option with Go's encoding/csv
+    (docker/cli opts/mount.go), so a field with a comma or a double quote must be wrapped in double quotes with its own
+    quotes doubled; every other field is passed on unchanged."""
+    text=key+'='+value
+    if ',' not in text and '"' not in text:return text
+    if '\r' in text or '\n' in text:raise ValueError('Mount paths with line breaks require offline restore')
+    return '"'+text.replace('"','""')+'"'
+def mount_option(kind,source,target,readonly=False):
+    """The whole `--mount` value for a bind or volume mount (fields CSV-quoted by mount_field)."""
+    return ','.join(['type='+kind,mount_field('src',source),mount_field('dst',target)]+(['readonly'] if readonly else []))
 def hardening(c):
     """The protections a copy must keep, read from the container's HostConfig. Refuses what DockNest cannot reproduce."""
     hc=c.get('HostConfig') or {};name=container_label(c)
