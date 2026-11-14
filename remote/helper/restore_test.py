@@ -448,6 +448,7 @@ def restore_test_restore(req):
     ordered=manifest.get('backupPlan',{}).get('restartOrder',[c['Id'] for c in containers])
     mapping={c['Id']:cid for c,cid in zip(containers,created)}
     running=[mapping[o] for o in ordered if next(c for c in containers if c['Id']==o)['State'].get('Running')]
+    if any(containers[i]['State'].get('Running') and not containers[j]['State'].get('Running') for i,j in peers.items()):raise TestOutcome('couldnt_run','A container shares the network of one that was stopped in the backup.',checks)
     state['restored']={'kind':'docker','containers':[{'name':definitions[i][0],'id':cid,'original':c['Name'].lstrip('/')} for i,(c,cid) in enumerate(zip(containers,created))],'running':running,'networks':list(networks.values()),'internet':internet,'egress':egress}
     save_state(d,state)
     emit(result={'outcome':'ok','kind':'docker','containers':len(created),'running':len(running),'networkMode':'internet' if internet else 'isolated-internal' if networks else 'none','mailBlocked':internet,'checks':checks})
