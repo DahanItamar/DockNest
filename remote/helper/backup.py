@@ -182,6 +182,20 @@ def revalidate_sources(plan):
     for source in plan['sources']:
         if scoped_classify(source['path'],table,{source['path']:source.get('excludedPaths',[])})!=source:raise ValueError('Source identity or mount changed; capture is blocked')
 
+DATABASE_IMAGE_WORDS=('postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch')
+DATABASE_TOOL_WORDS=frozenset(['exporter','commander','express','backup','backups','dump','dumper','restore','sidecar','insight','redisinsight'])
+def image_looks_like_database(image):
+    """Fail closed: true unless the image's own name is clearly a helper tool.
+
+    The name is the last path part without tag and digest. A name made of a database word plus a tool word
+    (postgres-exporter, redis-commander, mysql-backup) is a tool. Any other image that mentions a database word
+    anywhere (registry, namespace, name or tag), such as postgres, bitnami/postgresql-repmgr or an unknown variant, stays a database."""
+    whole=(image or '').lower()
+    if not any(word in whole for word in DATABASE_IMAGE_WORDS):return False
+    name=whole.split('@',1)[0].rsplit('/',1)[-1].split(':',1)[0]
+    if any(word in name for word in DATABASE_IMAGE_WORDS) and set(re.split(r'[-_.]+',name))&DATABASE_TOOL_WORDS:return False
+    return True
+
 def service_contracts(cfg,containers):
     """Resolve exact service identities and probe native binaries, never infer version from tags."""
     references={value:c['Id'] for c in containers for value in [c['Id'],c['Name'].lstrip('/')]}
@@ -200,10 +214,10 @@ def service_contracts(cfg,containers):
                     match=re.search(r'\bv=(\d+\.\d+\.\d+)\b' if name=='redis' else r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
                     if match:detected=name;version=match[1];break
                 except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
-        hint=c['Config'].get('Image','').lower()
+        hint=c['Config'].get('Image','')
         if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
         engine=detected or ('generic' if engine=='auto' else engine)
-        if engine=='generic' and any(word in hint for word in ['postgres','mysql','mariadb','mongo','redis','cockroach','cassandra','elasticsearch']):raise ValueError('Stateful service requires a supported per-service database contract')
+        if engine=='generic' and image_looks_like_database(hint):raise ValueError('Stateful service requires a supported per-service database contract')
         if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
         if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
         expected=declaration.get('version')

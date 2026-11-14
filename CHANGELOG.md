@@ -6,6 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Fixed
 
+- Helper containers named like postgres-exporter or redis-commander are no longer mistaken for databases and refused when you back up a site. Anything else that looks like a database, and any container that really runs one, still needs its database settings.
 - A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
 
 ## [2.16.3] - 2026-11-10
