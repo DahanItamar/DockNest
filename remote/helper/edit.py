@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, atomic_json, diagnostic, emit, private_staging_base, sync_directory)
+    NOFOLLOW, atomic_json, diagnostic, emit, mount_option, private_staging_base, sync_directory)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, within)
 from .net import (
@@ -1361,7 +1361,7 @@ def edit_create_args(plan,env_file,name):
     args=['create','--name',name,'--restart',plan['restart'],'--network',plan['network']]
     for a in plan['aliases']:args+=['--network-alias',a]
     for p in plan['ports']:args+=['-p','%s%d:%d/%s'%(('[%s]:'%p['hostIp'] if ':' in p['hostIp'] else p['hostIp']+':') if p['hostIp'] else '',p['host'],p['container'],p['protocol'])]
-    for m in plan['mounts']:args+=['--mount','type=%s,src=%s,dst=%s%s'%(m['type'],m['source'],m['target'],',readonly' if m['readonly'] else '')]
+    for m in plan['mounts']:args+=['--mount',mount_option(m['type'],m['source'],m['target'],bool(m['readonly']))]
     for d,o in plan['tmpfs']:args+=['--tmpfs',tmpfs_argument(d,o)]
     for h in plan['extraHosts']:args+=['--add-host',h]
     if plan['init']:args.append('--init')

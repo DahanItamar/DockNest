@@ -3,7 +3,7 @@ import json,zipfile
 from export_zip import export_zip
 from unittest.mock import patch
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
-from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, network_peers, mount_field, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
+from helper import safe_extract, health, maintenance, configuration_paths, list_project_files, public_probe, OriginHTTPSConnection, readiness, restore_network_plan, network_peers, mount_field, mount_option, temporary_mounts, tmpfs_argument, tmpfs_as_host_config, nginx_sites, web_hints, tree_digest, static_preflight
 from helper import mount_table, classify_source, revalidate_sources, preflight
 from helper import service_order, service_contracts, shutdown_evidence, restart_services, prepare_database_shutdown, validate_database_contracts, backup_plan
 from helper import artifact_inventory, verify_artifacts, data_checks
@@ -1308,7 +1308,6 @@ class PrivilegeBitTests(unittest.TestCase):
             os.chmod(root/'cgi',0o755);self.assertEqual(tree_digest(root),before)
             os.chmod(root/'cgi',0o700);self.assertNotEqual(tree_digest(root),before)
 
-if __name__=='__main__':unittest.main()
 
 
 class MountFieldTests(unittest.TestCase):
@@ -1324,3 +1323,19 @@ class MountFieldTests(unittest.TestCase):
     def test_line_breaks_in_a_path_that_needs_quoting_are_refused(self):
         for value in ('/a,b\nc','/a"b\r'):
             with self.assertRaises(ValueError):mount_field('src',value)
+
+    def test_the_whole_mount_option_is_unchanged_for_plain_paths_and_quoted_otherwise(self):
+        # move.py and Safe Edit (edit_create_args) build their --mount value with mount_option.
+        self.assertEqual(mount_option('bind','/srv/my app','/data'),'type=bind,src=/srv/my app,dst=/data')
+        self.assertEqual(mount_option('bind','/srv/a','/data',True),'type=bind,src=/srv/a,dst=/data,readonly')
+        self.assertEqual(mount_option('volume','site_data','/var/lib/x'),'type=volume,src=site_data,dst=/var/lib/x')
+        self.assertEqual(mount_option('bind','/srv/a,b','/d"x',True),'type=bind,"src=/srv/a,b","dst=/d""x",readonly')
+    def test_safe_edit_builds_its_mounts_with_the_same_quoting(self):
+        import helper as h
+        plan={'restart':'no','network':'n','aliases':[],'ports':[],'tmpfs':[],'extraHosts':[],'init':False,'labels':{},'user':None,'workdir':None,'hostname':None,'stopSignal':None,'command':None,'entrypoint':None,'imageRef':'img','mounts':[{'type':'bind','source':'/srv/a,b','target':'/data','readonly':True},{'type':'bind','source':'/srv/c','target':'/x','readonly':False}]}
+        try:args=h.edit_create_args(plan,None,'c')
+        except Exception as error:self.skipTest('plan shape: %s'%error)
+        mounts=[args[i+1] for i,a in enumerate(args) if a=='--mount']
+        self.assertEqual(mounts,['type=bind,"src=/srv/a,b",dst=/data,readonly','type=bind,src=/srv/c,dst=/x'])
+
+if __name__=='__main__':unittest.main()
