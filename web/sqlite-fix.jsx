@@ -34,14 +34,15 @@ export function SqliteFix({job,site,policy,downtimeSeconds,onRemovePath,onOpenSe
  const [line,label,advice]=CAUSE[failure.kind];
  const services=failure.path?(site.config?.services||[]).filter(service=>Array.isArray(service.sqliteFiles)&&service.sqliteFiles.includes(failure.path)).map(service=>service.container):[];
  const canRemove=!!failure.path&&services.length>0&&!removed&&!!onRemovePath;
+ const lastFile=(site.config?.services||[]).some(service=>service.sqliteSigtermConfirmed&&service.sqliteFiles?.length===1&&service.sqliteFiles[0]===failure.path);
  const when=policy?.enabled&&policy.schedule?' ('+describeSchedule(policy.schedule).replace(/^Every /,'every ')+')':'';
  const minutes=Number.isFinite(downtimeSeconds)&&downtimeSeconds>0?Math.max(1,Math.round(downtimeSeconds/60)):null;
  async function remove(){setBusy(true);setError('');try{await onRemovePath(failure.path);setRemoved(true);setConfirm(false)}catch(caught){setError(caught?.message||'Could not save the site. Try again.')}finally{setBusy(false)}}
  return <>
   <AlertPanel variant="error" title="What happened" action={<>
-   {removed?<span className="dn-next"><b>Done</b> {failure.path} was removed from the site. It is checked at the next scheduled backup.</span>
+   {removed?<span className="dn-next" tabIndex={-1} ref={node=>node?.focus()}><b>Done</b> {failure.path} was removed from the site. It is checked at the next scheduled backup.</span>
     :<span className="dn-next"><b>Next step</b> {failure.path?(services.length?'Fix it in the site settings or remove the path.':'No service declares this path any more. Run a backup to confirm.'):'Check the SQLite files in the site settings.'} It is checked again at the next scheduled backup{when}.</span>}
-   {!removed&&<div className="btn-row">{canRemove&&<button type="button" onClick={()=>{setError('');setConfirm(true)}}><Trash size={16} stroke={1.75} aria-hidden="true"/>Remove path</button>}{onOpenSettings&&<button type="button" onClick={onOpenSettings}><Settings size={16} stroke={1.75} aria-hidden="true"/>Open settings</button>}</div>}
+   {!removed&&<div className="btn-row">{canRemove&&<button type="button" disabled={lastFile} title={lastFile?'This is the only file of a service with SIGTERM acceptance. Declare the real file in the site settings instead.':undefined} onClick={()=>{setError('');setConfirm(true)}}><Trash size={16} stroke={1.75} aria-hidden="true"/>Remove path</button>}{onOpenSettings&&<button type="button" onClick={onOpenSettings}><Settings size={16} stroke={1.75} aria-hidden="true"/>Open settings</button>}</div>}
    {onBackup&&<div className="later"><span><button type="button" className="sq-quiet" onClick={onBackup}>Back up now</button></span><small>Runs the full backup.{minutes?' The site is offline for about '+minutes+' min.':''}</small></div>}
   </>}>
    <span className="dn-err-line">{line}</span><span className="dn-err-msg">{job.error}</span>

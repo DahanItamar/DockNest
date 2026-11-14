@@ -51,10 +51,9 @@ try{
  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
  await dialog.getByText('Advanced backup settings',{exact:true}).waitFor();
  assert.equal(await dialog.locator('details[open]>summary',{hasText:'Advanced backup settings'}).count(),1,'opens when the site declares files');
- assert.equal(await dialog.locator('.sq-group').count(),4,'shared web+worker, queue, cache, proxy');
+ assert.equal(await dialog.locator('.sq-group').count(),3,'shared web+worker, queue, cache; proxy has no SQLite and no version');
  assert.equal(await dialog.locator('.sq-group',{hasText:'Shared list'}).locator('.sq-tag').allTextContents().then(x=>x.join()),'web,worker');
- assert.equal(await dialog.locator('.sq-group',{hasText:'proxy'}).getByRole('button').count(),0,'no add link without a recorded SQLite version');
- assert.equal(await dialog.locator('.sq-group',{hasText:'proxy'}).getByText('No SQLite declared').count(),1);
+ assert.equal(await dialog.locator('.sq-group',{hasText:'proxy'}).count(),0,'no card without a recorded SQLite version');
  await page.screenshot({path:shots+'/site-form-1440.png'});
  const shared=dialog.getByLabel('Database files for web, worker');
  assert.equal(await shared.inputValue(),'/data/app.db\n/data/sessions.db');
@@ -74,7 +73,7 @@ try{
  site.config.services=services();
  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
  await dialog.getByRole('button',{name:'Edit separately',exact:true}).click();
- assert.equal(await dialog.locator('.sq-group').count(),5);
+ assert.equal(await dialog.locator('.sq-group').count(),4);
  await dialog.getByLabel('Database files for web',{exact:true}).fill('');
  await dialog.getByRole('button',{name:'Continue',exact:true}).click();
  await dialog.getByText(/SIGTERM confirmation needs at least one SQLite file/).waitFor();

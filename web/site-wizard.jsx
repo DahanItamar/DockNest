@@ -19,6 +19,7 @@ function SqliteFiles({services,texts,setTexts,split,setSplit,adding,setAdding}){
   <p className="hint">Files DockNest checks and captures while the service is stopped. One absolute path per line.</p>
   {groups.map(group=>{
    const text=texts[group.containers[0]]??'',empty=!group.files.length&&!text.trim()&&!group.containers.some(container=>adding.includes(container));
+   if(empty&&!group.version)return null;
    return <section className="sq-group" key={group.key} aria-label={group.shared?'Shared SQLite list':'SQLite files for '+group.containers[0]}>
     <div className="sq-head"><b><Database size={20} stroke={1.75} aria-hidden="true"/>{group.shared?'Shared list':group.containers[0]}</b><small>{group.version?'SQLite '+group.version:'No SQLite declared'}</small></div>
     <div className="sq-body">

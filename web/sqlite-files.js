@@ -25,7 +25,7 @@ export function sqliteProblem(services,texts){
   if(paths.some(path=>!/^\/[a-zA-Z0-9_./-]+$/.test(path)||path.split('/').includes('..')||path.startsWith('//')))return service.container+': use absolute paths with letters, numbers and . _ - /, one per line.';
   if(new Set(paths).size!==paths.length)return service.container+': a file is listed twice.';
   if(paths.length>30)return service.container+': list up to 30 files.';
-  if(!paths.length&&service.sqliteSigtermConfirmed)return service.container+': its SIGTERM confirmation needs at least one SQLite file. Keep a file, or ask for the confirmation to be cleared first.';
+  if(!paths.length&&service.sqliteSigtermConfirmed)return service.container+': its SIGTERM confirmation needs at least one SQLite file. Keep at least one file.';
  }
  return '';
 }
