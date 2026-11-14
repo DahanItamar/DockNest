@@ -104,3 +104,23 @@ a.icon-button{display:inline-flex;align-items:center;justify-content:center;heig
 .access-table .row-actions button:disabled{opacity:.5}
 .access-table .your-account{color:var(--text-muted);font-size:var(--fs-caption)}
 @media(max-width:767px){.access-table .data-table td.num:last-child .row-actions{justify-content:flex-start}.access-table .data-table td.num{text-align:left}}
+
+/* Jobs list: the steps of one restore test, folded under its row. */
+.rebrand-page .data-table tbody tr.test-step{height:auto}
+.rebrand-page .data-table tbody tr.test-step td{height:40px;background:var(--surface-muted)}
+.rebrand-page .data-table tbody tr.test-step td.step{padding-left:56px}
+.rebrand-page .data-table tbody tr.test-step.is-fail td{height:auto;padding-top:8px;padding-bottom:8px;white-space:normal;background:var(--error-surface);color:var(--alert-error-text)}
+.rebrand-page .data-table tbody tr.test-step.is-fail td:first-child{box-shadow:inset 3px 0 0 var(--error)}
+.test-step-reason{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);white-space:normal;color:var(--alert-error-text)}
+.test-chevron svg{transition:transform var(--dur-fast) var(--ease)}
+.test-chevron.open svg{transform:rotate(90deg)}
+.test-chevron:disabled{opacity:.4}
+@media(max-width:767px){
+ .rebrand-page .mobile-table tbody tr.test-step{padding:12px 16px;background:var(--surface-muted)}
+ .rebrand-page .mobile-table tbody tr.test-step.is-fail{background:var(--error-surface)}
+ .rebrand-page .data-table.mobile-table tbody tr.test-step td{height:auto;background:none}
+ .rebrand-page .data-table.mobile-table tbody tr.test-step td.step{padding-left:0}
+ .rebrand-page .data-table.mobile-table tbody tr.test-step.is-fail td.step{padding-left:12px}
+ .rebrand-page .mobile-table tbody tr.test-step td:last-child{display:none}
+ .rebrand-page .mobile-table tbody tr.test-step td.step::before{display:none}
+}
