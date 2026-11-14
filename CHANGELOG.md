@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Edit the SQLite database files of each service in the site settings (Advanced backup settings). Services that declare the same files share one list.
+
 ### Fixed
 
 - A backup that fails because a declared SQLite database file is missing or has become a link now names that file, so you know which entry to fix in the site settings.
