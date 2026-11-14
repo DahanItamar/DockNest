@@ -171,6 +171,17 @@ class ServiceContractTests(unittest.TestCase):
         with patch('helper.run',return_value=b'postgres (PostgreSQL) 16.13'):
             self.assertEqual(service_contracts({},[c])[0]['version'],'16.13')
             with self.assertRaises(ValueError):service_contracts({'services':[{'container':'database','engine':'mysql'}]},[c])
+    def test_database_image_names_fail_closed(self):
+        from helper import image_looks_like_database as db
+        tools=['postgres-exporter','quay.io/prometheuscommunity/postgres-exporter:v0.15.0','oliver006/redis_exporter:v1.58','rediscommander/redis-commander:latest','ghcr.io/joeferner/redis-commander@sha256:'+'a'*64,'mongo-express:1.0','prom/mysqld-exporter','registry.local:5000/team/mysql-backup:1.2','prodrigestivill/postgres-backup-local:16','redis/redisinsight:2.4','mariadb-backup','elasticsearch-exporter','Postgres-Exporter:LATEST','tiredofit/db-backup:4','adminer','nginx:1.27','']
+        for image in tools:self.assertFalse(db(image),image)
+        databases=['postgres','postgres:16','docker.io/library/postgres:16.4-alpine','library/postgres@sha256:'+'b'*64,'postgis/postgis:16-3.4','timescale/timescaledb:latest-pg16','timescale/timescaledb-ha:pg16','tensorchord/pgvecto-rs:pg14-v0.2.0','ghcr.io/immich-app/postgres:14-vectorchord0.3.0-pgvectors0.2.0','pgvector/pgvector:pg16','bitnami/postgresql:16','bitnami/postgresql-repmgr:16','supabase/postgres:15.1','mysql:8.4','mysql/mysql-server:8','mariadb:11','lscr.io/linuxserver/mariadb','mongo:7','mongodb/mongodb-community-server:7.0','bitnami/mongodb','redis:7.4','redis/redis-stack:latest','redis/redis-stack-server','bitnami/redis-sentinel','valkey/valkey:8','cockroachdb/cockroach:v24.1','cassandra:5','elasticsearch:8.13','docker.elastic.co/elasticsearch/elasticsearch:8.13','localhost:5000/redis:7','POSTGRES:16','myorg/app:postgres-16','postgrest/postgrest','mysql-router']
+        for image in databases:self.assertTrue(db(image),image)
+    def test_exporter_sidecar_is_generic_but_unknown_database_is_refused(self):
+        def box(image):return {'Id':'x','Name':'/x','Config':{'Image':image},'State':{'Running':False}}
+        self.assertEqual(service_contracts({},[box('quay.io/prometheuscommunity/postgres-exporter:v0.15.0')])[0]['engine'],'generic')
+        with self.assertRaisesRegex(ValueError,'database contract'):service_contracts({},[box('bitnami/postgresql-repmgr:16')])
+        with self.assertRaisesRegex(ValueError,'database contract'):service_contracts({},[box('postgres:16')])
     def test_forced_exit_and_missing_current_shutdown_proof_fail(self):
         service={'container':'db','engine':'mysql','version':'8.4.0','slowShutdownVerified':True}
         for state in [{'Running':False,'ExitCode':137},{'Running':False,'ExitCode':0,'OOMKilled':True}]:
