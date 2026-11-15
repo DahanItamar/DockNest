@@ -143,6 +143,11 @@ class SpooledArtifactTests(unittest.TestCase):
         self.assertEqual(members['mount.tar'],b'x'*1000);self.assertEqual(members['copy.tar'],'mount.tar')
         self.assertEqual(list(self.root.iterdir()),[])
 
+    def test_a_changed_folder_is_named_in_the_error(self):
+        with patch('helper.emit'),tarfile.open(fileobj=io.BytesIO(),mode='w|gz') as archive:
+            with self.assertRaisesRegex(ValueError,'^Folder changed during backup: /srv/app/data$'):
+                helper.stream_artifacts(archive,[('mount-0-0.tar',self.unstable,None)],labels={'mount-0-0.tar':'/srv/app/data'})
+
     def test_unspooled_non_deterministic_output_is_still_rejected(self):
         with patch('helper.emit'),tarfile.open(fileobj=io.BytesIO(),mode='w|gz') as archive:
             with self.assertRaisesRegex(ValueError,'changed during capture'):

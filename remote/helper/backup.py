@@ -76,8 +76,11 @@ def open_stream_archive(output,level):
     if sys.version_info>=(3,12):return tarfile.open(fileobj=output,mode='w|gz',compresslevel=level,bufsize=1024*1024)
     return tarfile.open(fileobj=output,mode='w|gz',bufsize=1024*1024)
 
-def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=None):
+CHANGED_DURING_CAPTURE=('Streamed artifact changed during capture','Streamed artifact grew during capture')
+
+def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=None,labels=None):
     # before: name -> callable run before each pass of that command (an incremental tar gets its parent snapshot back).
+    # labels: name -> the server path an artifact archives, named when that path changed between the two passes.
     before=before or {}
     inventory={};files={}
     try:
@@ -98,7 +101,11 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=
             elif name in files:command_artifact(['cat','--',str(files[name])],archive,name,inventory[name])
             else:
                 if name in before:before[name]()
-                command_artifact(command,archive,name,inventory[name])
+                try:command_artifact(command,archive,name,inventory[name])
+                except ValueError as error:
+                    # Something outside the paused containers (a host timer, cron job or another container) wrote here.
+                    if str(error) in CHANGED_DURING_CAPTURE and name in (labels or {}):raise ValueError('Folder changed during backup: '+str(labels[name])) from error
+                    raise
         transfer_progress(0,True)
     finally:
         TRANSFER=None
@@ -556,13 +563,13 @@ def capture(req,output=None):
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
-        archives={};specs=[];prepare={};scans={}
+        archives={};specs=[];prepare={};scans={};labels={}
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
             if output is not None:atomic_json(root/'snapshot-images.json',images)
             for j,m in enumerate(c['Mounts']):
-                source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j));guard=guarded_mount(m)
+                source=m['Source'];target=root/('mount-%d-%d.tar'%(i,j));guard=guarded_mount(m);labels[target.name]=source
                 if m['Type']=='bind' and protected_mount(source):
                     # Never copied: the archive holds an empty folder or file of the same name instead.
                     holder=root/('protected-%d-%d'%(i,j))/(pathlib.PurePosixPath(source).name or 'root');holder.parent.mkdir(mode=0o700)
@@ -585,14 +592,14 @@ def capture(req,output=None):
                         with open(target,'rb') as written:increment['renames'][key]=archive_renames_safely(written)
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
             source=pathlib.Path(filename)
-            if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None))
+            if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None));labels['config-%d.tar'%i]=str(source)
             else:run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
         if output is not None:
             level=int(cfg.get('streamCompressLevel',1))
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
             archive=open_stream_archive(output,level)
-            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans)
+            inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
         captured=time.time()
     except BaseException:
