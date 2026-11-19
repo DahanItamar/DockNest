@@ -72,9 +72,11 @@ def move_placeable(path):
     try:move_path(path)
     except ValueError:return False
     return all(move_root_allowed(form) for form in resolved(path) if form.startswith('/'))
-def hand_placed(files,compose_files=()):
-    """Configuration files a move leaves out and names in its preview. The project's Compose files still refuse."""
-    return [f for f in dict.fromkeys(files) if f not in compose_files and not move_placeable(lexical(f))]
+def hand_placed(files,kept=()):
+    """Configuration files a move may not create, to put back by hand. A file that is, or lies inside, a `kept` path
+    (the project's Compose files, the bind mounts) is never named here: placing it refuses exactly as before."""
+    kept=[lexical(path) for path in kept]
+    return [f for f in dict.fromkeys(files) if not any(within(lexical(f),path) for path in kept) and not move_placeable(lexical(f))]
 def move_state(mid,create=False):
     d=MOVES_ROOT/mid
     if create:MOVES_ROOT.mkdir(parents=True,exist_ok=True,mode=0o700);d.mkdir(exist_ok=True,mode=0o700)
@@ -251,7 +253,7 @@ def source_site_facts(cfg,tokens):
     files=[f.strip() for f in (labels[0].get('com.docker.compose.project.config_files','') if labels else '').split(',') if f.strip()]
     if compose and len(names)==1 and all(l.get('com.docker.compose.service') for l in labels) and files and all(f in cfg.get('composeFiles',[]) for f in files):
         project={'project':labels[0]['com.docker.compose.project'],'workingDir':labels[0].get('com.docker.compose.project.working_dir',''),'files':files,'services':{c['Name'].lstrip('/'):l['com.docker.compose.service'] for c,l in zip(cs,labels)}}
-    hand=hand_placed(cfg.get('composeFiles',[])+cfg.get('configFiles',[]),project['files'] if project else ())
+    hand=hand_placed(cfg.get('composeFiles',[])+cfg.get('configFiles',[]),(project['files'] if project else [])+[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind'])
     return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
         'ports':ports,'bindPaths':[b for b in binds if b not in hand],'handPlaced':hand,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
@@ -533,16 +535,17 @@ def deploy_restore(req):
         if root.exists():shutil.rmtree(root,ignore_errors=True)
     state['deployed'][mode]=result;save_state(d,state)
     emit(result=result)
-def place_configuration(manifest,unpacked,compose_files,placed,d,state,mid):
+def place_configuration(manifest,unpacked,hand,placed,d,state,mid):
     """Put the backup's configuration files back at their paths and return them. A file inside a mount just placed comes
-    with it; a file outside the folders a move may create (hand_placed) is left out, the preview names it."""
+    with it. Only the files the reviewed preview named to put back by hand (`hand`) are left out; any other file the
+    move may not create refuses, as it always did."""
     configuration=[]
     for filename in manifest.get('configurationFiles',[]):
         # Relative names and '..' are refused; other spellings the site form accepts (//, ./, a trailing /) are
         # normalised, so the lexical containment test below compares like with like.
         if not isinstance(filename,str) or not filename.startswith('/') or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('Unsupported path for a move: %s'%filename)
         configuration.append(lexical(filename))
-    skipped=set(hand_placed(configuration,[lexical(f) for f in compose_files]))
+    skipped={lexical(f) for f in hand if isinstance(f,str)}
     for i,filename in enumerate(configuration):
         if filename in skipped or any(filename==p or filename.startswith(p.rstrip('/')+'/') for p in placed):continue
         placed.append(str(place_tree(unpacked/('config-%d.tar'%i),filename,d,state,mid)))
@@ -585,7 +588,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             elif m['Type']=='volume':place_volume(mount_archive(unpacked,i,j),m['Name'],d,state,mid,mode,volume_labels.get(m['Name']))
             else:raise ValueError('Unsupported mount type')
             sources[key]=True
-    configuration=place_configuration(manifest,unpacked,(req.get('compose') or {}).get('files') or [],placed,d,state,mid)
+    configuration=place_configuration(manifest,unpacked,req.get('handPlaced') or [],placed,d,state,mid)
     # Settings are rewritten only in files this move just placed, after following links.
     rewritten=sum(rewrite_env_file(f,keys,tokens,target) for f in configuration if pathlib.Path(f).name.endswith('.env') and placed_by_move(f,placed)) if keys else 0
     for network in req.get('networks') or []:

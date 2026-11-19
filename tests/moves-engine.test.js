@@ -59,7 +59,7 @@ moves.moveTransport.remote = async (server, request, options = {}) => {
   const state = deployed.get(request.moveId) ?? new Set();
   switch (request.operation) {
     case 'move-facts': return request.role === 'source'
-      ? { addresses: ['203.0.113.7'], site: { kind: 'container', domains: request.config.domains, containerCount: 1, architecture: 'x86_64', ports: [{ container: 'web', hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }], bindPaths: ['/srv/shop'], names: { containers: ['web'], volumes: [], networks: [] }, networks: [], running: ['cid-web'], nginxDirectives: ['client_max_body_size'], web: 8080, maintenanceReady: true, env: [{ key: 'API_URL', where: 'container web', kind: 'ip', masked: 'http://203.0.113.7:9000' }] } }
+      ? { addresses: ['203.0.113.7'], site: { kind: 'container', domains: request.config.domains, containerCount: 1, architecture: 'x86_64', ports: [{ container: 'web', hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' }], bindPaths: ['/srv/shop'], handPlaced: ['/etc/cron.d/shop'], names: { containers: ['web'], volumes: [], networks: [] }, networks: [], running: ['cid-web'], nginxDirectives: ['client_max_body_size'], web: 8080, maintenanceReady: true, env: [{ key: 'API_URL', where: 'container web', kind: 'ip', masked: 'http://203.0.113.7:9000' }] } }
       : { uid: 0, architecture: 'x86_64', dockerVersion: '29.0.1', composeVersion: '2.29.1', freeBytes: 100 * 1024 ** 3, totalBytes: 200 * 1024 ** 3, stagingWritable: true, usedPorts: [22, 80, 8080], nginx: { installed: true, configOk: true, running: true, confDir: '/etc/nginx/conf.d', serverNames: [] }, webPortOwner: 'nginx', certbot: { installed: false, account: false }, addresses: ['198.51.100.9'], probe: { existingPaths: [], conflicts: {} } };
     case 'deploy-status': return { present: state.size > 0, deployed: [...state], finalized: false };
     case 'deploy-restore': state.add(request.mode); deployed.set(request.moveId, state); return { mode: request.mode, kind: 'docker', containers: ['web'], running: ['web'], ports: [{ container: 'web', from: 8080, to: 8081, containerPort: 80, protocol: 'tcp' }], paths: ['/srv/shop'], mailBlocked: request.mode === 'test' };
@@ -118,6 +118,7 @@ test('a site moves end to end: fresh backup, loopback test, final copy, DNS wait
   const deploys = calls.filter(call => call.operation === 'deploy-restore');
   assert.deepEqual(deploys.map(call => call.mode), ['test', 'live']);
   assert.deepEqual(deploys[0].request.portMap.map(entry => [entry.from, entry.to]), [[8080, 8081]]);
+  assert.deepEqual(deploys.map(call => call.request.handPlaced), [['/etc/cron.d/shop'], ['/etc/cron.d/shop']], 'only the files the preview named are left out');
   assert.equal(deploys[0].request.nginx, undefined, 'the test copy is never routed by nginx');
   assert.equal(deploys[1].request.nginx.upstreamPort, 8081); assert.equal(deploys[0].request.envRewrite, undefined, 'settings rewrite is off by default');
   assert.equal(calls.find(call => call.operation === 'move-test').request.http.port, 8081);

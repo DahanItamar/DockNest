@@ -673,7 +673,7 @@ def capture(req,output=None):
     if keys_left_out:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
-    hand=set(hand_placed(manifest['configurationFiles']))
+    hand=set(hand_placed(manifest['configurationFiles'],[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind']))
     if hand:
         with (root/'restore-guide.md').open('a') as guide:guide.write(hand_steps_guide([(i,f) for i,f in enumerate(manifest['configurationFiles']) if f in hand]))
     if increment:
