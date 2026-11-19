@@ -13,10 +13,15 @@ from .backup import (
 # Static shell, never interpolated. It reads the official image's root credentials inside the container and hands
 # them to mongosh as environment variables only: never Docker arguments, evidence, logs or job text. mongosh runs with
 # a private temporary HOME that is removed afterwards, so it leaves nothing in the container's writable layer.
-MONGO_SHELL_SCRIPT='set -eu; command -v mongosh >/dev/null 2>&1 || exit 69; user="${MONGO_INITDB_ROOT_USERNAME:-}"; password="${MONGO_INITDB_ROOT_PASSWORD:-}"; if [ -n "${MONGO_INITDB_ROOT_USERNAME_FILE:-}" ]; then user=$(cat -- "$MONGO_INITDB_ROOT_USERNAME_FILE") || exit 70; fi; if [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ]; then password=$(cat -- "$MONGO_INITDB_ROOT_PASSWORD_FILE") || exit 70; fi; if [ -n "$user" ] && [ -z "$password" ]; then exit 70; fi; home=$(mktemp -d) || exit 71; trap \'rm -rf -- "$home"\' EXIT; export HOME="$home" DO_NOT_TRACK=1 DOCKNEST_MONGO_USER="$user" DOCKNEST_MONGO_PASSWORD="$password" DOCKNEST_MONGO_OPERATION="$1" DOCKNEST_MONGO_DATABASE="$2" DOCKNEST_MONGO_COLLECTION="$3"; mongosh --quiet --nodb --norc --eval "$4"'
+# Telemetry and the update check are off before mongosh starts: its per-user config ($HOME/.mongodb/mongosh/config,
+# EJSON) is read at startup before analytics are set up (mongosh cli-repl _start: generateOrReadConfig, then
+# setupTelemetrySink). DO_NOT_TRACK and disableTelemetry() are further layers; the eval script refuses to run if
+# telemetry still reads as on.
+MONGO_SHELL_SCRIPT='set -eu; command -v mongosh >/dev/null 2>&1 || exit 69; user="${MONGO_INITDB_ROOT_USERNAME:-}"; password="${MONGO_INITDB_ROOT_PASSWORD:-}"; if [ -n "${MONGO_INITDB_ROOT_USERNAME_FILE:-}" ]; then user=$(cat -- "$MONGO_INITDB_ROOT_USERNAME_FILE") || exit 70; fi; if [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ]; then password=$(cat -- "$MONGO_INITDB_ROOT_PASSWORD_FILE") || exit 70; fi; if [ -n "$user" ] && [ -z "$password" ]; then exit 70; fi; home=$(mktemp -d) || exit 71; trap \'rm -rf -- "$home"\' EXIT; mkdir -p "$home/.mongodb/mongosh" && printf \'%s\\n\' \'{"enableTelemetry":false,"updateURL":""}\' > "$home/.mongodb/mongosh/config" || exit 71; export HOME="$home" DO_NOT_TRACK=1 DOCKNEST_MONGO_USER="$user" DOCKNEST_MONGO_PASSWORD="$password" DOCKNEST_MONGO_OPERATION="$1" DOCKNEST_MONGO_DATABASE="$2" DOCKNEST_MONGO_COLLECTION="$3"; mongosh --quiet --nodb --norc --eval "$4"'
 # Static mongosh script: connects over the loopback, authenticates from process.env, runs one fixed read-only
 # operation and prints one EJSON line. Exit codes name the refusal (MONGO_REFUSALS); error text never leaves mongosh.
 MONGO_EVAL_SCRIPT='''try { disableTelemetry(); } catch (error) {}
+if (config.get('enableTelemetry') !== false) quit(72);
 const env = process.env;
 const user = env.DOCKNEST_MONGO_USER, password = env.DOCKNEST_MONGO_PASSWORD;
 delete env.DOCKNEST_MONGO_USER; delete env.DOCKNEST_MONGO_PASSWORD;
@@ -39,6 +44,7 @@ MONGO_REFUSALS={
     69:'MongoDB shell (mongosh) is missing in the container; DockNest needs it to check the server and does not pull images',
     70:'MongoDB root credentials in the container are incomplete or their _FILE could not be read',
     71:'MongoDB check could not create a private temporary folder in the container',
+    72:'MongoDB shell telemetry could not be turned off; DockNest does not run tools that report usage',
     75:'MongoDB did not answer a plain local connection on port 27017; TLS-only mode and other ports are not supported',
     77:'MongoDB rejected the root credentials from the container environment',
     78:'MongoDB requires authentication; set MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD (or _FILE) in the container',

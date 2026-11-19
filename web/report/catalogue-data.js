@@ -175,6 +175,7 @@ export const CATALOGUE=Object.freeze([
  "MongoDB server is not a writable standalone server; capture blocked",
  "MongoDB sharded cluster members are not supported",
  "MongoDB shell (mongosh) is missing in the container; DockNest needs it to check the server and does not pull images",
+ "MongoDB shell telemetry could not be turned off; DockNest does not run tools that report usage",
  "MongoDB shutdown proof requires readable Docker logs; logging driver none is unsupported",
  "MongoDB shutdown proof requires the default log on standard output; remove systemLog.destination",
  "Mount archive must have exactly one source entry",

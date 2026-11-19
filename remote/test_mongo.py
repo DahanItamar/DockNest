@@ -132,13 +132,15 @@ class MongoContracts(unittest.TestCase):
             self.assertIn(name, MONGO_SHELL_SCRIPT)
         self.assertIn('process.env', MONGO_EVAL_SCRIPT); self.assertNotIn('@', MONGO_EVAL_SCRIPT, 'no credentials in the connection string')
         self.assertIn('mktemp -d', MONGO_SHELL_SCRIPT); self.assertNotIn('/root', MONGO_SHELL_SCRIPT); self.assertNotIn('exec mongosh', MONGO_SHELL_SCRIPT)
-        self.assertIn('disableTelemetry()', MONGO_EVAL_SCRIPT)
+        self.assertIn('disableTelemetry()', MONGO_EVAL_SCRIPT); self.assertIn("config.get('enableTelemetry') !== false) quit(72)", MONGO_EVAL_SCRIPT)
+        self.assertLess(MONGO_SHELL_SCRIPT.index('.mongodb/mongosh/config'), MONGO_SHELL_SCRIPT.index('mongosh --quiet'), 'the config is written before mongosh runs')
+        self.assertIn('{"enableTelemetry":false,"updateURL":""}', MONGO_SHELL_SCRIPT)
         with patch('helper.run', side_effect=subprocess.CalledProcessError(1, ['unsafe'], output=PASSWORD.encode())):
             with self.assertRaises(ValueError) as caught: mongo_query('mongo-id', 'ping')
         self.assertNotIn(PASSWORD, str(caught.exception)); self.assertIsNone(caught.exception.__cause__); self.assertTrue(caught.exception.__suppress_context__)
 
     def test_missing_tools_and_credentials_fail_closed_with_plain_reasons(self):
-        for code, message in [(69, 'mongosh\\) is missing'), (70, 'credentials in the container are incomplete'), (75, 'plain local connection'), (77, 'rejected the root credentials'), (78, 'requires authentication'), (79, 'collection does not exist'), (71, 'private temporary folder'), (76, 'query failed')]:
+        for code, message in [(69, 'mongosh\\) is missing'), (70, 'credentials in the container are incomplete'), (75, 'plain local connection'), (77, 'rejected the root credentials'), (78, 'requires authentication'), (79, 'collection does not exist'), (71, 'private temporary folder'), (72, 'telemetry could not be turned off'), (76, 'query failed')]:
             with self.subTest(code=code), patch('helper.run', side_effect=subprocess.CalledProcessError(code, ['docker'])):
                 with self.assertRaisesRegex(ValueError, message): mongo_query('mongo-id', 'contract')
         for output in [b'', b'MongoServerError: not json\n', b'[1]\n']:
@@ -150,7 +152,7 @@ class MongoContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = pathlib.Path(temporary); tools = base / 'bin'; tools.mkdir()
             fake = tools / 'mongosh'
-            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE.args"\nenv > "$CAPTURE.env"\ntouch "$HOME/.mongosh-trace"\necho \'{"ok":1}\'\nexit "${FAKE_EXIT:-0}"\n'); fake.chmod(0o755)
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE.args"\nenv > "$CAPTURE.env"\ncat "$HOME/.mongodb/mongosh/config" > "$CAPTURE.config"\ntouch "$HOME/.mongosh-trace"\necho \'{"ok":1}\'\nexit "${FAKE_EXIT:-0}"\n'); fake.chmod(0o755)
             secret_file = base / 'password'; secret_file.write_text(PASSWORD)
             def shell(env, path=str(tools) + ':/usr/bin:/bin'):
                 return subprocess.run([shutil.which('sh'), '-c', MONGO_SHELL_SCRIPT, 'docknest', 'ping', '', '', MONGO_EVAL_SCRIPT], env={'PATH': path, 'CAPTURE': str(base / 'run'), **env}, capture_output=True)
@@ -162,6 +164,7 @@ class MongoContracts(unittest.TestCase):
                     environment = dict(line.split('=', 1) for line in (base / 'run.env').read_text().splitlines() if '=' in line)
                     self.assertEqual(environment['DOCKNEST_MONGO_PASSWORD'], PASSWORD)
                     self.assertEqual(environment['DO_NOT_TRACK'], '1')
+                    self.assertEqual(json.loads((base / 'run.config').read_text()), {'enableTelemetry': False, 'updateURL': ''}, 'telemetry is off before mongosh starts')
                     self.assertNotEqual(environment['HOME'], '/root'); self.assertFalse(os.path.exists(environment['HOME']), 'the private HOME is removed')
             failed = shell({'FAKE_EXIT': '79'})
             self.assertEqual(failed.returncode, 79, 'the mongosh exit code names the refusal')

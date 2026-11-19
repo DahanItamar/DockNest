@@ -40,8 +40,9 @@ Engine knowledge is spread over six functions as `if engine == ...` branches, pl
    - Credentials: the shell inside the container reads `MONGO_INITDB_ROOT_USERNAME` and
      `MONGO_INITDB_ROOT_PASSWORD` (or `_FILE`) and passes them to `mongosh` through a static script and environment
      variables. They never appear in Docker arguments, evidence, logs or job text. Auth on with no readable credentials
-     fails closed. `mongosh` runs with a private temporary HOME that is removed afterwards and with telemetry off, so
-     it leaves nothing in the writable layer that the backup commits.
+     fails closed. `mongosh` runs with a private temporary HOME that is removed afterwards, so it leaves nothing in the
+     writable layer that the backup commits. A config pre-seeded in that HOME turns telemetry and the update check off
+     before startup (DockNest never lets a tool phone home); the check refuses to run if telemetry still reads as on.
    - Tools: `mongosh` must exist in the container. Without it the backup is refused with a plain reason. No image is
      pulled on the server for this.
    - Clean-stop proof: exit code 0, this stop's logs contain STORAGE 4795901 `WiredTiger closed` followed by CONTROL

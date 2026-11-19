@@ -64,6 +64,8 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
   const siteId = site('Native MongoDB fixture', config(name, [{ container: name, engine: 'mongo', database: 'shop', dependsOn: [], checks: [{ name: 'Orders', collection: 'orders' }] }]));
   const plan = await planBackup(siteId);
   assert.deepEqual([plan.services[0].engine, plan.services[0].version], ['mongo', nativeVersion]);
+  // The plan ran DockNest's mongosh call, which exits 72 unless mongosh reads telemetry as off (pre-seeded config).
+  record('MongoDB ' + nativeVersion + ': the DockNest mongosh call reads telemetry as off before it connects');
   assert.ok(nativeVersion.startsWith(imageName.split(':')[1] + '.'), nativeVersion);
   const stopWindow = Math.floor(Date.now() / 1000) - 1;
   enqueueBackup(siteId, 'qa');
