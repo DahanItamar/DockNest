@@ -190,12 +190,16 @@ Collapsed by default and pre-filled; most moves need no changes here.
   (`remote/helper/runspec.py`, shared with backups), which keeps the name, restart policy (with its retry count),
   networks and aliases, ports and `-P`, mounts, RAM folders, extra hosts, `--init`, the hostname, TTY and stdin, memory,
   memory reservation and swap, CPU limit, CPU shares and CPU set, pids limit, ulimits, the log driver and its options
-  (`json-file`, `local`, `journald` and `none` only), DNS servers, search domains and options, shm size, sysctls,
-  extra groups and the stop timeout. A CPU limit above the new server's CPU count is capped to it and a CPU set naming
-  CPUs it lacks is left out. Settings neither path recreates (devices, GPUs, a custom runtime or cgroup parent, host or
-  shared namespaces, volumes from other containers, other log drivers, block I/O and OOM settings) are named as
-  warnings in the move preview, never as a new refusal; what the preflight refused before stays refused. After a move,
-  running `docker compose up` by hand without the override brings the original host port back.
+  (`json-file`, `local` and `none` only), DNS servers, search domains and options, shm size, sysctls, extra groups and
+  the stop timeout. A test copy never publishes on every interface: its `-P` ports go to loopback ports Docker picks.
+  Nothing it used to drop may now stop the copy from starting on the new server: a CPU limit above its CPU count is
+  capped to it and a CPU set naming CPUs it lacks is left out (both named as warnings in the move preview, from the
+  new server's CPU count), and a sysctl its kernel does not have (`/proc/sys/<key>`) is left out and named in the
+  deploy result. Settings neither path recreates (devices, GPUs, a custom runtime or cgroup parent, host or shared
+  namespaces, volumes from other containers, the journald and other log drivers, block I/O and OOM settings) are
+  named as warnings in the move preview, never as a new refusal; what the preflight refused before stays refused. A
+  mount without a source or target blocks the move (the copy would lose its data). After a move, running
+  `docker compose up` by hand without the override brings the original host port back.
 - Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.

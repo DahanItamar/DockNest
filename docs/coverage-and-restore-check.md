@@ -54,8 +54,12 @@ The Linux integration test runs `docker compose config` on the output and recrea
 
 Fail closed: settings the spec cannot recreate (devices, GPUs, custom runtime, cgroup parent, host/PID/IPC namespaces,
 `volumes-from`) are listed by name in the preview. What preflight refuses today stays refused; Move gets **no new
-refusals** (upgrade safety): a setting it used to drop is now either recreated or named in the Move preview. A CPU
-limit or CPU set the target cannot satisfy is capped or dropped, and the preview says so.
+refusals** (upgrade safety): a setting it used to drop is now either recreated or named in the Move preview, and
+none may stop the copy from starting. A CPU limit or CPU set the target cannot satisfy is capped or dropped, and the
+preview says so from the target's CPU count (outside the reviewed hash, like the other notes). A sysctl the target's
+kernel lacks (`/proc/sys/<key>`) is dropped and named in the deploy result. The journald log driver is not recreated
+(it may be missing on the target): the copy keeps Docker's default and the preview names it. A mount without a
+source or target blocks the move.
 
 ### A3. Discovery suggests groups
 
@@ -120,12 +124,13 @@ readiness call, so the existing "checking" state covers it and there is no secon
 
 ## Upgrade safety
 
-- Two new tables only, in their own migrations (19 `server-coverage-ignores`, 20 `site-restore-decisions`, renumbered
-  at merge if needed); never released with a gap in the numbers. Older releases ignore them (`compatible: true`).
+- Two new tables only, in their own migrations (19 `site-restore-decisions` in #204, 20 `server-coverage-ignores` in
+  this feature's PR); never released with a gap in the numbers. Older releases ignore them (`compatible: true`).
 - `discover` and `readiness` gain fields; no field changes meaning. A helper that does not know
   `describe-containers` answers "unknown operation", which the UI shows as "update the helper" rather than an empty
   preview.
-- Existing backups restore exactly as before; `run-definition/` is new optional package content.
+- Existing backups restore exactly as before; `run-definition/` is new optional package content. Older releases
+  restore these packages but cannot ZIP-export them.
 
 ## Testing
 

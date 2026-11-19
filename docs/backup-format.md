@@ -39,7 +39,9 @@ snapshot image keeps it). They contain secrets like the manifest, and live only 
 The files are optional package content, recorded in `manifest.runDefinition` (path to `bytes` and `sha256`) rather than
 in `manifest.artifacts`. Restore verifies them when the record is present and refuses a package whose
 `run-definition/` folder holds a file the record does not list. Packages without the record, and every older package,
-restore exactly as before; older releases ignore the folder. ZIP export keeps the files in `recovery-originals/`.
+restore exactly as before. Older releases restore these packages (they ignore the folder) but cannot ZIP-export them:
+their export refuses the unknown entries. ZIP export keeps the files in `recovery-originals/`. Values are written as
+JSON strings with `$` doubled, so Compose never reads part of a value (a path, a log option) as a variable.
 
 ## Backup format v2 (incremental backups, 2.12)
 
