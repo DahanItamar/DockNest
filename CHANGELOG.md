@@ -4,6 +4,11 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
+- Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels.
+
 ### Fixed
 
 - A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.

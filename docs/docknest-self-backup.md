@@ -10,6 +10,8 @@ You can also use **Download recovery kit** to obtain the saved remote kit throug
 
 The kit contains a consistent SQLite snapshot (connections, storage destinations, schedules, accounts, backup catalog and history), the matching master key and independent recovery helpers. It records the release identifier. It does **not** embed the entire web application, container image, environment files, environment-mounted SSH/storage credentials, or website backup payloads. Keep the matching release image/source, Compose configuration, private environment configuration and any separately mounted credentials available independently. Saved connection credentials in SQLite are included inside the encrypted kit. Website payloads stay in their existing storage destinations.
 
+After each completed kit, the worker proves that it opens: see [kit check](emergency-kit.md#kit-check). If no single person should be able to open the kit, but some trusted people together should, the optional [emergency kit](emergency-kit.md) split adds a sealed copy next to it. One passphrase stays the default.
+
 One copy is a useful minimum for host-loss recovery. It cannot undo a configuration mistake once that state replaces the previous kit. Changing the passphrase affects future kits; the existing kit still needs its old passphrase until a replacement succeeds. Refresh the kit after adding connections or sites, changing credentials, and updating DockNest.
 
 ## Fresh-server import
