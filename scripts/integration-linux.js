@@ -292,6 +292,8 @@ try {
   await runMoveScenario({run,until,hosts,servers,db,record});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
   await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
+  const {runKeysSafeScenario}=await import('./integration-keys-safe.js');
+  await runKeysSafeScenario({run,until,hosts,servers,db,record});
   const {runSafeEditScenario}=await import('./integration-safe-edit.js');
   await runSafeEditScenario({run,until,hosts,servers,db,record});
   const {runIncrementalScenario}=await import('./integration-incremental.js');
