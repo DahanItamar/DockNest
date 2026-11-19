@@ -17,6 +17,7 @@ import { installActive } from '../installs.js';
 import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
+import { confirmKnownGood } from '../keys-safe/scan.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
 
 export const RETENTION_DAYS = 7;
@@ -669,6 +670,8 @@ const STEPS = {
     // Incremental backups: the old server's snapshot files are of no use any more; the next backup is full anyway
     // (the site's server changed). Best effort, never fails the move.
     if (incrementalSettings(site.id).enabled) await discardIncrementalState(site.id, { server: source });
+    // Keys safe (docs/keys-safe.md): the app now runs from a restored backup, which is its known-good. Best effort.
+    await confirmKnownGood(site.id, { source: 'restore', actor: 'move:' + move.id, remote }).catch(() => {});
   },
 };
 

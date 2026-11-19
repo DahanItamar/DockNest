@@ -21,6 +21,7 @@ import { COPY, copySeconds, STEPS, LIMITS, POLL_PHASES, PHASE_STEP, REVIEW_CODES
 import { resolveInvocation, storedInvocation, allowedRoots, invocationHash, helperInvocation } from './invocation.js';
 import { issueToken, takeToken } from './tokens.js';
 import { reviewDiff, inlineSecretKeys } from './diff.js';
+import { confirmKnownGood, safeEditItems } from '../keys-safe/scan.js';
 
 // Seconds; tests shrink them with `editTiming.scale`.
 export const editTiming = { scale: 1, pollSeconds: 10, retrySeconds: [30, 60, 120, 300, 600, 900], callSeconds: { 'edit-load': 120, 'edit-check': 180, 'edit-prepare': 1200, 'edit-apply': 600, 'edit-poll': 120, 'edit-rollback': 900, 'edit-finish': 300, 'edit-status': 120, discover: 120 } };
@@ -346,6 +347,8 @@ const RUNNERS = {
       if (p.outcome === 'rolled_back') setStep(edit.id, 'roll_back', 'done', p.dataRestored ? 'Previous version and data back.' : 'Previous version back.');
       conclude(edit, p.outcome, { failedStep: p.failedStep, reason: p.reasonPending });
     });
+    // Keys safe (docs/keys-safe.md): what an applied edit wrote is known-good. Best effort: the edit is done either way.
+    if (p.outcome === 'applied') await confirmKnownGood(edit.site_id, { source: 'safe-edit', actor: 'edit:' + edit.id, only: safeEditItems(edit.changes), remote: (server, request) => editTransport.remote(server, request) }).catch(() => {});
   },
   // After a restart or an unreachable server during prepare/apply: the journal on the server decides.
   async recover(edit, ctx) {
