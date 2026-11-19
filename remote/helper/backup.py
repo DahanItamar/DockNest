@@ -12,7 +12,7 @@ from .paths import (
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
     refuse_protected_sources, scoped_classify, source_archive, source_archive_command, within)
 from .databases import (
-    data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
+    ENGINES, data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
     shutdown_evidence, sqlite_check_mode, sqlite_file_source, validate_database_contracts)
 from .incremental import (
     INCREMENTAL_ROOT, annotate_mounts, copy_private, incremental_request, incremental_sources, manifest_snapshots,
@@ -215,22 +215,19 @@ def service_contracts(cfg,containers):
         declaration=declarations.get(c['Id'],{})
         engine=declaration.get('engine','auto');detected=None;version=None
         if c['State']['Running']:
-            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld'),('redis','redis-server')]:
-                try:
-                    output=run(['docker','exec',c['Id'],binary,'--version'],timeout=10).decode(errors='replace')
-                    match=re.search(r'\bv=(\d+\.\d+\.\d+)\b' if name=='redis' else r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
-                    if match:detected=name;version=match[1];break
-                except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
+            for name,native in ENGINES.items():
+                version=native.detect(c['Id'])
+                if version:detected=name;break
         hint=c['Config'].get('Image','')
         if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
         engine=detected or ('generic' if engine=='auto' else engine)
         if engine=='generic' and image_looks_like_database(hint):raise ValueError('Stateful service requires a supported per-service database contract')
         if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
-        if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
+        if engine!='generic':ENGINES[engine].check_version(version)
         expected=declaration.get('version')
         if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
         for check in declaration.get('checks',[]):
-            if engine=='generic' or (engine=='redis' and (not check.get('key') or check.get('table'))) or (engine in ['postgres','mysql','mariadb'] and (not check.get('table') or check.get('key'))):
+            if engine=='generic' or not ENGINES[engine].check_shape(check):
                 raise ValueError('Configured data checks do not match the detected native engine')
         dependencies=[]
         for value in declaration.get('dependsOn',[]):

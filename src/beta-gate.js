@@ -1,4 +1,6 @@
-const requiredEngines=['postgres','mysql','mariadb'];
+import {SQL_ENGINE_IDS} from '../shared/database-engines.js';
+// Native capture/restore evidence is required per SQL engine; Redis has its own evidence block below.
+const requiredEngines=SQL_ENGINE_IDS;
 export function betaGate(evidence,{release,requireHostReboot=false}={}){
  const blockers=[];
  if(!evidence||evidence.formatVersion!==2||evidence.status!=='passed')blockers.push('Passing versioned Linux evidence is required');

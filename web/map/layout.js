@@ -1,3 +1,4 @@
+import {engineLabel} from '../../shared/database-engines.js';
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
 // line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Nothing is persisted.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
@@ -13,13 +14,12 @@ export function groupForList(servers=[],sites=[]){
  return groups;
 }
 
-const ENGINES={postgres:'PostgreSQL',mysql:'MySQL',mariadb:'MariaDB',redis:'Redis'};
 // Databases DockNest already detects for capture: site.config.services entries with a supported engine. Nothing is invented.
 // They are shown in the site's details panel, never as nodes: they always move together with the site.
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
- return list.filter(s=>ENGINES[s?.engine]).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
-  label:ENGINES[s.engine]+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
+ return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
+  label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
 }
 // The domains of a site. No DNS data is available here, so there is no DNS verdict.
 export const domainsOf=site=>Array.isArray(site?.config?.domains)?site.config.domains.filter(d=>typeof d==='string'&&d):[];
