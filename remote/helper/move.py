@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
+    APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, SAFE_NAME, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
     hardening_args, inspect, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
@@ -17,9 +17,9 @@ from .net import (
 from .maintenance import (
     maintenance)
 from .discovery import (
-    nginx_sites, temporary_mounts)
+    nginx_sites)
 from .runspec import (
-    create_args, fit_host, port_argument, port_bindings, run_spec, yaml_str)
+    UNREADABLE_MOUNTS, create_args, fit_host, port_argument, port_bindings, run_spec, unbound_exposed, yaml_str)
 from .restore import (
     extract_archives, image_archives, mount_archive, mount_bytes, owned_job_root, restore_network_plan,
     unpack_verified)
@@ -35,7 +35,6 @@ from .restore_test import (
 MOVES_ROOT=pathlib.Path('/var/lib/docknest/moves')
 NGINX_CONF_DIRS=['/etc/nginx/conf.d','/etc/nginx/http.d','/etc/nginx/sites-enabled']
 ACME_ROOT=pathlib.Path('/var/lib/docknest/acme')
-SAFE_NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')
 DOMAIN=re.compile(r'(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)+')
 PROTECTED_PATHS={'/','/bin','/boot','/dev','/etc','/home','/lib','/lib64','/media','/mnt','/opt','/proc','/root','/run','/sbin','/srv','/sys','/tmp','/usr','/var','/var/lib','/var/lib/docker','/var/lib/docker/volumes','/var/www','/var/lib/docknest','/var/lib/docker-backup-manager'}
 MAIL_PORTS='25,465,587'
@@ -241,10 +240,14 @@ def source_site_facts(cfg,tokens):
         'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
         'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []},
-        'unsupported':unsupported_facts(cs)}
-def unsupported_facts(cs):
-    """Per container, the settings a docker create copy cannot recreate (runspec), named in the move preview."""
-    return [{'container':c['Name'].lstrip('/'),'settings':settings} for c in cs for settings in [run_spec(c)['unsupported']] if settings]
+        **run_spec_facts(cs)}
+def run_spec_facts(cs):
+    """What the move preview names per container (runspec): settings a docker create copy cannot recreate, mounts it
+    must refuse, and CPU limits the new server may have to fit."""
+    specs=[run_spec(c) for c in cs]
+    return {'unsupported':[{'container':s['name'],'settings':settings} for s in specs for settings in [[x for x in s['unsupported'] if x!=UNREADABLE_MOUNTS]] if settings],
+        'unreadableMounts':[s['name'] for s in specs if UNREADABLE_MOUNTS in s['unsupported']],
+        'cpuLimits':[{'container':s['name'],'cpus':s['cpus'],'cpuset':s['cpusetCpus']} for s in specs if s['cpus'] or s['cpusetCpus']]}
 # A seccomp profile path in a Compose security_opt entry: absolute, no variables, ends at a quote, space, comma or ].
 COMPOSE_SECCOMP=re.compile(r'seccomp[:=]\s*(/[A-Za-z0-9._/@+-]{1,4095})(?=["\'\s,\]]|$)')
 def compose_seccomp_paths(files):
@@ -295,7 +298,7 @@ def move_facts(req):
         'freeBytes':usage.free,'totalBytes':usage.total,'stagingWritable':os.access(existing,os.W_OK),'usedPorts':ports,'nginx':nginx,
         'webPortOwner':None if 80 not in ports else ('nginx' if nginx.get('running') else 'other'),
         'certbot':{'installed':bool(shutil.which('certbot')),'account':pathlib.Path('/etc/letsencrypt/accounts').is_dir()},'addresses':host_addresses()}
-    facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}'])
+    facts['architecture']=tool_version(['docker','info','--format','{{.Architecture}}']);facts['cpuCount']=cpu_count()
     facts['firewall']={'mailBlocking':firewall_ready()}
     facts['os']=os_release();facts['packageManager']=package_manager(facts['os']['id'])
     facts['candidates']=install_candidates(facts['packageManager'])
@@ -582,21 +585,23 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         docker('network','create','--driver','bridge','--label','docknest.move='+mid,test_network)
     for image in manifest['snapshotImages']:journal_resource(d,state,'images',image)
     for archive in image_archives(unpacked):load_images_keeping_tags(archive)
-    created=[];ports=[];names=[]
+    created=[];ports=[];names=[];adjusted=[]
     try:
         compose=req.get('compose')
         if compose:created,names,ports,rewritten=compose_up(compose,mid,mode,d,state,manifest,port_map,keys,tokens,target,rewritten)
         for i,c in enumerate([] if compose else containers):
             name=c['Name'].lstrip('/')
             if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported container name')
-            temporary_mounts(c)  # refuses a RAM folder DockNest cannot recreate, as before the run spec
             # The settings the copy keeps come from the run spec (remote/helper/runspec.py); env travels in the image.
-            spec=fit_host(run_spec(c),cpu_count())
+            spec,notes=fit_host(run_spec(c),cpu_count())
+            if notes:adjusted.append({'container':name,'settings':notes})
             primary=test_network if spec['network']=='bridge' and mode=='test' else spec['network']
             published=[]
             for binding in spec['ports']:
                 value,to=mapped_port(port_map,binding,mode);published.append(value);ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
-            args=['create','--name',name,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,*create_args(spec,'no' if mode=='test' else spec['restart'],primary,published),*hardening_args(c,d)]
+            # A test copy never publishes on every interface: -P becomes loopback ports Docker picks.
+            if mode=='test':published+=['127.0.0.1::'+port for port in unbound_exposed(spec)]
+            args=['create','--name',name,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,*create_args(spec,'no' if mode=='test' else spec['restart'],primary,published,mode!='test'),*hardening_args(c,d)]
             for item in c.get('Config',{}).get('Env') or []:
                 key,_,value=item.partition('=')
                 if key in keys and tokens:
@@ -621,7 +626,7 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         until=time.time()+120
         while time.time()<until and not health(running):time.sleep(2)
         if not health(running):raise ValueError('The copied containers did not become healthy')
-        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':mail_blocked}
+        result={'mode':mode,'kind':'docker','containers':names,'running':[names[created.index(cid)] for cid in running],'ports':ports,'paths':placed,'envRewritten':rewritten,'method':'compose-override' if compose else 'docker-create','mailBlocked':mail_blocked,'adjusted':adjusted}
         if mode=='live' and req.get('nginx'):
             n=req['nginx'];deploy_maintenance_dir(d,state,n)
             result['nginx']=write_nginx(d,state,mid,n)
@@ -654,7 +659,7 @@ def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
             key,_,value=item.partition('=')
             if key in keys and tokens:
                 new=rewrite_value(value,tokens,target)
-                if new!=value:env.append((key,new.replace('$','$$')))
+                if new!=value:env.append((key,new))
         if env:lines+=['    environment:']+['      %s: %s'%(yaml_str(k),yaml_str(v)) for k,v in env];rewritten+=len(env)
     return '\n'.join(lines)+'\n',ports,rewritten
 # Allow-lists for the merged Compose configuration (docker compose config). Anything not listed is refused, so a

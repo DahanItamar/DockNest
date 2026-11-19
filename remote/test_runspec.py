@@ -85,10 +85,21 @@ class RunSpecTests(unittest.TestCase):
         self.assertIn('security options DockNest cannot copy',spec['unsupported']);self.assertIn('RAM folders DockNest cannot recreate',spec['unsupported'])
         self.assertEqual(spec['tmpfs'],[]);self.assertIsNone(spec['hardening'])
         self.assertIn('extra capabilities',helper.run_spec(shop(HostConfig={'CapAdd':['SYS_ADMIN']}))['unsupported'])
+        with self.assertRaises(ValueError,msg='a copy refuses the RAM folder with the reason') as refused:helper.create_args(spec,'no','shopnet',[],False)
+        self.assertIn('/weird path',str(refused.exception))
+    def test_journald_and_tmpfs_mounts(self):
+        spec=helper.run_spec(shop(HostConfig={'LogConfig':{'Type':'journald','Config':{}}},Mounts=[{'Type':'tmpfs','Destination':'/run'}]))
+        self.assertEqual(spec['unsupported'],['the journald log driver'],'journald may be missing on another server; a tmpfs mount is fine')
+        self.assertIsNone(spec['logging'])
+    def test_the_host_network_or_host_name_namespace_sets_no_hostname(self):
+        for host in [{'NetworkMode':'host'},{'UTSMode':'host'}]:
+            spec=helper.run_spec(shop(Config={'Domainname':'example.internal'},HostConfig=host))
+            self.assertEqual((spec['hostname'],spec['domainname']),(None,None),host)
+        self.assertNotIn("the host's network",helper.run_spec(shop(HostConfig={'NetworkMode':'host'}))['unsupported'])
 
 class CreateArgsTests(unittest.TestCase):
     def test_create_flags_recreate_the_spec(self):
-        args=helper.create_args(helper.run_spec(shop()),'on-failure:3','shopnet',['127.0.0.1:8080:80/tcp'])
+        args=helper.create_args(helper.run_spec(shop()),'on-failure:3','shopnet',['127.0.0.1:8080:80/tcp'],True)
         def pairs(flag):return [args[i+1] for i,a in enumerate(args) if a==flag]
         self.assertEqual(args[:4],['--restart','on-failure:3','--network','shopnet'])
         self.assertEqual(pairs('--network-alias'),['store']);self.assertEqual(pairs('-p'),['127.0.0.1:8080:80/tcp'])
@@ -100,18 +111,26 @@ class CreateArgsTests(unittest.TestCase):
         self.assertEqual(pairs('--mount'),['type=volume,src=shop_data,dst=/data','type=bind,src=/srv/shop/config,dst=/config,readonly'])
         self.assertNotIn('-e',args);self.assertNotIn(SECRET,json.dumps(args))
     def test_an_unsupported_log_driver_is_never_passed(self):
-        args=helper.create_args(helper.run_spec(shop(HostConfig={'LogConfig':{'Type':'syslog','Config':{'tag':'x'}}})),'no','shopnet',[])
+        args=helper.create_args(helper.run_spec(shop(HostConfig={'LogConfig':{'Type':'syslog','Config':{'tag':'x'}}})),'no','shopnet',[],False)
         self.assertNotIn('--log-driver',args);self.assertNotIn('--log-opt',args)
-    def test_a_test_copy_network_gets_no_aliases_and_cpu_limits_fit_the_server(self):
-        spec=helper.fit_host(helper.run_spec(shop(HostConfig={'NanoCpus':8000000000,'CpusetCpus':'0-7'})),2)
-        self.assertEqual((spec['cpus'],spec['cpusetCpus']),('2',None))
-        self.assertNotIn('--network-alias',helper.create_args(spec,'no','dn-test-1234',[]))
-        kept=helper.fit_host(helper.run_spec(shop()),4);self.assertEqual((kept['cpus'],kept['cpusetCpus']),('1.5','0-1'))
+    def test_a_test_copy_network_gets_no_aliases_and_cpu_limits_and_sysctls_fit_the_server(self):
+        with patch('helper.os.path.exists',side_effect=lambda path:path=='/proc/sys/net/core/somaxconn'):
+            spec,notes=helper.fit_host(helper.run_spec(shop(HostConfig={'NanoCpus':8000000000,'CpusetCpus':'0-7','Sysctls':{'net.core.somaxconn':'1024','net.ipv6.conf.all.forwarding':'1','../etc':'1'}})),2)
+            kept,none=helper.fit_host(helper.run_spec(shop()),4)
+        self.assertEqual((spec['cpus'],spec['cpusetCpus'],spec['sysctls']),('2',None,{'net.core.somaxconn':'1024'}))
+        self.assertEqual(notes,['its CPU limit, capped to 2','its CPU set','the sysctl net.ipv6.conf.all.forwarding','the sysctl ../etc'])
+        self.assertNotIn('--network-alias',helper.create_args(spec,'no','dn-test-1234',[],False))
+        self.assertEqual((kept['cpus'],kept['cpusetCpus'],kept['sysctls'],none),('1.5','0-1',{'net.core.somaxconn':'1024'},[]))
+    def test_publish_all_is_the_callers_choice(self):
+        spec=helper.run_spec(shop())
+        self.assertNotIn('--publish-all',helper.create_args(spec,'no','shopnet',[],False))
+        self.assertEqual(helper.unbound_exposed(spec),['9000/tcp'],'80/tcp has its own host port')
+        self.assertEqual(helper.unbound_exposed(helper.run_spec(shop(HostConfig={'PublishAllPorts':False}))),[])
 
     def test_a_mount_without_a_source_is_refused_for_a_copy_and_named_in_the_compose_file(self):
         c=shop(Mounts=[{'Type':'volume','Destination':'/data','RW':True}])
         spec=helper.run_spec(c);self.assertIn('mounts without a source or target',spec['unsupported'])
-        with self.assertRaises(ValueError) as refused:helper.create_args(spec,'no','shopnet',[])
+        with self.assertRaises(ValueError) as refused:helper.create_args(spec,'no','shopnet',[],False)
         self.assertIn('Container shop has a mount without a source or target',str(refused.exception))
         text=helper.compose_document([spec],['shop:1.2']);self.assertIn('Not recreated for shop: mounts without a source or target.',text)
         self.assertNotIn('volumes',parse_yaml(text)['services']['shop'])
@@ -139,6 +158,17 @@ class ComposeTests(unittest.TestCase):
         self.assertIn('# Not recreated for shop: privileged mode, its custom seccomp profile (kept in manifest.json).',text)
         service=parse_yaml(text)['services']['shop'];self.assertEqual(service['network_mode'],'bridge');self.assertNotIn('labels',service)
         self.assertNotIn('networks',parse_yaml(text))
+    def test_dollar_signs_are_escaped_for_compose_in_every_value(self):
+        c=shop(HostConfig={'LogConfig':{'Type':'json-file','Config':{'tag':'app-$HOST'}}},Mounts=[{'Type':'bind','Source':'/srv/$shop','Destination':'/data','RW':True}])
+        service=parse_yaml(helper.compose_document([helper.run_spec(c)],['shop:1.2']))['services']['shop']
+        self.assertEqual(service['logging']['options'],{'tag':'app-$$HOST'});self.assertEqual(service['volumes'][0]['source'],'/srv/$$shop')
+        self.assertEqual(helper.create_args(helper.run_spec(c),'no','shopnet',[],False).count('type=bind,src=/srv/$shop,dst=/data'),1,'docker create gets the value as it is')
+    def test_the_host_network_publishes_nothing_and_joins_no_network(self):
+        c=shop(HostConfig={'NetworkMode':'host'},NetworkSettings={'Networks':{'host':{}}})
+        document=parse_yaml(helper.compose_document([helper.run_spec(c)],['shop:1.2']));service=document['services']['shop']
+        self.assertEqual(service['network_mode'],'host')
+        for key in ['ports','networks','hostname']:self.assertNotIn(key,service)
+        self.assertNotIn('networks',document)
     def test_env_file_quotes_values_literally_and_leaves_out_what_it_cannot_hold(self):
         text=helper.env_file_text(shop())
         self.assertEqual(text,"PASSWORD='%s'\nPATH='/usr/bin'\n# QUOTED is kept in the snapshot image only (its value has a quote or a line break).\n# MULTI is kept in the snapshot image only (its value has a quote or a line break).\n"%SECRET)
@@ -185,6 +215,10 @@ class PackageTests(unittest.TestCase):
             with self.assertRaises(ValueError):helper.verify_artifacts(root,manifest)
             (root/'run-definition'/'compose.yaml').write_bytes(b'services: {}\n');(root/'run-definition'/'extra.env').write_bytes(b'X=1\n')
             with self.assertRaises(ValueError,msg='an unexpected file'):helper.verify_artifacts(root,manifest)
+    def test_a_run_definition_that_cannot_be_written_never_fails_the_backup(self):
+        with patch('helper.run_definition',side_effect=KeyError('x')):self.assertEqual(helper.package_run_definition([shop()],['sha256:s']),{})
+        self.assertEqual(helper.package_run_definition([shop(Config={'Labels':{'com.docker.compose.project':'shop'}})],['sha256:s']),{})
+        self.assertEqual(sorted(helper.package_run_definition([shop()],['sha256:s'])),['run-definition/compose.yaml','run-definition/shop.env'])
     def test_zip_export_accepts_the_run_definition_entries(self):
         spec=importlib.util.spec_from_file_location('export_zip',pathlib.Path(__file__).parent/'export_zip.py');export_zip=importlib.util.module_from_spec(spec);spec.loader.exec_module(export_zip)
         for name in ['run-definition/compose.yaml','run-definition/shop.env']:self.assertTrue(export_zip.OUTER.fullmatch(name),name)
@@ -197,10 +231,12 @@ class DiscoveryHintTests(unittest.TestCase):
         with patch('helper.docker',return_value=lines):volumes=helper.discovered_volumes()
         self.assertEqual(volumes,[{'name':'shop_data','driver':'local','labels':{'com.docker.compose.project':'shop','empty':''}},{'name':'loose','driver':'local','labels':{}}])
         with patch('helper.docker',return_value=b''):self.assertEqual(helper.discovered_volumes(),[])
+        with patch('helper.docker',side_effect=helper.subprocess.CalledProcessError(1,['docker'])):self.assertIsNone(helper.discovered_volumes(),'a scan never fails on volumes')
 
 class MoveFactsTests(unittest.TestCase):
-    def test_the_move_preview_names_settings_a_copy_cannot_have(self):
-        facts=helper.unsupported_facts([shop(),shop(Name='/gpu',HostConfig={'DeviceRequests':[{'Driver':'nvidia'}],'LogConfig':{'Type':'gelf'}})])
-        self.assertEqual(facts,[{'container':'gpu','settings':['GPUs and other device requests','the gelf log driver']}])
+    def test_the_move_preview_names_settings_unreadable_mounts_and_cpu_limits(self):
+        facts=helper.run_spec_facts([shop(),shop(Name='/gpu',HostConfig={'DeviceRequests':[{'Driver':'nvidia'}],'LogConfig':{'Type':'gelf'},'NanoCpus':0,'CpusetCpus':''},Mounts=[{'Type':'volume','Destination':'/data'}])])
+        self.assertEqual(facts,{'unsupported':[{'container':'gpu','settings':['GPUs and other device requests','the gelf log driver']}],'unreadableMounts':['gpu'],
+            'cpuLimits':[{'container':'shop','cpus':'1.5','cpuset':'0-1'}]})
 
 if __name__=='__main__':unittest.main()

@@ -5,11 +5,9 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    container_label, emit, extra_capabilities, hardening, inspect, mount_option)
+    SAFE_NAME, container_label, emit, extra_capabilities, hardening, inspect, mount_option)
 from .discovery import (
     temporary_mounts, tmpfs_argument)
-from .move import (
-    SAFE_NAME)
 # </build:header>
 # ---- Run spec (docs/coverage-and-restore-check.md A2) ----
 # One source of truth for recreating a container. A spec never holds environment values, only their names; the values
@@ -18,10 +16,13 @@ from .move import (
 # fails: what DockNest refuses to copy stays refused where it was refused before (backup preflight, restore network
 # plan, hardening_args).
 RESTART_POLICIES={'no','always','unless-stopped','on-failure'}
-LOG_DRIVERS={'json-file','local','journald','none'}  # drivers that need nothing outside the server; others stay default
+LOG_DRIVERS={'json-file','local','none'}  # need nothing on the server; journald and others keep Docker's default
 DOCKER_SHM_BYTES=64*1024*1024
 EXTRA_HOST=re.compile(r'[A-Za-z0-9.-]+:[0-9a-fA-F.:]+|[A-Za-z0-9.-]+:host-gateway')
 PLAIN_WORD=re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,63}')
+SYSCTL_KEY=re.compile(r'[a-z0-9_-]+(?:\.[a-z0-9_-]+)+')
+BUILTIN_NETWORKS=('bridge','default','host','none')
+UNREADABLE_MOUNTS='mounts without a source or target'
 ENV_NAME=re.compile(r'[A-Za-z_][A-Za-z0-9_.]{0,255}')
 ENV_LITERAL=re.compile(r"[^'\r\n\0]*")
 # HostConfig settings that are recreated by neither path, named when set.
@@ -41,8 +42,10 @@ LIST_SETTINGS=(('extraHosts','--add-host','extra_hosts'),('dns','--dns','dns'),(
 SWITCH_SETTINGS=(('init','--init','init'),('tty','--tty','tty'),('stdinOpen','--interactive','stdin_open'))
 
 def yaml_str(value):
-    """A JSON string is a valid YAML double-quoted scalar, so every scalar is written as one (no YAML library)."""
-    return json.dumps(('true' if value else 'false') if isinstance(value,bool) else str(value))
+    """A Compose scalar: a JSON string is a valid YAML double-quoted scalar (no YAML library), and $ is written as $$
+    so Compose never reads part of a value as a variable."""
+    return json.dumps(('true' if value else 'false') if isinstance(value,bool) else str(value).replace('$','$$'))
+def yaml_key(key):return json.dumps(str(key))
 def port_bindings(c):
     result=[]
     for internal,bindings in (c.get('HostConfig',{}).get('PortBindings') or {}).items():
@@ -66,14 +69,14 @@ def unsupported_settings(c,hc):
     if hc.get('Runtime') not in [None,'','runc']:found.append('the %s runtime'%hc['Runtime'] if PLAIN_WORD.fullmatch(str(hc['Runtime'])) else 'a custom runtime')
     for key,label in NAMESPACES:
         mode=str(hc.get(key) or '')
-        if mode=='host':found.append("the host's "+label)
+        if mode=='host' and key!='NetworkMode':found.append("the host's "+label)
         elif mode.startswith('container:'):found.append("another container's "+label)
     joined=(c.get('NetworkSettings') or {}).get('Networks') or {}
     if any((n or {}).get('IPAMConfig') for n in joined.values()):found.append('a fixed IP address')
     if any(not SAFE_NAME.fullmatch(name) for name in joined):found.append('a network with an unusual name')
     driver=(hc.get('LogConfig') or {}).get('Type')
     if driver and driver not in LOG_DRIVERS:found.append('the %s log driver'%driver if PLAIN_WORD.fullmatch(str(driver)) else 'a custom log driver')
-    if any(m.get('Type') not in ['bind','volume'] for m in c.get('Mounts') or []):found.append('mounts other than folders and volumes')
+    if any(m.get('Type') not in ['bind','volume','tmpfs'] for m in c.get('Mounts') or []):found.append('mounts other than folders, volumes and RAM folders')
     if any(not (isinstance(h,str) and EXTRA_HOST.fullmatch(h)) for h in hc.get('ExtraHosts') or []):found.append('host entries DockNest cannot read')
     return found
 def restart_policy(hc):
@@ -84,7 +87,7 @@ def restart_policy(hc):
 def container_networks(c):
     """Network name -> aliases a copy keeps (Docker adds the short ID itself), and the network it starts on."""
     hc=c.get('HostConfig') or {};joined=(c.get('NetworkSettings') or {}).get('Networks') or {}
-    networks={name:[] if name in ['bridge','default'] else list(dict.fromkeys(a for a in (n or {}).get('Aliases') or [] if a and a!=str(c.get('Id',''))[:12] and SAFE_NAME.fullmatch(a))) for name,n in joined.items() if name!='none' and SAFE_NAME.fullmatch(name)}
+    networks={name:[] if name in BUILTIN_NETWORKS else list(dict.fromkeys(a for a in (n or {}).get('Aliases') or [] if a and a!=str(c.get('Id',''))[:12] and SAFE_NAME.fullmatch(a))) for name,n in joined.items() if name!='none' and SAFE_NAME.fullmatch(name)}
     primary=hc.get('NetworkMode') if hc.get('NetworkMode') in networks else next(iter(networks),'none')
     return networks,'bridge' if primary=='default' else primary
 def spec_hardening(c):
@@ -93,27 +96,29 @@ def spec_hardening(c):
     except ValueError:return None
     return {'readOnly':h['readonly'],'capDrop':h['drop'],'capAdd':h['add'],'noNewPrivileges':h['noNewPrivileges'],'seccomp':h['seccomp'] if h['seccomp'] in ['default','unconfined'] else 'custom','apparmor':h['apparmor'],'labels':h['labels']}
 def spec_tmpfs(c):
-    try:return [[destination,options] for destination,options in temporary_mounts(c)]
-    except ValueError:return None
+    """RAM folders and None, or [] and the reason DockNest cannot recreate one."""
+    try:return [[destination,options] for destination,options in temporary_mounts(c)],None
+    except ValueError as error:return [],str(error)
 def spec_mounts(c):
     return [{'type':m['Type'],'source':m.get('Name' if m['Type']=='volume' else 'Source'),'target':m.get('Destination'),'readOnly':not m.get('RW',True)} for m in c.get('Mounts') or [] if m.get('Type') in ['bind','volume']]
 def readable(m):return bool(m['source'] and m['target'])
 def run_spec(c):
     """The normalised run spec of one inspect record, with the settings it cannot recreate in 'unsupported'."""
     config=c.get('Config') or {};hc=c.get('HostConfig') or {};unsupported=unsupported_settings(c,hc)
-    networks,primary=container_networks(c);log=hc.get('LogConfig') or {};secure=spec_hardening(c);tmpfs=spec_tmpfs(c)
+    networks,primary=container_networks(c);log=hc.get('LogConfig') or {};secure=spec_hardening(c);tmpfs,tmpfs_problem=spec_tmpfs(c)
     if secure is None:unsupported.append('security options DockNest cannot copy')
     elif extra_capabilities(secure['capAdd']):unsupported.append('extra capabilities')
-    if tmpfs is None:unsupported.append('RAM folders DockNest cannot recreate')
+    if tmpfs_problem:unsupported.append('RAM folders DockNest cannot recreate')
     mounts=spec_mounts(c)
-    if not all(map(readable,mounts)):unsupported.append('mounts without a source or target')
-    hostname=str(config.get('Hostname') or '')
+    if not all(map(readable,mounts)):unsupported.append(UNREADABLE_MOUNTS)
+    # With the host's network or host name namespace the container has the server's own name: nothing to set.
+    hostname=str(config.get('Hostname') or '') if 'host' not in [hc.get('NetworkMode'),hc.get('UTSMode')] else ''
     swap=hc.get('MemorySwap') if positive(hc.get('Memory')) and hc.get('MemorySwap') not in [None,0] else None
     shm=positive(hc.get('ShmSize'))
     return {'name':container_label(c),'image':str(config.get('Image') or ''),'environment':[item.partition('=')[0] for item in config.get('Env') or [] if isinstance(item,str)],
-        'hostname':hostname if hostname and hostname!=str(c.get('Id',''))[:12] else None,'domainname':config.get('Domainname') or None,
+        'hostname':hostname if hostname and hostname!=str(c.get('Id',''))[:12] else None,'domainname':(config.get('Domainname') or None) if hostname else None,
         'restart':restart_policy(hc),'network':primary,'networks':networks,'ports':port_bindings(c),'publishAll':bool(hc.get('PublishAllPorts')),
-        'exposed':sorted(str(p) for p in config.get('ExposedPorts') or {}),'tmpfs':tmpfs or [],'mounts':mounts,
+        'exposed':sorted(str(p) for p in config.get('ExposedPorts') or {}),'tmpfs':tmpfs,'tmpfsProblem':tmpfs_problem,'mounts':mounts,
         'extraHosts':[h for h in hc.get('ExtraHosts') or [] if isinstance(h,str) and EXTRA_HOST.fullmatch(h)],'init':bool(hc.get('Init')),
         'tty':bool(config.get('Tty')),'stdinOpen':bool(config.get('OpenStdin')),'memory':positive(hc.get('Memory')),'memoryReservation':positive(hc.get('MemoryReservation')),
         'memorySwap':swap,'cpus':cpu_limit(hc.get('NanoCpus')),'cpuShares':positive(hc.get('CpuShares')),'cpusetCpus':hc.get('CpusetCpus') or None,
@@ -124,24 +129,36 @@ def run_spec(c):
         'sysctls':{str(k):str(v) for k,v in (hc.get('Sysctls') or {}).items()},'groupAdd':words(hc.get('GroupAdd')),
         'stopTimeout':integer(config.get('StopTimeout')),
         'hardening':secure,'unsupported':unsupported}
-def fit_host(spec,cpus):
-    """A CPU limit above this server's CPU count is capped to it, and a CPU set naming CPUs it lacks is left out:
-    docker create refuses both, and a move never fails on a setting it used to drop."""
-    capped=dict(spec)
-    if spec['cpus'] and float(spec['cpus'])>cpus:capped['cpus']=str(cpus)
-    numbers=[int(n) for n in re.findall(r'\d+',spec['cpusetCpus'] or '')]
-    if numbers and max(numbers)>=cpus:capped['cpusetCpus']=None
-    return capped
-def create_args(spec,restart,network,ports):
-    """`docker create` flags that recreate a spec. The caller picks the restart policy, the network the copy starts on
-    and its `-p` values (a move test copy differs), and adds its own name, labels and hardening_args."""
+def cpu_fit(cpus,cpuset,count):
+    """The CPU limit and CPU set a server with `count` CPUs accepts: a larger limit is capped to the count and a set
+    naming CPUs it lacks is left out (docker create refuses both). Mirrored in src/moves/preflight.js."""
+    numbers=[int(n) for n in re.findall(r'\d+',cpuset or '')]
+    return (str(count) if cpus and float(cpus)>count else cpus),(None if numbers and max(numbers)>=count else cpuset)
+def sysctl_present(key):
+    return bool(SYSCTL_KEY.fullmatch(key)) and os.path.exists('/proc/sys/'+key.replace('.','/'))
+def fit_host(spec,count):
+    """The spec this server can start, and what was changed in plain words: a move never fails on a setting it used to
+    drop. CPU limits are fitted (cpu_fit) and a sysctl this kernel does not have is left out."""
+    fitted={**spec,'sysctls':{k:v for k,v in spec['sysctls'].items() if sysctl_present(k)}}
+    fitted['cpus'],fitted['cpusetCpus']=cpu_fit(spec['cpus'],spec['cpusetCpus'],count)
+    notes=(['its CPU limit, capped to %s'%fitted['cpus']] if fitted['cpus']!=spec['cpus'] else [])+(['its CPU set'] if fitted['cpusetCpus']!=spec['cpusetCpus'] else [])
+    notes+=['the sysctl '+k for k in spec['sysctls'] if k not in fitted['sysctls']]
+    return fitted,notes
+def unbound_exposed(spec):
+    """Exposed ports `-P` publishes: those without a host port of their own."""
+    bound={'%d/%s'%(b['containerPort'],b['protocol']) for b in spec['ports']}
+    return [port for port in spec['exposed'] if spec['publishAll'] and port not in bound]
+def create_args(spec,restart,network,ports,publish_all):
+    """`docker create` flags that recreate a spec. The caller picks the restart policy, the network the copy starts on,
+    its `-p` values and whether `-P` applies (a move test copy differs), and adds its own name, labels and hardening_args.
+    A copy without one of the original's RAM folders or mounts would lose its data: refused, never skipped."""
+    if spec['tmpfsProblem']:raise ValueError(spec['tmpfsProblem'])
     args=['--restart',restart,'--network',network]
-    if network not in ['bridge','none']:args+=[part for alias in spec['networks'].get(network,[]) for part in ['--network-alias',alias]]
+    if network not in BUILTIN_NETWORKS:args+=[part for alias in spec['networks'].get(network,[]) for part in ['--network-alias',alias]]
     for port in ports:args+=['-p',port]
-    if spec['publishAll']:args.append('--publish-all')
+    if publish_all:args.append('--publish-all')
     for destination,options in spec['tmpfs']:args+=['--tmpfs',tmpfs_argument(destination,options)]
     for m in spec['mounts']:
-        # A copy without one of the original's mounts would lose its data: refused, never skipped.
         if not readable(m):raise ValueError('Container %s has a mount without a source or target, which DockNest cannot recreate.'%spec['name'])
         args+=['--mount',mount_option(m['type'],m['source'],m['target'],m['readOnly'])]
     for key,flag,_ in VALUE_SETTINGS:
@@ -174,12 +191,11 @@ def compose_service(spec,image):
     if image!=spec['image']:service['labels']={'docknest.original-image':spec['image']}
     if spec['environment']:service['env_file']=[env_file_name(spec)]
     service['restart']=spec['restart']
-    if spec['network'] in ['bridge','none']:service['network_mode']=spec['network']
-    else:service['networks']={name:({'aliases':aliases} if aliases else {}) for name,aliases in spec['networks'].items() if name not in ['bridge','default']}
-    ports=[port_argument(b['hostIp'],b['hostPort'],b['containerPort'],b['protocol']) for b in spec['ports']]
-    bound={'%d/%s'%(b['containerPort'],b['protocol']) for b in spec['ports']}
-    ports+=[port for port in spec['exposed'] if spec['publishAll'] and port not in bound]  # -P: each exposed port on a free host port
-    if ports:service['ports']=ports
+    if spec['network'] in BUILTIN_NETWORKS:service['network_mode']=spec['network']
+    else:service['networks']={name:({'aliases':aliases} if aliases else {}) for name,aliases in spec['networks'].items() if name not in BUILTIN_NETWORKS}
+    # -P: each exposed port on a free host port. The host network publishes nothing (the ports are the server's own).
+    ports=[port_argument(b['hostIp'],b['hostPort'],b['containerPort'],b['protocol']) for b in spec['ports']]+unbound_exposed(spec)
+    if ports and spec['network']!='host':service['ports']=ports
     if spec['tmpfs']:service['tmpfs']=[tmpfs_argument(destination,options) for destination,options in spec['tmpfs']]
     mounts=[m for m in spec['mounts'] if readable(m)]  # the others are named at the top of the file
     if mounts:service['volumes']=[{'type':m['type'],'source':m['source'],'target':m['target'],**({'read_only':True} if m['readOnly'] else {})} for m in mounts]
@@ -204,9 +220,9 @@ def compose_notes(spec):
     """What this Compose file leaves out for one container, in plain words (spec['unsupported'] plus Compose-only gaps)."""
     notes=list(spec['unsupported'])
     if spec['hardening'] and spec['hardening']['seccomp']=='custom':notes.append('its custom seccomp profile (kept in manifest.json)')
-    others=[name for name in spec['networks'] if name not in ['bridge','default']]
+    others=[name for name in spec['networks'] if name not in BUILTIN_NETWORKS]
     if spec['network']=='bridge' and others:notes.append("its networks next to Docker's default bridge (%s)"%', '.join(others))
-    elif spec['network'] not in ['bridge','none'] and len(others)<len(spec['networks']):notes.append("Docker's default bridge network next to its own")
+    elif spec['network'] not in BUILTIN_NETWORKS and len(others)<len(spec['networks']):notes.append("Docker's default bridge network next to its own")
     return notes
 def yaml_inline(item):
     """A scalar, {} or [] on one line; None for a dict or list that needs a block."""
@@ -217,7 +233,7 @@ def yaml_lines(value,indent=0):
     """Block YAML of dicts and lists whose every key and scalar is JSON-quoted."""
     pad=' '*indent;lines=[]
     for key,item in (value.items() if isinstance(value,dict) else ((None,item) for item in value)):
-        head=pad+('-' if key is None else yaml_str(key)+':');inline=yaml_inline(item)
+        head=pad+('-' if key is None else yaml_key(key)+':');inline=yaml_inline(item)
         if inline is not None:lines.append(head+' '+inline)
         elif key is None and isinstance(item,dict):
             nested=yaml_lines(item,indent+2);lines+=[head+' '+nested[0].lstrip()]+nested[1:]
@@ -230,7 +246,7 @@ def compose_document(specs,images):
         '# Environment values are read from the env_file of each service.']
     header+=['# Not recreated for %s: %s.'%(spec['name'],', '.join(compose_notes(spec))) for spec in specs if compose_notes(spec)]
     document={'services':{spec['name']:compose_service(spec,image) for spec,image in zip(specs,images)}}
-    networks=sorted({name for spec in specs if spec['network'] not in ['bridge','none'] for name in spec['networks'] if name not in ['bridge','default']})
+    networks=sorted({name for spec in specs if spec['network'] not in BUILTIN_NETWORKS for name in spec['networks'] if name not in BUILTIN_NETWORKS})
     volumes=sorted({m['source'] for spec in specs for m in spec['mounts'] if m['type']=='volume' and readable(m)})
     if networks:document['networks']={name:{'name':name} for name in networks}
     if volumes:document['volumes']={name:{'name':name} for name in volumes}

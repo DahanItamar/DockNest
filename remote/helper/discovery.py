@@ -90,9 +90,10 @@ def volume_labels(text):
     # `docker volume ls` prints labels as one "key=value,key=value" string; a comma inside a value cannot be told apart.
     return dict(item.partition('=')[::2] for item in str(text or '').split(',') if item)
 def discovered_volumes():
-    """Every volume on the server: name, driver and labels only (never its contents or mount point)."""
-    lines=docker('volume','ls','--format','{{json .}}').decode().splitlines()
-    return [{'name':v.get('Name'),'driver':v.get('Driver'),'labels':volume_labels(v.get('Labels'))} for v in map(json.loads,filter(str.strip,lines))]
+    """Every volume on the server: name, driver and labels only (never its contents or mount point). None when they
+    cannot be listed: a scan never fails on them, and None is never read as "no volumes"."""
+    try:return [{'name':v.get('Name'),'driver':v.get('Driver'),'labels':volume_labels(v.get('Labels'))} for v in map(json.loads,filter(str.strip,docker('volume','ls','--format','{{json .}}').decode().splitlines()))]
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError,AttributeError):return None
 def configuration_paths(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     roots=project_roots(container)

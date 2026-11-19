@@ -285,6 +285,13 @@ def run_definition_intact(root,records):
     present={'run-definition/'+p.name for p in folder.iterdir()} if folder.is_dir() and not folder.is_symlink() else set()
     if present!=set(records) or not all(RUN_DEFINITION.fullmatch(name) for name in records):return False
     return all((root/name).is_file() and not (root/name).is_symlink() and document_record((root/name).read_bytes())==item for name,item in records.items())
+def package_run_definition(cs,images):
+    """A container started without Compose gets a readable Compose file of itself (docs/backup-format.md). It is
+    optional content: if it cannot be written the backup goes on without it (no manifest.runDefinition)."""
+    if not standalone(cs):return {}
+    try:return {name:text.encode() for name,text in run_definition(cs,images).items()}
+    except Exception as error:
+        diagnostic(phase='run-definition-skipped',exceptionType=type(error).__name__);return {}
 def verify_artifacts(root,manifest):
     expected=manifest.get('artifacts')
     if expected is None:return False # Legacy package: no invented artifact evidence.
@@ -655,8 +662,7 @@ def capture(req,output=None):
     if protected:manifest['protectedMounts']=protected
     if keys_left_out:manifest['protectedPaths']=keys_left_out
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
-    # A container started without Compose gets a readable Compose file of itself (docs/backup-format.md).
-    definition={name:text.encode() for name,text in run_definition(cs,images).items()} if standalone(cs) else {}
+    definition=package_run_definition(cs,images)
     if definition:manifest['runDefinition']={name:document_record(data) for name,data in definition.items()}
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
