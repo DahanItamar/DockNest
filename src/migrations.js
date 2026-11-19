@@ -266,6 +266,14 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// The domain path (docs/domains.md, "Data"): the newest check of each domain. The domain is lowercase and at most 253
+// characters (the certificate module's NAME pattern is checked before storage); either id is null when the domain points
+// nowhere. hops holds states, reason codes and safe parameters only. Additive only: one new table and two indexes.
+export const domainChecksSchema = `
+CREATE TABLE IF NOT EXISTS domain_checks (domain TEXT PRIMARY KEY CHECK (length(domain) BETWEEN 1 AND 253 AND domain = lower(domain)),server_id TEXT REFERENCES servers(id),site_id TEXT REFERENCES sites(id),hops TEXT NOT NULL CHECK (length(hops) <= 8192 AND json_valid(hops)),checked_at TEXT NOT NULL,trigger TEXT NOT NULL CHECK (trigger IN ('manual','discover','readiness','backup','move')));
+CREATE INDEX IF NOT EXISTS domain_checks_server ON domain_checks(server_id);
+CREATE INDEX IF NOT EXISTS domain_checks_site ON domain_checks(site_id);
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -389,6 +397,9 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Purely additive: planned
+  // as 22 after 19 to 21 of the other 2.16.5 changes; renumber before release if the order changes.
+  { version: 22, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

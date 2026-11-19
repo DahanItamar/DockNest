@@ -59,6 +59,11 @@ test('certificate facts come only from public certificate files, certbot renewal
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for certificate helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('proxy routes from nginx, Nginx Proxy Manager, Caddy and Traefik carry only hosts, ports, upstreams and certificate names',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_domains.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for proxy route helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('copies keep the original read-only root, dropped capabilities and security options, or refuse with a reason',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_hardening.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for copy hardening verification');
