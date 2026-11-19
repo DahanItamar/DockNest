@@ -20,27 +20,116 @@ of them everything.
 
 ### Content
 
-The runbook is generated from the database at request time:
+The runbook is generated from the database at request time. Sections, in this order:
 
-- **Fleet overview:** what this is, who to ask (an owner-written note), servers (name, what runs there, an owner
-  note), apps (server, last good backup, last restore test), where the backups are, and the emergency kit (K of N, who
-  holds parts, labels only).
-- **One page per app:** what it is, how to tell it works (its domains and what to expect), numbered steps if it is
-  down, numbered steps to restore it from a backup, and the last restore test.
+1. **Start here:** three short numbered lists:
+   - get a new server;
+   - install DockNest;
+   - connect the backup storage.
+2. **Restore everything in this order:** one numbered list across all apps. Linked apps that own a shared database come
+   first (from the 2.16.5 links), then the apps that use them, then the rest. Each item has a one-line reason.
+3. **Fleet overview:**
+   - what this is;
+   - who to ask (an owner-written note);
+   - servers (name, what runs there, an owner note);
+   - apps (server, last good backup, last restore test);
+   - where the backups are;
+   - the emergency kit (K of N, who holds parts, labels only).
+4. **One page per app:** what it is, how to tell it works (its domains and what to expect), numbered steps if it is
+   down, numbered steps to restore it from a backup, and the last restore test.
 
 ### Rules
 
-- **Redacted by default:** no passwords, tokens, keys or env values, ever. Server addresses are hidden behind "Show
-  addresses", which is off by default, and the printed copy follows that toggle.
-- **Plain language:** steps are short and numbered, and each one links to the expert guide (`restore-guide.md`
-  sections, `docs/independent-recovery.md`) for the person who will do the technical part.
+- **Writing:** short sentences, one action per step, no filler. Each step starts with a verb ("Open Storage.").
+  Expert detail goes behind a link to the expert guide (`restore-guide.md` sections, `docs/independent-recovery.md`).
+- **Redacted by default:** the page never shows passwords, tokens, keys, env values or server addresses. The PDF
+  includes addresses or login details only when the dialog says so (below).
 - **Honest wording:**
   - "Verified" appears only with a passed restore test (`recovery-evidence.js` `TEST_METHOD`), with its date and
     source (main or off-site copy).
   - Otherwise the runbook says "Backed up, not tested yet".
   - A key that is missing from a backup (see Keys safe) is listed as a known gap.
-- **Formats:** an HTML page with a print stylesheet (Print or save as PDF), and a download (a single self-contained
-  HTML file).
+
+### Export: "Download recovery guide (PDF)"
+
+**Entry point.** There is no button. A documentation-style text link, "Download recovery guide (PDF)", sits under the
+runbook title and under each app page's title. On an app page, the dialog opens with only that app ticked. The link
+opens a dialog, "Download recovery guide", with these choices:
+
+- **Apps:** every app, all ticked by default, with "Select all" and "Select none".
+- **Include:**
+
+  | Option | Default | Rule |
+  |---|---|---|
+  | Server addresses | off | — |
+  | Login details | off | administrators only (hidden for operators); re-verification when ticked; a warning panel: "This PDF will hold logins to your backup storage. Anyone with the file can reach your backups. Keep it like a password. Creating it is recorded in the audit log." |
+  | Restore test history | on | — |
+  | Schedules | on | — |
+  | Your notes | on | — |
+
+- **Actions:** one primary action, "Create PDF", and Cancel.
+- **States:** default, login details ticked with the warning, creating (button busy, inputs disabled), and error
+  ("The PDF could not be created. Nothing was saved. Try again.").
+
+**What "Login details" holds:**
+
+- the backup storage logins DockNest keeps sealed (SFTP host, user and password or key; S3 endpoint, bucket and keys);
+- the owner's own per-app login notes, sealed like other secrets.
+
+**What it never holds:** the master key, the recovery passphrase, SSH private keys for servers, or emergency kit parts.
+The emergency kit is how a relative gets those.
+
+**Audit.** The entry records who, when, the app ids and the option flags. It never records the content.
+
+**Output.** `POST /api/runbook/pdf { apps[], include{} }` returns `application/pdf` as a download
+(`Content-Disposition: attachment`, `Cache-Control: no-store`). There is no print dialog and no HTML file. The PDF is
+built in memory and streamed. It is never written to disk, never cached and never logged; the request log records
+only the route and status. Re-verification is enforced on the server when `include.logins` is true, not just in the UI.
+
+### PDF approach: a small in-house writer, no new npm dependency
+
+`src/runbook/pdf.js` is a minimal PDF 1.7 writer (Node 24 ESM, `node:zlib` for FlateDecode). It uses a fixed layout
+model:
+
+- headings, paragraphs, numbered lists and simple tables;
+- automatic page breaks, a page header and footer with page numbers;
+- a title page.
+
+**Fonts.** Text uses embedded TrueType fonts as Type0/CIDFontType2 with Identity-H encoding and a ToUnicode CMap, so
+text can be selected and searched. Hebrew and other scripts work: a Noto Sans Hebrew face covers them. Right-to-left
+runs are reordered with a small Unicode bidi pass, which is enough because Hebrew needs no glyph shaping. The writer
+reads only the `cmap`, `hmtx`, `head`, `hhea` and `maxp` tables from fonts that ship with DockNest. It never reads fonts
+or PDFs from users.
+
+**Font files.** Static OFL/Apache TTFs (Roboto Regular and Bold, Noto Sans Hebrew Regular) are vendored under
+`assets/fonts/` with their licences, and their SHA-256 is pinned in a test. A font file is not a code dependency. The
+fonts are embedded whole (no subsetting), which costs about 0.5 MB per PDF. That is acceptable for a file made rarely.
+
+**Why not a library:**
+
+- pdfkit pulls in fontkit and several transitive packages.
+- pdf-lib has had no release since 2021.
+- A headless browser is far too large for the image and the attack surface.
+
+Writing PDF with text only is a well-bounded format task, about 400 lines. It is easier to review than a dependency tree.
+
+**Security notes:**
+
+- The writer only writes. It parses no untrusted input.
+- Every string from the database goes into content streams through one escaping function for PDF literal strings,
+  which handles `\`, `(`, `)` and control characters. Text is encoded as glyph ids, so no raw byte from input ever
+  becomes a PDF operator.
+- There is no JavaScript, no forms, no embedded files, no launch actions, and no external links except fixed `https`
+  links to the project's docs.
+- Limits: 200 apps, 2,000 pages and 64 MB of output. A request beyond them is refused.
+
+**Tests:**
+
+- golden-structure tests: xref offsets, object count and trailer;
+- an escaping fuzz test, so injected `) Tj` sequences stay text;
+- a Hebrew round-trip through the ToUnicode map;
+- on the Linux CI image, `qpdf --check` and `pdftotext` checks that the text matches and that no secret appears when
+  login details are off.
 
 ### Out of date, event-driven
 
@@ -60,8 +149,9 @@ server address changed, and so on). There is no timer. The same comparison runs 
 inputs, so the Overview can show one quiet line. With the owner's opt-in, this can also be an alert event
 (`runbook.outdated`, sent once per digest).
 
-The redacted runbook is also written next to each emergency kit in storage, so a relative can read it before anything
-is decrypted.
+A redacted PDF of the runbook (all apps; no addresses and no login details, whatever the dialog last used) is also
+written next to each emergency kit in storage, so a relative can read it before anything is decrypted. That
+automatic copy can never include login details, and a test asserts it.
 
 ## Decision 2: the emergency kit, split K of N
 
@@ -127,6 +217,7 @@ the public key binding.
 | A malicious practice-join page | parts typed into a compromised page | the join is client-side only. The offline tool is the recommended path for a real recovery |
 | A wrong or corrupt part | wrong key | the RS1024 checksum per part, then the digest check before any decrypt |
 | Rollback to an old kit | older data | each kit header carries its creation time and release. The tool lists kits newest first |
+| An exported PDF with login details leaks | anyone with the file can reach the backup storage (the backups themselves stay encrypted with the master key) | off by default, administrators only, re-verification enforced on the server, a warning in the dialog, an audit entry, never stored or logged, never in the automatic copy next to the kit |
 | Side channels | — | a one-shot local operation. Table-based GF(256) is acceptable here, and the reason is documented |
 
 ### Security review checklist (before merge)
@@ -142,7 +233,8 @@ the public key binding.
 - The DockNest backup page gets a card "Emergency kit for trusted people". The split dialog has three steps (choose
   people, hand out parts one at a time, done) with the existing dialog stepper.
 - The Runbook page is new: admin only, in the sidebar below "DockNest backup".
-- Boards: C1-C5 and D1-D6.
+- The recovery guide dialog opens from a documentation-style text link, never from a button.
+- Boards: C1-C9 (runbook and export dialog states) and D1-D6.
 
 ## Data
 

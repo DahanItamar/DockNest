@@ -125,7 +125,7 @@ Docker integration suite.
 | | 8 | UI: padlock, Keys panel, card line, kit check card | PRs 4, 5, 7, DS v2 |
 | L3 If I'm gone (Opus) | 9 | `src/emergency/` SLIP-0039 split and join, X25519 envelope, published test vectors. No UI | — |
 | | 10 | Emergency kit with each self-backup, `emergency_keys` migration, offline open tool in the recovery kit | PR 9 |
-| | 11 | Runbook generator, inventory digest, Runbook page, print view | PRs 7, 10 |
+| | 11 | Runbook generator, inventory digest, Runbook page, in-house PDF writer (`src/runbook/pdf.js`, vendored fonts) and the recovery guide dialog | PRs 7, 10 |
 | | 12 | Split flow and practice join UI | PRs 10, 11, DS v2 |
 | L4 Small ideas (Sonnet, PR 16 Opus) | 13 | Missed-run event | — |
 | | 14 | Restore test from a copy | — |
@@ -145,20 +145,27 @@ storage targets `append_only`. Online dumps live in the app's config JSON, so th
 - The runbook starts as "never made".
 - The upgrade compatibility job (`npm run test:upgrade`) gains a fixture from 2.16.5 for each table.
 
-## E. Owner questions
+## E. Owner decisions (approved)
 
-1. **Domains column:** show it by default whenever an app has domains, with a toolbar toggle remembered per browser?
-   *Recommended: yes.*
-2. **Broken domain hops:** in 3.0.0, show them on the Map and in the Move review only, with no new alert (certificate
-   alerts stay as they are)? *Recommended: yes. It keeps "not uptime monitoring" clear.*
-3. **Who confirms "Mark as known-good"** after a change outside Safe Edit? *Recommended: administrators, with
-   re-verification, recorded in the audit trail.*
-4. **Kit decrypt proof:** it uses the passphrase DockNest keeps sealed. Should the runbook also offer a practice where
-   you type your own passphrase (checked in memory, never stored)? *Recommended: yes, offered, never nagged.*
-5. **Emergency kit parts:** SLIP-0039 word lists (33 words each; independent open-source tools can join them) rather
-   than DockNest-only codes? *Recommended: SLIP-0039.*
-6. **Append-only SFTP** turns retention off for that storage, so it only grows. Is that acceptable, with the storage
-   report warning about growth? *Recommended: yes. Online dumps stay opt-in per database and are never the default.*
+The owner approved all six recommendations:
+
+1. The Domains column shows by default when an app has domains. A toolbar toggle is remembered per browser.
+2. Broken domain hops show on the Map and in the Move review only. There is no new alert; certificate alerts stay.
+3. Only administrators can "Mark as known-good". They must re-verify, and it is audited.
+4. The runbook offers a "type your own passphrase" practice, checked in memory and never stored. It is offered, never
+   pushed.
+5. Emergency kit parts are SLIP-0039 word lists of 33 words.
+6. Append-only SFTP turns retention off for that storage, and the storage report warns about growth. Online dumps
+   stay opt-in per database.
+
+Theme 4 additions from the owner:
+
+- A "Start here" section and a restore order.
+- A "Download recovery guide (PDF)" text link that opens an options dialog (apps, addresses, admin-only login
+  details, history, schedules, notes).
+- A real server-side PDF.
+
+All of this is in the [theme 4 ADR](adr-3.0.0-if-im-gone.md).
 
 ## Roles used
 
