@@ -45,10 +45,13 @@ class RestoreGapScan:
         self.cfg=cfg;self.containers=containers;self.files=0;self.complete=True;self.findings={}
         self.folders=gap_folders(cfg,containers);self.names=gap_names(containers)
         self.included=set(cfg.get('composeFiles',[])+cfg.get('configFiles',[]))
-    def entries(self,directory):
-        """Files (and links) directly in a scanned folder, sorted. A folder that is a link is not scanned."""
+    def entries(self,directory,scanned=()):
+        """Files (and links) directly in a scanned folder, sorted. A folder that is a link is not scanned; a link to
+        another folder of the same scan (Alpine's /var/spool/cron/crontabs -> /etc/crontabs) is skipped quietly."""
         try:
-            if os.path.islink(directory):self.complete=False;return []
+            if os.path.islink(directory):
+                if lexical(os.path.realpath(directory)) not in {lexical(os.path.realpath(f)) for f in scanned if not os.path.islink(f)}:self.complete=False
+                return []
             if not os.path.isdir(directory):return []
             with os.scandir(directory) as items:names=sorted(item.name for item in items if not item.name.startswith('.') and not item.is_dir(follow_symlinks=False))
         except OSError:self.complete=False;return []
@@ -60,7 +63,7 @@ class RestoreGapScan:
         except OSError:return None
         if stat.S_ISLNK(info.st_mode):
             target=lexical(os.path.realpath(path))
-            if target=='/dev/null':return None
+            if gap_masked(path):return None
             if not within(target,lexical(os.path.realpath(os.path.dirname(path)))):self.complete=False;return None
             path=target
         if protected_path(path):return None
@@ -99,6 +102,9 @@ def restore_gaps(cfg,containers,roots):
     cron_gaps(scan,roots);timer_gaps(scan,roots['systemd']);docker_object_gaps(scan);bind_gaps(scan);compose_gaps(scan)
     certificate_gaps(scan,roots['letsencrypt'],roots['nginx'])
     return scan.report()
+def gap_masked(path):
+    """A masked systemd unit or disabled file: a link to /dev/null."""
+    return os.path.islink(path) and lexical(os.path.realpath(path))=='/dev/null'
 def gap_containers(cfg):
     ids=(cfg.get('containers') or []) if cfg.get('kind')!='static' else []
     if not all(isinstance(value,str) and DOCKER_NAME.fullmatch(value) for value in ids):raise ValueError('Select valid containers')
@@ -162,7 +168,7 @@ def cron_sources(scan,roots):
     """(file, line parser) for the system crontab, /etc/cron.d, the users' crontabs and the periodic script folders."""
     sources=[(roots['crontab'],lambda line:cron_entry(line,True))]
     sources+=[(path,lambda line:cron_entry(line,True)) for path in scan.entries(roots['cron'])]
-    sources+=[(path,lambda line:cron_entry(line,False)) for folder in roots['spool'] for path in scan.entries(folder)]
+    sources+=[(path,lambda line:cron_entry(line,False)) for folder in roots['spool'] for path in scan.entries(folder,roots['spool'])]
     for folder in roots['periodic']:
         schedule=os.path.basename(folder).rpartition('.')[2]
         sources+=[(path,lambda line,schedule=schedule:periodic_entry(line,schedule)) for path in scan.entries(folder)]
@@ -189,12 +195,13 @@ def timer_service(directory,unit):
 def timer_gaps(scan,directory):
     """Timers in /etc/systemd/system whose service runs, works in, writes to or reads its environment from the app."""
     for timer in scan.entries(directory):
-        if not timer.endswith('.timer'):continue
+        if not timer.endswith('.timer') or gap_masked(timer):continue
         settings=unit_settings(scan.read(timer))
         schedule='; '.join(value for key,value,_ in settings if key=='OnCalendar')
         unit=next((value for key,value,_ in settings if key=='Unit'),os.path.basename(timer)[:-len('.timer')]+'.service')
         service=timer_service(directory,unit)
-        if service is None:continue
+        # A service only in /lib/systemd/system (a package's own) is not read: the check cannot say it is clean.
+        if service is None:scan.complete=False;continue
         for key,value,number in unit_settings(scan.read(service)):
             matched=(key.startswith('ExecStart') or key in SERVICE_PATH_KEYS) and gap_match(value,scan.folders,scan.names)
             if matched:scan.add('host-schedule',service,matched,"The timer %s runs a command that uses this app's %s; a new server will not run it unless it is copied there."%(os.path.basename(timer),what_matched(scan,matched)),line=number,schedule=schedule if TIMER_SCHEDULE.fullmatch(schedule) else None,include=[timer,service])

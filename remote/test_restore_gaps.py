@@ -135,6 +135,20 @@ class SafeReadingTests(GapTest):
         self.assertTrue(result['complete'])
         self.assertEqual(len(result['findings']), 2)
 
+    @unittest.skipUnless(can_link(), 'symbolic links need extra rights on this Windows workstation')
+    def test_a_crontab_folder_that_links_to_another_scanned_folder_is_skipped_quietly(self):
+        alpine = self.host.base / 'etc-crontabs'; alpine.mkdir()
+        (alpine / 'root').write_text('* * * * * /srv/shop/data/x\n')
+        os.rmdir(self.host.roots['spool'][0]); os.symlink(str(alpine), self.host.roots['spool'][0])
+        self.host.roots['spool'] = (self.host.roots['spool'][0], str(alpine))
+        result = self.host.check()
+        self.assertTrue(result['complete']); self.assertEqual([f['path'] for f in result['findings']], [str(alpine / 'root')])
+
+    def test_a_timer_whose_service_is_not_in_the_scanned_folder_marks_the_check_incomplete(self):
+        self.host.write('systemd/apt-daily.timer', '[Timer]\nOnCalendar=daily\n')
+        result = self.host.check()
+        self.assertEqual(result['findings'], []); self.assertFalse(result['complete'])
+
     def test_file_count_size_and_finding_bounds_mark_the_check_incomplete(self):
         for index in range(5): self.host.write('cron.d/job%d' % index, '* * * * * root /srv/shop/data/%d\n' % index)
         with patch.object(helper, 'GAP_FILES', 2):
