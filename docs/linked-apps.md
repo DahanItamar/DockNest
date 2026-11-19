@@ -22,15 +22,21 @@ when you add, edit or archive one.
 
 Each pair of apps gets one link, labelled with the strongest reason:
 
-| Kind       | When                                                                                              |
-| ---------- | ------------------------------------------------------------------------------------------------- |
-| `volume`   | Containers of both apps mount the same named volume or the same host folder.                     |
-| `link`     | A container of one app links to, or depends on (`depends_on`), a container of the other.          |
-| `database` | The apps share a network and one side's container is a database.                                  |
-| `network`  | The apps share a user-defined network.                                                            |
+| Kind       | When                                                                                       | Warns |
+| ---------- | ------------------------------------------------------------------------------------------ | ----- |
+| `volume`   | Containers of both apps mount the same named volume or the same host folder.               | yes   |
+| `link`     | A container of one app links to, or depends on (`depends_on`), a container of the other.   | yes   |
+| `database` | The apps share a network, one side has a database on it and the other side something else. | yes   |
+| `network`  | The apps share a user-defined network.                                                     | no    |
 
-Host folders that unrelated containers commonly share, such as `/etc/localtime`, `/dev`, `/proc` and the Docker socket,
-never count as a link.
+A network-only link is shown on the Map but never used for a warning.
+
+A host folder and the folders inside it count as one: an app that mounts `/srv` and one that mounts `/srv/media` share
+`/srv`. Host folders that unrelated containers commonly share never count: system files such as `/etc/localtime`,
+`/etc/passwd` and `/etc/os-release`, `/dev`, `/proc`, `/var/log`, Docker's own `/var/lib/docker` and the Docker socket.
+
+A network that more than four apps share, such as a reverse proxy network, links no pair of apps. It is listed once as a
+shared network with its apps instead.
 
 A container is a database when its app's settings choose a database engine for it; otherwise DockNest goes by the image
 name, the same way it does when you back up (an image named like `postgres-exporter` or `redis-commander` is a tool, not a
@@ -43,7 +49,8 @@ with them, or reaches them as its database. Add them to an app to have them back
 
 - **Not scanned yet**: the server has not been scanned since the update. Scan the server to see its links.
 - **No links**: the apps on the server do not depend on each other.
-- **Partial**: some containers or values could not be read; the links shown come from the rest.
+- **Partial**: some containers or values could not be read, or the server has so many shared containers that DockNest
+  stopped looking; the links shown come from the rest.
 - **Scan failed**: the last good result stays, with the time it was taken.
 
 ## For developers
@@ -55,16 +62,18 @@ with them, or reaches them as its database. Add them to an app to have them back
   "checkedAt": "2026-11-19T08:00:00.000Z",
   "partial": false,
   "links": [
-    { "appIds": ["<app id>", "<app id>"], "kind": "database", "via": "demo-db",
+    { "appIds": ["<app id>", "<app id>"], "kind": "database", "via": "demo-db", "warns": true,
       "details": [{ "kind": "database", "via": "demo-db", "containers": ["demo-db", "demo-shop-web"] }] }
   ],
   "unowned": [
     { "container": "demo-cache", "appIds": ["<app id>"], "kind": "link", "via": "demo-cache",
       "details": [{ "kind": "link", "via": "demo-cache", "containers": ["demo-cache", "demo-shop-web"] }] }
-  ]
+  ],
+  "hubs": [{ "network": "proxy", "appIds": ["<app id>", "<app id>", "<app id>", "<app id>", "<app id>"] }]
 }
 ```
 
 `checkedAt` is null until the first scan. `appIds` are sorted; `via` is the volume or folder, the linked or database
-container, or the network the strongest reason came through. `linksOfApp(appLinks, appId)` in `shared/app-links.js` gives
-one app's links, strongest first, each with `otherAppId`, and its `unowned` entries.
+container, or the network the strongest reason came through. `warns` is false only for a `network` link; `unowned`
+entries always warn. `linksOfApp(appLinks, appId)` in `shared/app-links.js` gives one app's links, strongest first, each
+with `otherAppId`, and its `unowned` and `hubs` entries.

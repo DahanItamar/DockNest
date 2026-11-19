@@ -32,6 +32,10 @@ it. Backing up, moving or restore-testing one of them without the other can leav
    - `database`: two apps share a user-defined network and one side's container is a detected database.
    - `network`: two apps share a user-defined network (not `bridge`, `host`, `none`).
    One line per pair of apps, labelled with the strongest kind and the name it came through.
+   A `database` link needs a database on one side and something else on the other. A network more than four apps share
+   (a reverse proxy network) is a hub: it links no pair and is listed once per server. Network-only links show on the Map
+   but never warn. A host folder and the folders inside it count as one; system folders never count. Links are computed
+   per app, not per container pair, under a fixed work budget; running out marks the result partial.
 4. **Map**: links are drawn as dashed lines between app cards in the gutter right of the app column, with the existing
    line styling and tokens. Selecting an app highlights its links; the details panel lists them. The phone list shows
    them under each app.
