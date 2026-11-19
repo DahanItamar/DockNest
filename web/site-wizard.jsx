@@ -3,7 +3,8 @@ import {Paginated} from './pagination.jsx';
 import {AlertPanel} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
-import {containerName,containerGroups} from './container-groups.js';
+import {containerName,containerGroups,suggestedGroups} from './container-groups.js';
+import {RunDefinition} from './backup-coverage/RunDefinition.jsx';
 import {normalizeDomain} from '../shared/domains.js';
 import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
 import {detectedConfiguration} from './site-configuration.js';
@@ -36,7 +37,7 @@ function SqliteFiles({services,texts,setTexts,split,setSplit,adding,setAdding}){
 
 export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[],initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
  const [autoMaintenance,setAutoMaintenance]=useState(true);
- const [step,setStep]=useState(initialSite?2:1),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
+ const [step,setStep]=useState(initialSite?'details':'select'),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
  const [containers,setContainers]=useState([]),[primary,setPrimary]=useState(initialSite?.config.containers?.[0]||''),[additional,setAdditional]=useState(initialSite?.config.containers?.slice(1)||[]);
  const [staticSites,setStaticSites]=useState([]),[staticRoot,setStaticRoot]=useState(initialSite?.config.kind==='static'?initialSite.config.documentRoot:'');
  const [siteSearch,setSiteSearch]=useState('');
@@ -64,14 +65,18 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
  },[serverId,scan]);
  const serverName=servers.find(server=>server.id===serverId)?.name,savedServer=initialSite?.serverId||initialSite?.server_id;
  const groups=containerGroups(containers),coverage=coverageIndex(sites,serverId,{exceptSiteId:initialSite?.id,keep:savedServer===serverId?initialSite.config:null});
- const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...groups.flatMap(group=>group.kind==='standalone'?group.containers.map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
  const freeContainers=splitGroup(containers,coverage,containerName).free;
+ // Plain containers on one user-defined network are offered as one pre-selected app; any of them can be unticked.
+ const suggested=suggestedGroups(freeContainers).map(group=>({id:'network:'+group.networks.join(','),name:group.networks.join(', '),kind:'network',compose:false,containers:group.containers.map(name=>freeContainers.find(container=>containerName(container)===name))})),grouped=new Set(suggested.flatMap(group=>group.containers.map(containerName)));
+ const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...suggested,...groups.flatMap(group=>group.kind==='standalone'?group.containers.filter(container=>!grouped.has(containerName(container))).map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
  const pickedOnce=useRef(false);
  // Opened from the Map's + on a server: select the site that was clicked, once, after discovery has loaded.
- useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const c=siteChoices.find(x=>x.name===initialPick);if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
+ useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const wanted=[].concat(initialPick),c=siteChoices.find(x=>wanted.length===1&&x.name===wanted[0])||siteChoices.find(x=>wanted.every(name=>x.containers.some(container=>containerName(container)===name)));if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
  const selected=[primary,...additional].filter(Boolean);
  const isStatic=!!staticRoot,hasSelection=isStatic||!!selected.length;
  const detected=isStatic?{compose:false,composeFiles:[],configFiles:staticSites.find(site=>site.documentRoot===staticRoot)?.configFiles||initialSite?.config.configFiles||[],directory:staticRoot}:detectedConfiguration(containers,selected);
+ // Plain `docker run` containers get a step that previews the Compose DockNest keeps for them; Compose apps already have theirs.
+ const recreate=!initialSite&&!isStatic&&selected.length>0&&!detected.compose,order=['select',...(recreate?['recreate']:[]),'details','review'],labels={select:'Select app',recreate:'Recreate',details:'App details',review:'Review & add'};
  const temporaryFolders=containers.filter(c=>selected.includes(containerName(c))).flatMap(c=>(c.temporaryMemoryFolders||[]).map(destination=>({container:containerName(c),destination})));
  useEffect(()=>{
   if(loading||!selected.length||isStatic)return;
@@ -98,10 +103,10 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
  async function submit(event){
   event.preventDefault();if(busy)return;setError('');
   if(!serverId||!hasSelection||loading)return;
-  if(step===1&&error)return;
-  if(step===2&&detected.compose&&!settings.composeFiles.trim()){setError('Select the Compose project file below so this app can be backed up.');return;}
-  if(step===2&&!isStatic){const problem=sqliteProblem(savedServices.filter(service=>selected.includes(service.container)),sqliteText);if(problem){setError(problem);return;}}
-  if(step<3){setStep(step+1);return;}
+  if(step==='select'&&error)return;
+  if(step==='details'&&detected.compose&&!settings.composeFiles.trim()){setError('Select the Compose project file below so this app can be backed up.');return;}
+  if(step==='details'&&!isStatic){const problem=sqliteProblem(savedServices.filter(service=>selected.includes(service.container)),sqliteText);if(problem){setError(problem);return;}}
+  if(step!=='review'){setStep(order[order.indexOf(step)+1]);return;}
   setBusy(true);
   const paths=value=>value.split('\n').map(path=>path.trim()).filter(Boolean);
   const domains=settings.domains.split(',').map(normalizeDomain).filter(Boolean);
@@ -116,8 +121,8 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
  return <form className="modal-body site-wizard" onSubmit={submit}>
-  <ol className="wizard-steps" aria-label="App setup steps">{['Select app','App details','Review & add'].map((label,index)=><li key={label} aria-current={step===index+1?'step':undefined}>{index+1}. {label}</li>)}</ol>
-  {step===1&&<>
+  <ol className="wizard-steps" aria-label="App setup steps">{order.map((name,index)=><li key={name} aria-current={step===name?'step':undefined}>{index+1}. {labels[name]}</li>)}</ol>
+  {step==='select'&&<>
    <h3>Which app do you want to back up?</h3>
    <Field label="Source server" value={serverId} onChange={event=>setServerId(event.target.value)} options={[[ '', 'Choose a server'],...servers.map(server=>[server.id,server.name+(server.note?' · '+server.note:'')])]} required/>
    {loading&&<p role="status">Loading Docker containers from this server…</p>}
@@ -130,7 +135,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
       const names=group.containers.map(containerName);
       const chosen=group.kind==='static'?staticRoot===group.documentRoot:!isStatic&&names.length===selected.length&&names.every(name=>selected.includes(name));
       return <section className={'application-group'+(chosen?' chosen':'')} key={group.id} aria-label={group.name}>
-       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{names.length} {names.length===1?'service':'services'}</span>}</p>{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
+       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
        <p className="site-services">{group.kind==='static'?group.documentRoot:group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
        {group.kind!=='static'&&<details className="site-service-review"><summary>Review services in {group.name}</summary><div className="container-list">{group.containers.map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" aria-label={'Include '+name} checked={selected.includes(name)} disabled={!selected.includes(name)&&selected.length>=30} onChange={event=>toggleGrouped(name,event.target.checked)}/><div><b>{container.service||name}</b><small>{name} / {container.image||container.Config?.Image||'Image unavailable'}</small></div><span className="container-state">{containerStatus(container)}</span></label>;})}</div></details>}
       </section>;
@@ -147,7 +152,8 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
    </>}
    {serverId&&!loading&&<button type="button" onClick={()=>setScan(value=>value+1)}>{error?'Retry container discovery':'Refresh containers'}</button>}
   </>}
-  {step===2&&<>
+  {recreate&&step==='recreate'&&<RunDefinition api={api} serverId={serverId} containers={selected} onSessionExpired={onSessionExpired}/>}
+  {step==='details'&&<>
    <h3>Set up {settings.name||primary}</h3>
    {isStatic&&<p className="hint">Static website: {staticRoot}. DockNest copies and verifies the files while nginx keeps serving visitors. Restores use a separate private directory.</p>}
    <Field label="App name" name="name" value={settings.name} onChange={update} required maxLength={100}/>
@@ -172,7 +178,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
     {!isStatic&&<SqliteFiles services={savedServices.filter(service=>selected.includes(service.container))} texts={sqliteText} setTexts={setSqliteText} split={sqliteSplit} setSplit={setSqliteSplit} adding={sqliteAdding} setAdding={setSqliteAdding}/>}
    </details>
   </>}
-  {step===3&&<>
+  {step==='review'&&<>
    <h3>Review your app</h3>
    {!!initialSite?.config.mountExclusions?.length&&<div className="hint"><strong>Selected backup scope</strong><p>These paths are excluded and must be recovered separately. This backup keeps the application and its selected local state.</p><ul>{initialSite.config.mountExclusions.map(item=><li key={item.path}>{item.path}: {item.reason}</li>)}</ul></div>}
    <dl className="setup-review"><dt>App</dt><dd>{settings.name}</dd><dt>Server</dt><dd>{serverName}</dd><dt>{isStatic?'Website files':'Containers'}</dt><dd>{isStatic?staticRoot:selected.join(', ')}</dd><dt>Health check</dt><dd>{settings.healthUrl}</dd><dt>Backup delivery</dt><dd>{settings.deliveryMode==='direct'?'Direct stream to backup storage':'Temporary copy, then upload'}</dd>{!isStatic&&<><dt>Compose files</dt><dd>{settings.composeFiles||'None selected'}</dd></>}<dt>Other configuration</dt><dd>{settings.configFiles||'None selected'}</dd></dl>
@@ -183,6 +189,6 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
    <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
   </>}
   {error&&<AlertPanel variant="error" title="The app could not be saved">{error}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step>1&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>value-1);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step===1&&!!error)}>{busy?'Saving app…':step===3?(initialSite?'Save configuration':'Add app'):'Continue'}</button></div>
+  <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step!==order[0]&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>order[Math.max(0,order.indexOf(value)-1)]);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step==='select'&&!!error)}>{busy?'Saving app…':step==='review'?(initialSite?'Save configuration':'Add app'):'Continue'}</button></div>
  </form>;
 }

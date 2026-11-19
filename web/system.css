@@ -76,3 +76,10 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 .icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 
 @media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
+
+/* Overflow menu: one icon button and a short list of text actions. */
+.overflow-menu{position:relative;flex:none}
+.overflow-list{position:absolute;z-index:20;top:100%;right:0;min-width:160px;margin-top:4px;padding:4px;display:flex;flex-direction:column;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface);box-shadow:0 8px 24px var(--shadow)}
+.overflow-list button{justify-content:flex-start;min-height:var(--control-height);padding:8px 12px;border:0;background:var(--transparent);color:var(--text-primary);text-align:left;white-space:nowrap}
+.overflow-list button:hover,.overflow-list button:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.overflow-list button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
