@@ -33,14 +33,13 @@ async function removeCopy(record) {
 // `targetIds`: the destinations that hold the kit just written; `keyId`: its key identifier; `temporary`: the run's
 // private staging folder. Returns how many copies were written.
 export async function writeGuideCopies({ run, targetIds, keyId, temporary }) {
+  const at = new Date(), file = join(temporary, 'recovery-guide.pdf');
   let written = 0, pdf;
-  const at = new Date();
   try {
     const inventory = await loadInventory();
     pdf = guidePdf(inventory, { appIds: inventory.apps.map(app => app.id), include: COPY_OPTIONS, madeAt: at.toISOString() });
+    await writeFile(file, pdf, { mode: 0o600, flag: 'wx' });
   } catch { audit('worker', 'runbook.copy_failed', run.id, {}); return 0; }
-  const file = join(temporary, 'recovery-guide.pdf');
-  await writeFile(file, pdf, { mode: 0o600, flag: 'wx' });
   for (const targetId of targetIds) {
     try {
       const published = storageJoin(managerBackupDirectory(targetId, keyId), fileName(run.id, at));
