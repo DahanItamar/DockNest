@@ -296,6 +296,8 @@ try {
   await runSafeEditScenario({run,until,hosts,servers,db,record});
   const {runIncrementalScenario}=await import('./integration-incremental.js');
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
+  const {runEmergencyScenario}=await import('./integration-emergency.js');
+  await runEmergencyScenario({run,hosts,db,record,directory});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
   const {runLaunchScenario}=await import('./integration-launch.js');
