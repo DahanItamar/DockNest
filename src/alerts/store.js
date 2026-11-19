@@ -253,9 +253,9 @@ export function createRule(input, actor, { role } = {}) {
   const data = ruleCreate.safeParse(input); if (!data.success) fail(data.error);
   const { channelId, sourceKind, sourceId } = data.data;
   mustChannel(channelId);
-  if ((sourceKind === 'docknest') !== (sourceId === null)) throw httpError(400, sourceKind === 'docknest' ? 'A DockNest line has no source id.' : 'Choose the server or site for this line.');
+  if ((sourceKind === 'docknest') !== (sourceId === null)) throw httpError(400, sourceKind === 'docknest' ? 'A DockNest line has no source id.' : 'Choose the server or app for this line.');
   if (sourceKind === 'server' && !db.prepare('SELECT 1 FROM servers WHERE id=?').get(sourceId)) throw httpError(404, 'This server does not exist.');
-  if (sourceKind === 'site' && !db.prepare('SELECT 1 FROM sites WHERE id=?').get(sourceId)) throw httpError(404, 'This site does not exist.');
+  if (sourceKind === 'site' && !db.prepare('SELECT 1 FROM sites WHERE id=?').get(sourceId)) throw httpError(404, 'This app does not exist.');
   if (db.prepare('SELECT COUNT(*) AS n FROM alert_lines').get().n >= limits.rules) throw httpError(409, `You can have up to ${limits.rules} alert lines.`);
   if (db.prepare('SELECT 1 FROM alert_lines WHERE node_id=? AND source_kind=? AND source_id IS ?').get(channelId, sourceKind, sourceId)) throw httpError(409, 'This source already has a line to this alert node. Edit that line instead.');
   const ruleId = id(), at = now();

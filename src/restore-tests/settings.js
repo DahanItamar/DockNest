@@ -66,7 +66,7 @@ export function saveSettings(site, input, { actor, recentlyVerified }) {
   if (data.serverId && !server) throw httpError(400, 'INVALID', 'Choose a connected server.');
   if (data.enabled && !server) throw httpError(409, 'TEST_SERVER_REQUIRED', 'Choose a test server first.');
   const live = !!server && server.id === site.server_id;
-  if (live && !data.allowLiveServer) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'This is the site’s own server. Allow live server to test on it.');
+  if (live && !data.allowLiveServer) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'This is the app’s own server. Allow live server to test on it.');
   const allowLiveServer = live && data.allowLiveServer;
   // Re-verify whenever the result is "test on the live server" and it was not already allowed for this server:
   // turning the switch on, pointing tests at the site's own server, or a move that made the test server the live one.

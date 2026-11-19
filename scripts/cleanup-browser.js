@@ -77,7 +77,7 @@ try {
     assert.match(await longName.getAttribute('title'), /^a-very-long-one-off/, label + ': long names keep their full text in the title');
     // Kept items with plain reasons, behind a disclosure.
     await card.locator('.sc-kept summary').click();
-    assert.deepEqual(await card.locator('.sc-kept tbody td:nth-child(3)').allInnerTexts(), ['Used by a site', 'Kept old copy', 'DockNest'], label);
+    assert.deepEqual(await card.locator('.sc-kept tbody td:nth-child(3)').allInnerTexts(), ['Used by an app', 'Kept old copy', 'DockNest'], label);
     // Controls: equal heights, no wrapping.
     const select = await box(card.getByRole('combobox', { name: 'Server to clean' })), scanButton = await box(card.getByRole('button', { name: 'Scan', exact: true }));
     if (viewport.width > 480) assert.ok(Math.abs(select.height - scanButton.height) <= 4 && Math.abs(select.y + select.height - scanButton.y - scanButton.height) <= 1, label + ': select and Scan line up');

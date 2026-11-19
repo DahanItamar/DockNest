@@ -8,9 +8,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
 
+### Changed
+
+- Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate.
+
 ### Fixed
 
-- A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 
 ## [2.16.4] - 2026-11-14
 
@@ -364,7 +369,7 @@ See [docs/releases/2026-10-24-v2.7.0.md](docs/releases/2026-10-24-v2.7.0.md).
 - Map: the map takes exactly the height left on the screen, so the whole map and the hint below it are visible without scrolling on any screen size.
 - Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
 - Update button: a run that stopped before changing anything (for example a failed signature check, low disk space, or jobs still running) no longer uses up one of the 6 updates allowed per day. Before, a few such stops could block the button for the rest of the day. A separate limit of 24 attempts per day still applies. Takes effect after `sudo scripts/install-updater.sh --repair` on the host.
-- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "phaseX needs nginx. Install it, then try again." instead of a longer technical one.
+- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "web-box needs nginx. Install it, then try again." instead of a longer technical one.
 
 ### Changed
 

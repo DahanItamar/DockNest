@@ -169,7 +169,7 @@ export function recoverStep(move, step, observed) {
   if (definition.verify === 'rerun') return { action: 'rerun' };
   if (observed === 'done') return { action: 'mark_done' };
   if (observed === 'absent') return definition.effect === 'reversible' ? { action: 'undo_then_rerun', undo: definition.undo } : { action: 'rerun' };
-  if (definition.effect === 'irreversible') return { action: 'recovery_required', reason: `DockNest could not confirm whether ${step.step} finished. Check the site, then choose Resume or Undo.` };
+  if (definition.effect === 'irreversible') return { action: 'recovery_required', reason: `DockNest could not confirm whether ${step.step} finished. Check the app, then choose Resume or Undo.` };
   return { action: 'retry_later', reason: `DockNest could not check ${step.step} yet; it will try again.` };
 }
 

@@ -68,11 +68,11 @@ When you turn on immutable copies, backups cannot be deleted or overwritten unti
 
 - **Governance:** administrators with a special permission can remove locked backups early.
 - **Compliance:** nobody can remove locked backups early, not even the account owner. You pay for storage until the date passes. The form asks you to confirm this before connecting.
-- **Days:** each backup is locked this many days after it is created. Retention can only remove a backup after this date. The form warns when the lock is longer than the shortest site retention window (retention count times schedule interval), and again above 365 days.
+- **Days:** each backup is locked this many days after it is created. Retention can only remove a backup after this date. The form warns when the lock is longer than the shortest app retention window (retention count times schedule interval), and again above 365 days.
 
 - **Bucket setup:** the bucket must be created with Object Lock enabled, which also enables versioning. It must have **no default retention rule**. A default rule would also lock temporary uploads and the connection probe, so they could not be deleted. The connection test checks both.
 - **When retention is applied:** only when a package is published. The copy request sets `x-amz-object-lock-mode` and `x-amz-object-lock-retain-until-date` to the publish time plus the configured days. DockNest then reads the published object's headers to confirm the lock. If they are missing, publication fails.
-- **Deletion:** before deleting, DockNest reads the object's retention and legal hold, and refuses with `EOBJECTLOCKED` while either applies. Retention then records a deferral in `retention_deferrals` (`backup_id`, `retry_after`, `retain_until`, `first_seen`) instead of a blocking retention operation, so the backup stays fully usable: restore, download, integrity checks and pinning keep working. `retry_after` is the lock's retain-until date, or 24 hours later when the provider gives no date (legal hold). One `retention.deferred` audit event is written when the deferral is created, and another only if the date changes. Retention and reconciliation skip the backup until `retry_after`, then try again. Pinning removes the deferral, and a pinned backup is never deleted when the lock ends. A locked backup can therefore outlive the site's retention count.
+- **Deletion:** before deleting, DockNest reads the object's retention and legal hold, and refuses with `EOBJECTLOCKED` while either applies. Retention then records a deferral in `retention_deferrals` (`backup_id`, `retry_after`, `retain_until`, `first_seen`) instead of a blocking retention operation, so the backup stays fully usable: restore, download, integrity checks and pinning keep working. `retry_after` is the lock's retain-until date, or 24 hours later when the provider gives no date (legal hold). One `retention.deferred` audit event is written when the deferral is created, and another only if the date changes. Retention and reconciliation skip the backup until `retry_after`, then try again. Pinning removes the deferral, and a pinned backup is never deleted when the lock ends. A locked backup can therefore outlive the app's retention count.
 - **Storage migration:** deferred backups are copied like any other backup and their deferral is cleared. The old locked object stays on the old storage until its lock ends; DockNest does not remove it. The migration result reports `lockedOriginals`.
 - **Self-backup:** recovery kits published to the destination get the same retention.
 - **Governance mode:** DockNest never sends a bypass header. Only a privileged identity outside DockNest can remove governance retention early.
@@ -91,25 +91,25 @@ These notes are not verified against each live provider. Confirm them with the c
 | Wasabi | `https://s3.<region>.wasabisys.com` | Region: filled from the endpoint. Object Lock must be chosen when the bucket is created. |
 | MinIO | `https://minio.example.internal:9000` | Use path-style addressing. Plain HTTP works only on loopback. |
 
-## Storage per site and backup copies
+## Storage per app and backup copies
 
 Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
 
-- A site's main destination is `site_storage.main_target_id`; no row or NULL is the default destination
+- An app's main destination is `site_storage.main_target_id`; no row or NULL is the default destination
   (`backup_storage_target`), exactly as before. A chosen destination that was removed fails the backup closed; DockNest
   never writes to a destination the owner did not pick.
 - Copies are queued (`backup_copies`, status `pending`) in the same transaction that publishes the main copy. The worker
-  runs one due copy step when no site job waits, oldest backup first. The step checks free space on the copy
+  runs one due copy step when no app job waits, oldest backup first. The step checks free space on the copy
   destination, streams the encrypted package as it is to `<path>.partial`, syncs it, authenticates it in full (GCM tag
   and SHA-256 equal to the main copy's), renames it and only then records it. A file already at the copy path is adopted
   only when it authenticates; a different file is never overwritten. A worker restart resumes from the row (not under
   the deployment hold; the 5-minute maintenance step resumes it afterwards).
 - Status `copying` is the step's lease: nothing of that backup is deleted while it is read. Every 64 MiB a copy checks
-  for a queued site job and, if there is one, steps aside (its `.partial` is removed, it is due again at once and no
+  for a queued app job and, if there is one, steps aside (its `.partial` is removed, it is due again at once and no
   attempt is counted), so a long copy does not hold up a scheduled backup. Retries: 5 min, 30 min, 2 h, then every 6 h;
   after 7 days the copy is `gave_up`. Stored errors are fixed sentences, never storage output.
-- Retention: the site's count applies to main packages, each copy destination keeps its own count; a destination the
-  site no longer copies to keeps the site's count, and copies not made yet to it are cancelled. When a main package
+- Retention: the app's count applies to main packages, each copy destination keeps its own count; a destination the
+  app no longer copies to keeps the app's count, and copies not made yet to it are cancelled. When a main package
   ages out, the main file is removed first (Object Lock on it defers everything), then the copies no destination keeps.
   If a copy is still kept, `backup_main_removed` records that and `backups.path` keeps naming the main package;
   `packagePath()` (src/artifact-journal.js) gives download, ZIP export, scrub, restore, restore tests and startup checks
@@ -117,21 +117,21 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
 - Downgrade to 2.10 with such a backup: 2.10 sees its main package missing (startup marks it unverified) and its
   retention may remove the row; it never touches copy files. 2.11 cleans up those orphaned copies when it starts again.
 - Restore uses the main copy, then verified copies newest first; the owner may choose a copy (`sourceTargetId`).
-- A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or a site uses
+- A destination cannot be removed while it holds copies, main packages or recovery kits, is the default, or an app uses
   it. Its copies are deleted first (`POST /api/storage-targets/:id/copies/delete`). Deleting copies of backups that exist
   only there needs `includeLastPackages: true`; pinned ones need `includePinned: true`.
-- Every other destination that holds packages (copies, or a site's main destination) also receives the newest recovery
+- Every other destination that holds packages (copies, or an app's main destination) also receives the newest recovery
   kit. A kit there is removed only after a newer one was written to that same destination.
 - Real copies and restores count as validated only after the Linux integration suite passes.
 
 ### Using copies
 
-- **Set up.** In the site's storage settings keep "Default" or pick another main destination, then add up to three copy
-  destinations, each with its own retention (empty means the site's count). A copy destination cannot be the main one,
+- **Set up.** In the app's storage settings keep "Default" or pick another main destination, then add up to three copy
+  destinations, each with its own retention (empty means the app's count). A copy destination cannot be the main one,
   the same bucket or folder twice, or a folder inside another destination. API: `GET` and `PUT /api/sites/:id/storage`
   (administrator, recent sign-in). Nothing is copied retroactively; existing backups stay where they are.
 - **While it runs.** The backup is complete when the main copy is verified; copies follow in the background and never
-  extend the site's downtime. Each backup shows one chip per copy (verified, copying, missing). A site shows
+  extend the app's downtime. Each backup shows one chip per copy (verified, copying, missing). An app shows
   "Copy missing" until every configured copy is verified.
 - **Failures.** A failed copy is retried automatically (5 minutes, 30 minutes, 2 hours, then every 6 hours, for up to
   7 days), then marked "gave up". The next backup tries again, and **Retry** (`POST /api/backups/:id/copies/:targetId/retry`)
@@ -143,7 +143,7 @@ Design: [backup-copies.md](backup-copies.md). How 2.11.0 implements it:
   verified copy that authenticates (newest first) and says which destination it used in the job and the audit log. You
   can also choose a copy directly. A copy that fails authentication is never restored from.
 - **Removing a destination.** A destination that still holds copies, main packages or recovery kits, is the default, or
-  is used by a site cannot be removed. The Storage page shows how many copies and offers "Delete these copies". If some
+  is used by an app cannot be removed. The Storage page shows how many copies and offers "Delete these copies". If some
   backups exist only on that destination, deleting asks for an extra confirmation (request flag `includeLastPackages`) because it deletes
   those backups.
 

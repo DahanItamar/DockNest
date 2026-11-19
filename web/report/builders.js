@@ -86,7 +86,7 @@ export function buildJobReport({ version, installMode, env, includeEnvironment =
   const fields = { job_type: type, outcome: out, phase: ph, ended: out === 'recovery-required' ? pick(JOB_ENDINGS, ended) : null, site_kind: pick(SITE_KINDS, siteKind), storage: pick(STORAGE_TYPES, storage), containers: Number.isInteger(containers) ? containerBucket(containers) : pick(CONTAINER_BUCKETS, containers), helper_outcome: pick(HELPER_OUTCOMES, helperOutcome) };
   return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'job-failure.yml', title, version, installMode, env, includeEnvironment, fields: { ...fields, what_happened: what },
     allow: { job_type: JOB_TYPES, outcome: JOB_OUTCOMES, phase: JOB_PHASES, ended: JOB_ENDINGS, site_kind: SITE_KINDS, storage: STORAGE_TYPES, containers: CONTAINER_BUCKETS, helper_outcome: HELPER_OUTCOMES },
-    labels: { job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'Site kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } }));
+    labels: { job_type: 'Job', outcome: 'Outcome', phase: 'Failed at', ended: 'How it ended', site_kind: 'App kind', storage: 'Storage', containers: 'Containers', helper_outcome: 'Helper outcome' } }));
 }
 
 // Storage target test failures (storage-failure.yml). Never the endpoint, bucket, host or port.

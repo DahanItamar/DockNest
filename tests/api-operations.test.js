@@ -125,7 +125,7 @@ test('project file browser rejects malformed paths and operator access before co
 });
 
 test('removing a site pauses schedules, keeps backups and rejects active work or further edits',async()=>{
- const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Archive fixture',config:{containers:['fixture']}})});
+ const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Archive fixture',config:{containers:['archive-fixture']}})});
  const saved=await response.json();assert.equal(response.status,201);
  const route='/sites/'+saved.id,archiveJob=id(),backupId=id(),file=join(process.env.BACKUP_DIR,'archive-fixture.enc');await writeFile(file,'preserved');
  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(archiveJob,saved.id,new Date().toISOString());
@@ -146,14 +146,14 @@ test('removing a site pauses schedules, keeps backups and rejects active work or
  assert.equal((await request(route,{method:'PATCH',body:JSON.stringify({serverId:host,name:'Edited removed site',config:{containers:['fixture']}})})).status,409);
 });
 test('origin probe preference survives configuration normalization and readiness rejects active work',async()=>{
- const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Origin fixture',config:{containers:['fixture'],domains:['www.example.org'],maintenanceProbeOrigin:true}})});
+ const response=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'Origin fixture',config:{containers:['origin-fixture'],domains:['www.example.org'],maintenanceProbeOrigin:true}})});
  assert.equal(response.status,201);const saved=await response.json();assert.equal(saved.config.maintenance.probeOrigin,true);
  const pending=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(pending,saved.id,new Date().toISOString());
  assert.equal((await request('/sites/'+saved.id+'/readiness',{method:'POST',body:'{}'})).status,409);
  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(pending).status,'queued');
 });
 test('probe URLs refuse metadata, link-local and private literals while operators keep site edits with an audit trail',async()=>{
- const payload={serverId:host,name:'Probe fixture',config:{containers:['fixture'],domains:['www.example.org']}};
+ const payload={serverId:host,name:'Probe fixture',config:{containers:['probe-fixture'],domains:['www.example.org']}};
  const blocked=['http://169.254.169.254/latest/meta-data/','http://[fd00:ec2::254]/','http://[::ffff:169.254.169.254]/','http://0xa9fea9fe/','http://10.0.0.5/','http://172.17.0.2:8080/','http://192.168.1.1/','http://100.100.100.200/','http://[fe80::1]/','http://[fd12::1]/','http://224.0.0.1/','http://0.0.0.0:8080/','http://[::]/','http://[::169.254.169.254]/','http://[64:ff9b::169.254.169.254]/','http://[64:ff9b:1::1]/','http://[2002:a9fe:a9fe::1]/','http://[2002:7f00:1::1]/','http://[2001::1]/','http://[100::1]/','http://[2001:db8::1]/'];
  for(const url of blocked){
   for(const config of [{healthUrl:url},{maintenancePublicUrl:url},{maintenance:{required:true,directory:'/var/lib/docknest/maintenance/x',publicUrl:'https://www.example.org',healthUrl:url}}]){
@@ -161,7 +161,7 @@ test('probe URLs refuse metadata, link-local and private literals while operator
   }
  }
  assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,domains:['169.254.169.254']}})})).status,400,'A literal domain cannot become a metadata probe');
- for(const url of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::1.1.1.1]/','http://[2002:101:101::1]/','http://[2606:2800:220:1::1]/'])assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,healthUrl:url}})})).status,201,url);
+ for(const [index,url] of ['http://127.0.0.1:8080/health','http://[::1]:3000/','https://www.example.org/health','http://203.0.113.10/','http://[64:ff9b::1.1.1.1]/','http://[2002:101:101::1]/','http://[2606:2800:220:1::1]/'].entries())assert.equal((await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,containers:['probe-'+index],healthUrl:url}})})).status,201,url);
  const saved=await (await request('/sites',{method:'POST',body:JSON.stringify(payload)})).json();
  db.prepare("UPDATE users SET role='operator' WHERE id=?").run(user);
  try{

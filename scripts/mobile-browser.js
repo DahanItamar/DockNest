@@ -75,7 +75,7 @@ try{
  // Card footers on phones: buttons never overlap the content above them.
  for(const width of [320,402,480]){
   await page.setViewportSize({width,height:874});
-  for(const name of ['Servers','Sites & schedules','Storage','DockNest backup','Update Center']){
+  for(const name of ['Servers','Apps & schedules','Storage','DockNest backup','Update Center']){
    try{await navigate(name)}catch(e){await page.screenshot({path:'test-results/mobile/fail.png'});throw new Error('navigate '+name+' '+width+': '+e.message.slice(0,80))}await page.waitForTimeout(150);
    const bad=await page.evaluate(()=>{const out=[],hitTest=(a,b)=>a.left<b.right-.5&&a.right>b.left+.5&&a.top<b.bottom-.5&&a.bottom>b.top+.5;for(const footer of document.querySelectorAll('.card-footer')){const f=footer.getBoundingClientRect(),card=footer.closest('.card');if(!f.height)continue;
     if(card)for(const sibling of [...card.children].filter(c=>c!==footer&&(c.compareDocumentPosition(footer)&Node.DOCUMENT_POSITION_FOLLOWING))){const b=sibling.getBoundingClientRect();if(b.height&&b.bottom>f.top+.5)out.push('footer overlaps preceding content');}
@@ -90,14 +90,14 @@ try{
  // 2.3.1 Backups on phones: 6 groups per page, no reserved empty height, one compact 44px pager row.
  for(const width of [320,402]){
   await page.setViewportSize({width,height:874});await navigate('Backups');
-  const pager=page.getByRole('group',{name:'Backup sites pagination',exact:true});await pager.waitFor();
+  const pager=page.getByRole('group',{name:'Backup apps pagination',exact:true});await pager.waitFor();
   assert.equal(await page.locator('.backup-library>*').count(),6,'Six site groups per phone page at '+width);
   const geometry=await page.evaluate(()=>{const p=document.querySelector('.pagination').getBoundingClientRect(),last=document.querySelector('.backup-library').lastElementChild.getBoundingClientRect(),buttons=[...document.querySelectorAll('.pagination button')].map(b=>b.getBoundingClientRect()),page=document.querySelector('.pagination-page').getBoundingClientRect();return{gap:p.top-last.bottom,heights:buttons.map(b=>b.height),sameRow:buttons.every(b=>Math.abs(b.top-buttons[0].top)<1)&&Math.abs((page.top+page.bottom)/2-(buttons[0].top+buttons[0].bottom)/2)<2,min:getComputedStyle(document.querySelector('.paged-content')).minHeight};});
   assert.ok(geometry.gap<=24,'No reserved empty area above the pager at '+width+' ('+geometry.gap+'px)');
   assert.deepEqual(geometry.heights.map(Math.round),[44,44]);assert.equal(geometry.sameRow,true,'Previous, page and Next share one row');assert.equal(geometry.min,'0px');
-  await pager.getByRole('button',{name:'Backup sites next page',exact:true}).click();
+  await pager.getByRole('button',{name:'Backup apps next page',exact:true}).click();
   assert.equal(await page.locator('.backup-library>*').count(),6);
-  await pager.getByRole('button',{name:'Backup sites previous page',exact:true}).click();
+  await pager.getByRole('button',{name:'Backup apps previous page',exact:true}).click();
  }
  for(const width of [320,390,402,680]){
   await page.setViewportSize({width,height:844});

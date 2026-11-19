@@ -98,8 +98,8 @@ export function AlertPanel({narrow,node,startProvider,rules,connections,provider
    </div>}
   </section>}
   {tab==='sends'&&<section id="map-tabpanel-sends" role="tabpanel" aria-labelledby="map-tab-sends" className="map-sends">
-   {visible.length===0&&<p className="map-caption">Nothing is connected yet. Drag from a server, site or DockNest to this node, or connect one below.</p>}
-   {visible.map(d=><fieldset key={d.key} className="map-src" data-src={d.key}><legend>{d.source.name}<span className="map-caption"> {d.source.kind==='docknest'?'DockNest':d.source.kind==='server'?'Server':'Site'}</span></legend>
+   {visible.length===0&&<p className="map-caption">Nothing is connected yet. Drag from a server, app or DockNest to this node, or connect one below.</p>}
+   {visible.map(d=><fieldset key={d.key} className="map-src" data-src={d.key}><legend>{d.source.name}<span className="map-caption"> {d.source.kind==='docknest'?'DockNest':d.source.kind==='server'?'Server':'App'}</span></legend>
     {EVENTS_FOR[d.source.kind].map(e=><label key={e} className="map-check"><input type="checkbox" checked={d.events.has(e)} onChange={()=>toggle(d.key,e)}/>{EVENT_LABEL[e]}</label>)}
     {d.events.size===0&&<p className="map-caption" role="status">Choose at least one.</p>}
     <button type="button" aria-label={`Disconnect ${d.source.name}`} onClick={()=>disconnect(d.key)}>Disconnect</button>
@@ -123,7 +123,7 @@ export function DeleteNodeSheet({node,count,client,onClose,onDeleted}){
  </Sheet>;
 }
 
-// In a server, site or DockNest panel: the alerts that start here and a way to add one.
+// In a server, app or DockNest panel: the alerts that start here and a way to add one.
 export function SourceAlerts({source,rules,nodes,onEdit,onAdd}){
  const mine=rules.filter(r=>sameSource(r,source)),name=id=>nodes.find(n=>n.id===id)?.name||'an alert node';
  return <section aria-labelledby={'map-alerts-'+source.kind}>
