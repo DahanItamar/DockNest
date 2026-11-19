@@ -11,9 +11,44 @@ from .databases import (
 # Every field a configured data check can name. Each engine accepts exactly its own one.
 CHECK_FIELDS=('table','key')
 
+def writable_mounts_covering(path,c):
+    """The captured writable mounts that are a container path or hold it."""
+    path=str(path)
+    return [m for m in c['Mounts'] if m.get('RW') and (path==m['Destination'] or path.startswith(m['Destination'].rstrip('/')+'/'))]
+
 def in_writable_mount(path,c):
-    """True when a container path is a captured writable mount or lies inside one."""
-    return any(path==m['Destination'] or path.startswith(m['Destination'].rstrip('/')+'/') for m in c['Mounts'] if m.get('RW'))
+    return bool(writable_mounts_covering(path,c))
+
+def writable_mount_source(path,c):
+    """The host path of a container path inside the deepest captured writable mount, or None outside them."""
+    mounts=writable_mounts_covering(path,c)
+    if not mounts:return None
+    mount=max(mounts,key=lambda m:len(m['Destination']))
+    return pathlib.Path(mount['Source'])/pathlib.PurePosixPath(path).relative_to(mount['Destination'])
+
+def require_readable_logs(c,driver_none,timed_out,unreadable):
+    """Refuse before any stop when the clean-stop proof in Docker logs could not be read. Messages stay literal."""
+    if c.get('HostConfig',{}).get('LogConfig',{}).get('Type')=='none':raise ValueError(driver_none)
+    try:
+        logging=subprocess.run(['docker','logs','--tail','0',c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+    except subprocess.TimeoutExpired:raise ValueError(timed_out)
+    if logging.returncode:raise ValueError(unreadable)
+
+def stop_window_gap(cid,stopped_at,gap,timed_out,unreadable):
+    """Read only this stop's Docker log window until `gap(logs)` finds nothing missing; return the last gap or None.
+
+    Docker logging delivery can lag behind docker stop returning, so the window is re-read for a few seconds. It never
+    falls back to historical successful shutdowns.
+    """
+    for attempt in range(6):
+        # Explicit numeric tail avoids empty --since-only reads observed on
+        # Docker 29.1.3 json-file logs. Keep --since so old proof cannot pass.
+        try:output=subprocess.run(['docker','logs','--tail','10000','--since',str(stopped_at),cid],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+        except subprocess.TimeoutExpired:raise ValueError(timed_out)
+        if output.returncode:raise ValueError(unreadable)
+        missing=gap((output.stdout+output.stderr).decode(errors='replace'))
+        if missing is None or attempt==5:return missing
+        time.sleep(1)
 
 class DatabaseEngine:
     """One engine's native cold-capture contract; databases.ENGINES holds one instance per engine id.

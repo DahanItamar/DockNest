@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     inspect, run)
 from .engine_base import (
-    DatabaseEngine, in_writable_mount)
+    DatabaseEngine, in_writable_mount, require_readable_logs, stop_window_gap, writable_mount_source)
 # </build:header>
 def redis_query(container,service,command,raw=False):
     """Loopback only; password variables/files remain inside the container.
@@ -66,10 +66,8 @@ def redis_aof_check(service,c,original,staging_root):
     staging_root=pathlib.Path(staging_root)
     if not staging_root.is_dir() or staging_root.resolve()!=staging_root or staging_root.stat().st_mode&0o077 or ',' in str(staging_root):raise ValueError('Redis AOF check staging must be a private regular directory without mount separators')
     directory=pathlib.PurePosixPath(service['dataDirectory'])/service['aofDirectory']
-    mounts=[m for m in original['Mounts'] if m.get('RW') and (str(directory)==m['Destination'] or str(directory).startswith(m['Destination'].rstrip('/')+'/'))]
-    if not mounts:raise ValueError('Redis AOF directory is outside captured writable mounts')
-    mount=max(mounts,key=lambda m:len(m['Destination']))
-    source=pathlib.Path(mount['Source'])/directory.relative_to(mount['Destination'])
+    source=writable_mount_source(directory,original)
+    if source is None:raise ValueError('Redis AOF directory is outside captured writable mounts')
     if os.path.commonpath([str(staging_root),str(source)]) in [str(staging_root),str(source)]:raise ValueError('Redis AOF check staging and source must not overlap')
     before=redis_aof_inventory(source)
     manifest=service['aofFilename']+'.manifest'
@@ -119,11 +117,7 @@ class RedisEngine(DatabaseEngine):
         # Reject invisible evidence before interrupting any source services.
         if options['logfile'] or options['loglevel'] not in ['debug','verbose','notice']:
             raise ValueError('Redis shutdown proof requires logfile "" and loglevel notice or more verbose; update the persistent Redis configuration before retrying')
-        if c.get('HostConfig',{}).get('LogConfig',{}).get('Type')=='none':raise ValueError('Redis shutdown proof requires readable Docker logs; logging driver none is unsupported')
-        try:
-            logging=subprocess.run(['docker','logs','--tail','0',cid],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
-        except subprocess.TimeoutExpired:raise ValueError('Redis Docker logs are unavailable; fix the logging driver before retrying')
-        if logging.returncode:raise ValueError('Redis Docker logs are unavailable; enable a readable logging driver before retrying')
+        require_readable_logs(c,'Redis shutdown proof requires readable Docker logs; logging driver none is unsupported','Redis Docker logs are unavailable; fix the logging driver before retrying','Redis Docker logs are unavailable; enable a readable logging driver before retrying')
         if options['port']!='6379' or options.get('tls-port','0')!='0' or options['cluster-enabled']!='no' or options['aclfile']:raise ValueError('Redis non-default port, TLS, cluster or ACL file requires a reviewed adapter')
         stop_signal=str(c['Config'].get('StopSignal') or 'SIGTERM').upper()
         if stop_signal not in ['SIGTERM','TERM','15','SIGINT','INT','2'] or any(options[name] not in ['default','save'] for name in ['shutdown-on-sigterm','shutdown-on-sigint']):raise ValueError('Redis requires a persistence-preserving SIGTERM/SIGINT shutdown; NOSAVE/FORCE and custom signals are blocked')
@@ -143,22 +137,14 @@ class RedisEngine(DatabaseEngine):
         service.update({'dataDirectory':directory,'rdbEnabled':rdb,'aofEnabled':aof,'rdbFilename':options['dbfilename'],'aofDirectory':options['appenddirname'],'aofFilename':options['appendfilename']})
 
     def stop_evidence(self,service,c,original,stopped_at,staging_root):
-        # Docker logging delivery can lag behind docker stop returning. Re-read only
-        # this stop's window; never fall back to historical successful shutdowns.
-        for attempt in range(6):
-            # Explicit numeric tail avoids empty --since-only reads observed on
-            # Docker 29.1.3 json-file logs. Keep --since so old proof cannot pass.
-            try:output=subprocess.run(['docker','logs','--tail','10000','--since',str(stopped_at),c['Id']],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
-            except subprocess.TimeoutExpired:raise ValueError('Redis current shutdown logs timed out; review the Docker logging driver before retrying')
-            if output.returncode:raise ValueError('Redis current shutdown logs could not be read; review the Docker logging driver before retrying')
-            logs=(output.stdout+output.stderr).decode(errors='replace')
+        def gap(logs):
             if re.search(r'Fail to fsync the AOF file:|Error writing to the AOF file:|Error trying to save the DB',logs):raise ValueError('Redis current stop reported a persistence failure')
-            if not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):failure='graceful-shutdown'
-            elif service['rdbEnabled'] and not re.search(r'Saving the final RDB snapshot before exiting\.[\s\S]*DB saved on disk[\s\S]*Redis is now ready to exit, bye bye\.\.\.',logs):failure='completed final RDB save'
-            elif service['aofEnabled'] and 'Calling fsync() on the AOF file.' not in logs:failure='AOF flush and fsync'
-            else:break
-            if attempt==5:raise ValueError('Redis current '+failure+' proof is missing after waiting for log delivery; verify Redis stdout logging and Docker log retention before retrying')
-            time.sleep(1)
+            if not re.search(r'^.*\bRedis is now ready to exit, bye bye\.\.\.\s*$',logs,re.M):return 'graceful-shutdown'
+            if service['rdbEnabled'] and not re.search(r'Saving the final RDB snapshot before exiting\.[\s\S]*DB saved on disk[\s\S]*Redis is now ready to exit, bye bye\.\.\.',logs):return 'completed final RDB save'
+            if service['aofEnabled'] and 'Calling fsync() on the AOF file.' not in logs:return 'AOF flush and fsync'
+            return None
+        failure=stop_window_gap(c['Id'],stopped_at,gap,'Redis current shutdown logs timed out; review the Docker logging driver before retrying','Redis current shutdown logs could not be read; review the Docker logging driver before retrying')
+        if failure:raise ValueError('Redis current '+failure+' proof is missing after waiting for log delivery; verify Redis stdout logging and Docker log retention before retrying')
         flags=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--user','redis','--volumes-from',c['Id']+':ro']
         if service['rdbEnabled']:
             proof=run([*flags,'--entrypoint','redis-check-rdb',original['Image'],service['dataDirectory']+'/'+service['rdbFilename']],timeout=120).decode(errors='replace')
