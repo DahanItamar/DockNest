@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {formatBytes} from '../../shared/format-bytes.js';
-import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket} from '@tabler/icons-react';
+import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
@@ -17,6 +17,9 @@ import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
+import {useCoverage} from '../backup-coverage/use-coverage.js';
+import {MapCoverage} from '../backup-coverage/MapCoverage.jsx';
+import {nodeLine} from '../backup-coverage/model.js';
 import './map.css';
 
 const bytes=v=>v?formatBytes(v):'';
@@ -57,14 +60,14 @@ function useNarrow(){
  return narrow;
 }
 
-function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
+function MapList({cov,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
  return <div className="map-list">
  {undo}
  {canAdd&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
  {groups.map(({server,sites})=>{
   const id='map-list-'+(server?server.id:'unassigned');
   return <section key={id} className="map-list-group" aria-labelledby={id}>
-   <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span></>}</div></div>
+   <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span>{cov&&server.status==='connected'&&(line=><span className={'map-caption '+line.tone}>{line.text}</span>)(nodeLine(cov[server.id]))}</>}</div></div>
    {server&&<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}>Details</button>{canMove&&<button type="button" onClick={e=>onAddSite(server.id,e.currentTarget)}>Add app</button>}</div>}
    {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
   </section>;
@@ -79,6 +82,9 @@ function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onA
 
 export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user,api,onSessionExpired,alertsAccess=false,onOpenConnections,onAddServer,onAddStorage,onAddSite,onOpenSite,onOpenServer,onOpenStorage,onRefresh,onSafeEdit,onEditHistory}){
  const narrow=useNarrow(),canMove=user?.role==='admin';
+ // Backup coverage: read for connected servers only while the toggle is on. Nothing is scanned until then.
+ const [showCov,setShowCov]=useState(false),connected=servers.filter(server=>server.status==='connected').map(server=>server.id),coverage=useCoverage(api,connected,showCov,onSessionExpired);
+ const covToggle=<button type="button" className="bc-toggle" aria-pressed={showCov} onClick={()=>setShowCov(value=>!value)}><IconShieldCheck size={18} stroke={1.75} aria-hidden="true"/>Coverage</button>;
  const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
@@ -411,6 +417,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
     <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
+    {showCov&&sv.status==='connected'&&<MapCoverage api={api} server={sv} coverage={coverage} canChange={user?.role!=='viewer'} onSessionExpired={onSessionExpired} onAddApp={(serverId,names)=>{closePanel(false);onAddSite?.(serverId,names)}} onOpenApp={siteId=>{if(byId.sites[siteId])openPanel({kind:'site',id:siteId},opener.current)}}/>}
     {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button>}
     {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
@@ -445,7 +452,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
  const alertsList=alertsOn&&<AlertsList nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} sourceName={sourceName} onOpen={(n,el)=>openPanel({kind:'alert',id:n.id},el)} onEditRule={editRule} onDelete={requestDelete} onAdd={el=>addNode(el)} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
  const undoBar=undone&&<div className="map-undo" role="status"><span>{undone.name} is deleted.</span><button type="button" onClick={undoDelete}>Undo</button></div>;
- if(narrow)return <div className="map-root">{strip}<MapList groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
+ if(narrow)return <div className="map-root">{strip}{api&&<div className="map-toolbar">{covToggle}</div>}<MapList cov={showCov?coverage.byServer:null} groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
 
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
@@ -466,11 +473,11 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   </article>;
  };
  return <section className="map-root" aria-label="Infrastructure map">
-  {canMove&&<div className="map-toolbar">
+  {api&&<div className="map-toolbar">{covToggle}{canMove&&<>
    {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every app to a server to save</span>}
    <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" onClick={tidy}>Tidy up</button>
    {edit&&<button type="button" onClick={cancelEdit}>Cancel</button>}
-   <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button>
+   <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button></>}
   </div>}
   {strip}
   <div className="map-stage">
@@ -523,7 +530,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
        {s.status==='connected'?<IconCircleCheck className="map-badge ok" size={16} stroke={2} aria-hidden="true"/>:!s.status||s.status==='unchecked'?<IconClock className="map-badge" size={16} stroke={2} aria-hidden="true"/>:<IconAlertTriangle className="map-badge warn" size={16} stroke={2} aria-hidden="true"/>}
        <span className="map-label"><b id={'map-server-'+r.id} className="map-name" title={s.name}>{s.name}</b>
         <span className={'map-caption'+(bad?' bad':'')}>{bad?why(siteChecks[r.id]):pending?.targetId===r.id?'New home for '+byId.sites[pending.siteId]?.name:serverFacts(s,mine.length)}</span>
-        {s.status==='connected'?<span className="sr-only">Connected</span>:<span className="map-caption warn">{!s.status||s.status==='unchecked'?'Not checked yet':'Needs attention'}</span>}</span>
+        {showCov&&s.status==='connected'&&(line=><span className={'map-caption '+line.tone}>{line.text}</span>)(nodeLine(coverage.byServer[s.id]))}{s.status==='connected'?<span className="sr-only">Connected</span>:<span className="map-caption warn">{!s.status||s.status==='unchecked'?'Not checked yet':'Needs attention'}</span>}</span>
       </div>
       {canMove&&<button type="button" className="map-plus" aria-label={'New site on '+s.name} style={at(r.x+r.w+14,r.y+r.h/2+14)} onPointerDown={e=>e.stopPropagation()} onClick={e=>openPanel({kind:'add-server',id:r.id},e.currentTarget)}><IconPlus size={16} stroke={2} aria-hidden="true"/></button>}
       {mine.map(renderSite)}
