@@ -17,6 +17,7 @@ import { transport, enqueueBackup, setupMaintenance, movingSite } from '../engin
 import { classify } from '../alerts/addresses.js';
 import { moveActive, installActive, installInfo, INSTALL_PACKAGES } from '../installs.js';
 import { cleanupHeld } from '../cleanup-hold.js';
+import { coverageConflict } from '../site-coverage.js';
 import { maintenanceDefaults, normalizeMaintenance } from '../../shared/maintenance-design.js';
 import { firstDueAt } from '../restore-tests/settings.js';
 import { LAUNCH_STEPS } from '../migrations.js';
@@ -529,6 +530,8 @@ function saveSite(launch, steps) {
   const nextRun = CronExpressionParser.parse(schedule, { tz: zone, currentDate: new Date(launchTransport.now()) }).next().toISOString();
   transaction(() => {
     const config = siteConfig(launch, steps, siteId);
+    const conflict = coverageConflict(launch.server_id, config);
+    if (conflict) throw Object.assign(new Error(conflict.error), { code: conflict.code });
     db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, launch.server_id, launch.domain, JSON.stringify(config), at);
     db.prepare('INSERT INTO policies(site_id,enabled,schedule,timezone,retention,next_run) VALUES(?,1,?,?,7,?)').run(siteId, schedule, zone, nextRun);
     // Restore tests weekly on the chosen test server; with none, off with the reason the site page shows.

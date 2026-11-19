@@ -38,6 +38,7 @@ import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, e
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
+import { coverageConflict } from './site-coverage.js';
 import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
@@ -95,7 +96,7 @@ app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
-const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
+const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('App not found.');
 const safeServer = row => { const { private_key, ...rest } = parse(row); return rest; };
 // List endpoints pass a preloaded Map so each backup row does not issue its own verification query.
 const view = (row, verifications) => {
@@ -282,7 +283,7 @@ async function sitePathRefusal(req, saved, next, siteId) {
   let found = { configFiles: new Set(), composeFiles: new Set(), documentRoot: new Set() };
   if (fields.every(field => field in found)) { try { found = discoveredSitePaths(await discover(getServer(next.serverId))); } catch { /* Unconfirmed paths need an administrator. */ } }
   const refused = fields.filter(field => !found[field] || changes[field].some(value => !found[field].has(value)));
-  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of a site, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
+  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of an app, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
 }
 // Only lists that are new or changed are checked: a stored list that was already odd must not block unrelated edits.
 export function sqliteListProblem(next, saved) {
@@ -300,6 +301,8 @@ app.post('/api/sites', async (req, res) => {
   const settings = normalizedSite(data, siteId);
   const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
   if (refusal) return res.status(403).json(refusal);
+  const conflict = coverageConflict(data.serverId, settings);
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, data.serverId, data.name, JSON.stringify(settings), now());
   db.prepare('INSERT INTO policies VALUES (?,0,?,?,7,NULL)').run(siteId, '0 2 * * *', 'Asia/Jerusalem');
   audit(req.user.id, 'site.create', siteId); res.status(201).json(getSite(siteId));
@@ -321,6 +324,8 @@ app.patch('/api/sites/:id', async (req, res) => {
   // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
   const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
   const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
+  const conflict = coverageConflict(data.serverId, next, { exceptSiteId: site.id, saved: site.server_id === data.serverId ? saved : null });
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
   audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
@@ -365,7 +370,7 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   if (job.type === 'restore-test') return acknowledgeTestJob(req, res, job);
   const site = getSite(job.site_id);
   const data = z.object({ confirmation: z.string(), reviewedRemoteRecovery: z.literal(true) }).parse(req.body);
-  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the site name and review its remote recovery before acknowledging.' });
+  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the app name and review its remote recovery before acknowledging.' });
   const result = await verifyRecovery(job);
   if(job.type==='restore'){
     const details=JSON.parse(job.details);
@@ -468,7 +473,7 @@ app.post('/api/backups/:id/restore-plan', async (req, res) => {
 app.post('/api/backups/:id/restore', async (req, res) => {
   const data = z.object({ plan: z.object({ serverId: z.uuid(), mode: z.string(), mappings: z.record(z.string(), z.unknown()).default({}) }).passthrough(), confirmation: z.string(), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
   const backup = db.prepare('SELECT * FROM backups WHERE id=?').get(req.params.id) || notFound('Backup not found.');
-  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the site name to confirm the restore.' });
+  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the app name to confirm the restore.' });
   // Never trust the executable flag, capabilities or blockers submitted by a client.
   const sourceTargetId = data.sourceTargetId || (typeof data.plan.sourceTargetId === 'string' ? data.plan.sourceTargetId : null);
   const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId }).catch(sourceRefusal);
