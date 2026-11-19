@@ -43,7 +43,7 @@ const plainRemote = (error, name) => (error?.hostKeyRejected ? `The saved host k
 function siteNeed(siteId) {
   if (!siteId) return {};
   const site = db.prepare('SELECT config FROM sites WHERE id=?').get(siteId);
-  if (!site) throw httpError(404, 'Site not found.');
+  if (!site) throw httpError(404, 'App not found.');
   let config = {};
   try { config = JSON.parse(site.config); } catch { /* An unreadable configuration counts as several containers. */ }
   return dockerNeed(Array.isArray(config.containers) ? config.containers.length : 2);

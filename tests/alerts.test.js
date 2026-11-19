@@ -207,8 +207,8 @@ test('rule matching: docknest lines match everything, server and site lines only
 });
 
 test('messages are short, plain and carry only the names the owner typed', () => {
-  const text = events.messageFor({ type: 'backup.failed', at: '2026-10-23T03:00:12.000Z', siteName: 'shop.example.com', serverName: 'mobiX-Srv' });
-  assert.equal(text, 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. Open DockNest to see why.');
+  const text = events.messageFor({ type: 'backup.failed', at: '2026-10-23T03:00:12.000Z', siteName: 'shop.example.com', serverName: 'web-box' });
+  assert.equal(text, 'Backup failed: shop.example.com on web-box at 03:00 UTC. Open DockNest to see why.');
   assert.equal(events.messageFor({ type: 'nonsense' }), null);
   assert.ok(!/[\r\n<>]/.test(events.messageFor({ type: 'backup.failed', at: '2026-10-23T03:00:00Z', siteName: 'a\r\nb<script>', serverName: 'x'.repeat(500) })));
   assert.ok(events.messageFor({ type: 'server.disk_low', serverName: 'srv', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4 }).includes('2.1 GB free (95% used)'));
@@ -256,7 +256,7 @@ test('delivery retries with backoff three times, then gives up; success records 
 
 test('the detector reads backups, moves, updates and disk without replaying history or touching those tables', () => {
   reset(); db.exec("DELETE FROM settings WHERE key IN ('alerts_cursor','alerts_update_notified')");
-  const srv = server('mobiX-Srv', '203.0.113.9'), target = server('new-srv', '198.51.100.9'), siteId = site(srv, 'shop.example.com');
+  const srv = server('web-box', '203.0.113.9'), target = server('new-srv', '198.51.100.9'), siteId = site(srv, 'shop.example.com');
   const channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: [...events.EVENTS] }, 'test');
   const job = (status, finished, details = '{}') => { const jobId = randomUUID(); db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup',?,?,?,?,?)").run(jobId, siteId, status, status, finished, finished, details); return jobId; };
@@ -269,7 +269,7 @@ test('the detector reads backups, moves, updates and disk without replaying hist
   assert.equal(detect.detectJobsAndMoves('2026-01-01T08:00:00.000Z'), 0, 'seen once');
   const messages = db.prepare('SELECT event,message FROM alert_outbox ORDER BY created_at').all().map(row => ({ ...row }));
   assert.deepEqual(messages.map(row => row.event).sort(), ['backup.failed', 'backup.succeeded']);
-  assert.ok(messages.some(row => row.message === 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. Open DockNest to see why.'));
+  assert.ok(messages.some(row => row.message === 'Backup failed: shop.example.com on web-box at 03:00 UTC. Open DockNest to see why.'));
   assert.ok(!messages.some(row => /203\.0\.113|\d+\.\d+\.\d+\.\d+/.test(row.message)), 'no addresses');
   const move = (state, waiting, updated) => { const moveId = randomUUID(); db.prepare('INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,waiting_for,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(moveId, state === 'waiting' ? siteId : site(srv, 'shop.example.com'), srv, target, state, waiting, '{}', '{}', 'h', 'a', updated, updated); return moveId; };
   db.exec('DELETE FROM alert_outbox');
@@ -285,7 +285,7 @@ test('the detector reads backups, moves, updates and disk without replaying hist
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 2 * 1024 ** 3 }), srv);
   db.prepare('UPDATE servers SET capabilities=? WHERE id=?').run(JSON.stringify({ freeBytes: 500 * 1024 ** 3 }), target);
   assert.equal(detect.detectDisk(), 1); assert.equal(detect.detectDisk(), 0, 'once a day at most');
-  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Low disk space on mobiX-Srv: 2\.1 GB free/);
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Low disk space on web-box: 2\.1 GB free/);
 });
 
 test('incremental chains: a backup not saved for its chain and a scrub that found a broken chain both raise Backup failed', () => {
@@ -475,7 +475,7 @@ test('migration versions are contiguous from 1 once version 7 exists', async () 
 
 test('a server line also carries the backups of the sites on that server, never those of other servers, and sends once', async () => {
   reset(); db.exec("DELETE FROM settings WHERE key='alerts_cursor'");
-  const home = server('itamar-Srv'), away = server('other-Srv'), mine = site(home, 'mine'), theirs = site(away, 'theirs');
+  const home = server('media-box'), away = server('other-Srv'), mine = site(home, 'mine'), theirs = site(away, 'theirs');
   const channel = store.createChannel(tgNode(), 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'server', sourceId: home, events: ['server.unreachable', 'backup.failed'] }, 'test');
   store.createRule({ channelId: channel.id, sourceKind: 'site', sourceId: mine, events: ['backup.failed'] }, 'test');
@@ -483,7 +483,7 @@ test('a server line also carries the backups of the sites on that server, never 
   const fail = (siteId, finished) => db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,finished_at,details) VALUES(?,?,'backup','failed','failed',?,?,'{}')").run(randomUUID(), siteId, finished, finished);
   fail(theirs, '2026-07-01T01:00:00.000Z'); fail(mine, '2026-07-01T02:00:00.000Z');
   assert.equal(detect.detectJobsAndMoves(), 1, 'one message even though the server line and the site line both match');
-  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Backup failed: mine on itamar-Srv/);
+  assert.match(db.prepare('SELECT message FROM alert_outbox').get().message, /^Backup failed: mine on media-box/);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alert_outbox').get().n, 1);
 });
 

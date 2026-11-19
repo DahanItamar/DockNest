@@ -99,9 +99,9 @@ export function evaluateMove(facts, options = {}) {
   const add = (...args) => checks.push(check(...args));
 
   // Eligibility comes first; if the target cannot be reached nothing else can be trusted.
-  if (state.sameServer || source.id === target.id) add('eligibility', 'block', 'Same server', `This site is already on ${target.name}.`);
+  if (state.sameServer || source.id === target.id) add('eligibility', 'block', 'Same server', `This app is already on ${target.name}.`);
   if (!target.reachable || target.hostKeyOk === false) add('eligibility', 'block', 'Server not reachable', `DockNest cannot connect to ${target.name}. Test it on the Servers page.`);
-  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'Site is busy', `${site.name} is busy with another job. Try again when it finishes.`);
+  if (state.busy || state.archived || state.deploymentHold || state.activeMove) add('eligibility', 'block', 'App is busy', `${site.name} is busy with another job. Try again when it finishes.`);
   const reachable = !checks.some(item => item.title === 'Server not reachable');
 
   if (reachable) {
@@ -128,16 +128,16 @@ export function evaluateMove(facts, options = {}) {
     }
 
     const plan = planPorts(site.ports ?? [], [...(target.usedPorts ?? []), ...(target.reservedPorts ?? [])]);
-    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `${target.name} has no free port for this site (tried ${binding.hostPort} and the next ${PORT_SEARCH_RANGE}).`);
-    for (const entry of plan.map.filter(item => item.from !== item.to)) add('port', 'warn', 'Ports', `Port ${entry.from} is already used on ${target.name}. The site will listen on ${entry.to} instead. Its own settings stay the same.`, { automatic: true });
-    if (!plan.exhausted.length && plan.map.every(item => item.from === item.to)) add('port', 'ok', 'Ports', 'The site keeps its ports.');
+    for (const binding of plan.exhausted) add('port', 'block', 'Ports', `${target.name} has no free port for this app (tried ${binding.hostPort} and the next ${PORT_SEARCH_RANGE}).`);
+    for (const entry of plan.map.filter(item => item.from !== item.to)) add('port', 'warn', 'Ports', `Port ${entry.from} is already used on ${target.name}. The app will listen on ${entry.to} instead. Its own settings stay the same.`, { automatic: true });
+    if (!plan.exhausted.length && plan.map.every(item => item.from === item.to)) add('port', 'ok', 'Ports', 'The app keeps its ports.');
     portMap = plan.map;
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${target.name} already has a folder ${folder}. DockNest never overwrites folders.`);
     const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `${target.name} already has a ${label} called ${name}. DockNest never replaces it.`);
-    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);
+    for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this app by hand.`);
 
     // The copy keeps the site's read-only root, dropped capabilities and security options (remote helper hardening),
     // so a setting no copy can have, or an AppArmor profile the new server has not loaded, blocks the move here.
@@ -151,7 +151,7 @@ export function evaluateMove(facts, options = {}) {
     const seccomp = hardening?.seccomp ?? [];
     if (seccomp.length && !Array.isArray(target.seccompPresent)) add('security', 'block', 'Security settings', `DockNest could not check seccomp profiles on ${target.name}. Update DockNest on both servers, then check again.`);
     else for (const path of seccomp) if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
-    if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the site's security settings.");
+    if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the app's security settings.");
     // Docker's host-wide AppArmor default is a server setting, not the site's: noted, never enforced.
     // docker create copies (remote/helper/runspec.py): settings it cannot recreate are named, never refused; a mount it
     // cannot read is refused (the copy would lose its data); CPU limits are fitted to the new server, as fit_host does.

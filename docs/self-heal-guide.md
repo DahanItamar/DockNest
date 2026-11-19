@@ -1,10 +1,10 @@
 # Self-heal for unhealthy containers
 
 Docker restarts a container that exits, if its restart policy says so. It does nothing for a container that keeps
-running but fails its health check. Self-heal fills that gap: when Docker marks a container of a site unhealthy,
+running but fails its health check. Self-heal fills that gap: when Docker marks a container of an app unhealthy,
 DockNest restarts it, a limited number of times, and tells you through your alert Connections.
 
-It is off for every site until an administrator turns it on. The design is in [self-heal.md](self-heal.md).
+It is off for every app until an administrator turns it on. The design is in [self-heal.md](self-heal.md).
 
 > **Works while DockNest is running.** DockNest watches the server over its own SSH connection. While DockNest (or
 > its worker) is stopped, the laptop it runs on sleeps, or the server is unreachable, nothing is healed. Docker's own
@@ -15,13 +15,13 @@ Not validated yet: this release adds self-heal with unit tests and a Linux Docke
 
 ## What it does
 
-1. DockNest keeps one SSH session open to each server that has a site with self-heal on, and listens to
-   `docker events` for health changes of that site's containers. Nothing is installed or left running on the server.
+1. DockNest keeps one SSH session open to each server that has an app with self-heal on, and listens to
+   `docker events` for health changes of that app's containers. Nothing is installed or left running on the server.
 2. When a watched container turns **unhealthy**, DockNest records it and, if the limits allow, restarts it with
-   `docker restart --time 30`. DockNest's own job rules keep the restart apart from every other job of the site (see
+   `docker restart --time 30`. DockNest's own job rules keep the restart apart from every other job of the app (see
    "When it waits"). Right before the restart the server checks once more that the container is the same one, still
-   running and still unhealthy, that the site's maintenance page is off, and that no other DockNest step holds the
-   site's lock file there.
+   running and still unhealthy, that the app's maintenance page is off, and that no other DockNest step holds the
+   app's lock file there.
 3. When the container is **healthy** again, the episode is recorded as recovered.
 
 Only containers that have a Docker health check are watched. A health check that is still in its start period
@@ -29,10 +29,10 @@ Only containers that have a Docker health check are watched. A health check that
 
 ## Turn it on
 
-Administrators turn it on per site; operators can see the setting and the history.
+Administrators turn it on per app; operators can see the setting and the history.
 
-- **Self-heal.** On or off. Turning it on looks up which of the site's containers have a health check. If none has,
-  it stays off: "No container in this site has a health check."
+- **Self-heal.** On or off. Turning it on looks up which of the app's containers have a health check. If none has,
+  it stays off: "No container in this app has a health check."
 - **Restarts.** How many restarts per container in one window: 1 to 10, default 3.
 - **Window.** 10 minutes to 24 hours, default 1 hour.
 
@@ -40,17 +40,17 @@ Two restarts of the same container are always at least 60 seconds apart. If a re
 be reached, DockNest tries again after those 60 seconds; each try counts toward the limit. When a container used up
 its restarts in a window, DockNest records "Restart limit reached" once and sends one **Self-heal stopped** alert.
 Restarts resume by themselves as soon as the oldest restart is more than one window ago, if the container is still
-unhealthy then. One server watches at most 50 containers across all its sites; turning self-heal on for a site that
+unhealthy then. One server watches at most 50 containers across all its apps; turning self-heal on for an app that
 would pass that is refused.
 
 API (administrators, with the usual CSRF header): `PUT /api/sites/:id/self-heal` with
 `{ "enabled": true, "maxRestarts": 3, "windowMinutes": 60 }`. `GET /api/sites/:id/self-heal` shows the settings, the
 watched containers, whether DockNest is watching, and the recent history; `GET /api/self-heal/events` lists the
-history of all sites.
+history of all apps.
 
 ## When it waits
 
-Self-heal never fights DockNest's own work. No restart happens while the site:
+Self-heal never fights DockNest's own work. No restart happens while the app:
 
 - has a backup, restore, Safe Edit or move running, or one waiting to start;
 - is being moved;
@@ -62,7 +62,7 @@ container if it is still unhealthy (within about 15 seconds; at the exact moment
 
 ## Alerts
 
-Two new events for site, server and DockNest lines on the Map:
+Two new events for app, server and DockNest lines on the Map:
 
 - **Container restarted**: the first restart of a container in a window (every restart is in the history).
 - **Self-heal stopped**: a container used up its restarts, or a watched container was recreated or removed.
@@ -79,13 +79,13 @@ The setting shows whether DockNest is watching (`connected`), trying to (`connec
 - *the server SSH host key does not match the pinned key*: DockNest stops trying. Check the server and confirm the
   new key on the server page if the change is expected.
 - *Docker events could not be read on the server*: check that Docker runs and that the server's Docker is supported.
-- *this server already has 50 watched containers*: turn self-heal off for another site on that server.
-- *container recreated*: a watched container is gone. Turn self-heal off and on again to pick up the site's
+- *this server already has 50 watched containers*: turn self-heal off for another app on that server.
+- *container recreated*: a watched container is gone. Turn self-heal off and on again to pick up the app's
   current containers.
 
 ## Server settings to check
 
-The watch uses one extra SSH session per server, held open while self-heal is on for a site on that server.
+The watch uses one extra SSH session per server, held open while self-heal is on for an app on that server.
 
 - `MaxSessions` (sshd, default 10) and `MaxStartups` limit how many sessions sshd accepts. One held session per
   server is usually far below that, but count it if you limit sessions tightly.
@@ -101,6 +101,6 @@ worker's regular maintenance. The audit log records who turned self-heal on, off
 
 ## Upgrading and rolling back
 
-The update adds two tables and changes nothing else; self-heal stays off for every site. Rolling back to 2.14 ignores
+The update adds two tables and changes nothing else; self-heal stays off for every app. Rolling back to 2.14 ignores
 the new tables and any queued restart, which then simply never runs. The upgrade script waits for running restarts
 like any other job.

@@ -15,8 +15,8 @@ const SHOP='5e0f3b1c-6a2d-4c8e-9f10-2b3c4d5e6f70';
 const long='very-long-site-name-'.repeat(8)+'.example.com';
 const state={
  servers:[
-  {id:'b',name:'mobiX-Srv',host:'b.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:13*1024**3}},
-  {id:'a',name:'itamar-Srv',host:'a.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:57*1024**3,dockerVersion:'27.0.1',composeVersion:'2.29.0',nginx:{installed:false},certbot:{installed:true}}},
+  {id:'b',name:'office-box',host:'b.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:13*1024**3}},
+  {id:'a',name:'media-box',host:'a.example.invalid',port:22,username:'root',status:'connected',capabilities:{freeBytes:57*1024**3,dockerVersion:'27.0.1',composeVersion:'2.29.0',nginx:{installed:false},certbot:{installed:true}}},
   {id:'c',name:'Quiet server with a rather long name that must not break',host:'c.example.invalid',port:22,username:'root',status:'failed'},
   {id:'d',name:'zeta-Srv',host:'d.example.invalid',port:22,username:'root',status:'connected'}
  ],
@@ -95,8 +95,8 @@ const HASH='a'.repeat(64);
 function preview({siteId,targetServerId,options}){
  const env=options?.envRewrite?.length||options?.askBeforeSwitch?'-opt':'',id='m-'+siteId+'-'+targetServerId+env;
  const base={id,siteId,targetServerId,ok:true,mailBlocked:true,verdict:'ready',sentence:'Shop is ready to move.',needsMoveAnyway:false,estimateSeconds:180,downtimeSeconds:30,undoDays:7,preflightHash:HASH,blockers:[],warnings:[],advanced:{ports:[{from:80,to:80,changed:false},{from:8080,to:8081,changed:true}],nginx:{file:'/etc/nginx/conf.d/docknest-1.conf',notCopied:['client_max_body_size']},envKeys:[{key:'DATABASE_URL',masked:'postgres://203.0.113.7:5432/app',rewrite:false},{key:'REDIS_HOST',masked:'203.0.113.7',rewrite:false}],dns:{mode:'manual',cloudflareAvailable:false},tests:{mailBlocking:'where the server firewall allows it'},checks:[{id:'disk',status:'ok',title:'Disk space',text:'Plenty of room on the new server.'},{id:'port',status:'warn',title:'Ports',text:'Port 8080 is taken, 8081 will be used.'}]}};
-const nginx={id:'nginx',status:'block',title:'itamar-Srv needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported,reason:mock.unsupported?'This server packages offer Docker 20.10; this site needs 28 or newer. Install Docker from the Docker repository instead.':undefined}};
- if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['itamar-Srv needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
+const nginx={id:'nginx',status:'block',title:'media-box needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported,reason:mock.unsupported?'This server packages offer Docker 20.10; this site needs 28 or newer. Install Docker from the Docker repository instead.':undefined}};
+ if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['media-box needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
  return base;
@@ -109,8 +109,8 @@ const stepsFor=phase=>{
 function moveState(){
  const p=mock.phase;
  return {id:'m',state:p,steps:stepsFor(p),progress:{running:40,waiting_switch:60,switching:70,waiting_dns:90,done:100,cancelling:20,cancelled:20,rolling_back:30,rolled_back:0,needs_attention:50}[p]??0,
-  statusLine:{running:'Copying to the new server.',waiting_switch:'The new copy works. Ready when you are.',cancelling:'Cancelling and cleaning up.',rolling_back:'Switching back to the old server.',rolled_back:'Your site is back on the old server.'}[p]||'',
-  sourceName:'mobiX-Srv',actions:{cancel:p==='running'||p==='waiting_switch',switchBack:p==='done'&&!mock.askRemove,removeOldCopy:p==='done',askRemoveOldCopy:p==='done'&&mock.askRemove,resolve:p==='needs_attention'?['retry','undo']:[]},cancelLabel:p==='cancelling'?'Cancelling...':'Cancel',error:p==='needs_attention'?'The old server did not answer. Check it, then open the move again.':null,
+  statusLine:{running:'Copying to the new server.',waiting_switch:'The new copy works. Ready when you are.',cancelling:'Cancelling and cleaning up.',rolling_back:'Switching back to the old server.',rolled_back:'Your app is back on the old server.'}[p]||'',
+  sourceName:'office-box',actions:{cancel:p==='running'||p==='waiting_switch',switchBack:p==='done'&&!mock.askRemove,removeOldCopy:p==='done',askRemoveOldCopy:p==='done'&&mock.askRemove,resolve:p==='needs_attention'?['retry','undo']:[]},cancelLabel:p==='cancelling'?'Cancelling...':'Cancel',error:p==='needs_attention'?'The old server did not answer. Check it, then open the move again.':null,
   dns:mock.withDns?{type:'A',name:'shop.example.com',value:'203.0.113.7'}:null};
 }
 
@@ -149,7 +149,7 @@ async function open({role='admin',width=1440,height=900,scheme='light',appState=
   if(endpoint==='/api/storage-targets')return route.fulfill({json:targets});
   if(endpoint==='/api/storage-report')return route.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}});
   if(endpoint==='/api/servers/a/install'&&req.method()==='POST'){if(mock.needReauth)return route.fulfill({status:403,json:{error:'Please confirm it is you.',code:'REAUTH_REQUIRED'}});if(mock.alreadyInstalled)return route.fulfill({status:409,json:{error:'Docker is installed but not running. Start it, then check again.',code:'ALREADY_INSTALLED'}});mock.installs.push(req.postDataJSON());mock.jobStatus='running';return route.fulfill({status:202,json:{job:{id:'j1'}}});}
-  if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to itamar-Srv',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
+  if(endpoint==='/api/jobs/j1')return route.fulfill({json:{job:{id:'j1',type:'install',status:mock.jobStatus,details:{steps:[{name:'Connected to media-box',status:'completed'},{name:'Package list updated',status:mock.jobStatus==='running'?'running':'completed'},{name:'Installing nginx',status:mock.jobStatus==='running'?'pending':'completed'}]}}}});
   if(endpoint==='/api/updates/progress')return route.fulfill({json:{active:false,state:'idle'}});
   return route.fulfill({json:endpoint==='/api/auth/status'?auth:endpoint==='/api/state'?{...appState,alertsAccess:role==='admin'||alertsDb.access}:endpoint==='/api/version'?{version:'0.0.0'}:{}});
  });
@@ -203,8 +203,8 @@ async function moveFlow(page,scheme){
  await dialog(page).getByText('This server is not connected. Reconnect it first.').waitFor();
  assert.equal(await dialog(page).getByRole('button',{name:/Quiet server/}).isDisabled(),true);
  await page.waitForFunction(()=>![...document.querySelectorAll('dialog button')].some(b=>/Checking/.test(b.textContent)));
- await dialog(page).getByRole('button',{name:/^itamar-Srv/}).click();
- await page.getByText(/will move to itamar-Srv/).waitFor();
+ await dialog(page).getByRole('button',{name:/^media-box/}).click();
+ await page.getByText(/will move to media-box/).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  assert.equal(await save.isDisabled(),true);
@@ -216,11 +216,11 @@ async function moveFlow(page,scheme){
  await page.getByText(/cannot move to Quiet server.*not connected/).waitFor();
  assert.equal(await save.isDisabled(),true,'blocked target keeps save off');
  // Valid target
- await dragSite(page,SHOP,'itamar-Srv',false);
+ await dragSite(page,SHOP,'media-box',false);
  await page.locator('.map-server.target').waitFor();
  await shot(page,scheme,'1440-2-drag');
  await page.mouse.up();
- await page.getByText(/will move to itamar-Srv/).waitFor();
+ await page.getByText(/will move to media-box/).waitFor();
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
  assert.equal(await page.getByRole('button',{name:'Cancel',exact:true}).count(),1);
  await shot(page,scheme,'1440-3-pending');
@@ -305,15 +305,15 @@ mock.needReauth=true;await d.getByRole('button',{name:'Switch now'}).click();
  await d.getByText('The domain points to the new server.').waitFor({timeout:6000});
  // Switch back is offered from `actions`; then the old copy can be removed after 7 days
  await d.getByRole('button',{name:'Switch back'}).click();
- await d.getByRole('heading',{name:'Switch back to mobiX-Srv?'}).waitFor();
-await d.getByText('stay on itamar-Srv (not copied back)',{exact:false}).waitFor();
+ await d.getByRole('heading',{name:'Switch back to office-box?'}).waitFor();
+await d.getByText('stay on media-box (not copied back)',{exact:false}).waitFor();
  await shot(page,scheme,'1440-7c-switchback');
  await d.getByRole('button',{name:'Cancel'}).click();assert.equal(mock.switchBacks,0);
  await d.getByRole('button',{name:'Switch back'}).click();
- await d.getByRole('heading',{name:'Switch back to mobiX-Srv?'}).waitFor();
+ await d.getByRole('heading',{name:'Switch back to office-box?'}).waitFor();
  await d.getByRole('button',{name:'Switch back'}).click();
  assert.equal(mock.switchBacks,1);
- await d.getByRole('heading',{name:'shop.example.com is back on mobiX-Srv'}).waitFor({timeout:6000});
+ await d.getByRole('heading',{name:'shop.example.com is back on office-box'}).waitFor({timeout:6000});
  mock.phase='done';mock.askRemove=true;
  mock.listMoves=[{id:'m',siteId:SHOP,siteName:'shop.example.com',targetServerId:'a',state:'done',actions:{askRemoveOldCopy:true,resolve:[]}}];
  await d.getByRole('button',{name:'Close'}).click();await dialog(page).waitFor({state:'detached'});
@@ -327,7 +327,7 @@ await d.getByText('stay on itamar-Srv (not copied back)',{exact:false}).waitFor(
  assert.equal(await d.getByLabel('Also delete the old data').isChecked(),false,'delete data unticked');
  assert.equal(await rm.isDisabled(),true,'name required');
  await shot(page,scheme,'1440-7b-remove');
- await d.getByLabel('Type the site name to confirm').fill('shop.example.com');
+ await d.getByLabel('Type the app name to confirm').fill('shop.example.com');
  await d.getByLabel('Also delete the old data').check();
 mock.needReauth=true;await rm.click();
  await d.getByRole('group',{name:'Please confirm it is you'}).waitFor();
@@ -341,7 +341,7 @@ mock.needReauth=true;await rm.click();
  // Cancel path
  mock.phase='running';
  // The map refreshes after Close; retry the drag until it registers as a pending change
- for(let i=0;i<5&&await save.isDisabled();i++){await page.waitForLoadState('networkidle');await dragSite(page,SHOP,'itamar-Srv');}
+ for(let i=0;i<5&&await save.isDisabled();i++){await page.waitForLoadState('networkidle');await dragSite(page,SHOP,'media-box');}
  await save.click();
  await d.getByRole('button',{name:'Move',exact:true}).click();
  await d.getByRole('button',{name:'Cancel'}).click();
@@ -350,7 +350,7 @@ mock.needReauth=true;await rm.click();
  await d.getByRole('button',{name:'Close'}).click();
  // Long downtime: warning and "Move anyway"
 mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
- await d.getByText('This site is already being moved. Wait for that move to finish.').waitFor();
+ await d.getByText('This app is already being moved. Wait for that move to finish.').waitFor();
  await d.getByRole('button',{name:'Cancel'}).click();mock.siteMoving=false;
  await dragSite(page,SHOP,'zeta-Srv');await save.click();
  await d.getByText(/offline for a long time/).waitFor();
@@ -375,10 +375,10 @@ mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
  assert.deepEqual(mock.resolves,['undo']);
  mock.phase='rolled_back';
  await d.getByRole('heading',{name:'Move undone'}).waitFor({timeout:6000});
- await d.getByText('Your site is back on the old server.').first().waitFor();
+ await d.getByText('Your app is back on the old server.').first().waitFor();
  await d.getByRole('button',{name:'Close'}).click();
  // Blocked at review time: plain red sentence, no Move
- await dragSite(page,SHOP,'itamar-Srv');mock.blockA=true;await save.click();
+ await dragSite(page,SHOP,'media-box');mock.blockA=true;await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  await d.getByRole('alert').getByText('This server is not connected. Reconnect it first.').waitFor();
  assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
@@ -404,11 +404,11 @@ async function panelChecks(page,scheme){
  assert.equal(await panel.getByRole('heading',{name:'shop.example.com'}).evaluate(e=>document.activeElement===e),true,'panel title is focused on open');
  await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
  assert.equal(await panel.getByText('Generic').count()+await panel.getByText('app',{exact:true}).count(),0,'only detected databases are listed');
- await panel.getByText('Moves together with the site.').waitFor();
+ await panel.getByText('Moves together with the app.').waitFor();
  await panel.getByText(/^Today .*, passed$/).waitFor();
  assert.equal(await panel.locator('dd',{hasText:/^3$/}).count(),1,'containers show a count, never indexes');
  assert.equal(await panel.getByText('1, 2, 3').count(),0);
- await panel.getByText('nas-backup').waitFor();await panel.getByText('mobiX-Srv').waitFor();
+ await panel.getByText('nas-backup').waitFor();await panel.getByText('office-box').waitFor();
  assert.equal(await panel.getByRole('button',{name:'Open site'}).count(),1);assert.equal(await panel.getByRole('button',{name:'Move to…'}).count(),1);
  assert.equal(await save.isDisabled(),true,'a click is not a change');
  assert.equal(await page.locator('.map-lines path.warn, .map-lines path.pending').count(),0);
@@ -416,7 +416,7 @@ async function panelChecks(page,scheme){
  await size();await shot(page,scheme,'1440-2a-details-site');
  // Only one panel at a time: a server replaces it. Escape closes it and focus returns to the node
  await page.locator('.map-server[data-node="server:b"]').click();
- await panel.getByRole('heading',{name:'mobiX-Srv'}).waitFor();assert.equal(await panel.count(),1);
+ await panel.getByRole('heading',{name:'office-box'}).waitFor();assert.equal(await panel.count(),1);
  await panel.getByText('Docker').first().waitFor();await size();
  await page.keyboard.press('Escape');await panel.waitFor({state:'detached'});
  await page.waitForFunction(()=>document.activeElement?.dataset?.node==='server:b');
@@ -433,7 +433,7 @@ async function panelChecks(page,scheme){
  await size();await shot(page,scheme,'1440-2b-details-server');
  await panel.getByRole('button',{name:'Install nginx'}).click();
  const d=dialog(page);
- await d.getByRole('heading',{name:'Install nginx on itamar-Srv'}).waitFor();
+ await d.getByRole('heading',{name:'Install nginx on media-box'}).waitFor();
  Object.assign(mock,{needReauth:false,installs:[],jobStatus:'running',tests:0});
  await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
  await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
@@ -443,7 +443,7 @@ async function panelChecks(page,scheme){
  await d.getByRole('button',{name:'Check again'}).click();
  await dialog(page).waitFor({state:'detached'});
  assert.equal(mock.tests,1,'server is checked again');
- await panel.getByRole('heading',{name:'itamar-Srv'}).waitFor();
+ await panel.getByRole('heading',{name:'media-box'}).waitFor();
  await panel.getByRole('button',{name:'Close'}).click();
  // "+" at the top right: add a server or backup storage with the existing screens
  const plus=page.getByRole('button',{name:'Add to the map'});
@@ -461,8 +461,8 @@ async function panelChecks(page,scheme){
  await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('dialog').waitFor({state:'detached'});
  // "+" on a server: discovered sites that are not added yet
  assert.equal(await page.locator('.map-plus').count(),4,'+ beside every server, also those with sites');
- await page.locator('[data-node="server:a"]').focus();await page.keyboard.press('Enter');await panel.getByRole('button',{name:'Add a site found here'}).click();
- await panel.getByRole('heading',{name:'Add to itamar-Srv'}).waitFor();
+ await page.locator('[data-node="server:a"]').focus();await page.keyboard.press('Enter');await panel.getByRole('button',{name:'Add an app found here'}).click();
+ await panel.getByRole('heading',{name:'Add to media-box'}).waitFor();
  await panel.getByText('Found on this server (3)').waitFor();
  await panel.getByText('Docker · 2 containers').waitFor();await panel.getByText('nginx site · static files').waitFor();
  assert.equal(await panel.getByText('Discover again').count(),1);
@@ -477,12 +477,12 @@ async function panelChecks(page,scheme){
  await page.waitForFunction(n=>true,before);await panel.getByText('Found on this server (3)').waitFor();
  assert.ok(mock.discovers>before,'discovery runs again');
  for(const z of sizes)assert.deepEqual(z,sizes[0],'every panel is the same size');
- // A row opens the existing Add site wizard with that site already chosen
+ // A row opens the existing Add app wizard with that site already chosen
  await panel.getByRole('button',{name:/crm.example.com/}).click();
  await panel.waitFor({state:'detached'});
- const w=page.getByRole('dialog',{name:'Discover & add a site'});await w.waitFor();
- await w.getByRole('button',{name:'Select site crm.example.com'}).waitFor();
- await page.waitForFunction(()=>document.querySelector('[aria-label="Select site crm.example.com"]')?.getAttribute('aria-pressed')==='true');
+ const w=page.getByRole('dialog',{name:'Discover & add an app'});await w.waitFor();
+ await w.getByRole('button',{name:'Select app crm.example.com'}).waitFor();
+ await page.waitForFunction(()=>document.querySelector('[aria-label="Select app crm.example.com"]')?.getAttribute('aria-pressed')==='true');
  await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('dialog').waitFor({state:'detached'});
  // Open server goes to the existing Servers page, then back to the map
  await page.locator('.map-server[data-node="server:b"]').click();
@@ -498,7 +498,7 @@ async function reconnectChecks(page,scheme){
  // Pull the line off the server and let go in empty space: not connected, save is off with the reason
  await dragSiteToEmpty(page,'3');
  await page.locator('.map-site.lost').waitFor();
- await page.getByText('Connect every site to a server to save').waitFor();
+ await page.getByText('Connect every app to a server to save').waitFor();
  assert.equal(await save.isDisabled(),true,'save is off while a site is not connected');
  await page.locator('.map-site.lost .map-caption',{hasText:'Not connected'}).waitFor();
  assert.equal(await page.locator('.map-lines path.warn').count(),1,'dashed amber line');
@@ -515,14 +515,14 @@ async function reconnectChecks(page,scheme){
  assert.equal(await page.locator('.map-lines path.wire').count(),5,'line restored');
  // Dropping it back on its own server undoes the change
  await dragSiteToEmpty(page,'3');await page.locator('.map-site.lost').waitFor();
- await dragSite(page,'3','mobiX-Srv');
- await page.locator('.map-live',{hasText:'stays on mobiX-Srv'}).waitFor();
+ await dragSite(page,'3','office-box');
+ await page.locator('.map-live',{hasText:'stays on office-box'}).waitFor();
  await stateIsClean(page,'back on its own server');
  // Reconnect to a different server: the existing move, save is on and the warning is gone
  await dragSiteToEmpty(page,'3');await page.locator('.map-site.lost').waitFor();
- await dragSite(page,'3','itamar-Srv');
+ await dragSite(page,'3','media-box');
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
- assert.equal(await page.getByText('Connect every site to a server to save').count(),0);
+ assert.equal(await page.getByText('Connect every app to a server to save').count(),0);
  assert.equal(await page.locator('.map-lines path.pending').count(),1,'new line');
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  // Keyboard: Delete disconnects, Enter opens "Connect to", the sheet connects
@@ -534,19 +534,19 @@ async function reconnectChecks(page,scheme){
  const d=dialog(page);
  await d.getByRole('heading',{name:/^Connect .* to$/}).waitFor();
  await page.waitForFunction(()=>![...document.querySelectorAll('dialog button')].some(b=>/Checking/.test(b.textContent)));
- await d.getByRole('button',{name:/^mobiX-Srv/}).click();
- await page.locator('.map-live',{hasText:'stays on mobiX-Srv'}).waitFor();
+ await d.getByRole('button',{name:/^office-box/}).click();
+ await page.locator('.map-live',{hasText:'stays on office-box'}).waitFor();
  await stateIsClean(page,'keyboard reconnect');
 }
 async function installFlow(page,scheme){
  const d=dialog(page),save=page.getByRole('button',{name:'Save changes'});
  if(await page.getByRole('button',{name:'Cancel',exact:true}).count())await page.getByRole('button',{name:'Cancel',exact:true}).click();
  Object.assign(mock,{needNginx:true,needReauth:false,installs:[],jobStatus:'running',blockA:false});
- await dragSite(page,SHOP,'itamar-Srv');
+ await dragSite(page,SHOP,'media-box');
  await page.waitForFunction(()=>!document.querySelector('.map-toolbar .primary').disabled);
  await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
- await d.getByText('itamar-Srv needs nginx.',{exact:false}).first().waitFor();
+ await d.getByText('media-box needs nginx.',{exact:false}).first().waitFor();
  const sizes=[],feet=[];
  const measure=async()=>{sizes.push(await d.boundingBox());feet.push(await d.locator('.map-dialog-foot button').evaluateAll(bs=>bs.map(b=>{const r=b.getBoundingClientRect();return [r.x,r.y,r.width,r.height].map(Math.round)})))};
  await measure();
@@ -562,7 +562,7 @@ async function installFlow(page,scheme){
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  // Install: needs a fresh sign-in check, then the progress
  await d.getByRole('button',{name:'Install nginx'}).click();
- await d.getByRole('heading',{name:'Install nginx on itamar-Srv'}).waitFor();
+ await d.getByRole('heading',{name:'Install nginx on media-box'}).waitFor();
  await measure();
  mock.needReauth=true;
  await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
@@ -571,7 +571,7 @@ async function installFlow(page,scheme){
  await reverify(page);
  await d.getByRole('heading',{name:'Installing nginx'}).waitFor();
  assert.deepEqual(mock.installs,[{package:'nginx',siteId:SHOP}],"a move's install names its site");
- await d.getByText('Connected to itamar-Srv').waitFor();
+ await d.getByText('Connected to media-box').waitFor();
  assert.equal(await d.getByRole('button',{name:'Check again'}).isDisabled(),true,'check again waits for the install');
  await measure();await shot(page,scheme,'1440-9e-installing');
  mock.jobStatus='completed';mock.needNginx=false;
@@ -586,7 +586,7 @@ async function installFlow(page,scheme){
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  // Unsupported systems: a plain note, no Install button; the command only when it is known
  mock.needNginx=true;mock.unsupported=true;
- await dragSite(page,SHOP,'itamar-Srv');await save.click();
+ await dragSite(page,SHOP,'media-box');await save.click();
  await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
  assert.equal(await d.getByRole('button',{name:'Install nginx'}).count(),0);
  await d.getByText('packages offer Docker 20.10',{exact:false}).waitFor();
@@ -595,7 +595,7 @@ async function installFlow(page,scheme){
  await d.getByRole('button',{name:'Cancel'}).click();
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  mock.needNginx=true;mock.unsupported=false;mock.alreadyInstalled=true;
- await dragSite(page,SHOP,'itamar-Srv');await save.click();
+ await dragSite(page,SHOP,'media-box');await save.click();
  await d.getByRole('button',{name:'Install nginx'}).first().click();
  await d.locator('.map-dialog-foot').getByRole('button',{name:'Install nginx'}).click();
  await d.getByRole('alert').getByText('Docker is installed but not running. Start it, then check again.').waitFor();
@@ -785,7 +785,7 @@ async function layoutFlow(scheme){
  await panel.getByRole('button',{name:'Copy address'}).waitFor();await panel.getByRole('button',{name:'Copy host key'}).waitFor();await shot(page,scheme,'1440-details-server');await panelShot(panel,scheme,'server-1440');await copyLayout(panel);
  await page.keyboard.press('Escape');await page.locator('[data-node="site:s1"]').focus();await page.keyboard.press('Enter');
  await panel.getByRole('link',{name:'cinderbean.com',exact:true}).waitFor();await panel.getByRole('button',{name:'Copy cinderbean.com',exact:true}).waitFor();await panel.getByText('432 MB').waitFor();await panelShot(panel,scheme,'site-1440');await copyLayout(panel);await panel.getByText(/Next run/).waitFor();await shot(page,scheme,'1440-details-site');
- await page.keyboard.press('Escape');await page.locator('[data-node="storage:t1"]').focus();await page.keyboard.press('Enter');await panel.getByText('Sites using it').waitFor();await panel.getByText('Last upload').waitFor();
+ await page.keyboard.press('Escape');await page.locator('[data-node="storage:t1"]').focus();await page.keyboard.press('Enter');await panel.getByText('Apps using it').waitFor();await panel.getByText('Last upload').waitFor();
  await context.close();
  // Operators cannot move nodes: a body drag only pans
  {const {context:c2,page:p2}=await open({role:'operator',appState:alertState});await p2.locator('.map-site[data-site="s2"]').waitFor();assert.equal(await p2.getByRole('button',{name:'Tidy up'}).count(),0,'no layout buttons for operators');
@@ -896,9 +896,9 @@ try{
    const names=await page.locator('.map-server .map-name').allTextContents();
    assert.deepEqual(names,[...names].sort((x,y)=>x.toLowerCase()<y.toLowerCase()?-1:1),'server order');
    // Groups and status labels
-   const g=page.getByRole('group',{name:'itamar-Srv'});
+   const g=page.getByRole('group',{name:'media-box'});
    assert.equal(await g.locator('.map-site').count(),2);
-   await g.getByText('Connected').waitFor();await g.getByText('2 sites · 61.2 GB free').waitFor();
+   await g.getByText('Connected').waitFor();await g.getByText('2 apps · 61.2 GB free').waitFor();
    await page.getByText('Needs attention').waitFor();
    assert.ok(await page.locator('.map-lines g.decor').getAttribute('aria-hidden')==='true');
    // No overlaps (screen space)
@@ -1003,20 +1003,20 @@ try{
    await page.locator('.map-list').waitFor();
    assert.equal(await page.locator('.map-canvas').count(),0,'no canvas on phone');
      const heads=await page.locator('.map-list h2').allTextContents();
-   assert.deepEqual(heads,['itamar-Srv','mobiX-Srv','Quiet server with a rather long name that must not break','zeta-Srv','Backup storage','Alerts']);
+   assert.deepEqual(heads,['media-box','office-box','Quiet server with a rather long name that must not break','zeta-Srv','Backup storage','Alerts']);
    assert.equal(await page.locator('.map-list li').count(),5);
-   await page.getByText('No sites on this server yet.').first().waitFor();
+   await page.getByText('No apps on this server yet.').first().waitFor();
    assert.equal(await page.getByRole('list').filter({hasText:'blog.example.com'}).count()>=1,true);
    await fits(page,'phone '+scheme);
-   // Details and Add site are full-screen sheets with the same footer in the same place
+   // Details and Add app are full-screen sheets with the same footer in the same place
    await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click();
    const sheet=dialog(page);
    await sheet.getByRole('heading',{name:'shop.example.com'}).waitFor();await sheet.getByText('PostgreSQL 16.2 · shop_db').waitFor();
    const foot1=await sheet.locator('.map-dialog-foot').boundingBox();
    await shot(page,scheme,'402-0-details');
    await page.keyboard.press('Escape');await sheet.waitFor({state:'detached'});
-   await page.locator('.map-list-group',{hasText:'itamar-Srv'}).getByRole('button',{name:'Add site'}).click();
-   await sheet.getByRole('heading',{name:'Add to itamar-Srv'}).waitFor();await sheet.getByText('Found on this server (3)').waitFor();
+   await page.locator('.map-list-group',{hasText:'media-box'}).getByRole('button',{name:'Add app'}).click();
+   await sheet.getByRole('heading',{name:'Add to media-box'}).waitFor();await sheet.getByText('Found on this server (3)').waitFor();
    assert.deepEqual(await sheet.locator('.map-dialog-foot').boundingBox(),foot1,'footer stays put');
    await sheet.getByText('Not listed?').waitFor();
    for(const b of await sheet.getByRole('button').all())assert.ok((await b.boundingBox()).height>=43.5,'phone buttons 44px');
@@ -1036,7 +1036,7 @@ try{
    assert.equal(await d.locator('.map-targets button').evaluateAll(bs=>bs.every(b=>[b,...b.children].every(e=>e.scrollWidth<=e.clientWidth+1))),true,'target text stays inside the card');
    assert.equal(await page.evaluate(()=>document.activeElement?.tagName),'H2','title focused on open');
    await shot(page,scheme,'402-1-target');
-   await d.getByRole('button',{name:/^itamar-Srv/}).click();
+   await d.getByRole('button',{name:/^media-box/}).click();
    await d.getByRole('heading',{name:'Ready to move'}).waitFor();
    for(const b of await d.getByRole('button').all())assert.ok((await b.boundingBox()).height>=43.5,'phone buttons 44px');
    await fits(page,'phone sheet '+scheme);await shot(page,scheme,'402-2-review');

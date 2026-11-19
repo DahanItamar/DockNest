@@ -31,8 +31,8 @@ export const blocked=p=>!p.ok||p.verdict==='blocked';
 export const warningText=w=>typeof w==='string'?w:w?.text||'';
 export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(s<60)return s+' s';const m=Math.round(s/60);return m===1?'1 minute':m+' minutes'};
 // Plain sentences for the codes the screens react to. Anything else keeps the server's own sentence.
-export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your site will be offline for a long time. Tick the box to continue.'
- :e?.code==='SITE_MOVING'?'This site is already being moved. Wait for that move to finish.'
+export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your app will be offline for a long time. Tick the box to continue.'
+ :e?.code==='SITE_MOVING'?'This app is already being moved. Wait for that move to finish.'
  :e?.message||'Something went wrong.';
 export const PACKAGE_NAME={nginx:'nginx',docker:'Docker',compose:'Compose',certbot:'Certbot',git:'Git'};
 // Preflight checks that offer an install: {id,title,text,install:{package,command,supported}}

@@ -49,7 +49,7 @@ try{
  const dialog=page.getByRole('dialog').first();
 
  // 1. Site form: one group per service, a shared group for identical lists.
- await nav('Sites & schedules');
+ await nav('Apps & schedules');
  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
  await dialog.getByText('Advanced backup settings',{exact:true}).waitFor();
  assert.equal(await dialog.locator('details[open]>summary',{hasText:'Advanced backup settings'}).count(),1,'opens when the site declares files');
@@ -106,7 +106,7 @@ try{
  assert.equal(saved.length,1,'cancel saves nothing');
  await alert.getByRole('button',{name:'Remove path'}).click();
  await confirm.getByRole('button',{name:'Remove path'}).click();
- await alert.getByText(/was removed from the site/).waitFor();
+ await alert.getByText(/was removed from the app/).waitFor();
  const removed=saved.at(-1).config.services;
  assert.deepEqual(removed.map(x=>x.sqliteFiles),[['/data/sessions.db'],['/data/sessions.db'],['/data/queue.db'],[],[]]);
  assert.equal(removed[0].sqliteSigtermConfirmed,true);
@@ -125,7 +125,7 @@ try{
  assert.equal(await alert.locator('.path-box').count(),0);
  assert.equal(await alert.getByRole('button').allTextContents().then(x=>x.join('|')),'Open settings|Back up now');
  await alert.getByRole('button',{name:'Open settings'}).click();
- await page.getByRole('heading',{name:'Edit site configuration'}).waitFor();
+ await page.getByRole('heading',{name:'Edit app configuration'}).waitFor();
  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
 
  // 3. Jobs list: one row per restore test, steps folded under it.

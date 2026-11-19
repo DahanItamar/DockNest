@@ -16,8 +16,8 @@ export const chainOf=(backup,all)=>all.filter(item=>item.chainId&&item.chainId==
 
 export const SAVE_ERRORS={
  invalid_interval:{reason:'Full backup interval must be a whole number from 2 to 31.',action:'Enter a number in that range.'},
- static_site:{reason:'Static sites cannot use incremental backups.',action:'Use a Docker site.'},
- site_removed:{reason:'This site was removed.',action:'Close this dialog and reload the page.'},
- incremental_off:{reason:'Incremental backups are off for this site.',action:'Turn them on and save, then start a full backup.'}
+ static_site:{reason:'Static sites cannot use incremental backups.',action:'Use a Docker app.'},
+ site_removed:{reason:'This app was removed.',action:'Close this dialog and reload the page.'},
+ incremental_off:{reason:'Incremental backups are off for this app.',action:'Turn them on and save, then start a full backup.'}
 };
 export const saveError=error=>SAVE_ERRORS[error?.code]||{reason:error?.message||'Incremental settings could not be saved.',action:'Check the choices and try again.'};

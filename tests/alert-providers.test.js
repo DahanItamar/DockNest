@@ -62,7 +62,7 @@ const probes = id => Object.entries(VALUES[id]).filter(([key]) => provider(id).f
   const url = new URL(value); return [value, ...url.pathname.split('/'), ...[...url.searchParams.values()], url.search.slice(1)].filter(part => part && part.length >= 12);
 });
 
-const MSG = Object.freeze({ title: 'Backup failed', site: 'shop.example.com', server: 'mobiX-Srv', reason: 'The backup did not finish. Open DockNest to see why.', time: '03:00 UTC', url: 'https://dock.example.com/?job=job-0001-aaaa', event: 'backup.failed', at: '2026-10-27T03:00:00Z', id: 'item-0001' });
+const MSG = Object.freeze({ title: 'Backup failed', site: 'shop.example.com', server: 'web-box', reason: 'The backup did not finish. Open DockNest to see why.', time: '03:00 UTC', url: 'https://dock.example.com/?job=job-0001-aaaa', event: 'backup.failed', at: '2026-10-27T03:00:00Z', id: 'item-0001' });
 const OK_MSG = Object.freeze({ ...MSG, title: 'Backup finished', reason: 'The backup finished.', event: 'backup.succeeded', url: null });
 
 // ---- Harness ---------------------------------------------------------------------------------------------------------
@@ -175,23 +175,23 @@ test('registry: every provider has the contract fields, secrets and webhook URLs
 
 // ---- Format: native output per provider -----------------------------------------------------------------------------
 const JOB = 'https://dock.example.com/?job=job-0001-aaaa';
-const BODY_TEXT = 'Backup failed\nshop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.';
+const BODY_TEXT = 'Backup failed\nshop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.';
 test('format: each provider renders the one message natively', () => {
   const call = id => provider(id).format(MSG, parse(id, VALUES[id]) && { ...parse(id, VALUES[id]).secret, ...parse(id, VALUES[id]).settings });
   assert.deepEqual(call('telegram'), { method: 'POST', path: `/bot${TG}/sendMessage`, json: { chat_id: '-1001234567890', text: `${BODY_TEXT}\nOpen the job: ${JOB}`, link_preview_options: { is_disabled: true } } });
-  assert.deepEqual(call('whatsapp'), { method: 'POST', path: `/${GRAPH_VERSION}/1234567890/messages`, headers: { Authorization: `Bearer ${WA_TOKEN}` }, json: { messaging_product: 'whatsapp', to: '15550100', type: 'template', template: { name: 'docknest_alert', language: { code: 'en' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Backup failed' }, { type: 'text', text: 'shop.example.com on mobiX-Srv at 03:00 UTC' }, { type: 'text', text: 'The backup did not finish. Open DockNest to see why.' }] }] } } });
+  assert.deepEqual(call('whatsapp'), { method: 'POST', path: `/${GRAPH_VERSION}/1234567890/messages`, headers: { Authorization: `Bearer ${WA_TOKEN}` }, json: { messaging_product: 'whatsapp', to: '15550100', type: 'template', template: { name: 'docknest_alert', language: { code: 'en' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Backup failed' }, { type: 'text', text: 'shop.example.com on web-box at 03:00 UTC' }, { type: 'text', text: 'The backup did not finish. Open DockNest to see why.' }] }] } } });
   assert.deepEqual(provider('whatsapp').format(MSG, { ...parse('whatsapp', VALUES.whatsapp).secret, ...parse('whatsapp', { ...VALUES.whatsapp, template: '' }).settings }).json, { messaging_product: 'whatsapp', to: '15550100', type: 'text', text: { preview_url: false, body: `${BODY_TEXT}\nOpen the job: ${JOB}` } });
-  assert.deepEqual(call('discord'), { method: 'POST', url: `https://discord.com${URL_PART}?wait=true`, json: { content: `**Backup failed**\nshop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}>`, allowed_mentions: { parse: [] } } });
-  assert.deepEqual(call('slack'), { method: 'POST', url: `https://hooks.slack.com${SLACK_PATH}`, json: { text: `*Backup failed*\nshop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}|Open job>` } });
-  assert.deepEqual(call('teams'), { method: 'POST', url: TEAMS_URL, json: { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: { type: 'AdaptiveCard', version: '1.4', body: [{ type: 'TextBlock', text: 'Backup failed', wrap: true, weight: 'Bolder', size: 'Medium' }, { type: 'TextBlock', text: 'shop.example.com on mobiX-Srv at 03:00 UTC', wrap: true }, { type: 'TextBlock', text: 'The backup did not finish. Open DockNest to see why.', wrap: true }], actions: [{ type: 'Action.OpenUrl', title: 'Open job', url: JOB }] } }] } });
-  assert.deepEqual(call('googlechat'), { method: 'POST', url: CHAT_URL, json: { text: `*Backup failed*\nshop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}|Open job>` } });
-  assert.deepEqual(call('mattermost'), { method: 'POST', url: `https://chat.example.com${MM_PATH}`, json: { text: `**Backup failed**\n\nshop.example.com on mobiX-Srv at 03:00 UTC\n\nThe backup did not finish. Open DockNest to see why.\n\n[Open job](${JOB})` } });
-  assert.deepEqual(call('ntfy'), { method: 'POST', path: '/', headers: { Authorization: `Bearer ${NTFY_TOKEN}` }, json: { topic: 'docknest-fixture-topic', title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', click: JOB, priority: 4 } });
-  assert.deepEqual(call('gotify'), { method: 'POST', path: '/message', headers: { 'X-Gotify-Key': GOTIFY_TOKEN }, json: { title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 8, extras: { 'client::notification': { click: { url: JOB } } } } });
-  assert.deepEqual(call('pushover'), { method: 'POST', path: '/1/messages.json', json: { token: PUSH_TOKEN, user: PUSH_USER, title: 'Backup failed', message: 'shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 1, url: JOB, url_title: 'Open job' } });
+  assert.deepEqual(call('discord'), { method: 'POST', url: `https://discord.com${URL_PART}?wait=true`, json: { content: `**Backup failed**\nshop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}>`, allowed_mentions: { parse: [] } } });
+  assert.deepEqual(call('slack'), { method: 'POST', url: `https://hooks.slack.com${SLACK_PATH}`, json: { text: `*Backup failed*\nshop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}|Open job>` } });
+  assert.deepEqual(call('teams'), { method: 'POST', url: TEAMS_URL, json: { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: { type: 'AdaptiveCard', version: '1.4', body: [{ type: 'TextBlock', text: 'Backup failed', wrap: true, weight: 'Bolder', size: 'Medium' }, { type: 'TextBlock', text: 'shop.example.com on web-box at 03:00 UTC', wrap: true }, { type: 'TextBlock', text: 'The backup did not finish. Open DockNest to see why.', wrap: true }], actions: [{ type: 'Action.OpenUrl', title: 'Open job', url: JOB }] } }] } });
+  assert.deepEqual(call('googlechat'), { method: 'POST', url: CHAT_URL, json: { text: `*Backup failed*\nshop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\n<${JOB}|Open job>` } });
+  assert.deepEqual(call('mattermost'), { method: 'POST', url: `https://chat.example.com${MM_PATH}`, json: { text: `**Backup failed**\n\nshop.example.com on web-box at 03:00 UTC\n\nThe backup did not finish. Open DockNest to see why.\n\n[Open job](${JOB})` } });
+  assert.deepEqual(call('ntfy'), { method: 'POST', path: '/', headers: { Authorization: `Bearer ${NTFY_TOKEN}` }, json: { topic: 'docknest-fixture-topic', title: 'Backup failed', message: 'shop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', click: JOB, priority: 4 } });
+  assert.deepEqual(call('gotify'), { method: 'POST', path: '/message', headers: { 'X-Gotify-Key': GOTIFY_TOKEN }, json: { title: 'Backup failed', message: 'shop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 8, extras: { 'client::notification': { click: { url: JOB } } } } });
+  assert.deepEqual(call('pushover'), { method: 'POST', path: '/1/messages.json', json: { token: PUSH_TOKEN, user: PUSH_USER, title: 'Backup failed', message: 'shop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.', priority: 1, url: JOB, url_title: 'Open job' } });
   const matrixCall = call('matrix'); assert.match(matrixCall.path, /^\/_matrix\/client\/v3\/rooms\/%21fixtureRoom%3Aexample\.com\/send\/m\.room\.message\/item-0001-[0-9a-f]{16}$/);
-  assert.deepEqual({ ...matrixCall, path: null }, { method: 'PUT', path: null, headers: { Authorization: `Bearer ${MATRIX_TOKEN}` }, json: { msgtype: 'm.text', body: `${BODY_TEXT}\nOpen the job: ${JOB}`, format: 'org.matrix.custom.html', formatted_body: `<b>Backup failed</b><br>shop.example.com on mobiX-Srv at 03:00 UTC<br>The backup did not finish. Open DockNest to see why.<br><a href="${JOB}">Open job</a>`, 'm.mentions': {} } });
-  assert.deepEqual(call('webhook'), { method: 'POST', url: 'https://hooks.example.com/in/fixtureHook', headers: { Authorization: 'Bearer webhookFixture01' }, json: { title: 'Backup failed', site: 'shop.example.com', server: 'mobiX-Srv', message: 'Backup failed: shop.example.com on mobiX-Srv at 03:00 UTC. The backup did not finish. Open DockNest to see why.', url: JOB, event: 'backup.failed', at: '2026-10-27T03:00:00Z' } });
+  assert.deepEqual({ ...matrixCall, path: null }, { method: 'PUT', path: null, headers: { Authorization: `Bearer ${MATRIX_TOKEN}` }, json: { msgtype: 'm.text', body: `${BODY_TEXT}\nOpen the job: ${JOB}`, format: 'org.matrix.custom.html', formatted_body: `<b>Backup failed</b><br>shop.example.com on web-box at 03:00 UTC<br>The backup did not finish. Open DockNest to see why.<br><a href="${JOB}">Open job</a>`, 'm.mentions': {} } });
+  assert.deepEqual(call('webhook'), { method: 'POST', url: 'https://hooks.example.com/in/fixtureHook', headers: { Authorization: 'Bearer webhookFixture01' }, json: { title: 'Backup failed', site: 'shop.example.com', server: 'web-box', message: 'Backup failed: shop.example.com on web-box at 03:00 UTC. The backup did not finish. Open DockNest to see why.', url: JOB, event: 'backup.failed', at: '2026-10-27T03:00:00Z' } });
 });
 
 test('format: no link without a URL; success messages are quiet (no priority); Pushover and ntfy raise failures only', () => {
@@ -220,7 +220,7 @@ test('escaping: markup, mentions and HTML in a site name are neutral in every pr
   const matrix = JSON.parse(out('matrix')).json; assert.ok(!matrix.formatted_body.includes('<b>&</b>') && matrix.formatted_body.includes('&lt;b&gt;&amp;&lt;/b&gt;'), 'Matrix HTML is escaped'); assert.deepEqual(matrix['m.mentions'], {}); assert.ok(!matrix.body.includes('@room') && !matrix.body.includes('@everyone'));
   assert.ok(JSON.parse(out('teams')).json.attachments[0].content.body.every(block => block.type === 'TextBlock'), 'Teams: text blocks only');
   assert.equal(common.markdownEscape('1. a\n- b\n+ c'), '1\\. a\n\\- b\n\\+ c', 'list markers only at the start of a line');
-  assert.equal(common.markdownEscape('mobiX-Srv a-b'), 'mobiX-Srv a-b', 'hyphens inside a name are left alone');
+  assert.equal(common.markdownEscape('web-box a-b'), 'web-box a-b', 'hyphens inside a name are left alone');
 });
 
 test('unicode and right-to-left text pass through every provider intact, and no provider adds an emoji', () => {
@@ -626,13 +626,13 @@ test('use case: a provider down for hours: three tries, then failed; one that as
 test('template: every event has a title, a catalogue reason, the names the owner typed and the job link; unknown codes give the generic sentence', () => {
   const base = { at: '2026-10-27T03:00:00Z', siteName: 'shop', serverName: 'srv', targetName: 'new-srv', jobId: 'job-0001-aaaa', version: '2.10.0', freeBytes: 2 * 1024 ** 3, usedPercent: 95.4, daysLeft: 5 };
   const expected = {
-    'backup.failed': ['Backup failed', 'The backup did not finish. Open DockNest to see why.'], 'backup.succeeded': ['Backup finished', 'The backup finished.'], 'move.finished': ['Move finished', 'The site now runs on new-srv.'],
+    'backup.failed': ['Backup failed', 'The backup did not finish. Open DockNest to see why.'], 'backup.succeeded': ['Backup finished', 'The backup finished.'], 'move.finished': ['Move finished', 'The app now runs on new-srv.'],
     'move.needs_you': ['Move waiting for you', 'The move needs your decision. Open DockNest to continue.'], 'server.unreachable': ['Server unreachable', 'The server has not answered. Open DockNest to check it.'], 'server.disk_low': ['Low disk space', '2.1 GB free, 95% used. Open DockNest to review.'],
     'restore_test.failed': ['Restore test failed', 'The restore test failed. Open DockNest to see why.'], 'restore_test.couldnt_run': ["Restore test couldn't run", 'The restore test could not run. Open DockNest to see why.'], 'restore_test.recovered': ['Restore test passed again', 'The restore test passed again.'],
     'restore_test.needs_you': ['Restore test needs you', 'A restore test could not clean up its test server. Open DockNest to check it.'], 'update.available': ['Update available', 'DockNest 2.10.0 is available. Open DockNest to update.'],
     'backup.copy_failed': ['Backup copy failed', 'The copy to the copy destination did not finish. DockNest retries automatically.'], 'backup.copy_recovered': ['Backup copy saved', 'The copy to the copy destination is saved now.'], 'backup.copy_gave_up': ['Backup copy stopped', 'DockNest stopped retrying the copy to the copy destination after 7 days. Open DockNest to retry it.'],
     'certificate.expiring': ['Certificate expires soon', 'The certificate expires in 5 days. Renew it before visitors see a warning.'], 'certificate.renewal_failed': ['Certificate renewal failed', 'certbot could not renew the certificate. Check certbot on the server before it expires.'],
-    'edit.rolled_back': ['Change undone', 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.'], 'edit.needs_you': ['Change needs you', 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.'],
+    'edit.rolled_back': ['Change undone', 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.'], 'edit.needs_you': ['Change needs you', 'The previous version could not be put back by itself. The app stays behind the maintenance page. Open DockNest to continue.'],
     'self_heal.restarted': ['Container restarted', 'A container failed its health check and DockNest restarted it.'], 'self_heal.gave_up': ['Self-heal stopped', 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.'],
     'launch.needs_you': ['Launch needs you', 'A failed launch could not remove everything it made. Open DockNest and press Try again.'],
   };
@@ -645,9 +645,9 @@ test('template: every event has a title, a catalogue reason, the names the owner
   assert.equal(events.templateFor({ ...base, type: 'backup.failed' }).url, 'https://dock.example.com/?job=job-0001-aaaa'); assert.equal(events.templateFor({ ...base, type: 'server.unreachable', jobId: undefined }).url, 'https://dock.example.com/');
   assert.deepEqual([events.templateFor({ ...base, type: 'backup.failed' }).site, events.templateFor({ ...base, type: 'backup.failed' }).server, events.templateFor({ ...base, type: 'backup.failed' }).time], ['shop', 'srv', '03:00 UTC']);
   assert.deepEqual([events.templateFor({ ...base, type: 'server.unreachable' }).site, events.templateFor({ ...base, type: 'update.available' }).server], ['', '']);
-  assert.equal(events.templateFor({ ...base, type: 'move.finished', detail: 'rolled_back' }).title, 'Move undone'); assert.equal(events.templateFor({ ...base, type: 'move.finished', detail: 'failed' }).reason, 'The site did not move to new-srv. Open DockNest to see why.');
+  assert.equal(events.templateFor({ ...base, type: 'move.finished', detail: 'rolled_back' }).title, 'Move undone'); assert.equal(events.templateFor({ ...base, type: 'move.finished', detail: 'failed' }).reason, 'The app did not move to new-srv. Open DockNest to see why.');
   assert.match(events.templateFor({ ...base, type: 'move.needs_you', detail: 'dns' }).reason, /Change the DNS record to point to new-srv/);
-  assert.equal(events.templateFor({ ...base, type: 'backup.failed', code: 'recovery_required' }).reason, 'The backup stopped and the site needs recovery. Open DockNest to continue.');
+  assert.equal(events.templateFor({ ...base, type: 'backup.failed', code: 'recovery_required' }).reason, 'The backup stopped and the app needs recovery. Open DockNest to continue.');
   assert.equal(events.templateFor({ ...base, type: 'backup.failed', code: 'something-new' }).reason, 'The backup did not finish. Open DockNest to see why.', 'an unknown code falls back to the event\'s sentence');
   assert.equal(reasons.reasonFor('nonsense', 'x'), reasons.UNKNOWN_REASON); assert.equal(reasons.reasonFor('constructor', 'x'), reasons.UNKNOWN_REASON); assert.equal(events.templateFor({ type: 'nonsense' }), null);
   const test1 = events.testMessage(); assert.deepEqual({ ...test1, at: '' }, { title: 'DockNest test message', site: '', server: '', reason: 'Your alerts are connected.', time: '', url: null, event: 'test', at: '' });
@@ -680,10 +680,10 @@ test('template in the outbox: the structured message is stored and a retry sends
 test('Telegram on the template: the same facts as the 2.8 message, readable, with the link, and the 2.8 wording is not required', async () => {
   try {
     reset(); const connection = connect('telegram'); const calls = mock(() => reply(200, { ok: true, result: {} }));
-    const base = { type: 'backup.failed', at: '2026-10-27T03:00:12.000Z', siteName: 'shop.example.com', serverName: 'mobiX-Srv', jobId: 'job-0001-aaaa' };
+    const base = { type: 'backup.failed', at: '2026-10-27T03:00:12.000Z', siteName: 'shop.example.com', serverName: 'web-box', jobId: 'job-0001-aaaa' };
     fire({ ...base, key: 'site:x' }); await delivery.deliverDue({ at: T0 });
     assert.deepEqual(calls[0].body, { chat_id: '-1001234567890', text: `${BODY_TEXT}\nOpen the job: ${JOB}`, link_preview_options: { is_disabled: true } });
-    const old = events.messageFor(base); for (const fact of ['shop.example.com', 'mobiX-Srv', '03:00 UTC', 'Backup failed', 'Open DockNest to see why']) { assert.ok(old.includes(fact)); assert.ok(calls[0].body.text.includes(fact), `still says: ${fact}`); }
+    const old = events.messageFor(base); for (const fact of ['shop.example.com', 'web-box', '03:00 UTC', 'Backup failed', 'Open DockNest to see why']) { assert.ok(old.includes(fact)); assert.ok(calls[0].body.text.includes(fact), `still says: ${fact}`); }
     assert.ok(!('parse_mode' in calls[0].body), 'plain text: nothing in a name is read as markup'); assert.ok(!('disable_web_page_preview' in calls[0].body));
     assert.equal(calls[0].url, `https://api.telegram.org/bot${TG}/sendMessage`);
   } finally { restore(); }
@@ -709,7 +709,7 @@ test('Email on the template: the title is the subject, the body is the plain lin
     await delivery.sendWith(connections.getConnection(id), MSG);
     const headers = log.data.split('\r\n\r\n')[0], body = Buffer.from(log.data.split('\r\n\r\n')[1].replace(/\r\n/g, ''), 'base64').toString('utf8');
     assert.ok(headers.split('\r\n').includes('Subject: [DockNest] Backup failed'));
-    assert.equal(body.replaceAll('\r\n', '\n'), `shop.example.com on mobiX-Srv at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\nOpen the job: ${JOB}`);
+    assert.equal(body.replaceAll('\r\n', '\n'), `shop.example.com on web-box at 03:00 UTC\nThe backup did not finish. Open DockNest to see why.\nOpen the job: ${JOB}`);
   } finally { Object.assign(smtp.smtpIo, saved); server.close(); }
 });
 
