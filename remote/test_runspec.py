@@ -10,7 +10,7 @@ import helper
 SECRET='s3cret-value-never-shown'
 def shop(**changes):
     """docker run -dit --name shop --hostname shop-host --network shopnet --network-alias store -m 256m --cpus 1.5
-    --ulimit nofile=1024:2048 --log-opt max-size=10m --dns 1.1.1.1 --sysctl net.core.somaxconn=1024 --group-add 101
+    --ulimit nofile=1024:2048 --log-opt max-size=10m --dns 192.0.2.53 --sysctl net.core.somaxconn=1024 --group-add 101
     -p 127.0.0.1:8080:80 -P --stop-timeout 30 --tmpfs /tmp:size=1m --init --cap-drop NET_RAW ... shop:1.2"""
     c={'Id':'0123456789abcdef','Name':'/shop','State':{'Running':True},
         'Config':{'Image':'shop:1.2','Hostname':'shop-host','Domainname':'','Tty':True,'OpenStdin':True,'StopTimeout':30,'ExposedPorts':{'80/tcp':{},'9000/tcp':{}},
@@ -18,8 +18,8 @@ def shop(**changes):
         'HostConfig':{'NetworkMode':'shopnet','RestartPolicy':{'Name':'on-failure','MaximumRetryCount':3},'PortBindings':{'80/tcp':[{'HostIp':'127.0.0.1','HostPort':'8080'}]},
             'PublishAllPorts':True,'Tmpfs':{'/tmp':'size=1m'},'Memory':268435456,'MemoryReservation':134217728,'MemorySwap':536870912,'NanoCpus':1500000000,
             'CpuShares':512,'CpusetCpus':'0-1','PidsLimit':100,'Ulimits':[{'Name':'nofile','Soft':1024,'Hard':2048}],
-            'LogConfig':{'Type':'json-file','Config':{'max-size':'10m'}},'Dns':['1.1.1.1'],'DnsSearch':['example.internal'],'DnsOptions':['ndots:2'],
-            'ShmSize':134217728,'Sysctls':{'net.core.somaxconn':'1024'},'GroupAdd':['101'],'ExtraHosts':['db.local:10.0.0.5'],'Init':True,
+            'LogConfig':{'Type':'json-file','Config':{'max-size':'10m'}},'Dns':['192.0.2.53'],'DnsSearch':['example.internal'],'DnsOptions':['ndots:2'],
+            'ShmSize':134217728,'Sysctls':{'net.core.somaxconn':'1024'},'GroupAdd':['101'],'ExtraHosts':['db.local:192.0.2.5'],'Init':True,
             'CapDrop':['NET_RAW'],'SecurityOpt':['no-new-privileges:true'],'Runtime':'runc'},
         'NetworkSettings':{'Networks':{'shopnet':{'Aliases':['store','0123456789ab']}}},
         'Mounts':[{'Type':'volume','Name':'shop_data','Source':'/var/lib/docker/volumes/shop_data/_data','Destination':'/data','RW':True},
@@ -63,9 +63,9 @@ class RunSpecTests(unittest.TestCase):
         self.assertEqual((spec['cpus'],spec['cpuShares'],spec['cpusetCpus'],spec['pidsLimit'],spec['shmSize'],spec['stopTimeout']),('1.5',512,'0-1',100,134217728,30))
         self.assertEqual(spec['ulimits'],[{'name':'nofile','soft':1024,'hard':2048}])
         self.assertEqual(spec['logging'],{'driver':'json-file','options':{'max-size':'10m'}})
-        self.assertEqual((spec['dns'],spec['dnsSearch'],spec['dnsOptions'],spec['sysctls'],spec['groupAdd']),(['1.1.1.1'],['example.internal'],['ndots:2'],{'net.core.somaxconn':'1024'},['101']))
+        self.assertEqual((spec['dns'],spec['dnsSearch'],spec['dnsOptions'],spec['sysctls'],spec['groupAdd']),(['192.0.2.53'],['example.internal'],['ndots:2'],{'net.core.somaxconn':'1024'},['101']))
         self.assertEqual((spec['restart'],spec['network'],spec['networks'],spec['publishAll'],spec['init']),('on-failure:3','shopnet',{'shopnet':['store']},True,True))
-        self.assertEqual(spec['tmpfs'],[['/tmp','size=1m']]);self.assertEqual(spec['extraHosts'],['db.local:10.0.0.5'])
+        self.assertEqual(spec['tmpfs'],[['/tmp','size=1m']]);self.assertEqual(spec['extraHosts'],['db.local:192.0.2.5'])
         self.assertEqual(spec['mounts'],[{'type':'volume','source':'shop_data','target':'/data','readOnly':False},{'type':'bind','source':'/srv/shop/config','target':'/config','readOnly':True}])
         self.assertEqual(spec['hardening']['capDrop'],['NET_RAW']);self.assertTrue(spec['hardening']['noNewPrivileges'])
         self.assertEqual(spec['environment'],['PASSWORD','PATH','QUOTED','MULTI']);self.assertEqual(spec['unsupported'],[])
@@ -105,8 +105,8 @@ class CreateArgsTests(unittest.TestCase):
         self.assertEqual(pairs('--network-alias'),['store']);self.assertEqual(pairs('-p'),['127.0.0.1:8080:80/tcp'])
         for flag,value in [('--hostname','shop-host'),('--memory','268435456'),('--memory-reservation','134217728'),('--memory-swap','536870912'),('--cpus','1.5'),('--cpu-shares','512'),
             ('--cpuset-cpus','0-1'),('--pids-limit','100'),('--shm-size','134217728'),('--ulimit','nofile=1024:2048'),('--log-driver','json-file'),('--log-opt','max-size=10m'),
-            ('--dns','1.1.1.1'),('--dns-search','example.internal'),('--dns-option','ndots:2'),('--sysctl','net.core.somaxconn=1024'),('--group-add','101'),
-            ('--stop-timeout','30'),('--add-host','db.local:10.0.0.5'),('--tmpfs','/tmp:size=1m')]:self.assertEqual(pairs(flag),[value],flag)
+            ('--dns','192.0.2.53'),('--dns-search','example.internal'),('--dns-option','ndots:2'),('--sysctl','net.core.somaxconn=1024'),('--group-add','101'),
+            ('--stop-timeout','30'),('--add-host','db.local:192.0.2.5'),('--tmpfs','/tmp:size=1m')]:self.assertEqual(pairs(flag),[value],flag)
         for flag in ['--tty','--interactive','--init','--publish-all']:self.assertIn(flag,args)
         self.assertEqual(pairs('--mount'),['type=volume,src=shop_data,dst=/data','type=bind,src=/srv/shop/config,dst=/config,readonly'])
         self.assertNotIn('-e',args);self.assertNotIn(SECRET,json.dumps(args))
@@ -148,7 +148,7 @@ class ComposeTests(unittest.TestCase):
             'restart':'on-failure:3','networks':{'shopnet':{'aliases':['store']}},'ports':['127.0.0.1:8080:80/tcp','9000/tcp'],'tmpfs':['/tmp:size=1m'],
             'volumes':[{'type':'volume','source':'shop_data','target':'/data'},{'type':'bind','source':'/srv/shop/config','target':'/config','read_only':'true'}],
             'hostname':'shop-host','mem_limit':'268435456','mem_reservation':'134217728','memswap_limit':'536870912','cpus':'1.5','cpu_shares':'512','cpuset':'0-1',
-            'pids_limit':'100','shm_size':'134217728','extra_hosts':['db.local:10.0.0.5'],'dns':['1.1.1.1'],'dns_search':['example.internal'],'dns_opt':['ndots:2'],
+            'pids_limit':'100','shm_size':'134217728','extra_hosts':['db.local:192.0.2.5'],'dns':['192.0.2.53'],'dns_search':['example.internal'],'dns_opt':['ndots:2'],
             'group_add':['101'],'init':'true','tty':'true','stdin_open':'true','ulimits':{'nofile':{'soft':'1024','hard':'2048'}},
             'logging':{'driver':'json-file','options':{'max-size':'10m'}},'sysctls':{'net.core.somaxconn':'1024'},'stop_grace_period':'30s',
             'cap_drop':['NET_RAW'],'security_opt':['no-new-privileges:true']})
@@ -232,6 +232,13 @@ class DiscoveryHintTests(unittest.TestCase):
         self.assertEqual(volumes,[{'name':'shop_data','driver':'local','labels':{'com.docker.compose.project':'shop','empty':''}},{'name':'loose','driver':'local','labels':{}}])
         with patch('helper.docker',return_value=b''):self.assertEqual(helper.discovered_volumes(),[])
         with patch('helper.docker',side_effect=helper.subprocess.CalledProcessError(1,['docker'])):self.assertIsNone(helper.discovered_volumes(),'a scan never fails on volumes')
+    def test_a_container_that_cannot_be_inspected_is_counted_not_fatal(self):
+        def inspect(ids):
+            if 'gone' in ids:raise helper.subprocess.CalledProcessError(1,['docker'])
+            return [{'Id':cid} for cid in ids]
+        with patch('helper.inspect',side_effect=inspect):
+            self.assertEqual(helper.inspect_each(['a','gone','b']),([{'Id':'a'},{'Id':'b'}],1))
+            self.assertEqual(helper.inspect_each(['a']),([{'Id':'a'}],0));self.assertEqual(helper.inspect_each([]),([],0))
 
 class MoveFactsTests(unittest.TestCase):
     def test_the_move_preview_names_settings_unreadable_mounts_and_cpu_limits(self):

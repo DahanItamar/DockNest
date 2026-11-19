@@ -82,6 +82,17 @@ def web_hints(container,routes):
                 if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
     return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
 
+def inspect_each(ids):
+    """Inspect records of the listed containers and how many could not be read (one removed meanwhile, say): a scan
+    never fails on one container, and the count tells the coverage view the scan is incomplete."""
+    if not ids:return [],0
+    try:return inspect(ids),0
+    except subprocess.CalledProcessError:
+        records=[]
+        for cid in ids:
+            try:records+=inspect([cid])
+            except subprocess.CalledProcessError:pass
+        return records,len(ids)-len(records)
 DOCKER_NETWORKS={'bridge','host','none','default'}
 def user_networks(container):
     """The user-defined networks a container is on: the hint that plain containers belong to one app."""
