@@ -1,6 +1,12 @@
-import {SQL_ENGINE_IDS} from '../shared/database-engines.js';
-// Native capture/restore evidence is required per SQL engine; Redis has its own evidence block below.
-const requiredEngines=SQL_ENGINE_IDS;
+import {engineTestedVersions,releaseEvidenceIds} from '../shared/database-engines.js';
+// Each engine declares its release evidence in shared/database-engines.js: shared native records, Redis or MongoDB.
+const requiredEngines=releaseEvidenceIds('engines');
+const MONGO_CHECKS=['native version','clean shutdown consistency','network-none document-count recovery','restore test document count','source live-change preserved','real SIGKILL rejection and source recovery','credential-less auth refused','missing mongosh refused'];
+const imageEvidence=item=>/^sha256:[a-f0-9]{64}$/.test(item?.imageId)&&Array.isArray(item.digests)&&item.digests.some(digest=>/@sha256:[a-f0-9]{64}$/.test(digest));
+// One passed record per tested MongoDB major (the CI matrix), each with its exact version, image and every check.
+function mongoBlockers(records){
+ return releaseEvidenceIds('mongo').flatMap(id=>engineTestedVersions(id).filter(major=>!(Array.isArray(records)&&records.some(item=>item?.status==='passed'&&item.engine===id&&typeof item.version==='string'&&item.version.startsWith(major+'.')&&/^\d+\.\d+\.\d+$/.test(item.version)&&imageEvidence(item)&&MONGO_CHECKS.every(check=>item.checks?.includes(check))))).map(major=>'Missing native MongoDB '+major+' capture/restore and forced-kill evidence'));
+}
 export function betaGate(evidence,{release,requireHostReboot=false}={}){
  const blockers=[];
  if(!evidence||evidence.formatVersion!==2||evidence.status!=='passed')blockers.push('Passing versioned Linux evidence is required');
@@ -12,6 +18,7 @@ export function betaGate(evidence,{release,requireHostReboot=false}={}){
  const legacy=evidence?.legacyCompatibility;
  if(!legacy?.historicalCapture||!legacy.originalMetadataPreserved||legacy.formatVersion!==1||legacy.automaticApplicationStatus!=='not-tested'||!/^[a-f0-9]{40}$/.test(legacy.helperRevision||''))blockers.push('Real pre-M1 backup compatibility evidence is required');
  for(const required of ['M1: actual Linux nested/tmpfs mounts block before stop; NFS/CIFS mount-table policy fixtures pass','M2/M3: mixed-engine capture and isolated native data checks','M2: forced native database kill rejects consistency and recovers source','M4: Linux boot journal driver recovers native source after simulated boot identity change','M4: independent Linux root archive rejects manager-uid deletion'])if(!evidence?.milestones?.includes(required))blockers.push('Missing milestone evidence: '+required);
+ blockers.push(...mongoBlockers(evidence?.mongo));
  if(evidence?.nodeChecks!=='passed')blockers.push('Build, upgrade, journal and independent kit checks must pass');
  if(evidence?.privacyChecks!=='passed')blockers.push('Sanitized repository and full-history secret checks must pass');
  if(evidence?.browserChecks!=='passed')blockers.push('Browser checks must pass');
