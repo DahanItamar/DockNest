@@ -399,7 +399,7 @@ export const migrations = [
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
   // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Purely additive: planned
   // as 22 after 19 to 21 of the other 2.16.5 changes; renumber before release if the order changes.
-  { version: 22, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
+  { version: 19, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
