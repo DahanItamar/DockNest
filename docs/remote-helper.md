@@ -22,6 +22,7 @@ remote/
 │   ├── net.py              pinned HTTP(S), probe URL policy, public probes, health checks
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
 │   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
+│   ├── runspec.py          run spec of plain containers: docker create flags, Compose file, describe-containers
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
@@ -45,7 +46,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (19 modules)"]
+  subgraph Source["remote/helper/ (20 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -109,6 +110,7 @@ classDiagram
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
   class maintenance { maintenance() setup_maintenance() }
   class discovery { nginx_sites() configuration_paths() }
+  class runspec { run_spec() create_args() compose_document() describe_containers() }
   class paths { classify_source() protected_paths() source_archive() }
   class staging { install_boot_recovery() cleanup_staging() }
   class install { install_status() install_package() }
@@ -133,6 +135,8 @@ classDiagram
   edit --> move
   edit --> maintenance
   move --> restore
+  move --> runspec
+  backup --> runspec
   maintenance --> net
   databases --> net
   backup ..> common

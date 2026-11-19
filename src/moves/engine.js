@@ -125,7 +125,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const facts = {
     site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
       ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
-      timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
+      unsupported: composeOverride ? [] : sf.unsupported, timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },

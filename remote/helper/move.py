@@ -5,7 +5,7 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     APPARMOR_PROFILE, APPARMOR_PROFILES, NOFOLLOW, VERSION, apparmor_loaded, atomic_json, docker, emit, extra_capabilities, hardened, hardening,
-    hardening_args, inspect, mount_option, run, target_hardening_problem, verify_hardening)
+    hardening_args, inspect, run, target_hardening_problem, verify_hardening)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
 from .databases import (
@@ -17,14 +17,16 @@ from .net import (
 from .maintenance import (
     maintenance)
 from .discovery import (
-    nginx_sites, temporary_mounts, tmpfs_argument)
+    nginx_sites, temporary_mounts)
+from .runspec import (
+    create_args, fit_host, port_argument, port_bindings, run_spec, yaml_str)
 from .restore import (
     extract_archives, image_archives, mount_archive, mount_bytes, owned_job_root, restore_network_plan,
     unpack_verified)
 from .install import (
     install_candidates, os_release, package_manager)
 from .restore_test import (
-    load_images_keeping_tags)
+    cpu_count, load_images_keeping_tags)
 # </build:header>
 # ---- Site moves (docs/moving-sites.md) ----
 # Rules: facts are read-only and never include env values (masked host and port only); a deploy journals every
@@ -198,14 +200,6 @@ def env_findings(containers,files,tokens):
             match=re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$',line)
             if match:scan(match[1],match[2].strip().strip('"\''),'file '+str(p))
     return findings[:100]
-def port_bindings(c):
-    result=[]
-    for internal,bindings in (c.get('HostConfig',{}).get('PortBindings') or {}).items():
-        port,_,protocol=internal.partition('/')
-        for binding in bindings or []:
-            host=str(binding.get('HostPort') or '')
-            if host.isdigit() and port.isdigit():result.append({'container':c['Name'].lstrip('/'),'hostIp':binding.get('HostIp') or '0.0.0.0','hostPort':int(host),'containerPort':int(port),'protocol':protocol or 'tcp'})
-    return result
 def source_site_facts(cfg,tokens):
     domains=[d for d in cfg.get('domains',[]) if isinstance(d,str) and DOMAIN.fullmatch(d)]
     nginx=nginx_domain_facts(domains) if domains else {'directives':[],'upstreamPorts':[]}
@@ -246,7 +240,11 @@ def source_site_facts(cfg,tokens):
     return {'compose':project,'volumes':volumes,'kind':'compose' if compose else 'container','domains':domains,'containerCount':len(cs),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),
         'ports':ports,'bindPaths':binds,'names':{'containers':[c['Name'].lstrip('/') for c in cs],'volumes':list(dict.fromkeys(m['Name'] for c in cs for m in c['Mounts'] if m['Type']=='volume')),'networks':list(networks)},
         'networks':list(networks.values()),'running':[c['Id'] for c in cs if c['State'].get('Running')],'nginxDirectives':nginx['directives'],'web':web,'maintenanceReady':ready if m.get('required',True) else None,
-        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []}}
+        'env':env_findings(cs,cfg.get('composeFiles',[])+cfg.get('configFiles',[]),tokens),'hardening':{**hardening_facts(cs),'seccomp':compose_seccomp_paths(project['files']) if project else []},
+        'unsupported':unsupported_facts(cs)}
+def unsupported_facts(cs):
+    """Per container, the settings a docker create copy cannot recreate (runspec), named in the move preview."""
+    return [{'container':c['Name'].lstrip('/'),'settings':settings} for c in cs for settings in [run_spec(c)['unsupported']] if settings]
 # A seccomp profile path in a Compose security_opt entry: absolute, no variables, ends at a quote, space, comma or ].
 COMPOSE_SECCOMP=re.compile(r'seccomp[:=]\s*(/[A-Za-z0-9._/@+-]{1,4095})(?=["\'\s,\]]|$)')
 def compose_seccomp_paths(files):
@@ -393,11 +391,7 @@ def mapped_port(port_map,binding,mode):
             break
     else:to=binding['hostPort']
     if not 1<=to<=65535:raise ValueError('Invalid port in the move plan')
-    ip='127.0.0.1' if mode=='test' else binding['hostIp']
-    if ip in ['','0.0.0.0']:host=''
-    elif ':' in ip:host='['+ip+']:'
-    else:host=ip+':'
-    return host+str(to)+':'+str(binding['containerPort'])+'/'+binding['protocol'],to
+    return port_argument('127.0.0.1' if mode=='test' else binding['hostIp'],to,binding['containerPort'],binding['protocol']),to
 def firewall_ready():
     """Docker's DOCKER-USER chain exists, so DockNest can reject SMTP from test containers without touching other rules."""
     if not shutil.which('iptables'):return False
@@ -595,28 +589,14 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
         for i,c in enumerate([] if compose else containers):
             name=c['Name'].lstrip('/')
             if not SAFE_NAME.fullmatch(name):raise ValueError('Unsupported container name')
-            hc=c.get('HostConfig',{})
-            policy='no' if mode=='test' else (hc.get('RestartPolicy') or {}).get('Name') or 'no'
-            if policy not in ['no','always','unless-stopped','on-failure']:policy='no'
-            networks=[n for n in (c.get('NetworkSettings',{}).get('Networks') or {}) if n!='none']
-            primary=hc.get('NetworkMode') if hc.get('NetworkMode') in networks else (networks[0] if networks else 'none')
-            if primary=='default':primary='bridge'
-            if primary=='bridge' and mode=='test':primary=test_network
-            args=['create','--name',name,'--restart',policy,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,'--network',primary]
-            def aliases(network):
-                values=[a for a in (c['NetworkSettings']['Networks'][network].get('Aliases') or []) if a and a!=c['Id'][:12] and SAFE_NAME.fullmatch(a)]
-                return [part for alias in dict.fromkeys(values) for part in ['--alias' if network!=primary else '--network-alias',alias]]
-            if primary not in ['bridge','none'] and primary in networks:args+=aliases(primary)
-            for binding in port_bindings(c):
-                spec,to=mapped_port(port_map,binding,mode);args+=['-p',spec];ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
-            for destination,options in temporary_mounts(c):args+=['--tmpfs',tmpfs_argument(destination,options)]
-            args+=hardening_args(c,d)
-            for m in c['Mounts']:
-                mount=mount_option('volume' if m['Type']=='volume' else 'bind',m['Name'] if m['Type']=='volume' else m['Source'],m['Destination'],not m.get('RW',True))
-                args+=['--mount',mount]
-            for host in hc.get('ExtraHosts') or []:
-                if re.fullmatch(r'[A-Za-z0-9.-]+:[0-9a-fA-F.:]+|[A-Za-z0-9.-]+:host-gateway',host):args+=['--add-host',host]
-            if hc.get('Init'):args.append('--init')
+            temporary_mounts(c)  # refuses a RAM folder DockNest cannot recreate, as before the run spec
+            # The settings the copy keeps come from the run spec (remote/helper/runspec.py); env travels in the image.
+            spec=fit_host(run_spec(c),cpu_count())
+            primary=test_network if spec['network']=='bridge' and mode=='test' else spec['network']
+            published=[]
+            for binding in spec['ports']:
+                value,to=mapped_port(port_map,binding,mode);published.append(value);ports.append({'container':name,'from':binding['hostPort'],'to':to,'containerPort':binding['containerPort'],'protocol':binding['protocol']})
+            args=['create','--name',name,'--label','docknest.move='+mid,'--label','docknest.move.mode='+mode,*create_args(spec,'no' if mode=='test' else spec['restart'],primary,published),*hardening_args(c,d)]
             for item in c.get('Config',{}).get('Env') or []:
                 key,_,value=item.partition('=')
                 if key in keys and tokens:
@@ -625,9 +605,9 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             journal_resource(d,state,'containers',name)
             created.append(docker(*args,manifest['snapshotImages'][i]).decode().strip());names.append(name)
             if primary not in ['bridge','none']:
-                for other in networks:
+                for other,aliases in spec['networks'].items():
                     # A test copy never joins Docker's shared default bridge.
-                    if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*aliases(other),other,created[-1])
+                    if other!=primary and not (mode=='test' and other in ['bridge','default']):docker('network','connect',*[part for alias in aliases for part in ['--alias',alias]],other,created[-1])
         verify_hardening(containers,created,every=bool(compose))  # never less protected than the original
         mapping={c['Id']:cid for c,cid in zip(containers,created)}
         contracts=manifest.get('backupPlan',{}).get('services',[])
@@ -654,7 +634,6 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
             if created:docker('stop','--time','30',*created)
         except Exception:pass
         raise
-def yaml_str(value):return json.dumps(str(value))  # a JSON string is a valid YAML double-quoted scalar
 def compose_override(compose,mid,mode,manifest,port_map,keys,tokens,target):
     """Override file for the site's own Compose files: snapshot image, remapped host ports (Compose 2.24+ !override),
     no restart for the test copy, DockNest labels and opted-in setting rewrites. The user's files are never edited."""

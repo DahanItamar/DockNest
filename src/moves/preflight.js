@@ -14,7 +14,8 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     architecture?: string, packageBytes: number, ports?: PortBinding[], bindPaths?: string[],
  *     names?: { containers?: string[], volumes?: string[], networks?: string[] }, nginxDirectives?: string[],
  *     maintenanceReady?: boolean, env?: EnvFinding[], timings?: { backupSeconds?: number, restoreSeconds?: number },
- *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] } },
+ *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] },
+ *     unsupported?: { container: string, settings: string[] }[] },
  *   source: { id: string, name: string, addresses?: string[] },
  *   target: { id: string, name: string, reachable: boolean, hostKeyOk?: boolean, uid?: number, architecture?: string,
  *     dockerVersion?: string|null, composeVersion?: string|null, freeBytes: number, totalBytes?: number,
@@ -146,6 +147,8 @@ export function evaluateMove(facts, options = {}) {
     else for (const path of seccomp) if (!target.seccompPresent.includes(path)) add('security', 'block', 'Security settings', `${site.name} uses the seccomp profile ${path}, which is not on ${target.name}. Copy the file to the same path there, then check again.`);
     if (hardening?.hardened && !checks.some(item => item.id === 'security')) add('security', 'ok', 'Security settings', "The copy keeps the site's security settings.");
     // Docker's host-wide AppArmor default is a server setting, not the site's: noted, never enforced.
+    // Settings DockNest recreates neither with docker create nor Compose (remote/helper/runspec.py): named, never refused.
+    for (const item of docker ? site.unsupported ?? [] : []) add('settings', 'warn', 'Container settings', `${item.container} uses ${item.settings.join(', ')}, which DockNest does not recreate on ${target.name}.`);
     if (hardening?.hostAppArmor?.length && target.apparmorEnabled === false) add('security', 'info', 'AppArmor', `${site.name} runs under the ${hardening.hostAppArmor.join(', ')} AppArmor profile on ${source.name} by default. ${target.name} has no AppArmor, so the copy runs without it.`, { advanced: true });
 
     const nginx = target.nginx ?? { installed: false };

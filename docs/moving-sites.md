@@ -186,9 +186,16 @@ Collapsed by default and pre-filled; most moves need no changes here.
   generated override (`/var/lib/docknest/moves/<move>/compose.<test|live>.yaml`: snapshot image, `ports: !override`
   with the remapped host ports, restart `no` for the test copy, DockNest labels). The user's files are never edited.
   This needs Compose 2.24 or newer on the new server; otherwise, and for single containers, containers are recreated
-  from their snapshot images with `docker create`, which copies ports, mounts, networks, extra hosts and `--init` but
-  not resource limits or log drivers. After a move, running `docker compose up` by hand without the override brings
-  the original host port back.
+  from their snapshot images with `docker create`. Since 2.16.5 the flags come from the run spec
+  (`remote/helper/runspec.py`, shared with backups), which keeps the name, restart policy (with its retry count),
+  networks and aliases, ports and `-P`, mounts, RAM folders, extra hosts, `--init`, the hostname, TTY and stdin, memory,
+  memory reservation and swap, CPU limit, CPU shares and CPU set, pids limit, ulimits, the log driver and its options
+  (`json-file`, `local`, `journald` and `none` only), DNS servers, search domains and options, shm size, sysctls,
+  extra groups and the stop timeout. A CPU limit above the new server's CPU count is capped to it and a CPU set naming
+  CPUs it lacks is left out. Settings neither path recreates (devices, GPUs, a custom runtime or cgroup parent, host or
+  shared namespaces, volumes from other containers, other log drivers, block I/O and OOM settings) are named as
+  warnings in the move preview, never as a new refusal; what the preflight refused before stays refused. After a move,
+  running `docker compose up` by hand without the override brings the original host port back.
 - Paths: a move refuses to create anything under system folders (`/etc`, `/root`, `/usr`, `/boot`, `/bin`, `/sbin`,
   `/lib*`, `/proc`, `/sys`, `/dev`, `/run`, `/var/log`, `/var/spool`), Docker's storage, `.ssh` folders or protected
   files, with symlinks followed; only its own folders below `/var/lib/docknest` (moves, acme, maintenance) are allowed.

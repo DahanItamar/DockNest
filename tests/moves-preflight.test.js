@@ -217,3 +217,12 @@ test('security settings: a copy keeps them, so unreproducible settings and missi
   assert.equal(evaluateMove(facts(f => { f.site.hardening = { hardened: false, problems: [], apparmor: [], hostAppArmor: ['docker-default'] }; f.target.apparmorEnabled = false; })).verdict, 'ready', 'a note, not a warning');
   assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.hardening = { hardened: true, problems: ['x'], apparmor: [] }; })), 'security'), []);
 });
+
+test('settings a plain container copy cannot recreate are named warnings, never a refusal, and do not change what was reviewed', () => {
+  const unsupported = [{ container: 'shop-gpu', settings: ['GPUs and other device requests', 'the gelf log driver'] }];
+  const result = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unsupported = unsupported; }));
+  assert.equal(result.canStart, true); assert.equal(result.verdict, 'ready-with-notes');
+  assert.deepEqual(only(result, 'settings').map(item => [item.status, item.text]), [['warn', 'shop-gpu uses GPUs and other device requests, the gelf log driver, which DockNest does not recreate on new-srv.']]);
+  assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { f.site.kind = 'container'; }))));
+  assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.unsupported = unsupported; })), 'settings'), []);
+});
