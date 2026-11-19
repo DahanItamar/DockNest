@@ -266,6 +266,18 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Kit check and emergency kit (docs/emergency-kit.md, "Data"). Additive only: two new tables and their indexes, no rows,
+// so 2.16 code ignores them. kit_checks holds the outcome of each proof that the newest recovery kit opens (a reason code,
+// never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
+// K-of-N split (the X25519 public key, its digest, the SLIP-0039 identifier, K, N and the holder labels): no row exists
+// unless the owner opts in, and at most one key is not retired.
+export const kitChecksSchema = `
+CREATE TABLE IF NOT EXISTS kit_checks (id TEXT PRIMARY KEY,backup_id TEXT,requested_by TEXT NOT NULL CHECK (length(requested_by) <= 64),created_at TEXT NOT NULL,checked_at TEXT,result TEXT NOT NULL CHECK (result IN ('queued','running','passed','failed')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 32));
+CREATE UNIQUE INDEX IF NOT EXISTS kit_checks_active ON kit_checks((1)) WHERE result IN ('queued','running');
+CREATE INDEX IF NOT EXISTS kit_checks_created ON kit_checks(created_at);
+CREATE TABLE IF NOT EXISTS emergency_keys (id TEXT PRIMARY KEY,public_key TEXT NOT NULL CHECK (length(public_key) = 43),digest TEXT NOT NULL UNIQUE CHECK (length(digest) = 64),identifier INTEGER NOT NULL CHECK (identifier BETWEEN 0 AND 32767),k INTEGER NOT NULL CHECK (k BETWEEN 2 AND 16),n INTEGER NOT NULL CHECK (n BETWEEN k AND 16),labels TEXT NOT NULL CHECK (length(labels) <= 2048),created_by TEXT NOT NULL,created_at TEXT NOT NULL,retired_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS emergency_keys_active ON emergency_keys((1)) WHERE retired_at IS NULL;
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -389,6 +401,9 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional number
+  // (planned as 24): versions stay contiguous here and it is renumbered at merge after the other 2.16.5 and 3.0 ones.
+  { version: 19, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
