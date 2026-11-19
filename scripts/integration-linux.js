@@ -106,6 +106,7 @@ try {
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_restore_gaps.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
   await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
@@ -277,6 +278,8 @@ try {
   assert.equal(await run('exec',hosts[1],'stat','-c','%a',staticResult.documentRoot+'/assets/logo.txt'),'640');assert.equal(await run('exec',hosts[0],'cat',staticRoot+'/index.html'),'live-edit');
   await assert.rejects(remote(servers[0],{operation:'readiness',config:{...staticCfg,documentRoot:'/etc'}}).then(result=>{if(!result.ready)throw new Error('blocked')}));
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
+  const {runRestoreCheckScenario}=await import('./integration-restore-check.js');
+  await runRestoreCheckScenario({run,hosts,servers,db,record});
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
   const {runCopiesScenario,runHardenedRestoreScenario}=await import('./integration-copies.js');
