@@ -6,7 +6,6 @@ import React,{useEffect,useRef,useState} from 'react';
 import {containerName,containerGroups} from './container-groups.js';
 import {normalizeDomain} from '../shared/domains.js';
 import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
-import {count,plural} from './plural.js';
 import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
 import {HardDrive as Database,Plus} from './icons.jsx';
@@ -63,7 +62,8 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
   }).finally(()=>{if(current)setLoading(false);});
   return()=>{current=false;};
  },[serverId,scan]);
- const groups=containerGroups(containers),coverage=coverageIndex(sites,serverId,{exceptSiteId:initialSite?.id});
+ const serverName=servers.find(server=>server.id===serverId)?.name,savedServer=initialSite?.serverId||initialSite?.server_id;
+ const groups=containerGroups(containers),coverage=coverageIndex(sites,serverId,{exceptSiteId:initialSite?.id,keep:savedServer===serverId?initialSite.config:null});
  const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...groups.flatMap(group=>group.kind==='standalone'?group.containers.map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
  const freeContainers=splitGroup(containers,coverage,containerName).free;
  const pickedOnce=useRef(false);
@@ -142,7 +142,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
      {source&&<div className="hint"><b>{primary}</b><p>{source.image||source.Config?.Image||'Docker container'} · {containerStatus(source)}</p><p>{(source.mounts||source.Mounts)?.map(mount=>(mount.Type||mount.type)+': '+(mount.Destination||mount.destination)).join(' · ')||'Mounted data is inspected during backup preflight.'}</p></div>}
      {primary&&freeContainers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same app.</p><div className="container-list">{freeContainers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
      </details>
-    </>:hidden.length?<div role="status"><p><b>Everything on {servers.find(server=>server.id===serverId)?.name} is already backed up.</b></p><p>Its {containers.length?count(containers.length,'container')+' '+plural(containers.length,'belongs','belong'):'websites belong'} to {ownerNames(hiddenOwners(hidden))}. To change what an app includes, use Edit configuration on its card.</p></div>
+    </>:hidden.length?<div role="status"><p><b>Everything on {serverName} is already backed up.</b></p><p>It belongs to {ownerNames(hiddenOwners(hidden))}. To change what an app includes, use Edit configuration on its card.</p></div>
     :<p role="status">No Docker containers found. Check the selected server, or create your app’s container and refresh.</p>}
    </>}
    {serverId&&!loading&&<button type="button" onClick={()=>setScan(value=>value+1)}>{error?'Retry container discovery':'Refresh containers'}</button>}
@@ -175,7 +175,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
   {step===3&&<>
    <h3>Review your app</h3>
    {!!initialSite?.config.mountExclusions?.length&&<div className="hint"><strong>Selected backup scope</strong><p>These paths are excluded and must be recovered separately. This backup keeps the application and its selected local state.</p><ul>{initialSite.config.mountExclusions.map(item=><li key={item.path}>{item.path}: {item.reason}</li>)}</ul></div>}
-   <dl className="setup-review"><dt>App</dt><dd>{settings.name}</dd><dt>Server</dt><dd>{servers.find(server=>server.id===serverId)?.name}</dd><dt>{isStatic?'Website files':'Containers'}</dt><dd>{isStatic?staticRoot:selected.join(', ')}</dd><dt>Health check</dt><dd>{settings.healthUrl}</dd><dt>Backup delivery</dt><dd>{settings.deliveryMode==='direct'?'Direct stream to backup storage':'Temporary copy, then upload'}</dd>{!isStatic&&<><dt>Compose files</dt><dd>{settings.composeFiles||'None selected'}</dd></>}<dt>Other configuration</dt><dd>{settings.configFiles||'None selected'}</dd></dl>
+   <dl className="setup-review"><dt>App</dt><dd>{settings.name}</dd><dt>Server</dt><dd>{serverName}</dd><dt>{isStatic?'Website files':'Containers'}</dt><dd>{isStatic?staticRoot:selected.join(', ')}</dd><dt>Health check</dt><dd>{settings.healthUrl}</dd><dt>Backup delivery</dt><dd>{settings.deliveryMode==='direct'?'Direct stream to backup storage':'Temporary copy, then upload'}</dd>{!isStatic&&<><dt>Compose files</dt><dd>{settings.composeFiles||'None selected'}</dd></>}<dt>Other configuration</dt><dd>{settings.configFiles||'None selected'}</dd></dl>
    <label className="check"><input type="checkbox" name="externalReferencesConfirmed" checked={settings.externalReferencesConfirmed} onChange={update} required/> I reviewed external dependencies and included the configuration files and secrets needed to recreate this app.</label>
    {!isStatic&&<label className="check"><input type="checkbox" name="cleanShutdownConfirmed" checked={settings.cleanShutdownConfirmed} onChange={update} required={settings.shutdownProfile==='generic'}/> I verified that a normal stop cleanly closes the application and database writers (required for Generic).</label>}
    <label className="check"><input type="checkbox" name="exclusiveSourcesConfirmed" checked={settings.exclusiveSourcesConfirmed} onChange={update} required/> {isStatic?'No deployment or process will change these website files during capture.':'No containers or processes outside this app write to its mounted data.'}</label>

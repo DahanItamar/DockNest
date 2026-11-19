@@ -589,6 +589,7 @@ test('a launch whose containers another app already backs up fails its save step
   await drive();
   const view = (await admin('GET', `/launches/${launch}`)).body;
   assert.equal(view.failedStep, 'save'); assert.equal(steps(launch).teardown, 'done');
+  assert.equal(view.steps.find(step => step.step === 'save').detail, 'covered-example-com-db-1 is already backed up in Existing. Edit that app instead.');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sites WHERE server_id=?').get(server).n, 1);
   assert.ok(logged.some(line => line.includes('CONTAINER_ALREADY_BACKED_UP')));
 });

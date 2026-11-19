@@ -4,14 +4,15 @@ const unique=owners=>[...new Map(owners.map(owner=>[owner.siteId,owner])).values
 const plural=(count,one,many)=>count===1?one:many;
 
 // What the apps on one server back up, by container name and by static website folder. An app being edited does not
-// count against itself.
-export function coverageIndex(sites,serverId,{exceptSiteId}={}){
- const containers=new Map(),roots=new Map();
+// count against itself, and what it already had on this server (keep: its saved config) stays free for it, so an install
+// whose apps already overlap stays editable. Each container has one owner: when older apps share one, the last listed.
+export function coverageIndex(sites,serverId,{exceptSiteId,keep}={}){
+ const containers=new Map(),roots=new Map(),kept=new Set(keep?.containers||[]);
  for(const site of sites){
   if(site.serverId!==serverId||site.id===exceptSiteId)continue;
   const owner={siteId:site.id,name:site.name};
-  for(const name of site.config?.containers||[])containers.set(name,owner);
-  if(site.config?.kind==='static'&&site.config.documentRoot)roots.set(site.config.documentRoot,owner);
+  for(const name of site.config?.containers||[])if(!kept.has(name))containers.set(name,owner);
+  if(site.config?.kind==='static'&&site.config.documentRoot&&site.config.documentRoot!==keep?.documentRoot)roots.set(site.config.documentRoot,owner);
  }
  return {containers,roots};
 }
@@ -35,12 +36,10 @@ export function availableChoices(choices,index,nameOf){
  return {shown,hidden};
 }
 
-// What a configuration would take from other apps. Containers and the folder the app already had (saved) are not new,
-// so an install whose apps already overlap stays editable.
-export function overlaps(config,index,saved){
- const had=new Set(saved?.containers||[]);
- const {covered,owners}=splitGroup((config.containers||[]).filter(name=>!had.has(name)),index);
- const root=config.kind==='static'&&config.documentRoot!==saved?.documentRoot&&index.roots.get(config.documentRoot);
+// What a configuration would take from other apps.
+export function overlaps(config,index){
+ const {covered,owners}=splitGroup(config.containers||[],index);
+ const root=config.kind==='static'&&index.roots.get(config.documentRoot);
  return root?{items:[...covered,config.documentRoot],owners:unique([...owners,root])}:{items:covered,owners};
 }
 
@@ -50,5 +49,5 @@ export const overlapMessage=({items,owners})=>`${items.join(', ')} ${plural(item
 export const coveredCaption=({covered,owners})=>`${covered.length} more ${plural(covered.length,'service','services')} already backed up in ${ownerNames(owners)}`;
 export function hiddenCaption(hidden){
  const owners=hiddenOwners(hidden),shown=owners.slice(0,3),more=owners.length-shown.length;
- return `${hidden.length} already backed up here ${plural(hidden.length,'is','are')} hidden: ${ownerNames(shown)}${more?` and ${more} more`:''}.`;
+ return `Hidden because other apps already back them up: ${ownerNames(shown)}${more?` and ${more} more`:''}.`;
 }

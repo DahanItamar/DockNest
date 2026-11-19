@@ -316,7 +316,7 @@ app.patch('/api/sites/:id', async (req, res) => {
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
   { const problem = sqliteListProblem(data.config.services, (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.services); if (problem) return res.status(400).json({ error: problem }); }
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
   const refusal = await sitePathRefusal(req, { serverId: site.server_id, config: saved }, { serverId: data.serverId, config: next }, site.id);
@@ -324,14 +324,14 @@ app.patch('/api/sites/:id', async (req, res) => {
   // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
   const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
   const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
-  const conflict = coverageConflict(data.serverId, next, { exceptSiteId: site.id, saved: site.server_id === data.serverId ? saved : null });
+  const conflict = coverageConflict(data.serverId, next, { exceptSiteId: site.id, keep: site.server_id === data.serverId ? saved : null });
   if (conflict) return res.status(409).json(conflict);
   db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
   audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   const data = z.object({ enabled: z.boolean(), schedule: z.string().max(100), timezone: z.string().max(100), retention: z.number().int().min(1).max(1000) }).parse(req.body);
   new Intl.DateTimeFormat('en', { timeZone: data.timezone });
   const next = CronExpressionParser.parse(data.schedule, { tz: data.timezone }).next().toISOString();
@@ -342,7 +342,7 @@ app.post('/api/sites/:id/policy', (req, res) => {
 app.get('/api/sites/:id/storage', (req, res) => res.json(siteStorageView(getSite(req.params.id).id)));
 app.put('/api/sites/:id/storage', requireAdmin, requireRecentAuth, (req, res) => {
   const site = getSite(req.params.id);
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This app was removed from active apps.', code: 'site_removed' });
   try { res.json(updateSiteStorage(site.id, req.body, req.user.id)); }
   catch (error) { if (error.code && error.status) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
 });

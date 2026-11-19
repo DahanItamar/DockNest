@@ -24,13 +24,13 @@ const docker = (name, containers, serverId = host) => ({ serverId, name, config:
 const sites = () => db.prepare('SELECT COUNT(*) AS n FROM sites').get().n;
 
 test('a second app for a container is refused with 409 naming the container and its app', async () => {
-  const media = await call('/sites', 'POST', docker('MediaHouse', ['mediahouse-web', 'mediahouse-db']));
+  const media = await call('/sites', 'POST', docker('Gallery', ['gallery-web', 'gallery-db']));
   assert.equal(media.status, 201);
-  const before = sites(), duplicate = await call('/sites', 'POST', docker('Copy', ['mediahouse-db', 'fresh']));
+  const before = sites(), duplicate = await call('/sites', 'POST', docker('Copy', ['gallery-db', 'fresh']));
   assert.equal(duplicate.status, 409);
-  assert.deepEqual(duplicate.body, { error: 'mediahouse-db is already backed up in MediaHouse. Edit that app instead.', code: 'CONTAINER_ALREADY_BACKED_UP' });
+  assert.deepEqual(duplicate.body, { error: 'gallery-db is already backed up in Gallery. Edit that app instead.', code: 'CONTAINER_ALREADY_BACKED_UP' });
   assert.equal(sites(), before);
-  assert.equal((await call('/sites', 'POST', docker('Elsewhere', ['mediahouse-db'], other))).status, 201, 'another server is another container');
+  assert.equal((await call('/sites', 'POST', docker('Elsewhere', ['gallery-db'], other))).status, 201, 'another server is another container');
 });
 
 test('a removed app no longer covers its containers', async () => {
@@ -59,4 +59,20 @@ test('an edit keeps an overlap it already had and is refused only for one it add
   assert.equal(added.status, 409);
   assert.deepEqual(added.body, { error: 'paper-web is already backed up in Paperless. Edit that app instead.', code: 'CONTAINER_ALREADY_BACKED_UP' });
   assert.deepEqual(JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(legacy.body.id).config).containers, ['legacy-web', 'paper-redis']);
+});
+
+test('moving an app to a server where another app has its container is refused', async () => {
+  const mover = await call('/sites', 'POST', docker('Mover', ['gallery-web'], other));
+  assert.equal(mover.status, 201);
+  const moved = await call('/sites/' + mover.body.id, 'PATCH', { serverId: host, name: 'Mover', config: mover.body.config });
+  assert.equal(moved.status, 409);
+  assert.equal(moved.body.error, 'gallery-web is already backed up in Gallery. Edit that app instead.');
+});
+
+test('an edit may keep its own static folder but not take another app\'s', async () => {
+  const shop = await call('/sites', 'POST', { serverId: host, name: 'Shop', config: { kind: 'static', containers: [], documentRoot: '/var/www/shop' } });
+  assert.equal((await call('/sites/' + shop.body.id, 'PATCH', { serverId: host, name: 'Shop renamed', config: shop.body.config })).status, 200);
+  const taken = await call('/sites/' + shop.body.id, 'PATCH', { serverId: host, name: 'Shop', config: { ...shop.body.config, documentRoot: '/var/www/blog' } });
+  assert.equal(taken.status, 409);
+  assert.deepEqual(taken.body, { error: '/var/www/blog is already backed up in Blog. Edit that app instead.', code: 'CONTAINER_ALREADY_BACKED_UP' });
 });
