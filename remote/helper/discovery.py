@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     DEFAULT_CAPABILITIES, inspect, run)
+from .routing import (
+    match_upstream, upstream_address)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -20,6 +22,22 @@ def project_roots(container):
         if p.is_dir() and os.path.realpath(p)==os.path.abspath(p) and str(p) not in roots:roots.append(str(p))
     return roots
 
+NGINX_CERTIFICATE=re.compile(r'/live/([A-Za-z0-9][A-Za-z0-9._-]{0,127})/[A-Za-z0-9._-]+')
+CERTIFICATE_FILE=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+def nginx_listen_port(args):
+    """The port of one `listen` directive (80, 443 ssl, [::]:443, 127.0.0.1:8080), or None for a Unix socket."""
+    value=(args or ['80'])[0]
+    if value.startswith('unix:'):return None
+    port=value.rsplit(']',1)[-1]
+    port=port.rsplit(':',1)[1] if ':' in port else port if port.isdigit() else '80'
+    return int(port) if port.isdigit() and 0<int(port)<65536 else None
+def nginx_certificate_name(path):
+    """A certbot certificate's name (/etc/letsencrypt/live/NAME/fullchain.pem), else the file name. Never a path."""
+    if '$' in path:return None
+    match=NGINX_CERTIFICATE.search(path)
+    if match:return match.group(1)
+    name=path.rsplit('/',1)[-1]
+    return name if CERTIFICATE_FILE.fullmatch(name) else None
 def nginx_sites(folders=None):
     """Return routing metadata only, never nginx configuration contents or TLS keys."""
     sites=[]
@@ -40,6 +58,13 @@ def nginx_sites(folders=None):
         for name,args,children in nodes:
             yield name,args,children
             yield from walk(children)
+    def substitute(value,variables):
+        # Nginx Proxy Manager writes `set $server "app"; set $port 8080;` and proxies to $forward_scheme://$server:$port.
+        value=re.sub(r'\$(forward_scheme|server|port)\b',lambda match:variables.get(match.group(1),match.group(0)),value)
+        return value.replace('$request_uri','')
+    def pooled(value,pools):
+        name=value.split('://',1)[-1].rstrip('/')
+        return ['http://'+server for server in pools[name]] if name in pools else [value]
     for folder in folders or ['/etc/nginx/sites-enabled','/etc/nginx/conf.d']:
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
@@ -49,28 +74,38 @@ def nginx_sites(folders=None):
                 lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True
                 nodes=parse(iter(lexer))
             except (ValueError,OSError):continue
+            # Named upstream blocks in the same file: proxy_pass http://shop reaches their servers.
+            pools={args[0]:[v[0] for k,v,_ in children if k=='server' and v] for name,args,children in walk(nodes) if name=='upstream' and args}
             for name,args,children in walk(nodes):
                 if name!='server':continue
                 domains=[v for key,values,_ in children if key=='server_name' for v in values if re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]+',v) and '.' in v]
                 if not domains:continue
                 flattened=list(walk(children))
-                proxies=[values[0] for key,values,_ in flattened if key=='proxy_pass' and values]
+                variables={values[0][1:]:values[1] for key,values,_ in flattened if key=='set' and len(values)==2 and values[0] in ('$forward_scheme','$server','$port')}
+                proxies=[substitute(values[0],variables) for key,values,_ in flattened if key=='proxy_pass' and values]
+                if not proxies and {'server','port'}<=set(variables):proxies=[substitute('$forward_scheme://$server:$port',{'forward_scheme':'http',**variables})]
+                proxies=[target for value in proxies for target in pooled(value,pools)]
                 dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)
+                listen=sorted({port for key,values,_ in children if key=='listen' for port in [nginx_listen_port(values)] if port}) or [80]
+                certificates=sorted({name for key,values,_ in children if key=='ssl_certificate' and values for name in [nginx_certificate_name(values[0])] if name})
+                facts={'listen':listen,'certificates':certificates}
                 roots=[values[0] for key,values,_ in children if key=='root' and values]
                 if not roots:
                     roots=[v[0] for key,values,nested in children if key=='location' and values==['/'] for k,v,_ in nested if k=='root' and v]
                 for root in roots[:1] if not dynamic else []:
                     p=pathlib.Path(root)
                     if p.is_absolute() and '..' not in p.parts and str(p) not in ['/','/etc','/root','/home','/var','/var/www','/srv','/opt','/tmp'] and p.is_dir() and p.resolve()==p and (p/'index.html').is_file():
-                        sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0]})
-                if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies})
+                        sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0],**facts})
+                if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies,**facts})
     unique={}
     for site in sites:unique[(site['kind'],tuple(site['domains']),site.get('documentRoot',''))]=site
     return list(unique.values())
 
 def web_hints(container,routes):
+    """Health URL candidates (loopback ports of common web ports) and the domains whose nginx upstream reaches this
+    container, by the matcher every proxy adapter shares (remote/helper/routing.py)."""
     ports=container.get('NetworkSettings',{}).get('Ports',{}) or {}
-    candidates=[];domains=[]
+    candidates=[]
     for internal,bindings in ports.items():
         if not internal.endswith('/tcp'):continue
         for binding in bindings or []:
@@ -78,8 +113,8 @@ def web_hints(container,routes):
             if not port.isdigit() or host not in ['127.0.0.1','0.0.0.0','::','::1']:continue
             if internal.split('/')[0] not in ['80','8080','3000','5173','8000','5000','5678']:continue
             candidates.append('http://127.0.0.1:'+port+'/')
-            for route in routes:
-                if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
+    domains=[domain for route in routes for value in route.get('upstreams',[]) for upstream in [upstream_address(value)]
+        if upstream and match_upstream(upstream,[container]) for domain in route['domains']]
     return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
 
 def configuration_paths(container):

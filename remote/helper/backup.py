@@ -25,6 +25,8 @@ from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
+from .routing import (
+    proxy_routes)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
 # </build:header>
 def transfer_progress(count,final=False):
@@ -353,7 +355,7 @@ def capture_static(req):
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
     emit(stage='packing')
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'static-files.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('config-*.tar')]])
-    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def capture_static_stream(req,output):
     cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job']);plan=backup_plan(cfg,[])
@@ -373,7 +375,7 @@ def capture_static_stream(req,output):
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md','Static website backup. Restore static-files.tar into a new private directory and verify staticFiles.sha256. Never overwrite the live website automatically.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600);output.flush()
-    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def preflight(cfg):
     if cfg.get('deliveryMode','staged') not in ['staged','direct']:raise ValueError('Unsupported backup delivery mode')
@@ -468,7 +470,7 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         check('Maintenance proxy and website',proxy)
         if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
-    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts()}
+    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'routing':proxy_routes()}
 def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
@@ -682,4 +684,4 @@ def capture(req,output=None):
     # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
     if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots,'exclusions':increment['exclusions']})
     # Hardening facts travel beside the manifest, never inside the package, so the package format is unchanged.
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts()})
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts(),'routing':proxy_routes()})

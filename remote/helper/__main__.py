@@ -10,7 +10,7 @@ from .backup import (
 from .incremental import (
     incremental_commit, incremental_discard)
 from .net import (
-    certbot_certificates, skip_refused_probes)
+    certbot_certificates, certificate_facts, skip_refused_probes)
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
@@ -18,6 +18,8 @@ from .discovery import (
 from .restore import (
     external_restore_plan, prepare_restore, restore, restore_chain_offline, verify_recovery,
     verify_restore_recovery)
+from .routing import (
+    proxy_routes)
 from .staging import (
     cleanup_staging, install_boot_recovery, list_staging)
 from .move import (
@@ -121,7 +123,8 @@ def main(req):
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates()})
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates(),'routing':proxy_routes(cs)})
+    elif op=='domain-routes':emit(result={'certificates':certificate_facts(),'routing':proxy_routes()})
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

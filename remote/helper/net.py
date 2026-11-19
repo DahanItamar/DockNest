@@ -226,9 +226,17 @@ def note_peer_certificate(host,sock=None,error=None):
         fact=certificate_fact(sock.getpeercert(),'tls',name)
         if fact and (name in PEER_CERTIFICATES or len(PEER_CERTIFICATES)<CERT_LIMIT):PEER_CERTIFICATES[name]=fact
     except Exception:pass
+# Why a renewal failed, as a category only (docs/domains.md, "Certificate"). The log text itself never leaves the server.
+RENEW_CATEGORIES=(('rate-limited',re.compile(r'rateLimited|too many (?:certificates|failed authorizations)',re.I)),
+    ('dns',re.compile(r'DNS problem|NXDOMAIN|SERVFAIL')),('connection-refused',re.compile(r'Connection refused',re.I)),
+    ('timeout',re.compile(r'Timeout during connect|timed out',re.I)))
+RENEW_START=re.compile(r'Processing /etc/letsencrypt/renewal/|Renewing an existing certificate')
+def renewal_category(line):
+    return next((name for name,pattern in RENEW_CATEGORIES if pattern.search(line)),None)
 def renewal_outcomes(logs=None):
-    """{certificate name: ('ok' | 'failed', log modified time)} from certbot's newest logs (the last 512 KB of up to
-    five), newest first. A run that renewed nothing ("not yet due") says nothing, so the newest run that tried decides."""
+    """{certificate name: ('ok' | 'failed', log modified time, failure category or None)} from certbot's newest logs (the
+    last 512 KB of up to five), newest first. A run that renewed nothing ("not yet due") says nothing, so the newest run
+    that tried decides. The category comes from the failure line or the lines of the same renewal before it."""
     directory=pathlib.Path(logs or LETSENCRYPT_LOGS);outcomes={}
     for index in range(CERT_LOG_FILES):
         path=directory/('letsencrypt.log'+('.%d'%index if index else ''))
@@ -238,11 +246,18 @@ def renewal_outcomes(logs=None):
                 modified=os.fstat(handle.fileno()).st_mtime
                 size=handle.seek(0,2);handle.seek(max(0,size-CERT_LOG_TAIL));text=handle.read(CERT_LOG_TAIL).decode('utf-8','replace')
         except OSError:continue
-        found={}
+        found={};category=None
         for line in text.splitlines():
+            if RENEW_START.search(line):category=None
+            category=renewal_category(line) or category
             failed=RENEW_FAILED.search(line);result=None if failed else RENEW_RESULT.search(line);match=failed or result
-            if match and LINEAGE.fullmatch(match.group(1)):found[match.group(1)]='failed' if failed or result.group(2)=='failure' else 'ok'
-        for name,state in found.items():outcomes.setdefault(name,(state,modified))
+            if not match or not LINEAGE.fullmatch(match.group(1)):continue
+            name=match.group(1)
+            # The summary at the end of a run keeps the category its renewal already recorded.
+            if failed:found[name]=('failed',category)
+            elif result.group(2)=='failure':found[name]=('failed',found[name][1] if found.get(name,('',))[0]=='failed' else category)
+            else:found[name]=('ok',None)
+        for name,(state,reason) in found.items():outcomes.setdefault(name,(state,modified,reason))
     return outcomes
 def certbot_certificates(root=None,logs=None):
     """The certbot certificates on this server, read from the public certificate files only (never a key)."""
@@ -261,12 +276,14 @@ def certbot_certificates(root=None,logs=None):
             if not fact:continue
             fact['renews']=(root/'renewal'/(name+'.conf')).is_file()
             if name in renewal:
-                state,modified=renewal[name]
+                state,modified,category=renewal[name]
                 # A failure logged before this certificate was issued was followed by a renewal that worked.
                 if state=='failed' and modified<ssl.cert_time_to_seconds(decoded['notBefore']):state='ok'
                 fact['renewal']=state
                 # Which run failed (its log file's time), so DockNest can tell a new failure from the one it already told.
-                if state=='failed':fact['renewalAt']=int(modified)
+                if state=='failed':
+                    fact['renewalAt']=int(modified)
+                    if category:fact['renewalCategory']=category
         except Exception:continue
         facts.append(fact)
     return facts

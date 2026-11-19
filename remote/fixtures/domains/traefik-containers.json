@@ -1,0 +1,16 @@
+[
+  {"Name": "/traefik", "Config": {"Image": "traefik:v3.1", "Labels": {"traefik.http.middlewares.auth.basicauth.users": "fixture:$apr1$fixture-secret-do-not-leak"}},
+   "State": {"Running": true}, "NetworkSettings": {"Ports": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "80"}], "443/tcp": [{"HostIp": "0.0.0.0", "HostPort": "443"}]}}},
+  {"Name": "/forum-web", "Config": {"Image": "fixture/forum:1", "ExposedPorts": {"4567/tcp": {}}, "Labels": {
+     "traefik.enable": "true",
+     "traefik.http.routers.forum.rule": "Host(`forum.example.com`) || Host(`www.forum.example.com`)",
+     "traefik.http.routers.forum.service": "forum",
+     "traefik.http.services.forum.loadbalancer.server.port": "4567",
+     "traefik.http.routers.forum-api.rule": "Host(`forum.example.com`) && PathPrefix(`/api`)",
+     "traefik.http.routers.regex.rule": "HostRegexp(`{sub:[a-z]+}.example.com`)",
+     "traefik.tcp.routers.db.rule": "HostSNI(`db.example.com`)",
+     "traefik.http.middlewares.key.headers.customrequestheaders.X-Api-Key": "fixture-secret-do-not-leak"}},
+   "State": {"Running": true, "Health": {"Status": "healthy"}}, "NetworkSettings": {"Ports": {}}},
+  {"Name": "/ignored-web", "Config": {"Image": "fixture/ignored:1", "Labels": {"traefik.enable": "false", "traefik.http.routers.ignored.rule": "Host(`ignored.example.com`)"}},
+   "State": {"Running": false}, "NetworkSettings": {"Ports": {}}}
+]

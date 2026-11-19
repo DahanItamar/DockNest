@@ -1,0 +1,34 @@
+{
+  "admin": {"listen": "localhost:2019"},
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":443"],
+          "routes": [
+            {
+              "match": [{"host": ["notes.example.com"]}],
+              "handle": [
+                {"handler": "subroute", "routes": [
+                  {"handle": [
+                    {"handler": "authentication", "providers": {"http_basic": {"accounts": [{"username": "fixture", "password": "fixture-secret-do-not-leak"}]}}},
+                    {"handler": "reverse_proxy", "headers": {"request": {"set": {"X-Api-Key": ["fixture-secret-do-not-leak"]}}}, "upstreams": [{"dial": "notes-web:8080"}]}
+                  ]}
+                ]}
+              ],
+              "terminal": true
+            },
+            {
+              "match": [{"host": ["files.example.com", "*.files.example.com"]}],
+              "handle": [{"handler": "reverse_proxy", "upstreams": [{"dial": "localhost:9000"}, {"dial": "{http.request.host}"}]}]
+            },
+            {
+              "match": [{"host": ["static.example.com"]}],
+              "handle": [{"handler": "file_server", "root": "/srv/fixture-secret-root"}]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

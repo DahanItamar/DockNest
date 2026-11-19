@@ -1,0 +1,27 @@
+{
+    email fixture-admin@example.com
+    acme_dns fixture fixture-secret-do-not-leak
+}
+
+(common) {
+    reverse_proxy snippet-only:1
+}
+
+wiki.example.com, www.wiki.example.com {
+    basicauth {
+        fixture $2a$14$fixture-secret-do-not-leak
+    }
+    reverse_proxy wiki-web:3000 {
+        header_up X-Api-Key fixture-secret-do-not-leak
+    }
+}
+
+http://plain.example.net:8088 {
+    handle /api/* {
+        reverse_proxy @api 127.0.0.1:7000
+    }
+}
+
+{$FIXTURE_SITE} {
+    reverse_proxy {$FIXTURE_UPSTREAM}
+}
