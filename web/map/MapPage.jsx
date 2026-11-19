@@ -157,7 +157,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   createLaunchClient(api).forServer(panel.id).then(r=>{if(live)setRunning({id:panel.id,list:(Array.isArray(r?.launches)?r.launches:[]).filter(x=>x.state!=='done')})}).catch(()=>{});
   return()=>{live=false};
  },[panel?.kind,panel?.id,canMove,api,runTick]);
- function closeFlow(finished){setRunTick(n=>n+1);setFlow(null);if(finished){setEdit(null);H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
+ function closeFlow(finished){setRunTick(n=>n+1);setFlow(null);if(finished){const moved='site:'+(flow?.siteId??edit?.siteId);setPositions(({[moved]:_,...rest})=>rest);setEdit(null);H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
