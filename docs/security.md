@@ -150,6 +150,17 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
   Every server step of a move holds a per-move lock on the server and stops when DockNest stops waiting for it.
 - Cloudflare: the previous record is journaled before it is changed; a resumed switch reuses that journal.
 
+## Domain checks (outbound requests)
+
+- Domain checks ([domains](domains.md)) send DNS queries only, to 1.1.1.1 and 8.8.8.8, like site moves, at most once per
+  domain per hour unless someone presses Check again. They run on demand and after operations that already contact the
+  server, never on a timer.
+- With a saved Cloudflare token, a domain behind Cloudflare's proxy also makes read calls to the fixed Cloudflare host
+  (token verify, one DNS record read). Only `active` or `expired` and the names of missing scopes are kept.
+- On the server, the helper reads proxy routes read-only. The only network call it makes is a GET of Caddy's admin API
+  on `127.0.0.1:2019` with a fixed path and a 1 MB limit. Only hosts, ports, upstream addresses and certificate file
+  names leave the server; Nginx Proxy Manager's database and Traefik's dashboard are never read.
+
 ## Install on server (root package installs over SSH)
 
 An administrator can ask DockNest to install nginx, Docker, Docker Compose or certbot on a connected server
