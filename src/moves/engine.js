@@ -16,6 +16,7 @@ import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
+import { coverageConflict } from '../site-coverage.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
 
@@ -174,7 +175,14 @@ export function normaliseOptions(options = {}) {
 
 // POST /api/moves: a preview. It is stored as a draft so Start is bound to exactly what the owner reviewed; a newer
 // preview for the same site replaces it. Drafts block no other work and expire after an hour.
+// A move never makes a second app on the new server for a container or folder one of its apps already backs up: the
+// same refusal as adding or editing an app (src/site-coverage.js).
+function refuseCovered(siteId, targetServerId) {
+  const { site } = siteInfo(siteId), conflict = coverageConflict(targetServerId, site.config, { exceptSiteId: site.id });
+  if (conflict) throw httpError(409, conflict.error, { code: conflict.code });
+}
 export async function previewMove({ siteId, targetServerId, options: raw }, actor) {
+  refuseCovered(siteId, targetServerId);
   const options = normaliseOptions(raw);
   const preview = await previewFacts(siteId, targetServerId, options);
   preview.plan.dnsMode = options.dnsMode;
@@ -225,6 +233,7 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'draft') throw httpError(409, 'This move has already started.');
   refuseWhileInstalling(move);
+  refuseCovered(move.site_id, move.target_server_id);
   if (Date.parse(move.created_at) + DRAFT_TTL_MS < Date.now()) throw httpError(409, 'This check is more than an hour old. Press Save changes to check again.');
   const preview = await previewFacts(move.site_id, move.target_server_id, move.options);
   preview.plan.dnsMode = move.options.dnsMode;
