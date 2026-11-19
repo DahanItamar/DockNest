@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Linked apps (docs/linked-apps.md): the cleaned container facts of a server's last discovery scan. Links between apps are
+// computed from them on read, never stored. One row per server, replaced by each scan. Additive only: one new table.
+export const serverAppLinksSchema = `
+CREATE TABLE IF NOT EXISTS server_app_links (server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,facts TEXT NOT NULL CHECK (length(facts) <= 2097152),format INTEGER NOT NULL,checked_at TEXT NOT NULL,partial INTEGER NOT NULL CHECK (partial IN (0,1)));
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -389,6 +394,9 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it. Purely additive: renumber before release
+  // if another migration lands first (planned as 21 after 19 and 20 of the other 2.16.5 changes).
+  { version: 19, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

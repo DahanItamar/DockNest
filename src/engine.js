@@ -15,6 +15,7 @@ import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
 import { CLAIMABLE_JOB_SQL, CLAIMABLE_HEAL_SQL } from './job-claim.js';
 import { recordHardening, recordDiscoveredHardening } from './hardening.js';
+import { recordDiscoveredLinks } from './server-links.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -27,9 +28,17 @@ import { takeCertificates } from './alerts/certificates.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
-// facts of the sites on that server (docs/hardening-score.md); other roles only read.
+// facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
+// other roles only read.
 export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
-export const discover=async(server,{recordHardening:record=false}={})=>{const result=takeCertificates({serverId:server.id},await remote(server,{operation:'discover'}));if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
+export const discover=async(server,{record=false}={})=>{
+  const result=takeCertificates({serverId:server.id},await remote(server,{operation:'discover'}));
+  if(record){
+    try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
+    try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}
+  }
+  return result;
+};
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
