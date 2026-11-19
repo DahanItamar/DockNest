@@ -32,7 +32,9 @@ const site = (id, server, containers) => db.prepare('INSERT INTO sites VALUES(?,
 site('shop', 'srv-a', ['shop-web', 'shop-db']); site('blog', 'srv-a', ['blog-web']); site('old', 'srv-a', ['old-web']); site('target-shop', 'srv-b', ['shop-web']);
 db.prepare("INSERT INTO site_archives(site_id,archived_at) VALUES('old',?)").run(at);
 db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job-1','shop','backup','completed','completed',?)").run(at);
-db.prepare("INSERT INTO backups VALUES('backup-1','shop','job-1',?,'demo.enc',1,?,'{}',0,1,?)").run(at, 'a'.repeat(64), at);
+const manifest = names => JSON.stringify({ containers: names.map(name => ({ id: name, name: '/' + name, image: 'demo/' + name + ':1', mounts: [] })) });
+db.prepare("INSERT INTO backups VALUES('backup-0','shop','job-1','2026-01-01T00:00:00.000Z','demo-0.enc',1,?,?,0,1,?)").run('b'.repeat(64), manifest(['shop-web', 'shop-db', 'shop-cache']), at);
+db.prepare("INSERT INTO backups VALUES('backup-1','shop','job-1',?,'demo.enc',1,?,?,0,1,?)").run(at, 'a'.repeat(64), manifest(['shop-web']), at);
 
 const container = (name, extra = {}) => ({ name, image: 'demo/' + name + ':1', state: 'running', labels: {}, mounts: [], ...extra });
 const scan = {
@@ -54,6 +56,7 @@ test('an app with a verified backup is backed up, one without is pending, and a 
   assert.equal(result.complete, true); assert.deepEqual(result.problems, []);
   assert.deepEqual(items['container:shop-web'], { kind: 'container', name: 'shop-web', image: 'demo/shop-web:1', state: 'running', status: 'backed-up', app: { id: 'shop', name: 'Demo shop' } });
   assert.equal(items['container:blog-web'].status, 'pending');
+  assert.equal(items['container:shop-db'].status, 'pending', 'added to the app after its latest verified backup (an older one held it)');
   assert.deepEqual(items['volume:shop_data'], { kind: 'volume', name: 'shop_data', usedBy: ['shop-web'], status: 'backed-up', app: { id: 'shop', name: 'Demo shop' } });
   assert.equal(items['volume:blog_data'].status, 'pending');
   assert.equal(items['container:old-web'].status, 'not-backed-up', 'a removed app covers nothing');
@@ -75,6 +78,8 @@ test('an incomplete scan is never all clear', () => {
 });
 
 test('skipping an item: any signed-in role, strict body, audited without the note, shown only while nothing backs it up', async () => {
+  const note = await send('PUT', '/servers/srv-a/coverage/ignores', { kind: 'container', name: 'loose', note: '  Kept\n  on purpose\t ' });
+  assert.equal(note.status, 200); assert.equal((await note.json()).note, 'Kept on purpose', 'whitespace and a line break are collapsed, not refused');
   for (const [body, why] of [[{ kind: 'image', name: 'loose' }, 'kind'], [{ kind: 'container', name: '../etc' }, 'name'], [{ kind: 'container', name: 'loose', extra: 1 }, 'strict'], [{ kind: 'container', name: 'loose', note: 'x'.repeat(201) }, 'note']]) {
     assert.equal((await send('PUT', '/servers/srv-a/coverage/ignores', body)).status, 400, why);
   }
@@ -86,14 +91,23 @@ test('skipping an item: any signed-in role, strict body, audited without the not
   assert.equal(items['container:loose'].status, 'skipped'); assert.equal(items['container:loose'].note, 'Scratch container'); assert.equal(items['container:loose'].skippedBy, 'Demo operator'); assert.ok(items['container:loose'].skippedAt);
   assert.equal(items['container:shop-web'].status, 'backed-up', 'a covered item is never shown as skipped'); assert.equal(items['container:shop-web'].note, undefined);
   const audits = db.prepare("SELECT action,detail FROM audit_events WHERE action LIKE 'coverage.%' ORDER BY rowid").all();
-  assert.deepEqual(audits.map(row => [row.action, JSON.parse(row.detail)]), [['coverage.skip', { kind: 'container', name: 'loose' }], ['coverage.skip', { kind: 'container', name: 'shop-web' }]]);
-  assert.ok(!audits.some(row => row.detail.includes('Scratch')));
+  assert.deepEqual(audits.map(row => [row.action, JSON.parse(row.detail)]), [['coverage.skip', { kind: 'container', name: 'loose' }], ['coverage.skip', { kind: 'container', name: 'loose' }], ['coverage.skip', { kind: 'container', name: 'shop-web' }]]);
+  assert.ok(!audits.some(row => row.detail.includes('Scratch') || row.detail.includes('Kept')));
   assert.equal((await send('DELETE', '/servers/srv-a/coverage/ignores/container/loose')).status, 204);
   assert.equal((await send('DELETE', '/servers/srv-a/coverage/ignores/container/loose')).status, 404);
   assert.equal((await send('DELETE', '/servers/srv-a/coverage/ignores/image/loose')).status, 400);
   assert.equal(byName(await (await get('/servers/srv-a/coverage')).json())['container:loose'].status, 'not-backed-up');
   assert.equal(db.prepare("SELECT action FROM audit_events WHERE action='coverage.unskip'").all().length, 1);
   assert.equal((await get('/servers/srv-a/coverage', null)).status, 401);
+});
+
+test('a server holds at most 1000 skipped items; changing one it already holds still works', async () => {
+  const insert = db.prepare("INSERT INTO server_coverage_ignores(server_id,kind,name,note,created_by,created_at) VALUES('srv-b','volume',?,NULL,'admin',?)");
+  for (let index = 0; index < 1000; index++) insert.run('demo-' + index, at);
+  const refused = await send('PUT', '/servers/srv-b/coverage/ignores', { kind: 'volume', name: 'one-more' });
+  assert.equal(refused.status, 409); assert.deepEqual(await refused.json(), { error: 'This server already has 1000 skipped items. Unskip some before you skip more.', code: 'COVERAGE_SKIP_LIMIT' });
+  assert.equal((await send('PUT', '/servers/srv-b/coverage/ignores', { kind: 'volume', name: 'demo-7', note: 'Updated' })).status, 200);
+  db.prepare("DELETE FROM server_coverage_ignores WHERE server_id='srv-b'").run();
 });
 
 test('a move to a server whose apps already back up one of its containers is refused, at preview and at start', async () => {

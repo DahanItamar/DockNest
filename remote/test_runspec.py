@@ -177,6 +177,8 @@ class ComposeTests(unittest.TestCase):
         self.assertEqual(sorted(files),['run-definition/compose.yaml','run-definition/shop.env'])
         self.assertTrue(all(helper.RUN_DEFINITION.fullmatch(name) for name in files))
         self.assertTrue(helper.standalone([shop()]));self.assertFalse(helper.standalone([shop(Config={'Labels':{'com.docker.compose.project':'shop'}})]))
+        for labels in [{'com.docker.stack.namespace':'shop'},{'com.docker.swarm.service.name':'shop_web'}]:
+            self.assertFalse(helper.standalone([shop(),shop(Config={'Labels':labels})]),'Swarm recreates its own tasks: no run definition')
 
 class DescribeContainersTests(unittest.TestCase):
     def describe(self,names,records):

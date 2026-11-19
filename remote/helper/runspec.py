@@ -251,9 +251,10 @@ def compose_document(specs,images):
     if networks:document['networks']={name:{'name':name} for name in networks}
     if volumes:document['volumes']={name:{'name':name} for name in volumes}
     return '\n'.join(header+yaml_lines(document))+'\n'
+ORCHESTRATOR_LABELS=('com.docker.compose.project','com.docker.stack.namespace','com.docker.swarm.service.name')
 def standalone(containers):
-    """Plain containers only: none was started by Docker Compose."""
-    return not any(((c.get('Config') or {}).get('Labels') or {}).get('com.docker.compose.project') for c in containers)
+    """Plain containers only: none was started by Docker Compose or is a Swarm task (Swarm recreates its own tasks)."""
+    return not any(((c.get('Config') or {}).get('Labels') or {}).get(label) for c in containers for label in ORCHESTRATOR_LABELS)
 def run_definition(containers,images):
     """run-definition/ files of a backup package: compose.yaml (snapshot images) and one env file per container."""
     specs=[run_spec(c) for c in containers]
