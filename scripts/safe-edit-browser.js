@@ -316,7 +316,7 @@ async function boards187(width,scheme){
  await disclose.click();
  const field=dlg(page).getByLabel('Time limit in seconds');
  assert.equal(await field.inputValue(),'120');
- await dlg(page).getByText('Seconds DockNest waits for the site to answer before it rolls back. 60 to 600.').waitFor();
+ await dlg(page).getByText('Seconds DockNest waits for the app to answer before it rolls back. 60 to 600.').waitFor();
  await shot(page,'187-02','limit-open',width,scheme);await layout(page,'limit open '+tag);
  await field.fill('300');
  assert.match(await dlg(page).innerText(),/Time limit\s*5 minutes/);
@@ -329,7 +329,7 @@ async function boards187(width,scheme){
  await shot(page,'187-04','limit-bad',width,scheme);await layout(page,'limit bad '+tag);
  await field.fill('601');assert.equal(await apply187(page).isDisabled(),true,'Apply is off above the maximum');
  await field.fill('600');
- await dlg(page).getByText('The site can stay offline for up to 10 minutes before it rolls back.').waitFor();
+ await dlg(page).getByText('The app can stay offline for up to 10 minutes before it rolls back.').waitFor();
  assert.equal(await dlg(page).locator('.alert-warning').getByText('Longer wait').count(),1);
  await shot(page,'187-05','limit-long',width,scheme);await layout(page,'limit long '+tag);
  await field.fill('240');
@@ -350,9 +350,9 @@ async function boards187(width,scheme){
  await shot(page,'187-06','limit-short',width,scheme);await layout(page,'limit short '+tag);
  mock.dataRollback=false;
  // 07: the rolled-back message names the limit that was chosen.
- mock.editExtra={failedStep:'check_health',timeLimitSeconds:300,reason:'The site did not become healthy in 5 minutes.'};
+ mock.editExtra={failedStep:'check_health',timeLimitSeconds:300,reason:'The app did not become healthy in 5 minutes.'};
  mock.phase='rolled';await apply187(page).click();
- await dlg(page).getByText('The site did not answer within 5 minutes. The previous version runs again.').waitFor();
+ await dlg(page).getByText('The app did not answer within 5 minutes. The previous version runs again.').waitFor();
  await shot(page,'187-07','limit-rolled',width,scheme);await layout(page,'limit rolled '+tag);
  await dlg(page).getByRole('button',{name:'Close',exact:true}).click();await dlg(page).waitFor({state:'detached'});
  mock.editExtra=null;
@@ -430,7 +430,7 @@ async function boards187(width,scheme){
  assert.deepEqual(foot,['Undo change','Close'],'Undo change sits left of Close');
  assert.equal(await dlg(page).getByRole('button',{name:'Close',exact:true}).getAttribute('class'),'primary');
  assert.equal(await dlg(page).getByRole('button',{name:'Undo change'}).getAttribute('class')||'','','a secondary button');
- await dlg(page).getByText('You can undo this until the site changes again.').waitFor();
+ await dlg(page).getByText('You can undo this until the app changes again.').waitFor();
  await shot(page,'187-16','undo-offer',width,scheme);await layout(page,'undo offer '+tag);
  // 17: confirm.
  mock.undoReview={token:'tok-u',undoOf:'e1',diff:{files:[{path:'compose.yaml',hunks:[{oldStart:22,newStart:22,lines:[{type:'context',text:'  web:'},{type:'remove',text:'    image: demo/shop:1.5'},{type:'add',text:'    image: demo/shop:1.4'}]}]}],env:[]},summary:{health:'url',dataRollback:false,dataBytes:null},warnings:[]};
@@ -528,7 +528,7 @@ async function roles(){
  assert.equal(await editButton(page).count(),0,'static sites hide Edit');
  await context.close();
  // Sites page: Edit and History on the card, history opens an edit timeline, static card has no Edit.
- ({context,page}=await open({width:1280,start:'Sites & schedules'}));
+ ({context,page}=await open({width:1280,start:'Apps & schedules'}));
  await page.locator('.site-card').first().waitFor();
  const card=page.locator('.site-card',{hasText:'Demo Shop'});
  await card.getByRole('button',{name:'Edit history for Demo Shop'}).click();
@@ -563,7 +563,7 @@ async function roles(){
  await context.close();
  // Single-container site: no Compose tab. Image set through ${TAG}: guided edit declines.
  freshMock();
- mock.view=viewFor({kind:'container',files:[],env:[{file:'container',keys:[{key:'TAG',set:true}]}],services:[{name:'web',image:'shop:${TAG}',ports:[port(8080,8080)],frozen:false,healthcheck:true}],usable:{compose:false,env:true,ports:true,image:false},reasons:{compose:{code:'NO_COMPOSE',message:'This site has no Compose file to edit.'},image:{code:'IMAGE_FROM_ENV',message:'Edit TAG in Environment.'}}});
+ mock.view=viewFor({kind:'container',files:[],env:[{file:'container',keys:[{key:'TAG',set:true}]}],services:[{name:'web',image:'shop:${TAG}',ports:[port(8080,8080)],frozen:false,healthcheck:true}],usable:{compose:false,env:true,ports:true,image:false},reasons:{compose:{code:'NO_COMPOSE',message:'This app has no Compose file to edit.'},image:{code:'IMAGE_FROM_ENV',message:'Edit TAG in Environment.'}}});
  ({context,page}=await open({width:1280}));
  await startEdit(page,1280);
  assert.equal(await dlg(page).getByRole('tab',{name:'Compose'}).count(),0);
@@ -644,7 +644,7 @@ async function roles(){
  await dlg(page).getByRole('button',{name:'Review',exact:true}).waitFor();
  await context.close();
  // Rate limit, busy site and an unreachable server at Review are retryable notes, not the blocked panel.
- for(const [mode,text] of [['rate','Too many changes for this site. Try again later.'],['busy','This site is busy right now. Try again soon.'],['unreachable','The server could not be reached. Try again.']]){
+ for(const [mode,text] of [['rate','Too many changes for this app. Try again later.'],['busy','This app is busy right now. Try again soon.'],['unreachable','The server could not be reached. Try again.']]){
   freshMock();mock.reviewMode=mode;
   ({context,page}=await open({width:1280}));
   await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
@@ -685,7 +685,7 @@ async function roles(){
  ({context,page}=await open({width:1280}));
  await startEdit(page,1280);await dirtyEnv(page);await dlg(page).getByRole('button',{name:'Save SECRET_KEY'}).click();await review(page);
  await dlg(page).getByRole('button',{name:'Apply',exact:true}).click();
- await dlg(page).getByText('This site is busy right now. Try again soon.').waitFor();
+ await dlg(page).getByText('This app is busy right now. Try again soon.').waitFor();
  await context.close();
 }
 
@@ -754,7 +754,7 @@ async function realApi(){
   await context.addCookies([{name:'dbm_session',value:token,url:base}]);
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
-  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Sites & schedules',exact:true}).click();
+  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Apps & schedules',exact:true}).click();
   const card=page.locator('.site-card',{hasText:'shop'});
   await card.getByRole('button',{name:'Edit shop with Safe Edit'}).click();
   const d=dlg(page);
