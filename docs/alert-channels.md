@@ -20,7 +20,7 @@ a new Administration page, Connections. Alert nodes stay on the Map. Existing no
 | Outbound | Every request goes through one guarded client: HTTPS, own DNS check pinned to the socket, no redirects, 10 s, 64 KB. |
 | Private network | Refused by default. An admin setting "Allow private network" opens RFC 1918, ULA and CGNAT, but only for Connections an admin saved while it is on. A fixed list (loopback, link-local, metadata and others) is always refused. |
 | Who | Administrators, plus operators when an admin turns on "Operators can manage alerts" (off by default). Creating, replacing or deleting a Connection needs a recent re-verification. |
-| Message | One template for every provider: title, site and server, a plain reason, a link to the job. Each provider formats it natively. |
+| Message | One template for every provider: title, app and server, a plain reason, a link to the job. Each provider formats it natively. |
 
 ## Data model (migration `alert-connections`, `compatible: true`)
 
@@ -171,7 +171,7 @@ re-verification and the `alerts.operators_manage` audit event.
 - Turning the setting off takes effect on the next request. Operators keep nothing: their views carried no secrets.
 - Honest risk: with the setting on, an operator (or anyone holding a stolen operator session that passes
   re-verification) can create a Connection to an account they control, or move an existing one there, and receive
-  alert text: site and server names, event times, plain reasons and job links. They never receive saved secrets
+  alert text: app and server names, event times, plain reasons and job links. They never receive saved secrets
   (write-only), the link still needs a DockNest sign-in, and operators already see those names and jobs in DockNest.
   Destination changes need re-verification and are audited with the actor and role. They cannot probe the LAN:
   operator Connections reach public hosts only and failures reveal nothing. Other (any public URL with a fixed body)
@@ -261,7 +261,7 @@ any pseudo-header (`:name`).
 - So "Send test" never says "Delivered" for WhatsApp. It shows "Accepted by WhatsApp." and always the note: "If it
   does not arrive, check the template name. Plain messages arrive only within 24 hours of a message from you."
 - **Template is the default.** The user creates one Utility template once in WhatsApp Manager, named
-  `docknest_alert`, language `en`, body `DockNest alert: {{1}}. {{2}}. {{3}} Open DockNest for details.` (title, site
+  `docknest_alert`, language `en`, body `DockNest alert: {{1}}. {{2}}. {{3}} Open DockNest for details.` (title, app
   and server, reason). The fixed words keep the variable-to-length ratio Meta asks for, and the body neither starts
   nor ends with a variable. DockNest sends a `template` message with those three text parameters.
 - Under "More options": Template name (pre-filled `docknest_alert`) and Language (pre-filled `en`). Clearing the
@@ -407,7 +407,7 @@ switches to the new routes (PR 4), so main never has a broken alerts UI. They ar
 - **Node panel** (desktop side panel, phone sheet): Name, Provider (searchable), Connection (only that provider's,
   plus "New connection" prefilled with the provider and any `prefill`, and a pencil to edit), Send test. Tab "Sends
   when": one block per connected source with its events and Disconnect, then "Connect another source". New sources
-  start with the defaults: site: backup failed, restore test failed; server: those plus unreachable and low disk;
+  start with the defaults: app: backup failed, restore test failed; server: those plus unreachable and low disk;
   DockNest: those plus update available. No "Send on", no "Last result", no delete button in the panel.
 - **Delete on the grid**: Delete or Backspace on a focused node (never while typing in a field), or the trash icon on
   the node's corner. A node with sources asks "Delete Ops WhatsApp? It stops alerts from 2 sources."; one without
@@ -599,7 +599,7 @@ What PR 3 settled where this document left room, or chose a narrower step:
 - **Job link.** `jobLink` gives `${APP_ORIGIN}/?job=<id>` for a backup job and the app address itself for events without a
   job, and nothing when `APP_ORIGIN` is a loopback address. The web app does not read `?job=` yet: opening the job after
   sign-in comes with PR 4 (no UI in this PR).
-- **Telegram** now sends the template as plain text (title, "site on server at time", reason, link) with
+- **Telegram** now sends the template as plain text (title, "app on server at time", reason, link) with
   `link_preview_options: { is_disabled: true }` instead of `disable_web_page_preview`. The first message after the upgrade
   reads differently from 2.8 ("Upgrade safety" allows this) but says the same things, to the same chat.
 - **Email** sends the title as the subject (after the optional prefix) and the template lines as the plain text body.
@@ -613,7 +613,7 @@ What PR 3 settled where this document left room, or chose a narrower step:
 - **Slack** accepts `/services/T/B/token` only (not Workflow Builder `/triggers/` URLs). **Mattermost** accepts
   `<optional sub-path>/hooks/<id>`. **Google Chat** keeps `key`, `token` and the optional `threadKey` and
   `messageReplyOption`. **Discord** keeps `?thread_id=` (a thread webhook) and adds `wait=true` when sending.
-- **Matrix** sends `m.mentions: {}` and puts a zero-width space after every `@`, so a site named `@room` mentions nobody.
+- **Matrix** sends `m.mentions: {}` and puts a zero-width space after every `@`, so an app named `@room` mentions nobody.
   A homeserver on a public name must use 443 (the guard rule for public hosts); a custom port such as 8008 works on a
   private host with "Allow private network" on. The transaction ID is `<outbox id>-<16 hex of a SHA-256 of the time and
   both bodies>`: a retry of the same item reuses it, while the "N more alerts" item whose count changed in place, or a

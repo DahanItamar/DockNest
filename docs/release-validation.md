@@ -12,13 +12,13 @@ Locally, `node scripts/release-validation.js --target v2.1.0 --allow-local` (or 
 ## What it does
 
 1. **Install 2.0.0.** Clones the repository at `v2.0.0` into a temporary directory, runs `npm ci` and `npm run setup`, writes a `.env` and starts the repository's own `compose.yaml` with `docker compose up -d --build`: read-only containers, all capabilities dropped, the real named volume.
-2. **Create state through 2.0.0.** Completes first-admin setup over the HTTP API (setup token, password, TOTP enrolment; codes are computed from the returned secret). It then writes representative rows through 2.0.0's own `db.js` inside the api container: a server with a sealed credential, a site, an enabled policy, a finished job, a pinned legacy backup (`verified=1` and no `backup_verifications` rows), a restore, audit events and a settings marker. It records a SHA-256 digest of every row of every table, excluding `sessions`, `rate_limits` and the login and enrolment challenge tables.
+2. **Create state through 2.0.0.** Completes first-admin setup over the HTTP API (setup token, password, TOTP enrolment; codes are computed from the returned secret). It then writes representative rows through 2.0.0's own `db.js` inside the api container: a server with a sealed credential, an app, an enabled policy, a finished job, a pinned legacy backup (`verified=1` and no `backup_verifications` rows), a restore, audit events and a settings marker. It records a SHA-256 digest of every row of every table, excluding `sessions`, `rate_limits` and the login and enrolment challenge tables.
 3. **Upgrade as documented.** `git fetch --tags && git checkout <target> && docker compose up -d --build`. Asserts:
    - `/api/version` reports the target version and `schemaVersion`, and the container runs that version.
    - A `state-v0-to-v<N>-*.sqlite` snapshot exists in the volume and is a healthy 2.0.0 database with the seeded rows.
    - Every pre-existing row is unchanged. New rows are allowed, and the columns compared are the ones 2.0.0 had.
    - The session opened on 2.0.0 still works, and the admin logs in again with password and TOTP.
-   - `GET /api/state` lists the seeded server, site, policy, job, backup, restore and audit events, does not expose the server credential, and shows the legacy backup's integrity as `passed` (`source: legacy`). Anonymous requests get 401.
+   - `GET /api/state` lists the seeded server, app, policy, job, backup, restore and audit events, does not expose the server credential, and shows the legacy backup's integrity as `passed` (`source: legacy`). Anonymous requests get 401.
    - The worker runs, `node src/worker-status.js` shows a held lease and a running heartbeat, and no job or restore needs recovery review.
    - `.env`, `data/master.key` and `data/setup.token` are byte-identical to before.
 4. **Worker drain.** `docker compose stop worker` must log the draining message and `Worker drained; lease released.`, exit with code 0 (not SIGKILL) inside the container's stop grace period, and leave the lease free. The worker is then started again.
@@ -31,7 +31,7 @@ The job summary shows one PASS, FAIL or SKIP line per phase. The artifact `relea
 
 ## What it proves
 
-- An installation made by 2.0.0 keeps its administrator, factors, sessions, servers, sites, policies, backups, restores and audit trail across the documented upgrade, a compatible downgrade and a second upgrade, on the real images and the real volume.
+- An installation made by 2.0.0 keeps its administrator, factors, sessions, servers, apps, policies, backups, restores and audit trail across the documented upgrade, a compatible downgrade and a second upgrade, on the real images and the real volume.
 - The pre-upgrade snapshot is written and usable, the migration does not change existing rows, and legacy-verified backups still read as having passed integrity.
 - `scripts/upgrade.sh` completes both directions non-interactively, releases its hold and writes an honest status file.
 - The worker drains on SIGTERM within its grace period.

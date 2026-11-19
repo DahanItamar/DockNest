@@ -4,9 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate.
+
 ### Fixed
 
-- A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 
 ## [2.16.4] - 2026-11-14
 

@@ -24,7 +24,7 @@ remote/
 │   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
-│   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
+│   ├── move.py             app moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
 │   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
@@ -162,7 +162,7 @@ The full, exact dependency list of each module is its build header (the `from .x
 - `VERSION=1` does not change: it is also the backup `formatVersion` that restores require.
 - Old backups, recovery kits and running restore test reapers each hold their own complete helper and keep working.
   Their guide texts (`python3 helper.py restore-chain ...`) stay true: the kit still ships `recovery/helper.py`.
-- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, sites
+- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, apps
   with boot recovery show it as outdated until it is reinstalled, as after any helper change. The old copy keeps
   working until then.
 
