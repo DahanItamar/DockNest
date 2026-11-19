@@ -1,6 +1,6 @@
 # ADR: MongoDB support and one module per database engine
 
-Status: proposed for 2.16.5. Related: [database-contracts.md](database-contracts.md), [support-matrix.md](support-matrix.md).
+Status: accepted for 3.0.0. Related: [database-contracts.md](database-contracts.md), [support-matrix.md](support-matrix.md).
 
 ## Audit of the engines today
 
@@ -30,27 +30,33 @@ Engine knowledge is spread over six functions as `if engine == ...` branches, pl
    `shared/database-engines.js`. The refactor ships first with no behaviour change, proven by the existing tests.
 2. **MongoDB follows the same cold contract** as the other engines, so restore, Move and restore tests keep one data
    path and the backup format does not change:
-   - Detection: `mongod --version` in the container. Tested majors only (6.0, 7.0, 8.0); others are refused.
+   - Detection: `mongod --version` in the container, only for an image named as a database (the same rule that
+     refuses unknown database images) or a service declared as `mongo`. Vendor images that bundle their own mongod
+     (network controllers and the like) stay generic writers, as before. Tested majors only (6.0, 7.0, 8.0, each run
+     by the CI MongoDB matrix); others are refused.
    - Contract: `dbPath` (from `getCmdLineOpts`) inside a writable captured mount, WiredTiger engine, no TLS-only mode.
-     A standalone server or a single-member replica set passes. A multi-member set, a secondary or an arbiter is
-     refused: one member's files are not a whole copy of the set.
+     Only a standalone server passes. Any replica set member (primary, secondary, arbiter, hidden or delayed, even
+     a single-member set) is refused for now: fail closed until a reviewed replica set adapter exists.
    - Credentials: the shell inside the container reads `MONGO_INITDB_ROOT_USERNAME` and
      `MONGO_INITDB_ROOT_PASSWORD` (or `_FILE`) and passes them to `mongosh` through a static script and environment
      variables. They never appear in Docker arguments, evidence, logs or job text. Auth on with no readable credentials
-     fails closed.
+     fails closed. `mongosh` runs with a private temporary HOME that is removed afterwards and with telemetry off, so
+     it leaves nothing in the writable layer that the backup commits.
    - Tools: `mongosh` must exist in the container. Without it the backup is refused with a plain reason. No image is
      pulled on the server for this.
-   - Clean-stop proof: exit code 0, this stop's logs contain `WiredTiger closed` and the shutdown exit code 0, and
-     `mongod.lock` in `dbPath` is empty.
+   - Clean-stop proof: exit code 0, this stop's logs contain STORAGE 4795901 `WiredTiger closed` followed by CONTROL
+     23138 `Shutting down` with exit code 0, and `mongod.lock` in `dbPath` is empty.
    - Ready after start: `db.runCommand({ping:1})`. Data checks: `{name, collection}` with an optional `database`,
-     read-only `countDocuments`, kept as a hash like the other engines.
-3. **Logical dumps** (`mongodump --archive --gzip` / `mongorestore`) are an open question for the owner, see below. They
-   are not needed for consistency, because writers are already stopped, and they would add a second restore path.
-4. **Second engine**: not in 2.16.5. Follow-up candidates, in order: Elasticsearch/OpenSearch single node,
+     read-only `countDocuments`, kept as a hash like the other engines. A missing database or collection fails the
+     check instead of counting zero.
+3. **No logical dumps** (owner decision): cold capture is final. `mongodump` is not needed for consistency, because
+   writers are already stopped, and it would add a second restore path.
+4. **Second engine**: not in 3.0.0. Follow-up candidates, in order: Elasticsearch/OpenSearch single node,
    CouchDB. Each is one new `engine_*.py` module plus its integration scenario.
 
 ## Upgrade safety
 
 No migration and no change to stored configuration. Existing apps keep their detected engines; a MongoDB container
 that was refused before ("Stateful service requires a supported per-service database contract") is now detected and
-checked. Old backups restore exactly as before.
+checked. A vendor image that bundles mongod without a database name, declared generic or left on auto, stays a
+generic writer exactly as before. Old backups restore exactly as before.

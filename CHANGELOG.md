@@ -6,7 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
-- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone or a single-member replica set).
+- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
 
 ### Fixed
 
