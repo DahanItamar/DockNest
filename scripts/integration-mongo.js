@@ -17,13 +17,15 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
   rt.testTiming.scale = 0.25; rt.testTiming.cancelPollMs = 200;
   const [source, target] = hosts, name = 'qa-mongo-native', imageName = process.env.MONGO_IMAGE || 'mongo:7.0';
   const password = randomBytes(24).toString('base64url'), filePassword = randomBytes(24).toString('base64url');
-  const secret = async (file, text, destination) => {
+  const secret = async (file, text, destination, mode) => {
     await writeFile(join(directory, file), text, { mode: 0o600 });
     await run('cp', join(directory, file), source + ':' + destination);
-    await run('exec', source, 'chmod', '600', destination);
+    await run('exec', source, 'chmod', mode, destination);
   };
-  await secret('mongo.env', 'MONGO_INITDB_ROOT_USERNAME=demo\nMONGO_INITDB_ROOT_PASSWORD=' + password + '\n', '/root/qa-mongo.env');
-  await secret('mongo-root', filePassword, '/root/qa-mongo-secret');
+  await secret('mongo.env', 'MONGO_INITDB_ROOT_USERNAME=demo\nMONGO_INITDB_ROOT_PASSWORD=' + password + '\n', '/root/qa-mongo.env', '600');
+  // The image's entrypoint drops to the mongodb user before it reads _FILE variables, so the secret is mounted
+  // read-only for everyone in the container (0444, like a Docker secret) on a disposable host.
+  await secret('mongo-root', filePassword, '/root/qa-mongo-secret', '444');
   // The fixture's own shell, authenticated from the container environment or secret file like DockNest's helper.
   const mongo = (host, container, script) => run('exec', host, 'docker', 'exec', container, 'sh', '-c',
     'p="${MONGO_INITDB_ROOT_PASSWORD:-}"; [ -z "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] || p=$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE"); exec mongosh --quiet --norc -u "$MONGO_INITDB_ROOT_USERNAME" -p "$p" --authenticationDatabase admin shop --eval "$1"', 'qa', script);
@@ -43,7 +45,7 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
     }
     // Diagnosable without the password: the fixture's state, its last log lines and the last probe error, redacted.
     const state = await run('exec', source, 'docker', 'inspect', '--format', '{{json .State}}', container).catch(() => 'unknown');
-    const logs = await run('exec', source, 'docker', 'logs', '--tail', '40', container).catch(error => String(error.stderr || ''));
+    const logs = await run('exec', source, 'sh', '-c', 'docker logs --tail 40 "$1" 2>&1', 'qa', container).catch(error => String(error.stderr || ''));
     throw new Error(redact('MongoDB fixture ' + container + ' did not become ready. State: ' + state + '\nLast probe: ' + last + '\nLast logs:\n' + logs));
   };
   const running = async container => await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', container) === 'true';
