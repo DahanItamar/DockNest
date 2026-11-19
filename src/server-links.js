@@ -7,6 +7,7 @@
 // containers could not be read. Only names, bind source paths and the image reference are stored.
 import { db } from './db.js';
 import { computeAppLinks } from '../shared/app-links.js';
+import { coverageIndex } from '../shared/backup-coverage.js';
 import { containerIsDatabase } from '../shared/database-image.js';
 
 export const LINKS_FORMAT = 1;
@@ -83,20 +84,13 @@ export function recordDiscoveredLinks(serverId, discovered, checkedAt = new Date
   return true;
 }
 
-// Who backs up each container on a server: the active Docker apps there, the last listed app when older ones overlap.
-// Adapter until shared/backup-coverage.js lands: then this becomes coverageIndex(sites, serverId).containers.
-function containerOwners(sites) {
-  const owners = new Map();
-  for (const site of sites) for (const name of site.config?.containers || []) owners.set(name, { siteId: site.id, name: site.name });
-  return name => owners.get(name) ?? null;
-}
 // The engine each app chose for its containers (site.config.services), for the database rule.
 function chosenEngines(sites) {
   return new Map(sites.flatMap(site => (Array.isArray(site.config?.services) ? site.config.services : []).map(service => [service?.container, service?.engine])));
 }
 function activeSites(serverId, database) {
-  return database.prepare('SELECT id,name,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all(serverId).flatMap(row => {
-    try { return [{ id: row.id, name: row.name, config: JSON.parse(row.config) }]; } catch { return []; }
+  return database.prepare('SELECT id,name,server_id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all(serverId).flatMap(row => {
+    try { return [{ id: row.id, name: row.name, serverId: row.server_id, config: JSON.parse(row.config) }]; } catch { return []; }
   });
 }
 
@@ -108,8 +102,8 @@ function computeRow(serverId, row, database) {
   if (!Array.isArray(stored)) return null;
   const entries = stored.filter(plainObject);
   const scan = cleanScan(entries.map(({ name, image, ...links }) => ({ name, image, links: { format: LINKS_FORMAT, ...links } })));
-  const sites = activeSites(serverId, database), engines = chosenEngines(sites);
-  const computed = computeAppLinks(scan.facts, containerOwners(sites), container => containerIsDatabase(engines.get(container.name), container.image));
+  const sites = activeSites(serverId, database), engines = chosenEngines(sites), owners = coverageIndex(sites, serverId).containers;
+  const computed = computeAppLinks(scan.facts, name => owners.get(name) ?? null, container => containerIsDatabase(engines.get(container.name), container.image));
   const { links, unowned, hubs } = computed;
   return { checkedAt: row.checked_at, partial: Boolean(row.partial) || entries.length < stored.length || scan.partial || computed.partial, links, unowned, hubs };
 }
