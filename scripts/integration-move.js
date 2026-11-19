@@ -8,9 +8,21 @@ import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { HARDENED_FLAGS, buildHardenedImage, hardeningOf, assertReadOnlyRoot } from './integration-copies.js';
 import { exportBackupZip } from './integration-zip.js';
+import { writeHelperBundle } from '../src/helper-bundle.js';
 
 // docker inspect fields a plain container's copy must keep (remote/helper/runspec.py); restart and ports differ per copy.
-const PLAIN_SETTINGS = '{{.Config.Hostname}} {{.Config.Tty}} {{.HostConfig.Memory}} {{.HostConfig.MemoryReservation}} {{.HostConfig.NanoCpus}} {{json .HostConfig.Ulimits}} {{.HostConfig.LogConfig.Type}} {{json .HostConfig.LogConfig.Config}} {{json .HostConfig.DnsSearch}} {{.HostConfig.ShmSize}} {{json .HostConfig.Sysctls}} {{.Config.StopTimeout}}';
+const PLAIN_SETTINGS = '{{.Config.Hostname}} {{.Config.Tty}} {{.HostConfig.Memory}} {{.HostConfig.MemoryReservation}} {{.HostConfig.NanoCpus}} {{json .HostConfig.Ulimits}} {{.HostConfig.LogConfig.Type}} {{json .HostConfig.LogConfig.Config}} {{json .HostConfig.DnsSearch}} {{.HostConfig.ShmSize}} {{json .HostConfig.Sysctls}} {{.Config.StopTimeout}} {{.Config.OpenStdin}} {{.HostConfig.PidsLimit}}';
+// -P on an exposed port without its own host port: Compose and a live copy publish it, a test copy only on loopback.
+const PLAIN_EXPOSURE = '{{.HostConfig.PublishAllPorts}} {{json (index .HostConfig.PortBindings "9000/tcp")}}';
+// fit_host on a real Docker engine: the limits a smaller server cannot take are refused by docker create, the fitted
+// ones are accepted, and a sysctl the kernel lacks is left out and named.
+const FIT_HOST_CHECK = ["import sys,subprocess;sys.path.insert(0,'/plain-helper');import helper",
+  "n=helper.cpu_count();image=sys.argv[1]",
+  "spec,notes=helper.fit_host({'cpus':str(n+1),'cpusetCpus':'0-%d'%n,'sysctls':{'net.core.somaxconn':'512','kernel.docknest_missing':'1'}},n)",
+  "assert notes==['its CPU limit, capped to %d'%n,'its CPU set','the sysctl kernel.docknest_missing'],notes",
+  "assert subprocess.run(['docker','create','--cpus',str(n+1),image],capture_output=True).returncode!=0,'docker refuses the original limit'",
+  "cid=subprocess.check_output(['docker','create','--cpus',spec['cpus'],*[a for k,v in spec['sysctls'].items() for a in ['--sysctl',k+'='+v]],image]).decode().strip()",
+  "subprocess.check_call(['docker','rm',cid],stdout=subprocess.DEVNULL);print('fitted')"].join('\n');
 const PLAIN_SECRET = 'PLAIN_SECRET=a$b\\c';  // a dollar sign and a backslash must arrive literally through the env file
 const UNPACK_RUN_DEFINITION = ["import zipfile,pathlib,shutil",
   "z=zipfile.ZipFile('/plain.zip');out=pathlib.Path('/plain');out.mkdir();prefix='recovery-originals/run-definition/'",
@@ -177,9 +189,11 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record, 
   await run('exec', source, 'docker', 'network', 'create', 'plain-net');
   await run('exec', source, 'docker', 'run', '-d', '--name', 'move-plain', '--restart', 'unless-stopped', '-p', '127.0.0.1:8099:8080', '-e', PLAIN_SECRET, '-v', 'move-plain-data:/site',
     '--hostname', 'plain-host', '--network', 'plain-net', '--network-alias', 'plain-alias', '-t', '--memory', '256m', '--memory-reservation', '128m', '--cpus', '0.5', '--ulimit', 'nofile=1024:2048',
-    '--log-opt', 'max-size=5m', '--dns-search', 'plain.internal', '--shm-size', '128m', '--sysctl', 'net.core.somaxconn=512', '--stop-timeout', '20', 'docknest-fixture:local');
+    '--log-opt', 'max-size=5m', '--dns-search', 'plain.internal', '--shm-size', '128m', '--sysctl', 'net.core.somaxconn=512', '--stop-timeout', '20',
+    '-i', '--pids-limit', '100', '--expose', '9000', '-P', 'docknest-fixture:local');
   await until(async () => (await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Health.Status}}', 'move-plain')) === 'healthy', 'Plain move fixture is not healthy');
   const plainSettings = host => run('exec', host, 'docker', 'inspect', '--format', PLAIN_SETTINGS, 'move-plain');
+  const plainExposure = async host => { const [all, bindings] = (await run('exec', host, 'docker', 'inspect', '--format', PLAIN_EXPOSURE, 'move-plain')).split(' '); return { all: all === 'true', bindings: JSON.parse(bindings) ?? [] }; };
   const plainAliases = async host => JSON.parse(await run('exec', host, 'docker', 'inspect', '--format', '{{json (index .NetworkSettings.Networks "plain-net").Aliases}}', 'move-plain')) ?? [];
   const original = await plainSettings(source);
   sites.plain = randomUUID();
@@ -198,19 +212,27 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record, 
   assert.ok((await plainAliases(target)).includes('plain-alias'), 'compose.yaml keeps the network alias');
   assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.HostConfig.RestartPolicy.Name}} {{index .Config.Labels "docknest.original-image"}}', 'move-plain'), 'unless-stopped docknest-fixture:local');
   assert.ok(JSON.parse(await run('exec', target, 'docker', 'inspect', '--format', '{{json .Config.Env}}', 'move-plain')).includes(PLAIN_SECRET), 'the env file holds the value literally');
+  assert.equal((await plainExposure(target)).bindings.length, 1, 'compose.yaml publishes the -P port');
+  const helperFolder = join(directory, 'plain-helper'); writeHelperBundle(helperFolder);
+  await run('cp', helperFolder, target + ':/plain-helper');
+  assert.equal(await run('exec', target, 'python3', '-c', FIT_HOST_CHECK, await run('exec', target, 'docker', 'inspect', '--format', '{{.Image}}', 'move-plain')), 'fitted');
+  await run('exec', target, 'rm', '-rf', '/plain-helper'); await rm(helperFolder, { recursive: true });
   await compose('down', '--volumes');
   await run('exec', target, 'rm', '-rf', '/plain', '/plain.zip');
-  record('A plain docker run app: its backup holds a Compose file that docker compose config accepts and that recreates hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout, network alias, restart policy and env values');
+  record('A plain docker run app: its backup holds a Compose file that docker compose config accepts and that recreates hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout, network alias, -P, stdin, pids limit, restart policy and env values; fit_host caps CPU limits docker create would refuse and drops a missing sysctl');
   const plainMove = await moves.previewMove({ siteId: sites.plain, targetServerId: servers[1].id, options: { askBeforeSwitch: true } }, 'qa');
   assert.equal(plainMove.ok, true, plainMove.sentence);
   await moves.startMove(plainMove.id, { preflightHash: plainMove.preflightHash }, 'qa');
   await drive(plainMove.id, state => ['waiting', 'rolled_back', 'failed', 'recovery_required', 'cancelled'].includes(state));
   assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(plainMove.id).state, 'waiting', moves.moveView(plainMove.id).statusLine);
   assert.equal(await plainSettings(target), original, 'the move copy keeps the same settings');
+  const testExposure = await plainExposure(target);
+  assert.equal(testExposure.all, false, 'a test copy never publishes on every interface');
+  assert.deepEqual(testExposure.bindings.map(binding => binding.HostIp), ['127.0.0.1'], 'the -P port of a test copy is on loopback');
   assert.ok((await plainAliases(target)).includes('plain-alias'), 'the move copy keeps the network alias');
   moves.cancelMove(plainMove.id, 'qa');
   await drive(plainMove.id, state => ['cancelled', 'rolled_back', 'recovery_required'].includes(state));
   assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(plainMove.id).state, 'cancelled');
   await run('exec', source, 'docker', 'rm', '-f', 'move-plain').catch(() => {});
-  record('Site move, plain docker run app: the copy on the new server keeps hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout and network alias (docker inspect matches the original)');
+  record('Site move, plain docker run app: the copy on the new server keeps hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout, stdin, pids limit and network alias (docker inspect matches the original), and its -P port is loopback-only');
 }
