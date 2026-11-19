@@ -49,6 +49,8 @@ try {
   const { remote, connect } = await import('../src/ssh.js');
   const {testStorageTarget,openRead,openWrite,storageJoin,removeFile,statFile}=await import('../src/storage.js');
   ({ db } = await import('../src/db.js'));
+  // Operations check their domains in the background (docs/domains.md); the fixture network never asks public DNS.
+  (await import('../src/moves/dns.js')).dnsResolver.resolve = async () => [];
   const servers = [];
   for (const host of hosts) {
     await run('run', '-d', '--privileged', '--name', host, '-e', 'DOCKER_TLS_CERTDIR=', '-p', '127.0.0.1::22', 'docknest-qa-host:local');
@@ -106,6 +108,7 @@ try {
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_domains.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
   await run('exec', hosts[0], 'docker', 'build', '-t', 'docknest-fixture:local', '/fixture-site');
@@ -298,6 +301,8 @@ try {
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
+  const {runDomainsScenario}=await import('./integration-domains.js');
+  await runDomainsScenario({run,until,hosts,servers,db,record});
   const {runLaunchScenario}=await import('./integration-launch.js');
   await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
   const wrapper=join(directory,'tar-wrapper');
