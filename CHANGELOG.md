@@ -7,6 +7,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Fixed
 
 - A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
 
 ## [2.16.4] - 2026-11-14
 

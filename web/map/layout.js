@@ -1,5 +1,5 @@
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
-// line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Nothing is persisted.
+// line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Moved nodes come in as opts.positions.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
  labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
 const byName=(a,b)=>{const x=String(a.name||'').toLowerCase(),y=String(b.name||'').toLowerCase();return x<y?-1:x>y?1:String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0};
@@ -114,7 +114,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   }
   out.width=alertX+m.alertS+m.pad;
  }
- out.height=bottom;
+ out.height=bottom;out.x0=0;out.y0=0;
  // Free layout: the owner's saved positions replace the automatic ones node by node (unknown nodes keep their automatic place).
  // Lines are then drawn between the final ports with plain elbows; they can cross a card, which is the owner's choice.
  const pos=opts.positions||{};
@@ -133,8 +133,19 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],pts=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:pts,d:elbow(pts)}});
   out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],pts=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:pts,d:elbow(pts)}});
   out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],pts=gen(src.alertOut,node.in);return {...p,points:pts,d:elbow(pts,12)}});
-  let w=0,h=0;for(const [,n] of nodes){w=Math.max(w,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);h=Math.max(h,n.block.y+n.block.h+m.pad)}
-  out.width=Math.max(w,m.pad*2);out.height=Math.max(h,m.pad*2);
+  // The canvas grows in every direction: a node left of or above the automatic layout widens it there, with the same margin.
+  let x0=0,y0=0,x1=0,y1=0;
+  for(const [,n] of nodes){x0=Math.min(x0,n.x-m.pad,n.block.x);y0=Math.min(y0,n.y-m.pad,n.block.y);x1=Math.max(x1,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);y1=Math.max(y1,n.block.y+n.block.h+m.pad)}
+  out.x0=x0;out.y0=y0;out.width=Math.max(x1-x0,m.pad*2);out.height=Math.max(y1-y0,m.pad*2);
  }
  return out;
 }
+
+// Map coordinates: the canvas spans x0..x0+width and y0..y0+height. x0 and y0 are 0 for the automatic layout and negative once a node
+// sits left of or above it. Everything else (nodes, ports, lines, the view offset) uses the same coordinates, with no wall at 0.
+export const GRID=16;
+export const snapToGrid=v=>Math.round(v/GRID)*GRID||0; // never -0
+// The view offset at zoom k that shows the canvas centred when it fits a w x h view, otherwise from its top left corner.
+export const homeOffset=(l,k,w,h)=>({x:Math.max(0,(w-l.width*k)/2)-l.x0*k,y:Math.max(0,(h-l.height*k)/2)-l.y0*k});
+// Whether part of the canvas lies outside a w x h view at offset t ({x,y,k}).
+export const clippedIn=(l,t,w,h)=>t.x+l.x0*t.k<-2||t.y+l.y0*t.k<-2||t.x+(l.x0+l.width)*t.k>w+2||t.y+(l.y0+l.height)*t.k>h+2;
