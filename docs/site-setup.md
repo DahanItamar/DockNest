@@ -26,14 +26,20 @@ If any step fails, DockNest puts every file back and reloads nginx. The app is s
 
 ## Coverage
 
-`GET /api/servers/:id/coverage` (any signed-in role) scans the server on demand and lists every container and volume
-with its status: `backed-up` (its app has a verified backup), `pending` (its app has none yet), `not-backed-up` or
-`skipped` (marked on purpose, with an optional note of up to 200 characters). A volume belongs to the app whose
-container mounts it. DockNest's own restore copies, restore test copies, Safe Edit holders and move test copies are
-left out. `complete` is `false`, with a line in `problems`, when volumes could not be listed or a container could not
-be read; such a scan is never all clear. Mark or unmark an item with `PUT /api/servers/:id/coverage/ignores`
-`{"kind":"container"|"volume","name":"...","note":"..."}` and `DELETE /api/servers/:id/coverage/ignores/:kind/:name`;
-both are audited without the note. See [the design](coverage-and-restore-check.md).
+Coverage shows, per server, every container and volume and whether an app backs it up.
+
+1. Open **Apps & schedules** and the **Coverage** panel, then pick a server. DockNest scans it when you open the
+   panel; **Scan again** checks it again. Nothing runs in the background.
+2. Each item is **Backed up** (with its app), **First backup pending** (it is in an app whose latest verified backup
+   does not hold it yet), **Not backed up**, or **Skipped**. A volume follows the app whose container mounts it.
+   DockNest's own restore copies, restore test copies and move test copies are not listed.
+3. For something not backed up, **Add app** opens the add flow with it already selected. For something you leave out
+   on purpose, **Skip** asks for an optional note (one line, up to 200 characters); **Unskip** brings it back. A server
+   holds up to 1000 skipped items. Skips are kept in the audit log, without the note.
+4. On the **Map**, the **Coverage** toggle adds the counts to each server and the list to the server panel.
+
+If the scan could not read everything (volumes, or a container that disappeared), the panel says so and never shows
+"everything is backed up". The endpoints are in [the design](coverage-and-restore-check.md#a4-coverage-view).
 
 ## Static nginx websites
 

@@ -1,6 +1,6 @@
 # Back up any container, coverage, and the restore check (ADR)
 
-Status: accepted for 2.16.5 (boards approved 2026-11-19). Date: 2026-11-19.
+Status: accepted for 2.16.5 (designs approved 2026-11-19). Date: 2026-11-19.
 Depends on: the Sites to Apps rename and `shared/backup-coverage.js` (integration/2.16.5). Internal names (`sites`,
 `site_id`, `/api/sites`) stay; all new copy says "app".
 
@@ -18,14 +18,14 @@ Two features:
 | Capture | A non-Compose app is already backed up: full `docker inspect` in the manifest, a `docker commit` snapshot image, every mount archived. Privileged or device containers and non-local volumes are refused at preflight. | The package holds raw inspect JSON only: nothing a person can read or run to recreate the container without DockNest. |
 | Restore (isolated) and restore tests | Recreate from the snapshot image with `--network none` or isolated networks, original mounts and hardening. | Fine for proving data comes back; not a real recreate. |
 | Move (real recreate) | `docker create` from the snapshot image keeps name, restart policy, networks and aliases, ports, tmpfs, hardening, mounts, extra hosts, init. Image config (env, command, entrypoint, user, workdir, labels, healthcheck, stop signal) travels with the commit. | Silently dropped: TTY and stdin, hostname, memory, CPU and pids limits, ulimits, log options, DNS, shm size, sysctls, group-add, publish-all (`-P`), stop timeout. |
-| Coverage | `useDiscovery` on the Map already subtracts containers that are in an app. The other lead's `shared/backup-coverage.js` makes this shared, with a 409 `CONTAINER_ALREADY_BACKED_UP`. | No per-server view, no volumes, no way to mark something as skipped on purpose. |
+| Coverage | `useDiscovery` on the Map already subtracts containers that are in an app. The duplicate check from the Apps rename (`shared/backup-coverage.js`) makes this shared, with a 409 `CONTAINER_ALREADY_BACKED_UP`. | No per-server view, no volumes, no way to mark something as skipped on purpose. |
 | Readiness (Check readiness) | Read-only helper operation. Required checks plus non-blocking warnings: mounts not copied (passwords, sudoers, keys) and `.ssh`/`.gnupg` folders left out. | Nothing about the host around the app. |
 | Host timer fix (Unreleased) | A backup that stops because a folder changed while paused now names the folder. | It reports the symptom after the fact; nothing finds the timer beforehand. |
 | Move preflight | Refuses Compose `external:` networks and volumes, non-bridge drivers, fixed subnets, file-based secrets and configs, and checks certbot on the target. | Only at move time, only for Compose apps, and as a refusal rather than a list. |
 | Add-app confirmation | "I reviewed external dependencies and included the configuration files and secrets" is a checkbox the user ticks with no help. | Nothing tells the user what those dependencies are. |
 | Restore tests and hardening score | Prove data restores in isolation; grade container security. | Neither looks at the host, so neither overlaps with B. |
 
-Conclusion for B: the owner is right that parts exist, but scattered (move refusals, readiness warnings, a checkbox).
+Conclusion for B: parts exist, but scattered (move refusals, readiness warnings, a checkbox).
 B **extends Check readiness**; there is no new check system, scheduler or job type.
 
 ## Decisions
@@ -70,7 +70,7 @@ network shopnet"). It is only a pre-selection; the user can untick any of them.
 
 - `GET /api/servers/:id/coverage` runs the existing `discover` (extended additively with `volumes` from
   `docker volume ls`) and classifies every container and volume with `shared/backup-coverage.js`:
-  **Backed up** (which app, once it has at least one verified backup; before that a "first backup pending" warning), **Not backed up**, or
+  **Backed up** (which app, once its latest verified backup holds the container; before that "first backup pending"), **Not backed up**, or
   **Skipped on purpose** (with the note). Volumes count as backed up when a container of an active app mounts them.
 - DockNest's own containers and volumes are not listed: restore copies (`dbm-restore-*`, label
   `docker-backup-manager.restore`), restore test copies (`docknest.restore-test`), Safe Edit holders
@@ -85,7 +85,8 @@ network shopnet"). It is only a pre-selection; the user can untick any of them.
   created_at)`, keyed by name (names survive recreates, IDs do not). Additive migration 19, `compatible: true`.
   `PUT /api/servers/:id/coverage/ignores` `{kind, name, note?}` and `DELETE .../ignores/:kind/:name`; every
   signed-in role (admins and operators) may change it, audited as `coverage.skip` / `coverage.unskip` with the kind
-  and name only, never the note. A skip shows only while nothing backs the item up.
+  and name only, never the note. A skip shows only while nothing backs the item up. A note is one line (whitespace is
+  collapsed), up to 200 characters; a server holds up to 1000 skips (409 `COVERAGE_SKIP_LIMIT` beyond).
 - Move: preview and start refuse with 409 `CONTAINER_ALREADY_BACKED_UP` when an active app on the target already
   backs up one of the app's containers (the same check as adding or editing an app).
 - UI: a Coverage panel per server on the Apps page, and a "Coverage" toggle on the Map that adds a status count to
@@ -120,7 +121,7 @@ follow links out of the scanned folder, and skip every path the denylist protect
   note, decided_by, decided_at)`; `finding_key` is a hash of kind, path and match, so line moves do not reset it.
   Additive migration, `compatible: true`.
 
-Owner answers (2026-11-19):
+Decisions (2026-11-19):
 
 - **Include in backup** saves a copy in the backup and adds restore-guide steps that say where to put it back by hand.
   Move never writes into `/etc`. The button and its copy say exactly that.
