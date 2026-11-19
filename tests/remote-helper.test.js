@@ -14,6 +14,11 @@ test('Redis contracts reject unsafe persistence, authentication, shutdown and ke
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for Redis contract verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('MongoDB contracts refuse unsafe topology, TLS, logging, credentials and lock states and keep credentials out of argv',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_mongo.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for MongoDB contract verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('incremental backups: snapshot state, chain links verified before extraction, dumpdir path checks and ZIP refusal',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_incremental.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for incremental backup helper verification');
