@@ -4,6 +4,10 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone or a single-member replica set).
+
 ### Fixed
 
 - A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.

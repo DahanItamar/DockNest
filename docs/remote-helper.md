@@ -20,6 +20,7 @@ remote/
 │   ├── engine_postgres.py  PostgreSQL: contract, control-file clean-stop proof, readiness, row counts
 │   ├── engine_mysql.py     MySQL and MariaDB: contract, verified slow shutdown, clean-stop log proof, row counts
 │   ├── engine_redis.py     Redis 7.4: standalone contract, final-save proof, offline RDB/AOF checks, key digests
+│   ├── engine_mongo.py     MongoDB 6.0/7.0/8.0: mongosh contract, WiredTiger clean-stop proof, document counts
 │   ├── databases.py        SQLite proofs, the ENGINES registry, contracts, clean shutdown, restart, data checks
 │   ├── backup.py           backup plan, artifact streaming and checks, static sites, preflight, readiness, capture
 │   ├── incremental.py      snapshot state, chain records, commit and discard
@@ -49,7 +50,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (23 modules)"]
+  subgraph Source["remote/helper/ (24 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
