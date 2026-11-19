@@ -36,7 +36,7 @@ test('manual DNS says the downtime lasts until the DNS change is live', () => {
 
 test('blocked moves lead with one plain sentence naming the first reason', () => {
   const cases = [
-    [f => { f.target.id = 'old'; }, 'This site is already on new-srv.'],
+    [f => { f.target.id = 'old'; }, 'This app is already on new-srv.'],
     [f => { f.target.reachable = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
     [f => { f.target.hostKeyOk = false; }, 'DockNest cannot connect to new-srv. Test it on the Servers page.'],
     [f => { f.state.busy = true; }, 'Shop is busy with another job. Try again when it finishes.'],
@@ -56,7 +56,7 @@ test('blocked moves lead with one plain sentence naming the first reason', () =>
     [f => { f.target.nginx.configOk = false; }, 'nginx on new-srv has a setup error. Fix it, then try again.'],
     [f => { f.target.nginx.serverNames = ['SHOP.example.com']; }, 'new-srv already serves shop.example.com.'],
     [f => { f.target.webPortOwner = 'other'; }, 'Another program uses port 80 on new-srv.'],
-    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'new-srv has no free port for this site (tried 8082 and the next 100).'],
+    [f => { f.target.usedPorts = Array.from({ length: PORT_SEARCH_RANGE + 1 }, (_, index) => 8082 + index); }, 'new-srv has no free port for this app (tried 8082 and the next 100).'],
     [f => { f.dns.records = [{ type: 'CNAME', name: 'shop.example.com', value: 'shop.host.example.net' }]; }, 'shop.example.com is a CNAME record, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
     [f => { f.dns.records.push({ type: 'A', name: 'shop.example.com', value: '203.0.113.8' }); }, 'shop.example.com has 2 A records, so DockNest cannot switch it for you. Choose "I\'ll change DNS myself".'],
   ];
@@ -85,7 +85,7 @@ test('warnings proceed and stay under Advanced details', () => {
   assert.equal(result.verdict, 'ready-with-notes'); assert.equal(result.canStart, true);
   assert.match(result.sentence, /^Shop is ready to move to new-srv\./);
   const text = id => only(result, id).map(item => item.text);
-  assert.deepEqual(text('port'), ['Port 8082 is already used on new-srv. The site will listen on 8083 instead. Its own settings stay the same.']);
+  assert.deepEqual(text('port'), ['Port 8082 is already used on new-srv. The app will listen on 8083 instead. Its own settings stay the same.']);
   assert.equal(only(result, 'port')[0].automatic, true);
   assert.deepEqual(result.details.portMap, [{ hostIp: '127.0.0.1', protocol: 'tcp', containerPort: 80, from: 8082, to: 8083 }]);
   assert.match(text('compose')[0], /older than 2\.24/);

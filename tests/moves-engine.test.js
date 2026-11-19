@@ -222,7 +222,7 @@ test('only administrators manage moves; starting needs a recent re-verification;
   assert.equal((await admin('/sites/' + siteId, { method: 'DELETE' })).status, 409);
   assert.equal((await post(admin, '/moves', { siteId, targetServerId: newServer })).status, 409, 'one move per site');
   const same = await post(admin, '/moves', { siteId: siteRow('same'), targetServerId: oldServer });
-  const body = await same.json(); assert.equal(body.ok, false); assert.equal(body.id, null); assert.equal(body.sentence, 'This site is already on old-srv.');
+  const body = await same.json(); assert.equal(body.ok, false); assert.equal(body.id, null); assert.equal(body.sentence, 'This app is already on old-srv.');
   assert.equal((await post(admin, `/moves/${draft.id}/start`, { preflightHash: draft.preflightHash })).status, 409, 'already started');
   await post(admin, `/moves/${draft.id}/cancel`); await drive(20);
   assert.equal(engineState(draft.id), 'cancelled');
@@ -396,7 +396,7 @@ test('a failure after the DNS switch never undoes the move: no teardown, no rest
   const live = calls.findIndex(call => call.operation === 'deploy-restore' && call.mode === 'live');
   assert.ok(live > 0 && !calls.slice(live).some(call => ['deploy-teardown', 'move-resume-source'].includes(call.operation)), 'after the live deploy nothing is torn down and the old site is not restarted');
   const view = await (await admin('/moves/' + draft.id)).json();
-  assert.match(view.statusLine, /certbot crashed The site already runs on new-srv, so DockNest did not undo anything\. Press Try again, or Switch back\.$/);
+  assert.match(view.statusLine, /certbot crashed The app already runs on new-srv, so DockNest did not undo anything\. Press Try again, or Switch back\.$/);
   assert.deepEqual(view.actions.resolve, ['retry']); assert.equal(view.actions.switchBack, true);
   assert.equal((await post(admin, `/moves/${draft.id}/resolve`, { action: 'undo' })).status, 409);
   // Switch back before finalize: the old copy was only stopped, so it is resumed (not un-retired).

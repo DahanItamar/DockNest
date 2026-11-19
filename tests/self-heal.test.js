@@ -509,7 +509,7 @@ test('API: read for everyone, change for administrators with CSRF, 422 NO_HEALTH
   assert.equal((await admin('PUT', `/sites/${siteId}/self-heal`, { enabled: true, extra: 1 })).body.code, 'INVALID');
   resolveAnswer = () => ({ containers: [{ name: 'shop-web-1', project: 'shop', service: 'web', healthcheck: false }] });
   const none = await admin('PUT', `/sites/${siteId}/self-heal`, { enabled: true });
-  assert.deepEqual([none.status, none.body.code, none.body.error], [422, 'NO_HEALTHCHECK', 'No container in this site has a health check.']);
+  assert.deepEqual([none.status, none.body.code, none.body.error], [422, 'NO_HEALTHCHECK', 'No container in this app has a health check.']);
   resolveAnswer = () => { throw new Error('ssh: connect to host 192.0.2.10 port 22: refused'); };
   const down = await admin('PUT', `/sites/${siteId}/self-heal`, { enabled: true });
   assert.equal(down.status, 502); assert.doesNotMatch(JSON.stringify(down.body), /192\.0\.2/);
@@ -538,7 +538,7 @@ test('API: read for everyone, change for administrators with CSRF, 422 NO_HEALTH
   const page1 = await operator('GET', `/self-heal/events?siteId=${siteId}&limit=2`);
   assert.equal(page1.body.items.length, 2); assert.ok(page1.body.nextCursor);
   assert.deepEqual(Object.keys(page1.body.items[0]).sort(), ['at', 'container', 'id', 'jobId', 'kind', 'reason', 'reasonCode', 'siteId', 'siteName']);
-  assert.equal(page1.body.items.find(item => item.kind === 'skipped').reason, 'The site was in maintenance.');
+  assert.equal(page1.body.items.find(item => item.kind === 'skipped').reason, 'The app was in maintenance.');
   const page2 = await operator('GET', `/self-heal/events?siteId=${siteId}&limit=2&after=${page1.body.nextCursor}`);
   const page3 = await operator('GET', `/self-heal/events?siteId=${siteId}&limit=2&after=${page2.body.nextCursor}`);
   assert.deepEqual([page2.body.items.length, page3.body.items.length, page3.body.nextCursor], [2, 1, null]);

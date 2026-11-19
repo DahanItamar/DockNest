@@ -113,10 +113,10 @@ async function gotoMap(page){
  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).first().click();
  await page.locator('.map-root').waitFor();
 }
-// Desktop: the "+" beside the server opens New site with that server. Phone: Add site on the server, then the New site row.
+// Desktop: the "+" beside the server opens New site with that server. Phone: Add app on the server, then the New site row.
 async function openNew(page,server='Commerce host'){
  await gotoMap(page);
- if(phone(page))await page.locator('.map-list-group',{hasText:server}).getByRole('button',{name:'Add site'}).click();
+ if(phone(page))await page.locator('.map-list-group',{hasText:server}).getByRole('button',{name:'Add app'}).click();
  else await page.getByRole('button',{name:'New site on '+server}).click();
  await page.locator('.map-row',{hasText:'New site'}).click();
  await page.getByRole('heading',{name:'New site'}).waitFor();

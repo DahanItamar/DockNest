@@ -22,7 +22,7 @@ const handle = fn => async (req, res, next) => {
   }
 };
 const notFound = message => Object.assign(new Error(message), { status: 404, code: 'NOT_FOUND' });
-const siteOf = siteId => db.prepare('SELECT * FROM sites WHERE id=?').get(String(siteId)) ?? (() => { throw notFound('Site not found.'); })();
+const siteOf = siteId => db.prepare('SELECT * FROM sites WHERE id=?').get(String(siteId)) ?? (() => { throw notFound('App not found.'); })();
 const testOf = testId => loadTest(String(testId)) ?? (() => { throw notFound('Restore test not found.'); })();
 
 restoreTestRoutes.get('/sites/:id/restore-tests', handle((req, res) => {
@@ -60,7 +60,7 @@ export async function acknowledgeTestJob(req, res, job) {
   if (!test) return res.status(404).json({ error: 'Restore test not found.', code: 'NOT_FOUND' });
   const site = db.prepare('SELECT name FROM sites WHERE id=?').get(test.site_id);
   const body = z.object({ confirmation: z.string().max(200), reviewedRemoteRecovery: z.literal(true) }).safeParse(req.body);
-  if (!body.success || body.data.confirmation !== site?.name) return res.status(409).json({ error: 'Type the site name and confirm you checked the test server.', code: 'CONFIRMATION_REQUIRED' });
+  if (!body.success || body.data.confirmation !== site?.name) return res.status(409).json({ error: 'Type the app name and confirm you checked the test server.', code: 'CONFIRMATION_REQUIRED' });
   try { res.json(await acknowledgeRestoreTestCleanup(test.id, req.user.id)); }
   catch (error) {
     if (error.status) return send(res, error);

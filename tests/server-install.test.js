@@ -293,7 +293,7 @@ test('Docker offered by the system below what the site needs is not installable,
   const facts = { os: { id: 'ubuntu', versionId: '24.04' }, packageManager: 'apt', candidates: { docker: '26.1' } };
   const multi = plan.installInfo(facts, 'docker', { needDockerMajor: 28 });
   assert.equal(multi.supported, false);
-  assert.equal(multi.reason, "This server's packages offer Docker 26.1; this site needs 28 or newer. Install Docker from Docker's own repository instead.");
+  assert.equal(multi.reason, "This server's packages offer Docker 26.1; this app needs 28 or newer. Install Docker from Docker's own repository instead.");
   assert.match(multi.command, /^# .*https:\/\/docs\.docker\.com\/engine\/install\/$/);
   assert.doesNotMatch(multi.command, /curl|wget|\| *sh/);
   assert.equal(plan.installInfo(facts, 'docker', { needDockerMajor: 0 }).supported, true, 'a single container does not need 28');
@@ -301,14 +301,14 @@ test('Docker offered by the system below what the site needs is not installable,
   for (const candidates of [{ docker: 'x; rm' }, {}, undefined]) {
     const unread = plan.installInfo({ ...facts, candidates }, 'docker', { needDockerMajor: 28 });
     assert.equal(unread.supported, false, 'fail-closed: an unreadable offered version does not meet the need');
-    assert.equal(unread.reason, "DockNest could not read which Docker version this server's packages offer; this site needs 28 or newer. Install Docker from Docker's own repository instead.");
+    assert.equal(unread.reason, "DockNest could not read which Docker version this server's packages offer; this app needs 28 or newer. Install Docker from Docker's own repository instead.");
   }
   assert.equal(plan.installInfo({ ...facts, candidates: {} }, 'docker', { needDockerMajor: 0 }).supported, true, 'without a need the offered version does not matter');
   assert.equal(plan.installInfo({ ...facts, candidates: {} }, 'nginx', { needDockerMajor: 28 }).supported, true, 'the Docker need applies to Docker only');
   assert.deepEqual([plan.dockerNeed(undefined), plan.dockerNeed(1), plan.dockerNeed(2)], [{ needDockerMajor: 0 }, { needDockerMajor: 0 }, { needDockerMajor: 28 }]);
   const result = evaluateMove(moveFacts(f => { f.target.candidates = { docker: '26.1' }; }));
   assert.equal(checkFor(result, 'docker')[0].install.supported, false);
-  assert.match(checkFor(result, 'docker')[0].install.reason, /offer Docker 26\.1; this site needs 28 or newer/);
+  assert.match(checkFor(result, 'docker')[0].install.reason, /offer Docker 26\.1; this app needs 28 or newer/);
   const single = evaluateMove(moveFacts(f => { f.target.candidates = { docker: '26.1' }; f.site.containerCount = 1; }));
   assert.equal(checkFor(single, 'docker')[0].install.supported, true);
 });
@@ -334,7 +334,7 @@ test('an install for a site applies the same Docker need as move preflight; the 
   system.candidates = { docker: '26.1' };
   let response = await post(user('admin'), url, { package: 'docker', siteId: group });
   let body = await response.json();
-  assert.equal(response.status, 409); assert.equal(body.code, 'INSTALL_UNSUPPORTED'); assert.match(body.error, /offer Docker 26\.1; this site needs 28 or newer/);
+  assert.equal(response.status, 409); assert.equal(body.code, 'INSTALL_UNSUPPORTED'); assert.match(body.error, /offer Docker 26\.1; this app needs 28 or newer/);
   system.candidates = {};
   body = await (await post(user('admin'), url, { package: 'docker', siteId: group })).json();
   assert.match(body.error, /could not read which Docker version/);

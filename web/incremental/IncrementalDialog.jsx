@@ -46,7 +46,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
    <div className="inc-row-text"><span className="inc-row-label" id="inc-full">New chain</span><span className="t-caption" id="inc-full-help">A full backup, then increments. Old backups stay.</span>{(!data.enabled||!enabled)&&<span className="t-caption inc-hint">Save first.</span>}</div>
    <div className="inc-row-add"><button type="button" aria-describedby="inc-full-help" disabled={busy||!data.enabled||!enabled} onClick={fullNow}>Full backup now</button></div>
   </div>
-  {data.available===false&&<AlertPanel variant="info" title="Not available">Incremental backups need a Docker site on a server with the latest helper.</AlertPanel>}
+  {data.available===false&&<AlertPanel variant="info" title="Not available">Incremental backups need a Docker app on a server with the latest helper.</AlertPanel>}
   {enabled&&<p className="inc-next t-caption"><StatusLabel state="queued">{nextFull?'Next backup: full':'Next backup: increment'}</StatusLabel></p>}
   {enabled&&nextFull&&data.fullNextMessage&&<AlertPanel variant="warning" title="Full backup planned">{data.fullNextMessage}</AlertPanel>}
   {!enabled&&data.enabled&&<AlertPanel variant="info" title="Existing chains stay">Turning this off makes the next backup full. Older backups can still be restored.</AlertPanel>}

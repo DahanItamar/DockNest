@@ -105,8 +105,8 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     await dialog.getByRole('heading',{name:'Fixture Ubuntu is connected'}).waitFor();
     if(mode==='new'){
       await page.route('**/api/servers/fixture-server/discover',route=>route.fulfill({json:{containers:[{name:'first-site',image:'app:latest',state:{status:'running'}}]}}));
-      await dialog.getByRole('button',{name:'Add a site',exact:true}).click();
-      await dialog.getByRole('button',{name:'Select site first-site',exact:true}).click();
+      await dialog.getByRole('button',{name:'Add an app',exact:true}).click();
+      await dialog.getByRole('button',{name:'Select app first-site',exact:true}).click();
       assert.equal(await dialog.getByRole('button',{name:'Continue',exact:true}).isEnabled(),true,'A standalone site can be selected without technical controls');
       assert.equal(await dialog.getByLabel('Source server').inputValue(),'fixture-server','Successful connection hands off the chosen server');
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -148,16 +148,16 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
-  await page.getByRole('navigation').getByRole('button',{name:'Sites & schedules'}).click();
-  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Apps & schedules'}).click();
+  await page.getByRole('button',{name:'Add app',exact:true}).click();
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isVisible(),false,'Service controls stay collapsed during site selection');
-  await siteDialog.getByRole('button',{name:'Select site blog',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app blog',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true,includeHidden:true}).isChecked(),false,'Choosing another site replaces the prior project');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true);
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
@@ -169,7 +169,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.screenshot({path:path.join(screenshotDir,'site-selection-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
   assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
   assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
   await page.route('**/api/servers/host-one/project-files?**',route=>{
@@ -184,13 +184,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   await siteDialog.getByLabel('Domains (comma separated)').fill('https://shop.example.org/catalog/');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
-  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop');
+  await siteDialog.getByLabel('App name',{exact:true}).fill('My shop');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
   await siteDialog.getByRole('checkbox',{name:/normal stop/}).check();
   await siteDialog.getByRole('checkbox',{name:/No containers or processes/}).check();
   await siteDialog.getByRole('button',{name:'Back',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'My shop','Back preserves edited settings');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
   assert.equal(await siteDialog.getByLabel('Domains (comma separated)').inputValue(),'shop.example.org','Advanced settings survive navigation');
   await siteDialog.getByText('Advanced backup settings',{exact:true}).click();
@@ -198,10 +198,10 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   let maintenanceSetups=0;
   await page.route('**/api/sites/fixture-site/maintenance/setup',route=>{assert.equal(route.request().method(),'POST');maintenanceSetups++;return route.fulfill({json:{configured:true,files:['/etc/nginx/sites-enabled/shop']}});});
   assert.equal(await siteDialog.getByRole('checkbox',{name:/Show a maintenance page during backups/}).isChecked(),true,'New Docker sites set up the maintenance page by default');
-  await siteDialog.getByRole('button',{name:'Add site',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Add app',exact:true}).click();
   await siteDialog.waitFor({state:'hidden'});assert.equal(createdSites,1);
   assert.equal(maintenanceSetups,1,'Adding the site sets up its maintenance page once');
-  await page.getByText('Site added with its maintenance page, tested on your domain. Set its schedule when ready.').waitFor();
+  await page.getByText('App added with its maintenance page, tested on your domain. Set its schedule when ready.').waitFor();
   await page.route('**/api/sites/fixture-site',route=>{
     if(route.request().method()==='DELETE'){fixtureSites=[];fixturePolicies=[];return route.fulfill({json:{id:'fixture-site',removed:true,backupsPreserved:true}});}
     assert.equal(route.request().method(),'PATCH');const body=route.request().postDataJSON();assert.equal(body.name,'My shop edited');
@@ -211,20 +211,22 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     fixtureSites=[{id:'fixture-site',...body}];return route.fulfill({json:fixtureSites[0]});
   });
   await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
-  assert.equal(await siteDialog.getByLabel('Site name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
-  await siteDialog.getByLabel('Site name',{exact:true}).fill('My shop edited');
+  assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
+  await siteDialog.getByLabel('App name',{exact:true}).fill('My shop edited');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   await siteDialog.getByRole('checkbox',{name:/reviewed external dependencies/}).check();
   await siteDialog.getByRole('button',{name:'Save configuration',exact:true}).click();await siteDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Add site',exact:true}).click();
+  // The saved app now owns shop and shop-db, so the wizard hides them; the next wizard checks run without it.
+  const savedSites=fixtureSites;fixtureSites=[];await page.getByRole('button',{name:'Refresh dashboard'}).click();
+  await page.getByRole('button',{name:'Add app',exact:true}).click();
   await siteDialog.getByLabel('Source server').selectOption('host-one');
-  await siteDialog.getByRole('button',{name:'Select site shop',exact:true}).click();
+  await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   await siteDialog.getByText('Review services in shop',{exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isChecked(),true,'Compose project selects its database');
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).uncheck();
   await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).check();
-  await siteDialog.getByText('My site needs a custom selection',{exact:true}).click();
-  await siteDialog.getByLabel('Docker container (site)').selectOption('shop');
+  await siteDialog.getByText('My app needs a custom selection',{exact:true}).click();
+  await siteDialog.getByLabel('Docker container (app)').selectOption('shop');
   await siteDialog.getByLabel('Source server').selectOption('host-two');
   await siteDialog.getByRole('alert').getByText('The server is unavailable. Retry the connection.',{exact:true}).waitFor();
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'A failed server switch cannot reuse a previous selection');
@@ -232,6 +234,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await siteDialog.getByText(/No Docker containers found/).waitFor();
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true,'Empty discovery cannot create a site');
   await siteDialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  fixtureSites=savedSites;await page.getByRole('button',{name:'Refresh dashboard'}).click();
   let expectedSchedule='45 23 * * *';
   await page.route('**/api/sites/fixture-site/policy',route=>{
     const body=route.request().postDataJSON();assert.equal(body.schedule,expectedSchedule);assert.equal(body.timezone,'Asia/Jerusalem');
@@ -275,13 +278,13 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByRole('dialog').getByRole('heading',{name:'Setup needs attention',exact:true}).waitFor();
   await page.getByRole('dialog').getByText('Deploy the maintenance page and integrate it with the source proxy.',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();
-  await page.getByRole('button',{name:'Remove site',exact:true}).click();
+  await page.getByRole('button',{name:'Remove app',exact:true}).click();
   const removeDialog=page.getByRole('dialog');
   await removeDialog.getByText(/Existing backup files and history will be kept/).waitFor();
   await removeDialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  await page.getByRole('button',{name:'Remove site',exact:true}).click();
-  await removeDialog.getByRole('button',{name:'Remove site',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
-  await page.getByRole('heading',{name:'Choose the sites to protect',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Remove app',exact:true}).click();
+  await removeDialog.getByRole('button',{name:'Remove app',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
+  await page.getByRole('heading',{name:'Choose the apps to protect',exact:true}).waitFor();
   let storageFixture=[];
   await page.route('**/api/storage-report',route=>route.fulfill({json:{generatedAt:new Date().toISOString(),storages:[],sites:[],totals:{packages:0,bytes:0,estimateUpToBytes:0,estimateUpToPercent:0},growth:{days:30,points:[],fromBytes:0,toBytes:0,changeBytes:0},method:''}}));
   await page.route('**/api/storage-targets',route=>route.fulfill({json:{targets:storageFixture,activeTargetId:storageFixture[0]?.id}}));
@@ -320,7 +323,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
   await page.screenshot({path:path.join(screenshotDir,'storage-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
-  for (const name of ['Servers', 'Sites & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
+  for (const name of ['Servers', 'Apps & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
   }

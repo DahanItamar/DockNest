@@ -581,3 +581,15 @@ test('Remove launch is refused while a Safe Edit or a self-heal restart is queue
   assert.equal((await admin('POST', `/launches/${id}/remove`, {})).status, 202);
   assert.equal(db.prepare('SELECT enabled FROM self_heal_settings WHERE site_id=?').get(siteId).enabled, 0, 'self-heal is off for the site being torn down');
 });
+
+test('a launch whose containers another app already backs up fails its save step and tears down', async () => {
+  const server = serverRow('covered-srv'); script = {}; calls = [];
+  db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(randomUUID(), server, 'Existing', JSON.stringify({ kind: 'docker', containers: ['covered-example-com-db-1'] }), at());
+  const launch = (await admin('POST', `/servers/${server}/launch`, pasted('covered.example.com'))).body.launch.id;
+  await drive();
+  const view = (await admin('GET', `/launches/${launch}`)).body;
+  assert.equal(view.failedStep, 'save'); assert.equal(steps(launch).teardown, 'done');
+  assert.equal(view.steps.find(step => step.step === 'save').detail, 'covered-example-com-db-1 is already backed up in Existing. Edit that app instead.');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sites WHERE server_id=?').get(server).n, 1);
+  assert.ok(logged.some(line => line.includes('CONTAINER_ALREADY_BACKED_UP')));
+});

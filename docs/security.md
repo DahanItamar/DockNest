@@ -16,11 +16,11 @@ Administrators manage invitations, revoke access, and rotate the system password
 
 Sensitive administration requires password plus that administrator's personal factor verified within the previous five minutes. The server returns REAUTH_REQUIRED when another verification is needed. Rotating the shared password signs everyone out and invalidates pending login/enrollment challenges and invitations. Tell authorized people the replacement password privately.
 
-### Roles and site host paths
+### Roles and app host paths
 
-Some site settings name folders and files on the source server that the helper reads or writes as root. Only administrators can add or change them. An operator who saves a site with a new or changed path gets HTTP 403 (`ADMIN_REQUIRED`) and the message "Only an administrator can change the ... of a site". Operators can still edit every other field, remove paths, and run backups, restores and downloads that use paths an administrator saved.
+Some app settings name folders and files on the source server that the helper reads or writes as root. Only administrators can add or change them. An operator who saves an app with a new or changed path gets HTTP 403 (`ADMIN_REQUIRED`) and the message "Only an administrator can change the ... of an app". Operators can still edit every other field, remove paths, and run backups, restores and downloads that use paths an administrator saved.
 
-| Site setting | Administrator | Operator |
+| App setting | Administrator | Operator |
 | --- | --- | --- |
 | Configuration (environment) files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
 | Compose project files | Any path except protected system paths | Saved paths, or paths discovery reports for that server |
@@ -29,11 +29,11 @@ Some site settings name folders and files on the source server that the helper r
 | Maintenance directory | Under the staging root, a project folder or a web root | Saved value or the default under the staging root only |
 | Name, containers, services, schedule, probe URLs, domains | Yes | Yes |
 
-Moving a site to another server checks all of its paths again. When discovery cannot reach the server, a path counts as not discovered.
+Moving an app to another server checks all of its paths again. When discovery cannot reach the server, a path counts as not discovered.
 
-The helper also checks paths, for every role. It never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, the SSH host keys (`/etc/ssh/*_key`), `/root/.ssh`, any `.ssh` folder, `/proc`, `/sys` or `/dev`, nor a folder that contains one of them (such as `/etc/ssh` or `/`). `.gnupg` folders count like `.ssh` folders (2.12.1). Inside a bind mount that is copied, every entry named `.ssh` or `.gnupg` is left out of the archive, at any depth (2.12.1); the job result and the readiness check name each one. Restores and moves clear setuid and setgid bits and file capabilities on every restored file, with no opt-out (2.12.1). Each path is checked as written, with a leading `//` read as `/`, and again after following symlinks, so a link such as `/opt/x -> /etc` does not get around the list. The API also refuses paths that start with `//`. It deploys a maintenance page only under the site's staging root, its Compose project folders, its website folder, `/var/lib/docknest`, `/var/www`, `/srv` or `/usr/share/nginx`, and never inside system folders such as `/etc`, `/root` or `/usr/bin`. A maintenance directory outside these places that is already deployed (it already holds `maintenance.html`) or already integrated (it holds `ready`) keeps working. The helper reports a warning, and the API logs it as `Remote helper warning:`. The exception is a maintenance folder that is a symlink into a system folder (for example `/var/www/x -> /etc/cron.d`). The helper refuses to deploy into it or to enable maintenance there, but it still lets the site leave maintenance. To clear the warning, move the folder under `/var/www/<domain>` or the staging root and update the site.
+The helper also checks paths, for every role. It never captures `/etc/shadow`, `/etc/gshadow`, `/etc/sudoers*`, the SSH host keys (`/etc/ssh/*_key`), `/root/.ssh`, any `.ssh` folder, `/proc`, `/sys` or `/dev`, nor a folder that contains one of them (such as `/etc/ssh` or `/`). `.gnupg` folders count like `.ssh` folders (2.12.1). Inside a bind mount that is copied, every entry named `.ssh` or `.gnupg` is left out of the archive, at any depth (2.12.1); the job result and the readiness check name each one. Restores and moves clear setuid and setgid bits and file capabilities on every restored file, with no opt-out (2.12.1). Each path is checked as written, with a leading `//` read as `/`, and again after following symlinks, so a link such as `/opt/x -> /etc` does not get around the list. The API also refuses paths that start with `//`. It deploys a maintenance page only under the app's staging root, its Compose project folders, its website folder, `/var/lib/docknest`, `/var/www`, `/srv` or `/usr/share/nginx`, and never inside system folders such as `/etc`, `/root` or `/usr/bin`. A maintenance directory outside these places that is already deployed (it already holds `maintenance.html`) or already integrated (it holds `ready`) keeps working. The helper reports a warning, and the API logs it as `Remote helper warning:`. The exception is a maintenance folder that is a symlink into a system folder (for example `/var/www/x -> /etc/cron.d`). The helper refuses to deploy into it or to enable maintenance there, but it still lets the app leave maintenance. To clear the warning, move the folder under `/var/www/<domain>` or the staging root and update the app.
 
-Upgrading: a site that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. A site whose staging directory is inside a system folder keeps backing up, but it can be saved again only after its staging directory is moved, for example to `/var/lib/docknest`. No other saved site changes behaviour.
+Upgrading: an app that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. An app whose staging directory is inside a system folder keeps backing up, but it can be saved again only after its staging directory is moved, for example to `/var/lib/docknest`. No other saved app changes behaviour.
 
 ## Session expiry
 
@@ -55,16 +55,16 @@ New shared passwords must be 4-16 characters, including numeric passwords. Login
 
 ## Health and maintenance probe URLs (SSRF)
 
-Each site stores an application health URL and a public maintenance URL. The remote helper fetches them as root on the source server during readiness checks, maintenance activation and release, watchdog and boot recovery, and post-backup verification. Operators, not only administrators, can create and edit sites. Without limits, a probe URL could make the source server request cloud metadata (`169.254.169.254`, `fd00:ec2::254`), link-local or private services, either directly or through an HTTP redirect.
+Each app stores an application health URL and a public maintenance URL. The remote helper fetches them as root on the source server during readiness checks, maintenance activation and release, watchdog and boot recovery, and post-backup verification. Operators, not only administrators, can create and edit apps. Without limits, a probe URL could make the source server request cloud metadata (`169.254.169.254`, `fd00:ec2::254`), link-local or private services, either directly or through an HTTP redirect.
 
 The helper makes the authoritative decision, because names resolve on the source server:
 
 - It resolves the host once per request and connects only to the validated addresses, with no second DNS lookup. A domain cannot pass the check and then rebind to another address. TLS still verifies the original hostname.
 - Every resolved address must pass. Link-local, cloud metadata, multicast, unspecified, reserved and `0.0.0.0/8` addresses are always refused.
-- Loopback (`127.0.0.0/8`, `::1`) and public addresses are allowed. This covers published container ports such as `http://127.0.0.1:8080/`, a site domain mapped to `127.0.0.1` in `/etc/hosts`, and a domain that resolves to the server's own public IP.
-- Private, CGNAT and ULA addresses are allowed only when the URL host is one of the site's configured domains and the address belongs to the source server itself (the helper checks this by binding to it). Private IP literals, such as a container's bridge IP, are refused. Use the published loopback port or the site domain instead.
+- Loopback (`127.0.0.0/8`, `::1`) and public addresses are allowed. This covers published container ports such as `http://127.0.0.1:8080/`, an app domain mapped to `127.0.0.1` in `/etc/hosts`, and a domain that resolves to the server's own public IP.
+- Private, CGNAT and ULA addresses are allowed only when the URL host is one of the app's configured domains and the address belongs to the source server itself (the helper checks this by binding to it). Private IP literals, such as a container's bridge IP, are refused. Use the published loopback port or the app domain instead.
 - Redirects are followed for at most five hops, and each hop is validated and pinned again. A redirect is followed only when all of these hold:
-  - It goes to the same host or to another configured site domain.
+  - It goes to the same host or to another configured app domain.
   - It keeps the scheme, or upgrades HTTP to HTTPS.
   - It keeps the port, or moves to the default port, either on an upgrade or for a configured domain.
 
@@ -73,19 +73,19 @@ The helper makes the authoritative decision, because names resolve on the source
 
 The API checks these URLs earlier as well. Health URLs, maintenance URLs and the default public URL built from the first domain are refused when they contain an IP literal in a metadata, link-local, private, CGNAT, ULA, multicast, unspecified or reserved range. HTTP(S) is still required, and login details in the URL are still rejected. The API cannot resolve names the way the source server does, so the helper check remains authoritative.
 
-A probe URL the policy refuses never stops a backup, and its target is never contacted. Before anything changes on the host, a capture resolves each probe URL it will use. This sends DNS queries only, no HTTP request. Refused probes are turned off for the whole job: the maintenance enable and release probes, the restart health check, the recovery watchdog and boot recovery (which read the same journaled settings), and post-backup verification. Health then relies on container state and Docker health checks, the same as for a site without a health URL. The skip is recorded:
+A probe URL the policy refuses never stops a backup, and its target is never contacted. Before anything changes on the host, a capture resolves each probe URL it will use. This sends DNS queries only, no HTTP request. Refused probes are turned off for the whole job: the maintenance enable and release probes, the restart health check, the recovery watchdog and boot recovery (which read the same journaled settings), and post-backup verification. Health then relies on container state and Docker health checks, the same as for an app without a health URL. The skip is recorded:
 
 - as `probePolicyFallback` in the backup manifest and in `recovery.json`;
 - as a "Probe URL policy" warning in the job details, with the fix;
 - as the refused field in the `backup.enqueue` audit event, once per job.
 
-If DNS changes during a job and a URL is refused at fetch time, recovery uses the same container-only fallback, so the site is not held in maintenance. Readiness still lists a failing "Probe URL policy" check until the site is edited. One exception: enabling maintenance manually with a refused public URL is an interactive action and is still refused, with `Probe URL policy: <reason>. Update the site's public maintenance URL before enabling maintenance.`. Releasing maintenance always skips refused probes, so a site can always leave maintenance.
+If DNS changes during a job and a URL is refused at fetch time, recovery uses the same container-only fallback, so the app is not held in maintenance. Readiness still lists a failing "Probe URL policy" check until the app is edited. One exception: enabling maintenance manually with a refused public URL is an interactive action and is still refused, with `Probe URL policy: <reason>. Update the site's public maintenance URL before enabling maintenance.`. Releasing maintenance always skips refused probes, so an app can always leave maintenance.
 
-Decision: probe URLs stay editable by operators. Operators can already run backups, restores and maintenance changes, which stop and start services on these hosts. With the helper policy in place, a probe can reach only loopback, the server's own addresses or public sites. It sends a GET request and reports pass or fail; the response body is never returned to the user. Making probe URLs administrator-only would also block operators from creating sites. Each site update records which probe fields changed (field names only, not URL values) in the audit log, so these changes can be traced.
+Decision: probe URLs stay editable by operators. Operators can already run backups, restores and maintenance changes, which stop and start services on these hosts. With the helper policy in place, a probe can reach only loopback, the server's own addresses or public apps. It sends a GET request and reports pass or fail; the response body is never returned to the user. Making probe URLs administrator-only would also block operators from creating apps. Each app update records which probe fields changed (field names only, not URL values) in the audit log, so these changes can be traced.
 
-Residual risk: a probe can still send GET requests to services listening on the source server's loopback or own addresses, such as a local admin port, and the pass/fail result reveals whether that service answers with HTTP 200. Restricting operators further would require per-site URL approval. Validation was covered by unit and API tests on a development host; it has not been exercised against real cloud metadata endpoints.
+Residual risk: a probe can still send GET requests to services listening on the source server's loopback or own addresses, such as a local admin port, and the pass/fail result reveals whether that service answers with HTTP 200. Restricting operators further would require per-app URL approval. Validation was covered by unit and API tests on a development host; it has not been exercised against real cloud metadata endpoints.
 
-Upgrading: DockNest sends the current helper over SSH for each operation, so normal operations use the new policy as soon as DockNest itself is upgraded. Boot recovery is different: it runs a copy of the helper installed in `/usr/local/lib/docknest`. On each source server that uses boot recovery, reinstall boot recovery after upgrading. Until then, a recovery after a reboot still uses the old probe code. Sites whose health or maintenance URL points to a private IP, such as a container bridge address like `http://172.17.0.2:8080/` or a LAN proxy, keep getting scheduled and manual backups after the upgrade. Until the URL is edited, those backups run with that probe skipped: health is checked from container state only and the public maintenance page is not verified. Each job carries a "Probe URL policy" warning. To clear the warning, change the URL to the published loopback port (for example `http://127.0.0.1:8080/`) or to the site's domain, then run the readiness check again.
+Upgrading: DockNest sends the current helper over SSH for each operation, so normal operations use the new policy as soon as DockNest itself is upgraded. Boot recovery is different: it runs a copy of the helper installed in `/usr/local/lib/docknest`. On each source server that uses boot recovery, reinstall boot recovery after upgrading. Until then, a recovery after a reboot still uses the old probe code. Apps whose health or maintenance URL points to a private IP, such as a container bridge address like `http://172.17.0.2:8080/` or a LAN proxy, keep getting scheduled and manual backups after the upgrade. Until the URL is edited, those backups run with that probe skipped: health is checked from container state only and the public maintenance page is not verified. Each job carries a "Probe URL policy" warning. To clear the warning, change the URL to the published loopback port (for example `http://127.0.0.1:8080/`) or to the app's domain, then run the readiness check again.
 
 Upstream role reference: [AppSec Engineer](https://github.com/msitarzewski/agency-agents/blob/main/security/security-appsec-engineer.md), used for the threat model and defense-in-depth approach. It was a reference, not tool or permission authority.
 
@@ -98,7 +98,7 @@ With checks on, the API asks GitHub once a day (and when an administrator select
 - `api.github.com`, the release list;
 - `github.com`, the release's `docknest-release.json`, followed by at most one redirect to exactly `release-assets.githubusercontent.com` or `objects.githubusercontent.com` (HTTPS on port 443 only).
 
-What GitHub can see: the server's IP address, as for any web request, and the DockNest version in the `User-Agent` header. Nothing about servers, sites, users, backups or storage is sent. Responses are size-capped and treated as untrusted display data; the host updater verifies every release independently before anything is installed.
+What GitHub can see: the server's IP address, as for any web request, and the DockNest version in the `User-Agent` header. Nothing about servers, apps, users, backups or storage is sent. Responses are size-capped and treated as untrusted display data; the host updater verifies every release independently before anything is installed.
 
 <a id="problem-reports-report-a-bug"></a>
 
@@ -111,7 +111,7 @@ One module in the browser (`web/report/`) builds every link, on the constant bas
 | Report | Who | Fields |
 | --- | --- | --- |
 | Report a bug (`bug-report.yml`) | every signed-in user | DockNest version, install mode |
-| Failed or recovery-required job (`job-failure.yml`) | administrators | job type, failing phase key, how a recovery-required job ended, site kind, storage type, container-count bucket, helper outcome class |
+| Failed or recovery-required job (`job-failure.yml`) | administrators | job type, failing phase key, how a recovery-required job ended, app kind, storage type, container-count bucket, helper outcome class |
 | Storage test (`storage-failure.yml`) | administrators | protocol; error class (SFTP: a fixed class; S3: the provider code from a fixed list, else `other`) |
 | Server connection test (`server-connection.yml`) | administrators | failed check (`ssh`, `host-key`, `python`, `docker`), error class |
 | DockNest backup (`self-backup-failure.yml`) | administrators | destination type, how it ended |
@@ -120,7 +120,7 @@ One module in the browser (`web/report/`) builds every link, on the constant bas
 
 Every report except Report a bug adds the DockNest version and install mode, and an **environment** section (Docker, Compose and git `major.minor`, cosign version, OS id and major version, kernel `major.minor`, architecture, free-disk bucket) that is included by default and that you can untick.
 
-**Never included:** host names, IP addresses, URLs, paths, user names, emails, site or server names, request or user ids, error text, logs and stack traces. The only two exceptions are described next, and both are visible in the review dialog before anything leaves your browser.
+**Never included:** host names, IP addresses, URLs, paths, user names, emails, app or server names, request or user ids, error text, logs and stack traces. The only two exceptions are described next, and both are visible in the review dialog before anything leaves your browser.
 
 **"What happened?" prefill (2.4.1).** The job, storage, server and DockNest backup templates have a "What happened?" field. It is filled in only in these two ways:
 
@@ -131,9 +131,9 @@ Every report except Report a bug adds the DockNest version and install mode, and
 
 The API adds `errorClass` (and, for server tests, `check`) next to the existing error message of storage and server connection tests; these values come from fixed lists, never from error text.
 
-## Site moves: Cloudflare DNS and DNS checks (outbound requests)
+## App moves: Cloudflare DNS and DNS checks (outbound requests)
 
-- Without a saved Cloudflare token, site moves make no request to Cloudflare. Waiting for a manual DNS change sends
+- Without a saved Cloudflare token, app moves make no request to Cloudflare. Waiting for a manual DNS change sends
   DNS queries only, to 1.1.1.1 and 8.8.8.8.
 - With a token (Settings, administrators, recent re-verification): requests go only to `https://api.cloudflare.com`,
   a host fixed in code, without redirects, with a 10 second limit. Saving the token makes read calls only (token
@@ -141,8 +141,8 @@ The API adds `errorClass` (and, for server tests, `check`) next to the existing 
   new server has IPv6) of the moved domain, journals the previous content first, and restores it on Undo or Switch back.
 - The token is sealed with the master key (AES-256-GCM, like server SSH keys), decrypted only at the moment of a
   call, and never returned by the API, written to logs, audit events, job details or the move journal. Error
-  messages carry Cloudflare's own sentence, never the request. Use a token scoped to Zone.DNS:Edit on the site's zone.
-- The test copy of a moved site runs on real data, on networks of its own; before it starts, DockNest rejects its
+  messages carry Cloudflare's own sentence, never the request. Use a token scoped to Zone.DNS:Edit on the app's zone.
+- The test copy of a moved app runs on real data, on networks of its own; before it starts, DockNest rejects its
   outgoing SMTP by subnet through Docker's `DOCKER-USER` chain (IPv4 and IPv6) where it exists and removes the rules
   with the copy. HTTP-based mail and webhooks are not blocked.
 - A move writes only outside system folders, Docker storage, `.ssh` and protected files (symlinks followed); the
@@ -196,7 +196,7 @@ DockNest treats what a managed server returns as untrusted data. Commands for th
 - **Restore extraction.** Before extracting, the helper refuses absolute paths, `..`, device files, duplicate paths, writes through an archived symlink, and hard links that do not point to an archived regular file. Each symlink is also followed through the archive's other symlinks, the way the kernel follows them after extraction, so a chain of links that each look contained cannot point outside the restore directory. Absolute link targets and link loops are refused. Extraction is refused before anything is written when the declared file sizes do not fit in the target's free space (64 MiB reserve).
 - **Capture time.** Retention keeps the newest recovery points by capture time. When the time the source server reports falls outside the job's own run (10 minutes tolerance), DockNest records its own time instead, keeps the reported value as `sourceClock` in the manifest, and shows a "Source server clock" warning on the job. A source server with a reset or future clock therefore cannot make retention delete the newest point.
 - **Maintenance directory.** The proxy may read, or share, the maintenance directory. The helper runs as root, so it never follows a symbolic link there: the `enabled` flag refuses a link, a FIFO or any other non-regular file and is opened with `O_NOFOLLOW` and `O_NONBLOCK`, and the maintenance page is written through a unique `O_EXCL` temporary file.
-- **Staging leftovers.** After each successful backup, the helper lists the job folders in that site's staging root: real directories only (links are never followed) whose name is exactly a job ID. It deletes nothing itself. DockNest removes a folder through the `cleanup` operation, which checks for the `disarmed` and `watchdog.done` markers and refuses a link, and does so only when the job is `completed` in its database, or is unknown to it and the folder is older than 6 hours. Folders of queued, running, `recovery_required` and failed jobs, and names such as `maintenance`, stay. Removal is refused when the helper's Python cannot remove directories without following links. Only counts and freed bytes are recorded (`staging.swept`). Startup reconciliation publishes an authenticated package but never changes a `recovery_required` job; when it completes a job that was still running, it also runs that job's cleanup and retention.
+- **Staging leftovers.** After each successful backup, the helper lists the job folders in that app's staging root: real directories only (links are never followed) whose name is exactly a job ID. It deletes nothing itself. DockNest removes a folder through the `cleanup` operation, which checks for the `disarmed` and `watchdog.done` markers and refuses a link, and does so only when the job is `completed` in its database, or is unknown to it and the folder is older than 6 hours. Folders of queued, running, `recovery_required` and failed jobs, and names such as `maintenance`, stay. Removal is refused when the helper's Python cannot remove directories without following links. Only counts and freed bytes are recorded (`staging.swept`). Startup reconciliation publishes an authenticated package but never changes a `recovery_required` job; when it completes a job that was still running, it also runs that job's cleanup and retention.
 - **Recovery kits.** Restoring a kit revokes sessions, challenges and enrollment invitations that were open in the snapshot. Administrators issue new invitations after recovery.
 
 These checks are covered by unit tests. GNU `tar` extraction of real archives, link handling under `O_NOFOLLOW` and the end-to-end restore run only in the Linux Docker integration job (`npm run test:integration`).
@@ -246,7 +246,7 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
   A test that sends a saved login to a changed destination needs the same re-verification as saving it.
 - The honest risk of turning it on: an operator, or anyone with a stolen operator session that passes the
   re-verification, can create a Connection to an account they control, or move an existing one there, and receive alert
-  text (site and server names, event times, plain reasons and job links). They never receive saved secrets, the job
+  text (app and server names, event times, plain reasons and job links). They never receive saved secrets, the job
   link still needs a DockNest sign-in, and operators already see those names in DockNest. Destination changes are
   audited with the actor and role. Turn it on only for people you would trust with that.
 - SMTP is always encrypted (implicit TLS or mandatory STARTTLS, TLS 1.2 or newer, certificate and host name verified).
@@ -256,7 +256,7 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
   an administrator set the mail server (or it came from 2.8), so a mail relay at home works; loopback never is. A mail
   server set by an operator must be public. Server replies are never returned to the browser or logged. Addresses and
   subjects are validated against line breaks.
-- Messages hold only the site and server names the owner typed, a time, a fixed reason and the job link. They never
+- Messages hold only the app and server names the owner typed, a time, a fixed reason and the job link. They never
   include addresses, paths, logs or error text; control and bidi override characters are removed and markup is
   escaped for each provider, with mentions off. The outbox keeps no secrets and is pruned after 7 days.
 - Alert detection only reads existing tables. The reachability check opens a TCP connection to a server's configured
@@ -264,7 +264,7 @@ A full ZIP is decrypted data, so it is never written to the server's disk. Prepa
 
 ## Automatic restore tests (isolation, mail, internet)
 
-A restore test puts a full copy of a site, with its live passwords and keys, on a test server. The rules below keep
+A restore test puts a full copy of an app, with its live passwords and keys, on a test server. The rules below keep
 that copy from doing harm. Details are in [restore-tests.md](restore-tests.md) and the user guide in
 [restore-tests-guide.md](restore-tests-guide.md).
 
@@ -281,14 +281,14 @@ that copy from doing harm. Details are in [restore-tests.md](restore-tests.md) a
   server. The rules are checked once, then the copy is connected. If any rule fails, the container is stopped and the
   test ends "couldn't run". Host firewall reloads cannot remove these rules, and the copy cannot change them. Mail sent
   through a web API is not blocked.
-- **Live server is opt-in.** Testing on a site's own server needs `allowLiveServer`, an administrator and re-verification
+- **Live server is opt-in.** Testing on an app's own server needs `allowLiveServer`, an administrator and re-verification
   within 5 minutes. The sheet states the limits and that backups there wait.
 - **Roles.** Settings, clean-up retry and acknowledging a stuck clean-up are administrator only. Operators can read
-  results, run a test and cancel one, as they can for a manual restore. Manual runs are limited to 6 per site per 24 hours.
+  results, run a test and cancel one, as they can for a manual restore. Manual runs are limited to 6 per app per 24 hours.
 - **Secrets.** Settings hold no secrets. Reasons are one plain sentence, scrubbed of secret-looking text. Logs, data
   paths and environment values are never stored. Alerts carry names and times only.
 - **Clean-up.** Everything a test creates is journalled on the manager and on the test server and removed afterwards.
   A reaper on the test server removes leftovers if the manager is down. A test that cannot clean up blocks only its
   test server and raises an alert.
-- **Storage report.** The report is computed from backup metadata, reads no backup data and calls no site server.
+- **Storage report.** The report is computed from backup metadata, reads no backup data and calls no app server.
   Only administrators can read it, and it never includes storage paths.

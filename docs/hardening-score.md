@@ -1,6 +1,6 @@
 # Hardening score
 
-Each Docker site gets a security grade from A to F, based on how its containers are configured. Every finding comes with a one-line fix you can apply in your Compose file.
+Each Docker app gets a security grade from A to F, based on how its containers are configured. Every finding comes with a one-line fix you can apply in your Compose file.
 
 DockNest only reads. It never changes a container, a Compose file or a server setting to improve the grade.
 
@@ -8,12 +8,12 @@ DockNest only reads. It never changes a container, a Compose file or a server se
 
 The grade is refreshed by work DockNest already does, with no extra connection or timer:
 
-- a server scan run by an administrator (discovery, for example when you add or edit a site), and
-- every backup of the site.
+- a server scan run by an administrator (discovery, for example when you add or edit an app), and
+- every backup of the app.
 
 Scans run by operators and viewers only read; they never change the stored grade.
 
-Until one of these runs after the update, the site has no grade (`grade: null`). A static website has no containers and never gets a grade. A scan updates a site only when it finds every container of that site; otherwise the previous grade stays. A site with more than 30 containers (more than a site can hold) gets no grade.
+Until one of these runs after the update, the app has no grade (`grade: null`). A static website has no containers and never gets a grade. A scan updates an app only when it finds every container of that app; otherwise the previous grade stays. An app with more than 30 containers (more than an app can hold) gets no grade.
 
 ## Checks
 
@@ -42,7 +42,7 @@ Details:
 
 ## Grading
 
-Each check counts once per site. On a site with several containers, each check reports the worst container by name.
+Each check counts once per app. On an app with several containers, each check reports the worst container by name.
 
 | Grade | Rule |
 | --- | --- |
@@ -54,7 +54,7 @@ Each check counts once per site. On a site with several containers, each check r
 
 ## API
 
-The site objects in `GET /api/state` carry a `hardening` field, readable by every role like the other site fields:
+The app objects in `GET /api/state` carry a `hardening` field, readable by every role like the other app fields:
 
 ```json
 "hardening": {
@@ -68,15 +68,15 @@ The site objects in `GET /api/state` carry a `hardening` field, readable by ever
 }
 ```
 
-A site that was never scanned returns `grade: null`, `checkedAt: null`, `passed: 0`, `total: 0` and no findings.
+An app that was never scanned returns `grade: null`, `checkedAt: null`, `passed: 0`, `total: 0` and no findings.
 
 ## Where you see it
 
-- **Sites & schedules:** every site card has a Hardening row: `Grade B` with the number of findings to fix and a **Findings** button, `All passed` for an A with nothing to fix, or `Not checked yet. Next backup checks it.` until the first scan or backup. While a backup of an ungraded site runs, the row says `Checking…`. A static website shows `Static site, nothing to check.`
+- **Apps & schedules:** every app card has a Hardening row: `Grade B` with the number of findings to fix and a **Findings** button, `All passed` for an A with nothing to fix, or `Not checked yet. Next backup checks it.` until the first scan or backup. While a backup of an ungraded app runs, the row says `Checking…`. A static website shows `Static site, nothing to check.`
 - **Findings dialog:** a red alert for grade F, an amber one for D and none for A to C. The table lists each finding with its container and fix, five per page. On a phone the fix sits under the finding.
-- **Map:** the details panel of a site shows the grade, the first three findings and **See all**, which opens the same dialog.
+- **Map:** the details panel of an app shows the grade, the first three findings and **See all**, which opens the same dialog.
 
-Every role can open these views. Nothing in them changes a site.
+Every role can open these views. Nothing in them changes an app.
 
 ## What is stored
 
