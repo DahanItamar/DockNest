@@ -214,11 +214,11 @@ def service_contracts(cfg,containers):
     for c in containers:
         declaration=declarations.get(c['Id'],{})
         engine=declaration.get('engine','auto');detected=None;version=None
+        hint=c['Config'].get('Image','')
         if c['State']['Running']:
             for name,native in ENGINES.items():
-                version=native.detect(c['Id'])
+                version=native.detect(c['Id']) if native.detectable(hint,engine) else None
                 if version:detected=name;break
-        hint=c['Config'].get('Image','')
         if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
         engine=detected or ('generic' if engine=='auto' else engine)
         if engine=='generic' and image_looks_like_database(hint):raise ValueError('Stateful service requires a supported per-service database contract')

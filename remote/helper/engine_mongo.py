@@ -7,13 +7,17 @@ from .common import (
     run)
 from .engine_base import (
     DatabaseEngine, in_writable_mount, require_readable_logs, stop_window_gap, writable_mount_source)
+from .backup import (
+    image_looks_like_database)
 # </build:header>
 # Static shell, never interpolated. It reads the official image's root credentials inside the container and hands
-# them to mongosh as environment variables only: never Docker arguments, evidence, logs or job text.
-MONGO_SHELL_SCRIPT='set -eu; command -v mongosh >/dev/null 2>&1 || exit 69; user="${MONGO_INITDB_ROOT_USERNAME:-}"; password="${MONGO_INITDB_ROOT_PASSWORD:-}"; if [ -n "${MONGO_INITDB_ROOT_USERNAME_FILE:-}" ]; then user=$(cat -- "$MONGO_INITDB_ROOT_USERNAME_FILE") || exit 70; fi; if [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ]; then password=$(cat -- "$MONGO_INITDB_ROOT_PASSWORD_FILE") || exit 70; fi; if [ -n "$user" ] && [ -z "$password" ]; then exit 70; fi; export DOCKNEST_MONGO_USER="$user" DOCKNEST_MONGO_PASSWORD="$password" DOCKNEST_MONGO_OPERATION="$1" DOCKNEST_MONGO_DATABASE="$2" DOCKNEST_MONGO_COLLECTION="$3"; exec mongosh --quiet --nodb --norc --eval "$4"'
+# them to mongosh as environment variables only: never Docker arguments, evidence, logs or job text. mongosh runs with
+# a private temporary HOME that is removed afterwards, so it leaves nothing in the container's writable layer.
+MONGO_SHELL_SCRIPT='set -eu; command -v mongosh >/dev/null 2>&1 || exit 69; user="${MONGO_INITDB_ROOT_USERNAME:-}"; password="${MONGO_INITDB_ROOT_PASSWORD:-}"; if [ -n "${MONGO_INITDB_ROOT_USERNAME_FILE:-}" ]; then user=$(cat -- "$MONGO_INITDB_ROOT_USERNAME_FILE") || exit 70; fi; if [ -n "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ]; then password=$(cat -- "$MONGO_INITDB_ROOT_PASSWORD_FILE") || exit 70; fi; if [ -n "$user" ] && [ -z "$password" ]; then exit 70; fi; home=$(mktemp -d) || exit 71; trap \'rm -rf -- "$home"\' EXIT; export HOME="$home" DO_NOT_TRACK=1 DOCKNEST_MONGO_USER="$user" DOCKNEST_MONGO_PASSWORD="$password" DOCKNEST_MONGO_OPERATION="$1" DOCKNEST_MONGO_DATABASE="$2" DOCKNEST_MONGO_COLLECTION="$3"; mongosh --quiet --nodb --norc --eval "$4"'
 # Static mongosh script: connects over the loopback, authenticates from process.env, runs one fixed read-only
 # operation and prints one EJSON line. Exit codes name the refusal (MONGO_REFUSALS); error text never leaves mongosh.
-MONGO_EVAL_SCRIPT='''const env = process.env;
+MONGO_EVAL_SCRIPT='''try { disableTelemetry(); } catch (error) {}
+const env = process.env;
 const user = env.DOCKNEST_MONGO_USER, password = env.DOCKNEST_MONGO_PASSWORD;
 delete env.DOCKNEST_MONGO_USER; delete env.DOCKNEST_MONGO_PASSWORD;
 let admin;
@@ -22,18 +26,29 @@ if (user) { try { admin.auth(user, password); } catch (error) { quit(77); } }
 const operations = {
   ping: () => admin.runCommand({ ping: 1 }),
   contract: () => ({ version: admin.version(), options: admin.adminCommand({ getCmdLineOpts: 1 }).parsed, hello: admin.adminCommand({ hello: 1 }), storageEngine: admin.serverStatus().storageEngine.name }),
-  count: () => ({ count: admin.getSiblingDB(env.DOCKNEST_MONGO_DATABASE).getCollection(env.DOCKNEST_MONGO_COLLECTION).countDocuments({}) }),
+  count: () => {
+    const database = admin.getSiblingDB(env.DOCKNEST_MONGO_DATABASE), name = env.DOCKNEST_MONGO_COLLECTION;
+    return database.getCollectionInfos({ name }).length ? { count: database.getCollection(name).countDocuments({}) } : null;
+  },
 };
 let result;
 try { result = operations[env.DOCKNEST_MONGO_OPERATION](); } catch (error) { quit(error.code === 13 ? (user ? 77 : 78) : 76); }
+if (result === null) quit(79);
 print(EJSON.stringify(result, { relaxed: true }));'''
 MONGO_REFUSALS={
     69:'MongoDB shell (mongosh) is missing in the container; DockNest needs it to check the server and does not pull images',
     70:'MongoDB root credentials in the container are incomplete or their _FILE could not be read',
+    71:'MongoDB check could not create a private temporary folder in the container',
     75:'MongoDB did not answer a plain local connection on port 27017; TLS-only mode and other ports are not supported',
     77:'MongoDB rejected the root credentials from the container environment',
     78:'MongoDB requires authentication; set MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD (or _FILE) in the container',
+    79:'MongoDB data check collection does not exist in its database',
 }
+
+def mongo_document(value):
+    """A reply part that must be a document; anything else fails closed."""
+    if not isinstance(value,dict):raise ValueError('MongoDB local native reply is incomplete')
+    return value
 
 def mongo_query(container,operation,database='',collection=''):
     """One fixed read-only mongosh operation inside the container; returns its decoded reply."""
@@ -41,10 +56,8 @@ def mongo_query(container,operation,database='',collection=''):
     except subprocess.CalledProcessError as error:raise ValueError(MONGO_REFUSALS.get(error.returncode,'MongoDB local native query failed; review the server configuration')) from None
     except subprocess.TimeoutExpired:raise ValueError('MongoDB local native query timed out') from None
     lines=[line for line in output.decode(errors='replace').splitlines() if line.startswith('{')]
-    try:reply=json.loads(lines[-1])
+    try:return mongo_document(json.loads(lines[-1]))
     except (IndexError,ValueError):raise ValueError('MongoDB local native reply is incomplete') from None
-    if not isinstance(reply,dict):raise ValueError('MongoDB local native reply is incomplete')
-    return reply
 
 def mongo_log_entries(logs):
     """mongod 4.4+ writes one JSON document per log line; anything else on the stream is ignored."""
@@ -55,11 +68,23 @@ def mongo_log_entries(logs):
         if isinstance(entry,dict):entries.append(entry)
     return entries
 
+# mongod's stable log ids (component, id, message) for the end of a clean shutdown.
+MONGO_WIREDTIGER_CLOSED=('STORAGE',4795901,'WiredTiger closed')
+MONGO_SHUTTING_DOWN=('CONTROL',23138,'Shutting down')
+
+def mongo_log_is(entry,expected):
+    return (entry.get('c'),entry.get('id'),entry.get('msg'))==expected
+
 def mongo_stop_gap(logs):
+    """What this stop's log window still lacks: WiredTiger closed, then Shutting down with exit code 0."""
     entries=mongo_log_entries(logs)
     if any(entry.get('s')=='F' for entry in entries):raise ValueError('MongoDB current stop reported a fatal error')
-    if not any(entry.get('msg')=='WiredTiger closed' for entry in entries):return 'WiredTiger closed'
-    if not any(entry.get('msg')=='Shutting down' and isinstance(entry.get('attr'),dict) and entry['attr'].get('exitCode')==0 for entry in entries):return 'shutdown exit code 0'
+    closed=next((index for index,entry in enumerate(entries) if mongo_log_is(entry,MONGO_WIREDTIGER_CLOSED)),None)
+    if closed is None:return 'WiredTiger closed'
+    def clean_exit(entry):
+        code=entry.get('attr',{}).get('exitCode') if isinstance(entry.get('attr'),dict) else None
+        return mongo_log_is(entry,MONGO_SHUTTING_DOWN) and type(code) is int and code==0
+    if not any(clean_exit(entry) for entry in entries[closed+1:]):return 'shutdown exit code 0'
     return None
 
 def mongo_lock_empty(service,c):
@@ -74,11 +99,11 @@ def mongo_lock_empty(service,c):
     if not stat.S_ISREG(metadata.st_mode):raise ValueError('MongoDB mongod.lock must be a regular file')
     if metadata.st_size:raise ValueError('MongoDB mongod.lock is not empty; mongod did not stop cleanly')
 
-def mongo_require_whole_copy(hello):
-    """One member's files are a whole copy only for a standalone server or a single-member replica set."""
-    if hello.get('arbiterOnly') or hello.get('secondary') or hello.get('isWritablePrimary') is not True:raise ValueError('MongoDB secondaries and arbiters are not supported; back up a standalone server or the only member of its replica set')
-    members=[*hello.get('hosts',[]),*hello.get('passives',[]),*hello.get('arbiters',[])]
-    if hello.get('setName') and len(members)!=1:raise ValueError('MongoDB replica sets with more than one member are not supported; one member is not a whole copy of the set')
+def mongo_require_standalone(hello):
+    """Only a standalone server's files are a whole copy. Any replica set member (primary, secondary, arbiter, hidden
+    or delayed) is refused for now."""
+    if 'setName' in hello or hello.get('arbiterOnly') or hello.get('secondary'):raise ValueError('MongoDB replica set members are not supported yet; back up a standalone server')
+    if hello.get('isWritablePrimary') is not True:raise ValueError('MongoDB server is not a writable standalone server; capture blocked')
 
 def mongo_check_target(service,check):
     database=check.get('database') or service.get('database')
@@ -92,22 +117,27 @@ class MongoEngine(DatabaseEngine):
     version_pattern=r'\bdb version v(\d+\.\d+\.\d+)\b'
     check_field='collection'
 
+    def detectable(self,image,declared):
+        # Vendor images (network controllers and the like) bundle their own mongod; they stay generic writers
+        # unless the image is named as a database or the service is declared as MongoDB.
+        return declared=='mongo' or image_looks_like_database(image)
+
     def check_version(self,version):
         if not re.fullmatch(r'[678]\.0\.\d+',version):raise ValueError('MongoDB native capture is limited to tested MongoDB 6.0, 7.0 and 8.0 versions')
 
     def validate(self,service,c):
         reply=mongo_query(c['Id'],'contract')
-        options,hello=reply.get('options'),reply.get('hello')
-        if not isinstance(options,dict) or not isinstance(hello,dict):raise ValueError('MongoDB local native reply is incomplete')
+        options,hello=mongo_document(reply.get('options')),mongo_document(reply.get('hello'))
+        net=mongo_document(options.get('net',{}))
         if reply.get('version')!=service['version']:raise ValueError('Running MongoDB version does not match the installed server binary')
         if reply.get('storageEngine')!='wiredTiger':raise ValueError('MongoDB capture requires the WiredTiger storage engine')
-        net=options.get('net') or {}
-        if (net.get('tls') or {}).get('mode')=='requireTLS' or (net.get('ssl') or {}).get('mode')=='requireSSL':raise ValueError('MongoDB TLS-only mode is not supported; DockNest checks the server over a plain local connection')
-        if (options.get('sharding') or {}).get('clusterRole'):raise ValueError('MongoDB sharded cluster members are not supported')
-        mongo_require_whole_copy(hello)
-        if (options.get('systemLog') or {}).get('destination'):raise ValueError('MongoDB shutdown proof requires the default log on standard output; remove systemLog.destination')
+        if mongo_document(net.get('tls',{})).get('mode')=='requireTLS' or mongo_document(net.get('ssl',{})).get('mode')=='requireSSL':raise ValueError('MongoDB TLS-only mode is not supported; DockNest checks the server over a plain local connection')
+        if mongo_document(options.get('sharding',{})).get('clusterRole'):raise ValueError('MongoDB sharded cluster members are not supported')
+        mongo_require_standalone(hello)
+        if mongo_document(options.get('systemLog',{})).get('destination'):raise ValueError('MongoDB shutdown proof requires the default log on standard output; remove systemLog.destination')
         require_readable_logs(c,'MongoDB shutdown proof requires readable Docker logs; logging driver none is unsupported','MongoDB Docker logs are unavailable; fix the logging driver before retrying','MongoDB Docker logs are unavailable; enable a readable logging driver before retrying')
-        directory=(options.get('storage') or {}).get('dbPath') or '/data/db'
+        directory=mongo_document(options.get('storage',{})).get('dbPath','/data/db')
+        if not isinstance(directory,str):raise ValueError('MongoDB local native reply is incomplete')
         if not directory.startswith('/') or '..' in pathlib.PurePosixPath(directory).parts or directory=='/' or not in_writable_mount(directory,c):raise ValueError('MongoDB dbPath must be inside a captured writable mount')
         if run(['docker','exec',c['Id'],'readlink','-f',directory],timeout=30).decode().strip()!=directory:raise ValueError('MongoDB dbPath must be a captured writable directory without symbolic links')
         service['dataDirectory']=directory

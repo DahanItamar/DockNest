@@ -61,6 +61,16 @@ class MongoContracts(unittest.TestCase):
         with patch('helper.run', side_effect=mongod('7.0.14')):
             with self.assertRaisesRegex(ValueError, 'does not match'): service_contracts({'services': [{'container': 'demo-shop-mongo', 'engine': 'redis'}]}, [container])
 
+    def test_vendor_images_with_a_bundled_mongod_stay_generic_writers(self):
+        container, *_ = fixture(); container['Config']['Image'] = 'jacobalberty/unifi:v8.1'
+        with patch('helper.run', side_effect=mongod('7.0.14')) as probes:
+            for declared in [{}, {'engine': 'auto'}, {'engine': 'generic'}]:
+                with self.subTest(declared=declared):
+                    contract = service_contracts({'services': [{'container': 'demo-shop-mongo', **declared}]}, [container])[0]
+                    self.assertEqual((contract['engine'], contract['role'], contract['version']), ('generic', 'writer', None))
+            self.assertNotIn('mongod', [call.args[0][-2] for call in probes.call_args_list])
+            self.assertEqual(service_contracts({'services': [{'container': 'demo-shop-mongo', 'engine': 'mongo'}]}, [container])[0]['engine'], 'mongo')
+
     def test_data_checks_name_a_collection_only(self):
         container, *_ = fixture()
         with patch('helper.run', side_effect=mongod('7.0.14')):
@@ -69,21 +79,22 @@ class MongoContracts(unittest.TestCase):
                 with self.subTest(check=check), self.assertRaisesRegex(ValueError, 'do not match'):
                     service_contracts({'services': [{'container': 'demo-shop-mongo', 'checks': [check]}]}, [container])
 
-    def test_standalone_and_single_member_set_pass_and_record_db_path(self):
-        for hello in [{'isWritablePrimary': True}, {'isWritablePrimary': True, 'setName': 'rs0', 'hosts': ['demo-shop-mongo:27017']}]:
-            with self.subTest(hello=hello):
-                container, service, reply = fixture(); reply['hello'] = hello
-                query = self.validate(container, service, reply)
-                query.assert_called_once_with('mongo-id', 'contract')
-                self.assertEqual(service['dataDirectory'], '/data/db')
-                self.assertNotIn(PASSWORD, json.dumps(service))
+    def test_standalone_passes_and_records_db_path(self):
+        container, service, reply = fixture()
+        query = self.validate(container, service, reply)
+        query.assert_called_once_with('mongo-id', 'contract')
+        self.assertEqual(service['dataDirectory'], '/data/db')
+        self.assertNotIn(PASSWORD, json.dumps(service))
 
     def test_unsafe_topology_storage_tls_logging_and_paths_block_before_stop(self):
         changes = [
-            ('hello', {'isWritablePrimary': True, 'setName': 'rs0', 'hosts': ['a:27017', 'b:27017']}, 'more than one member'),
-            ('hello', {'isWritablePrimary': True, 'setName': 'rs0', 'hosts': ['a:27017'], 'arbiters': ['c:27017']}, 'more than one member'),
-            ('hello', {'isWritablePrimary': False, 'secondary': True, 'setName': 'rs0', 'hosts': ['a:27017']}, 'secondaries and arbiters'),
-            ('hello', {'isWritablePrimary': False, 'arbiterOnly': True, 'setName': 'rs0'}, 'secondaries and arbiters'),
+            ('hello', {'isWritablePrimary': True, 'setName': 'rs0', 'hosts': ['demo-shop-mongo:27017']}, 'replica set members'),
+            ('hello', {'isWritablePrimary': True, 'setName': 'rs0', 'hosts': ['a:27017', 'b:27017']}, 'replica set members'),
+            ('hello', {'isWritablePrimary': False, 'secondary': True, 'hidden': True, 'setName': 'rs0'}, 'replica set members'),
+            ('hello', {'isWritablePrimary': False, 'secondary': True, 'secondaryDelaySecs': 3600, 'setName': 'rs0'}, 'replica set members'),
+            ('hello', {'isWritablePrimary': False, 'arbiterOnly': True, 'setName': 'rs0'}, 'replica set members'),
+            ('hello', {'isWritablePrimary': False}, 'not a writable standalone'),
+            ('hello', ['not', 'a', 'document'], 'incomplete'),
             ('storageEngine', 'inMemory', 'WiredTiger'),
             ('version', '7.0.12', 'does not match'),
             ('options', {'net': {'tls': {'mode': 'requireTLS'}}}, 'TLS-only'),
@@ -92,6 +103,10 @@ class MongoContracts(unittest.TestCase):
             ('options', {'storage': {'dbPath': '/srv/outside'}}, 'captured writable mount'),
             ('options', {'storage': {'dbPath': '/data/db/../etc'}}, 'captured writable mount'),
             ('options', 'not a document', 'incomplete'),
+            ('options', {'net': 'not a document'}, 'incomplete'),
+            ('options', {'net': {'tls': 'requireTLS'}}, 'incomplete'),
+            ('options', {'storage': {'dbPath': 7}}, 'incomplete'),
+            ('options', {'storage': None}, 'incomplete'),
         ]
         for field, value, message in changes:
             with self.subTest(field=field, value=value):
@@ -116,12 +131,14 @@ class MongoContracts(unittest.TestCase):
         for name in ['MONGO_INITDB_ROOT_USERNAME', 'MONGO_INITDB_ROOT_PASSWORD', 'MONGO_INITDB_ROOT_USERNAME_FILE', 'MONGO_INITDB_ROOT_PASSWORD_FILE']:
             self.assertIn(name, MONGO_SHELL_SCRIPT)
         self.assertIn('process.env', MONGO_EVAL_SCRIPT); self.assertNotIn('@', MONGO_EVAL_SCRIPT, 'no credentials in the connection string')
+        self.assertIn('mktemp -d', MONGO_SHELL_SCRIPT); self.assertNotIn('/root', MONGO_SHELL_SCRIPT); self.assertNotIn('exec mongosh', MONGO_SHELL_SCRIPT)
+        self.assertIn('disableTelemetry()', MONGO_EVAL_SCRIPT)
         with patch('helper.run', side_effect=subprocess.CalledProcessError(1, ['unsafe'], output=PASSWORD.encode())):
             with self.assertRaises(ValueError) as caught: mongo_query('mongo-id', 'ping')
         self.assertNotIn(PASSWORD, str(caught.exception)); self.assertIsNone(caught.exception.__cause__); self.assertTrue(caught.exception.__suppress_context__)
 
     def test_missing_tools_and_credentials_fail_closed_with_plain_reasons(self):
-        for code, message in [(69, 'mongosh\\) is missing'), (70, 'credentials in the container are incomplete'), (75, 'plain local connection'), (77, 'rejected the root credentials'), (78, 'requires authentication'), (76, 'query failed')]:
+        for code, message in [(69, 'mongosh\\) is missing'), (70, 'credentials in the container are incomplete'), (75, 'plain local connection'), (77, 'rejected the root credentials'), (78, 'requires authentication'), (79, 'collection does not exist'), (71, 'private temporary folder'), (76, 'query failed')]:
             with self.subTest(code=code), patch('helper.run', side_effect=subprocess.CalledProcessError(code, ['docker'])):
                 with self.assertRaisesRegex(ValueError, message): mongo_query('mongo-id', 'contract')
         for output in [b'', b'MongoServerError: not json\n', b'[1]\n']:
@@ -133,7 +150,7 @@ class MongoContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = pathlib.Path(temporary); tools = base / 'bin'; tools.mkdir()
             fake = tools / 'mongosh'
-            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE.args"\nenv > "$CAPTURE.env"\necho \'{"ok":1}\'\n'); fake.chmod(0o755)
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE.args"\nenv > "$CAPTURE.env"\ntouch "$HOME/.mongosh-trace"\necho \'{"ok":1}\'\nexit "${FAKE_EXIT:-0}"\n'); fake.chmod(0o755)
             secret_file = base / 'password'; secret_file.write_text(PASSWORD)
             def shell(env, path=str(tools) + ':/usr/bin:/bin'):
                 return subprocess.run([shutil.which('sh'), '-c', MONGO_SHELL_SCRIPT, 'docknest', 'ping', '', '', MONGO_EVAL_SCRIPT], env={'PATH': path, 'CAPTURE': str(base / 'run'), **env}, capture_output=True)
@@ -142,7 +159,13 @@ class MongoContracts(unittest.TestCase):
                     result = shell(env)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertNotIn(PASSWORD, (base / 'run.args').read_text())
-                    self.assertIn('DOCKNEST_MONGO_PASSWORD=' + PASSWORD, (base / 'run.env').read_text().splitlines())
+                    environment = dict(line.split('=', 1) for line in (base / 'run.env').read_text().splitlines() if '=' in line)
+                    self.assertEqual(environment['DOCKNEST_MONGO_PASSWORD'], PASSWORD)
+                    self.assertEqual(environment['DO_NOT_TRACK'], '1')
+                    self.assertNotEqual(environment['HOME'], '/root'); self.assertFalse(os.path.exists(environment['HOME']), 'the private HOME is removed')
+            failed = shell({'FAKE_EXIT': '79'})
+            self.assertEqual(failed.returncode, 79, 'the mongosh exit code names the refusal')
+            self.assertFalse(os.path.exists(dict(line.split('=', 1) for line in (base / 'run.env').read_text().splitlines() if '=' in line)['HOME']))
             self.assertEqual(shell({'MONGO_INITDB_ROOT_USERNAME': 'demo'}).returncode, 70)
             self.assertEqual(shell({'MONGO_INITDB_ROOT_USERNAME': 'demo', 'MONGO_INITDB_ROOT_PASSWORD_FILE': str(base / 'missing')}).returncode, 70)
             empty = base / 'empty'; empty.mkdir()
@@ -200,6 +223,11 @@ class MongoCleanStop(unittest.TestCase):
         lines = CLEAN_STOP.decode().splitlines()
         for logs, message in [(b'old startup line\n', 'WiredTiger closed'), ('\n'.join(lines[::2]).encode(), 'WiredTiger closed'),
                               (CLEAN_STOP.replace(b'"exitCode": 0', b'"exitCode": 14'), 'exit code 0'),
+                              (CLEAN_STOP.replace(b'"exitCode": 0', b'"exitCode": false'), 'exit code 0'),
+                              (CLEAN_STOP.replace(b'4795901', b'4795902'), 'WiredTiger closed'),
+                              (CLEAN_STOP.replace(b'"c": "STORAGE"', b'"c": "CONTROL"'), 'WiredTiger closed'),
+                              (CLEAN_STOP.replace(b'23138', b'23139'), 'exit code 0'),
+                              ('\n'.join([lines[0], lines[2], lines[1]]).encode(), 'exit code 0'),
                               (CLEAN_STOP + log({'s': 'F', 'msg': 'Fatal assertion'}), 'fatal')]:
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message): self.evidence(logs)
 

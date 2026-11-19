@@ -67,6 +67,10 @@ class DatabaseEngine:
         match=re.search(self.version_pattern,output)
         return match[1] if match else None
 
+    def detectable(self,image,declared):
+        """Whether to probe this container's binary; `declared` is the service's declared engine or 'auto'."""
+        return True
+
     def check_version(self,version):
         """Raise for a detected version this engine was not tested with."""
 
