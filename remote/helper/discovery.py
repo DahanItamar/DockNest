@@ -5,6 +5,8 @@
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
     DEFAULT_CAPABILITIES, inspect, run)
+from .paths import (
+    SITE_PATH)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -20,26 +22,25 @@ def project_roots(container):
         if p.is_dir() and os.path.realpath(p)==os.path.abspath(p) and str(p) not in roots:roots.append(str(p))
     return roots
 
-def nginx_sites(folders=None):
-    """Return routing metadata only, never nginx configuration contents or TLS keys."""
-    sites=[]
-    def parse(tokens):
-        nodes=[];words=[]
-        for token in tokens:
-            if token==';':
-                if words:nodes.append((words[0],words[1:],[]))
-                words=[]
-            elif token=='{':
-                nested=parse(tokens)
-                if words:nodes.append((words[0],words[1:],nested))
-                words=[]
-            elif token=='}':break
-            else:words.append(token)
-        return nodes
-    def walk(nodes):
-        for name,args,children in nodes:
-            yield name,args,children
-            yield from walk(children)
+def nginx_parse(tokens):
+    nodes=[];words=[]
+    for token in tokens:
+        if token==';':
+            if words:nodes.append((words[0],words[1:],[]))
+            words=[]
+        elif token=='{':
+            nested=nginx_parse(tokens)
+            if words:nodes.append((words[0],words[1:],nested))
+            words=[]
+        elif token=='}':break
+        else:words.append(token)
+    return nodes
+def nginx_walk(nodes):
+    for name,args,children in nodes:
+        yield name,args,children
+        yield from nginx_walk(children)
+def nginx_servers(folders=None):
+    """(file, domains, directives) of every nginx server block with a domain name. Contents never leave the helper."""
     for folder in folders or ['/etc/nginx/sites-enabled','/etc/nginx/conf.d']:
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
@@ -47,23 +48,28 @@ def nginx_sites(folders=None):
             if not file.is_file() or file.stat().st_size>1024*1024:continue
             try:
                 lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True
-                nodes=parse(iter(lexer))
+                nodes=nginx_parse(iter(lexer))
             except (ValueError,OSError):continue
-            for name,args,children in walk(nodes):
+            for name,args,children in nginx_walk(nodes):
                 if name!='server':continue
                 domains=[v for key,values,_ in children if key=='server_name' for v in values if re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]+',v) and '.' in v]
-                if not domains:continue
-                flattened=list(walk(children))
-                proxies=[values[0] for key,values,_ in flattened if key=='proxy_pass' and values]
-                dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)
-                roots=[values[0] for key,values,_ in children if key=='root' and values]
-                if not roots:
-                    roots=[v[0] for key,values,nested in children if key=='location' and values==['/'] for k,v,_ in nested if k=='root' and v]
-                for root in roots[:1] if not dynamic else []:
-                    p=pathlib.Path(root)
-                    if p.is_absolute() and '..' not in p.parts and str(p) not in ['/','/etc','/root','/home','/var','/var/www','/srv','/opt','/tmp'] and p.is_dir() and p.resolve()==p and (p/'index.html').is_file():
-                        sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0]})
-                if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies})
+                if domains:yield file,domains,children
+
+def nginx_sites(folders=None):
+    """Return routing metadata only, never nginx configuration contents or TLS keys."""
+    sites=[]
+    for file,domains,children in nginx_servers(folders):
+        flattened=list(nginx_walk(children))
+        proxies=[values[0] for key,values,_ in flattened if key=='proxy_pass' and values]
+        dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)
+        roots=[values[0] for key,values,_ in children if key=='root' and values]
+        if not roots:
+            roots=[v[0] for key,values,nested in children if key=='location' and values==['/'] for k,v,_ in nested if k=='root' and v]
+        for root in roots[:1] if not dynamic else []:
+            p=pathlib.Path(root)
+            if p.is_absolute() and '..' not in p.parts and str(p) not in ['/','/etc','/root','/home','/var','/var/www','/srv','/opt','/tmp'] and p.is_dir() and p.resolve()==p and (p/'index.html').is_file():
+                sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0]})
+        if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies})
     unique={}
     for site in sites:unique[(site['kind'],tuple(site['domains']),site.get('documentRoot',''))]=site
     return list(unique.values())
@@ -126,7 +132,7 @@ def list_project_files(ids,directory=None):
         for item in items:
             kind='link' if item.is_symlink() else 'directory' if item.is_dir(follow_symlinks=False) else 'file' if item.is_file(follow_symlinks=False) else 'other'
             entry_path=str(p/item.name)
-            entries.append({'name':item.name,'path':entry_path,'kind':kind,'selectable':kind=='file' and bool(re.fullmatch(r'/[a-zA-Z0-9_./-]+',entry_path))})
+            entries.append({'name':item.name,'path':entry_path,'kind':kind,'selectable':kind=='file' and bool(SITE_PATH.fullmatch(entry_path))})
     entries.sort(key=lambda item:(item['kind']!='directory',item['name'].lower()))
     parent=str(p.parent) if any(p.parent.is_relative_to(root) for root in roots) else None
     return {'directory':str(p),'parent':parent,'entries':entries[:500],'limited':len(entries)>500}
