@@ -71,6 +71,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Save the login once in Administration, Connections (encrypted, never shown again), then add an alert node on the Map, draw a line from DockNest, a server or a site, and pick the events. See [alerts](docs/alerts.md).
 
 **Security**
+- Keys safe: DockNest finds the encryption keys apps keep in their settings (such as Laravel `APP_KEY`, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden) and checks that each one is inside the last backup, without ever reading the key into DockNest. A restore test confirms the restored copy has the same keys. It also tells you when an app's Compose or env files change outside Safe Edit. See [keys safe](docs/keys-safe.md).
 - Backups are encrypted with AES-256-GCM.
 - Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
 - SSH host keys are pinned and checked before connecting.
@@ -193,7 +194,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) · [Keys safe](docs/keys-safe.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |

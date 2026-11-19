@@ -4,6 +4,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
+- Restore tests check that the restored app has the same keys as the backup.
+- A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
+
 ### Fixed
 
 - A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.

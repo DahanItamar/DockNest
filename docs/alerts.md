@@ -73,6 +73,7 @@ saved token can never be pointed at a new server by editing the server alone.
 | `backup.copy_gave_up` | A copy still failed after 7 days of retries (it can be retried in DockNest) | Once per copy |
 | `certificate.expiring` | A site's TLS certificate expires within the warning days (14 by default), or has expired | Once per certificate, expiry date and stage (expires soon, then expired) |
 | `certificate.renewal_failed` | certbot's newest renewal run for a site's certificate failed | Once per failed certbot run; a later failed run alerts again |
+| `config.changed` | An app's Compose, env or configuration files (or a key in them) differ from known-good, seen at a readiness check, discovery or backup. See [keys-safe.md](keys-safe.md) | Once per new set of fingerprints |
 
 New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.

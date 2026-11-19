@@ -331,7 +331,7 @@ running test.
   "limits": { "memoryMb": 1024, "cpus": 1, "timeLimitMinutes": 30, "internet": false },
   "steps": [ { "step": "check_space", "label": "Check space", "state": "pending | running | done | failed | skipped",
     "startedAt": null, "finishedAt": null, "detail": null } ],
-  "checks": [ { "name": "Containers running", "kind": "running | health | stable | database | sqlite | http | static-files",
+  "checks": [ { "name": "Containers running", "kind": "running | health | stable | database | sqlite | http | static-files | keys",
     "target": "web", "status": "passed | failed | skipped | not-configured", "detail": "HTTP 200 in 140 ms" } ] }
 ```
 
