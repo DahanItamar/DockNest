@@ -5,7 +5,7 @@
 // in events.js. Sealed logins are opened only at the moment of a send and never appear in a log line, an audit event or
 // an error.
 import { db, id, audit, transaction } from '../db.js';
-import { messageFor, templateFor, messageOf, plainTemplate, testMessage, ruleMatches, DEDUPE_MS, STATE_DEDUPE_MS } from './events.js';
+import { messageFor, templateFor, messageOf, plainTemplate, testMessage, ruleMatches, DEDUPE_MS, STATE_DEDUPE_MS, EVERY_CHANNEL_EVENTS } from './events.js';
 import { enabledRules, getChannel, getCredential, nodeConnection, recordResult, recordCredentialTest, httpError } from './store.js';
 import { getConnection, openSecret, recordConnectionSend, privateAllowed } from './connections.js';
 import { provider } from './providers/index.js';
@@ -118,11 +118,13 @@ export async function sendTest(channelId, actor) {
 export function emit(event, { at = Date.now() } = {}) {
   const stamped = { ...event, at: event.at ?? new Date(at).toISOString() }, text = messageFor(stamped), template = templateFor(stamped); if (!text || !template) return 0;
   const payload = JSON.stringify(template);
-  // Dedup per Connection: one message per Connection and event, however many nodes and lines lead to it.
+  // Dedup per Connection: one message per Connection and event, however many nodes and lines lead to it. An
+  // every-channel event goes to each node that has a Connection, with or without a rule.
   const targets = new Map();
-  for (const rule of enabledRules().filter(rule => ruleMatches(rule, event))) {
-    const node = db.prepare('SELECT connection_id FROM alert_nodes WHERE id=?').get(rule.node_id);
-    if (node?.connection_id && !targets.has(node.connection_id)) targets.set(node.connection_id, rule.node_id);
+  const nodes = EVERY_CHANNEL_EVENTS.includes(event.type) ? db.prepare('SELECT id FROM alert_nodes ORDER BY created_at,id').all().map(node => node.id) : enabledRules().filter(rule => ruleMatches(rule, event)).map(rule => rule.node_id);
+  for (const nodeId of nodes) {
+    const node = db.prepare('SELECT connection_id FROM alert_nodes WHERE id=?').get(nodeId);
+    if (node?.connection_id && !targets.has(node.connection_id)) targets.set(node.connection_id, nodeId);
   }
   const window = STATE_DEDUPE_MS[event.type] ?? DEDUPE_MS, key = `${event.type}:${event.key}`.slice(0, 200), created = new Date(at).toISOString();
   let queued = 0;

@@ -635,6 +635,7 @@ test('template: every event has a title, a catalogue reason, the names the owner
     'edit.rolled_back': ['Change undone', 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.'], 'edit.needs_you': ['Change needs you', 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.'],
     'self_heal.restarted': ['Container restarted', 'A container failed its health check and DockNest restarted it.'], 'self_heal.gave_up': ['Self-heal stopped', 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.'],
     'launch.needs_you': ['Launch needs you', 'A failed launch could not remove everything it made. Open DockNest and press Try again.'],
+    'selfbackup.kit_check_failed': ['Self Backup kit check failed', 'The newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.'],
   };
   assert.deepEqual(Object.keys(expected).sort(), [...events.EVENTS].sort(), 'the catalogue covers every event');
   for (const [type, [title, reason]] of Object.entries(expected)) {

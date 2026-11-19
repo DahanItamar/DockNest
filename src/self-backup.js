@@ -1,7 +1,5 @@
 import { mkdtemp,readFile,rm,mkdir,realpath,readdir } from 'node:fs/promises';
-import { openSync,closeSync,readFileSync,lstatSync,createReadStream } from 'node:fs';
-import { pipeline } from 'node:stream/promises';
-import { createHash } from 'node:crypto';
+import { openSync,closeSync,readFileSync,lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
@@ -11,7 +9,8 @@ import { seal,open,digest } from './crypto.js';
 import { exportRecoveryKit } from './recovery-kit.js';
 import { deploymentHeld,requireNoDeploymentHold,deploymentHoldMessage } from './deployment-hold.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
-import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openWrite,openRead,syncFile,renameFile,removeFile } from './storage.js';
+import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openRead,removeFile,publishVerified } from './storage.js';
+import { writeEmergencyKit } from './emergency/kits.js';
 
 const now=()=>new Date().toISOString(),settingsKey='manager_backup_config';
 const packageInfo=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
@@ -65,7 +64,8 @@ export function claimSelfBackup(){
  // A run queued before the hold (an older release did not check it) stays queued until the hold is released.
  return transaction(()=>{if(deploymentHeld(db))return null;const run=db.prepare("SELECT * FROM manager_backups WHERE status='queued'").get();if(!run)return null;db.prepare("UPDATE manager_backups SET status='running' WHERE id=?").run(run.id);return run;});
 }
-async function directory(){
+// The worker's private folder for kits (0700, never a symlink): staging, local kits and kit checks.
+export async function selfBackupDirectory(){
  const root=join(config.dataDir,'manager-backups');await mkdir(root,{recursive:true,mode:0o700});
  if(await realpath(root)!==join(await realpath(config.dataDir),'manager-backups'))throw new Error('Manager backup directory cannot be a symlink');
  return root;
@@ -78,7 +78,7 @@ export async function pruneSelfBackups(){
  for(const row of db.prepare("SELECT * FROM manager_backups WHERE status IN ('completed','failed') AND id<>? AND NOT EXISTS(SELECT 1 FROM manager_backup_downloads d WHERE d.backup_id=manager_backups.id)").all(latest?.id||'')){
   try{
    if(row.path){validateRemotePath(row);for(const file of [row.path+'.partial',row.path])try{await removeFile(file);}catch(error){if(error.code!==2&&error.code!=='ENOENT')throw error;}}
-   else await rm(filename(await directory(),row.id),{force:true});
+   else await rm(filename(await selfBackupDirectory(),row.id),{force:true});
    if(row.id!==lastAttempt?.id)db.prepare('DELETE FROM manager_backups WHERE id=?').run(row.id);
   }catch{/* Keep the previous copy and retry cleanup later. */}
  }
@@ -91,25 +91,26 @@ function validateRemotePath(row){
  const previous=row.path.startsWith(legacy)&&new RegExp('^[a-f0-9]{16}/'+runId+'\\.dkit$').test(row.path.slice(legacy.length));
  if(!remoteModes.includes(selected.mode)||!(current||previous))throw new Error('Invalid manager backup path');
 }
-async function remoteHash(file){const hash=createHash('sha256');for await(const chunk of await openRead(file))hash.update(chunk);return hash.digest('hex');}
+// Returns true when the run completed, so the worker queues its kit check (src/kit-check.js).
 export async function executeSelfBackup(run){
- let temporary;
+ let temporary,completed=false;
  try{
   const targetId=run.target_id||destination().id;
   if(!targetId)throw new Error('Select a connected SFTP or S3 destination');
-  const root=await directory(),saved=selfBackupConfig();temporary=await mkdtemp(join(root,'.pending-'));
+  const root=await selfBackupDirectory(),saved=selfBackupConfig();temporary=await mkdtemp(join(root,'.pending-'));
   const file=join(temporary,'manager.dkit');
-  const evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase:open(saved.passphrase),release});
+  const passphrase=open(saved.passphrase),evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase,release});
   const bytes=await readFile(file);if(digest(bytes)!==evidence.sha256)throw new Error('Recovery kit checksum mismatch');
   const remoteDirectory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(remoteDirectory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
   db.prepare('UPDATE manager_backups SET target_id=?,path=? WHERE id=?').run(targetId,published,run.id);
-  await makeDirectory(remoteDirectory);await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
-  if(await remoteHash(published+'.partial')!==evidence.sha256)throw new Error('Uploaded recovery kit checksum mismatch');
-  await renameFile(published+'.partial',published);
-  if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
+  await makeDirectory(remoteDirectory);await publishVerified(file,published,evidence.sha256);
   // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
-  const completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
-  if(completed)await copyKitToCopyDestinations(run,file,evidence,targetId);
+  completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
+  if(completed){
+   await copyKitToCopyDestinations(run,file,evidence,targetId);
+   // With the optional split on, the same kit is also sealed to the emergency key (src/emergency/kits.js). Never fails the kit.
+   await writeEmergencyKit({run,kit:bytes,passphrase,keyId:evidence.keyId,targetId,temporary,release});
+  }
  }catch(error){
   // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold
   // set under a running backup, as by a forced upgrade) is recorded as it is.
@@ -117,6 +118,7 @@ export async function executeSelfBackup(run){
   if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),held?deploymentHoldMessage+' Your previous successful copy is kept.':'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id,held?{reason:'deployment-hold'}:{});
  }finally{if(temporary)try{await rm(temporary,{recursive:true,force:true});}catch{/* Retry interrupted staging cleanup at worker startup. */}}
  try{await pruneSelfBackups();}catch{/* Cleanup failure must not prevent ordinary site jobs. */}
+ return completed;
 }
 // Every other destination that holds backup copies, or that a site uses as its main destination, also gets the newest
 // recovery kit, so each one can be recovered on its own (docs/backup-copies.md). A failure here never fails the kit.
@@ -128,10 +130,7 @@ async function copyKitToCopyDestinations(run,file,evidence,mainTargetId){
  for(const targetId of kitCopyDestinations(mainTargetId)){
   try{
    const directory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(directory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
-   await makeDirectory(directory);await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
-   if(await remoteHash(published+'.partial')!==evidence.sha256)throw new Error('Uploaded recovery kit checksum mismatch');
-   await renameFile(published+'.partial',published);
-   if(await remoteHash(published)!==evidence.sha256)throw new Error('Published recovery kit checksum mismatch');
+   await makeDirectory(directory);await publishVerified(file,published,evidence.sha256);
    db.prepare('INSERT INTO manager_backup_copies(backup_id,target_id,path,created_at) VALUES(?,?,?,?) ON CONFLICT(backup_id,target_id) DO UPDATE SET path=excluded.path').run(run.id,targetId,published,now());
    audit('worker','manager-backup.copied',run.id,{targetId});
   }catch{audit('worker','manager-backup.copy_failed',run.id,{targetId});}
@@ -152,8 +151,8 @@ export async function pruneKitCopies(){
 export async function recoverInterruptedSelfBackups(){
  if(!db.prepare('SELECT 1 FROM manager_backups LIMIT 1').get())return;
  db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error='Worker interrupted. Previous successful DockNest backup is kept.' WHERE status='running'").run(now());
- try{const root=await directory();
-  for(const name of await readdir(root))if(/^\.pending-[a-zA-Z0-9]+$/.test(name))await rm(join(root,name),{recursive:true,force:true});
+ try{const root=await selfBackupDirectory();
+  for(const name of await readdir(root))if(/^\.(pending|kit-check)-[a-zA-Z0-9]+$/.test(name))await rm(join(root,name),{recursive:true,force:true});
   await pruneSelfBackups();
  }catch{/* Optional kit cleanup must not prevent ordinary site jobs. */}
 }
@@ -167,15 +166,15 @@ export async function readLatestSelfBackup(){
   if(row.path){
    validateRemotePath(row);const chunks=[];let size=0;
    for await(const chunk of await openRead(row.path)){size+=chunk.length;if(size>128*1024*1024+1024)throw new Error('Recovery kit exceeds size limit');chunks.push(chunk);}
-   const bytes=Buffer.concat(chunks);if(digest(bytes)!==row.checksum)throw new Error('Recovery kit checksum mismatch');return {bytes,checksum:row.checksum};
+   const bytes=Buffer.concat(chunks);if(digest(bytes)!==row.checksum)throw new Error('Recovery kit checksum mismatch');return {bytes,checksum:row.checksum,id:row.id};
   }
-  const root=await directory();
+  const root=await selfBackupDirectory();
   let handle;
   try{
    const file=filename(root,row.id),info=lstatSync(file);
    if(!info.isFile()||info.isSymbolicLink()||info.size>128*1024*1024+1024)throw new Error('Invalid kit file');
    handle=openSync(file,'r');const bytes=readFileSync(handle);
-   if(digest(bytes)!==row.checksum)throw new Error('Recovery kit checksum mismatch');return {bytes,checksum:row.checksum};
+   if(digest(bytes)!==row.checksum)throw new Error('Recovery kit checksum mismatch');return {bytes,checksum:row.checksum,id:row.id};
   }finally{if(handle!==undefined)closeSync(handle);}
  }catch{throw Object.assign(new Error('Unable to read the saved DockNest backup. Check storage access and file integrity.'),{status:503});}
  finally{db.prepare('DELETE FROM manager_backup_downloads WHERE id=?').run(lease);}

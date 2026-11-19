@@ -43,6 +43,11 @@ const catalogue = Object.freeze({
   'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this site.',
   // Launches (docs/launch-site.md): the teardown of a failed launch did not finish, so the server stays held.
   'launch.needs_you': 'A failed launch could not remove everything it made. Open DockNest and press Try again.',
+  // Self Backup and the emergency kit (docs/emergency-kit.md). The code is the kit check's reason; never a key or an error.
+  'selfbackup.kit_check_failed': 'The newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.',
+  'selfbackup.kit_check_failed:key_mismatch': 'The newest recovery kit holds a different master key than this DockNest. Run a new Self Backup and check again.',
+  'selfbackup.kit_check_failed:unreadable': 'The newest recovery kit could not be read from storage. Check the storage connection.',
+  'emergency.key_changed': 'New emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));
