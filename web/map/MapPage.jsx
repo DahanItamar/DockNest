@@ -232,7 +232,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   const h=e=>{if(e.key==='Escape'){setSel(null);return}if(!(e.ctrlKey||e.metaKey)||e.altKey||!canMove)return;const k=e.key.toLowerCase();if(k!=='z'&&k!=='y')return;if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName||'')||document.querySelector('dialog[open]'))return;e.preventDefault();if(k==='y'||e.shiftKey)redo();else undo()};
   document.addEventListener('keydown',h);return()=>document.removeEventListener('keydown',h);
  });
- function tidy(){pushHist();mode.current='home';setPositions({});setNote('The map is tidy again. Undo brings your layout back.')}
+ function tidy(){pushHist();setPositions({});setNote('The map is tidy again. Undo brings your layout back.')}
 
  // The default view is always 100%: centred when the map fits, otherwise the top-left of the content. Only the Fit button and the 0 key shrink it.
  const home=useCallback(()=>{
@@ -257,7 +257,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(Math.abs(next-box.height)>1)setViewH(next);
  },[]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;size();window.addEventListener('resize',size);return()=>window.removeEventListener('resize',size)},[narrow,size,servers.length,note,!!strip,!!edit]);
- const apply=useCallback(()=>{if(mode.current==='fit')fit();else if(mode.current==='home')home()},[fit,home]);
+ // The view holds still while a node is dragged, so the canvas can grow under it without the map re-centring away from the pointer.
+ const apply=useCallback(()=>{if(gesture.current?.type==='node')return;if(mode.current==='fit')fit();else if(mode.current==='home')home()},[fit,home]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;apply();},[narrow,apply,servers.length,viewH]);
  useEffect(()=>{
   const el=view.current;if(!el||typeof ResizeObserver==='undefined')return;
@@ -306,8 +307,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    g.moved=true;mode.current='user';setT(p=>({...p,x:p.x+e.clientX-prev.x,y:p.y+e.clientY-prev.y}));}
   else if(g.type==='node'){
    if(!g.moved&&Math.hypot(e.clientX-g.sx,e.clientY-g.sy)<=4)return;
-   // The view holds still while a node moves, so the canvas can grow under it without re-centring.
-   g.moved=true;mode.current='user';setDragPos({key:g.key,x:snapToGrid(g.ox+(e.clientX-g.sx)/t.k),y:snapToGrid(g.oy+(e.clientY-g.sy)/t.k)});
+   g.moved=true;setDragPos({key:g.key,x:snapToGrid(g.ox+(e.clientX-g.sx)/t.k),y:snapToGrid(g.oy+(e.clientY-g.sy)/t.k)});
   }
   else if(g.type==='alert'){
    if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
