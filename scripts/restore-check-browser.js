@@ -25,9 +25,16 @@ const SCENES={
  none:readiness({findings:[],complete:true,limits:{}}),
  error:readiness({error:'The server did not answer in time.'}),
  partial:readiness({findings:findings().slice(0,2),complete:false,limits:{files:400}}),
+ partialEmpty:readiness({findings:[],complete:false,limits:{files:400}}),
+ dup:readiness({findings:[
+  find(1,'host-schedule',{path:'/etc/cron.d/shop',line:2,includable:true,includePaths:['/etc/cron.d/shop'],message:'A scheduled task uses this app’s folder.'}),
+  find(7,'host-schedule',{path:'/etc/cron.d/shop',line:5,includable:true,includePaths:['/etc/cron.d/shop'],message:'A second line of the same file uses this app’s folder.'}),
+  find(8,'host-schedule',{path:'/etc/systemd/system/shop-backup.service',schedule:'daily',includable:true,includePaths:['/etc/systemd/system/shop-backup.timer','/etc/systemd/system/shop-backup.service'],message:'A systemd timer uses this app’s folder.'})
+ ],complete:true,limits:{}}),
  older:readiness()
 };
-const site={id:'s1',name:'Shop',serverId:'s1',config:{containers:['c1'],domains:['shop.example.com'],configFiles:['/srv/shop/.env']}};
+const config={containers:['c1'],domains:['shop.example.com'],configFiles:['/srv/shop/.env']},siteFor=scene=>({id:'s1',name:'Shop',serverId:'s1',config:scene==='dup'?{...config,configFiles:[...config.configFiles,'/etc/systemd/system/shop-backup.timer']}:config});
+const site=siteFor('findings');
 const state={servers:[{id:'s1',name:'Production',host:'srv.example.invalid',port:22,username:'root',status:'connected'}],sites:[site],policies:[],backups:[],jobs:[],restores:[],audit:[],storage:{used:0,total:1e12},worker:{online:true},maintenance:{}};
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 const errors=[];
@@ -38,7 +45,7 @@ async function open(theme,width,{role='admin',scene='findings',onWrite=()=>null}
  await page.route('**/api/state',r=>r.fulfill({json:state}));
  await page.route('**/api/auth/activity',r=>r.fulfill({json:{}}));
  await page.route('**/api/sites/s1/readiness',r=>r.fulfill({json:SCENES[scene]}));
- await page.route('**/api/sites/s1',r=>{const q=r.request();if(q.method()==='GET')return r.fulfill({json:site});calls.push({method:q.method(),url:q.url(),body:q.postDataJSON()});return onWrite(r,'site')||r.fulfill({json:site});});
+ await page.route('**/api/sites/s1',r=>{const q=r.request();if(q.method()==='GET')return r.fulfill({json:siteFor(scene)});calls.push({method:q.method(),url:q.url(),body:q.postDataJSON()});return onWrite(r,'site')||r.fulfill({json:site});});
  await page.route('**/api/sites/s1/restore-decisions/*',r=>{const q=r.request();calls.push({method:q.method(),url:q.url(),body:q.postDataJSON?.()});return onWrite(r,'decision')||r.fulfill({json:{ok:true}});});
  await page.addInitScript(t=>localStorage.setItem('docknest-theme',t),theme);
  await page.emulateMedia({reducedMotion:'reduce',colorScheme:theme});
@@ -109,6 +116,7 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await row(page,'/etc/cron.d/shop').getByText('Saved in backups').waitFor();
  const patch=page.calls.find(c=>c.method==='PATCH');
  assert.deepEqual(patch.body.config.configFiles,['/srv/shop/.env','/etc/cron.d/shop']);assert.equal(patch.body.name,'Shop');
+ assert.deepEqual(patch.body.config.containers,['c1'],'other fields are kept');assert.deepEqual(patch.body.config.domains,['shop.example.com'],'other fields are kept');
  assert.equal(await row(page,'/etc/cron.d/shop').getByRole('button',{name:'Save a copy in backups'}).count(),0);
  await page.close();
 
@@ -138,6 +146,17 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  page=await open(theme,width,{scene:'partial'});
  await page.getByText('The scan stopped early; there may be more').waitFor();
  assert.equal(await page.locator('.rg-item').count(),2);await shot(page,'partial',theme,width);await page.close();
+ page=await open(theme,width,{scene:'partialEmpty'});
+ await page.getByText('Nothing found so far, but the scan stopped early').waitFor();
+ assert.equal(await page.getByText('Nothing outside the app folder that a new server would miss').count(),0,'no success line for a partial scan');await page.close();
+ // Include keeps one entry per path and updates sibling findings that are now covered.
+ page=await open(theme,width,{scene:'dup'});
+ await row(page,'shop-backup.service').getByRole('button',{name:'Save a copy in backups'}).click();
+ await row(page,'shop-backup.service').getByText('Saved in backups').waitFor();
+ assert.deepEqual(page.calls.find(c=>c.method==='PATCH').body.config.configFiles,['/srv/shop/.env','/etc/systemd/system/shop-backup.timer','/etc/systemd/system/shop-backup.service'],'no duplicate paths');
+ await page.locator('.rg-item',{hasText:'/etc/cron.d/shop:2'}).getByRole('button',{name:'Save a copy in backups'}).click();
+ await page.locator('.rg-item',{hasText:'/etc/cron.d/shop:5'}).getByText('Saved in backups').waitFor();
+ await page.close();
  page=await open(theme,width,{scene:'older'});
  assert.equal(await page.locator('.rg').count(),0,'an older answer shows no section');
  await page.getByText('Not copied: /srv/shop/cache.').waitFor();await page.close();

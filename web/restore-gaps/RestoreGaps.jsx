@@ -42,8 +42,8 @@ function Finding({f,isAdmin,busy,editing,onInclude,onDecide,onEdit,onCancel}){
    <div className="rg-head">
     <b>{label}</b>
     {f.included&&<StatusLabel state="success">Saved in backups</StatusLabel>}
-    {answered==='ignore'&&<StatusLabel state="queued">Ignored</StatusLabel>}
-    {answered==='note'&&<StatusLabel state="queued">Noted</StatusLabel>}
+    {answered==='ignore'&&<span className="status status-queued"><IconEyeOff className="status-icon" size={16} stroke={2} aria-hidden="true"/>Ignored</span>}
+    {answered==='note'&&<span className="status status-queued"><IconNotes className="status-icon" size={16} stroke={2} aria-hidden="true"/>Noted</span>}
    </div>
    {f.message&&<p>{f.message}</p>}
    {where(f)&&<code className="rg-path">{where(f)}</code>}
@@ -81,8 +81,8 @@ export function RestoreGaps({gaps,isAdmin,api,siteId,onSessionExpired,onIncluded
   <h3 id="rg-title">Restore on a new server</h3>
   {gaps.error?<AlertPanel variant="error" title="Could not check the rest of the server">{gaps.error} The checks above are still valid.</AlertPanel>:<>
    <p className="rg-lede">What a new server would not have unless you add it. This check only reads: nothing changes unless you choose a copy.</p>
-   {gaps.complete===false&&<StatusLabel state="needs-review">The scan stopped early; there may be more</StatusLabel>}
-   {!findings.length?<StatusLabel state="success">Nothing outside the app folder that a new server would miss</StatusLabel>:<>
+   {gaps.complete===false&&<StatusLabel state="needs-review">{findings.length?'The scan stopped early; there may be more':'Nothing found so far, but the scan stopped early'}</StatusLabel>}
+   {!findings.length?(gaps.complete===false?null:<StatusLabel state="success">Nothing outside the app folder that a new server would miss</StatusLabel>):<>
     <p className="rg-count t-caption" role="status">{open.length?count(open.length,'thing')+' to review':'All reviewed'}{rest&&open.length?', '+rest+' answered':''}</p>
     <ul className="rg-list">{[...open,...findings.filter(f=>f.included||f.decision)].map(f=><Finding key={f.key} f={f} isAdmin={isAdmin} busy={busy} editing={editing===f.key} onInclude={include} onDecide={decide} onEdit={setEditing} onCancel={()=>setEditing('')}/>)}</ul>
    </>}
