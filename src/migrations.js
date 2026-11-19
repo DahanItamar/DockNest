@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// The restore check (docs/restore-check.md): an Ignore or Note answer per finding of a site's readiness check. finding_key is
+// the helper's sha256 of kind, path and match, so a moved line keeps its answer. Additive only: one new table.
+export const restoreDecisionsSchema = `
+CREATE TABLE IF NOT EXISTS site_restore_decisions (site_id TEXT NOT NULL REFERENCES sites(id),finding_key TEXT NOT NULL CHECK (length(finding_key) = 64 AND finding_key NOT GLOB '*[^0-9a-f]*'),decision TEXT NOT NULL CHECK (decision IN ('ignore','note')),note TEXT CHECK (note IS NULL OR length(note) <= 500),decided_by TEXT,decided_at TEXT NOT NULL,PRIMARY KEY (site_id,finding_key));
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -389,6 +394,9 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it. Purely additive: renumber
+  // before release if another migration lands first.
+  { version: 19, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
