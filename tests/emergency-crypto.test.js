@@ -137,7 +137,9 @@ test('offline tool: the one-file build imports only offline built-ins and opens 
     assert.equal(await readFile(join(directory, 'out', 'recovery-passphrase.txt'), 'utf8'), passphrase);
     assert.deepEqual((await readdir(join(directory, 'out'))).sort(), ['docknest-recovery.dkit', 'recovery-passphrase.txt']);
     if (process.platform !== 'win32') assert.equal((await stat(join(directory, 'out', 'recovery-passphrase.txt'))).mode & 0o777, 0o600);
-    for (const word of new Set(mnemonics.join(' ').split(' '))) assert.ok(!(opened.stdout + opened.stderr).split(/\s+/).includes(word), 'no part word is printed');
+    // Single words are common English and may appear in the tool's own sentences; no run of three part words may.
+    const output = (opened.stdout + opened.stderr).toLowerCase().split(/\s+/).join(' ');
+    for (const words of mnemonics.map(mnemonic => mnemonic.split(' '))) for (let index = 0; index + 3 <= words.length; index++) assert.ok(!output.includes(words.slice(index, index + 3).join(' ')), 'no part words are printed');
     assert.ok(!(opened.stdout + opened.stderr).includes(privateKey.toString('hex')) && !(opened.stdout + opened.stderr).includes(privateKey.toString('base64')));
     const again = run(['open', kits, join(directory, 'out')], `${mnemonics[0]}\n${mnemonics[1]}\n`);
     assert.match(again.stderr, /already exists/);
