@@ -77,9 +77,11 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 
 @media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
 
-/* Overflow menu: one icon button and a short list of text actions. */
-.overflow-menu{position:relative;flex:none}
-.overflow-list{position:absolute;z-index:20;top:100%;right:0;min-width:160px;margin-top:4px;padding:4px;display:flex;flex-direction:column;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface);box-shadow:0 8px 24px var(--shadow)}
-.overflow-list button{justify-content:flex-start;min-height:var(--control-height);padding:8px 12px;border:0;background:var(--transparent);color:var(--text-primary);text-align:left;white-space:nowrap}
-.overflow-list button:hover,.overflow-list button:focus-visible{background:var(--surface-hover);color:var(--heading)}
-.overflow-list button:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+/* Overflow menu: one icon button and a short list of actions. The list opens upward (.up) where it would be clipped. */
+.overflow-menu{position:relative;display:inline-flex}
+.overflow-menu-list{position:absolute;z-index:20;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 8px 24px var(--shadow)}
+.overflow-menu-list.up{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}
+.overflow-menu-list button[role=menuitem]{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:var(--control-height);padding:0 12px;border:0;background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left;white-space:nowrap}
+.overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.overflow-menu-list button[role=menuitem]:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}

@@ -21,5 +21,6 @@ export function nodeLine(entry){
  const sum=summarize(entry.data);
  if(sum.notBackedUp)return {text:sum.notBackedUp+' not backed up',tone:'warn'};
  if(sum.partial)return {text:'Scan incomplete',tone:'warn'};
+ if(sum.pending)return {text:sum.pending+' waiting for a first backup',tone:''};
  return {text:sum.total?'All backed up':'Nothing to back up',tone:''};
 }

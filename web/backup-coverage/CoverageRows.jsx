@@ -5,7 +5,7 @@ import {Paginated} from '../pagination.jsx';
 import {addTargets} from './model.js';
 import './backup-coverage.css';
 
-const STATUS={'backed-up':['success','Backed up'],pending:['queued','First backup pending'],'not-backed-up':['needs-review','Not backed up'],skipped:['queued','Skipped']};
+const STATUS={'backed-up':['success','Backed up'],pending:['running','First backup pending'],'not-backed-up':['needs-review','Not backed up'],skipped:['queued','Skipped']};
 
 // The one quiet detail after the status: which app, why it is skipped, or what uses the volume.
 function detail(item){
@@ -16,17 +16,16 @@ function detail(item){
 }
 
 // What clicking the row does. Not backed up: Add app. Backed up or pending: open that app. Skipped: the menu.
-function actionOf(item,canChange){
+function actionOf(item){
  if((item.status==='backed-up'||item.status==='pending')&&item.app)return 'open';
- if(!canChange)return null;
  if(item.status==='not-backed-up'&&addTargets(item).length)return 'add';
  return item.status==='not-backed-up'||item.status==='skipped'?'menu':null;
 }
 const HINT={add:'Add app',open:'Open'};
 
-function Row({item,canChange,onAdd,onOpen,onSkip,onUnskip}){
- const [menu,setMenu]=useState(false),action=actionOf(item,canChange),[state,label]=STATUS[item.status],Icon=item.kind==='volume'?IconDatabase:IconBox,text=detail(item);
- const menuItems=!canChange?[]:item.status==='not-backed-up'?[{label:'Skip',onSelect:()=>onSkip(item)}]:item.status==='skipped'?[{label:'Unskip',onSelect:()=>onUnskip(item)}]:[];
+function Row({item,onAdd,onOpen,onSkip,onUnskip}){
+ const [menu,setMenu]=useState(false),action=actionOf(item),[state,label]=STATUS[item.status],Icon=item.kind==='volume'?IconDatabase:IconBox,text=detail(item);
+ const menuItems=item.status==='not-backed-up'?[{label:'Skip',onSelect:()=>onSkip(item)}]:item.status==='skipped'?[{label:'Unskip',onSelect:()=>onUnskip(item)}]:[];
  const click={add:()=>onAdd(item),open:()=>onOpen(item),menu:()=>setMenu(open=>!open)}[action];
  const body=<>
   <Icon className="bc-kind" size={24} stroke={1.5} aria-hidden="true"/>

@@ -6,7 +6,7 @@ import './backup-coverage.css';
 
 // Apps page: which containers and volumes on a server no app backs up. Closed until opened, so the Apps page never scans
 // a server by itself. Opening it, switching server and "Scan again" are the only reads.
-export function CoveragePanel({api,servers,canChange,onAddApp,onOpenApp,onSessionExpired}){
+export function CoveragePanel({api,servers,onAddApp,onOpenApp,onSessionExpired}){
  const [open,setOpen]=useState(false),[chosen,setChosen]=useState(''),server=servers.find(item=>item.id===chosen)||servers[0];
  const coverage=useCoverage(api,server?[server.id]:[],open,onSessionExpired);
  if(!server)return null;
@@ -17,7 +17,7 @@ export function CoveragePanel({api,servers,canChange,onAddApp,onOpenApp,onSessio
   </div>
   {open&&<div id="bc-body" className="bc-body">
    {servers.length>1&&<label className="bc-server"><span className="sr-only">Server</span><select value={server.id} onChange={event=>setChosen(event.target.value)} aria-label="Server">{servers.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
-   <CoverageSection api={api} serverId={server.id} serverName={server.name} entry={coverage.byServer[server.id]} canChange={canChange} onScan={coverage.scan} patch={coverage.patch} onAddApp={onAddApp} onOpenApp={onOpenApp} onSessionExpired={onSessionExpired}/>
+   <CoverageSection api={api} serverId={server.id} serverName={server.name} entry={coverage.byServer[server.id]} onScan={coverage.scan} patch={coverage.patch} onAddApp={onAddApp} onOpenApp={onOpenApp} onSessionExpired={onSessionExpired}/>
   </div>}
  </section>;
 }

@@ -30,7 +30,6 @@ button.bc-main:focus-visible{outline:2px solid var(--focus-ring);outline-offset:
 .bc-dialog{width:min(480px,calc(100vw - 32px))}
 .bc-dialog .modal-body{display:flex;flex-direction:column;gap:16px}
 .bc-dialog .modal-body p{margin:0}
-.bc-dialog textarea{min-height:88px;resize:vertical}
 .bc-dialog .modal-foot{margin-top:0}
 .bc-map{display:flex;flex-direction:column;gap:12px}
 .bc-map .bc-bar{flex-wrap:wrap;gap:4px 8px}

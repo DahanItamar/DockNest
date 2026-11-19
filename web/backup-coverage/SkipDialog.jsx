@@ -13,7 +13,7 @@ export function SkipDialog({item,busy,error,onConfirm,onClose}){
   <div className="modal-head"><h2 id="bc-skip-title">Skip {item.name}?</h2><button type="button" className="icon" onClick={onClose} disabled={busy} aria-label="Close dialog"><X size={20}/></button></div>
   <form className="modal-body" onSubmit={event=>{event.preventDefault();onConfirm(note.trim());}}>
    <p>DockNest will stop listing this {item.kind} as not backed up. It stays unprotected. Nothing changes on the server, and you can undo this at any time.</p>
-   <label className="field"><span>Note (optional)</span><textarea name="note" rows={3} maxLength={NOTE_MAX} value={note} onChange={event=>setNote(event.target.value)} aria-describedby="bc-note-help"/><small id="bc-note-help">For example: a cache that is rebuilt on start. {note.length}/{NOTE_MAX}</small></label>
+   <label className="field"><span>Note (optional)</span><input type="text" name="note" maxLength={NOTE_MAX} value={note} onChange={event=>setNote(event.target.value)} aria-describedby="bc-note-help"/><small id="bc-note-help">For example: a cache that is rebuilt on start. {note.length}/{NOTE_MAX}</small></label>
    {error&&<AlertPanel variant="error" title="The change was not saved">{error}</AlertPanel>}
    <div className="modal-foot"><button type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="primary" disabled={busy}>{busy?'Saving…':'Skip'}</button></div>
   </form>

@@ -1,4 +1,4 @@
-import React,{useEffect,useRef} from 'react';
+import React,{useEffect,useId,useRef,useState} from 'react';
 import {IconDots} from '@tabler/icons-react';
 import {statusState} from './status-state.js';
 import {CheckCircle2,Loader,Clock,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
@@ -32,30 +32,34 @@ export function IconButton({label,icon:Icon,size=20,className='',...rest}){
  return <button type="button" className={('icon-button '+className).trim()} aria-label={label} title={label} {...rest}><Icon size={size} stroke={1.75} aria-hidden="true"/></button>;
 }
 
-// One overflow ("more actions") menu. items: [{label, onSelect}]. Controlled with open/onOpenChange so a row can open it
-// from elsewhere. Arrow keys, Home/End and Escape work; Escape and picking an item return focus to the button.
-export function OverflowMenu({label,items,open,onOpenChange}){
- const root=useRef(null),button=useRef(null),list=useRef(null);
- const focusItem=index=>{const nodes=list.current?.querySelectorAll('[role=menuitem]');if(nodes?.length)nodes[(index+nodes.length)%nodes.length].focus()};
+// Overflow menu for the secondary actions of a row. items: [{label, icon, onSelect, disabled}]. Arrow keys, Home and End
+// move, Escape and a press outside close it, and focus returns to the trigger. Uncontrolled by default; pass open and
+// onOpenChange when a row opens it from elsewhere. The list opens upward when it would be clipped below (last row of a
+// dialog or table). A press inside the parent row is left to the row, so its click can toggle the menu.
+export function OverflowMenu({label,items,disabled,open:controlled,onOpenChange}){
+ const [inner,setInner]=useState(false),open=controlled??inner,setOpen=value=>{setInner(value);onOpenChange?.(value)};
+ const root=useRef(null),trigger=useRef(null),list=useRef(null),id=useId(),[up,setUp]=useState(false);
+ const enabled=()=>[...(list.current?.querySelectorAll('[role=menuitem]:not(:disabled)')||[])];
  useEffect(()=>{
   if(!open)return;
-  focusItem(0);
-  const away=event=>{if(!root.current?.contains(event.target))onOpenChange(false)};
+  const away=e=>{if(!(root.current?.parentElement||root.current)?.contains(e.target))setOpen(false)};
   document.addEventListener('pointerdown',away);
+  const box=list.current.getBoundingClientRect(),clip=root.current.closest('dialog,.table-wrap')?.getBoundingClientRect(),limit=Math.min(innerHeight,clip?clip.bottom:innerHeight);
+  setUp(box.bottom>limit&&root.current.getBoundingClientRect().top-box.height>(clip?clip.top:0));
+  enabled()[0]?.focus();
   return()=>document.removeEventListener('pointerdown',away);
  },[open]);
- const close=()=>{onOpenChange(false);button.current?.focus()};
- function keys(event){
-  const nodes=[...list.current.querySelectorAll('[role=menuitem]')],at=nodes.indexOf(document.activeElement);
-  if(event.key==='Escape'){event.preventDefault();close()}
-  else if(event.key==='Tab')onOpenChange(false);
-  else if(event.key==='ArrowDown'){event.preventDefault();focusItem(at+1)}
-  else if(event.key==='ArrowUp'){event.preventDefault();focusItem(at-1)}
-  else if(event.key==='Home'){event.preventDefault();focusItem(0)}
-  else if(event.key==='End'){event.preventDefault();focusItem(-1)}
- }
- return <div className="overflow-menu" ref={root}>
-  <button type="button" ref={button} className="icon-button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={()=>onOpenChange(!open)} onKeyDown={event=>{if(event.key==='ArrowDown'&&!open){event.preventDefault();onOpenChange(true)}}}><IconDots size={20} stroke={1.75} aria-hidden="true"/></button>
-  {open&&<div className="overflow-list" role="menu" aria-label={label} ref={list} onKeyDown={keys}>{items.map(item=><button type="button" role="menuitem" key={item.label} onClick={()=>{onOpenChange(false);item.onSelect()}}>{item.label}</button>)}</div>}
- </div>;
+ const key=e=>{
+  const all=enabled(),at=all.indexOf(document.activeElement);
+  if(e.key==='Escape'){e.stopPropagation();e.preventDefault();setOpen(false);trigger.current?.focus();}
+  else if(e.key==='ArrowDown'){e.preventDefault();all[(at+1)%all.length]?.focus();}
+  else if(e.key==='ArrowUp'){e.preventDefault();all[(at-1+all.length)%all.length]?.focus();}
+  else if(e.key==='Home'){e.preventDefault();all[0]?.focus();}
+  else if(e.key==='End'){e.preventDefault();all.at(-1)?.focus();}
+  else if(e.key==='Tab')setOpen(false);
+ };
+ return <span className="overflow-menu" ref={root} onKeyDown={open?key:undefined}>
+  <button type="button" ref={trigger} className="icon-button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open?id:undefined} disabled={disabled} onClick={()=>setOpen(!open)} onKeyDown={e=>{if(e.key==='ArrowDown'&&!open){e.preventDefault();setOpen(true)}}}><IconDots size={20} stroke={1.75} aria-hidden="true"/></button>
+  {open&&<div className={'overflow-menu-list'+(up?' up':'')} role="menu" id={id} aria-label={label} ref={list}>{items.map(({label:text,icon:Icon,onSelect,disabled:off})=><button type="button" role="menuitem" key={text} disabled={off} onClick={()=>{setOpen(false);trigger.current?.focus();onSelect();}}>{Icon&&<Icon size={18} stroke={1.75} aria-hidden="true"/>}{text}</button>)}</div>}
+ </span>;
 }

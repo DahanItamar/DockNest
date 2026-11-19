@@ -71,12 +71,13 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
  const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...suggested,...groups.flatMap(group=>group.kind==='standalone'?group.containers.filter(container=>!grouped.has(containerName(container))).map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
  const pickedOnce=useRef(false);
  // Opened from the Map's + on a server: select the site that was clicked, once, after discovery has loaded.
- useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const wanted=[].concat(initialPick),c=siteChoices.find(x=>wanted.length===1&&x.name===wanted[0])||siteChoices.find(x=>wanted.every(name=>x.containers.some(container=>containerName(container)===name)));if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
+ useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const wanted=[].concat(initialPick),c=siteChoices.find(x=>wanted.length===1&&x.name===wanted[0])||siteChoices.find(x=>wanted.every(name=>x.containers.some(container=>containerName(container)===name)));if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else if(c.kind==='network')selectNames(wanted,wanted[0]);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
  const selected=[primary,...additional].filter(Boolean);
  const isStatic=!!staticRoot,hasSelection=isStatic||!!selected.length;
  const detected=isStatic?{compose:false,composeFiles:[],configFiles:staticSites.find(site=>site.documentRoot===staticRoot)?.configFiles||initialSite?.config.configFiles||[],directory:staticRoot}:detectedConfiguration(containers,selected);
  // Plain `docker run` containers get a step that previews the Compose DockNest keeps for them; Compose apps already have theirs.
- const recreate=!initialSite&&!isStatic&&selected.length>0&&!detected.compose,order=['select',...(recreate?['recreate']:[]),'details','review'],labels={select:'Select app',recreate:'Recreate',details:'App details',review:'Review & add'};
+ const swarm=groups.some(group=>group.kind==='swarm'&&group.containers.some(container=>selected.includes(containerName(container))));
+ const recreate=!initialSite&&!isStatic&&selected.length>0&&!detected.compose&&!swarm,order=['select',...(recreate?['recreate']:[]),'details','review'],labels={select:'Select app',recreate:'Recreate',details:'App details',review:'Review & add'};
  const temporaryFolders=containers.filter(c=>selected.includes(containerName(c))).flatMap(c=>(c.temporaryMemoryFolders||[]).map(destination=>({container:containerName(c),destination})));
  useEffect(()=>{
   if(loading||!selected.length||isStatic)return;

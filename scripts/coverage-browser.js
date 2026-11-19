@@ -4,7 +4,7 @@ import {mkdir} from 'node:fs/promises';
 
 // Backup coverage (docs/coverage-and-restore-check.md A2-A4) against a mocked API: the closed Apps panel that reads nothing,
 // loading, error with retry, empty, partial and the list (order, one row per item, 8 per page), Add app pre-selection,
-// Skip with a note and Unskip, read-only viewers, the Map toggle, and the "How DockNest will recreate it" step with its
+// Skip with a note and Unskip, the Map toggle, and the "How DockNest will recreate it" step with its
 // old-helper fallback. Light and dark, 1280 and 390 px. Run against a dev server or the built app: TEST_BASE_URL=http://127.0.0.1:5173
 // Set SHOTS_DIR to also write screenshots.
 const base=process.env.TEST_BASE_URL||'http://127.0.0.1:5173',shots=process.env.SHOTS_DIR,now=Date.now();
@@ -13,6 +13,7 @@ const item=(kind,name,status,extra={})=>({kind,name,status,...extra});
 const filler=Array.from({length:6},(_,i)=>item('container','svc-'+(i+1),'backed-up',{app:{id:'shop',name:'Shop'}}));
 const covered=[
  item('container','worker','not-backed-up'),
+ item('container','db2','not-backed-up'),
  item('volume','pgdata','not-backed-up',{usedBy:['db2','db3']}),
  item('volume','scratch','not-backed-up',{usedBy:[]}),
  item('container','db','pending',{app:{id:'shop',name:'Shop'}}),
@@ -24,7 +25,8 @@ const servers=[
  {id:'s1',name:'Production',host:'192.0.2.10',port:22,username:'root',status:'connected'},
  {id:'s2',name:'Staging',host:'192.0.2.11',port:22,username:'root',status:'connected'},
  {id:'s3',name:'Broken',host:'192.0.2.12',port:22,username:'root',status:'connected'},
- {id:'s4',name:'Empty',host:'192.0.2.13',port:22,username:'root',status:'connected'}
+ {id:'s4',name:'Empty',host:'192.0.2.13',port:22,username:'root',status:'connected'},
+ {id:'s5',name:'Waiting',host:'192.0.2.14',port:22,username:'root',status:'connected'}
 ];
 const sites=[{id:'shop',name:'Shop',serverId:'s1',config:{containers:['shop-web','db'],domains:['shop.example.com']}}];
 const state={servers,sites,policies:[],backups:[],jobs:[],restores:[],audit:[],storage:{used:0,total:1e12},worker:{online:true},maintenance:{}};
@@ -70,6 +72,7 @@ async function open(theme,width,{role='admin',route='Apps & schedules',coverage,
 function defaultCoverage(id,attempt){
  if(id==='s2')return {body:{complete:false,problems:['Docker did not answer for 2 containers.'],items:[item('container','api','not-backed-up'),item('container','queue','backed-up',{app:{id:'shop',name:'Shop'}})]}};
  if(id==='s3')return attempt===1?{status:500,body:{error:'SSH connection to 192.0.2.12 timed out.'}}:{body:{complete:true,problems:[],items:[item('container','web','backed-up',{app:{id:'shop',name:'Shop'}})]}};
+ if(id==='s5')return {body:{complete:true,problems:[],items:[item('container','queue','pending',{app:{id:'shop',name:'Shop'}})]}};
  if(id==='s4')return {body:{complete:true,problems:[],items:[]}};
  return {body:{complete:true,problems:[],items:covered}};
 }
@@ -92,9 +95,10 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await rows(page).first().waitFor();
  assert.equal(calls.filter(c=>/coverage$/.test(c.path)).length,1,'one scan per opening');
  assert.equal(await rows(page).count(),8,'eight rows per page');
+ assert.notEqual(await row(page,'cache').locator('.status').first().evaluate(e=>e.className),await row(page,'db').locator('.status').first().evaluate(e=>e.className),'Skipped and First backup pending look different');
  const names=await rows(page).locator('b').allTextContents();
- assert.deepEqual(names.slice(0,5),['worker','pgdata','scratch','db','cache'],'not backed up first, then pending, skipped, backed up');
- await panel(page).getByText('3 not backed up, 1 waiting for a first backup, 1 skipped, 7 backed up.',{exact:false}).waitFor();
+ assert.deepEqual(names.slice(0,5),['db2','worker','pgdata','scratch','db'],'not backed up first, then pending, skipped, backed up');
+ await panel(page).getByText('4 not backed up, 1 waiting for a first backup, 1 skipped, 7 backed up.',{exact:false}).waitFor();
  assert.equal(await panel(page).getByText('Everything here is covered').count(),0);
  // No pills or badges, no repeated labels, no number inputs.
  assert.equal(await page.locator('.bc-panel [class*="pill"],.bc-panel [class*="badge"],.bc-panel input[type=number]').count(),0);
@@ -111,8 +115,9 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await row(page,'worker').getByRole('button',{name:'More actions for worker'}).click();
  await page.getByRole('menuitem',{name:'Skip',exact:true}).click();
  const dialog=page.locator('dialog.bc-dialog');await dialog.waitFor();
- assert.equal(await dialog.locator('textarea').getAttribute('maxlength'),'200');
- await dialog.locator('textarea').fill('Rebuilt by a nightly job');
+ assert.equal(await dialog.locator('input[name=note]').getAttribute('maxlength'),'200');
+ assert.equal(await dialog.locator('textarea').count(),0,'the note is one line');
+ await dialog.locator('input[name=note]').fill('Rebuilt by a nightly job');
  await shot(page,'cov-skip',theme,width);
  await dialog.getByRole('button',{name:'Skip',exact:true}).click();
  await dialog.waitFor({state:'detached'});
@@ -158,6 +163,13 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await page.locator('.selection-summary').getByText('db2, db3').waitFor();
  await page.close();
 
+ // A container inside a suggested network group is pre-ticked alone, not the whole group.
+ ({page}=await open(theme,width));
+ await panel(page).getByRole('button',{name:'Check coverage',exact:true}).click();
+ await row(page,'db2').getByRole('button').first().click();
+ await page.locator('.selection-summary').getByText('1 services included: db2').waitFor();
+ await page.close();
+
  // Add app on a container pre-selects it; an old helper still lets the user continue.
  ({page,calls}=await open(theme,width,{helper:'old'}));
  await panel(page).getByRole('button',{name:'Check coverage',exact:true}).click();
@@ -169,16 +181,6 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await shot(page,'add-old-helper',theme,width);
  await page.close();
 
- // Viewers read: no menus, no Add app, and a backed up row still opens its app.
- ({page}=await open(theme,width,{role:'viewer'}));
- await panel(page).getByRole('button',{name:'Check coverage',exact:true}).click();
- await rows(page).first().waitFor();
- assert.equal(await page.getByRole('button',{name:/More actions/}).count(),0);
- assert.equal(await page.getByText('Add app',{exact:true}).filter({has:page.locator('.bc-hint')}).count(),0);
- assert.equal(await panel(page).locator('.bc-hint',{hasText:'Add app'}).count(),0);
- await shot(page,'cov-viewer',theme,width);
- await page.close();
-
  // Partial: the banner lists the problems and nothing says everything is covered.
  ({page}=await open(theme,width));
  await panel(page).getByRole('button',{name:'Check coverage',exact:true}).click();
@@ -187,6 +189,10 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await page.getByText('Docker did not answer for 2 containers.').waitFor();
  assert.equal(await panel(page).getByText('Everything here is covered').count(),0);
  await shot(page,'cov-partial',theme,width);
+ // Only a pending app: never reads as covered.
+ await panel(page).getByLabel('Server').selectOption('s5');
+ await row(page,'queue').getByText('First backup pending').waitFor();
+ assert.equal(await panel(page).getByText('Everything here is covered').count(),0);
  // Empty.
  await panel(page).getByLabel('Server').selectOption('s4');
  await panel(page).getByText('No containers or volumes',{exact:true}).waitFor();
@@ -211,7 +217,9 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  assert.equal(calls.filter(c=>/coverage/.test(c.path)).length,0,'the Map does not scan until Coverage is on');
  await page.getByRole('button',{name:'Coverage',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'Coverage',exact:true}).getAttribute('aria-pressed'),'true');
- await page.getByText('3 not backed up').first().waitFor();
+ await page.getByText('4 not backed up').first().waitFor();
+ await page.getByText('1 waiting for a first backup').first().waitFor();
+ assert.equal(await page.getByText('All backed up').count(),0,'pending never reads as all backed up');
  await page.getByText('1 not backed up').first().waitFor();
  assert.equal(await page.locator('.map-root [class*="pill"],.map-root .bc-pill').count(),0,'no pills on the Map');
  await noOverflow(page);await shot(page,'map-coverage',theme,width);

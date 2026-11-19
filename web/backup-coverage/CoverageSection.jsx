@@ -9,14 +9,14 @@ import './backup-coverage.css';
 // Counts as one plain line. Zero counts are left out except "not backed up", which is the number that matters.
 function Summary({sum}){
  const parts=[[sum.notBackedUp,'not backed up',true],[sum.pending,'waiting for a first backup'],[sum.skipped,'skipped'],[sum.backedUp,'backed up']].filter(([n,,always])=>n||always);
- return <p className="bc-summary" role="status">{parts.map(([n,label],index)=><React.Fragment key={label}>{index>0&&', '}<b>{n}</b> {label}</React.Fragment>)}.{!sum.partial&&!sum.notBackedUp&&sum.total>0&&' Everything here is covered by an app or skipped on purpose.'}</p>;
+ return <p className="bc-summary" role="status">{parts.map(([n,label],index)=><React.Fragment key={label}>{index>0&&', '}<b>{n}</b> {label}</React.Fragment>)}.{!sum.partial&&!sum.notBackedUp&&!sum.pending&&sum.total>0&&' Everything here is covered by an app or skipped on purpose.'}</p>;
 }
 
 const ScanAgain=({label='Scan again',onScan})=><button type="button" className="bc-link" onClick={onScan}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{label}</button>;
 
 // One server's coverage: loading, error with retry, empty, partial and the list. Reads only through entry/onScan, so the Apps
 // page and the Map share it. Skip and Unskip change the list in place and never start a scan.
-export function CoverageSection({api,serverId,serverName,entry,canChange,onScan,patch,onAddApp,onOpenApp,onSessionExpired}){
+export function CoverageSection({api,serverId,serverName,entry,onScan,patch,onAddApp,onOpenApp,onSessionExpired}){
  const [skip,setSkip]=useState(null),[busy,setBusy]=useState(false),[fail,setFail]=useState('');
  const path='/servers/'+encodeURIComponent(serverId)+'/coverage/ignores';
  async function change(item,note,remove){
@@ -35,7 +35,7 @@ export function CoverageSection({api,serverId,serverName,entry,canChange,onScan,
   {items.length>0?<>
    <div className="bc-bar"><Summary sum={sum}/><ScanAgain onScan={onScan}/></div>
    {fail&&!skip&&<AlertPanel variant="error" title="The change was not saved">{fail}</AlertPanel>}
-   <CoverageRows items={items} resetKey={serverId} canChange={canChange} onAdd={item=>onAddApp(serverId,addTargets(item))} onOpen={item=>onOpenApp(item.app.id)} onSkip={item=>{setFail('');setSkip(item)}} onUnskip={item=>change(item,'',true)}/>
+   <CoverageRows items={items} resetKey={serverId} onAdd={item=>onAddApp(serverId,addTargets(item))} onOpen={item=>onOpenApp(item.app.id)} onSkip={item=>{setFail('');setSkip(item)}} onUnskip={item=>change(item,'',true)}/>
   </>:<div className="bc-state"><b>{sum.partial?'Nothing was found':'No containers or volumes'}</b><span className="t-caption">{sum.partial?'The scan was incomplete, so this may not be everything on '+serverName+'.':serverName+' has no Docker containers, so there is nothing to back up yet.'}</span><ScanAgain onScan={onScan}/></div>}
   {skip&&<SkipDialog item={skip} busy={busy} error={fail} onClose={()=>{setSkip(null);setFail('')}} onConfirm={note=>change(skip,note,false)}/>}
  </div>;
