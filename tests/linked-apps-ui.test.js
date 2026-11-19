@@ -35,7 +35,7 @@ test('links to apps that are not on the map are not drawn',()=>{
 });
 
 test('scan states',()=>{
- assert.equal(scanState(null),'never');
+ assert.equal(scanState(null),'unknown');
  assert.equal(scanState({checkedAt:null,partial:false}),'never');
  assert.equal(scanState({checkedAt:null,partial:true}),'damaged');
  assert.equal(scanState({checkedAt:'t',partial:true}),'partial');
@@ -69,6 +69,13 @@ test('warnings: only warning links and unbacked containers, one sentence each',(
  assert.equal(items[1].before+items[1].after,'App A uses cache-1, which no app backs up, so its data is not in this copy.');
  assert.match(warningsFor(appLinks,sites[0],nameOf,'move')[0].after,/moving only one/);
  assert.match(warningsFor(appLinks,sites[0],nameOf,'restore')[0].after,/test copy/);
+});
+
+test('missing appLinks give no links and no warnings',()=>{
+ assert.deepEqual(linksOf([{id:'s1'}],sites[0]),{links:[],unowned:[],hubs:[]});
+ assert.deepEqual(linksOf([],sites[0]),{links:[],unowned:[],hubs:[]});
+ assert.deepEqual(warningsFor(undefined,sites[0],nameOf,'move'),[]);
+ assert.equal(scanState(undefined),'unknown');
 });
 
 test('no warning for network-only links, hubs or apps without links',()=>{

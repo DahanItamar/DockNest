@@ -42,7 +42,7 @@ import {stepDuration} from './restore-tests/model.js';
 import {STEP_LABELS} from './restore-tests/restore-tests-client.js';
 import {useRestoreTests} from './restore-tests/use-restore-tests.js';
 import {RestoreTestsDialog} from './restore-tests/RestoreTestsDialog.jsx';
-import {appLinksOf,warningsFor} from './linked/linked.js';
+import {appNameOf,appLinksOf,warningsFor} from './linked/linked.js';
 import {BackupConfirm} from './linked/BackupConfirm.jsx';
 import {TestJobDetails} from './restore-tests/TestJobDetails.jsx';
 import {isTestJob,testIdOf,runError} from './restore-tests/restore-tests-client.js';
@@ -232,7 +232,7 @@ function jobFixProps(job){
   onOpenSettings:()=>open({type:'site',title:'Edit app configuration',item:site}),
   onBackup:async()=>{const r=await action('/sites/'+site.id+'/backup',{},'Backup queued. Follow progress in Jobs.');if(r)setModal(null)}};
 }
-const siteName=id=>s.sites.find(x=>x.id===id)?.name||'';
+const siteName=appNameOf(s.sites);
 const linkedFor=(site,kind)=>warningsFor(appLinksOf(s.servers,site),site,siteName,kind);
 function openApp(id){setModal(null);setQuery(siteName(id));setRoute('Apps & schedules')}
 const queueBackup=async site=>{const r=await action('/sites/'+site.id+'/backup',{},'Backup queued. Follow progress in Jobs.');if(r)setModal(null)};

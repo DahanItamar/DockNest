@@ -17,7 +17,7 @@ import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
-import {linkPairs,linksOf,warningsFor,appLinksOf,linkSummary} from '../linked/linked.js';
+import {appNameOf,linkPairs,linksOf,warningsFor,appLinksOf,linkSummary} from '../linked/linked.js';
 import {LinkedSection} from '../linked/LinkedSection.jsx';
 import './map.css';
 
@@ -128,7 +128,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  },[target]);
  const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:shown.current}):target,[target,tick]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
- const nameOf=id=>sites.find(site=>site.id===id)?.name||'';
+ const nameOf=useMemo(()=>appNameOf(sites),[sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
  const view=useRef(null),mode=useRef('home'),pointers=useRef(new Map()),gesture=useRef(null);
  const [t,setT]=useState({x:0,y:0,k:1}),[drag,setDrag]=useState(null),[note,setNote]=useState('');

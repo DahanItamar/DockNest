@@ -5,15 +5,16 @@ import {plural} from '../plural.js';
 
 const NO_LINKS={links:[],unowned:[],hubs:[]};
 
+export const appNameOf=sites=>id=>sites.find(site=>site.id===id)?.name||'';
 export const appLinksOf=(servers,site)=>servers.find(server=>server.id===site?.serverId)?.appLinks||null;
 export const linksOf=(servers,site)=>site?linksOfApp(appLinksOf(servers,site),site.id):NO_LINKS;
 
 // Every pair of linked apps on every server, for the Map lines. Hubs are never drawn.
 export const linkPairs=servers=>servers.flatMap(server=>(server.appLinks?.links||[]).map(({appIds:[a,b],kind})=>({id:a+'~'+b,a,b,kind})));
 
-// not scanned yet | damaged stored data | partial scan | complete scan
+// no data for the server | not scanned yet | damaged stored data | partial scan | complete scan
 export function scanState(appLinks){
- if(!appLinks)return 'never';
+ if(!appLinks)return 'unknown';
  if(!appLinks.checkedAt)return appLinks.partial?'damaged':'never';
  return appLinks.partial?'partial':'ok';
 }

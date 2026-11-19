@@ -1,16 +1,17 @@
 import React from 'react';
 import {IconLink,IconNetwork,IconAlertTriangle,IconInfoCircle} from '@tabler/icons-react';
-import {linksOf,scanState,reasonOf,hubLine,unownedLine} from './linked.js';
+import {linksOf,appLinksOf,scanState,reasonOf,hubLine,unownedLine} from './linked.js';
 import './linked.css';
 
 const HINT={
+ unknown:'Links show after the next server scan.',
  never:'Not scanned yet. Scan this server again to see which apps depend on each other.',
  damaged:'The saved link data could not be read. Scan this server again to rebuild it.',
  partial:'Some containers could not be read, so this list may be incomplete.',
 };
 // "Linked apps" in an app's details panel, from the last scan of its server. Every state says plainly what is known.
 export function LinkedSection({site,servers,nameOf,onOpen}){
- const {links,unowned,hubs}=linksOf(servers,site),state=scanState(servers.find(server=>server.id===site.serverId)?.appLinks);
+ const {links,unowned,hubs}=linksOf(servers,site),state=scanState(appLinksOf(servers,site));
  const known=links.length+unowned.length+hubs.length>0;
  return <section className="lk-section" aria-labelledby="lk-title">
   <h3 id="lk-title" className="map-group-title">Linked apps</h3>
