@@ -53,9 +53,11 @@ people (2 ≤ K ≤ N ≤ 16) can open it, and fewer than K learn nothing.
    `Cache-Control: no-store`, and are never written to the database, a log, the audit trail or job details.
 4. After every completed Self Backup, the worker seals the same recovery kit, together with the recovery passphrase it
    opens with, to the public key, and stores it as
-   `<storage root>/BACKUP/docknest-recovery/emergency/emergency_<digest prefix>_<UTC time>Z--<backup id>.dkem`.
-   It is uploaded as a `.partial` file, read back, renamed and read back again. A newer kit of the same split replaces
-   the older one once it is verified. A failure is audited and never fails the Self Backup.
+   `<storage root>/BACKUP/docknest-recovery/emergency/emergency_<digest prefix>_<UTC time>Z--<backup id>.dkem`,
+   next to the one-file offline tool `emergency-open.js`. That happens on the Self Backup destination and on every
+   copy destination that gets the recovery kit. Each file is uploaded as a `.partial` file, read back, renamed and
+   read back again. A newer kit of the same split replaces the older one on that destination once it is verified. A
+   failure is audited per destination and never fails the Self Backup.
 5. To open it, K holders type their parts into the offline tool (below). It joins the parts, rebuilds the private key,
    checks it against the kit's digest before any decryption, and writes the newest matching kit as a recovery kit file
    with its passphrase file. From there, the [independent recovery](independent-recovery.md) steps apply.
@@ -85,13 +87,15 @@ API (administrators; split, off and delete need a re-verification in the last 5 
 
 ### Opening an emergency kit without DockNest
 
-`scripts/emergency-open.js` needs only Node 24 and no network. The same tool is inside every recovery kit as
-`recovery/emergency-open.js`, one file you can copy anywhere.
+Copy the `docknest-recovery/emergency/` folder from your backup storage: the tool is in it, as `emergency-open.js`.
+It needs only Node 24 and no network. The same tool is `scripts/emergency-open.js` in the repository, and a kit made
+while the split is on also carries it as `recovery/emergency-open.js`. A default kit (no split) keeps exactly the file
+set of 2.16.4, so earlier releases still restore it.
 
 ```sh
-# Copy the docknest-recovery/emergency/ folder from your backup storage first.
-node emergency-open.js list ./emergency
-node emergency-open.js open ./emergency ./opened
+cd ./emergency
+node emergency-open.js list .
+node emergency-open.js open . /secure/opened
 ```
 
 `list` shows every kit, newest first, with its time, the DockNest release that made it and its key digest. `open`
@@ -100,7 +104,7 @@ parts are joined, the key is checked against the digest, and the newest kit made
 folder as `docknest-recovery.dkit` and `recovery-passphrase.txt` (both `0600`). Then, from a copy of DockNest:
 
 ```sh
-node scripts/recovery-kit.js restore ./opened/docknest-recovery.dkit /secure/new-manager-data ./opened/recovery-passphrase.txt
+node scripts/recovery-kit.js restore /secure/opened/docknest-recovery.dkit /secure/new-manager-data /secure/opened/recovery-passphrase.txt
 ```
 
 Keep the opened folder private and delete it once DockNest runs again: it holds the recovery passphrase. Words and keys

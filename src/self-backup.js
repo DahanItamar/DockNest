@@ -10,7 +10,7 @@ import { exportRecoveryKit } from './recovery-kit.js';
 import { deploymentHeld,requireNoDeploymentHold,deploymentHoldMessage } from './deployment-hold.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
 import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openRead,removeFile,publishVerified } from './storage.js';
-import { writeEmergencyKit } from './emergency/kits.js';
+import { writeEmergencyKit,activeEmergencyKey } from './emergency/kits.js';
 
 const now=()=>new Date().toISOString(),settingsKey='manager_backup_config';
 const packageInfo=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
@@ -99,7 +99,7 @@ export async function executeSelfBackup(run){
   if(!targetId)throw new Error('Select a connected SFTP or S3 destination');
   const root=await selfBackupDirectory(),saved=selfBackupConfig();temporary=await mkdtemp(join(root,'.pending-'));
   const file=join(temporary,'manager.dkit');
-  const passphrase=open(saved.passphrase),evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase,release});
+  const passphrase=open(saved.passphrase),evidence=await exportRecoveryKit({database:db,masterKey:config.masterKey,output:file,passphrase,release,emergencyTool:Boolean(activeEmergencyKey())});
   const bytes=await readFile(file);if(digest(bytes)!==evidence.sha256)throw new Error('Recovery kit checksum mismatch');
   const remoteDirectory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(remoteDirectory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
   db.prepare('UPDATE manager_backups SET target_id=?,path=? WHERE id=?').run(targetId,published,run.id);
@@ -109,7 +109,7 @@ export async function executeSelfBackup(run){
   if(completed){
    await copyKitToCopyDestinations(run,file,evidence,targetId);
    // With the optional split on, the same kit is also sealed to the emergency key (src/emergency/kits.js). Never fails the kit.
-   await writeEmergencyKit({run,kit:bytes,passphrase,keyId:evidence.keyId,targetId,temporary,release});
+   await writeEmergencyKit({run,kit:bytes,passphrase,keyId:evidence.keyId,targetIds:[targetId,...kitCopyDestinations(targetId)],temporary,release});
   }
  }catch(error){
   // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold

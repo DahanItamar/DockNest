@@ -1,8 +1,8 @@
 // Self Backup kit check and the optional K-of-N emergency kit (docs/emergency-kit.md) on the real Linux SFTP storage host.
 // Called by scripts/integration-linux.js. Proves: a Self Backup's kit check passes; with the split on, a Self Backup writes
-// a sealed emergency kit under docknest-recovery/emergency/; scripts/emergency-open.js with K of the parts turns it into
-// a recovery kit that `node scripts/recovery-kit.js restore` accepts; and the kit check fails cleanly, with a reason
-// code and the alert, on a corrupted kit. Afterwards the split is turned off and its kits are deleted.
+// a sealed emergency kit and the one-file tool under docknest-recovery/emergency/; that bundled tool, copied out of the
+// storage folder, turns the kit into a recovery kit with K of the parts that `node scripts/recovery-kit.js restore`
+// accepts; and the kit check fails cleanly, with a reason code, on a corrupted kit and on a wrong kept passphrase. Afterwards the split is turned off and its kits are deleted.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
@@ -22,7 +22,8 @@ export async function runEmergencyScenario({ run, hosts, db, record, directory }
   const { claimKitCheck, executeKitCheck, queueKitCheckAfterBackup } = await import('../src/kit-check.js');
   const { splitEmergencyKit, retireEmergencyKit } = await import('../src/emergency/keys.js');
   const { emergencyKits, deleteOldEmergencyKits } = await import('../src/emergency/kits.js');
-  const { openRead } = await import('../src/storage.js');
+  const { openRead, storageJoin } = await import('../src/storage.js');
+  const { seal } = await import('../src/crypto.js');
   const { readEnvelopeHeader } = await import('../src/emergency/envelope.js');
   const work = join(directory, 'emergency'), passphrase = randomBytes(32).toString('base64url'), actor = 'qa-admin';
   await mkdir(work, { recursive: true, mode: 0o700 });
@@ -42,21 +43,24 @@ export async function runEmergencyScenario({ run, hosts, db, record, directory }
 
   const split = splitEmergencyKit({ k: 2, n: 3, labels: ['Holder one', 'Holder two', 'Holder three'] }, actor);
   await selfBackup();
-  const [kit] = emergencyKits();
+  const mainTarget = db.prepare("SELECT target_id FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get().target_id, kit = emergencyKits().find(item => item.targetId === mainTarget);
   assert.ok(kit && /\/BACKUP\/docknest-recovery\/emergency\/emergency_[a-f0-9]{16}_[0-9_-]+Z--[0-9a-f-]{36}\.dkem$/.test(kit.path));
   const sealed = await read(kit.path);
   assert.equal(readEnvelopeHeader(sealed).digest, split.digest);
+  // A holder copies the emergency folder: the kit and the bundled tool, as stored.
+  const tool = join(work, 'kits', 'emergency-open.js');
   await mkdir(join(work, 'kits')); await writeFile(join(work, 'kits', kit.path.split('/').at(-1)), sealed);
-  const opened = await script(['scripts/emergency-open.js', 'open', join(work, 'kits'), join(work, 'opened')], `${split.parts[2].words}\n${split.parts[0].words}\n`);
-  assert.equal(opened.code, 0, 'emergency-open.js opens the kit with K parts');
+  await writeFile(tool, await read(storageJoin(kit.path.slice(0, kit.path.lastIndexOf('/')), 'emergency-open.js')));
+  const opened = await script([tool, 'open', join(work, 'kits'), join(work, 'opened')], `${split.parts[2].words}\n${split.parts[0].words}\n`);
+  assert.equal(opened.code, 0, 'the bundled emergency-open.js from storage opens the kit with K parts');
   assert.deepEqual(await readFile(join(work, 'opened', 'docknest-recovery.dkit')), (await readLatestSelfBackup()).bytes);
   const restored = await script(['scripts/recovery-kit.js', 'restore', join(work, 'opened', 'docknest-recovery.dkit'), join(work, 'restored'), join(work, 'opened', 'recovery-passphrase.txt')], '');
   assert.equal(restored.code, 0, 'recovery-kit.js restore accepts the opened kit');
   assert.equal(JSON.parse(restored.stdout).restored, true);
   assert.ok((await readdir(join(work, 'restored', 'recovery'))).includes('emergency-open.js'));
-  const short = await script(['scripts/emergency-open.js', 'open', join(work, 'kits'), join(work, 'short')], `${split.parts[1].words}\n`);
+  const short = await script([tool, 'open', join(work, 'kits'), join(work, 'short')], `${split.parts[1].words}\n`);
   assert.equal(short.code, 1, 'fewer than K parts open nothing');
-  record('With the optional 2-of-3 split on, a Self Backup writes a sealed emergency kit to SFTP; emergency-open.js with 2 parts gives a recovery kit that recovery-kit.js restore accepts, and 1 part opens nothing');
+  record('With the optional 2-of-3 split on, a Self Backup writes a sealed emergency kit and the tool to SFTP; the bundled emergency-open.js copied from storage with 2 parts gives a recovery kit that recovery-kit.js restore accepts, and 1 part opens nothing');
 
   // Corrupt the published recovery kit on the storage host, check, then put the byte back.
   const kitPath = db.prepare("SELECT path FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get().path, remote = kitPath.slice(kitPath.indexOf(':/') + 1);
@@ -70,8 +74,17 @@ export async function runEmergencyScenario({ run, hosts, db, record, directory }
   assert.equal(lastCheck().result, 'passed', 'the restored kit passes again');
   record('A corrupted recovery kit on SFTP storage fails the kit check cleanly with a reason code, and passes again once repaired');
 
+  // A wrong kept passphrase: the stored kit is intact (its checksum passes), so this fails at decryption.
+  const settings = db.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get().value, kept = JSON.parse(settings);
+  db.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(JSON.stringify({ ...kept, passphrase: seal(randomBytes(32).toString('base64url')) }));
+  try { queueKitCheckAfterBackup(); await executeKitCheck(claimKitCheck()); } finally { db.prepare("UPDATE settings SET value=? WHERE key='manager_backup_config'").run(settings); }
+  assert.deepEqual({ ...lastCheck() }, { result: 'failed', reason: 'passphrase' });
+  assert.deepEqual((await readdir(await selfBackupDirectory())).filter(name => name.startsWith('.kit-check-')), []);
+  record('A wrong kept passphrase fails the kit check at decryption, not at the storage checksum, with the reason code passphrase');
+
   retireEmergencyKit(actor);
-  assert.deepEqual(await deleteOldEmergencyKits(actor), { deleted: 1, failed: 0 });
+  const removed = await deleteOldEmergencyKits(actor);
+  assert.equal(removed.failed, 0); assert.ok(removed.deleted >= 1, 'the main destination and any copy destinations');
   assert.deepEqual(emergencyKits(), []);
   record('Go back to one passphrase retires the key pair and the old emergency kits are deleted from SFTP storage');
 }

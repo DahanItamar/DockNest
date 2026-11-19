@@ -1,6 +1,8 @@
 // Emergency kits in the backup storage (docs/emergency-kit.md). Only while the optional split is on: after each completed
 // Self Backup, the worker seals the same recovery kit and its passphrase to the active emergency public key and publishes
-// it under docknest-recovery/emergency/. DockNest never holds the private key, so it can make kits but never open one.
+// it under docknest-recovery/emergency/ on the main destination and on every copy destination that gets the recovery kit,
+// next to the one-file offline tool (emergency-open.js), so holders who copy that folder have all they need.
+// DockNest never holds the private key, so it can make kits but never open one.
 // Where each kit lives is kept in the `emergency_kits` setting (paths and key ids only), because storage cannot be
 // listed: a newer kit of the same key replaces the older one once it is verified; kits of a retired key stay until the
 // owner deletes them ("Old parts stop opening new kits. Delete the old kits so old parts open nothing.").
@@ -9,10 +11,11 @@ import { join } from 'node:path';
 import { db, audit, transaction } from '../db.js';
 import { digest } from '../crypto.js';
 import { backupRoot, emergencyKitFilename } from '../backup-layout.js';
-import { managerBackupDirectory, storageJoin, makeDirectory, publishVerified, removeFile, targetOptions, targetPrefix } from '../storage.js';
+import { managerBackupDirectory, storageJoin, makeDirectory, publishVerified, storedHash, removeFile, targetOptions, targetPrefix } from '../storage.js';
 import { seal, packKit } from './envelope.js';
+import { emergencyToolSource } from './bundle.js';
 
-const SETTING = 'emergency_kits';
+const SETTING = 'emergency_kits', TOOL = 'emergency-open.js';
 export const activeEmergencyKey = () => db.prepare('SELECT * FROM emergency_keys WHERE retired_at IS NULL').get() ?? null;
 export function emergencyKits() {
   try { const list = JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(SETTING)?.value ?? '[]'); return Array.isArray(list) ? list : []; } catch { return []; }
@@ -30,21 +33,36 @@ async function removeKit(record) {
   changeKits(list => list.filter(item => item.path !== record.path));
 }
 
-// `kit` and `passphrase` are the bytes and passphrase of the recovery kit just published; `keyId` its key identifier.
-// A failure is audited without its text and never fails the Self Backup.
-export async function writeEmergencyKit({ run, kit, passphrase, keyId, targetId, temporary, release }) {
+// The tool next to the kits: published once per build, replaced when a release changes it. Storage never renames over
+// a file, so a missing, different or unreadable copy (and any .partial) is removed first; the verified publish then
+// fails if anything still stands in the way.
+async function publishTool(directory, file, sha256) {
+  const published = storageJoin(directory, TOOL);
+  try { if (await storedHash(published) === sha256) return; } catch { /* Missing or unreadable: written below. */ }
+  for (const name of [published, published + '.partial']) try { await removeFile(name); } catch { /* Not there. */ }
+  await publishVerified(file, published, sha256);
+}
+
+// `kit` and `passphrase` are the bytes and passphrase of the recovery kit just published, `keyId` its key identifier and
+// `targetIds` every destination that holds that kit. Each destination fails on its own: audited without its text, and
+// never failing the Self Backup. Returns how many destinations got the kit.
+export async function writeEmergencyKit({ run, kit, passphrase, keyId, targetIds, temporary, release }) {
   const key = activeEmergencyKey();
-  if (!key) return false;
-  try {
-    const createdAt = new Date().toISOString(), sealed = seal(packKit({ kit, passphrase }), { publicKey: Buffer.from(key.public_key, 'base64url'), createdAt, release });
-    const file = join(temporary, 'emergency.dkem'); await writeFile(file, sealed, { mode: 0o600, flag: 'wx' });
-    const directory = storageJoin(managerBackupDirectory(targetId, keyId), 'emergency'), published = storageJoin(directory, emergencyKitFilename(key.digest, run.id, new Date(createdAt)));
-    await makeDirectory(directory); await publishVerified(file, published, digest(sealed));
-    changeKits(list => [...list.filter(item => item.path !== published), { keyId: key.id, targetId, path: published, createdAt }]);
-    audit('worker', 'emergency.kit_written', run.id, { targetId });
-    for (const older of emergencyKits().filter(item => item.keyId === key.id && item.path !== published)) try { await removeKit(older); } catch { /* Kept; replaced again after the next Self Backup. */ }
-    return true;
-  } catch { audit('worker', 'emergency.kit_failed', run.id, { targetId }); return false; }
+  if (!key) return 0;
+  const createdAt = new Date().toISOString(), sealed = seal(packKit({ kit, passphrase }), { publicKey: Buffer.from(key.public_key, 'base64url'), createdAt, release });
+  const file = join(temporary, 'emergency.dkem'), tool = join(temporary, TOOL), toolBytes = emergencyToolSource();
+  await writeFile(file, sealed, { mode: 0o600, flag: 'wx' }); await writeFile(tool, toolBytes, { mode: 0o600, flag: 'wx' });
+  let written = 0;
+  for (const targetId of targetIds) {
+    try {
+      const directory = storageJoin(managerBackupDirectory(targetId, keyId), 'emergency'), published = storageJoin(directory, emergencyKitFilename(key.digest, run.id, new Date(createdAt)));
+      await makeDirectory(directory); await publishVerified(file, published, digest(sealed)); await publishTool(directory, tool, digest(toolBytes));
+      changeKits(list => [...list.filter(item => item.path !== published), { keyId: key.id, targetId, path: published, createdAt }]);
+      audit('worker', 'emergency.kit_written', run.id, { targetId }); written++;
+      for (const older of emergencyKits().filter(item => item.keyId === key.id && item.targetId === targetId && item.path !== published)) try { await removeKit(older); } catch { /* Kept; replaced again after the next Self Backup. */ }
+    } catch { audit('worker', 'emergency.kit_failed', run.id, { targetId }); }
+  }
+  return written;
 }
 
 // Removes every emergency kit that the active key (if any) does not open, so parts of an earlier split open nothing.

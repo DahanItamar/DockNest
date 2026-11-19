@@ -25,9 +25,15 @@ const { claimKitCheck, executeKitCheck, queueKitCheckAfterBackup, requeueInterru
 const { combineMnemonics } = await import('../src/emergency/slip39.js');
 const { open, unpackKit, readEnvelopeHeader, publicKeyOf, publicKeyDigest } = await import('../src/emergency/envelope.js');
 const { runWorkerLoop } = await import('../src/worker-loop.js');
-const fixture = await startSftpFixture(), target = id(), passphrase = randomBytes(32).toString('base64url');
+const { emergencyToolSource } = await import('../src/emergency/bundle.js');
+const fixture = await startSftpFixture(), target = id(), copyTarget = id(), passphrase = randomBytes(32).toString('base64url');
 const now = () => new Date().toISOString();
-db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(target, 'Kit storage', fixture.options.host, fixture.options.port, fixture.options.username, fixture.options.hostKey, 'password', seal(fixture.options.password), '/backups', 1e12, 'connected', now(), now());
+// The main Self Backup destination, and a copy destination that some app keeps copies on (it gets the kits too).
+for (const [targetId, name, storageRoot] of [[target, 'Kit storage', '/backups'], [copyTarget, 'Copy storage', '/copies']]) db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId, name, fixture.options.host, fixture.options.port, fixture.options.username, fixture.options.hostKey, 'password', seal(fixture.options.password), storageRoot, 1e12, 'connected', now(), now());
+db.prepare('INSERT INTO site_storage_copies(site_id,target_id,created_at) VALUES(?,?,?)').run('fixture-app', copyTarget, now());
+// The 2.16.4 recovery kit file set: a default kit must keep it, so earlier releases still restore it.
+const earlierNames = ['master.key', 'recovery/README.md', 'recovery/boot_recovery.py', 'recovery/decrypt-backup.js', 'recovery/export_zip.py', 'recovery/helper.py', 'state.sqlite'];
+const kitNames = bytes => { const header = bytes.subarray(0, 32), key = scryptSync(passphrase, header.subarray(4, 20), 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }), decipher = createDecipheriv('aes-256-gcm', key, header.subarray(20)); decipher.setAAD(header); decipher.setAuthTag(bytes.subarray(-16)); return Object.keys(JSON.parse(Buffer.concat([decipher.update(bytes.subarray(32, -16)), decipher.final()]).toString()).files).sort(); };
 db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(target);
 const [administrator, operator, stale] = [id(), id(), id()], csrf = 'fixture-csrf', tokens = [0, 1, 2].map(() => randomBytes(32).toString('base64url'));
 for (const [index, user] of [administrator, operator, stale].entries()) {
@@ -47,8 +53,9 @@ saveSelfBackupSettings({ enabled: false, schedule: '0 3 * * *', timezone: 'UTC',
 const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
 const request = (route, { index = 0, body } = {}) => fetch(`http://127.0.0.1:${server.address().port}/api/self-backup${route}`, { method: body ? 'POST' : 'GET', headers: { Cookie: 'dbm_session=' + tokens[index], Origin: process.env.APP_ORIGIN, 'x-csrf-token': csrf, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
 const status = async () => (await request('')).json();
-const emergencyFiles = () => [...fixture.files.keys()].filter(name => name.startsWith('/backups/BACKUP/docknest-recovery/emergency/') && name.endsWith('.dkem')).sort();
-const kitFiles = () => [...fixture.files.keys()].filter(name => name.endsWith('.dkit'));
+const emergencyFiles = (storageRoot = '/backups') => [...fixture.files.keys()].filter(name => name.startsWith(storageRoot + '/BACKUP/docknest-recovery/emergency/') && name.endsWith('.dkem')).sort();
+const kitFiles = () => [...fixture.files.keys()].filter(name => name.startsWith('/backups/') && name.endsWith('.dkit'));
+const toolFile = storageRoot => fixture.files.get(storageRoot + '/BACKUP/docknest-recovery/emergency/emergency-open.js');
 // The worker's path: run the Self Backup, then the kit check it queues.
 async function selfBackup() {
   enqueueSelfBackup(administrator);
@@ -68,7 +75,9 @@ test('one passphrase is the default: no key pair, no emergency kit, and the kit 
   assert.deepEqual(before.emergency, { split: false, oldKits: 0 }); assert.deepEqual(before.kitCheck, { last: null, active: false });
   assert.equal((await request('/kit-check', { body: {} })).status, 409, 'nothing to check before the first Self Backup');
   await selfBackup();
-  assert.equal(kitFiles().length, 1); assert.deepEqual(emergencyFiles(), []);
+  assert.equal(kitFiles().length, 1); assert.deepEqual(emergencyFiles(), []); assert.deepEqual(emergencyFiles('/copies'), []);
+  assert.deepEqual(kitNames((await readLatestSelfBackup()).bytes), earlierNames, 'a default kit has exactly the 2.16.4 file set');
+  assert.equal(toolFile('/backups'), undefined, 'no tool in storage without the split');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM emergency_keys').get().n, 0);
   const after = await status();
   assert.equal(after.kitCheck.last.result, 'passed'); assert.equal(after.kitCheck.last.reason, null); assert.equal(after.kitCheck.active, false);
@@ -117,11 +126,11 @@ test('checkRecoveryKit: wrong passphrase, other master key, damaged hashes and a
   assert.deepEqual(await check(Buffer.from('DKN2' + bytes.toString('latin1').slice(4), 'latin1')), { passed: false, reason: 'format' });
   assert.deepEqual(await check(reseal(kit => { kit.files['recovery/README.md'].sha256 = '0'.repeat(64); })), { passed: false, reason: 'hashes' });
   assert.deepEqual(await check(reseal(kit => { delete kit.files['recovery/README.md']; })), { passed: false, reason: 'contents' });
-  // A kit made before 3.0 has no emergency tool: it still checks and restores.
-  const earlier = reseal(kit => { delete kit.files['recovery/emergency-open.js']; });
-  assert.deepEqual(await check(earlier), { passed: true, reason: null });
-  await writeFile(join(root, 'earlier.dkit'), earlier);
-  assert.equal((await restoreRecoveryKit({ input: join(root, 'earlier.dkit'), directory: join(root, 'earlier-restored'), passphrase })).restored, true);
+  // A kit made while the split is on also carries the tool; it checks and restores like a default kit.
+  const splitKit = join(root, 'split.dkit'); await exportRecoveryKit({ database: db, masterKey: process.env.MASTER_KEY_FILE, output: splitKit, passphrase, emergencyTool: true });
+  assert.deepEqual(kitNames(await readFile(splitKit)), [...earlierNames, 'recovery/emergency-open.js'].sort());
+  assert.deepEqual(await check(await readFile(splitKit)), { passed: true, reason: null });
+  assert.equal((await restoreRecoveryKit({ input: splitKit, directory: join(root, 'split-restored'), passphrase })).restored, true);
   const corrupt = Buffer.from('not an sqlite database, only bytes'), sha = createHash('sha256').update(corrupt).digest('hex');
   assert.deepEqual(await check(reseal(kit => { kit.files['state.sqlite'] = { sha256: sha, body: corrupt.toString('base64') }; })), { passed: false, reason: 'integrity' });
   assert.deepEqual((await readdir(parent)).filter(name => name.startsWith('.kit-check-')), [], 'the folder is removed in every case');
@@ -163,12 +172,15 @@ test('a split returns 33-word parts once, stores only public material, alerts ev
   assert.equal(contents.passphrase, passphrase);
   assert.equal((await status()).kitCheck.last.result, 'passed');
   assert.ok((await status()).emergency.latestKitAt);
+  // The copy destination gets the same kit and the tool, next to its own copy of the recovery kit.
+  assert.equal(emergencyFiles('/copies').length, 1); assert.deepEqual(fixture.files.get(emergencyFiles('/copies')[0]), sealed);
+  for (const storageRoot of ['/backups', '/copies']) assert.deepEqual(toolFile(storageRoot), emergencyToolSource());
 
-  // The offline tool with K parts gives a recovery kit that restore accepts.
+  // A holder copies the emergency folder: the bundled tool in it, with K parts, gives a recovery kit that restore accepts.
   const work = await mkdtemp(join(tmpdir(), 'docknest-emergency-open-'));
   try {
-    await writeFile(join(work, 'kit.dkem'), sealed);
-    const opened = spawnSync(process.execPath, ['scripts/emergency-open.js', 'open', work, join(work, 'opened')], { input: `${firstParts[1]}\n${firstParts[0]}\n`, encoding: 'utf8' });
+    await writeFile(join(work, 'kit.dkem'), sealed); await writeFile(join(work, 'emergency-open.js'), toolFile('/backups'));
+    const opened = spawnSync(process.execPath, [join(work, 'emergency-open.js'), 'open', work, join(work, 'opened')], { cwd: work, input: `${firstParts[1]}\n${firstParts[0]}\n`, encoding: 'utf8' });
     assert.equal(opened.status, 0, opened.stderr);
     for (const secret of secrets) assert.ok(!(opened.stdout + opened.stderr).includes(secret));
     const restored = await restoreRecoveryKit({ input: join(work, 'opened', 'docknest-recovery.dkit'), directory: join(work, 'restored'), passphrase: await readFile(join(work, 'opened', 'recovery-passphrase.txt'), 'utf8') });
@@ -177,7 +189,7 @@ test('a split returns 33-word parts once, stores only public material, alerts ev
   } finally { await rm(work, { recursive: true, force: true }); }
 
   await selfBackup();
-  assert.equal(emergencyFiles().length, 1, 'a newer kit of the same key replaces the older one');
+  assert.equal(emergencyFiles().length, 1, 'a newer kit of the same key replaces the older one'); assert.equal(emergencyFiles('/copies').length, 1);
   assert.notEqual(emergencyFiles()[0], file);
 });
 
@@ -189,13 +201,13 @@ test('a re-split retires the old key, keeps its kit until deleted, and old parts
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='emergency.resplit'").get());
   assert.equal(outbox('emergency.key_changed').length, 6, 'every channel again');
   await selfBackup();
-  assert.equal(emergencyFiles().length, 2); assert.equal((await status()).emergency.oldKits, 1);
+  assert.equal(emergencyFiles().length, 2); assert.equal((await status()).emergency.oldKits, 2, 'one old kit per destination');
   const newFile = emergencyFiles().find(name => name !== oldFile), newKey = combineMnemonics(result.parts.slice(1).map(part => part.words)), oldKey = combineMnemonics(firstParts.slice(0, 2));
   secrets.add(newKey.toString('hex')); secrets.add(newKey.toString('base64'));
   assert.throws(() => open(fixture.files.get(newFile), oldKey), /do not open/); assert.ok(open(fixture.files.get(oldFile), oldKey));
   assert.ok(open(fixture.files.get(newFile), newKey));
   const deleted = await request('/emergency/delete-old-kits', { body: {} });
-  assert.deepEqual(await deleted.json(), { deleted: 1, failed: 0 });
+  assert.deepEqual(await deleted.json(), { deleted: 2, failed: 0 });
   assert.deepEqual(emergencyFiles(), [newFile]); assert.equal((await status()).emergency.oldKits, 0);
 });
 
@@ -206,9 +218,9 @@ test('Go back to one passphrase stops new emergency kits and lets the owner dele
   const before = emergencyFiles();
   await selfBackup();
   assert.deepEqual(emergencyFiles(), before, 'no new emergency kit');
-  assert.deepEqual((await status()).emergency, { split: false, oldKits: 1 });
-  assert.deepEqual(await (await request('/emergency/delete-old-kits', { body: {} })).json(), { deleted: 1, failed: 0 });
-  assert.deepEqual(emergencyFiles(), []); assert.deepEqual((await status()).emergency, { split: false, oldKits: 0 });
+  assert.deepEqual((await status()).emergency, { split: false, oldKits: 2 });
+  assert.deepEqual(await (await request('/emergency/delete-old-kits', { body: {} })).json(), { deleted: 2, failed: 0 });
+  assert.deepEqual(emergencyFiles(), []); assert.deepEqual(emergencyFiles('/copies'), []); assert.deepEqual((await status()).emergency, { split: false, oldKits: 0 });
 });
 
 test('no part, private key or run of part words reaches the database, audit, alerts, job details, settings or the logs', async () => {
