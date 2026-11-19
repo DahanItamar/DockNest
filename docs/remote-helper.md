@@ -21,7 +21,7 @@ remote/
 │   ├── incremental.py      snapshot state, chain records, commit and discard
 │   ├── net.py              pinned HTTP(S), probe URL policy, public probes, health checks
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
-│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
+│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs, hardening and linked apps facts
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
 │   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
