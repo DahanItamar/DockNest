@@ -14,7 +14,8 @@ Upstream reference roles (msitarzewski/agency-agents): UI Designer (tokens, comp
 4. One primary action per view. Labels are verbs.
 5. Say it once, short. Helper text only where a user could get it wrong.
 6. Keyboard first-class: `:focus-visible` ring, never on mouse click.
-7. Upgrade-safe: legacy tokens alias to v2 until the last screen migrates; saved user state is never touched.
+7. Keep what works (owner rule). Where the 2.x look is cleaner, keep it. v2 fixes inconsistency and slop (spacing and token consistency, button clutter, contrast, decorative motion); it does not restyle status indicators, tables or job views that already work.
+8. Upgrade-safe: legacy tokens alias to v2 until the last screen migrates; saved user state is never touched.
 
 
 ## 2. Audit
@@ -120,6 +121,8 @@ Scope: web/*.css (20 root + 14 subfolder files, ~2570 lines, most rules minified
 | Heading tabindex=-1 focus, outline suppressed (correct) | focus | map.css:32,176; connections/DeployKeys.jsx:18; ConnectionDialog.jsx:144 | dialog-1440-light-before.png | Keep |
 | Two close-button shapes | duplicate | map.css:198, connections/DeployKeys.jsx:18 | dialog-390-light-before.png | One `<DialogClose>` |
 | Footer buttons min-width 120, no stacking on mobile | touch/layout | wizards.css:11, zip-export.css:9 | dialog-390-dark-before.png | Full-width stack <=600 |
+
+Job details keeps its 2.x layout and running/completed status display; only its header actions become quiet ghost/text buttons.
 
 ### Tabs, nav, sidebar, header
 
@@ -737,6 +740,7 @@ Don't: two Primary buttons side by side; full-width buttons on desktop; gradient
 
 Anatomy: label (above, 14/500), control, help or error text (12/400) below. Height `--dn-control-h`. Radius md. Border strong; hover brand-8; focus-visible ring (the ring, not a border colour swap).
 Error: border and message in danger-text, message starts with a Tabler `alert-circle` 16 icon, `aria-invalid` + `aria-describedby`. Keep the user's input.
+Number fields: no browser spinner arrows anywhere (`::-webkit-inner/outer-spin-button` hidden, `appearance:textfield`); keep `type=number` or `inputmode="numeric"/"decimal"`, min/max validation and arrow-key stepping.
 Do: real `<label>`; units and formats in help text ("Hours, 1 to 720"). Don't: placeholder as label; placeholder with real-looking example data; required asterisk without the legend "Required".
 
 ### Switch and checkbox
@@ -745,14 +749,16 @@ Switch = immediate effect setting (saves on toggle, shows a quiet "Saved" status
 
 ### List row (replaces stacked outlined buttons)
 
-Used in Map panels, Apps cards, Storage, Servers and the domain list. Anatomy: [icon chip] title + meta line [status pill] [overflow menu] [chevron].
+Used in Map panels, Apps cards, Storage, Servers and the domain list. Anatomy: [icon chip] title + meta line [status: icon + text] [overflow menu] [chevron].
 - The whole row is the click target that opens details: hover bg-hover, focus-visible ring, trailing Tabler `chevron-right`.
 - Secondary actions (Move to…, Edit…, Delete…) live in one overflow menu per row: a 32px Ghost icon button with Tabler `dots`, `aria-label="More actions for <name>"`.
 - At most one visible primary action per panel or card, as a small button or a text link with an icon (Map server card: "+ Add app").
-- Status rows (such as a domain with "Needs review") use the same row with a status pill; no extra button.
+- Status rows (such as a domain with "Needs review") use the same row with an icon + text status; no extra button.
 - Don't: two or more bordered buttons stacked in a row or card; a "Details" button when the row itself can open details.
 
 ### Table
+
+Owner rule: the 2.x tables (Jobs, Backups, Audit) keep their look: plain columns, status as icon + text, no per-row icon chips unless the chip carries information. v2 only aligns heights and tokens:
 
 Header row 40px, `--dn-text-xs` 500 text-secondary, no fill colour change on desktop. Body row 56px (72px two-line). Dividers subtle. Numbers right aligned, tabular. Row hover bg-hover only when the row is clickable. Row actions: Ghost `sm` buttons, max 2 visible, rest in a "More" menu (`dots`). Under 768px: stacked labelled records (existing `.mobile-table` pattern becomes the only one).
 
@@ -768,9 +774,11 @@ Sizes: sm 440 (confirm), md 640 (forms), lg 880 (details). Radius lg, shadow-3, 
 
 Underline tabs only (one style). 40px high, text-secondary, current = text-primary + 2px brand-9 underline. Scroll horizontally on mobile, never wrap. Segmented control is a separate component for 2-4 view options (e.g. list/map), not for navigation.
 
-### Badge / status pill
+### Status (icon + text) and badges
 
-One component, `--dn-radius-sm`, 20px high, xs/500, semantic surface + semantic text + 6px dot. Statuses map 1:1: Healthy/Completed = success, Running = info (static dot; no pulsing), Warning/Missed = warning, Failed = danger, Paused/Unknown = neutral. Text always present; dot never alone.
+Status is a Tabler icon followed by coloured text, with no background or container: `circle-check` + "Connected" / "Completed" / "Enabled" in success text; `loader-2` + "Running" in info text; `alert-triangle` + "Missed" / "Needs review" in warning text; `circle-x` + "Failed" in danger text; `player-pause` + "Paused" in secondary text. Icon 16, text `--dn-text-sm` or xs, weight 500. This is the 2.x style and stays as is (owner rule).
+- Don't: filled pills, dot + tinted background, or colour without text.
+- Badges (a container) only where a count or a tag truly needs one: nav counts ("Jobs 1"), "Append-only" tag on a storage target. Radius sm, neutral surface.
 
 ### Alert / banner / inline notice
 
@@ -803,10 +811,10 @@ Side panel: 360px fixed, surface, border-left subtle, no shadow (shadow-2 only w
 | Feature | Components used | Tokens |
 |---|---|---|
 | Domains on the Map (domain ring, path panel) | Map node ring, side panel with ordered path list (domain > proxy > app > container) | `--dn-map-domain-ring`, `--dn-map-path` (brand-9), path list uses table rows |
-| Keys safe (padlock, keys panel) | Status pill (Locked = neutral, Unlocked = warning with time left), side panel, confirm dialog for reveal/rotate | `--dn-safe-locked-*`, `--dn-safe-unlocked-*`; padlock icons `lock` / `lock-open` |
+| Keys safe (padlock, keys panel) | Status as icon + text (Locked = neutral, Unlocked = warning with time left), side panel, confirm dialog for reveal/rotate | `--dn-safe-locked-*`, `--dn-safe-unlocked-*`; padlock icons `lock` / `lock-open` |
 | Recovery Guide page (was "If I'm gone" runbook) | Document layout (max 72ch), numbered sections, print stylesheet | text scale only; no new colours |
 | K-of-N recovery kit flow | Wizard; share cards in a 1/2/3-column grid; states Pending (neutral), Issued (info), Confirmed (success); progress "2 of 3 shares confirmed" | `--dn-share-*` |
-| Missed-run alert | Page banner (warning) + status pill "Missed" + alert channel event | warning set |
+| Missed-run alert | Page banner (warning) + status "Missed" (icon + text) + alert channel event | warning set |
 | Restore test from off-site copy | Existing restore-test flow; source selector as radio cards | none new |
 | Portainer / Dockge import | Wizard: Connect > Choose stacks (table with checkboxes) > Review > Import | none new |
 | Online DB dumps | Settings row with switch + method select; job type badge "DB dump" | neutral badge |
@@ -899,6 +907,6 @@ All questions are answered; the owner gave full authority for 3.0.0.
 The boards render the real app with synthetic data (example.com, 192.0.2.x). In "after" mode the prototype loads `tokens-v2.css` before render, then `prototype-overrides.css` and `after-mode.js`, which apply the v2 copy, names, row pattern and one-primary rule to the DOM. These prototype files are not committed; only `web/ds-v2/tokens-v2.css` (and its contrast report) ships, as the base for PR 1.
 
 Limits of the mock:
-- The "Needs review" domain pill is mocked: no fixture has that status yet.
+- The "Needs review" domain status is mocked: no fixture has that status yet.
 - Mouse-click focus can't be shown in a static capture. The keyboard and pointer test in PR 2 covers it.
 - Copy changes are done as DOM text replacement. The build changes the JSX strings and checks them with the existing browser tests.
