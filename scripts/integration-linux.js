@@ -86,12 +86,16 @@ try {
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
   // INTEGRATION_ONLY=self-heal or launch (test-only, for a quick re-run of one scenario through workflow_dispatch): the hosts and
   // the remote storage above are what the self-heal scenario needs (it builds its own site image). Unset, the full run
-  // below is unchanged. Partial evidence is marked as such and never reads as a full pass.
+  // below is unchanged. Partial evidence is marked as such and never reads as a full pass. INTEGRATION_ONLY=mongo is the
+  // CI MongoDB matrix (one job per tested major, MONGO_IMAGE); aggregate-gate merges its evidence for the release gate.
   const only = process.env.INTEGRATION_ONLY || '';
   if (only) {
-    if (!['self-heal','launch'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal" or "launch", not "${only.slice(0, 40)}"`);
+    if (!['self-heal','launch','mongo'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch" or "mongo", not "${only.slice(0, 40)}"`);
     evidence.only = only;
-    if (only === 'launch') {
+    if (only === 'mongo') {
+      const {runMongoCompatibility}=await import('./integration-mongo.js');
+      await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
+    } else if (only === 'launch') {
       const {runLaunchScenario}=await import('./integration-launch.js');
       await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
     } else {
@@ -293,9 +297,6 @@ try {
   await runMoveScenario({run,until,hosts,servers,db,record});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
   await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
-  // After the restore test scenario: it shortens the restore test stability window this scenario also uses.
-  const {runMongoCompatibility}=await import('./integration-mongo.js');
-  await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
   const {runSafeEditScenario}=await import('./integration-safe-edit.js');
   await runSafeEditScenario({run,until,hosts,servers,db,record});
   const {runIncrementalScenario}=await import('./integration-incremental.js');
