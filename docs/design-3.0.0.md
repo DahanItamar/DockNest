@@ -11,7 +11,7 @@ Decision records:
 
 - [Domains on the Map](adr-3.0.0-domains-map.md) (theme 1)
 - [Keys safe](adr-3.0.0-keys-safe.md) (theme 2)
-- ["If I'm gone": runbook and emergency kit](adr-3.0.0-if-im-gone.md) (theme 4, security-critical, with a threat model)
+- ["If I'm gone": Recovery Guide and emergency kit](adr-3.0.0-if-im-gone.md) (theme 4, security-critical, with a threat model)
 - The small ideas are designed in [Small ideas](#small-ideas) below.
 
 Mock boards are real-app renders (Vite plus fixture data, light and dark, 1280 and 390). They live outside Git with
@@ -56,11 +56,11 @@ a part exists and is extended, NEW means nothing usable exists.
 
 | Item | State | Evidence | What to improve |
 |---|---|---|---|
-| Restore guide texts | EXISTS | `remote/helper/guides.py:7` `RESTORE_GUIDE`, written into every package (`backup.py:662`) | These are written for experts. The runbook adds plain steps and links to them. |
+| Restore guide texts | EXISTS | `remote/helper/guides.py:7` `RESTORE_GUIDE`, written into every package (`backup.py:662`) | These are written for experts. The Recovery Guide adds plain steps and links to them. |
 | Recovery kit | EXISTS | `src/recovery-kit.js:8` (state, master key, tools), scrypt N=32768 (`:10`) | The emergency kit reuses this format. Only the envelope is new. |
-| Verification evidence | EXISTS | `src/recovery-evidence.js:5,15,24` | The runbook uses this wording source. "Verified" appears only with restore test evidence. |
+| Verification evidence | EXISTS | `src/recovery-evidence.js:5,15,24` | The Recovery Guide uses this wording source. "Verified" appears only with restore test evidence. |
 | Self-backup | EXISTS | `src/self-backup.js` | A new emergency kit is made with each self-backup. |
-| Runbook, out-of-date flag | NEW | — | ADR. |
+| Recovery Guide, out-of-date flag | NEW | — | ADR. |
 | K-of-N split | NEW | no match for shamir or split secret | ADR (SLIP-0039 plus X25519). |
 
 ### Small ideas
@@ -84,7 +84,7 @@ a part exists and is extended, NEW means nothing usable exists.
 2. **Restore test from the copy.** The restore test settings gain "Test from": main storage or one verified copy.
    `testTransport.upload` passes that `sourceTargetId`, which the isolated restore already supports. If the copy is
    missing or failed, the test ends as "couldn't run" with the copy's name. It is never a silent fall back to main.
-   The evidence records the source role, so the runbook can say "tested from the off-site copy".
+   The evidence records the source role, so the Recovery Guide can say "tested from the off-site copy".
 3. **Import from Portainer or Dockge.** Discovery labels stacks by origin. Dockge: compose projects under its stacks
    folder (from the Dockge container's `DOCKGE_STACKS_DIR` env and mount). Portainer: the helper maps
    `/data/compose/N` to the host source of the Portainer container's `/data` mount. The stack's Compose and `.env`
@@ -124,9 +124,9 @@ Docker integration suite.
 | | 7 | Kit decrypt proof after each self-backup, `kit_checks` migration | — |
 | | 8 | UI: padlock, Keys panel, card line, kit check card | PRs 4, 5, 7, DS v2 |
 | L3 If I'm gone (Opus) | 9 | `src/emergency/` SLIP-0039 split and join, X25519 envelope, published test vectors. No UI | — |
-| | 10 | Emergency kit with each self-backup, `emergency_keys` migration, offline open tool in the recovery kit | PR 9 |
-| | 11 | Runbook generator, inventory digest, Runbook page, in-house PDF writer (`src/runbook/pdf.js`, vendored fonts) and the recovery guide dialog | PRs 7, 10 |
-| | 12 | Split flow and practice join UI | PRs 10, 11, DS v2 |
+| | 10 | Optional K-of-N split (off by default; one passphrase stays the default): emergency kit with each self-backup when on, `emergency_keys` migration, offline open tool in the recovery kit | PR 9 |
+| | 11 | Recovery Guide generator, inventory digest, Recovery Guide page, in-house PDF writer (`src/runbook/pdf.js`, vendored fonts) and the Recovery Guide dialog | PRs 7, 10 |
+| | 12 | Kit flow with the "Choose how" step (one passphrase or split), the practice join, and the Self Backup and Recovery Guide names | PRs 10, 11, DS v2 |
 | L4 Small ideas (Sonnet, PR 16 Opus) | 13 | Missed-run event | — |
 | | 14 | Restore test from a copy | — |
 | | 15 | Portainer and Dockge import | 2.16.5 coverage |
@@ -142,7 +142,7 @@ and container adoption take the next ones). Tables: `domain_checks`, `app_keys`,
 storage targets `append_only`. Online dumps live in the app's config JSON, so they need no migration. First-run rules:
 - Fingerprints start as a silent baseline, so an upgrade raises no alerts.
 - Missed-run checks look only at occurrences due after the upgrade.
-- The runbook starts as "never made".
+- The Recovery Guide starts as "never made".
 - The upgrade compatibility job (`npm run test:upgrade`) gains a fixture from 2.16.5 for each table.
 
 ## E. Owner decisions (approved)
@@ -152,7 +152,7 @@ The owner approved all six recommendations:
 1. The Domains column shows by default when an app has domains. A toolbar toggle is remembered per browser.
 2. Broken domain hops show on the Map and in the Move review only. There is no new alert; certificate alerts stay.
 3. Only administrators can "Mark as known-good". They must re-verify, and it is audited.
-4. The runbook offers a "type your own passphrase" practice, checked in memory and never stored. It is offered, never
+4. The Recovery Guide offers a "type your own passphrase" practice, checked in memory and never stored. It is offered, never
    pushed.
 5. Emergency kit parts are SLIP-0039 word lists of 33 words.
 6. Append-only SFTP turns retention off for that storage, and the storage report warns about growth. Online dumps
@@ -160,8 +160,11 @@ The owner approved all six recommendations:
 
 Theme 4 additions from the owner:
 
+- The user-facing name is **Recovery Guide** (internal names such as `runbook_state` stay). "DockNest backup" becomes **Self Backup**.
+- The K-of-N split is optional and off by default. One passphrase stays the default.
+
 - A "Start here" section and a restore order.
-- A "Download recovery guide (PDF)" text link that opens an options dialog (apps, addresses, admin-only login
+- A "Download Recovery Guide (PDF)" text link that opens an options dialog (apps, addresses, admin-only login
   details, history, schedules, notes).
 - A real server-side PDF.
 

@@ -1,4 +1,4 @@
-# ADR: "If I'm gone": living runbook and emergency kit (3.0.0)
+# ADR: "If I'm gone": living Recovery Guide and emergency kit (3.0.0)
 
 Status: proposed, security-critical. Index and audit: [3.0.0 design](design-3.0.0.md).
 
@@ -16,11 +16,15 @@ the job to someone who can. Today the expert pieces exist:
 Three things are missing: plain steps, a current inventory, and a way to give access to people without giving any one
 of them everything.
 
-## Decision 1: the living runbook
+## Decision 1: the living Recovery Guide
+
+Naming: the user-facing name is **Recovery Guide**, everywhere: sidebar, page title, link, dialog and PDF title. The
+internal names (`runbook_state`, `src/runbook/`, `/api/runbook/pdf`, `runbook.outdated`) stay as they are, so later
+upgrades never need to rename stored data.
 
 ### Content
 
-The runbook is generated from the database at request time. Sections, in this order:
+The Recovery Guide is generated from the database at request time. Sections, in this order:
 
 1. **Start here:** three short numbered lists:
    - get a new server;
@@ -47,14 +51,14 @@ The runbook is generated from the database at request time. Sections, in this or
 - **Honest wording:**
   - "Verified" appears only with a passed restore test (`recovery-evidence.js` `TEST_METHOD`), with its date and
     source (main or off-site copy).
-  - Otherwise the runbook says "Backed up, not tested yet".
+  - Otherwise the Recovery Guide says "Backed up, not tested yet".
   - A key that is missing from a backup (see Keys safe) is listed as a known gap.
 
-### Export: "Download recovery guide (PDF)"
+### Export: "Download Recovery Guide (PDF)"
 
-**Entry point.** There is no button. A documentation-style text link, "Download recovery guide (PDF)", sits under the
-runbook title and under each app page's title. On an app page, the dialog opens with only that app ticked. The link
-opens a dialog, "Download recovery guide", with these choices:
+**Entry point.** There is no button. A documentation-style text link, "Download Recovery Guide (PDF)", sits under the
+Recovery Guide title and under each app page's title. On an app page, the dialog opens with only that app ticked. The link
+opens a dialog, "Download Recovery Guide", with these choices:
 
 - **Apps:** every app, all ticked by default, with "Select all" and "Select none".
 - **Include:**
@@ -143,19 +147,34 @@ An inventory digest is computed as SHA-256 of a canonical JSON over:
 - the emergency kit split state;
 - the owner notes.
 
-It is stored in `runbook_state.digest` when the runbook is made. Every read compares the stored digest with the
-current one. If they differ, the page shows "This runbook is out of date" with the changes as categories (app added,
+It is stored in `runbook_state.digest` when the Recovery Guide is made. Every read compares the stored digest with the
+current one. If they differ, the page shows "This Recovery Guide is out of date" with the changes as categories (app added,
 server address changed, and so on). There is no timer. The same comparison runs after the events that change those
 inputs, so the Overview can show one quiet line. With the owner's opt-in, this can also be an alert event
 (`runbook.outdated`, sent once per digest).
 
-A redacted PDF of the runbook (all apps; no addresses and no login details, whatever the dialog last used) is also
-written next to each emergency kit in storage, so a relative can read it before anything is decrypted. That
+A redacted PDF of the Recovery Guide (all apps; no addresses and no login details, whatever the dialog last used) is also
+written next to the kit in the backup storage (`docknest-recovery/`: next to the recovery kit, and next to the emergency kit when the split is on), so a relative can read it before anything is decrypted. That
 automatic copy can never include login details, and a test asserts it.
 
-## Decision 2: the emergency kit, split K of N
+## Decision 2: the emergency kit, with an optional K-of-N split
 
-### Construction
+### Default: one kit, one passphrase (unchanged)
+
+Today's recovery kit, opened with the owner's single recovery passphrase, stays the default. Nothing changes for
+installs that never opt in:
+- no key pair is made;
+- no emergency kit file is made;
+- the Recovery Guide's kit page says "One kit, opened with your recovery passphrase".
+
+### Opt-in: split between trusted people
+
+Splitting is offered as a choice in the kit flow on the Self Backup page, with one line explaining why: "Use this if
+no single person should be able to open the kit, but some of them together should." It is off by default. Turning
+the split off ("Go back to one passphrase") retires the key pair: new self-backups stop making emergency kits, and the
+UI offers to delete the old ones.
+
+### Construction (only when the split is on)
 
 The kit stays current without DockNest keeping the secret. It uses Node `crypto` only:
 
@@ -175,12 +194,12 @@ The kit stays current without DockNest keeping the secret. It uses Node `crypto`
 5. After every self-backup, the worker makes an emergency kit. This is the existing recovery kit bytes, sealed to the
    public key with an ephemeral X25519 exchange, HKDF-SHA256 (`info = "docknest emergency kit v1"`) and
    AES-256-GCM, with a header that holds the format version, public-key digest and ephemeral public key. It is
-   stored under `docknest-recovery/emergency/` with the redacted runbook.
+   stored under `docknest-recovery/emergency/` with the redacted Recovery Guide PDF.
 6. **Opening:** K holders type their words into the offline tool shipped in the recovery kit and in the repository
    (`scripts/emergency-open.js`, Node 24, no network). The tool joins the parts, rebuilds the private key, checks it
    against the digest, and decrypts the newest emergency kit into a recovery kit folder. From there, the existing
    recovery steps apply.
-7. **Practice join:** two holders can test their parts in the browser on the Runbook page. The join runs in page
+7. **Practice join:** two holders can test their parts in the browser on the Recovery Guide page. The join runs in page
    JavaScript and only the digest is compared. The parts never go to the server. This is the only way to prove the
    parts work without opening a kit, and the UI says so.
 
@@ -202,17 +221,22 @@ Delete the old kits so old parts open nothing."
 
 ## Threat model
 
+Scope: this applies only when the owner opts in to the split. With the default single passphrase, the existing
+recovery kit model holds unchanged: anyone with the passphrase and the kit file can open it, and no part or key pair
+exists.
+
 Assets: the emergency kit contents (`state.sqlite` and `master.key`, which together open every backup), the parts, and
 the public key binding.
 
 | Threat | Effect | Mitigation |
 |---|---|---|
 | One holder, or up to K-1 colluding holders | learn nothing about the key | Shamir is information-theoretically secure below the threshold |
-| K colluding holders | full access | inherent. The owner chooses K and the people. The runbook says so |
+| K colluding holders | full access | inherent. The owner opts in and chooses K and the people. The Recovery Guide says so |
+| An owner who does not need a split | extra moving parts | the split is off by default and needs a deliberate choice; the default stays one passphrase |
 | A holder loses a part | fewer parts left | N greater than K gives slack. Re-split is one flow |
 | Stolen storage | only ciphertext | AES-GCM to a key DockNest does not hold. The recovery kit inside is still passphrase-encrypted, so storage plus K parts are needed |
 | Leaked DockNest database | public key, digest and labels only | no secret is stored |
-| An attacker with an admin session replaces the public key, so future kits are sealed to them | silent takeover of future kits | re-verification is required to split. Audit entry. Alert `emergency.key_changed` to every channel. The digest is printed on the parts, and the Runbook shows the current digest, so a mismatch is visible |
+| An attacker with an admin session replaces the public key, so future kits are sealed to them | silent takeover of future kits | re-verification is required to split. Audit entry. Alert `emergency.key_changed` to every channel. The digest is printed on the parts, and the Recovery Guide shows the current digest, so a mismatch is visible |
 | A compromised browser during the split | parts exposed at creation | the same trust as the admin session. Shown once, never stored. Guidance to split from a trusted device |
 | A malicious practice-join page | parts typed into a compromised page | the join is client-side only. The offline tool is the recommended path for a real recovery |
 | A wrong or corrupt part | wrong key | the RS1024 checksum per part, then the digest check before any decrypt |
@@ -230,17 +254,24 @@ the public key binding.
 
 ## UI
 
-- The DockNest backup page gets a card "Emergency kit for trusted people". The split dialog has three steps (choose
-  people, hand out parts one at a time, done) with the existing dialog stepper.
-- The Runbook page is new: admin only, in the sidebar below "DockNest backup".
-- The recovery guide dialog opens from a documentation-style text link, never from a button.
-- Boards: C1-C9 (runbook and export dialog states), D1-D6, and F1-F7 (A4 mock pages of the recovery guide PDF: cover, Start here, restore order, a Verified app, an untested app with a known gap, the same app with secrets marked on every page, and the emergency kit page).
+- "DockNest backup" is renamed **Self Backup** in the sidebar and in the page title.
+- The Self Backup page's kit card shows the default, "One kit, opened with your recovery passphrase", and a text link,
+  "Split between trusted people (optional)", with the one-line reason.
+- The kit dialog has four steps, using the existing dialog stepper:
+  1. Choose how: one passphrase (default) or split;
+  2. Choose people;
+  3. Hand out parts one at a time;
+  4. Done.
+- "Go back to one passphrase" turns the split off.
+- The Recovery Guide page is new: admin only, in the sidebar below "Self Backup".
+- The Recovery Guide dialog opens from a documentation-style text link, never from a button.
+- Boards: C1-C9 (Recovery Guide and export dialog states), D1-D6, and F1-F8 (A4 mock pages of the Recovery Guide PDF: cover, Start here, restore order, a Verified app, an untested app with a known gap, the same app with secrets marked on every page, the emergency kit page with one passphrase (default), and the same page when the optional split is on).
 
 ## Data
 
 Compatible migrations:
 
-- `emergency_keys`: `id`, `public_key`, `digest`, `identifier`, `k`, `n`, `labels` JSON, `created_by`, `created_at`,
+- `emergency_keys` (no rows unless the owner opts in): `id`, `public_key`, `digest`, `identifier`, `k`, `n`, `labels` JSON, `created_by`, `created_at`,
   `retired_at`.
 - `runbook_state`: `digest`, `made_at`, `made_by`, `notes` (the owner-written text, at most 4000 characters).
 
@@ -256,6 +287,6 @@ Compatible migrations:
 [Security Architect](https://github.com/msitarzewski/agency-agents/blob/main/security/security-architect.md)
 for the threat model and the cryptography choices.
 [Technical Writer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-technical-writer.md)
-for the plain-language runbook.
+for the plain-language Recovery Guide.
 [Reality Checker](https://github.com/msitarzewski/agency-agents/blob/main/testing/testing-reality-checker.md) for
 "Verified" only with evidence.

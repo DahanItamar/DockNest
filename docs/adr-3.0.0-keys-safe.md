@@ -54,7 +54,7 @@ The list is plain data, so adding an app is one entry with a test:
 - **Restore test:** the test compares the restored container's env or file fingerprint. Passing is the only case that
   may say "Verified in a restore test".
 
-Wording levels, used everywhere (Map, card, runbook):
+Wording levels, used everywhere (Map, card, Recovery Guide):
 
 | State | Text |
 |---|---|
