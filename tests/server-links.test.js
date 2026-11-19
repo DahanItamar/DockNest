@@ -87,15 +87,16 @@ test('facts are cleaned: unexpected values are dropped and mark the scan partial
 test('a scan replaces the row, a non-scan keeps the previous one, and the view computes links from the current apps', () => {
   server('srv-a'); site('shop', 'srv-a', { containers: ['shop-web'] }); site('data', 'srv-a', { containers: ['pg'], services: [{ container: 'pg', engine: 'postgres' }] });
   site('static', 'srv-a', { kind: 'static', containers: [] });
-  assert.deepEqual(serverLinksView('srv-a'), { checkedAt: null, partial: false, links: [], unowned: [] }, 'not scanned yet');
+  assert.deepEqual(serverLinksView('srv-a'), { checkedAt: null, partial: false, links: [], unowned: [], hubs: [] }, 'not scanned yet');
   const scan = { containers: [container('shop-web', { networks: ['data-net'], links: ['cache'] }), container('pg', { networks: ['data-net'] }, 'custom/db:2'), container('cache')] };
   assert.equal(recordDiscoveredLinks('srv-a', scan, at), true);
   const stored = db.prepare("SELECT facts FROM server_app_links WHERE server_id='srv-a'").get().facts;
   assert.doesNotMatch(stored, /label-secret|"id"/, 'only the cleaned facts are stored');
   assert.deepEqual(serverLinksView('srv-a'), {
     checkedAt: at, partial: false,
-    links: [{ appIds: ['data', 'shop'], kind: 'database', via: 'pg', details: [{ kind: 'database', via: 'pg', containers: ['pg', 'shop-web'] }] }],
+    links: [{ appIds: ['data', 'shop'], kind: 'database', via: 'pg', warns: true, details: [{ kind: 'database', via: 'pg', containers: ['pg', 'shop-web'] }] }],
     unowned: [{ container: 'cache', appIds: ['shop'], kind: 'link', via: 'cache', details: [{ kind: 'link', via: 'cache', containers: ['cache', 'shop-web'] }] }],
+    hubs: [],
   }, 'the engine chosen in the app makes pg a database although its image name does not say so');
   assert.equal(recordDiscoveredLinks('srv-a', { error: 'nope' }, '2026-11-20T00:00:00.000Z'), false);
   assert.equal(serverLinksView('srv-a').checkedAt, at, 'the last good scan stays with its time');
@@ -107,10 +108,45 @@ test('a scan replaces the row, a non-scan keeps the previous one, and the view c
   // A partial scan says so; damaged or future stored facts read as not scanned.
   recordDiscoveredLinks('srv-a', { containers: [container('shop-web'), { name: 'broken', links: 'x' }] }, at);
   assert.equal(serverLinksView('srv-a').partial, true);
-  db.prepare("UPDATE server_app_links SET facts='not json' WHERE server_id='srv-a'").run();
-  assert.equal(serverLinksView('srv-a').checkedAt, null);
+  for (const facts of ['not json', '{"a":1}']) {
+    db.prepare("UPDATE server_app_links SET facts=? WHERE server_id='srv-a'").run(facts);
+    assert.deepEqual(serverLinksView('srv-a'), { checkedAt: null, partial: true, links: [], unowned: [], hubs: [] });
+  }
   db.prepare("UPDATE server_app_links SET facts='[]',format=2 WHERE server_id='srv-a'").run();
   assert.equal(serverLinksView('srv-a').checkedAt, null);
+});
+
+test('a damaged stored row or app setting never fails the view: odd entries are dropped and the result is partial', () => {
+  server('srv-c'); site('odd', 'srv-c', { containers: { not: 'a list' } });
+  const good = { name: 'odd-web', image: 'demo/app:1', project: null, service: null, networks: [], volumes: ['v'], binds: [], links: [], dependsOn: [] };
+  db.prepare('INSERT INTO server_app_links VALUES(?,?,1,?,0)').run('srv-c', JSON.stringify([null, 5, 'x', [], good]), at);
+  assert.deepEqual(serverLinksView('srv-c'), { checkedAt: null, partial: true, links: [], unowned: [], hubs: [] }, 'an app whose containers are not a list: not scanned, partial');
+  db.prepare("UPDATE sites SET config=? WHERE id='odd'").run(JSON.stringify({ containers: ['odd-web'], services: { not: 'a list' } }));
+  const view = serverLinksView('srv-c');
+  assert.equal(view.checkedAt, at); assert.equal(view.partial, true, 'entries that are not objects were dropped; odd services are ignored');
+});
+
+test('facts over the size limit are cut to what fits, with the new time and partial', () => {
+  server('srv-d');
+  recordDiscoveredLinks('srv-d', { containers: [container('a')] }, '2026-11-01T00:00:00.000Z');
+  const binds = Array.from({ length: LIMITS.binds }, (_, index) => '/srv/' + 'd'.repeat(1000) + index);
+  const containers = Array.from({ length: 40 }, (_, index) => container('c' + index, { binds }));
+  assert.equal(recordDiscoveredLinks('srv-d', { containers }, at), true);
+  const row = db.prepare("SELECT facts,checked_at,partial FROM server_app_links WHERE server_id='srv-d'").get();
+  assert.equal(row.checked_at, at); assert.equal(row.partial, 1); assert.ok(row.facts.length <= 2097152);
+  const kept = JSON.parse(row.facts);
+  assert.ok(kept.length > 0 && kept.length < 40); assert.equal(kept[0].name, 'c0');
+});
+
+test('bind paths may use letters of any script but never control characters', () => {
+  assert.deepEqual(cleanContainerLinks(container('web', { binds: ['/srv/מדיה/תמונות', '/srv/médias', '/srv/写真'] })).facts.binds, ['/srv/מדיה/תמונות', '/srv/médias', '/srv/写真']);
+  for (const bad of ['/srv/a\u0000b', '/srv/a\nb', '/srv/a\u202eb']) assert.equal(cleanContainerLinks(container('web', { binds: [bad] })).dropped, true, JSON.stringify(bad));
+});
+
+test('two apps that list one container: the last listed owns it, and they do not link through it', () => {
+  server('srv-e'); site('first', 'srv-e', { containers: ['shared-db', 'first-web'] }); site('second', 'srv-e', { containers: ['shared-db', 'second-web'] });
+  recordDiscoveredLinks('srv-e', { containers: [container('shared-db', { networks: ['data'] }, 'postgres:16'), container('first-web', { networks: ['data'] }), container('second-web', { networks: ['data'] })] }, at);
+  assert.deepEqual(serverLinksView('srv-e').links.map(link => [link.appIds, link.kind, link.via]), [[['first', 'second'], 'database', 'shared-db']]);
 });
 
 test('GET /api/state gives every signed-in role appLinks on each server, never the raw facts', async () => {
@@ -120,7 +156,7 @@ test('GET /api/state gives every signed-in role appLinks on each server, never t
     const { status, body } = await as('/state');
     assert.equal(status, 200);
     const entry = body.servers.find(item => item.id === 'srv-b');
-    assert.deepEqual(entry.appLinks, { checkedAt: at, partial: false, links: [{ appIds: ['blog', 'wiki'], kind: 'volume', via: 'media', details: [{ kind: 'volume', via: 'media', containers: ['blog-web', 'wiki-web'] }] }], unowned: [] });
+    assert.deepEqual(entry.appLinks, { checkedAt: at, partial: false, links: [{ appIds: ['blog', 'wiki'], kind: 'volume', via: 'media', warns: true, details: [{ kind: 'volume', via: 'media', containers: ['blog-web', 'wiki-web'] }] }], unowned: [], hubs: [] });
     assert.equal(body.servers.find(item => item.id === 'srv-a').appLinks.checkedAt, null);
     assert.doesNotMatch(JSON.stringify(body), /"facts"|label-secret/);
   }

@@ -14,7 +14,8 @@ export const LIMITS = Object.freeze({ containers: 1000, networks: 32, volumes: 6
 const MAX_STORED = 2097152;
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$/;
 const IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9_.\/:@-]{0,254}$/;
-const BIND = /^\/[a-zA-Z0-9_.\/@+=:,~ -]{0,1023}$/;
+// Letters and digits of any script, but never a control character.
+const BIND = /^\/[\p{L}\p{N}\p{M}_.\/@+=:,~ -]{0,1023}$/u;
 const isName = value => typeof value === 'string' && NAME.test(value);
 
 // Keeps the valid values of a list up to its limit. `dropped` is true when anything was left out.
@@ -59,15 +60,26 @@ export function cleanScan(discovered) {
   return { facts, partial };
 }
 
-// Stores the facts of a discovery scan for one server, replacing the previous scan. An answer that is not a scan, or
-// facts too large to store, leaves the previous scan in place.
+// The facts that fit in MAX_STORED characters, in scan order, as stored JSON, and whether any were left out.
+function fitting(facts) {
+  const kept = [];
+  let size = 2;
+  for (const item of facts) {
+    const length = JSON.stringify(item).length + 1;
+    if (size + length > MAX_STORED) break;
+    kept.push(item); size += length;
+  }
+  return { json: JSON.stringify(kept), truncated: kept.length < facts.length };
+}
+
+// Stores the facts of a discovery scan for one server, replacing the previous scan. An answer that is not a scan leaves
+// the previous scan in place; facts too large to store are cut to what fits and marked partial.
 export function recordDiscoveredLinks(serverId, discovered, checkedAt = new Date().toISOString(), database = db) {
   const scan = cleanScan(discovered);
   if (!scan) return false;
-  const facts = JSON.stringify(scan.facts);
-  if (facts.length > MAX_STORED) return false;
+  const { json, truncated } = fitting(scan.facts);
   database.prepare('INSERT INTO server_app_links(server_id,facts,format,checked_at,partial) VALUES(?,?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET facts=excluded.facts,format=excluded.format,checked_at=excluded.checked_at,partial=excluded.partial')
-    .run(serverId, facts, LINKS_FORMAT, checkedAt, scan.partial ? 1 : 0);
+    .run(serverId, json, LINKS_FORMAT, checkedAt, scan.partial || truncated ? 1 : 0);
   return true;
 }
 
@@ -80,7 +92,7 @@ function containerOwners(sites) {
 }
 // The engine each app chose for its containers (site.config.services), for the database rule.
 function chosenEngines(sites) {
-  return new Map(sites.flatMap(site => (site.config?.services || []).map(service => [service.container, service.engine])));
+  return new Map(sites.flatMap(site => (Array.isArray(site.config?.services) ? site.config.services : []).map(service => [service?.container, service?.engine])));
 }
 function activeSites(serverId, database) {
   return database.prepare('SELECT id,name,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all(serverId).flatMap(row => {
@@ -88,17 +100,25 @@ function activeSites(serverId, database) {
   });
 }
 
-const notScanned = () => ({ checkedAt: null, partial: false, links: [], unowned: [] });
-// The API view for one server: {checkedAt, partial, links, unowned}. Never scanned, or facts this release cannot read:
-// checkedAt null and nothing listed. Stored facts are cleaned again on read.
+const notScanned = (partial = false) => ({ checkedAt: null, partial, links: [], unowned: [], hubs: [] });
+const plainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+// Links from one stored row, or null when the row holds no facts this release can read.
+function computeRow(serverId, row, database) {
+  const stored = JSON.parse(row.facts);
+  if (!Array.isArray(stored)) return null;
+  const entries = stored.filter(plainObject);
+  const scan = cleanScan(entries.map(({ name, image, ...links }) => ({ name, image, links: { format: LINKS_FORMAT, ...links } })));
+  const sites = activeSites(serverId, database), engines = chosenEngines(sites);
+  const computed = computeAppLinks(scan.facts, containerOwners(sites), container => containerIsDatabase(engines.get(container.name), container.image));
+  const { links, unowned, hubs } = computed;
+  return { checkedAt: row.checked_at, partial: Boolean(row.partial) || entries.length < stored.length || scan.partial || computed.partial, links, unowned, hubs };
+}
+// The API view for one server: {checkedAt, partial, links, unowned, hubs}. Never scanned, or facts this release cannot
+// read: checkedAt null and nothing listed. Stored facts are cleaned again on read, and a damaged row never fails the
+// caller (/api/state): it reads as not scanned and partial.
 export function serverLinksView(serverId, database = db) {
   let row;
   try { row = database.prepare('SELECT facts,format,checked_at,partial FROM server_app_links WHERE server_id=?').get(serverId); } catch { return notScanned(); }
   if (!row || row.format !== LINKS_FORMAT) return notScanned();
-  let stored; try { stored = JSON.parse(row.facts); } catch { return notScanned(); }
-  if (!Array.isArray(stored)) return notScanned();
-  const scan = cleanScan(stored.map(({ name, image, ...links }) => ({ name, image, links: { format: LINKS_FORMAT, ...links } })));
-  const sites = activeSites(serverId, database), engines = chosenEngines(sites);
-  const { links, unowned } = computeAppLinks(scan.facts, containerOwners(sites), container => containerIsDatabase(engines.get(container.name), container.image));
-  return { checkedAt: row.checked_at, partial: Boolean(row.partial) || scan.partial, links, unowned };
+  try { return computeRow(serverId, row, database) ?? notScanned(true); } catch { return notScanned(true); }
 }
