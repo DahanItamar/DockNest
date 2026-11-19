@@ -234,7 +234,7 @@ the public key binding.
   people, hand out parts one at a time, done) with the existing dialog stepper.
 - The Runbook page is new: admin only, in the sidebar below "DockNest backup".
 - The recovery guide dialog opens from a documentation-style text link, never from a button.
-- Boards: C1-C9 (runbook and export dialog states) and D1-D6.
+- Boards: C1-C9 (runbook and export dialog states), D1-D6, and F1-F7 (A4 mock pages of the recovery guide PDF: cover, Start here, restore order, a Verified app, an untested app with a known gap, the same app with secrets marked on every page, and the emergency kit page).
 
 ## Data
 
