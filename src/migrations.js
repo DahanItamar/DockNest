@@ -266,6 +266,14 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Keys safe (docs/keys-safe.md, "Data"). Additive only: two new tables, no rows, nothing altered, so 2.16 code ignores
+// them. Rows hold rule ids, locations (`env:<container>` or `file:<path>`) and keyed fingerprints (32 hex characters),
+// never a key value. `in_backup` and `verified_test_id` name a backup and a restore test without a foreign key, so
+// retention and test clean-up never depend on them. A config_fingerprints item is a file path or `<rule>@<location>`.
+export const keysSafeSchema = `
+CREATE TABLE IF NOT EXISTS app_keys (site_id TEXT NOT NULL REFERENCES sites(id),rule_id TEXT NOT NULL,location TEXT NOT NULL CHECK (length(location) <= 4200),fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 32 AND fingerprint NOT GLOB '*[^0-9a-f]*'),in_backup TEXT,verified_test_id TEXT,first_seen_at TEXT NOT NULL,changed_at TEXT,PRIMARY KEY (site_id,rule_id,location));
+CREATE TABLE IF NOT EXISTS config_fingerprints (site_id TEXT NOT NULL REFERENCES sites(id),item TEXT NOT NULL CHECK (length(item) <= 4300),fingerprint TEXT NOT NULL CHECK (length(fingerprint) = 32 AND fingerprint NOT GLOB '*[^0-9a-f]*'),known_good TEXT NOT NULL,known_good_source TEXT NOT NULL CHECK (known_good_source IN ('baseline','safe-edit','restore','admin')),known_good_at TEXT NOT NULL,first_seen_changed_at TEXT,alerted_fingerprint TEXT,PRIMARY KEY (site_id,item));
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -389,6 +397,9 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them. Planned as 23; the next number on this
+  // base, so versions stay contiguous, and set in merge order with the other 3.0.0 migrations.
+  { version: 19, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
