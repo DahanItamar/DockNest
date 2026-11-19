@@ -31,15 +31,15 @@ export const ACTIVE=new Set(['queued','running','checking','rolling_back']);
 export const TABS=['Compose','Environment','Ports','Image'];
 export const TAB_KEY={Compose:'compose',Environment:'env',Ports:'ports',Image:'image'};
 export const STEP_TEXT={backup:'Back up',prepare:'Prepare',apply:'Apply',check_health:'Check health',finish:'Finish',roll_back:'Roll back'};
-export const STATUS_LINE={backup:'Backing up…',prepare:'Getting ready…',apply:'Applying the change…',check_health:'Checking the site…',finish:'Finishing…',roll_back:'Rolling back…'};
+export const STATUS_LINE={backup:'Backing up…',prepare:'Getting ready…',apply:'Applying the change…',check_health:'Checking the app…',finish:'Finishing…',roll_back:'Rolling back…'};
 const FRIENDLY={
- SITE_BUSY:'This site is busy right now. Try again soon.',
- MOVE_RUNNING:'This site is being moved. Wait for the move to finish.',
- EDIT_RUNNING:'Another change to this site is still running.',
+ SITE_BUSY:'This app is busy right now. Try again soon.',
+ MOVE_RUNNING:'This app is being moved. Wait for the move to finish.',
+ EDIT_RUNNING:'Another change to this app is still running.',
  REVIEW_EXPIRED:'This review expired. Review the change again.',
  UNDO_NEWER:'A newer change was made. Undo that one first.',
  UNDO_UNAVAILABLE:'This change cannot be undone.',
- RATE_LIMITED:'Too many changes for this site. Try again later.'
+ RATE_LIMITED:'Too many changes for this app. Try again later.'
 };
 export const friendlyError=e=>FRIENDLY[e?.code]||e?.message||'Something went wrong.';
 
@@ -56,7 +56,7 @@ const gb=n=>n>=1024**3?(n/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(n/1024
 export function limitWarnings(seconds,dataBytes){
  if(!validLimit(seconds))return [];
  const s=Number(seconds),out=[];
- if(s>300)out.push({code:'LONG_LIMIT',title:'Longer wait',text:`The site can stay offline for up to ${limitText(s)} before it rolls back.`});
+ if(s>300)out.push({code:'LONG_LIMIT',title:'Longer wait',text:`The app can stay offline for up to ${limitText(s)} before it rolls back.`});
  if(Number.isFinite(dataBytes)&&dataBytes>0&&dataBytes/COPY_BYTES_PER_SECOND>s)out.push({code:'SHORT_LIMIT',title:'Short time limit',text:`Copying ${gb(dataBytes)} of data may need more than ${s} seconds. If it does not finish, the change rolls back.`});
  return out;
 }
@@ -81,7 +81,7 @@ export function outcomeOf(edit){
 export const historyChanges=e=>{
  if(e.undoOf)return 'Undid a change';
  const names=[...(e.changed||[]).map(p=>String(p).replace(/^services\./,'')),...['added','replaced','removed'].flatMap(k=>e.env?.[k]||[])];
- return names.length?names.slice(0,3).join(', ')+(names.length>3?' and more':''):'Changed the site';
+ return names.length?names.slice(0,3).join(', ')+(names.length>3?' and more':''):'Changed the app';
 };
 
 // ---- Guided edits: ports and image make the same text edit as typing it in Compose.

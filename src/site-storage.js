@@ -27,7 +27,7 @@ export const siteCopyTargets=siteId=>db.prepare('SELECT target_id,retention,crea
 export function siteMainStorage(siteId){
  const chosen=siteMainTargetId(siteId);
  if(chosen===null)return activeStorage();
- if(!targetSummary(chosen))throw fail(409,'destination_missing','The main destination chosen for this site was removed. Choose another main destination in the site storage settings.');
+ if(!targetSummary(chosen))throw fail(409,'destination_missing','The main destination chosen for this app was removed. Choose another main destination in the app storage settings.');
  return targetOptions(chosen);
 }
 // The destination id a stored path belongs to: "sftp:<id>:/path", "s3:<id>:/key", legacy "sftp:/path" (env) or local.
@@ -99,19 +99,19 @@ export function updateSiteStorage(siteId,body,actor){
  if(mainTargetId!==null&&mainTargetId!=='env'&&!remoteTarget(mainTargetId))throw fail(400,'unknown_destination','The chosen main destination does not exist.');
  const copies=body.copies===undefined?[]:body.copies;
  if(!Array.isArray(copies))throw fail(400,'invalid_request','copies must be a list.');
- if(copies.length>MAX_COPIES)throw fail(400,'too_many_copies',`A site can keep at most ${MAX_COPIES} extra copies.`);
+ if(copies.length>MAX_COPIES)throw fail(400,'too_many_copies',`An app can keep at most ${MAX_COPIES} extra copies.`);
  const effectiveMain=mainTargetId??defaultTargetId(),seen=[];
  for(const copy of copies){
   if(!copy||typeof copy!=='object'||typeof copy.targetId!=='string'||!remoteTarget(copy.targetId))throw fail(400,'unknown_destination','A copy destination does not exist.');
   const retention=copy.retention===undefined?null:copy.retention;
-  if(retention!==null&&!(Number.isInteger(retention)&&retention>=MIN_RETENTION&&retention<=MAX_RETENTION))throw fail(400,'invalid_retention',`Keep between ${MIN_RETENTION} and ${MAX_RETENTION} copies, or use the site's count.`);
+  if(retention!==null&&!(Number.isInteger(retention)&&retention>=MIN_RETENTION&&retention<=MAX_RETENTION))throw fail(400,'invalid_retention',`Keep between ${MIN_RETENTION} and ${MAX_RETENTION} copies, or use the app's count.`);
   if(sameLocation(copy.targetId,effectiveMain))throw fail(400,'copy_equals_main','A copy must go to a different destination than the main one.');
   if(seen.some(other=>sameLocation(other,copy.targetId)))throw fail(400,'duplicate_copy','Each copy needs its own destination.');
   seen.push(copy.targetId);
  }
  const at=new Date().toISOString();
  transaction(()=>{
-  if(!db.prepare('SELECT 1 FROM sites WHERE id=?').get(siteId))throw fail(404,'not_found','Site not found.');
+  if(!db.prepare('SELECT 1 FROM sites WHERE id=?').get(siteId))throw fail(404,'not_found','App not found.');
   db.prepare('INSERT INTO site_storage(site_id,main_target_id,updated_at) VALUES(?,?,?) ON CONFLICT(site_id) DO UPDATE SET main_target_id=excluded.main_target_id,updated_at=excluded.updated_at').run(siteId,mainTargetId,at);
   const previous=new Map(siteCopyTargets(siteId).map(row=>[row.target_id,row]));
   db.prepare('DELETE FROM site_storage_copies WHERE site_id=?').run(siteId);

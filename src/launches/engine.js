@@ -17,6 +17,7 @@ import { transport, enqueueBackup, setupMaintenance, movingSite } from '../engin
 import { classify } from '../alerts/addresses.js';
 import { moveActive, installActive, installInfo, INSTALL_PACKAGES } from '../installs.js';
 import { cleanupHeld } from '../cleanup-hold.js';
+import { coverageConflict } from '../site-coverage.js';
 import { maintenanceDefaults, normalizeMaintenance } from '../../shared/maintenance-design.js';
 import { firstDueAt } from '../restore-tests/settings.js';
 import { LAUNCH_STEPS } from '../migrations.js';
@@ -441,8 +442,8 @@ export function advanceLaunch(launchId) {
       case 'save':
         try { saveSite(launch, steps); }
         catch (error) {
-          console.error(`Launch ${launchId} could not save its site: ${error.code ?? error.name}`);
-          setStep(launchId, 'save', { state: 'failed', finished_at: now(), attempt: 1, detail: 'DockNest could not save the site record, so it removes what the launch made.' });
+          console.error(`Launch ${launchId} could not save its app: ${error.code ?? error.name}`);
+          setStep(launchId, 'save', { state: 'failed', finished_at: now(), attempt: 1, detail: error.code === 'CONTAINER_ALREADY_BACKED_UP' ? error.message : 'DockNest could not save the app record, so it removes what the launch made.' });
         }
         continue;
       case 'first_backup':
@@ -529,6 +530,8 @@ function saveSite(launch, steps) {
   const nextRun = CronExpressionParser.parse(schedule, { tz: zone, currentDate: new Date(launchTransport.now()) }).next().toISOString();
   transaction(() => {
     const config = siteConfig(launch, steps, siteId);
+    const conflict = coverageConflict(launch.server_id, config);
+    if (conflict) throw Object.assign(new Error(conflict.error), { code: conflict.code });
     db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, launch.server_id, launch.domain, JSON.stringify(config), at);
     db.prepare('INSERT INTO policies(site_id,enabled,schedule,timezone,retention,next_run) VALUES(?,1,?,?,7,?)').run(siteId, schedule, zone, nextRun);
     // Restore tests weekly on the chosen test server; with none, off with the reason the site page shows.
@@ -554,7 +557,7 @@ function firstBackup(launch, steps, poll) {
       const tries = (step.result.tries ?? 0) + 1;
       // 409 (removed or moving site) and a missing site never change; other work on the site first is retried.
       if (error?.status === 409 || /not found/i.test(String(error?.message)) || tries >= FIRST_BACKUP_TRIES) {
-        setStep(launch.id, 'first_backup', { state: 'failed', finished_at: now(), detail: 'The first backup could not be queued. The daily backup runs as scheduled; open the site to back it up now.', result: { ...step.result, tries } });
+        setStep(launch.id, 'first_backup', { state: 'failed', finished_at: now(), detail: 'The first backup could not be queued. The daily backup runs as scheduled; open the app to back it up now.', result: { ...step.result, tries } });
         return true;
       }
       setStep(launch.id, 'first_backup', { result: { ...step.result, tries } });
@@ -566,7 +569,7 @@ function firstBackup(launch, steps, poll) {
   const job = db.prepare('SELECT status FROM jobs WHERE id=?').get(step.result.jobId);
   if (job && ['queued', 'running'].includes(job.status)) return false;
   const backup = job?.status === 'completed' ? db.prepare('SELECT id FROM backups WHERE job_id=? AND verified=1').get(step.result.jobId) : null;
-  setStep(launch.id, 'first_backup', backup ? { state: 'done', finished_at: now(), result: { ...step.result, backupId: backup.id } } : { state: 'failed', finished_at: now(), detail: 'The first backup did not finish. The daily backup tries again; open the site to see why.' });
+  setStep(launch.id, 'first_backup', backup ? { state: 'done', finished_at: now(), result: { ...step.result, backupId: backup.id } } : { state: 'failed', finished_at: now(), detail: 'The first backup did not finish. The daily backup tries again; open the app to see why.' });
   return true;
 }
 

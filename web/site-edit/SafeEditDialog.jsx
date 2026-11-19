@@ -186,7 +186,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   const stuck=ports.some(p=>p.host!=null&&((!p.loc&&!isContainer)||p.stale||!!p.reason));
   return <>
    {tabNote('Ports')}
-   {rows.length>0?<Rows narrow={narrow} headers={['Service','Container port','Host port']} columns={[null,'150px','170px']} numeric={[1,2]} rows={rows}/>:<p className="map-caption">This site publishes no ports.</p>}
+   {rows.length>0?<Rows narrow={narrow} headers={['Service','Container port','Host port']} columns={[null,'150px','170px']} numeric={[1,2]} rows={rows}/>:<p className="map-caption">This app publishes no ports.</p>}
    {stuck&&view?.usable?.ports!==false&&<p className="map-caption">Some ports are set in a way that needs the file. {inCompose}</p>}
   </>;
  }
@@ -232,7 +232,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
    <div className="map-advanced">
     <button type="button" className="map-disclose" aria-expanded={advOpen} aria-controls="se-adv" onClick={()=>setAdvOpen(!advOpen)}>Advanced settings<ChevronDown size={18} stroke={1.75} aria-hidden="true" className={advOpen?'open':''}/></button>
     {advOpen&&<div id="se-adv" className="map-adv-body"><section><h3>Time limit</h3>
-     <label className="map-field"><span className="map-caption">Seconds DockNest waits for the site to answer before it rolls back. {LIMIT.min} to {LIMIT.max}.</span>
+     <label className="map-field"><span className="map-caption">Seconds DockNest waits for the app to answer before it rolls back. {LIMIT.min} to {LIMIT.max}.</span>
       <span className="se-unit"><input type="number" className="se-input" inputMode="numeric" aria-label="Time limit in seconds" aria-invalid={!okLimit||undefined} value={limit} onChange={e=>setLimit(e.target.value)}/><span>seconds</span></span></label>
      {!okLimit&&<p className="se-hint bad">Use {LIMIT.min} to {LIMIT.max} seconds.</p>}
     </section></div>}
@@ -281,7 +281,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
    <Note kind="ok" icon={CheckCircle2} role="status">{isUndo?'Change undone':'Change applied'}</Note>
    {canEdit&&u?.available===false&&<AlertPanel variant="info">A newer change was made{u.newerAt?' on '+whenText(u.newerAt):''}. Undo that one first.</AlertPanel>}
    <Timeline edit={edit}/>
-   {canEdit&&u?.available&&<p className="map-caption">You can undo this until the site changes again.</p>}
+   {canEdit&&u?.available&&<p className="map-caption">You can undo this until the app changes again.</p>}
    {fail}{guard.prompt}
   </Shell>;
  }
@@ -290,7 +290,7 @@ export function SafeEditDialog({api,site,onClose,onChanged,initialEditId,canEdit
   {edit.restore&&<AlertPanel variant="info">{edit.restore.running?'Restoring the backup. Follow it in Jobs.':'The restore was started. Follow it in Jobs.'}</AlertPanel>}
   <Timeline edit={edit}/>{fail}{guard.prompt}
  </Shell>;
- const slow=edit.failedStep==='check_health'&&edit.timeLimitSeconds?`The site did not answer within ${limitText(edit.timeLimitSeconds)}. The previous version runs again.`:null;
+ const slow=edit.failedStep==='check_health'&&edit.timeLimitSeconds?`The app did not answer within ${limitText(edit.timeLimitSeconds)}. The previous version runs again.`:null;
  const words={rolled:['Rolled back',isUndo?'The undo did not work. The version from before the undo runs again.':slow||'The change did not work. The previous version runs again.'],failed:['Change stopped','Nothing was changed.'],cancelled:['Cancelled','Nothing was changed.']}[outcome]||['Change stopped','Nothing was changed.'];
  return <Shell onClose={onClose} title={words[0]} actions={<Foot a="Close" onA={onClose} b={canEdit?'Edit again':undefined} onB={again}/>}><AlertPanel variant="error">{outcome==='rolled'&&(isUndo||slow)?words[1]:edit.reason||words[1]}</AlertPanel><Timeline edit={edit}/></Shell>;
 }

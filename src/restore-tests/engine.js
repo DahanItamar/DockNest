@@ -89,15 +89,15 @@ export function createRestoreTest({ siteId, serverId, backupId = null, trigger =
   if (!['schedule', 'manual'].includes(trigger)) throw httpError(400, 'INVALID', 'Unknown trigger.');
   const checked = validateLimits(limits);
   const site = db.prepare('SELECT * FROM sites WHERE id=?').get(siteId);
-  if (!site) throw httpError(404, 'NOT_FOUND', 'Site not found.');
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) throw httpError(409, 'SITE_ARCHIVED', 'This site was removed from active sites.');
+  if (!site) throw httpError(404, 'NOT_FOUND', 'App not found.');
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId)) throw httpError(409, 'SITE_ARCHIVED', 'This app was removed from active apps.');
   const target = server(serverId);
   if (!target) throw httpError(409, 'NO_TEST_SERVER', 'Choose a test server first.');
   if (target.id === site.server_id && !liveServer) throw httpError(409, 'LIVE_SERVER_NOT_ALLOWED', 'Testing on the live server needs the live-server opt-in.');
   const backup = backupId ? db.prepare('SELECT * FROM backups WHERE id=? AND site_id=? AND verified=1').get(backupId, siteId) : latestTestableBackup(siteId);
   if (!backup || db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backup.id)) throw httpError(409, 'NO_VERIFIED_BACKUP', 'Not tested: no verified backup yet.');
   const manifest = JSON.parse(backup.manifest || '{}');
-  if (needsExternalStorage(manifest)) throw httpError(409, 'EXTERNAL_STORAGE', 'This site needs external storage that a restore test cannot attach.');
+  if (needsExternalStorage(manifest)) throw httpError(409, 'EXTERNAL_STORAGE', 'This app needs external storage that a restore test cannot attach.');
   if (probe !== null && manifest.kind === 'static') throw httpError(409, 'PROBE_STATIC', 'A static site has no container for a web check.');
   const testId = id(), at = iso(clock());
   const record = { ...checked, internet: internet === true, liveServer: target.id === site.server_id, ...(probe ? { probe } : {}) };
@@ -109,7 +109,7 @@ export function createRestoreTest({ siteId, serverId, backupId = null, trigger =
       audit(actor, 'restore_test.enqueue', siteId, { test: testId, trigger, backup: backup.id, server: target.id });
     });
   } catch (error) {
-    if (/UNIQUE constraint failed: restore_tests\.site_id/.test(error.message)) throw httpError(409, 'TEST_ACTIVE', 'This site already has a restore test that has not finished.');
+    if (/UNIQUE constraint failed: restore_tests\.site_id/.test(error.message)) throw httpError(409, 'TEST_ACTIVE', 'This app already has a restore test that has not finished.');
     throw error;
   }
   return { id: testId };

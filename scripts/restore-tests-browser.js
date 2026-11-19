@@ -106,9 +106,9 @@ async function overview(scheme,width){
  await page.locator('.dash-site').first().waitFor();
  await page.waitForFunction(()=>document.querySelector('.dash-site-latest .status'));
  const head=await page.locator('.dash-sites .dash-panel-head').innerText();
- assert.equal(head.replace(/\s+/g,' ').trim(),'Sites at a glance Manage sites','no eyebrow, no count badge');
+ assert.equal(head.replace(/\s+/g,' ').trim(),'Apps at a glance Manage apps','no eyebrow, no count badge');
  assert.equal(await page.locator('.dash-sites .dash-count,.dash-sites .dash-eyebrow').count(),0);
- assert.equal((await page.locator('.dash-site-columns span').allTextContents()).filter(Boolean).join(' '),'Site / server Last test Schedule');
+ assert.equal((await page.locator('.dash-site-columns span').allTextContents()).filter(Boolean).join(' '),'App / server Last test Schedule');
  const latest=await page.locator('.dash-site-latest').allTextContents();
  assert.deepEqual(latest.map(x=>x.trim()),['Passed · 2 days ago','Passed · 5 days ago','Couldn\u2019t run · 3 days ago','Not tested']);
  assert.deepEqual((await page.locator('.dash-site-schedule').allTextContents()).map(x=>x.trim()),Array(4).fill('Daily at 02:00'));
@@ -206,7 +206,7 @@ async function runningJob(){
 
 async function settingsDialog({role='admin',scheme='light',width=1440,motion=true}={}){
  freshMock();
- const {context,page}=await open({role,scheme,width,motion,page:'Sites & schedules'});
+ const {context,page}=await open({role,scheme,width,motion,page:'Apps & schedules'});
  const card=page.locator('.site-card',{hasText:'brightsmile.com'});
  await card.waitFor();
  return {context,page,card};
@@ -332,13 +332,13 @@ async function dialogErrors(){
  await card.getByRole('button',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch').waitFor();
  await d.getByLabel('Test server').selectOption({label:'Home NAS'});
- mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each site.'};
+ mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each app.'};
  await d.getByRole('button',{name:'Run test'}).click();
- await d.getByText('You can run 6 tests a day for each site.').waitFor();
+ await d.getByText('You can run 6 tests a day for each app.').waitFor();
  assert.equal(await d.locator('.rt-why.rt-done').count(),0);
  mock.runError={code:'NO_VERIFIED_BACKUP',message:'raw'};
  await d.getByRole('button',{name:'Run test'}).click();
- await d.getByText('This site has no verified backup yet.').waitFor();
+ await d.getByText('This app has no verified backup yet.').waitFor();
  mock.saveError='LIVE_SERVER_NOT_ALLOWED';
  await d.getByRole('button',{name:'Save'}).click();
  await d.getByText('Allow live server to use that server.').waitFor();
@@ -404,14 +404,14 @@ async function operator(){
  await context.close();
  // An operator with a saved server can run a test and sees the API's limit message
  freshMock();
- const second=await open({role:'operator',page:'Sites & schedules'});
+ const second=await open({role:'operator',page:'Apps & schedules'});
  const p=second.page;
  await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();
  const d3=dialog(p);await d3.getByRole('switch').waitFor();
  assert.equal(await d3.getByRole('button',{name:'Run test'}).isDisabled(),false);
- mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each site.'};
+ mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each app.'};
  await d3.getByRole('button',{name:'Run test'}).click();
- await d3.getByText('You can run 6 tests a day for each site.').waitFor();
+ await d3.getByText('You can run 6 tests a day for each app.').waitFor();
  mock.runError=null;
  await d3.getByRole('button',{name:'Run test'}).click();
  await d3.locator('.rt-why.rt-done').waitFor();
@@ -470,7 +470,7 @@ async function motion(){
 
 async function pickerRules(){
  // The approved picker rules are in the shipped stylesheet and supported by this browser
- const {context,page}=await open({page:'Sites & schedules'});
+ const {context,page}=await open({page:'Apps & schedules'});
  const rules=await page.evaluate(()=>{const out=[];const walk=list=>{for(const r of list){if(r.cssRules&&!(r instanceof CSSStyleRule))walk(r.cssRules);if(r.cssText&&/position-area/.test(r.cssText))out.push(r.cssText)}};for(const s of document.styleSheets){try{walk(s.cssRules)}catch{}}return out});
  assert.ok(rules.some(t=>/position-area:\s*block-end span-inline-end/.test(t)&&/position-try(-fallbacks)?:\s*flip-block/.test(t)&&/scrollbar-width:\s*none/.test(t)),'select picker opens downward first with a hidden scrollbar');
  await context.close();
@@ -521,7 +521,7 @@ async function realApi(){
  db.prepare("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,0,(SELECT id FROM users LIMIT 1),?)").run(now());
  const signedIn=async token=>{const context=await browser.newContext({viewport:{width:1440,height:900}});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();return {context,page};};
  const goto=async(page,name)=>page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();
- const openDialog=async page=>{await goto(page,'Sites & schedules');await page.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();return d;};
+ const openDialog=async page=>{await goto(page,'Apps & schedules');await page.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();return d;};
  try{
   // Settings go through the real PUT: off on a fresh install, then on with a spare server.
   const {context,page}=await signedIn(fresh);
@@ -566,7 +566,7 @@ async function realApi(){
   for(let index=0;index<5;index++)db.prepare("INSERT INTO restore_tests(id,site_id,backup_id,backup_captured_at,server_id,trigger,limits,created_by,created_at,finished_at,result) VALUES(?,?,?,?,?,'manual','{}','fixture',?,?,'cancelled')").run(randomUUID(),siteId,backupId,now(),spare,now(),now());
   d=await openDialog(page);
   await d.getByRole('button',{name:'Run test'}).click();
-  await d.getByText('You can run 6 tests a day for each site.').waitFor();
+  await d.getByText('You can run 6 tests a day for each app.').waitFor();
   await context.close();
   // Allow internet from a session that has not re-verified: the real REVERIFY_REQUIRED opens the app's check.
   const second=await signedIn(stale);
