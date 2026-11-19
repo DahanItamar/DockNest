@@ -69,9 +69,9 @@ test('the migration is the last one, compatible, adds only server_app_links, kee
 });
 
 test('facts are cleaned: unexpected values are dropped and mark the scan partial, unreadable containers are left out', () => {
-  assert.deepEqual(cleanContainerLinks(container('web', { project: 'demo-shop', networks: [{ name: 'shop-net', aliases: ['web'] }], binds: ['/srv/demo shop/media'] })), {
-    facts: { name: 'web', image: 'demo/app:1', project: 'demo-shop', service: null, networks: [{ name: 'shop-net', aliases: ['web'] }], volumes: [], binds: ['/srv/demo shop/media'], links: [], dependsOn: [] }, dropped: false });
-  for (const bad of [{ volumes: ['ok', '../x'] }, { binds: ['relative/path'] }, { binds: ['/srv/\u0007bell'] }, { links: [42] }, { networks: [{ name: 'net', aliases: ['bad alias'] }] },
+  assert.deepEqual(cleanContainerLinks(container('web', { project: 'demo-shop', networks: ['shop-net'], binds: ['/srv/demo shop/media'] })), {
+    facts: { name: 'web', image: 'demo/app:1', project: 'demo-shop', service: null, networks: ['shop-net'], volumes: [], binds: ['/srv/demo shop/media'], links: [], dependsOn: [] }, dropped: false });
+  for (const bad of [{ volumes: ['ok', '../x'] }, { binds: ['relative/path'] }, { binds: ['/srv/\u0007bell'] }, { links: [42] }, { networks: ['bad network'] },
     { networks: 'shop-net' }, { project: 'bad project' }, { volumes: Array.from({ length: LIMITS.volumes + 1 }, (_, index) => 'v' + index) }]) {
     const cleaned = cleanContainerLinks(container('web', bad));
     assert.ok(cleaned && cleaned.dropped, JSON.stringify(bad));
@@ -88,7 +88,7 @@ test('a scan replaces the row, a non-scan keeps the previous one, and the view c
   server('srv-a'); site('shop', 'srv-a', { containers: ['shop-web'] }); site('data', 'srv-a', { containers: ['pg'], services: [{ container: 'pg', engine: 'postgres' }] });
   site('static', 'srv-a', { kind: 'static', containers: [] });
   assert.deepEqual(serverLinksView('srv-a'), { checkedAt: null, partial: false, links: [], unowned: [] }, 'not scanned yet');
-  const scan = { containers: [container('shop-web', { networks: [{ name: 'data-net', aliases: [] }], links: ['cache'] }), container('pg', { networks: [{ name: 'data-net', aliases: [] }] }, 'custom/db:2'), container('cache')] };
+  const scan = { containers: [container('shop-web', { networks: ['data-net'], links: ['cache'] }), container('pg', { networks: ['data-net'] }, 'custom/db:2'), container('cache')] };
   assert.equal(recordDiscoveredLinks('srv-a', scan, at), true);
   const stored = db.prepare("SELECT facts FROM server_app_links WHERE server_id='srv-a'").get().facts;
   assert.doesNotMatch(stored, /label-secret|"id"/, 'only the cleaned facts are stored');

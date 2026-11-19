@@ -3,7 +3,7 @@
 // links are never stored and follow every app change at once. Read-only: links only feed warnings.
 //
 // Inputs:
-// - facts: [{name, image, project, service, networks: [{name, aliases}], volumes, binds, links, dependsOn}], cleaned by
+// - facts: [{name, image, project, service, networks, volumes, binds, links, dependsOn}], cleaned by
 //   the server (src/server-links.js).
 // - containerOwner(name): {siteId, name} of the app that backs the container up, or null.
 // - isDatabase(fact): whether the container is a database (shared/database-image.js).
@@ -40,7 +40,7 @@ function evidence(containers, isDatabase) {
       ...containers.filter(other => container.project && other.project === container.project && services.has(other.service))];
     for (const target of new Set(targets)) if (target && target !== container) found.push({ kind: 'link', via: target.name, containers: [container, target], target });
   }
-  for (const [network, group] of groupBy(containers, container => container.networks.map(item => item.name).filter(name => !DEFAULT_NETWORKS.has(name)))) {
+  for (const [network, group] of groupBy(containers, container => container.networks.filter(name => !DEFAULT_NETWORKS.has(name)))) {
     for (const [a, b] of pairs(group)) {
       const database = isDatabase(b) ? b : isDatabase(a) ? a : null;
       found.push(database ? { kind: 'database', via: database.name, containers: [a, b], target: database } : { kind: 'network', via: network, containers: [a, b], target: null });

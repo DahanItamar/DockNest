@@ -30,7 +30,7 @@ class LinkFactTests(unittest.TestCase):
     def test_facts_hold_only_what_links_need(self):
         facts = container_link_facts(container())
         self.assertEqual(facts, {'format': 1, 'project': 'demo-shop', 'service': 'web',
-                                 'networks': [{'name': 'demo-shop_default', 'aliases': ['demo-shop-web-1', 'web']}, {'name': 'shared-data', 'aliases': []}],
+                                 'networks': ['demo-shop_default', 'shared-data'],
                                  'volumes': ['shop-uploads'], 'binds': ['/srv/media'], 'links': ['legacy-db'], 'dependsOn': ['cache', 'db']})
         text = json.dumps(facts)
         for secret in ['hunter2', 'DB_PASSWORD', 'cmd-secret', 'label-secret', '/srv/demo-shop', '/var/lib/docker/volumes']: self.assertNotIn(secret, text)

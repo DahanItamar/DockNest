@@ -13,7 +13,7 @@ it. Backing up, moving or restore-testing one of them without the other can leav
 
 - Discovery (`remote/helper/discovery.py`, operation `discover`) already inspects every container on the server and
   runs only when someone scans a server or adds an app. Hardening facts ride on the same scan and are stored per app.
-- Nothing today records networks, aliases, links or which apps share volumes.
+- Nothing today records networks, links or which apps share volumes.
 - The Map (`web/map/layout.js`) draws servers, apps and storage with elbow lines; databases are shown inside an app's
   details, never as nodes.
 - `shared/backup-coverage.js` maps a container name to the app that backs it up.
@@ -21,7 +21,7 @@ it. Backing up, moving or restore-testing one of them without the other can leav
 ## Decisions
 
 1. **Facts from the existing scan.** Discovery adds, per container, only what links need: compose project, user-defined
-   networks with aliases, named volumes and bind sources, `HostConfig.Links`, and the compose `depends_on` label.
+   network names, named volumes and bind sources, `HostConfig.Links`, and the compose `depends_on` label.
    No environment values, commands or file contents. Nothing new connects to the server and nothing runs on a timer.
 2. **Stored per server** in a new table `server_app_links` (migration 21, or the next free number at merge): the
    validated facts and the time of the scan. A scan replaces the row; deleting a server deletes it.

@@ -7,7 +7,7 @@ import { computeAppLinks, linksOfApp, LINK_KINDS } from '../shared/app-links.js'
 import { imageLooksLikeDatabase, containerIsDatabase } from '../shared/database-image.js';
 
 const fact = (name, fields = {}) => ({ name, image: 'demo/app:1', project: null, service: null, networks: [], volumes: [], binds: [], links: [], dependsOn: [], ...fields });
-const on = (...names) => names.map(name => ({ name, aliases: [] }));
+const on = (...names) => names;
 // Owners by container name, as the server's lookup returns them.
 const owners = map => name => (map[name] ? { siteId: map[name], name: map[name] } : null);
 const byImage = container => imageLooksLikeDatabase(container.image);

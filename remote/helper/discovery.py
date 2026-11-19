@@ -211,7 +211,7 @@ def hardening_report(containers):
 
 # ---- Linked apps facts (docs/linked-apps.md) ----
 # Read-only facts that show how containers depend on each other, from the same `docker inspect` output: the Compose
-# project, service and depends_on service names, user-defined networks with their aliases, named volumes, bind sources
+# project, service and depends_on service names, user-defined network names, named volumes, bind sources
 # and legacy links. Never environment values, commands, other labels or file contents. DockNest validates them again.
 LINKS_FORMAT=1
 DEFAULT_NETWORKS=('bridge','host','none')
@@ -226,7 +226,7 @@ def container_link_facts(c):
     networks=(c.get('NetworkSettings') or {}).get('Networks') or {}
     def mounted(kind,field):return sorted({m[field] for m in mounts if m.get('Type')==kind and isinstance(m.get(field),str) and m[field]})
     return {'format':LINKS_FORMAT,'project':labels.get('com.docker.compose.project') or None,'service':labels.get('com.docker.compose.service') or None,
-        'networks':[{'name':name,'aliases':sorted({a for a in (settings or {}).get('Aliases') or [] if isinstance(a,str)})} for name,settings in sorted(networks.items()) if name not in DEFAULT_NETWORKS],
+        'networks':sorted(name for name in networks if name not in DEFAULT_NETWORKS),
         'volumes':mounted('volume','Name'),'binds':mounted('bind','Source'),
         'links':sorted({link_target(v) for v in (c.get('HostConfig') or {}).get('Links') or [] if isinstance(v,str) and link_target(v)}),
         'dependsOn':depends_on_services(labels.get('com.docker.compose.depends_on'))}

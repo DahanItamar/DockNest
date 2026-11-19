@@ -10,7 +10,7 @@ import { computeAppLinks } from '../shared/app-links.js';
 import { containerIsDatabase } from '../shared/database-image.js';
 
 export const LINKS_FORMAT = 1;
-export const LIMITS = Object.freeze({ containers: 1000, networks: 32, aliases: 32, volumes: 64, binds: 64, links: 32, dependsOn: 32 });
+export const LIMITS = Object.freeze({ containers: 1000, networks: 32, volumes: 64, binds: 64, links: 32, dependsOn: 32 });
 const MAX_STORED = 2097152;
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$/;
 const IMAGE = /^[a-zA-Z0-9][a-zA-Z0-9_.\/:@-]{0,254}$/;
@@ -23,11 +23,6 @@ function cleanList(values, limit, clean) {
   const kept = values.slice(0, limit).map(clean).filter(value => value !== null);
   return { values: kept, dropped: values.length > kept.length };
 }
-const cleanNetwork = raw => {
-  if (!raw || typeof raw !== 'object' || !isName(raw.name)) return null;
-  const aliases = cleanList(raw.aliases, LIMITS.aliases, value => (isName(value) ? value : null));
-  return aliases.dropped ? null : { name: raw.name, aliases: aliases.values };
-};
 const optionalName = value => (value === null || value === undefined ? { value: null, dropped: false } : isName(value) ? { value, dropped: false } : { value: null, dropped: true });
 
 // Clean facts for one discovered container ({name, image, links}), and whether anything was dropped. A container whose
@@ -37,7 +32,7 @@ export function cleanContainerLinks(container) {
   if (!isName(container?.name) || !raw || typeof raw !== 'object' || raw.format !== LINKS_FORMAT) return null;
   const project = optionalName(raw.project), service = optionalName(raw.service);
   const lists = {
-    networks: cleanList(raw.networks, LIMITS.networks, cleanNetwork),
+    networks: cleanList(raw.networks, LIMITS.networks, value => (isName(value) ? value : null)),
     volumes: cleanList(raw.volumes, LIMITS.volumes, value => (isName(value) ? value : null)),
     binds: cleanList(raw.binds, LIMITS.binds, value => (typeof value === 'string' && BIND.test(value) ? value : null)),
     links: cleanList(raw.links, LIMITS.links, value => (isName(value) ? value : null)),

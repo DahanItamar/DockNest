@@ -12,7 +12,7 @@ Linked apps is read-only and warn-only. DockNest never adds, changes or blocks a
 When an administrator scans a server (Add app, or scanning the server again), DockNest reads, for each container, only:
 
 - the Compose project and service names, and the service names in Compose `depends_on`;
-- the user-defined networks it is on, with their aliases (`bridge`, `host` and `none` are ignored);
+- the names of the user-defined networks it is on (`bridge`, `host` and `none` are ignored);
 - the names of the named volumes it mounts, and the host folders it bind-mounts;
 - the containers it links to with legacy `links`.
 
