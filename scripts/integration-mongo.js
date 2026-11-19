@@ -28,9 +28,24 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
   const mongo = (host, container, script) => run('exec', host, 'docker', 'exec', container, 'sh', '-c',
     'p="${MONGO_INITDB_ROOT_PASSWORD:-}"; [ -z "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] || p=$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE"); exec mongosh --quiet --norc -u "$MONGO_INITDB_ROOT_USERNAME" -p "$p" --authenticationDatabase admin shop --eval "$1"', 'qa', script);
   const count = (host, container) => mongo(host, container, 'print(db.orders.countDocuments({}))');
-  const ready = container => until(async () => await mongo(source, container, 'print(db.adminCommand({ getCmdLineOpts: 1 }).parsed.net.bindIpAll === true)') === 'true',
-    // The image's first start runs a temporary localhost-only server to create the root user; wait for the real one.
-    'MongoDB fixture did not become ready', 180);
+  const redact = text => [password, filePassword].reduce((value, secretValue) => value.split(secretValue).join('[redacted]'), String(text ?? ''));
+  // The image's first start runs a temporary localhost-only server (--bind_ip 127.0.0.1) to create the root user; the
+  // real one starts with --bind_ip_all. getCmdLineOpts.argv is the literal command line (parsed reports bindIp '*').
+  const ready = async container => {
+    const end = Date.now() + 180 * 1000;
+    let last = '';
+    while (Date.now() < end) {
+      try {
+        if (await mongo(source, container, "print(db.adminCommand({ getCmdLineOpts: 1 }).argv.includes('--bind_ip_all'))") === 'true') return;
+        last = 'the temporary init server is still running';
+      } catch (error) { last = String(error.stderr || error.message).slice(-600); }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    // Diagnosable without the password: the fixture's state, its last log lines and the last probe error, redacted.
+    const state = await run('exec', source, 'docker', 'inspect', '--format', '{{json .State}}', container).catch(() => 'unknown');
+    const logs = await run('exec', source, 'docker', 'logs', '--tail', '40', container).catch(error => String(error.stderr || ''));
+    throw new Error(redact('MongoDB fixture ' + container + ' did not become ready. State: ' + state + '\nLast probe: ' + last + '\nLast logs:\n' + logs));
+  };
   const running = async container => await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Running}}', container) === 'true';
   const site = (label, cfg) => {
     const siteId = randomUUID();
