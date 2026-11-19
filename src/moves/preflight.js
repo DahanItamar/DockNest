@@ -128,6 +128,8 @@ export function evaluateMove(facts, options = {}) {
 
     const existing = new Map((target.existingPaths ?? []).map(item => [item.path, item]));
     for (const folder of site.bindPaths ?? []) if (existing.has(folder) && !existing.get(folder).empty) add('paths', 'block', 'Folders', `${target.name} already has a folder ${folder}. DockNest never overwrites folders.`);
+    // Configuration files outside the folders a move may create (such as /etc/cron.d) are never written; they stay in the backup.
+    for (const file of site.handPlaced ?? []) add('paths', 'warn', 'Put back by hand', `Put back by hand: ${file}. DockNest does not write there during a move; copy it from the backup to the same path on ${target.name}.`);
     const labels = { containers: 'container', volumes: 'volume', networks: 'network', composeProjects: 'Compose project' };
     for (const [kind, label] of Object.entries(labels)) for (const name of target.conflicts?.[kind] ?? []) add('names', 'block', 'Names', `${target.name} already has a ${label} called ${name}. DockNest never replaces it.`);
     for (const network of site.networks ?? []) if (network.driver && network.driver !== 'bridge') add('names', 'block', 'Networks', `The ${network.name} network uses the ${network.driver} driver, which DockNest cannot move. Move this site by hand.`);

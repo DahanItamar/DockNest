@@ -19,6 +19,11 @@ Replacement requires a verified backup of the current target before stopping it,
 Delete plaintext staging securely according to your storage policy; filesystem deletion alone does not guarantee erasure on every disk.
 """
 
+def hand_steps_guide(files):
+    """Restore-guide steps for configuration files outside the folders a move may create: nothing writes them back."""
+    steps=''.join('- copy %s (config-%d.tar) from the backup to %s\n'%(posixpath.basename(path),index,path) for index,path in files)
+    return '\n# Put back by hand\nThese configuration files live outside the app folders, where neither a move nor a restore writes. After restoring, put each one back yourself:\n'+steps
+
 INCREMENTAL_GUIDE="""
 # Incremental backups (format v2)
 manifest.backupKind says whether this package is a full backup or an increment. manifest.chain names the chain, this

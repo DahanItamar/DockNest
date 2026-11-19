@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
-    INCREMENTAL_GUIDE, RESTORE_GUIDE)
+    INCREMENTAL_GUIDE, RESTORE_GUIDE, hand_steps_guide)
 from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
@@ -25,6 +25,8 @@ from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
 from .restore_gaps import (
     restore_check)
+from .move import (
+    hand_placed)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
@@ -671,6 +673,9 @@ def capture(req,output=None):
     if keys_left_out:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
+    hand=set(hand_placed(manifest['configurationFiles']))
+    if hand:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(hand_steps_guide([(i,f) for i,f in enumerate(manifest['configurationFiles']) if f in hand]))
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
     if output is not None:
