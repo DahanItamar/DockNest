@@ -20,7 +20,7 @@
 
 // Strongest first.
 export const LINK_KINDS = Object.freeze(['volume', 'link', 'database', 'network']);
-export const HUB_APPS = 4, MAX_GROUP = 200, MAX_EVIDENCE = 20000;
+export const HUB_APPS = 4, MAX_GROUP = 200, MAX_EVIDENCE = 5000;
 const rank = kind => LINK_KINDS.indexOf(kind);
 const DEFAULT_NETWORKS = new Set(['bridge', 'host', 'none']);
 // Bind sources that unrelated containers share without depending on each other: system files, logs, devices, Docker's
