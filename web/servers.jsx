@@ -25,13 +25,13 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
      <div className="def-row"><dt>Connection</dt><dd><code>{server.username}@{server.host}:{server.port}</code></dd></div>
      <div className="def-row"><dt>SSH host fingerprint</dt><dd><code>{server.hostKey}</code></dd></div>
      <div className="def-row"><dt>Server ID</dt><dd><code>{server.id}</code></dd></div>
-     <div className="def-row"><dt>Sites</dt><dd><span aria-label={`${count} configured ${count===1?'site':'sites'}`}>{count}</span></dd></div>
+     <div className="def-row"><dt>Apps</dt><dd><span aria-label={`${count} configured ${count===1?'app':'apps'}`}>{count}</span></dd></div>
     </dl>
     {failure?.id===server.id&&<AlertPanel variant="error" title="The connection test failed" action={<div className="rp-actions"><button type="button" className="primary" disabled={busy} onClick={()=>onTest(server)}>Test again</button><ReportProblem summary="Server connection test" excerptSource={catalogued(failure.message)||!failure.message?null:{error:failure.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildServerReport({...facts,...opts,check:failure.check,errorClass:failure.errorClass,message:failure.message,explanation:EXPLAIN.server})}/></div>}>{failure.message}</AlertPanel>}
    </div>
    <footer className="card-footer server-card-actions">
     <button disabled={busy} onClick={()=>onTest(server)}>Test connection</button>
-    <button onClick={()=>onDiscover(server)}>Discover sites</button>
+    <button onClick={()=>onDiscover(server)}>Discover apps</button>
     {user?.role==='admin'&&<IconButton className="server-edit" label="Edit details" icon={EditIcon} onClick={()=>onEdit(server)}/>}
    </footer>
   </article>;

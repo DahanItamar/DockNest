@@ -103,7 +103,7 @@ storageTargets.delete('/:id',requireRecentAuth,(req,res)=>{
  const removed=transaction(()=>{
   const usage=destinationUsage(target.id);
   if(destinationInUse(usage)){
-   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'site':'sites'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'site copies':'sites copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
+   const reasons=[usage.copies?`it holds ${usage.copies} backup ${usage.copies===1?'copy':'copies'} (delete these copies first)`:null,usage.mainForSites.length?`it is the main destination of ${usage.mainForSites.length} ${usage.mainForSites.length===1?'app':'apps'}`:null,usage.copyForSites.length?`${usage.copyForSites.length} ${usage.copyForSites.length===1?'app copies':'apps copy'} to it`:null,usage.mainBackups?`it holds ${usage.mainBackups} main ${usage.mainBackups===1?'backup':'backups'}`:null,usage.recoveryKits?'it holds DockNest recovery kits':null,usage.isDefault?'it is the default destination':null].filter(Boolean);
    return {usage,refused:`${target.name} cannot be removed: ${reasons.join('; ')}.`};
   }
   db.prepare('DELETE FROM storage_targets WHERE id=?').run(target.id);

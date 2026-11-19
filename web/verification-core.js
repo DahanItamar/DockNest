@@ -2,7 +2,7 @@ import {formatDate} from './date-format.js';
 // Pure verification semantics shared by labels, dashboard aggregates and charts (no JSX).
 // Four independent evidence levels from src/recovery-evidence.js; `verified` alone means package integrity only.
 export const LEVELS=[['integrity','Integrity','Integrity checked'],['consistency','Consistency','Consistency verified'],['isolatedRestore','Isolated restore','Isolated restore tested'],['application','Application checks','Application checks passed']];
-export const DESCRIPTIONS={integrity:'The encrypted file is complete and unaltered.',consistency:'Data was captured in a consistent state.',isolatedRestore:'The site was restored to a separate copy and started.',application:'The restored app answered its own checks.'};
+export const DESCRIPTIONS={integrity:'The encrypted file is complete and unaltered.',consistency:'Data was captured in a consistent state.',isolatedRestore:'The app was restored to a separate copy and started.',application:'The restored app answered its own checks.'};
 const STATUS={declared:'declared by operator',partial:'partially checked',failed:'failed','not-tested':'not tested'};
 
 // Mirrors withLegacyIntegrity in src/recovery-evidence.js: a verified package without an integrity record was checked before per-kind evidence existed.

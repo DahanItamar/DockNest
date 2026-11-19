@@ -34,7 +34,7 @@ export function retentionWindowDays(schedule,retention){
 export function lockWarnings(days,sites=[],policies=[]){
  const warnings=[],lockDays=Number(days);
  if(!Number.isFinite(lockDays)||lockDays<1)return warnings;
- const windows=policies.filter(policy=>policy.enabled).map(policy=>({site:sites.find(site=>site.id===policy.site_id)?.name||'a site',days:retentionWindowDays(policy.schedule,policy.retention)}));
+ const windows=policies.filter(policy=>policy.enabled).map(policy=>({site:sites.find(site=>site.id===policy.site_id)?.name||'an app',days:retentionWindowDays(policy.schedule,policy.retention)}));
  const known=windows.filter(item=>item.days!==null).sort((a,b)=>a.days-b.days)[0];
  if(known&&lockDays>known.days){const kept=Math.max(1,Math.round(known.days));warnings.push('Backups will be locked longer than your retention setting keeps them ('+known.site+' keeps about '+kept+' day'+(kept===1?'':'s')+'). They stay usable and will be removed after the lock ends.');}
  else if(!known&&windows.length)warnings.push('Some schedules could not be read. Backups that retention would remove sooner stay usable and are removed after the lock ends.');
