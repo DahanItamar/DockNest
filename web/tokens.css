@@ -218,7 +218,7 @@
  --fs-section:var(--dn-text-md);--lh-section:var(--dn-leading-md);--fs-body:var(--dn-text-sm);--lh-body:var(--dn-leading-sm);
  --fs-caption:var(--dn-text-xs);--lh-caption:var(--dn-leading-xs);--fs-button:var(--dn-text-sm);--lh-button:var(--dn-leading-sm);
  /* tokens.css — shape, space, layout */
- --radius:var(--dn-radius-lg);--radius-input:var(--dn-radius-md);--spacing:var(--dn-space-2);
+ --radius:var(--dn-radius-lg);--radius-input:var(--dn-radius-lg);--spacing:var(--dn-space-2);
  
  --edge:var(--dn-layout-margin);--content-max:var(--dn-layout-max-wide);--grid-columns:var(--dn-card-columns);
  --control-height:var(--dn-control-h);--row-height:var(--dn-row-h);--header-row-height:var(--dn-row-h-header);--card-footer-height:var(--dn-footer-h);
@@ -228,6 +228,16 @@
  --dn-motion-fast:var(--dn-dur-fast);--dn-motion-base:var(--dn-dur-base);--dn-motion-slow:var(--dn-dur-slow);--dn-ease-out:var(--dn-ease-enter);
  font-family:var(--dn-font-sans);color:var(--dn-text-primary);
 }
+/* Legacy layout (2.16.x) kept until the shell PR: page edge, card columns, content cap, rail and control height.
+   Same specificity as the alias block and placed after it. Type scaling is gone; only layout steps remain. */
+:root,:root[data-theme]{--sidebar-width:260px;--content-max:none;--control-height:40px}
+@media(min-width:768px){:root,:root[data-theme]{--edge:24px;--grid-columns:2}}
+@media(min-width:1440px){:root,:root[data-theme]{--edge:32px;--grid-columns:3}}
+@media(min-width:1920px){:root,:root[data-theme]{--edge:40px;--grid-columns:4}}
+@media(min-width:2560px){:root,:root[data-theme]{--edge:48px;--content-max:2200px}}
+@media(min-width:3200px){:root,:root[data-theme]{--content-max:2800px}}
+@media(min-width:3840px){:root,:root[data-theme]{--content-max:3400px}}
+@media(max-width:480px){:root,:root[data-theme]{--control-height:44px}}
 :root{background:var(--dn-bg-surface);font-variant-numeric:tabular-nums;color-scheme:light}
 :root[data-theme=dark]{color-scheme:dark}
 code,pre,.mono {font-family:var(--dn-font-mono)}
