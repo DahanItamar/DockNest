@@ -105,6 +105,7 @@ try {
   await run('cp',writeHelperBundle(),hosts[0]+':/qa-helper/bundle/helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_mongo.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
@@ -292,6 +293,9 @@ try {
   await runMoveScenario({run,until,hosts,servers,db,record});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
   await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
+  // After the restore test scenario: it shortens the restore test stability window this scenario also uses.
+  const {runMongoCompatibility}=await import('./integration-mongo.js');
+  await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
   const {runSafeEditScenario}=await import('./integration-safe-edit.js');
   await runSafeEditScenario({run,until,hosts,servers,db,record});
   const {runIncrementalScenario}=await import('./integration-incremental.js');
