@@ -39,3 +39,12 @@ at that path, remove the symlink before extracting that later archive (tar would
 images.tar for every package of the chain, in order. The snapshot-*.snar files are GNU tar snapshot files; a restore
 does not need them.
 """
+
+RUN_DEFINITION_GUIDE="""
+# Run definition (containers started without Docker Compose)
+run-definition/compose.yaml recreates the containers the way docker inspect showed them, from the snapshot images in
+images.tar; the label docknest.original-image names the image each one started from. Each <container>.env file next to
+it holds that container's environment and contains secrets. Lines at the top of compose.yaml name any setting it cannot
+recreate. On a new server: docker load -i images.tar, put each mount back where compose.yaml mounts it, then run
+  docker compose -f run-definition/compose.yaml up -d
+"""
