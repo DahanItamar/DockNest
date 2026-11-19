@@ -11,6 +11,8 @@ from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
     refuse_protected_sources, scoped_classify, source_archive, source_archive_command, within)
+from .keys import (
+    KEY_FILE_LIMIT, key_context, key_hits, key_proof)
 from .databases import (
     data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
     shutdown_evidence, sqlite_check_mode, sqlite_file_source, validate_database_contracts)
@@ -53,7 +55,7 @@ def command_artifact(command,archive=None,name=None,expected=None,spool=None,sca
                 while data:=reader.read(1024*1024):output.write(data)
                 output.flush();os.fsync(output.fileno())
         elif archive is None:
-            if scan is not None:scan(archive_renames_safely(reader))
+            if scan is not None:scan(reader)
             while reader.read(1024*1024):pass
         else:
             info=tarfile.TarInfo(name);info.size=expected['bytes'];info.mode=0o600
@@ -112,19 +114,25 @@ def stream_artifacts(archive,specs,spool_root=None,spooled=(),before=None,scans=
         for path in files.values():path.unlink(missing_ok=True)
     return inventory
 
-def archive_has_renames(fileobj):
-    """True when a GNU tar archive holds a directory rename record (R or T in a GNU.dumpdir). GNU tar keeps writing a
-    rename's records into later increments of the same snapshot file, where a restore would replay them; so after an
-    increment with renames the next backup must be full (see the engine's `folders-renamed`)."""
-    with tarfile.open(fileobj=fileobj,mode='r|') as tar:
-        for member in tar:
-            value=member.pax_headers.get('GNU.dumpdir')
-            if isinstance(value,str) and any(entry[:1] in ('R','T') for entry in value.split('\0') if entry):return True
-    return False
+def archive_scan(fileobj,members=(),renames=False,stream=True):
+    """One pass over a tar archive. renames: whether it holds a directory rename record (R or T in a GNU.dumpdir). GNU
+    tar keeps writing a rename's records into later increments of the same snapshot file, where a restore would replay
+    them; so after an increment with renames the next backup must be full (see the engine's `folders-renamed`).
+    members: names of regular files whose bytes are returned (at most KEY_FILE_LIMIT each), for the key proof.
+    An archive this pass cannot read counts as renamed and gives no member: the next backup is then full, never a wrong
+    increment, and no key is proven from it. stream=False reads a seekable file and skips the file data it passes."""
+    wanted=set(members);found={};renamed=False
+    try:
+        with tarfile.open(fileobj=fileobj,mode='r|' if stream else 'r:') as tar:
+            for member in tar:
+                value=member.pax_headers.get('GNU.dumpdir')
+                if renames and isinstance(value,str) and any(entry[:1] in ('R','T') for entry in value.split('\0') if entry):renamed=True
+                if member.name in wanted and member.isfile() and member.size<=KEY_FILE_LIMIT:found[member.name]=tar.extractfile(member).read()
+                if (renamed or not renames) and len(found)==len(wanted):break
+    except (tarfile.TarError,OSError,EOFError,ValueError):return True,{}
+    return renamed,found
 def archive_renames_safely(fileobj):
-    # An archive this scan cannot read counts as renamed: the next backup is then full, never a wrong increment.
-    try:return archive_has_renames(fileobj)
-    except (tarfile.TarError,OSError,EOFError,ValueError):return True
+    return archive_scan(fileobj,renames=True)[0]
 def stream_file(archive,name,path,expected):
     size=path.stat().st_size;info=tarfile.TarInfo(name);info.size=size;info.mode=0o600
     with open(path,'rb') as source:archive.addfile(info,source)
@@ -469,6 +477,38 @@ def readiness(cfg):
         check('Maintenance proxy and website',proxy)
         if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
     return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts()}
+def key_archive_member(hit,cfg,containers):
+    """(archive, member) of the package that holds a key file: config-N.tar for a configuration file, else the first
+    archive of its mount source (a source shared by mounts is archived once, in its first archive)."""
+    if hit['source']=='config':
+        return 'config-%d.tar'%(cfg.get('composeFiles',[])+cfg.get('configFiles',[])).index(hit['path']),posixpath.basename(hit['path'])
+    source=containers[hit['container']]['Mounts'][hit['mount']]['Source']
+    first=next('mount-%d-%d.tar'%(i,j) for i,c in enumerate(containers) for j,m in enumerate(c['Mounts']) if m['Source']==source)
+    name=pathlib.PurePosixPath(source).name
+    return first,name if hit['path']==source else name+'/'+posixpath.relpath(hit['path'],source)
+def key_missing_reason(hit,containers,exclusions):
+    """Why a key cannot be in the package at all: its file is not one the app backs up, or lies in an excluded path."""
+    if hit['source']=='outside':return 'not-included'
+    if hit['source']=='mount' and excluded_path(hit['path'],exclusions.get(containers[hit['container']]['Mounts'][hit['mount']]['Source'],[])):return 'excluded'
+    return None
+def archive_scanner(name,members,renamed,increment,packaged):
+    """The inventory pass's scan of one streamed archive: its rename record (increments) and the key files it holds."""
+    def scan(reader):
+        found,data=archive_scan(reader,members,name in renamed)
+        if name in renamed:increment['renames'][renamed[name]]=found
+        packaged.update({(name,member):value for member,value in data.items()})
+    return scan
+def packaged_keys(context,found,root,direct,members,packaged,cfg,containers,exclusions):
+    """The key proof of a capture: every live key compared with the bytes written into the package, the manifest's
+    container env and the configuration and mount archives. None when no key was looked for or the proof failed."""
+    if found is None:return None
+    try:
+        if not direct:
+            for name,wanted in members.items():
+                with open(root/name,'rb') as archive_file:packaged.update({(name,member):value for member,value in archive_scan(archive_file,wanted,stream=False)[1].items()})
+        written=json.loads((root/'manifest.json').read_text())['containers']
+        return {'keys':key_proof(context,found[0],written,lambda hit:packaged.get(key_archive_member(hit,cfg,containers)),lambda hit:key_missing_reason(hit,containers,exclusions)),'files':found[1]}
+    except Exception:return None  # the backup stands; this package proves no key
 def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
@@ -499,6 +539,16 @@ def capture(req,output=None):
     # .ssh and .gnupg entries inside copied bind mounts are left out (2.12.1). The ones found join the incremental
     # exclusion record, so a chain whose earlier archives still hold them restarts with a full backup.
     keys_left_out,_=protected_paths(cs,exclusions)
+    # App keys (docs/keys-safe.md): found from the live sources before anything stops. Finding them never fails a
+    # backup; without a result the package simply proves no key.
+    key_request=key_context(req);key_found=None;packaged={}
+    if key_request:
+        try:key_found=key_hits(key_request,cfg,cs)
+        except Exception:key_found=None
+    key_members={}
+    for hit in key_found[0] if key_found else []:
+        if hit['source'] in ('config','mount'):
+            archive_name,member=key_archive_member(hit,cfg,cs);key_members.setdefault(archive_name,set()).add(member)
     increment=None;snapshot_sources={}
     if inc is not None:
         snapshot_sources=incremental_sources(cs)
@@ -563,7 +613,7 @@ def capture(req,output=None):
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
-        archives={};specs=[];prepare={};scans={};labels={}
+        archives={};specs=[];prepare={};scans={};labels={};renamed={}
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -582,7 +632,7 @@ def capture(req,output=None):
                     link=archives.get(source) if share else None
                     specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot,guard),link))
                     if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
-                    if key and not link and increment['level']:scans[target.name]=lambda found,key=key:increment['renames'].__setitem__(key,found)
+                    if key and not link and increment['level']:renamed[target.name]=key
                     archives[source]=link or target.name
                 elif share and source in archives:os.link(archives[source],target)
                 else:
@@ -599,6 +649,9 @@ def capture(req,output=None):
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
             archive=open_stream_archive(output,level)
+            # The inventory pass reads each archive once; the second pass must give the same bytes (SHA-256), so a key
+            # read here is a key in the package.
+            for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
             inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
         captured=time.time()
@@ -658,7 +711,8 @@ def capture(req,output=None):
         # An increment whose archives carry directory renames ends the chain: the engine makes the next backup full.
         manifest['renamesSeen']=any(increment['renames'].values())
         if increment['reason']:manifest['fallback']={'reason':increment['reason']}
-    (root/'manifest.json').write_text(json.dumps(manifest));os.chmod(root/'manifest.json',0o600)
+    document=json.dumps(manifest)
+    (root/'manifest.json').write_text(document);os.chmod(root/'manifest.json',0o600)
     (root/'restore-guide.md').write_text(RESTORE_GUIDE)
     if exclusions:
         with (root/'restore-guide.md').open('a') as guide:
@@ -672,7 +726,7 @@ def capture(req,output=None):
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
     if output is not None:
-        stream_document(archive,'manifest.json',json.dumps(manifest))
+        stream_document(archive,'manifest.json',document)
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
         archive.close();output.flush()
     else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar'))])
@@ -681,5 +735,7 @@ def capture(req,output=None):
         except Exception:pass
     # Only incremental-commit, after the package is stored and verified, moves these snapshot copies into the state.
     if increment:atomic_json(increment['work']/'ready.json',{'siteKey':increment['siteKey'],'chainId':increment['chain']['id'],'position':increment['chain']['position'],'capturedAt':captured,'snapshots':snapshots,'exclusions':increment['exclusions']})
-    # Hardening facts travel beside the manifest, never inside the package, so the package format is unchanged.
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts()})
+    # Hardening facts and the key proof travel beside the manifest, never inside the package, so the package format is
+    # unchanged.
+    proof=packaged_keys(key_request,key_found,root,output is not None,key_members,packaged,cfg,cs,exclusions)
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts(),**({'keys':proof} if proof else {})})

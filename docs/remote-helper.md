@@ -16,6 +16,7 @@ remote/
 │   │                       and ALL mutable runtime state
 │   ├── guides.py           restore guide texts written into every backup
 │   ├── paths.py            protected paths, mount table, source classification, source archives
+│   ├── keys.py             app keys and configuration fingerprints: detection, packaged-bytes proof (docs/keys-safe.md)
 │   ├── databases.py        SQLite proofs, PostgreSQL/MySQL/Redis contracts, clean shutdown, data checks
 │   ├── backup.py           backup plan, artifact streaming and checks, static sites, preflight, readiness, capture
 │   ├── incremental.py      snapshot state, chain records, commit and discard
@@ -93,7 +94,7 @@ classDiagram
     atomic_json() complete_recovery()
   }
   class main["__main__"] {
-    main(req) dispatch of 64 operations
+    main(req) dispatch of 65 operations
     move_lock() stop_after_stdin()
     restore-chain entry point
   }
@@ -110,6 +111,7 @@ classDiagram
   class maintenance { maintenance() setup_maintenance() }
   class discovery { nginx_sites() configuration_paths() }
   class paths { classify_source() protected_paths() source_archive() }
+  class keys { key_context() key_hits() key_proof() restored_keys() }
   class staging { install_boot_recovery() cleanup_staging() }
   class install { install_status() install_package() }
   class guides { RESTORE_GUIDE INCREMENTAL_GUIDE }
@@ -126,6 +128,8 @@ classDiagram
   main --> staging
   backup --> databases
   backup --> paths
+  backup --> keys
+  restore_test --> keys
   backup --> incremental
   backup --> guides
   restore --> backup
