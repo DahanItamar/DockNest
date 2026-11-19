@@ -34,7 +34,7 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin, requireRecentAuth } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, describeContainers, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
@@ -234,13 +234,15 @@ app.post('/api/servers/:id/test', async (req, res) => {
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id), { recordHardening: req.user.role === 'admin' });
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
+  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes || [] });
 });
+const containerNames = query => siteSchema.shape.config.shape.containers.min(1).parse(typeof query === 'string' ? query.split(',') : []);
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
-  const containers=siteSchema.shape.config.shape.containers.min(1).parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
   const directory=linuxPath.optional().parse(req.query.path);
-  res.json(await browseProjectFiles(getServer(req.params.id),containers,directory));
+  res.json(await browseProjectFiles(getServer(req.params.id),containerNames(req.query.containers),directory));
 });
+// Any signed-in role may read: the helper only inspects the containers and never returns environment values.
+app.get('/api/servers/:id/describe-containers', async (req, res) => res.json(await describeContainers(getServer(req.params.id), containerNames(req.query.containers))));
 function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const maintenance = data.config.maintenance || { required: data.config.maintenanceRequired, directory: `${data.config.stagingRoot}/maintenance/${siteId}`, publicUrl: data.config.domains[0] ? 'https://' + data.config.domains[0] : '', healthUrl: data.config.healthUrl };

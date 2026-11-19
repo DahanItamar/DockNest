@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    DEFAULT_CAPABILITIES, inspect, run)
+    DEFAULT_CAPABILITIES, docker, inspect, run)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -82,6 +82,17 @@ def web_hints(container,routes):
                 if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
     return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
 
+DOCKER_NETWORKS={'bridge','host','none','default'}
+def user_networks(container):
+    """The user-defined networks a container is on: the hint that plain containers belong to one app."""
+    return sorted(name for name in (container.get('NetworkSettings') or {}).get('Networks') or {} if name not in DOCKER_NETWORKS)
+def volume_labels(text):
+    # `docker volume ls` prints labels as one "key=value,key=value" string; a comma inside a value cannot be told apart.
+    return dict(item.partition('=')[::2] for item in str(text or '').split(',') if item)
+def discovered_volumes():
+    """Every volume on the server: name, driver and labels only (never its contents or mount point)."""
+    lines=docker('volume','ls','--format','{{json .}}').decode().splitlines()
+    return [{'name':v.get('Name'),'driver':v.get('Driver'),'labels':volume_labels(v.get('Labels'))} for v in map(json.loads,filter(str.strip,lines))]
 def configuration_paths(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     roots=project_roots(container)

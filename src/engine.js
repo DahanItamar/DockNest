@@ -29,8 +29,11 @@ const now=()=>new Date().toISOString();
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
 // facts of the sites on that server (docs/hardening-score.md); other roles only read.
 export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
-export const discover=async(server,{recordHardening:record=false}={})=>{const result=takeCertificates({serverId:server.id},await remote(server,{operation:'discover'}));if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
+export const discover=async(server,{recordHardening:record=false}={})=>{const result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover'}));if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+// Read-only: how DockNest would recreate plain containers (run spec, unsupported settings, Compose preview). The helper
+// never returns environment values here, only their names.
+export const describeContainers=(server,containers)=>transport.remote(server,{operation:'describe-containers',containers});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
