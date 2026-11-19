@@ -27,3 +27,9 @@ description = "Pushover's own documented example application token and user key 
 condition = "AND"
 paths = ['''^scripts/connections-browser\.js$''']
 regexes = ['''^azGDORePK8gMaC0QOYAMyEEuzJnyUi$''', '''^uQiRzpo4DXghDmr9QzzfQu27cmVRsG$''']
+
+[[allowlists]]
+description = "A made-up token in an early commit of the restore check tests (the test now builds its token at run time); only this exact value, only in that test file"
+condition = "AND"
+paths = ['''^remote/test_restore_gaps\.py$''']
+regexes = ['''^tok-7f3a9c-never-leaves$''']
