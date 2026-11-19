@@ -20,6 +20,7 @@ import { claimLaunch, interruptLaunchSteps } from './launches/claim.js';
 import { tickLaunches, executeLaunchStep } from './launches/engine.js';
 import { tickSelfHeal, recoverInterruptedHeals, purgeSelfHealEvents, healRunner, cancelRechecks, haltSelfHeal } from './self-heal/engine.js';
 import { syncStreams, stopStreams } from './self-heal/streams.js';
+import { recoverInterruptedDomainChecks } from './domains/jobs.js';
 if(config.storage.mode==='local')await mkdir(config.backupDir,{recursive:true,mode:0o700});
 // Single worker per state database, enforced by an expiring SQLite lease (src/worker-lease.js) rather than a PID file,
 // so a SIGKILLed worker cannot crash-loop its replacement. A legacy worker.lock is only reported: exclusion lives in the
@@ -42,6 +43,8 @@ failInterruptedInstalls();
 interruptLaunchSteps();
 // A self-heal restart is one helper call; an interrupted one is failed, counts toward the limit and is not retried.
 recoverInterruptedHeals();
+// A domain check is one read-only helper call; an interrupted one is failed and can be run again.
+recoverInterruptedDomainChecks();
 // Any job still 'running' belonged to a worker that no longer holds the lease.
 db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
 let stopping=false,lost=false;

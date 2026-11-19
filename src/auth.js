@@ -46,6 +46,15 @@ export function rateLimit(scope,limit=10,windowMs=15*60_000){
   next();
  };
 }
+// Per user, not per address: people behind one proxy must not share one budget.
+export function userRateLimit(scope,limit,windowMs,sentence){
+ return (req,res,next)=>{
+  const key=`${scope}:user:${req.user.id}`,now=Date.now(),previous=db.prepare('SELECT * FROM rate_limits WHERE key=?').get(key);
+  if(previous&&previous.reset_at>now&&previous.attempts>=limit){res.set('Retry-After',String(Math.ceil((previous.reset_at-now)/1000)));return res.status(429).json({error:sentence});}
+  db.prepare('INSERT INTO rate_limits VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET attempts=excluded.attempts,reset_at=excluded.reset_at').run(key,previous&&previous.reset_at>now?previous.attempts+1:1,previous&&previous.reset_at>now?previous.reset_at:now+windowMs);
+  next();
+ };
+}
 function sessionTimes(row){
  return {idleExpiresAt:Math.min(row.last_activity_at+IDLE_MS,row.created_at+ABSOLUTE_MS,row.expires_at),absoluteExpiresAt:Math.min(row.created_at+ABSOLUTE_MS,row.expires_at),serverTime:Date.now()};
 }
