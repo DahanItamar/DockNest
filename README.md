@@ -50,6 +50,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Storage page with space per site and per destination, and growth over time.
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything a site, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each site gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the site. See [hardening score](docs/hardening-score.md).
+- Linked apps: each server scan shows which apps depend on each other, such as a database, network or volume they share, and which containers they use that no app backs up. Read-only and warn-only. See [linked apps](docs/linked-apps.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.
@@ -193,7 +194,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [Site setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving sites](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) · [Linked apps](docs/linked-apps.md) |
 | Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
