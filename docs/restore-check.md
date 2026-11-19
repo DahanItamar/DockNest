@@ -10,6 +10,22 @@ on a new server starts without them.
 **Check readiness** now also lists these things in its result, as `restoreGaps`. The check reads only; it never changes
 the server, and it never changes whether the site is ready to back up.
 
+## Where you see it
+
+Sites & schedules, an app's **Check readiness** button. The dialog keeps its check list as before; below it a section
+**Restore on a new server** lists what the scan found, from the same readiness answer (no second request). Each row
+has at most one quiet link and a **More actions** menu:
+
+- **Save a copy in backups** (administrators; operators see it disabled with "An administrator can add this"). It saves
+  a copy in the backup; the restore guide says where to put it back by hand, and a move never writes into `/etc`. A
+  finding already in the backup shows **Saved in backups**.
+- **Ignore**, **Note** (up to 500 characters) and **Undo** in the menu, for administrators and operators.
+- No findings: "Nothing outside the app folder that a new server would miss". An incomplete scan says "The scan
+  stopped early; there may be more". A failed scan shows its message; an answer without `restoreGaps` (an older
+  helper) shows no section.
+
+Browser test: `npm run test:restore-check`.
+
 ## What it finds
 
 The app's folders are its Compose project folders, the folders of its Compose files, its configuration files, its mount
