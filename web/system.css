@@ -76,3 +76,10 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 .icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 
 @media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
+
+/* Overflow menu (OverflowMenu in system.jsx): a quiet list of secondary actions under an icon button */
+.overflow-menu{position:relative;display:inline-flex}
+.overflow-menu-list{position:absolute;z-index:5;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 8px 24px var(--shadow)}
+.overflow-menu-list button[role=menuitem]{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:var(--control-height);padding:0 12px;border:0;background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left}
+.overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}
