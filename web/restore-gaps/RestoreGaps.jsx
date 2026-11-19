@@ -42,8 +42,8 @@ function Finding({f,isAdmin,busy,editing,onInclude,onDecide,onEdit,onCancel}){
    <div className="rg-head">
     <b>{label}</b>
     {f.included&&<StatusLabel state="success">Saved in backups</StatusLabel>}
-    {answered==='ignore'&&<span className="status status-queued"><IconEyeOff className="status-icon" size={16} stroke={2} aria-hidden="true"/>Ignored</span>}
-    {answered==='note'&&<span className="status status-queued"><IconNotes className="status-icon" size={16} stroke={2} aria-hidden="true"/>Noted</span>}
+    {answered==='ignore'&&<StatusLabel state="queued" icon={IconEyeOff}>Ignored</StatusLabel>}
+    {answered==='note'&&<StatusLabel state="queued" icon={IconNotes}>Noted</StatusLabel>}
    </div>
    {f.message&&<p>{f.message}</p>}
    {where(f)&&<code className="rg-path">{where(f)}</code>}
