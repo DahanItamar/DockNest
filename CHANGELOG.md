@@ -4,6 +4,14 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
+
+### Changed
+
+- A move no longer stops when a site's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
+
 ### Fixed
 
 - A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
