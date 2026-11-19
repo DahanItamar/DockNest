@@ -196,7 +196,7 @@
  --background:var(--dn-bg-app);--surface:var(--dn-bg-surface);--surface-muted:var(--dn-bg-subtle);--surface-hover:var(--dn-bg-hover);
  --text-primary:var(--dn-text-primary);--heading:var(--dn-text-primary);--text-secondary:var(--dn-text-secondary);--text-muted:var(--dn-text-tertiary);
  --border-subtle:var(--dn-border-subtle);--border-control:var(--dn-border-strong);
- --accent:var(--dn-brand-solid);--accent-soft:var(--dn-brand-surface);--accent-hover:var(--dn-brand-solid-hover);--link:var(--dn-text-link);
+ --accent:var(--dn-brand-text);--accent-soft:var(--dn-brand-surface);--accent-hover:var(--dn-text-link-hover);--link:var(--dn-text-link);
  --focus-ring:var(--dn-focus-color);--primary-foreground:var(--dn-text-on-solid);
  --button-primary:var(--dn-brand-solid);--button-primary-hover:var(--dn-brand-solid-hover);
  --success:var(--dn-success-text);--success-surface:var(--dn-success-surface);--warning:var(--dn-warning-text);--warning-surface:var(--dn-warning-surface);
