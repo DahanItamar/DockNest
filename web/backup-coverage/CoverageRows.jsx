@@ -5,7 +5,7 @@ import {Paginated} from '../pagination.jsx';
 import {addTargets} from './model.js';
 import './backup-coverage.css';
 
-const STATUS={'backed-up':['success','Backed up'],pending:['running','First backup pending'],'not-backed-up':['needs-review','Not backed up'],skipped:['queued','Skipped']};
+const STATUS={'backed-up':['success','Backed up'],pending:['pending','First backup pending'],'not-backed-up':['needs-review','Not backed up'],skipped:['queued','Skipped']};
 
 // The one quiet detail after the status: which app, why it is skipped, or what uses the volume.
 function detail(item){

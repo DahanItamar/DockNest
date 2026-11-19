@@ -17,7 +17,7 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 /* Status label: icon plus text in the semantic colour; no pill, border or dot */
 .status{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;white-space:nowrap;background:none;border:0;padding:0}
 .status-icon{flex:none;width:16px;height:16px}
-.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
+.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-pending{color:var(--warning)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
 .status-running .status-icon{animation:dn-spin 1s linear infinite}
 
 /* Buttons: one height, one type size, label never wraps */

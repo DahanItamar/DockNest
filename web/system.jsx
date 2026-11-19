@@ -1,19 +1,20 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
 import {IconDots} from '@tabler/icons-react';
 import {statusState} from './status-state.js';
-import {CheckCircle2,Loader,Clock,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
+import {CheckCircle2,Loader,Clock,Hourglass,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
 
 // 2.3.0 shared primitives. Styles live in system.css (.status, .alert-panel, .icon-button).
 const STATES={
  success:{Icon:CheckCircle2,label:'Succeeded'},
  running:{Icon:Loader,label:'Running'},
  queued:{Icon:Clock,label:'Queued'},
+ pending:{Icon:Hourglass,label:'Pending'},
  failed:{Icon:CircleX,label:'Failed'},
  'needs-review':{Icon:TriangleAlert,label:'Needs review'}
 };
 export {statusState};
 const humanise=v=>{const t=String(v).replace(/[_-]+/g,' ').trim();return t.charAt(0).toUpperCase()+t.slice(1)};
-// value: any status string (shown humanised); state: force one of success|running|queued|failed|needs-review.
+// value: any status string (shown humanised); state: force one of success|running|queued|pending|failed|needs-review.
 export function StatusLabel({value,state,children}){
  const s=state||statusState(value),{Icon}=STATES[s]||STATES.queued;
  const text=children||(value?humanise(value):'Unknown');
