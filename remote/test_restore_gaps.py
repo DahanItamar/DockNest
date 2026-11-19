@@ -3,13 +3,14 @@ restore on a new server would miss. Run: python3 remote/test_restore_gaps.py
 Proves that findings carry a path, line, schedule and what matched but never a command or line text, that reads skip
 links out of the scanned folder and protected paths, that bounds mark the result incomplete, and that a failure never
 changes readiness."""
-import io, json, os, pathlib, sys, tempfile, unittest
+import io, json, os, pathlib, secrets, sys, tempfile, unittest
 from unittest.mock import Mock, patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
 import helper
 
-SECRET = 'tok-7f3a9c-never-leaves'
+# Built at run time, so no token-shaped literal lives in the repository.
+SECRET = 'tok-' + secrets.token_hex(8)
 
 
 def web(name='shop-web', project='', mounts=None, networks=None):
