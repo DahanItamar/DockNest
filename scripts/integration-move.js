@@ -4,9 +4,23 @@
 // the move created on the target while the source keeps running. DNS uses a stub resolver (no real DNS in CI).
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { HARDENED_FLAGS, buildHardenedImage, hardeningOf, assertReadOnlyRoot } from './integration-copies.js';
+import { exportBackupZip } from './integration-zip.js';
 
-export async function runMoveScenario({ run, until, hosts, servers, db, record }) {
+// docker inspect fields a plain container's copy must keep (remote/helper/runspec.py); restart and ports differ per copy.
+const PLAIN_SETTINGS = '{{.Config.Hostname}} {{.Config.Tty}} {{.HostConfig.Memory}} {{.HostConfig.MemoryReservation}} {{.HostConfig.NanoCpus}} {{json .HostConfig.Ulimits}} {{.HostConfig.LogConfig.Type}} {{json .HostConfig.LogConfig.Config}} {{json .HostConfig.DnsSearch}} {{.HostConfig.ShmSize}} {{json .HostConfig.Sysctls}} {{.Config.StopTimeout}}';
+const PLAIN_SECRET = 'PLAIN_SECRET=a$b\\c';  // a dollar sign and a backslash must arrive literally through the env file
+const UNPACK_RUN_DEFINITION = ["import zipfile,pathlib,shutil",
+  "z=zipfile.ZipFile('/plain.zip');out=pathlib.Path('/plain');out.mkdir();prefix='recovery-originals/run-definition/'",
+  "names=sorted(n for n in z.namelist() if n.startswith(prefix))",
+  "assert names==[prefix+'compose.yaml',prefix+'move-plain.env'],repr(z.namelist())",
+  "for n in names+['recovery-originals/images.tar']:",
+  "  with z.open(n) as source,open(out/pathlib.PurePosixPath(n).name,'wb') as target:shutil.copyfileobj(source,target)",
+  "print('unpacked')"].join('\n');
+
+export async function runMoveScenario({ run, until, hosts, servers, db, record, directory }) {
   const { enqueueBackup, claimJob, executeJob } = await import('../src/engine.js');
   const moves = await import('../src/moves/engine.js');
   const { dnsResolver } = await import('../src/moves/dns.js');
@@ -157,4 +171,46 @@ export async function runMoveScenario({ run, until, hosts, servers, db, record }
   assert.equal(await run('exec', target, 'sh', '-c', 'docker ps -aq --filter name=move-hardened'), '');
   await run('exec', source, 'docker', 'rm', '-f', 'move-hardened').catch(() => {});
   record('Site move, hardened site: the copy on the new server keeps the read-only root, RAM folder, CapDrop ALL plus default capabilities and no-new-privileges (docker inspect and /proc/1/status match the original)');
+
+  // A plain `docker run` app (2.16.5): its backup holds run-definition/compose.yaml, which `docker compose config`
+  // accepts and which recreates the same settings from the snapshot image, and a move's copy keeps them too.
+  await run('exec', source, 'docker', 'network', 'create', 'plain-net');
+  await run('exec', source, 'docker', 'run', '-d', '--name', 'move-plain', '--restart', 'unless-stopped', '-p', '127.0.0.1:8099:8080', '-e', PLAIN_SECRET, '-v', 'move-plain-data:/site',
+    '--hostname', 'plain-host', '--network', 'plain-net', '--network-alias', 'plain-alias', '-t', '--memory', '256m', '--memory-reservation', '128m', '--cpus', '0.5', '--ulimit', 'nofile=1024:2048',
+    '--log-opt', 'max-size=5m', '--dns-search', 'plain.internal', '--shm-size', '128m', '--sysctl', 'net.core.somaxconn=512', '--stop-timeout', '20', 'docknest-fixture:local');
+  await until(async () => (await run('exec', source, 'docker', 'inspect', '--format', '{{.State.Health.Status}}', 'move-plain')) === 'healthy', 'Plain move fixture is not healthy');
+  const plainSettings = host => run('exec', host, 'docker', 'inspect', '--format', PLAIN_SETTINGS, 'move-plain');
+  const plainAliases = async host => JSON.parse(await run('exec', host, 'docker', 'inspect', '--format', '{{json (index .NetworkSettings.Networks "plain-net").Aliases}}', 'move-plain')) ?? [];
+  const original = await plainSettings(source);
+  sites.plain = randomUUID();
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(sites.plain, servers[0].id, 'move-plain', JSON.stringify({ ...config('move-cancel'), containers: ['move-plain'], domains: ['plain.example.invalid'], healthUrl: 'http://127.0.0.1:8099/' }), new Date().toISOString());
+  const queuedPlain = enqueueBackup(sites.plain, 'qa'), plainJob = claimJob(); assert.equal(plainJob.id, queuedPlain.id); await executeJob(plainJob);
+  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(plainJob.id).status, 'completed', db.prepare('SELECT error FROM jobs WHERE id=?').get(plainJob.id).error);
+  const zip = join(directory, 'plain.zip');
+  await exportBackupZip(db.prepare('SELECT * FROM backups WHERE job_id=?').get(plainJob.id), zip);
+  await run('cp', zip, target + ':/plain.zip'); await rm(zip);
+  assert.equal(await run('exec', target, 'python3', '-c', UNPACK_RUN_DEFINITION), 'unpacked');
+  await run('exec', target, 'docker', 'load', '-i', '/plain/images.tar');
+  const compose = (...args) => run('exec', target, 'docker', 'compose', '-p', 'plain-check', '-f', '/plain/compose.yaml', ...args);
+  await compose('config', '--quiet');
+  await compose('create');
+  assert.equal(await plainSettings(target), original, 'compose.yaml recreates the same settings');
+  assert.ok((await plainAliases(target)).includes('plain-alias'), 'compose.yaml keeps the network alias');
+  assert.equal(await run('exec', target, 'docker', 'inspect', '--format', '{{.HostConfig.RestartPolicy.Name}} {{index .Config.Labels "docknest.original-image"}}', 'move-plain'), 'unless-stopped docknest-fixture:local');
+  assert.ok(JSON.parse(await run('exec', target, 'docker', 'inspect', '--format', '{{json .Config.Env}}', 'move-plain')).includes(PLAIN_SECRET), 'the env file holds the value literally');
+  await compose('down', '--volumes');
+  await run('exec', target, 'rm', '-rf', '/plain', '/plain.zip');
+  record('A plain docker run app: its backup holds a Compose file that docker compose config accepts and that recreates hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout, network alias, restart policy and env values');
+  const plainMove = await moves.previewMove({ siteId: sites.plain, targetServerId: servers[1].id, options: { askBeforeSwitch: true } }, 'qa');
+  assert.equal(plainMove.ok, true, plainMove.sentence);
+  await moves.startMove(plainMove.id, { preflightHash: plainMove.preflightHash }, 'qa');
+  await drive(plainMove.id, state => ['waiting', 'rolled_back', 'failed', 'recovery_required', 'cancelled'].includes(state));
+  assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(plainMove.id).state, 'waiting', moves.moveView(plainMove.id).statusLine);
+  assert.equal(await plainSettings(target), original, 'the move copy keeps the same settings');
+  assert.ok((await plainAliases(target)).includes('plain-alias'), 'the move copy keeps the network alias');
+  moves.cancelMove(plainMove.id, 'qa');
+  await drive(plainMove.id, state => ['cancelled', 'rolled_back', 'recovery_required'].includes(state));
+  assert.equal(db.prepare('SELECT state FROM site_moves WHERE id=?').get(plainMove.id).state, 'cancelled');
+  await run('exec', source, 'docker', 'rm', '-f', 'move-plain').catch(() => {});
+  record('Site move, plain docker run app: the copy on the new server keeps hostname, TTY, memory, CPU, ulimits, log options, DNS, shm size, sysctls, stop timeout and network alias (docker inspect matches the original)');
 }
