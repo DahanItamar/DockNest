@@ -52,3 +52,10 @@ test('discovery adds each container\'s user networks and the server\'s volumes, 
   assert.deepEqual(result.containers[0].Config.Env, ['PASSWORD=[redacted]']);
   assert.deepEqual(result.volumes, [{ name: 'shop_data', driver: 'local', labels: {} }]);
 });
+
+test('volumes the server could not list stay null, never an empty list', async () => {
+  const original = transport.remote;
+  transport.remote = async () => ({ staticSites: [], containers: [], volumes: null, certificates: [] });
+  try { assert.equal((await (await get(`/servers/${host}/discover`)).json()).volumes, null); }
+  finally { transport.remote = original; }
+});

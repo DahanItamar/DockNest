@@ -234,7 +234,7 @@ app.post('/api/servers/:id/test', async (req, res) => {
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id), { recordHardening: req.user.role === 'admin' });
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes || [] });
+  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });
 const containerNames = query => siteSchema.shape.config.shape.containers.min(1).parse(typeof query === 'string' ? query.split(',') : []);
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
