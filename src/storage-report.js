@@ -82,7 +82,7 @@ export function buildReport({ backups, sites, targets, capacities = {}, nowMs = 
   const siteRows = [...bySite].map(([siteId, rows]) => {
     rows.sort((a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt) || String(a.id).localeCompare(String(b.id)));
     const estimate = siteEstimate(rows.map(row => row.size));
-    return { siteId, name: names.get(siteId) ?? 'Removed site', packages: rows.length, bytes: estimate.stored, newestBytes: rows.at(-1).size, growthPerBackupBytes: estimate.growthPerBackupBytes, estimate: { upToBytes: estimate.upToBytes, upToPercent: estimate.upToPercent } };
+    return { siteId, name: names.get(siteId) ?? 'Removed app', packages: rows.length, bytes: estimate.stored, newestBytes: rows.at(-1).size, growthPerBackupBytes: estimate.growthPerBackupBytes, estimate: { upToBytes: estimate.upToBytes, upToPercent: estimate.upToPercent } };
   }).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
   const storages = [...byStorage.values()].map(entry => ({ ...entry, capacityBytes: capacities[entry.id] ?? null })).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
   const bytes = siteRows.reduce((sum, row) => sum + row.bytes, 0), estimateUpToBytes = siteRows.reduce((sum, row) => sum + row.estimate.upToBytes, 0);

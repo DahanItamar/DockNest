@@ -21,8 +21,8 @@ test('limits read as minutes when whole, else as seconds', () => {
 test('only a long limit and a limit shorter than the data copy warn', () => {
   assert.deepEqual(limitWarnings('120', null), []);
   assert.deepEqual(limitWarnings('300', null), [], '5 minutes is not a long wait');
-  assert.deepEqual(limitWarnings('600', null).map(item => [item.title, item.text]), [['Longer wait', 'The site can stay offline for up to 10 minutes before it rolls back.']]);
-  assert.deepEqual(limitWarnings('360', 0).map(item => item.text), ['The site can stay offline for up to 6 minutes before it rolls back.']);
+  assert.deepEqual(limitWarnings('600', null).map(item => [item.title, item.text]), [['Longer wait', 'The app can stay offline for up to 10 minutes before it rolls back.']]);
+  assert.deepEqual(limitWarnings('360', 0).map(item => item.text), ['The app can stay offline for up to 6 minutes before it rolls back.']);
   const short = limitWarnings('60', 4.2 * 1024 ** 3);
   assert.deepEqual(short.map(item => item.title), ['Short time limit']);
   assert.equal(short[0].text, 'Copying 4.2 GB of data may need more than 60 seconds. If it does not finish, the change rolls back.');

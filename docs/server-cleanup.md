@@ -2,7 +2,7 @@
 
 Docker leaves things behind: containers that stopped long ago, images that lost their tag after an update, volumes no
 container uses and build cache. Server cleanup shows how much space they take on one server and removes them after you
-confirm. It never removes anything DockNest or one of your sites still needs.
+confirm. It never removes anything DockNest or one of your apps still needs.
 
 Administrators only. Open **Storage**, scroll to **Server cleanup**, pick a server and press **Scan**.
 
@@ -24,12 +24,12 @@ and the outcome (also when it was refused).
 
 ## What is never removed
 
-- Containers, images and volumes a registered site uses, including archived sites, other services of the same Compose
-  project, and named volumes that the site's recent backups list even if their container is gone.
-- Anonymous volumes of a site's Compose project (from the site's recent backups), even when every container of that
+- Containers, images and volumes a registered app uses, including archived apps, other services of the same Compose
+  project, and named volumes that the app's recent backups list even if their container is gone.
+- Anonymous volumes of an app's Compose project (from the app's recent backups), even when every container of that
   stack is gone after `docker compose down`.
 - Anything of a backup in progress (its snapshot images), of a restore or restore test (its copies and their images and
-  volumes), and of a site move (its copies, and the stopped old copy kept on the old server after a move).
+  volumes), and of an app move (its copies, and the stopped old copy kept on the old server after a move).
 - DockNest itself: its containers, images (also old builds), volumes and staging folders.
 - Containers in a Compose project that still has a running container.
 - Named volumes of unknown owner. DockNest cannot tell whether a stack that is down will use them again, so it keeps
@@ -47,9 +47,9 @@ When it is unclear who owns something, it stays.
 - A clean stops starting new removals after 30 minutes; anything left is listed as not removed (Time limit reached).
   Scan again to continue.
 - A preview is valid for 15 minutes and can be used once, by the administrator who made it. Scan again after that.
-- Cleanup waits while a backup, restore, restore test, site move, Safe Edit or self-heal restart uses the server, and
+- Cleanup waits while a backup, restore, restore test, app move, Safe Edit or self-heal restart uses the server, and
   only one cleanup runs per server. An unfinished Safe Edit holds its server between its steps too (for example while
-  it waits for the site to become healthy).
+  it waits for the app to become healthy).
   On the server it also refuses while any backup job folder is unfinished or any restore staging folder exists, however
   old: a folder an interrupted job left behind blocks cleanup until DockNest's recovery finishes it.
 - Nothing starts while a clean runs. DockNest puts a hold on the server for the length of the clean: backups, restores,
@@ -65,7 +65,7 @@ When it is unclear who owns something, it stays.
   BuildKit removes the cache no build is using and that was not used in the last day, including the cache of images
   that still exist. The scan counts the same records (from `docker system df -v`), so what it shows is what a clean
   frees; on Docker versions without that listing it shows Docker's reclaimable total instead. Build cache never holds
-  site data; the next build of each project may be slower once.
+  app data; the next build of each project may be slower once.
 - Build cache is not offered on servers where Docker keeps images in the containerd image store (the default from
   Docker 29, shown by `docker info` as `driver-type: io.containerd.snapshotter.v1`), nor when DockNest cannot tell which
   store Docker uses. In that store build cache and image layers are the same files: Docker counts them twice, and

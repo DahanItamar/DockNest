@@ -119,7 +119,7 @@ try {
     { // Sites page and the settings dialog: on, off, full fallback.
       const fallback = { ...SETTINGS, 'site-1': settingsOf('site-1', { fullNext: true, fullNextReason: 'snapshot-mismatch', fullNextMessage: 'The saved file list on the server no longer matched the last backup, so the next backup is full and starts a new chain.' }) };
       const { context, page, errors } = await open(viewport, scheme);
-      await go(page, viewport, 'Sites & schedules');
+      await go(page, viewport, 'Apps & schedules');
       const card = page.locator('.site-card', { hasText: SITE });
       assert.match(await card.locator('.def-row', { hasText: 'Incremental' }).innerText(), /Full every 7 backups[\s\S]*Beta/, label);
       assert.match(await page.locator('.site-card', { hasText: 'pawmeadow.com' }).locator('.def-row', { hasText: 'Incremental' }).innerText(), /Off/, label);
@@ -139,7 +139,7 @@ try {
       assert.deepEqual(errors, [], label);
       await context.close();
       const second = await open(viewport, scheme, { settings: fallback });
-      await go(second.page, viewport, 'Sites & schedules');
+      await go(second.page, viewport, 'Apps & schedules');
       dialog = await openSiteDialog(second.page, SITE, 'Incremental backups');
       await dialog.getByText('Full backup planned').waitFor();
       await shot(second.page, 'setting-fallback-' + tag);
@@ -147,7 +147,7 @@ try {
     }
     { // Settings errors: out-of-range interval stays on the field; a server refusal is a red alert panel.
       const { context, page, calls } = await open(viewport, scheme, { onApi: ({ path, method, route }) => { if (method === 'PUT' && /incremental$/.test(path) && refuse.length) return route.fulfill({ status: 409, json: { error: 'x', code: refuse.shift() } }); } });
-      await go(page, viewport, 'Sites & schedules');
+      await go(page, viewport, 'Apps & schedules');
       const dialog = await openSiteDialog(page, SITE, 'Incremental backups');
       const input = dialog.getByLabel('Full backup every');
       await input.fill('1'); await dialog.getByRole('button', { name: 'Save' }).click();

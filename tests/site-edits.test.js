@@ -329,7 +329,7 @@ test('health check fails after an image change: files and data rolled back in pl
   await drive(30);
   const done = edit(editId);
   assert.equal(done.result, 'rolled_back', JSON.stringify(done)); assert.equal(done.failed_step, 'check_health');
-  assert.equal(done.reason, 'The site did not become healthy in 2 minutes.');
+  assert.equal(done.reason, 'The app did not become healthy in 2 minutes.');
   assert.deepEqual(steps(editId), { backup: 'done', prepare: 'done', apply: 'done', check_health: 'failed', roll_back: 'done', finish: 'done' });
   assert.equal(calls.find(call => call.operation === 'edit-rollback').restoreData, true);
   assert.equal(restores.length, 0, 'the data comes back in place inside edit-rollback, never as an isolated restore');
@@ -362,7 +362,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   const editId = await apply(siteId);
   await drive(30);
   let row = edit(editId);
-  assert.equal(row.state, 'needs_attention'); assert.equal(row.result, null); assert.equal(row.reason, 'The previous version could not be put back. The site stays behind the maintenance page.');
+  assert.equal(row.state, 'needs_attention'); assert.equal(row.result, null); assert.equal(row.reason, 'The previous version could not be put back. The app stays behind the maintenance page.');
   assert.ok(!ops().includes('edit-finish'), 'maintenance stays: finish never ran');
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='site.edit.needs_attention' AND target=?").get(siteId));
   assert.doesNotMatch(everything(), /corrupted|\/var\/lib\/docknest\/edits/);
@@ -397,7 +397,7 @@ test('a rollback that fails: needs attention, maintenance stays on, then Try aga
   row = edit(second);
   await drive(10);
   row = edit(second);
-  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The backup from before the change was restored through the normal restore. Check the site, then turn off its maintenance page.');
+  assert.equal(row.result, 'failed'); assert.equal(row.reason, 'The backup from before the change was restored through the normal restore. Check the app, then turn off its maintenance page.');
   // Once the restore succeeded, finish cleaned up the journal, copy, holders and tags but left the maintenance page on.
   const cleanup = calls.filter(call => call.operation === 'edit-finish').at(-1);
   assert.equal(cleanup.keepMaintenance, true);
@@ -545,7 +545,7 @@ test('apply failures: an unknown write state goes through edit-status; pre-write
   answers['edit-rollback'] = () => ({ ok: true, dataCopy: true, dataRestored: true });
   editId = await apply(siteId);
   await drive(30);
-  assert.equal(edit(editId).result, 'rolled_back'); assert.equal(edit(editId).reason, 'Docker could not start the changed site.');
+  assert.equal(edit(editId).result, 'rolled_back'); assert.equal(edit(editId).reason, 'Docker could not start the changed app.');
 });
 
 test('the data copy kept flag follows the journal: apply failed after the copy, then the rollback failed', async () => {

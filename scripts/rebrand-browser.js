@@ -19,14 +19,14 @@ try{
  await page.route('**/api/access',r=>r.fulfill({json:{users:[{id:'admin',name:'Administrator',email:'admin@example.invalid',role:'admin',status:'active',activeSessions:1},{id:'operator',name:'Sam Operator',email:'sam@example.invalid',role:'operator',status:'active',activeSessions:0}],security:{idleMinutes:30,invitationMinutes:15,absoluteHours:8}}}));
  await page.addInitScript(()=>localStorage.setItem('docknest-theme','light'));
  await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5173');
- const routes=[['Overview','dashboard'],['Servers','servers'],['Sites & schedules','sites'],['Backups','backups'],['Jobs','jobs'],['Maintenance','maintenance'],['Audit','audit'],['Storage','storage'],['Access','access']];
+ const routes=[['Overview','dashboard'],['Servers','servers'],['Apps & schedules','sites'],['Backups','backups'],['Jobs','jobs'],['Maintenance','maintenance'],['Audit','audit'],['Storage','storage'],['Access','access']];
  async function navigate(name){if(await page.evaluate(()=>innerWidth<900&&!document.querySelector('.mobile-open')))await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('navigation').getByRole('button',{name,exact:true}).click();await page.evaluate(()=>document.fonts.ready);await page.waitForFunction(()=>[...document.querySelectorAll('img[src^="/brand/"]')].every(image=>image.complete&&image.naturalWidth>0));}
  async function equalCards(selector){const cards=await page.locator(selector).evaluateAll(elements=>elements.map(el=>{const r=el.getBoundingClientRect();return {width:r.width,height:r.height,x:r.x,y:r.y}}));if(cards.length>=2){for(const card of cards){assert.ok(Math.abs(card.width-cards[0].width)<1,'Equal widths: '+selector);assert.ok(Math.abs(card.height-cards[0].height)<1,'Equal heights: '+selector);}}}
  for(const theme of ['light','dark']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug] of routes){
    await page.setViewportSize({width:1440,height:1000});await navigate(route);
-   if(route==='Sites & schedules')await equalCards('.site-card');
+   if(route==='Apps & schedules')await equalCards('.site-card');
    if(route==='Storage'){await equalCards('.storage-card');const bars=await page.locator('.storage-card-actions').evaluateAll(elements=>elements.map(el=>({y:el.getBoundingClientRect().y,height:el.getBoundingClientRect().height})));assert.ok(Math.abs(bars[0].y-bars[1].y)<1,'Storage action baselines');assert.ok(Math.abs(bars[0].height-bars[1].height)<1,'Storage action heights');}
    if(route==='Access')await equalCards('.access-grid>.panel');
    if(route==='Backups'){await page.locator('.backup-group>summary').first().click();assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),2);assert.equal(await page.getByRole('button',{name:'Download full ZIP acme-latest'}).count(),1);}
@@ -35,7 +35,7 @@ try{
    await page.setViewportSize({width:390,height:844});await page.screenshot({path:`${directory}/${slug}-${theme}-mobile.png`,fullPage:true});
   }
  }
- await page.setViewportSize({width:1440,height:1000});await navigate('Sites & schedules');
+ await page.setViewportSize({width:1440,height:1000});await navigate('Apps & schedules');
  let queued=0;await page.route('**/api/sites/acme/backup',r=>{queued++;assert.equal(r.request().method(),'POST');assert.deepEqual(r.request().postDataJSON(),{});return r.fulfill({json:{id:'fixture-queued'}});});
  await page.getByRole('article',{name:'Acme Store',exact:true}).getByRole('button',{name:'Back up now',exact:true}).click();
  await page.getByRole('status').filter({hasText:'Backup queued.'}).waitFor();assert.equal(queued,1);
@@ -46,7 +46,7 @@ try{
  await navigate('Maintenance');let saved;
  await page.route('**/api/maintenance',r=>{assert.equal(r.request().method(),'PATCH');saved=r.request().postDataJSON();return r.fulfill({json:saved});});
  await page.getByLabel('Page title',{exact:true}).fill('Scheduled update');await page.getByRole('button',{name:'Save design',exact:true}).click();await page.getByRole('status').filter({hasText:'Maintenance design saved.'}).waitFor();assert.equal(saved.title,'Scheduled update');assert.equal(saved.color.toLowerCase(),'#5e35b1');
- role='operator';await page.reload();await navigate('Sites & schedules');assert.equal(await page.getByRole('button',{name:'Remove site',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Back up now',exact:true}).count(),4);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Access',exact:true}).count(),0);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).count(),0);
+ role='operator';await page.reload();await navigate('Apps & schedules');assert.equal(await page.getByRole('button',{name:'Remove app',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Back up now',exact:true}).count(),4);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Access',exact:true}).count(),0);assert.equal(await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).count(),0);
  const authPage=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
  authPage.on('pageerror',error=>problems.push(error.message));
  await authPage.addInitScript(()=>localStorage.setItem('docknest-theme','light'));

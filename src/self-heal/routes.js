@@ -28,7 +28,7 @@ const handle = fn => async (req, res, next) => {
 };
 const siteOf = siteId => {
   const site = db.prepare('SELECT * FROM sites WHERE id=?').get(String(siteId));
-  if (!site) throw httpError(404, 'NOT_FOUND', 'Site not found.');
+  if (!site) throw httpError(404, 'NOT_FOUND', 'App not found.');
   let config = {}; try { config = JSON.parse(site.config); } catch { config = {}; }
   return { ...site, config };
 };
@@ -100,10 +100,10 @@ const input = z.object({
   maxRestarts: z.number().int().min(LIMITS.maxRestarts.min, `Choose ${LIMITS.maxRestarts.min} to ${LIMITS.maxRestarts.max} restarts.`).max(LIMITS.maxRestarts.max, `Choose ${LIMITS.maxRestarts.min} to ${LIMITS.maxRestarts.max} restarts.`).default(LIMITS.maxRestarts.default),
   windowMinutes: z.number().int().min(LIMITS.windowMinutes.min, 'Choose a window from 10 minutes to 24 hours.').max(LIMITS.windowMinutes.max, 'Choose a window from 10 minutes to 24 hours.').default(LIMITS.windowMinutes.default),
 }).strict();
-const NO_HEALTHCHECK = () => httpError(422, 'NO_HEALTHCHECK', 'No container in this site has a health check.');
+const NO_HEALTHCHECK = () => httpError(422, 'NO_HEALTHCHECK', 'No container in this app has a health check.');
 selfHealRoutes.put('/sites/:id/self-heal', requireAdmin, handle(async (req, res) => {
   const site = siteOf(req.params.id), data = input.parse(req.body ?? {});
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'SITE_REMOVED', 'This site was removed from active sites.');
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) throw httpError(409, 'SITE_REMOVED', 'This app was removed from active apps.');
   const current = settingsRow(site.id);
   let watched = watchedOf(current);
   if (data.enabled) {
@@ -125,7 +125,7 @@ selfHealRoutes.put('/sites/:id/self-heal', requireAdmin, handle(async (req, res)
     }
   }
   const at = new Date().toISOString(), text = JSON.stringify(watched);
-  if (text.length > 4096) throw httpError(422, 'TOO_MANY_CONTAINERS', 'Too many containers to watch in one site.');
+  if (text.length > 4096) throw httpError(422, 'TOO_MANY_CONTAINERS', 'Too many containers to watch in one app.');
   const action = !current?.enabled && data.enabled ? 'self_heal.enabled' : current?.enabled && !data.enabled ? 'self_heal.disabled' : (current && (current.max_restarts !== data.maxRestarts || current.window_minutes !== data.windowMinutes)) ? 'self_heal.changed' : null;
   transaction(() => {
     if (data.enabled) {
