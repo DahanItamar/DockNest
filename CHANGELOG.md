@@ -7,11 +7,12 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ### Added
 
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
+- Coverage: see every container and volume on a server and whether an app backs it up, its first backup is pending, or nothing does. Mark the ones you leave out on purpose, with a note.
 
 ### Changed
 
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
-- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
 
 ### Fixed
 

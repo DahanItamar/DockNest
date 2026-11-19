@@ -72,12 +72,22 @@ network shopnet"). It is only a pre-selection; the user can untick any of them.
   `docker volume ls`) and classifies every container and volume with `shared/backup-coverage.js`:
   **Backed up** (which app, once it has at least one verified backup; before that a "first backup pending" warning), **Not backed up**, or
   **Skipped on purpose** (with the note). Volumes count as backed up when a container of an active app mounts them.
-- DockNest's own containers (restore copies, Safe Edit holders, move test copies) are not listed.
+- DockNest's own containers and volumes are not listed: restore copies (`dbm-restore-*`, label
+  `docker-backup-manager.restore`), restore test copies (`docknest.restore-test`), Safe Edit holders
+  (`docknest.edit.hold`) and move test copies (`docknest.move.mode=test`). Not every `docknest.*` label: a moved app's
+  live copy keeps `docknest.move` and a launched app `docknest.launch`, and both are real apps.
 - On demand only: opening the view or "Scan again". No timer, no stored scan.
-- A failed or incomplete scan shows an error or "partial" state and never "everything is backed up".
+- A failed or incomplete scan shows an error or "partial" state and never "everything is backed up": discover
+  returns `volumes: null` when the volumes cannot be listed and `uninspected` (a count) for containers that could not
+  be inspected, and either makes `complete: false` with a plain problem line. Response:
+  `{complete, problems: [string], items: [{kind, name, image?, state?, usedBy?, status: backed-up|pending|not-backed-up|skipped, app?: {id, name}, note?, skippedBy?, skippedAt?}]}`.
 - Ignore list: new table `server_coverage_ignores (server_id, kind container|volume, name, note, created_by,
-  created_at)`, keyed by name (names survive recreates, IDs do not). Additive migration, `compatible: true`, next free
-  number at merge. Admins and operators change it, viewers read it; changes are audited.
+  created_at)`, keyed by name (names survive recreates, IDs do not). Additive migration 19, `compatible: true`.
+  `PUT /api/servers/:id/coverage/ignores` `{kind, name, note?}` and `DELETE .../ignores/:kind/:name`; every
+  signed-in role (admins and operators) may change it, audited as `coverage.skip` / `coverage.unskip` with the kind
+  and name only, never the note. A skip shows only while nothing backs the item up.
+- Move: preview and start refuse with 409 `CONTAINER_ALREADY_BACKED_UP` when an active app on the target already
+  backs up one of the app's containers (the same check as adding or editing an app).
 - UI: a Coverage panel per server on the Apps page, and a "Coverage" toggle on the Map that adds a status count to
   each server node and the list to the server panel, reusing Map rows, notes and tokens. "Add app" on a not-backed-up
   item opens the existing add flow with it pre-selected (the Map's existing `initialPick`).
@@ -124,8 +134,8 @@ readiness call, so the existing "checking" state covers it and there is no secon
 
 ## Upgrade safety
 
-- Two new tables only, in their own migrations (19 `site-restore-decisions` in #204, 20 `server-coverage-ignores` in
-  this feature's PR); never released with a gap in the numbers. Older releases ignore them (`compatible: true`).
+- Two new tables only, in their own migrations (19 `server-coverage-ignores` in this feature's PR, which merges
+  first, and 20 `site-restore-decisions` in #204); never released with a gap in the numbers. Older releases ignore them (`compatible: true`).
 - `discover` and `readiness` gain fields; no field changes meaning. A helper that does not know
   `describe-containers` answers "unknown operation", which the UI shows as "update the helper" rather than an empty
   preview.

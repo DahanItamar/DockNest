@@ -24,6 +24,17 @@ Connect **Storage** and use **Check readiness**.
 
 If any step fails, DockNest puts every file back and reloads nginx. The app is still added and its backups still run without the page. Automatic setup needs nginx running on the server itself. For Caddy, Traefik, Nginx Proxy Manager or nginx inside a container, integrate the page by hand; without it, backups still work. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
 
+## Coverage
+
+`GET /api/servers/:id/coverage` (any signed-in role) scans the server on demand and lists every container and volume
+with its status: `backed-up` (its app has a verified backup), `pending` (its app has none yet), `not-backed-up` or
+`skipped` (marked on purpose, with an optional note of up to 200 characters). A volume belongs to the app whose
+container mounts it. DockNest's own restore copies, restore test copies, Safe Edit holders and move test copies are
+left out. `complete` is `false`, with a line in `problems`, when volumes could not be listed or a container could not
+be read; such a scan is never all clear. Mark or unmark an item with `PUT /api/servers/:id/coverage/ignores`
+`{"kind":"container"|"volume","name":"...","note":"..."}` and `DELETE /api/servers/:id/coverage/ignores/:kind/:name`;
+both are audited without the note. See [the design](coverage-and-restore-check.md).
+
 ## Static nginx websites
 
 Select the detected domain to include its website directory and nginx virtual-host file. Confirm that deployments will not change the files during capture. nginx keeps serving visitors; no containers or daemons are stopped and no maintenance proxy is needed. Capture checks file contents, paths, modes and ownership against the source and its copied archive. Links, special files and roots outside detected static sites are rejected.
