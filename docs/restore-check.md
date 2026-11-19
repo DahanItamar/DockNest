@@ -66,8 +66,8 @@ before.
   - the backup's `restore-guide.md` (also in a ZIP export, under `recovery-originals/`) gets a **Put back by hand**
     section: `copy <file> (config-N.tar) from the backup to <original path>`, for each configuration file outside the
     folders a move may create;
-  - a move leaves such files out and names each one in its preview as a note, never a blocker; it never writes into
-    `/etc` ([moving sites](moving-sites.md));
+  - a move leaves out exactly the files its preview names as a note (never a blocker) and never writes into `/etc`
+    ([moving sites](moving-sites.md));
   - an isolated restore or restore test unpacks configuration files into its own restore folder for review, as
     always, and never at their original path.
 - **Ignore** or **Note**: `PUT /api/sites/:id/restore-decisions/:key` with `{"decision": "ignore"}` or
@@ -80,16 +80,21 @@ stay with the site's history.
 
 ## Upgrade safety
 
-- One new table in its own compatible migration; older releases ignore it.
+- One new table in its own compatible migration (19); older releases ignore it.
 - `readiness` gains one field. A helper that does not send it leaves the API answer without `restoreGaps`.
-- Backups and restores are unchanged.
+- A backup's `restore-guide.md` gains a **Put back by hand** section when it holds configuration files outside the
+  folders a move may create. Nothing else in a backup or restore changes.
+- A move leaves out only the configuration files its reviewed preview named to put back by hand: for those, the
+  refusal it gave before becomes a named skip. Every other file, including the project's Compose files, files inside
+  bind mounts and a path that only becomes a link on the new server, refuses exactly as before. A preview saved
+  before the upgrade names no files, so its move runs as it always did. Nothing else moves differently.
 
 ## Tests
 
 - `remote/test_restore_gaps.py`: cron and timer matching, a token on a cron line never appearing in the result or the
   helper's output, links and protected paths, limits, Compose networks, volumes, secrets, configs and env files,
   certificates, and readiness staying the same when the check fails.
-- `tests/restore-decisions.test.js`: the answer routes, the readiness join and migration 20.
+- `tests/restore-decisions.test.js`: the answer routes, the readiness join and migration 19.
 - Linux Docker integration (`scripts/integration-restore-check.js`): a cron.d file and a systemd timer touching the app
   and a user network are found through Check readiness; the cron token is absent from the result, the audit trail and
   the logs.
