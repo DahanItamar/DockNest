@@ -13,6 +13,8 @@ from .engine_mysql import (
     MysqlEngine)
 from .engine_redis import (
     RedisEngine)
+from .engine_mongo import (
+    MongoEngine)
 # </build:header>
 def sqlite_file_source(filename,container):
     if not isinstance(filename,str) or not re.fullmatch(r'/[a-zA-Z0-9_./-]+',filename) or str(pathlib.PurePosixPath(filename))!=filename or '..' in pathlib.PurePosixPath(filename).parts:raise ValueError('SQLite database path must be a regular absolute file path')
@@ -155,7 +157,7 @@ def cached_sqlite_file_proof(cache,service,container,reuse=False):
 
 # Native engines in detection order: the first whose server binary answers `--version` wins (MariaDB images can
 # also ship mysqld). The engine modules (engine_*.py) hold every engine-specific step; nothing else branches on one.
-ENGINES={'postgres':PostgresEngine(),'mariadb':MysqlEngine('mariadbd','mariadb'),'mysql':MysqlEngine('mysqld','mysql'),'redis':RedisEngine()}
+ENGINES={'postgres':PostgresEngine(),'mariadb':MysqlEngine('mariadbd','mariadb'),'mysql':MysqlEngine('mysqld','mysql'),'redis':RedisEngine(),'mongo':MongoEngine()}
 
 def database_query(container,service,query):
     """Local socket only. Credential files/variables stay inside the container."""

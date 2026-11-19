@@ -9,7 +9,7 @@ from .databases import (
     database_query)
 # </build:header>
 # Every field a configured data check can name. Each engine accepts exactly its own one.
-CHECK_FIELDS=('table','key')
+CHECK_FIELDS=('table','key','collection')
 
 def writable_mounts_covering(path,c):
     """The captured writable mounts that are a container path or hold it."""
