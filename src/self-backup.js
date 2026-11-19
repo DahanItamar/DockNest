@@ -11,6 +11,7 @@ import { deploymentHeld,requireNoDeploymentHold,deploymentHoldMessage } from './
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
 import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openRead,removeFile,publishVerified } from './storage.js';
 import { writeEmergencyKit,activeEmergencyKey } from './emergency/kits.js';
+import { writeGuideCopies } from './runbook/copy.js';
 
 const now=()=>new Date().toISOString(),settingsKey='manager_backup_config';
 const packageInfo=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
@@ -121,9 +122,11 @@ export async function executeSelfBackup(run){
   // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
   completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
   if(completed){
-   await copyKitToCopyDestinations(run,file,evidence,targetId);
+   const copied=await copyKitToCopyDestinations(run,file,evidence,targetId);
    // With the optional split on, the same kit is also sealed to the emergency key (src/emergency/kits.js). Never fails the kit.
    await writeEmergencyKit({run,kit:bytes,passphrase,keyId:evidence.keyId,targetIds:[targetId,...kitCopyDestinations(targetId)],temporary,release});
+   // A redacted Recovery Guide PDF next to each kit (src/runbook/copy.js). Never fails the kit.
+   await writeGuideCopies({run,targetIds:[targetId,...copied],keyId:evidence.keyId,temporary});
   }
  }catch(error){
   // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold
@@ -140,15 +143,18 @@ export function kitCopyDestinations(mainTargetId){
  const ids=db.prepare("SELECT target_id AS id FROM backup_copies WHERE status<>'deleted' UNION SELECT target_id FROM site_storage_copies UNION SELECT main_target_id FROM site_storage WHERE main_target_id IS NOT NULL").all().map(row=>row.id);
  return [...new Set(ids)].filter(targetId=>targetId!==mainTargetId&&(()=>{try{return remoteModes.includes(targetOptions(targetId).mode);}catch{return false;}})());
 }
+// Returns the destinations that got the kit.
 async function copyKitToCopyDestinations(run,file,evidence,mainTargetId){
+ const copied=[];
  for(const targetId of kitCopyDestinations(mainTargetId)){
   try{
    const directory=managerBackupDirectory(targetId,evidence.keyId),published=storageJoin(directory,managerBackupFilename(evidence.keyId,run.id,new Date(run.created_at)));
    await makeDirectory(directory);await publishVerified(file,published,evidence.sha256);
    db.prepare('INSERT INTO manager_backup_copies(backup_id,target_id,path,created_at) VALUES(?,?,?,?) ON CONFLICT(backup_id,target_id) DO UPDATE SET path=excluded.path').run(run.id,targetId,published,now());
-   audit('worker','manager-backup.copied',run.id,{targetId});
+   audit('worker','manager-backup.copied',run.id,{targetId});copied.push(targetId);
   }catch{audit('worker','manager-backup.copy_failed',run.id,{targetId});}
  }
+ return copied;
 }
 // Per destination: a kit copy is removed only once a newer kit was written there successfully (a row exists only after
 // its upload was verified), so a failed upload never leaves a destination without a kit.

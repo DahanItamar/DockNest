@@ -46,6 +46,7 @@ const catalogue = Object.freeze({
   // Keys safe (docs/keys-safe.md). Never a file name, a value or a diff.
   'config.changed': 'The Compose or env files changed outside Safe Edit. Open DockNest to review them.',
   // Self Backup and the emergency kit (docs/emergency-kit.md). The code is the kit check's reason; never a key or an error.
+  'runbook.outdated': 'Apps, servers, storage or the emergency kit changed since the Recovery Guide was made. Make a new one and replace the printed copy.',
   'selfbackup.kit_check_failed': 'The newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.',
   'selfbackup.kit_check_failed:key_mismatch': 'The newest recovery kit holds a different master key than this DockNest. Run a new Self Backup and check again.',
   'selfbackup.kit_check_failed:unreadable': 'The newest recovery kit could not be read from storage. Check the storage connection.',

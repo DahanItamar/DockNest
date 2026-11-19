@@ -70,6 +70,9 @@ db.close();`, { cwd: old });
   // raises no config.changed alert.
   for (const table of ['app_keys', 'config_fingerprints']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, `${table} starts empty`);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action='config.changed'").get().count, 0, 'no configuration alert after the upgrade');
+  // The Recovery Guide starts as never made: no runbook_state row, no comparison and no copy next to the kit yet.
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM runbook_state').get().count, 0, 'runbook_state starts empty');
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key IN ('runbook_check','recovery_guide_copies')").get().count, 0);
   assert.deepEqual({ ...db.prepare('SELECT version,schema_version FROM release_history WHERE version=?').get(release.version) }, { version: release.version, schema_version: schemaVersion }, 'the started API records its release');
   db.close();
   // Domain path (migration 23): the table starts empty, and a check of the released site's domain fits its limits and
