@@ -28,6 +28,7 @@ remote/
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
 │   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs, hardening and linked apps facts
 │   ├── runspec.py          run spec of plain containers: docker create flags, Compose file, describe-containers
+│   ├── restore_gaps.py     restore check: host schedules, Docker objects and files a new server would miss
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
 │   ├── move.py             app moves: facts, deploy, compose override, nginx, cut-over steps
@@ -51,7 +52,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (25 modules)"]
+  subgraph Source["remote/helper/ (26 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]

@@ -38,22 +38,22 @@ const site = (id, serverId, config) => db.prepare('INSERT INTO sites(id,server_i
 const migration = migrations.find(item => item.name === 'server-app-links');
 const objects = database => database.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all().map(row => ({ ...row }));
 
-test('the migration is the last one, compatible, adds only server_app_links, keeps every row and restarts as a no-op', async () => {
-  assert.equal(migration.version, migrations.at(-1).version); assert.equal(migration.compatible, true); assert.equal(compatFloor(migrations), 1);
+test('the migration is 20, compatible, adds only server_app_links, keeps every row and restarts as a no-op', async () => {
+  assert.equal(migration.version, 20); assert.equal(migration.compatible, true); assert.equal(compatFloor(migrations), 1);
   const folder = await mkdtemp(join(tmpdir(), 'docknest-links-migration-')), file = join(folder, 'state.sqlite'), database = new DatabaseSync(file);
   try {
     database.exec('PRAGMA foreign_keys=ON');
-    const before = migrations.filter(item => item.version < migration.version), quiet = () => {};
+    const before = migrations.filter(item => item.version < migration.version), upTo = [...before, migration], quiet = () => {};
     migrate(database, { file, list: before, log: quiet });
     database.exec(`INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('srv','Server','192.0.2.20',22,'root','sealed','${'a'.repeat(64)}','${at}')`);
     const old = objects(database), servers = database.prepare('SELECT * FROM servers').all().map(row => ({ ...row }));
-    const result = migrate(database, { file, list: migrations, log: quiet });
+    const result = migrate(database, { file, list: upTo, log: quiet });
     assert.equal(result.to, migration.version); assert.ok(result.snapshot);
     for (const row of old) assert.deepEqual(objects(database).find(item => item.name === row.name), row, 'unchanged: ' + row.name);
     assert.deepEqual(objects(database).map(row => row.name).filter(name => !old.some(row => row.name === name)), ['server_app_links']);
     assert.deepEqual(database.prepare('SELECT * FROM servers').all().map(row => ({ ...row })), servers);
     const after = objects(database);
-    assert.deepEqual(migrate(database, { file, list: migrations, log: quiet }), { from: migration.version, to: migration.version, snapshot: null });
+    assert.deepEqual(migrate(database, { file, list: upTo, log: quiet }), { from: migration.version, to: migration.version, snapshot: null });
     migration.up(database); assert.deepEqual(objects(database), after);
     // Older code accepts the newer, compatible schema.
     assert.deepEqual(migrate(database, { file, list: before, log: quiet }), { from: migration.version, to: migration.version, snapshot: null });

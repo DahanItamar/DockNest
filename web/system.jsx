@@ -15,8 +15,8 @@ const STATES={
 export {statusState};
 const humanise=v=>{const t=String(v).replace(/[_-]+/g,' ').trim();return t.charAt(0).toUpperCase()+t.slice(1)};
 // value: any status string (shown humanised); state: force one of success|running|queued|pending|failed|needs-review.
-export function StatusLabel({value,state,children}){
- const s=state||statusState(value),{Icon}=STATES[s]||STATES.queued;
+export function StatusLabel({value,state,children,icon}){
+ const s=state||statusState(value),Icon=icon||(STATES[s]||STATES.queued).Icon;
  const text=children||(value?humanise(value):'Unknown');
  return <span className={'status status-'+s}><Icon className="status-icon" size={16} stroke={2} aria-hidden="true"/>{text}</span>;
 }
