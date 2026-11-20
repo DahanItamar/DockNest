@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    NOFOLLOW, atomic_json, diagnostic, emit, mount_option, private_staging_base, sync_directory)
+    NOFOLLOW, SAFE_NAME, atomic_json, diagnostic, emit, mount_option, private_staging_base, sync_directory)
 from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, within)
 from .net import (
@@ -15,8 +15,10 @@ from .incremental import (
     INCREMENTAL_ROOT, SITE_KEY)
 from .restore import (
     DEFAULT_CAPABILITIES)
+from .runspec import (
+    EXTRA_HOST, RESTART_POLICIES)
 from .move import (
-    COMPOSE_MOUNT_KEYS, COMPOSE_SERVICE_KEYS, COMPOSE_SERVICE_NETWORK_KEYS, COMPOSE_TOP_KEYS, PROTECTED_PATHS, SAFE_NAME,
+    COMPOSE_MOUNT_KEYS, COMPOSE_SERVICE_KEYS, COMPOSE_SERVICE_NETWORK_KEYS, COMPOSE_TOP_KEYS, PROTECTED_PATHS,
     compose_network_problem, compose_volume_problem, listening_ports)
 from .restore_test import (
     IMAGE_TAG)
@@ -1295,14 +1297,14 @@ def edit_container_plan(c,inv):
         return list(dict.fromkeys(values))
     policy=hc.get('RestartPolicy') or {}
     restart=policy.get('Name') or 'no'
-    if restart not in ('no','always','unless-stopped','on-failure'):edit_refuse('UNSUPPORTED_CONTAINER')
+    if restart not in RESTART_POLICIES:edit_refuse('UNSUPPORTED_CONTAINER')
     if restart=='on-failure' and policy.get('MaximumRetryCount'):restart+=':%d'%int(policy['MaximumRetryCount'])
     entrypoint=config.get('Entrypoint') or [];command=config.get('Cmd') or []
     custom_entry=entrypoint!=(image.get('Entrypoint') or [])
     plan={'name':c['Name'].lstrip('/'),'imageRef':config.get('Image'),'imageId':c.get('Image'),'restart':restart,'network':'bridge' if primary=='default' else primary,
         'aliases':aliases(primary) if primary not in ('bridge','default') else [],'extraNetworks':[{'name':n,'aliases':aliases(n)} for n in networks if n!=primary],
         'ports':[{'host':int(b.get('HostPort')),'container':int(k.split('/')[0]),'protocol':k.split('/')[1] if '/' in k else 'tcp','hostIp':b.get('HostIp') or ''} for k,v in sorted((hc.get('PortBindings') or {}).items()) for b in v or [] if str(b.get('HostPort') or '').isdigit()],
-        'mounts':mounts,'tmpfs':[[d,o] for d,o in temporary_mounts(c)],'extraHosts':[h for h in hc.get('ExtraHosts') or [] if re.fullmatch(r'[A-Za-z0-9.-]+:[0-9a-fA-F.:]+|[A-Za-z0-9.-]+:host-gateway',h)],
+        'mounts':mounts,'tmpfs':[[d,o] for d,o in temporary_mounts(c)],'extraHosts':[h for h in hc.get('ExtraHosts') or [] if EXTRA_HOST.fullmatch(h)],
         'init':bool(hc.get('Init')),'labels':labels,'user':config.get('User') if config.get('User')!=image.get('User') else None,
         'workdir':config.get('WorkingDir') if config.get('WorkingDir')!=image.get('WorkingDir') else None,
         'entrypoint':entrypoint if custom_entry else None,'command':command if custom_entry or command!=(image.get('Cmd') or []) else None,
