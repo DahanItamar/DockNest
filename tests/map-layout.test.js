@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {layoutMap,databasesOf,domainsOf,METRICS} from '../web/map/layout.js';
+import {layoutMap,databasesOf,domainsOf,METRICS,snapToGrid,homeOffset,clippedIn} from '../web/map/layout.js';
+import {cleanPositions,prunePositions} from '../web/map/saved-layout.js';
 
 const make=(ns,nm)=>{const servers=[],sites=[];for(let i=0;i<ns;i++){servers.push({id:'s'+i,name:'Server '+String(ns-i).padStart(2,'0')});for(let j=0;j<(nm+i)%(nm+1);j++)sites.push({id:`s${i}-w${j}`,serverId:'s'+i,name:'site-'+((j*7)%13)+'.example.com'});}return {servers,sites};};
 const storageFor=(sites,n=3)=>{const storage=Array.from({length:n},(_,i)=>({id:'t'+i,name:'Storage '+i})),backupOf={};sites.forEach((s,i)=>{if(i%4!==3)backupOf[s.id]=storage[i%n].id});return {storage,backupOf};};
@@ -108,3 +109,33 @@ test('saved positions move only their node, lines follow and unknown nodes keep 
  assert.deepEqual(layoutMap(servers,sites,{...o,positions:{}}),auto,'no positions is the automatic layout');
 });
 test('metrics stay on the 8 px rhythm',()=>{for(const k of ['pad','serverS','siteS','storageS','rowGap','groupGap'])assert.equal(METRICS[k]%8,0,k)});
+test('a node moved left of and above the layout grows the canvas there, with no wall at 0',()=>{
+ const {servers,sites}=make(2,2),o=storageFor(sites),auto=layoutMap(servers,sites,o),key='site:'+auto.sites[0].id;
+ assert.deepEqual([auto.x0,auto.y0],[0,0],'the automatic layout starts at 0');
+ const l=layoutMap(servers,sites,{...o,positions:{[key]:{x:-400,y:-320}}}),n=l.keys[key];
+ assert.deepEqual([n.x,n.y],[-400,-320],'the position is used as given');
+ assert.ok(l.x0<=n.block.x&&l.x0<=n.x-METRICS.pad&&l.y0<=n.y-METRICS.pad,'the canvas reaches past the moved node');
+ assert.ok(l.x0+l.width>=auto.width&&l.y0+l.height>=auto.height-1,'and still covers the rest of the map');
+ assert.deepEqual(l.paths.find(p=>p.id===auto.sites[0].id).points.at(-1),[n.x-14,n.y+n.h/2],'its line follows it');
+ const same=layoutMap(servers,sites,{...o,positions:{[key]:{x:auto.sites[0].x,y:auto.sites[0].y}}});
+ assert.deepEqual([same.x0,same.y0],[0,0],'a node left in place keeps the canvas origin');
+});
+test('snapping, the home view and the out-of-view check use the same coordinates',()=>{
+ assert.deepEqual([-500,-9,-7,0,7,8,23].map(snapToGrid),[-496,-16,0,0,0,16,16]);
+ const l={x0:-200,y0:-100,width:600,height:400};
+ assert.deepEqual(homeOffset(l,1,1000,800),{x:400,y:300},'centred when it fits: x0 lands at the left edge of the centred box');
+ assert.deepEqual(homeOffset(l,0.5,200,100),{x:100,y:50},'otherwise its top left corner is at the view corner');
+ assert.equal(clippedIn(l,{x:400,y:300,k:1},1000,800),false);
+ assert.equal(clippedIn(l,{x:100,y:300,k:1},1000,800),true,'a node left of the view counts as out of view');
+});
+test('saved positions are read back only when they are sound',()=>{
+ assert.deepEqual(cleanPositions({'site:a':{x:-480,y:-96},'server:b':{x:32,y:48,extra:1}}),{'site:a':{x:-480,y:-96},'server:b':{x:32,y:48}});
+ for(const bad of [null,'x',[],42])assert.deepEqual(cleanPositions(bad),{});
+ assert.deepEqual(cleanPositions({'site:a':{x:'1',y:2},'site:b':{x:NaN,y:0},'site:c':{x:1e9,y:0},'nope:d':{x:1,y:1},'site:':{x:1,y:1},'site:e':null}),{});
+});
+test('positions of removed nodes are dropped, kinds not loaded yet are kept',()=>{
+ const p={'server:a':{x:0,y:0},'server:gone':{x:1,y:1},'site:s':{x:2,y:2},'storage:t':{x:3,y:3},'alert:c':{x:4,y:4},'docknest:root':{x:5,y:5}};
+ assert.deepEqual(Object.keys(prunePositions(p,{server:['a'],site:[],storage:null,alert:null})),['server:a','storage:t','alert:c','docknest:root']);
+ assert.equal(prunePositions(p,{server:['a','gone'],site:['s'],storage:['t'],alert:['c']}),p,'nothing removed: the same object, so nothing re-renders');
+ assert.equal(prunePositions(p,{server:null,site:null,storage:null,alert:null}),p,'nothing loaded yet: everything is kept');
+});

@@ -19,6 +19,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 - Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
 - A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
 
 ## [2.16.4] - 2026-11-14
 
