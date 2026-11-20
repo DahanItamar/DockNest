@@ -44,7 +44,7 @@ test('operators get 403 for each path field they add or change; administrators m
     assert.equal((await call('/sites', 'POST', docker)).status, 201, 'a site without host paths is still an operator action');
   } finally { role('admin'); }
   const created = {};
-  for (const [field, config] of Object.entries(edits)) { const response = await call('/sites', 'POST', { ...docker, config }); assert.equal(response.status, 201, field); created[field] = await response.json(); }
+  for (const [field, config] of Object.entries(edits)) { const response = await call('/sites', 'POST', { ...docker, config: { ...config, containers: ['fixture-' + field.toLowerCase()] } }); assert.equal(response.status, 201, field); created[field] = await response.json(); }
   const savedStatic = await call('/sites', 'POST', staticSite); assert.equal(savedStatic.status, 201);
   created.documentRoot = await savedStatic.json();
   role('operator');
@@ -115,7 +115,7 @@ test('an operator may save paths that discovery reports for the server, and noth
 test('staging roots in system folders and paths starting with // are refused for everyone', async () => {
   for (const stagingRoot of ['/root/docknest', '/etc/docknest', '/usr/bin/x', '/home/a/.ssh/x']) assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, stagingRoot } })).status, 400, stagingRoot);
   assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, configFiles: ['//etc/shadow'] } })).status, 400);
-  assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, stagingRoot: '/srv/docknest' } })).status, 201);
+  assert.equal((await call('/sites', 'POST', { ...docker, config: { ...docker.config, containers: ['staging-app'], stagingRoot: '/srv/docknest' } })).status, 201);
 });
 
 test.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); await rm(directory, { recursive: true, force: true }); });

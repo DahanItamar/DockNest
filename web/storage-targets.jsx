@@ -22,17 +22,17 @@ function StorageTree({api,target,refreshKey,onSessionExpired}) {
  async function pin(backup){setBusy(true);setError('');try{await api('/backups/'+backup.id+'/pin',{pinned:!backup.pinned});setReload(value=>value+1);}catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}}
  const filename=file=>file.filename||file.relativePath?.split('/').at(-1)||'Encrypted backup';
  return <section className="panel padded">
-  <h2>{target.name} · Backup folders</h2><p>Site backups are organized by server and site. DockNest recovery kits have their own folder.</p>
+  <h2>{target.name} · Backup folders</h2><p>App backups are organized by server and app. DockNest recovery kits have their own folder.</p>
   {error&&<AlertPanel variant="error" action={<button onClick={()=>setReload(value=>value+1)}>Retry</button>}>{error}</AlertPanel>}
   {!tree&&!error&&<p role="status">Loading backup folders…</p>}
   {tree&&<>
    <p>New backups go under <code>{tree.managedRoot||tree.root}/</code>. Existing files show their recorded paths. Other files on the destination are not listed.</p>
-   {tree.limited&&<p>Showing the latest 1,000 site backups. Use the backup library for other recovery points.</p>}
+   {tree.limited&&<p>Showing the latest 1,000 app backups. Use the backup library for other recovery points.</p>}
    <div className="backup-tree">
-    {!tree.servers.length?<p>No site backups stored here yet.</p>:<Paginated rows={tree.servers} label="Storage servers" pageSize={5}>{servers=>servers.map(server=><details key={server.id} open>
+    {!tree.servers.length?<p>No app backups stored here yet.</p>:<Paginated rows={tree.servers} label="Storage servers" pageSize={5}>{servers=>servers.map(server=><details key={server.id} open>
      <summary>Server: {server.name}</summary>
-     <Paginated rows={server.sites} label={'Storage sites on '+server.name} pageSize={5}>{sites=>sites.map(site=><details key={site.id} open>
-      <summary>Site: {site.name}</summary>
+     <Paginated rows={server.sites} label={'Storage apps on '+server.name} pageSize={5}>{sites=>sites.map(site=><details key={site.id} open>
+      <summary>App: {site.name}</summary>
       <Paginated rows={site.days.flatMap(day=>day.backups)} label={'Stored backups for '+site.name} pageSize={5}>{points=>points.map(backup=><div className="backup-tree-file" key={backup.id}>
        <div><b>{filename(backup)}</b><small>{formatDate(backup.capturedAt)} · {formatBytes(backup.size)} · {backup.verified?'Integrity checked':'Integrity unchecked'}{backup.pinned?' · Pinned':''}{backup.backupKind==='incremental'?' · Increment '+backup.chainPosition+', download the chain from the backup library':''}</small>{backup.relativePath&&<code>{backup.relativePath}</code>}</div>
        <div className="actions">{backup.backupKind!=='incremental'&&<><ZipButton backupId={backup.id} className="button" label={'Download full ZIP '+backup.id}>Full ZIP</ZipButton><a className="button" href={'/api/backups/'+backup.id+'/download'}>Encrypted backup</a></>}<button disabled={busy} onClick={()=>pin(backup)}>{backup.pinned?'Unpin':'Pin'}</button></div>

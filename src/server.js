@@ -34,10 +34,11 @@ import { seal } from './crypto.js';
 import { auth, session, requireAuth, csrf, rateLimit, requireAdmin, requireRecentAuth } from './auth.js';
 import { access } from './access.js';
 import { prepareServerKey, serverReportCommand } from './server-onboarding.js';
-import { testServer, discover, browseProjectFiles, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
+import { testServer, discover, browseProjectFiles, describeContainers, checkReadiness, planBackup, enqueueBackup, enqueueScrub, planRestore, enqueueRestore, setMaintenance, deployMaintenance, setupMaintenance, verifyRecovery } from './engine.js';
 import { backupVerification, backupVerifications } from './recovery-evidence.js';
 import { installBootRecovery, bootRecoveryStatus, requireNotMoving, discardIncrementalState } from './engine.js';
 import { normalizeDomain } from '../shared/domains.js';
+import { coverageConflict } from './site-coverage.js';
 import { exportFullZip,clearInterruptedExports,startZipExport,findZipExport,zipExportState,activeZipExportFor,cancelZipExport,streamZipExport } from './backup-export.js';
 import { reportErrorFields, serverTestFailure } from './storage-errors.js';
 import { siteStorageView, siteStorageSummary, updateSiteStorage } from './site-storage.js';
@@ -45,6 +46,7 @@ import { backupCopyViews } from './backup-copies.js';
 import { retryCopy, packagePath } from './artifact-journal.js';
 import { incrementalRoutes } from './incremental-routes.js';
 import { serverCleanupRoutes } from './server-cleanup.js';
+import { coverageRoutes } from './server-coverage.js';
 import { chainViews, linkOf, incrementalSettings } from './incremental.js';
 import { hardeningView } from './hardening.js';
 import { keysSafeRoutes } from './keys-safe/routes.js';
@@ -92,13 +94,14 @@ app.use('/api', siteEditRoutes);
 app.use('/api', storageReportRoutes);
 app.use('/api', incrementalRoutes);
 app.use('/api', serverCleanupRoutes);
+app.use('/api', coverageRoutes);
 app.use('/api', keysSafeRoutes);
 app.use('/api/settings/cloudflare-dns', cloudflareRoutes);
 app.use('/api/updates', updateRoutes({ release, service: updates }));
 const now = () => new Date().toISOString();
 const notFound = message => { const error = new Error(message); error.status = 404; throw error; };
 const getServer = serverId => db.prepare('SELECT * FROM servers WHERE id=?').get(serverId) || notFound('Server not found.');
-const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
+const getSite = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('App not found.');
 const safeServer = row => { const { private_key, ...rest } = parse(row); return rest; };
 // List endpoints pass a preloaded Map so each backup row does not issue its own verification query.
 const view = (row, verifications) => {
@@ -237,13 +240,15 @@ app.post('/api/servers/:id/test', async (req, res) => {
 app.get('/api/servers/:id/discover', async (req, res) => {
   const result = await discover(getServer(req.params.id), { recordHardening: req.user.role === 'admin', scanKeys: ['admin', 'operator'].includes(req.user.role) });
   const containers = Array.isArray(result) ? result : result.containers || [];
-  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })) });
+  res.json({ staticSites:result.staticSites||[],containers: containers.map(container => ({ ...container, Config: { ...container.Config, Env: (container.Config?.Env || []).map(value => value.split('=')[0] + '=[redacted]') } })), volumes: result.volumes ?? null });
 });
+const containerNames = query => siteSchema.shape.config.shape.containers.min(1).parse(typeof query === 'string' ? query.split(',') : []);
 app.get('/api/servers/:id/project-files', requireAdmin, async (req,res)=>{
-  const containers=siteSchema.shape.config.shape.containers.min(1).parse(typeof req.query.containers==='string'?req.query.containers.split(','):[]);
   const directory=linuxPath.optional().parse(req.query.path);
-  res.json(await browseProjectFiles(getServer(req.params.id),containers,directory));
+  res.json(await browseProjectFiles(getServer(req.params.id),containerNames(req.query.containers),directory));
 });
+// Any signed-in role may read: the helper only inspects the containers and never returns environment values.
+app.get('/api/servers/:id/describe-containers', async (req, res) => res.json(await describeContainers(getServer(req.params.id), containerNames(req.query.containers))));
 function normalizedSite(data, siteId) {
   const settings = db.prepare("SELECT value FROM settings WHERE key='maintenance'").get();
   const maintenance = data.config.maintenance || { required: data.config.maintenanceRequired, directory: `${data.config.stagingRoot}/maintenance/${siteId}`, publicUrl: data.config.domains[0] ? 'https://' + data.config.domains[0] : '', healthUrl: data.config.healthUrl };
@@ -285,7 +290,7 @@ async function sitePathRefusal(req, saved, next, siteId) {
   let found = { configFiles: new Set(), composeFiles: new Set(), documentRoot: new Set() };
   if (fields.every(field => field in found)) { try { found = discoveredSitePaths(await discover(getServer(next.serverId))); } catch { /* Unconfirmed paths need an administrator. */ } }
   const refused = fields.filter(field => !found[field] || changes[field].some(value => !found[field].has(value)));
-  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of a site, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
+  return refused.length ? { error: `Only an administrator can change the ${refused.map(field => pathLabels[field]).join(', ')} of an app, unless discovery found the path on this server. Ask an administrator to make this change.`, code: 'ADMIN_REQUIRED' } : null;
 }
 // Only lists that are new or changed are checked: a stored list that was already odd must not block unrelated edits.
 export function sqliteListProblem(next, saved) {
@@ -303,6 +308,8 @@ app.post('/api/sites', async (req, res) => {
   const settings = normalizedSite(data, siteId);
   const refusal = await sitePathRefusal(req, null, { serverId: data.serverId, config: settings }, siteId);
   if (refusal) return res.status(403).json(refusal);
+  const conflict = coverageConflict(data.serverId, settings);
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('INSERT INTO sites VALUES (?,?,?,?,?)').run(siteId, data.serverId, data.name, JSON.stringify(settings), now());
   db.prepare('INSERT INTO policies VALUES (?,0,?,?,7,NULL)').run(siteId, '0 2 * * *', 'Asia/Jerusalem');
   audit(req.user.id, 'site.create', siteId); res.status(201).json(getSite(siteId));
@@ -316,7 +323,7 @@ app.patch('/api/sites/:id', async (req, res) => {
   const savedCheckMode = (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.sqliteIntegrityCheck;
   if (data.config.sqliteIntegrityCheck === undefined && savedCheckMode) data.config.sqliteIntegrityCheck = savedCheckMode;
   { const problem = sqliteListProblem(data.config.services, (typeof site.config === 'string' ? JSON.parse(site.config) : site.config)?.services); if (problem) return res.status(400).json({ error: problem }); }
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status IN ('queued','running','recovery_required')").get(site.id)) return res.status(409).json({ error: 'Resolve the active job before changing capture settings.' });
   const saved = typeof site.config === 'string' ? JSON.parse(site.config) : site.config, next = normalizedSite(data, site.id);
   const refusal = await sitePathRefusal(req, { serverId: site.server_id, config: saved }, { serverId: data.serverId, config: next }, site.id);
@@ -324,12 +331,14 @@ app.patch('/api/sites/:id', async (req, res) => {
   // Probe targets stay operator-editable (operators already run backups and maintenance on these hosts); the helper enforces the address policy and the audit trail names who moved a probe.
   const probeFields = { healthUrl: [saved?.healthUrl, next.healthUrl], maintenanceHealthUrl: [saved?.maintenance?.healthUrl, next.maintenance.healthUrl], maintenancePublicUrl: [saved?.maintenance?.publicUrl, next.maintenance.publicUrl], probeOrigin: [Boolean(saved?.maintenance?.probeOrigin), Boolean(next.maintenance.probeOrigin)], domains: [JSON.stringify(saved?.domains || []), JSON.stringify(next.domains)] };
   const probeTargetsChanged = Object.keys(probeFields).filter(name => (probeFields[name][0] ?? '') !== (probeFields[name][1] ?? ''));
+  const conflict = coverageConflict(data.serverId, next, { exceptSiteId: site.id, keep: site.server_id === data.serverId ? saved : null });
+  if (conflict) return res.status(409).json(conflict);
   db.prepare('UPDATE sites SET name=?,server_id=?,config=? WHERE id=?').run(data.name, data.serverId, JSON.stringify(next), site.id);
   audit(req.user.id, 'site.update', site.id, probeTargetsChanged.length ? { probeTargetsChanged } : {}); res.json(getSite(site.id));
 });
 app.post('/api/sites/:id/policy', (req, res) => {
   const site = getSite(req.params.id);
-  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This site was removed from active sites.'});
+  if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id))return res.status(409).json({error:'This app was removed from active apps.'});
   const data = z.object({ enabled: z.boolean(), schedule: z.string().max(100), timezone: z.string().max(100), retention: z.number().int().min(1).max(1000) }).parse(req.body);
   new Intl.DateTimeFormat('en', { timeZone: data.timezone });
   const next = CronExpressionParser.parse(data.schedule, { tz: data.timezone }).next().toISOString();
@@ -340,7 +349,7 @@ app.post('/api/sites/:id/policy', (req, res) => {
 app.get('/api/sites/:id/storage', (req, res) => res.json(siteStorageView(getSite(req.params.id).id)));
 app.put('/api/sites/:id/storage', requireAdmin, requireRecentAuth, (req, res) => {
   const site = getSite(req.params.id);
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) return res.status(409).json({ error: 'This app was removed from active apps.', code: 'site_removed' });
   try { res.json(updateSiteStorage(site.id, req.body, req.user.id)); }
   catch (error) { if (error.code && error.status) return res.status(error.status).json({ error: error.message, code: error.code }); throw error; }
 });
@@ -368,7 +377,7 @@ app.post('/api/jobs/:id/recovery', async (req, res) => {
   if (job.type === 'restore-test') return acknowledgeTestJob(req, res, job);
   const site = getSite(job.site_id);
   const data = z.object({ confirmation: z.string(), reviewedRemoteRecovery: z.literal(true) }).parse(req.body);
-  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the site name and review its remote recovery before acknowledging.' });
+  if (data.confirmation !== site.name || job.status !== 'recovery_required') return res.status(409).json({ error: 'Confirm the app name and review its remote recovery before acknowledging.' });
   const result = await verifyRecovery(job);
   if(job.type==='restore'){
     const details=JSON.parse(job.details);
@@ -471,7 +480,7 @@ app.post('/api/backups/:id/restore-plan', async (req, res) => {
 app.post('/api/backups/:id/restore', async (req, res) => {
   const data = z.object({ plan: z.object({ serverId: z.uuid(), mode: z.string(), mappings: z.record(z.string(), z.unknown()).default({}) }).passthrough(), confirmation: z.string(), sourceTargetId: z.string().min(1).max(64).nullable().optional() }).parse(req.body);
   const backup = db.prepare('SELECT * FROM backups WHERE id=?').get(req.params.id) || notFound('Backup not found.');
-  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the site name to confirm the restore.' });
+  if (data.confirmation !== getSite(backup.site_id).name) return res.status(409).json({ error: 'Type the app name to confirm the restore.' });
   // Never trust the executable flag, capabilities or blockers submitted by a client.
   const sourceTargetId = data.sourceTargetId || (typeof data.plan.sourceTargetId === 'string' ? data.plan.sourceTargetId : null);
   const plan = await planRestore(backup.id, { serverId: data.plan.serverId, mode: data.plan.mode, mappings: data.plan.mappings, sourceTargetId }).catch(sourceRefusal);

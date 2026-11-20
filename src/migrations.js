@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Coverage view (docs/coverage-and-restore-check.md A4): containers and volumes skipped on purpose, by name (names
+// survive a recreate, IDs do not). Additive only: one new table, so 2.16 code ignores it.
+export const coverageIgnoresSchema = `
+CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
+`;
 // Keys safe (docs/keys-safe.md, "Data"). Additive only: two new tables, no rows, nothing altered, so 2.16 code ignores
 // them. Rows hold rule ids, locations (`env:<container>` or `file:<path>`) and keyed fingerprints (32 hex characters),
 // never a key value. `in_backup` and `verified_test_id` name a backup and a restore test without a foreign key, so
@@ -397,9 +402,11 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
-  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them. Planned as 23; the next number on this
-  // base, so versions stay contiguous, and set in merge order with the other 3.0.0 migrations.
-  { version: 19, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
+  // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
+  { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
+  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them. A placeholder number: the next one on this
+  // base, so versions stay contiguous; the final number is set in merge order with the other 3.0.0 migrations.
+  { version: 20, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

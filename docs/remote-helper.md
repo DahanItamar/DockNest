@@ -23,9 +23,10 @@ remote/
 │   ├── net.py              pinned HTTP(S), probe URL policy, public probes, health checks
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
 │   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
+│   ├── runspec.py          run spec of plain containers: docker create flags, Compose file, describe-containers
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
 │   ├── staging.py          boot recovery installation, staging folder list and cleanup
-│   ├── move.py             site moves: facts, deploy, compose override, nginx, cut-over steps
+│   ├── move.py             app moves: facts, deploy, compose override, nginx, cut-over steps
 │   ├── install.py          fixed-argv package installs (nginx, Docker, Compose, certbot)
 │   ├── restore_test.py     automatic restore tests: prepare, run, probe, teardown, reaper
 │   ├── cleanup.py          server cleanup: scan reclaimable Docker space, remove previewed items by ID
@@ -46,7 +47,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (19 modules)"]
+  subgraph Source["remote/helper/ (20 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -110,6 +111,7 @@ classDiagram
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
   class maintenance { maintenance() setup_maintenance() }
   class discovery { nginx_sites() configuration_paths() }
+  class runspec { run_spec() create_args() compose_document() describe_containers() }
   class paths { classify_source() protected_paths() source_archive() }
   class keys { key_context() key_hits() key_proof() restored_keys() }
   class staging { install_boot_recovery() cleanup_staging() }
@@ -137,6 +139,8 @@ classDiagram
   edit --> move
   edit --> maintenance
   move --> restore
+  move --> runspec
+  backup --> runspec
   maintenance --> net
   databases --> net
   backup ..> common
@@ -166,7 +170,7 @@ The full, exact dependency list of each module is its build header (the `from .x
 - `VERSION=1` does not change: it is also the backup `formatVersion` that restores require.
 - Old backups, recovery kits and running restore test reapers each hold their own complete helper and keep working.
   Their guide texts (`python3 helper.py restore-chain ...`) stay true: the kit still ships `recovery/helper.py`.
-- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, sites
+- Boot recovery: the installed copy is compared by SHA-256. After upgrading to the release with this layout, apps
   with boot recovery show it as outdated until it is reinstalled, as after any helper change. The old copy keeps
   working until then.
 

@@ -14,7 +14,7 @@ This page is the reference for what you see and what the API does.
   master key, shown afterwards only as "Saved, hidden", and replaced with the pencil, never read back.
 - An **alert node** on the Map is one provider plus one Connection of that provider. One Connection can serve several
   nodes. A node without a Connection shows "Needs a connection" and sends nothing.
-- A **line** connects a server, a site or DockNest to a node and lists the events it sends.
+- A **line** connects a server, an app or DockNest to a node and lists the events it sends.
 
 A Connection in use cannot be deleted; the Connections page and the API name the nodes that use it.
 
@@ -60,9 +60,9 @@ saved token can never be pointed at a new server by editing the server alone.
 
 | Event | When it fires | Repeats |
 | --- | --- | --- |
-| `backup.failed` | A backup of a site ended failed or needing recovery | Same site: at most once per 10 minutes |
-| `backup.succeeded` | A backup finished | Same site: at most once per 10 minutes |
-| `move.finished` | A site move completed, was rolled back, or failed | Once per move state |
+| `backup.failed` | A backup of an app ended failed or needing recovery | Same app: at most once per 10 minutes |
+| `backup.succeeded` | A backup finished | Same app: at most once per 10 minutes |
+| `move.finished` | An app move completed, was rolled back, or failed | Once per move state |
 | `move.needs_you` | A move waits for the DNS change, for your OK to switch, or for your decision | Once per move state |
 | `server.unreachable` | A server's SSH port did not answer twice in a row (checked every 5 minutes) | Same server: at most once per 6 hours |
 | `server.disk_low` | A server has less than 5 GB free, or more than 90 percent used when its size is known | Same server: at most once per 24 hours |
@@ -71,40 +71,40 @@ saved token can never be pointed at a new server by editing the server alone.
 | `backup.copy_failed` | The first failed attempt of a backup copy (DockNest keeps retrying for 7 days) | Once per copy |
 | `backup.copy_recovered` | A copy that failed earlier was saved | Once per copy |
 | `backup.copy_gave_up` | A copy still failed after 7 days of retries (it can be retried in DockNest) | Once per copy |
-| `certificate.expiring` | A site's TLS certificate expires within the warning days (14 by default), or has expired | Once per certificate, expiry date and stage (expires soon, then expired) |
-| `certificate.renewal_failed` | certbot's newest renewal run for a site's certificate failed | Once per failed certbot run; a later failed run alerts again |
+| `certificate.expiring` | An app's TLS certificate expires within the warning days (14 by default), or has expired | Once per certificate, expiry date and stage (expires soon, then expired) |
+| `certificate.renewal_failed` | certbot's newest renewal run for an app's certificate failed | Once per failed certbot run; a later failed run alerts again |
 | `config.changed` | An app's Compose, env or configuration files (or a key in them) differ from known-good, seen at a readiness check, discovery or backup. See [keys-safe.md](keys-safe.md) | Once per new set of fingerprints |
 
-New lines start with the failures: a site with backup failed and restore test failed; a server with those plus
+New lines start with the failures: an app with backup failed and restore test failed; a server with those plus
 unreachable and low disk; DockNest with those plus update available.
 
-A `docknest` line covers the whole installation, a `server` line that server and the sites on it, a `site` line only
-that site. There is one line per source and node. A message goes to a Connection at most once per event, however many
+A `docknest` line covers the whole installation, a `server` line that server and the apps on it, a `site` line only
+that app. There is one line per source and node. A message goes to a Connection at most once per event, however many
 nodes and lines lead to it.
 
 ## Certificates
 
-DockNest warns before a site's TLS certificate runs out, without any new check or schedule. It only reads certificate
-facts while it already works on the server or site:
+DockNest warns before an app's TLS certificate runs out, without any new check or schedule. It only reads certificate
+facts while it already works on the server or app:
 
-- **What visitors see.** When a backup or a readiness check probes the site's HTTPS health or public URL, the helper
+- **What visitors see.** When a backup or a readiness check probes the app's HTTPS health or public URL, the helper
   notes the expiry date of the certificate it just verified (any certificate authority, wildcards included). A
   certificate refused because it has expired is noted as expired.
-- **certbot.** When DockNest tests the server connection, discovers sites, checks readiness or takes a backup, the helper
+- **certbot.** When DockNest tests the server connection, discovers apps, checks readiness or takes a backup, the helper
   also reads the public certificate files in `/etc/letsencrypt/live` (never a key) and the outcome of certbot's latest
   renewal runs from its newest logs in `/var/log/letsencrypt`. Only dates, DNS names, serial numbers and certificate names
   leave the server, never file contents or log text.
 
-A certbot certificate counts for every site on that server whose domains it covers (a wildcard covers one label:
-`*.example.com` covers `shop.example.com`, not `example.com`). A certificate shared by several sites is one alert per
+A certbot certificate counts for every app on that server whose domains it covers (a wildcard covers one label:
+`*.example.com` covers `shop.example.com`, not `example.com`). A certificate shared by several apps is one alert per
 channel. When a probe and a certbot file disagree, what visitors see wins, unless the file is newer (a renewal the web
-server has not loaded yet). A site without TLS has no certificate facts and never alerts. An expired certbot
+server has not loaded yet). An app without TLS has no certificate facts and never alerts. An expired certbot
 certificate that nothing renews (no file in `/etc/letsencrypt/renewal`) is left-over, not served, and is ignored.
 
-**Forgetting a certificate.** When a backup or readiness check of a site sees no certificate for it at all (no HTTPS
+**Forgetting a certificate.** When a backup or readiness check of an app sees no certificate for it at all (no HTTPS
 probe answer and no certbot certificate covering its domains), DockNest keeps the stored facts, and what they already
-alerted, for 7 days, so a site that was down for a day does not alert twice. After 7 days without any certificate it
-forgets them: the site is treated as having no TLS.
+alerted, for 7 days, so an app that was down for a day does not alert twice. After 7 days without any certificate it
+forgets them: the app is treated as having no TLS.
 
 The stored facts are judged again on each pass of the alert worker, so a certificate that reaches the warning days
 between backups still alerts. A renewal (a new expiry date) clears a renewal failure and can alert again later. Each
@@ -119,7 +119,7 @@ the Map's alert panel.
 
 ## Messages
 
-One template for every provider: a title ("Backup failed"), the site and server names you typed, the time with its
+One template for every provider: a title ("Backup failed"), the app and server names you typed, the time with its
 zone, one plain reason from a fixed list ("The backup did not finish. Open DockNest to see why.") and a link that opens
 the job in DockNest after sign-in (`/?job=<id>`, only when `APP_ORIGIN` is not a loopback address). Each provider
 formats it in its own way; mentions are always off and markup in names is neutral. No addresses, paths, logs or error
@@ -180,6 +180,6 @@ Migration 10 (`alert-connections`, compatible) adds `connections`, `alert_nodes`
 copies the 2.8 alerts into them without opening any sealed value. The 2.8 tables stay as they were, so going back to
 2.9 keeps the alerts as they were at upgrade time. See [upgrading.md](upgrading.md).
 
-Migration 13 (`site-certificates`, compatible) adds `site_certificates`: the latest certificate facts per site (source,
+Migration 13 (`site-certificates`, compatible) adds `site_certificates`: the latest certificate facts per app (source,
 certificate name, serial, expiry, certbot renewal outcome) and which certificate alert each one already gave. Older
 versions ignore it.

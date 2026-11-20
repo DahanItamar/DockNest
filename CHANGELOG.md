@@ -6,13 +6,22 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
+- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
+- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
+- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
 - Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
 - Restore tests check that the restored app has the same keys as the backup.
 - A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
 
+### Changed
+
+- Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
+
 ### Fixed
 
-- A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
+- A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 
 ## [2.16.4] - 2026-11-14
 
@@ -366,7 +375,7 @@ See [docs/releases/2026-10-24-v2.7.0.md](docs/releases/2026-10-24-v2.7.0.md).
 - Map: the map takes exactly the height left on the screen, so the whole map and the hint below it are visible without scrolling on any screen size.
 - Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
 - Update button: a run that stopped before changing anything (for example a failed signature check, low disk space, or jobs still running) no longer uses up one of the 6 updates allowed per day. Before, a few such stops could block the button for the rest of the day. A separate limit of 24 attempts per day still applies. Takes effect after `sudo scripts/install-updater.sh --repair` on the host.
-- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "phaseX needs nginx. Install it, then try again." instead of a longer technical one.
+- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "web-box needs nginx. Install it, then try again." instead of a longer technical one.
 
 ### Changed
 

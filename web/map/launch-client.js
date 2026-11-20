@@ -30,7 +30,7 @@ export function createLaunchClient(api){
 export const LAUNCH_STOP=new Set(['waiting_dns','done','failed','cancelled','removed','needs_attention']);
 export const busyLaunch=l=>!!l&&((l.steps||[]).some(s=>['queued','running'].includes(s.state))||!!l.removing)&&!['failed','cancelled','removed','needs_attention'].includes(l.state);
 export const settled=l=>!!l&&LAUNCH_STOP.has(l.state)&&!busyLaunch(l);
-export const STEP_LABEL={check:'Check',fetch:'Fetch source',build:'Build',start:'Start',check_health:'Health check',web:'nginx',certificate:'Certificate',save:'Save site',first_backup:'First backup',maintenance:'Maintenance page',teardown:'Clean up'};
+export const STEP_LABEL={check:'Check',fetch:'Fetch source',build:'Build',start:'Start',check_health:'Health check',web:'nginx',certificate:'Certificate',save:'Save app',first_backup:'First backup',maintenance:'Maintenance page',teardown:'Clean up'};
 export const LAUNCH_STEPS=Object.entries(STEP_LABEL).filter(([k])=>k!=='teardown');
 // The sentence under the progress bar: the step that is running now.
 export const statusLine=l=>l?.statusLine||'Starting…';
@@ -42,7 +42,7 @@ export function checkRows(result){
  return rows;
 }
 // Why a check cannot go on: the engine's blockers, then the Compose gate's refusals.
-const GATE_TEXT={NO_WEB:'No service serves the website. Choose the web service.',WEB_SERVICE_INVALID:'The web service was not found in this Compose file.',BUILD_SETTING_REFUSED:'A build setting in this Compose file is not allowed.',ENV_FILE_REFUSED:'An env_file in this Compose file is not allowed.',PATH_REFUSED:'A path in this Compose file leaves the site folder.',SYNTAX_REFUSED:'This Compose file uses something DockNest does not allow.'};
+const GATE_TEXT={NO_WEB:'No service serves the website. Choose the web service.',WEB_SERVICE_INVALID:'The web service was not found in this Compose file.',BUILD_SETTING_REFUSED:'A build setting in this Compose file is not allowed.',ENV_FILE_REFUSED:'An env_file in this Compose file is not allowed.',PATH_REFUSED:'A path in this Compose file leaves the app folder.',SYNTAX_REFUSED:'This Compose file uses something DockNest does not allow.'};
 export function blockersOf(result){
  const out=[...(result?.blockers||[])].filter(Boolean);
  for(const r of result?.gate?.refusals||[])out.push((GATE_TEXT[r.code]||'The Compose file asks for something DockNest does not allow')+(r.service?` (${r.service})`:''));

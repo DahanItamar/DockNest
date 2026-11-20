@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
-    INCREMENTAL_GUIDE, RESTORE_GUIDE)
+    INCREMENTAL_GUIDE, RESTORE_GUIDE, RUN_DEFINITION_GUIDE)
 from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
@@ -27,6 +27,8 @@ from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
+from .runspec import (
+    run_definition, standalone)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
 # </build:header>
 def transfer_progress(count,final=False):
@@ -139,7 +141,7 @@ def stream_file(archive,name,path,expected):
     if file_sha256(path)!=expected or path.stat().st_size!=size:raise ValueError('Snapshot file changed during capture')
     return {'bytes':size,'sha256':expected}
 def stream_document(archive,name,value):
-    data=value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
+    data=value if isinstance(value,bytes) else value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
     archive.addfile(info,io.BytesIO(data))
 
 def capture_size(containers,configuration,exclusions,images):
@@ -283,11 +285,26 @@ def artifact_inventory(root):
             result[p.name]={'bytes':p.stat().st_size,'sha256':digest.hexdigest()}
     return result
 
+# run-definition/ files (2.16.5): optional, recorded in manifest.runDefinition, so packages without them still verify.
+RUN_DEFINITION=re.compile(r'run-definition/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:yaml|env)')
+def document_record(data):return {'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+def run_definition_intact(root,records):
+    folder=root/'run-definition'
+    present={'run-definition/'+p.name for p in folder.iterdir()} if folder.is_dir() and not folder.is_symlink() else set()
+    if present!=set(records) or not all(RUN_DEFINITION.fullmatch(name) for name in records):return False
+    return all((root/name).is_file() and not (root/name).is_symlink() and document_record((root/name).read_bytes())==item for name,item in records.items())
+def package_run_definition(cs,images):
+    """A container started without Compose gets a readable Compose file of itself (docs/backup-format.md). It is
+    optional content: if it cannot be written the backup goes on without it (no manifest.runDefinition)."""
+    if not standalone(cs):return {}
+    try:return {name:text.encode() for name,text in run_definition(cs,images).items()}
+    except Exception as error:
+        diagnostic(phase='run-definition-skipped',exceptionType=type(error).__name__);return {}
 def verify_artifacts(root,manifest):
     expected=manifest.get('artifacts')
     if expected is None:return False # Legacy package: no invented artifact evidence.
     actual=artifact_inventory(root)
-    if actual!=expected:raise ValueError('Backup artifacts are missing, changed or unexpected')
+    if actual!=expected or not run_definition_intact(root,manifest.get('runDefinition') or {}):raise ValueError('Backup artifacts are missing, changed or unexpected')
     names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
     if manifest.get('formatVersion')==2:
@@ -698,6 +715,8 @@ def capture(req,output=None):
     if protected:manifest['protectedMounts']=protected
     if keys_left_out:manifest['protectedPaths']=keys_left_out
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
+    definition=package_run_definition(cs,images)
+    if definition:manifest['runDefinition']={name:document_record(data) for name,data in definition.items()}
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
     if increment:
@@ -725,11 +744,17 @@ def capture(req,output=None):
             guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
+    if definition:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(RUN_DEFINITION_GUIDE)
     if output is not None:
         stream_document(archive,'manifest.json',document)
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
+        for name,data in definition.items():stream_document(archive,name,data)
         archive.close();output.flush()
-    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar'))])
+    else:
+        if definition:(root/'run-definition').mkdir(mode=0o700)
+        for name,data in definition.items():(root/name).write_bytes(data);os.chmod(root/name,0o600)
+        run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar')),*definition])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass

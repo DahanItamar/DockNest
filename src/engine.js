@@ -44,6 +44,9 @@ export const discover=async(server,{recordHardening:record=false,scanKeys=false}
  return result;
 };
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
+// Read-only: how DockNest would recreate plain containers (run spec, unsupported settings, Compose preview). The helper
+// never returns environment values here, only their names.
+export const describeContainers=(server,containers)=>transport.remote(server,{operation:'describe-containers',containers});
 // Backup transport; tests replace these members to drive executeJob without SSH.
 export const transport={remote,remoteCaptureStream,download,uploadStream};
 export async function planBackup(siteId){const {site,server}=siteInfo(siteId);return transport.remote(server,{operation:'plan',config:site.config});}
@@ -77,7 +80,7 @@ export async function verifyRecovery(job){
  const {site,server}=siteInfo(job.site_id);
  return remote(server,{operation:'verify-recovery',job:job.id,config:site.config});
 }
-function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('Site not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
+function siteInfo(siteId){const site=parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId));if(!site)throw new Error('App not found');const server=db.prepare('SELECT * FROM servers WHERE id=?').get(site.server_id);if(!server)throw new Error('Server not found');site.config.maintenance={required:site.config.maintenanceRequired!==false,directory:'/var/lib/docker-backup-manager/maintenance/'+site.id,publicUrl:site.config.domains?.[0]?'https://'+site.config.domains[0]:'',healthUrl:site.config.healthUrl||'',...site.config.maintenance};return {site,server};}
 // Restore tests never make their site busy: a test runs on its test server and its clean-up blocks only that server.
 function busy(siteId){return db.prepare("SELECT id FROM jobs WHERE site_id=? AND type NOT IN ('site-move','restore-test') AND status IN ('queued','running','recovery_required')").get(siteId);}
 export const busySite=siteId=>Boolean(busy(siteId));
@@ -85,12 +88,12 @@ export const busySite=siteId=>Boolean(busy(siteId));
 // backups pass the actor `move:<id>`.
 const movesTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_moves'").get();
 export function movingSite(siteId){if(!movesTable())return null;return db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('draft','rolled_back','cancelled','failed','switched_back','cleaned','completed','retention_expired')").get(siteId)||null;}
-export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This site is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});requireNotEditing(siteId,actor);}
+export function requireNotMoving(siteId,actor=''){const move=movingSite(siteId);if(move&&actor!=='move:'+move.id)throw Object.assign(new Error('This app is being moved. Wait for the move to finish or cancel it first.'),{status:409,code:'SITE_MOVING'});requireNotEditing(siteId,actor);}
 // A site with an unfinished Safe Edit (docs/safe-edit.md) refuses other mutating work, also while the edit waits for its
 // backup or a health poll and while it needs attention; the edit's own backup and restore pass the actor `edit:<id>`.
 const editsTable=()=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='site_edits'").get();
 export function editingSite(siteId){if(!editsTable())return null;return db.prepare('SELECT id,state FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)||null;}
-export function requireNotEditing(siteId,actor=''){const edit=editingSite(siteId);if(edit&&actor!=='edit:'+edit.id)throw Object.assign(new Error('This site is being changed by a Safe Edit. Wait for it to finish first.'),{status:409,code:'SITE_EDITING',publicCode:'SITE_EDITING'});}
+export function requireNotEditing(siteId,actor=''){const edit=editingSite(siteId);if(edit&&actor!=='edit:'+edit.id)throw Object.assign(new Error('This app is being changed by a Safe Edit. Wait for it to finish first.'),{status:409,code:'SITE_EDITING',publicCode:'SITE_EDITING'});}
 const requireNoDeploymentHold=()=>requireNoHold(db);
 // `within` runs first inside the enqueue transaction (Full backup now: its settings change and the job commit together).
 export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}){
@@ -98,14 +101,14 @@ export function enqueueBackup(siteId,actor='scheduler',extra={},{within=null}={}
  // Upgrade safety: a stored probe URL the policy refuses never blocks the backup. The helper skips that probe
  // (container health only) and the job carries a warning until the site is edited.
  const probe=storedProbeProblem(siteInfo(siteId).site.config);
- if(busy(siteId))throw new Error('Site already has an active job or unresolved recovery');
- const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This site was removed from active sites.'),{status:409});if(busy(siteId))throw new Error('Site already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{}),...(extra.editId?{editId:extra.editId}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
+ if(busy(siteId))throw new Error('App already has an active job or unresolved recovery');
+ const job=id();db.exec('BEGIN IMMEDIATE');try{within?.();requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(siteId))throw Object.assign(new Error('This app was removed from active apps.'),{status:409});if(busy(siteId))throw new Error('App already has active work');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'backup','queued','queued',?,?)").run(job,siteId,now(),JSON.stringify({...(probe?{warnings:[probe.message]}:{}),...(extra.moveId?{moveId:extra.moveId,keepStopped:!!extra.keepStopped}:{}),...(extra.editId?{editId:extra.editId}:{})}));audit(actor,'backup.enqueue',siteId,{job,...(probe?{probePolicy:probe.field}:{})});db.exec('COMMIT');return {id:job};}catch(e){db.exec('ROLLBACK');throw e;}
 }
 export function enqueueScrub(backupId,actor='administrator'){
  requireNoDeploymentHold();
  const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);if(!backup)throw new Error('Backup not found');
  db.exec('BEGIN IMMEDIATE');
- try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');if(busy(backup.site_id))throw new Error('Site already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
+ try{requireNoDeploymentHold();if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');if(busy(backup.site_id))throw new Error('App already has active work');const job=id();db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'scrub','queued','queued',?,?)").run(job,backup.site_id,now(),JSON.stringify({backupId}));audit(actor,'backup.scrub.enqueue',backupId,{job});db.exec('COMMIT');return {id:job};}catch(error){db.exec('ROLLBACK');throw error;}
 }
 async function executeScrub(job){
  const {backupId}=JSON.parse(job.details);const backup=db.prepare('SELECT * FROM backups WHERE id=?').get(backupId);
@@ -246,7 +249,7 @@ export async function enqueueRestore(backupId,plan,actor='administrator'){
  const restoreId=id(),jobId=id();
  db.exec('BEGIN IMMEDIATE');
  try{
-  if(busy(backup.site_id))throw new Error('Site already has active work or unresolved recovery');
+  if(busy(backup.site_id))throw new Error('App already has active work or unresolved recovery');
   requireNoDeploymentHold();
   if(db.prepare('SELECT 1 FROM retention_operations WHERE backup_id=?').get(backupId))throw new Error('Package retention is in progress');
   db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,?,?,'queued',?)").run(restoreId,backupId,fresh.serverId,fresh.mode,JSON.stringify(fresh),now());
@@ -543,7 +546,7 @@ export async function executeJob(job){
   const notCopied=protectedMountWarning(manifest.protectedMounts);if(notCopied)warnings.push(notCopied);
   const keysNotCopied=protectedPathWarning(manifest.protectedPaths);if(keysNotCopied)warnings.push(keysNotCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
-  if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the site server can run the current helper.');
+  if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the app server can run the current helper.');
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
   const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{}),...(jobDetails.editId?{editId:jobDetails.editId}:{})}});

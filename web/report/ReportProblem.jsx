@@ -17,7 +17,7 @@ export function ReportProvider({api,user,children}){
 }
 export const useReportContext=()=>useContext(ReportContext);
 
-const NEVER=['Server and site names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
+const NEVER=['Server and app names','Addresses, domains and ports','Paths, buckets and file names','User names and emails','Error text from your servers, logs and keys','Backup contents'];
 export const PUBLIC_WARNING='Issues on the DockNest repository are public and linked to your GitHub account. Anyone can read what you share.';
 
 // The review dialog: the exact title and values that will be sent, then GitHub in a new tab (no opener, no referrer).

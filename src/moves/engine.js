@@ -16,6 +16,7 @@ import { incrementalSettings, chainSize } from '../incremental.js';
 import { installActive } from '../installs.js';
 import { launchActive, launchHeld } from '../launches/hold.js';
 import { evaluateMove, preflightHash, describeDuration } from './preflight.js';
+import { coverageConflict } from '../site-coverage.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { confirmKnownGood } from '../keys-safe/scan.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
@@ -126,7 +127,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const facts = {
     site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
       ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
-      timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
+      ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
       : { id: target.id, name: target.name, reachable: target.id === source.id, hostKeyOk, freeBytes: 0 },
@@ -175,14 +176,21 @@ export function normaliseOptions(options = {}) {
 
 // POST /api/moves: a preview. It is stored as a draft so Start is bound to exactly what the owner reviewed; a newer
 // preview for the same site replaces it. Drafts block no other work and expire after an hour.
+// A move never makes a second app on the new server for a container or folder one of its apps already backs up: the
+// same refusal as adding or editing an app (src/site-coverage.js).
+function refuseCovered(siteId, targetServerId) {
+  const { site } = siteInfo(siteId), conflict = coverageConflict(targetServerId, site.config, { exceptSiteId: site.id });
+  if (conflict) throw httpError(409, conflict.error, { code: conflict.code });
+}
 export async function previewMove({ siteId, targetServerId, options: raw }, actor) {
+  refuseCovered(siteId, targetServerId);
   const options = normaliseOptions(raw);
   const preview = await previewFacts(siteId, targetServerId, options);
   preview.plan.dnsMode = options.dnsMode;
   const moveId = id(), at = now();
   transaction(() => {
     const active = db.prepare("SELECT id,state FROM site_moves WHERE site_id=? AND state NOT IN ('rolled_back','cancelled','failed','switched_back','cleaned')").get(siteId);
-    if (active && active.state !== 'draft') throw httpError(409, 'This site is already being moved. Open the move to follow it or cancel it first.', { moveId: active.id });
+    if (active && active.state !== 'draft') throw httpError(409, 'This app is already being moved. Open the move to follow it or cancel it first.', { moveId: active.id });
     if (active) db.prepare("UPDATE site_moves SET state='cancelled',finished_at=?,updated_at=? WHERE id=?").run(at, at, active.id);
     // A preview to the site's own server is still answered (with its reason) but never stored.
     if (preview.source.id !== preview.target.id) db.prepare("INSERT INTO site_moves(id,site_id,source_server_id,target_server_id,state,options,preflight,preflight_hash,actor,created_at,updated_at) VALUES(?,?,?,?,'draft',?,?,?,?,?,?)")
@@ -226,6 +234,7 @@ export async function startMove(moveId, { preflightHash: reviewed, moveAnyway = 
   if (!move) throw httpError(404, 'Move not found.');
   if (move.state !== 'draft') throw httpError(409, 'This move has already started.');
   refuseWhileInstalling(move);
+  refuseCovered(move.site_id, move.target_server_id);
   if (Date.parse(move.created_at) + DRAFT_TTL_MS < Date.now()) throw httpError(409, 'This check is more than an hour old. Press Save changes to check again.');
   const preview = await previewFacts(move.site_id, move.target_server_id, move.options);
   preview.plan.dnsMode = move.options.dnsMode;
@@ -383,7 +392,7 @@ function advance(moveId, at) {
       const extra = action.waiting_for ? { waiting_for: action.waiting_for } : {};
       if (action.to === 'recovery_required' && move.switched_at) {
         const target = server(move.target_server_id)?.name ?? 'the new server';
-        extra.error = `${move.error ?? 'A step failed after the switch.'} The site already runs on ${target}, so DockNest did not undo anything. Press Try again, or Switch back.`;
+        extra.error = `${move.error ?? 'A step failed after the switch.'} The app already runs on ${target}, so DockNest did not undo anything. Press Try again, or Switch back.`;
       }
       transition(move, action.to, extra);
       if (action.waiting_for === 'dns') markDnsWait(moveId);
@@ -447,7 +456,7 @@ function pollBackupStep(move, steps, name) {
     });
     return;
   }
-  const error = job.status === 'recovery_required' ? 'The final copy stopped partway. Resolve the backup job on the Jobs page; then DockNest restarts the old site.' : 'The backup did not finish, so nothing was changed.';
+  const error = job.status === 'recovery_required' ? 'The final copy stopped partway. Resolve the backup job on the Jobs page; then DockNest restarts the old app.' : 'The backup did not finish, so nothing was changed.';
   transaction(() => { saveStep(failStep(step, { result: { error } }, now())); saveMove({ ...move, error, updated_at: now() }); });
 }
 // A backup step that runs longer than its limit stops the move; the backup itself finishes on its own.
@@ -763,7 +772,7 @@ export function removeOldCopy(moveId, { confirmation, deleteData = false }, acto
     if (!move) throw httpError(404, 'Move not found.');
     if (!['completed', 'retention_expired'].includes(move.state)) throw httpError(409, 'There is no stopped old copy to remove for this move.');
     const site = db.prepare('SELECT name FROM sites WHERE id=?').get(move.site_id);
-    if (confirmation !== site?.name) throw httpError(409, 'Type the site name to confirm removing the old copy.');
+    if (confirmation !== site?.name) throw httpError(409, 'Type the app name to confirm removing the old copy.');
     if (loadSteps(move).some(step => step.step === REMOVE_STEP && step.state === 'running')) throw httpError(409, 'The old copy is already being removed.');
     addOwnerSteps(moveId, [REMOVE_STEP], { deleteData: !!deleteData });
     saveMove({ ...move, error: null, updated_at: now() });
@@ -787,7 +796,7 @@ export async function resolveMove(moveId, action, actor, { confirmation } = {}) 
       const site = db.prepare('SELECT name FROM sites WHERE id=?').get(move.site_id);
       const finalize = steps.find(step => step.step === 'finalize');
       if (!['failed', 'running'].includes(finalize?.state)) throw httpError(409, 'This is possible only when finishing the move failed.');
-      if (confirmation !== site?.name) throw httpError(409, 'Type the site name to confirm finishing without the old server.');
+      if (confirmation !== site?.name) throw httpError(409, 'Type the app name to confirm finishing without the old server.');
       saveStep({ ...finalize, state: 'pending', finished_at: null });
       saveMove(applyTransition({ ...move, preflight: { ...move.preflight, skipRetire: true, oldCopyRunning: true } }, 'running', now(), { error: null }));
       audit(actor, 'move.resolve', move.site_id, { move: moveId, action });

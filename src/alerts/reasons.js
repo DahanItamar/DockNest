@@ -5,16 +5,16 @@
 export const UNKNOWN_REASON = 'Open DockNest to see why.';
 const catalogue = Object.freeze({
   'backup.failed': 'The backup did not finish. Open DockNest to see why.',
-  'backup.failed:recovery_required': 'The backup stopped and the site needs recovery. Open DockNest to continue.',
+  'backup.failed:recovery_required': 'The backup stopped and the app needs recovery. Open DockNest to continue.',
   'backup.failed:chain_inconsistent': 'The backup could not be confirmed as part of its incremental chain, so it was not saved. The next backup will be full.',
   'backup.failed:chain_broken': 'A check found a broken incremental chain: some backups cannot be restored. Open DockNest to see which.',
   'backup.succeeded': 'The backup finished.',
-  'move.finished': 'The site now runs on {target}.',
-  'move.finished:rolled_back': 'The move was undone and the site is back where it was. Open DockNest for details.',
-  'move.finished:failed': 'The site did not move to {target}. Open DockNest to see why.',
+  'move.finished': 'The app now runs on {target}.',
+  'move.finished:rolled_back': 'The move was undone and the app is back where it was. Open DockNest for details.',
+  'move.finished:failed': 'The app did not move to {target}. Open DockNest to see why.',
   'move.needs_you': 'The move needs your decision. Open DockNest to continue.',
   'move.needs_you:dns': 'Change the DNS record to point to {target}. Open DockNest for the record.',
-  'move.needs_you:owner-switch': 'The site is ready on {target}. Open DockNest to switch when you are ready.',
+  'move.needs_you:owner-switch': 'The app is ready on {target}. Open DockNest to switch when you are ready.',
   'server.unreachable': 'The server has not answered. Open DockNest to check it.',
   'server.disk_low': '{free} free, {used}% used. Open DockNest to review.',
   'restore_test.failed': 'The restore test failed. Open DockNest to see why.',
@@ -26,7 +26,7 @@ const catalogue = Object.freeze({
   'backup.copy_failed': 'The copy to {destination} did not finish. DockNest retries automatically.',
   'backup.copy_failed:space': 'There is not enough free space on {destination}. DockNest retries automatically.',
   'backup.copy_failed:conflict': 'A different file is already on {destination} where the copy goes. Open DockNest to check it.',
-  'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the site storage.',
+  'backup.copy_failed:destination_missing': '{destination} is no longer connected. Open DockNest to check the app storage.',
   'backup.copy_recovered': 'The copy to {destination} is saved now.',
   'backup.copy_gave_up': 'DockNest stopped retrying the copy to {destination} after 7 days. Open DockNest to retry it.',
   // Certificates (docs/alerts.md, "Certificates"). {days} is "3 days", "1 day" or "less than a day".
@@ -35,12 +35,12 @@ const catalogue = Object.freeze({
   'certificate.renewal_failed': 'certbot could not renew the certificate. Check certbot on the server before it expires.',
   // Safe Edit (docs/safe-edit.md). Never the changed values or the step's own reason.
   'edit.rolled_back': 'The change did not come up, so DockNest put the previous version back. Open DockNest to see why.',
-  'edit.needs_you': 'The previous version could not be put back by itself. The site stays behind the maintenance page. Open DockNest to continue.',
+  'edit.needs_you': 'The previous version could not be put back by itself. The app stays behind the maintenance page. Open DockNest to continue.',
   // Self-heal (docs/self-heal.md). The code is 'failed' for a restart that did not work, the reason for "gave up".
   'self_heal.restarted': 'A container failed its health check and DockNest restarted it.',
   'self_heal.restarted:failed': 'A container failed its health check and DockNest could not restart it. Open DockNest to see why.',
   'self_heal.gave_up': 'A container kept failing its health check, so DockNest stopped restarting it for now. Open DockNest to check it.',
-  'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this site.',
+  'self_heal.gave_up:recreated': 'A watched container was recreated or removed, so DockNest did not restart it. Open DockNest to check self-heal for this app.',
   // Launches (docs/launch-site.md): the teardown of a failed launch did not finish, so the server stays held.
   'launch.needs_you': 'A failed launch could not remove everything it made. Open DockNest and press Try again.',
   // Keys safe (docs/keys-safe.md). Never a file name, a value or a diff.

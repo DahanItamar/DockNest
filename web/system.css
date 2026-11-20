@@ -17,7 +17,7 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 /* Status label: icon plus text in the semantic colour; no pill, border or dot */
 .status{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;white-space:nowrap;background:none;border:0;padding:0}
 .status-icon{flex:none;width:16px;height:16px}
-.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
+.status-success{color:var(--success)}.status-running{color:var(--info)}.status-queued{color:var(--text-muted)}.status-pending{color:var(--warning)}.status-failed{color:var(--error)}.status-needs-review{color:var(--warning)}
 .status-running .status-icon{animation:dn-spin 1s linear infinite}
 
 /* Buttons: one height, one type size, label never wraps */
@@ -76,3 +76,12 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 .icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 
 @media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
+
+/* Overflow menu: one icon button and a short list of actions. The list opens upward (.up) where it would be clipped. */
+.overflow-menu{position:relative;display:inline-flex}
+.overflow-menu-list{position:absolute;z-index:20;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 8px 24px var(--shadow)}
+.overflow-menu-list.up{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}
+.overflow-menu-list button[role=menuitem]{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:var(--control-height);padding:0 12px;border:0;background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left;white-space:nowrap}
+.overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
+.overflow-menu-list button[role=menuitem]:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}

@@ -3,8 +3,10 @@ import {Paginated} from './pagination.jsx';
 import {AlertPanel} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
-import {containerName,containerGroups} from './container-groups.js';
+import {containerName,containerGroups,suggestedGroups} from './container-groups.js';
+import {RunDefinition} from './backup-coverage/RunDefinition.jsx';
 import {normalizeDomain} from '../shared/domains.js';
+import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
 import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
 import {HardDrive as Database,Plus} from './icons.jsx';
@@ -33,9 +35,9 @@ function SqliteFiles({services,texts,setTexts,split,setSplit,adding,setAdding}){
  </section>;
 }
 
-export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
+export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[],initialServer='',initialPick='',initialSite=null,allowFileBrowsing=false,onSaved,onCancel,onSessionExpired}) {
  const [autoMaintenance,setAutoMaintenance]=useState(true);
- const [step,setStep]=useState(initialSite?2:1),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
+ const [step,setStep]=useState(initialSite?'details':'select'),[serverId,setServerId]=useState(initialSite?.serverId||initialSite?.server_id||initialServer||(servers.length===1?servers[0].id:''));
  const [containers,setContainers]=useState([]),[primary,setPrimary]=useState(initialSite?.config.containers?.[0]||''),[additional,setAdditional]=useState(initialSite?.config.containers?.slice(1)||[]);
  const [staticSites,setStaticSites]=useState([]),[staticRoot,setStaticRoot]=useState(initialSite?.config.kind==='static'?initialSite.config.documentRoot:'');
  const [siteSearch,setSiteSearch]=useState('');
@@ -61,14 +63,21 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
   }).finally(()=>{if(current)setLoading(false);});
   return()=>{current=false;};
  },[serverId,scan]);
- const groups=containerGroups(containers);
- const siteChoices=[...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...groups.flatMap(group=>group.kind==='standalone'?group.containers.map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])];
+ const serverName=servers.find(server=>server.id===serverId)?.name,savedServer=initialSite?.serverId||initialSite?.server_id;
+ const groups=containerGroups(containers),coverage=coverageIndex(sites,serverId,{exceptSiteId:initialSite?.id,keep:savedServer===serverId?initialSite.config:null});
+ const freeContainers=splitGroup(containers,coverage,containerName).free;
+ // Plain containers on one user-defined network are offered as one pre-selected app; any of them can be unticked.
+ const suggested=suggestedGroups(freeContainers).map(group=>({id:'network:'+group.networks.join(','),name:group.networks.join(', '),kind:'network',compose:false,containers:group.containers.map(name=>freeContainers.find(container=>containerName(container)===name))})),grouped=new Set(suggested.flatMap(group=>group.containers.map(containerName)));
+ const {shown:siteChoices,hidden}=availableChoices([...staticSites.map(site=>({...site,id:'static:'+site.documentRoot,containers:[]})),...suggested,...groups.flatMap(group=>group.kind==='standalone'?group.containers.filter(container=>!grouped.has(containerName(container))).map(container=>({...group,id:'container:'+containerName(container),name:containerName(container),containers:[container]})):[group])],coverage,containerName);
  const pickedOnce=useRef(false);
  // Opened from the Map's + on a server: select the site that was clicked, once, after discovery has loaded.
- useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const c=siteChoices.find(x=>x.name===initialPick);if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
+ useEffect(()=>{if(!initialPick||pickedOnce.current||loading)return;const wanted=[].concat(initialPick),c=siteChoices.find(x=>wanted.length===1&&x.name===wanted[0])||siteChoices.find(x=>wanted.every(name=>x.containers.some(container=>containerName(container)===name)));if(!c)return;pickedOnce.current=true;if(c.kind==='static')selectStatic(c);else if(c.kind==='network')selectNames(wanted,wanted[0]);else selectNames(c.containers.map(containerName),c.name);},[loading,staticSites,containers]);
  const selected=[primary,...additional].filter(Boolean);
  const isStatic=!!staticRoot,hasSelection=isStatic||!!selected.length;
  const detected=isStatic?{compose:false,composeFiles:[],configFiles:staticSites.find(site=>site.documentRoot===staticRoot)?.configFiles||initialSite?.config.configFiles||[],directory:staticRoot}:detectedConfiguration(containers,selected);
+ // Plain `docker run` containers get a step that previews the Compose DockNest keeps for them; Compose apps already have theirs.
+ const swarm=groups.some(group=>group.kind==='swarm'&&group.containers.some(container=>selected.includes(containerName(container))));
+ const recreate=!initialSite&&!isStatic&&selected.length>0&&!detected.compose&&!swarm,order=['select',...(recreate?['recreate']:[]),'details','review'],labels={select:'Select app',recreate:'Recreate',details:'App details',review:'Review & add'};
  const temporaryFolders=containers.filter(c=>selected.includes(containerName(c))).flatMap(c=>(c.temporaryMemoryFolders||[]).map(destination=>({container:containerName(c),destination})));
  useEffect(()=>{
   if(loading||!selected.length||isStatic)return;
@@ -76,7 +85,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
   const web=containers.filter(container=>selected.includes(containerName(container))).map(container=>container.webHints).find(hints=>hints?.healthUrls?.length);
   setSettings(previous=>({...previous,...(!filesEdited.current.composeFiles?{composeFiles:discovery.composeFiles.join('\n')}:{ }),...(!filesEdited.current.configFiles?{configFiles:discovery.configFiles.join('\n')}:{ }),...(!healthEdited.current?{healthUrl:web?.healthUrls?.[0]||''}:{}),...(!domainsEdited.current?{domains:web?.domains?.join(', ')||''}:{})}));
  },[containers,primary,additional,loading]);
- function selectNames(names,title){if(names.length>30){setError('A site can include up to 30 containers. Select the services it needs individually.');return;}setStaticRoot('');setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
+ function selectNames(names,title){if(names.length>30){setError('An app can include up to 30 containers. Select the services it needs individually.');return;}setStaticRoot('');setPrimary(names[0]||'');setAdditional(names.slice(1));setError('');setSettings(previous=>({...previous,...(!nameEdited.current?{name:title||names[0]||''}:{}),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
  function selectStatic(site){setStaticRoot(site.documentRoot);setPrimary('');setAdditional([]);setError('');filesEdited.current={composeFiles:false,configFiles:false};setSettings(previous=>({...previous,...(!nameEdited.current?{name:site.name}:{}),healthUrl:site.healthUrl,domains:site.domains.join(', '),composeFiles:'',configFiles:site.configFiles.join('\n'),externalReferencesConfirmed:false,cleanShutdownConfirmed:false,exclusiveSourcesConfirmed:false}));}
  function toggleGrouped(name,checked){selectNames(checked?[...selected,name]:selected.filter(value=>value!==name),settings.name);}
  const source=containers.find(container=>containerName(container)===primary);
@@ -95,64 +104,67 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
  async function submit(event){
   event.preventDefault();if(busy)return;setError('');
   if(!serverId||!hasSelection||loading)return;
-  if(step===1&&error)return;
-  if(step===2&&detected.compose&&!settings.composeFiles.trim()){setError('Select the Compose project file below so this site can be backed up.');return;}
-  if(step===2&&!isStatic){const problem=sqliteProblem(savedServices.filter(service=>selected.includes(service.container)),sqliteText);if(problem){setError(problem);return;}}
-  if(step<3){setStep(step+1);return;}
+  if(step==='select'&&error)return;
+  if(step==='details'&&detected.compose&&!settings.composeFiles.trim()){setError('Select the Compose project file below so this app can be backed up.');return;}
+  if(step==='details'&&!isStatic){const problem=sqliteProblem(savedServices.filter(service=>selected.includes(service.container)),sqliteText);if(problem){setError(problem);return;}}
+  if(step!=='review'){setStep(order[order.indexOf(step)+1]);return;}
   setBusy(true);
   const paths=value=>value.split('\n').map(path=>path.trim()).filter(Boolean);
   const domains=settings.domains.split(',').map(normalizeDomain).filter(Boolean);
   try{
    const site=await api(initialSite?'/sites/'+initialSite.id:'/sites',{serverId,name:settings.name,config:{...initialSite?.config,...(savedServices.length?{services:mergeSqliteFiles(savedServices,Object.fromEntries(Object.entries(sqliteText).filter(([container])=>selected.includes(container))))}:{}),kind:isStatic?'static':'docker',...(isStatic?{documentRoot:staticRoot}:{}),containers:selected,temporaryMemoryFolders:temporaryFolders,stagingRoot:settings.stagingRoot,deliveryMode:settings.deliveryMode,maintenanceRequired:!isStatic,maintenanceProbeOrigin:!!settings.probeOrigin,maintenancePublicUrl:isStatic?settings.healthUrl:publicUrl,domains,healthUrl:settings.healthUrl,...(initialSite?.config.maintenance?{maintenance:{...initialSite.config.maintenance,required:!isStatic,healthUrl:settings.healthUrl,publicUrl:isStatic?settings.healthUrl:publicUrl}}:{}),shutdownProfile:settings.shutdownProfile,configFiles:paths(settings.configFiles),composeFiles:paths(settings.composeFiles),externalReferencesConfirmed:settings.externalReferencesConfirmed,cleanShutdownConfirmed:settings.cleanShutdownConfirmed,exclusiveSourcesConfirmed:settings.exclusiveSourcesConfirmed}},initialSite?'PATCH':'POST');
    if(!initialSite&&!isStatic&&canSetUpMaintenance&&autoMaintenance&&domains.length){
-    try{await api('/sites/'+site.id+'/maintenance/setup',{});onSaved(site,'Site added with its maintenance page, tested on your domain. Set its schedule when ready.');}
-    catch(error){if(error.status===401){onSessionExpired();return;}onSaved(site,'Site added. The maintenance page was not set up: '+error.message+' Backups still work; visitors may see an error for a few seconds during each one.');}
+    try{await api('/sites/'+site.id+'/maintenance/setup',{});onSaved(site,'App added with its maintenance page, tested on your domain. Set its schedule when ready.');}
+    catch(error){if(error.status===401){onSessionExpired();return;}onSaved(site,'App added. The maintenance page was not set up: '+error.message+' Backups still work; visitors may see an error for a few seconds during each one.');}
     return;
    }
    onSaved(site);
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
  return <form className="modal-body site-wizard" onSubmit={submit}>
-  <ol className="wizard-steps" aria-label="Site setup steps">{['Select site','Site details','Review & add'].map((label,index)=><li key={label} aria-current={step===index+1?'step':undefined}>{index+1}. {label}</li>)}</ol>
-  {step===1&&<>
-   <h3>Which site do you want to back up?</h3>
+  <ol className="wizard-steps" aria-label="App setup steps">{order.map((name,index)=><li key={name} aria-current={step===name?'step':undefined}>{index+1}. {labels[name]}</li>)}</ol>
+  {step==='select'&&<>
+   <h3>Which app do you want to back up?</h3>
    <Field label="Source server" value={serverId} onChange={event=>setServerId(event.target.value)} options={[[ '', 'Choose a server'],...servers.map(server=>[server.id,server.name+(server.note?' · '+server.note:'')])]} required/>
    {loading&&<p role="status">Loading Docker containers from this server…</p>}
    {serverId&&!loading&&!error&&<>
     {siteChoices.length?<>
      <p>Choose a Docker project or static nginx website. Docker projects include their services; static websites include their files without stopping nginx.</p>
-     <Field label="Find a site" value={siteSearch} onChange={event=>setSiteSearch(event.target.value)} help="Search a domain, project or container name."/>
-     <Paginated rows={siteChoices.filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered sites" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map(group=>{
+     <Field label="Find an app" value={siteSearch} onChange={event=>setSiteSearch(event.target.value)} help="Search a domain, project or container name."/>
+     {!!hidden.length&&<p className="t-caption" role="note">{hiddenCaption(hidden)}</p>}
+     <Paginated rows={siteChoices.filter(group=>[group.name,...(group.domains||[]),...group.containers.flatMap(container=>[containerName(container),...(container.webHints?.domains||[])])].join(' ').toLowerCase().includes(siteSearch.toLowerCase()))} label="Discovered apps" pageSize={2} resetKey={serverId+':'+siteSearch}>{visible=>visible.length?<div className="application-groups">{visible.map(group=>{
       const names=group.containers.map(containerName);
       const chosen=group.kind==='static'?staticRoot===group.documentRoot:!isStatic&&names.length===selected.length&&names.every(name=>selected.includes(name));
       return <section className={'application-group'+(chosen?' chosen':'')} key={group.id} aria-label={group.name}>
-       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{names.length} {names.length===1?'service':'services'}</span>}</p></div><button type="button" aria-label={'Select site '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select site'}</button></header>
+       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
        <p className="site-services">{group.kind==='static'?group.documentRoot:group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
        {group.kind!=='static'&&<details className="site-service-review"><summary>Review services in {group.name}</summary><div className="container-list">{group.containers.map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" aria-label={'Include '+name} checked={selected.includes(name)} disabled={!selected.includes(name)&&selected.length>=30} onChange={event=>toggleGrouped(name,event.target.checked)}/><div><b>{container.service||name}</b><small>{name} / {container.image||container.Config?.Image||'Image unavailable'}</small></div><span className="container-state">{containerStatus(container)}</span></label>;})}</div></details>}
       </section>;
-     })}</div>:<p role="status">No sites match this search.</p>}</Paginated>
-     <div className="selection-summary" role="status"><b>{hasSelection?settings.name||primary:'No site selected'}</b><span>{isStatic?staticRoot:selected.length?selected.length+' services included: '+selected.join(', '):'Use Select site on one of the cards above.'}</span>{hasSelection&&<button type="button" onClick={()=>selectNames([])}>Clear selection</button>}</div>
-     <details className="manual-container-picker"><summary>My site needs a custom selection</summary>
+     })}</div>:<p role="status">No apps match this search.</p>}</Paginated>
+     <div className="selection-summary" role="status"><b>{hasSelection?settings.name||primary:'No app selected'}</b><span>{isStatic?staticRoot:selected.length?selected.length+' services included: '+selected.join(', '):'Use Select app on one of the cards above.'}</span>{hasSelection&&<button type="button" onClick={()=>selectNames([])}>Clear selection</button>}</div>
+     <details className="manual-container-picker"><summary>My app needs a custom selection</summary>
      <p>Select the app and its database or other services. Docker project labels suggest membership; check that shared services belong in this backup.</p>
-     <Field label="Docker container (site)" value={primary} onChange={chooseContainer} options={[[ '', 'Choose a Docker container'],...containers.map(container=>[containerName(container),containerName(container)+' · '+containerStatus(container)])]}/>
+     <Field label="Docker container (app)" value={primary} onChange={chooseContainer} options={[[ '', 'Choose a Docker container'],...freeContainers.map(container=>[containerName(container),containerName(container)+' · '+containerStatus(container)])]}/>
      {source&&<div className="hint"><b>{primary}</b><p>{source.image||source.Config?.Image||'Docker container'} · {containerStatus(source)}</p><p>{(source.mounts||source.Mounts)?.map(mount=>(mount.Type||mount.type)+': '+(mount.Destination||mount.destination)).join(' · ')||'Mounted data is inspected during backup preflight.'}</p></div>}
-     {primary&&containers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same site.</p><div className="container-list">{containers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
+     {primary&&freeContainers.length>1&&<details open><summary>Review selected services ({selected.length}) and add or remove containers</summary><p>Include its database or other services only when they belong to the same app.</p><div className="container-list">{freeContainers.filter(container=>containerName(container)!==primary).map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" checked={additional.includes(name)} disabled={!additional.includes(name)&&selected.length>=30} onChange={event=>{setAdditional(previous=>event.target.checked?[...previous,name]:previous.filter(value=>value!==name));}}/><div><b>{name}</b><small>{container.image||container.Config?.Image} · {containerStatus(container)}</small></div></label>;})}</div></details>}
      </details>
-    </>:<p role="status">No Docker containers found. Check the selected server, or create your site’s container and refresh.</p>}
+    </>:hidden.length?<div role="status"><p><b>Everything on {serverName} is already backed up.</b></p><p>It belongs to {ownerNames(hiddenOwners(hidden))}. To change what an app includes, use Edit configuration on its card.</p></div>
+    :<p role="status">No Docker containers found. Check the selected server, or create your app’s container and refresh.</p>}
    </>}
    {serverId&&!loading&&<button type="button" onClick={()=>setScan(value=>value+1)}>{error?'Retry container discovery':'Refresh containers'}</button>}
   </>}
-  {step===2&&<>
+  {recreate&&step==='recreate'&&<RunDefinition api={api} serverId={serverId} containers={selected} onSessionExpired={onSessionExpired}/>}
+  {step==='details'&&<>
    <h3>Set up {settings.name||primary}</h3>
    {isStatic&&<p className="hint">Static website: {staticRoot}. DockNest copies and verifies the files while nginx keeps serving visitors. Restores use a separate private directory.</p>}
-   <Field label="Site name" name="name" value={settings.name} onChange={update} required maxLength={100}/>
+   <Field label="App name" name="name" value={settings.name} onChange={update} required maxLength={100}/>
    {!isStatic&&<Field label="Public website URL" type="url" value={publicUrl} onChange={event=>{publicEdited.current=true;setPublicUrl(event.target.value);if(!domainsEdited.current)setSettings(previous=>({...previous,domains:normalizeDomain(event.target.value)}));}} required help="Use a page that returns HTTP 200, such as your homepage or /login. This checks maintenance and recovery; keep the internal app health URL below."/>}
-   <Field label="Application health URL" name="healthUrl" type="url" value={settings.healthUrl} onChange={update} required help="Use the URL that responds when this site is healthy, as reached from its source server."/>
+   <Field label="Application health URL" name="healthUrl" type="url" value={settings.healthUrl} onChange={update} required help="Use the URL that responds when this app is healthy, as reached from its source server."/>
    <p className="hint">{isStatic?'The website address is filled in from nginx. Confirm that it loads normally.':'Published web ports fill in the health URL when available. Confirm this URL belongs to the selected app; without a detected web port, enter its health endpoint.'}</p>
    <section className="site-files" aria-label="Backup configuration files"><h4>Configuration files to include</h4>
-    {!!temporaryFolders.length&&<div className="hint"><h4>Temporary RAM folders</h4><p>{temporaryFolders.map(item=>item.container+': '+item.destination).join(' | ')}</p><p>Docker empties these folders whenever the container restarts, so there is nothing in them to back up. A restore recreates them empty with their original size and permissions. Keep site files and database data in persistent mounts.</p></div>}
-    {detected.compose&&<p>{detected.composeFiles.length?'Detected Compose files are filled in below. Review them and any environment files before saving.':'This site uses Compose. Select its project file so DockNest can recreate it.'}</p>}
-    <Field label="Compose project files (one absolute path per line)" aria-label="Compose project files (one absolute path per line)" name="composeFiles" multiline value={settings.composeFiles} onChange={update} required={detected.compose} help="Project definitions needed to recreate this site."/>
+    {!!temporaryFolders.length&&<div className="hint"><h4>Temporary RAM folders</h4><p>{temporaryFolders.map(item=>item.container+': '+item.destination).join(' | ')}</p><p>Docker empties these folders whenever the container restarts, so there is nothing in them to back up. A restore recreates them empty with their original size and permissions. Keep app files and database data in persistent mounts.</p></div>}
+    {detected.compose&&<p>{detected.composeFiles.length?'Detected Compose files are filled in below. Review them and any environment files before saving.':'This app uses Compose. Select its project file so DockNest can recreate it.'}</p>}
+    <Field label="Compose project files (one absolute path per line)" aria-label="Compose project files (one absolute path per line)" name="composeFiles" multiline value={settings.composeFiles} onChange={update} required={detected.compose} help="Project definitions needed to recreate this app."/>
     {allowFileBrowsing&&detected.compose&&<button type="button" onClick={()=>setBrowser('composeFiles')}>Browse Compose files</button>}
     <Field label="Environment and other configuration files (one absolute path per line)" aria-label="Environment and other configuration files (one absolute path per line)" name="configFiles" multiline value={settings.configFiles} onChange={update} help="Include .env and other files needed by your project. File contents stay off this screen."/>
     {allowFileBrowsing&&detected.compose&&<button type="button" onClick={()=>setBrowser('configFiles')}>Browse configuration files</button>}
@@ -161,23 +173,23 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,initialS
    <Field label="Backup delivery" name="deliveryMode" value={settings.deliveryMode} onChange={update} options={[['staged','Create a temporary copy, then upload'],['direct','Stream directly to backup storage']]} help={settings.deliveryMode==='direct'?(isStatic?'Streams compressed, encrypted data without a full temporary copy. Website files must remain unchanged during capture.':'Saves source disk space. Services stay in maintenance during verification and transfer; slow storage can extend downtime. Small recovery journals and Docker snapshots still use local space.'):'Creates temporary archives on the source server. Docker services restart before compression and upload; enough local space is required.'}/>
    <details open={savedServices.some(service=>service.sqliteFiles?.length)||undefined}><summary>Advanced backup settings</summary>
     <Field label="Domains (comma separated)" name="domains" value={settings.domains} onChange={update} onBlur={()=>setSettings(previous=>({...previous,domains:previous.domains.split(',').map(normalizeDomain).filter(Boolean).join(', ')}))} help="Enter www.blog.example.invalid or paste https://www.blog.example.invalid. Separate multiple domains with commas. Used for the maintenance page."/>
-    {!isStatic&&<><Field label="Shutdown profile" name="shutdownProfile" value={settings.shutdownProfile} onChange={update} options={[[ 'generic','Generic services'],['postgres','PostgreSQL'],['mysql','MySQL']]} help="Generic requires you to verify clean shutdown in the next step. Choose a database profile only when it matches this site's database."/>
+    {!isStatic&&<><Field label="Shutdown profile" name="shutdownProfile" value={settings.shutdownProfile} onChange={update} options={[[ 'generic','Generic services'],['postgres','PostgreSQL'],['mysql','MySQL']]} help="Generic requires you to verify clean shutdown in the next step. Choose a database profile only when it matches this app's database."/>
     <label className="check"><input type="checkbox" name="probeOrigin" checked={!!settings.probeOrigin} onChange={update}/> Check the website through this server's local proxy</label><p className="hint">Use when a CDN blocks automated probes. Keeps the website hostname and verifies its HTTPS certificate, while connecting to 127.0.0.1 on the source server. Verify CDN behavior separately.</p></>}
     <Field label="Staging directory" name="stagingRoot" value={settings.stagingRoot} onChange={update} required help="Local capture and recovery directory. Direct delivery keeps only small journals here. Permanent backups use the selected storage destination."/>
     {!isStatic&&<SqliteFiles services={savedServices.filter(service=>selected.includes(service.container))} texts={sqliteText} setTexts={setSqliteText} split={sqliteSplit} setSplit={setSqliteSplit} adding={sqliteAdding} setAdding={setSqliteAdding}/>}
    </details>
   </>}
-  {step===3&&<>
-   <h3>Review your site</h3>
+  {step==='review'&&<>
+   <h3>Review your app</h3>
    {!!initialSite?.config.mountExclusions?.length&&<div className="hint"><strong>Selected backup scope</strong><p>These paths are excluded and must be recovered separately. This backup keeps the application and its selected local state.</p><ul>{initialSite.config.mountExclusions.map(item=><li key={item.path}>{item.path}: {item.reason}</li>)}</ul></div>}
-   <dl className="setup-review"><dt>Site</dt><dd>{settings.name}</dd><dt>Server</dt><dd>{servers.find(server=>server.id===serverId)?.name}</dd><dt>{isStatic?'Website files':'Containers'}</dt><dd>{isStatic?staticRoot:selected.join(', ')}</dd><dt>Health check</dt><dd>{settings.healthUrl}</dd><dt>Backup delivery</dt><dd>{settings.deliveryMode==='direct'?'Direct stream to backup storage':'Temporary copy, then upload'}</dd>{!isStatic&&<><dt>Compose files</dt><dd>{settings.composeFiles||'None selected'}</dd></>}<dt>Other configuration</dt><dd>{settings.configFiles||'None selected'}</dd></dl>
-   <label className="check"><input type="checkbox" name="externalReferencesConfirmed" checked={settings.externalReferencesConfirmed} onChange={update} required/> I reviewed external dependencies and included the configuration files and secrets needed to recreate this site.</label>
+   <dl className="setup-review"><dt>App</dt><dd>{settings.name}</dd><dt>Server</dt><dd>{serverName}</dd><dt>{isStatic?'Website files':'Containers'}</dt><dd>{isStatic?staticRoot:selected.join(', ')}</dd><dt>Health check</dt><dd>{settings.healthUrl}</dd><dt>Backup delivery</dt><dd>{settings.deliveryMode==='direct'?'Direct stream to backup storage':'Temporary copy, then upload'}</dd>{!isStatic&&<><dt>Compose files</dt><dd>{settings.composeFiles||'None selected'}</dd></>}<dt>Other configuration</dt><dd>{settings.configFiles||'None selected'}</dd></dl>
+   <label className="check"><input type="checkbox" name="externalReferencesConfirmed" checked={settings.externalReferencesConfirmed} onChange={update} required/> I reviewed external dependencies and included the configuration files and secrets needed to recreate this app.</label>
    {!isStatic&&<label className="check"><input type="checkbox" name="cleanShutdownConfirmed" checked={settings.cleanShutdownConfirmed} onChange={update} required={settings.shutdownProfile==='generic'}/> I verified that a normal stop cleanly closes the application and database writers (required for Generic).</label>}
-   <label className="check"><input type="checkbox" name="exclusiveSourcesConfirmed" checked={settings.exclusiveSourcesConfirmed} onChange={update} required/> {isStatic?'No deployment or process will change these website files during capture.':'No containers or processes outside this site write to its mounted data.'}</label>
+   <label className="check"><input type="checkbox" name="exclusiveSourcesConfirmed" checked={settings.exclusiveSourcesConfirmed} onChange={update} required/> {isStatic?'No deployment or process will change these website files during capture.':'No containers or processes outside this app write to its mounted data.'}</label>
    {!isStatic&&!initialSite&&canSetUpMaintenance&&<label className="check"><input type="checkbox" checked={autoMaintenance} onChange={event=>setAutoMaintenance(event.target.checked)}/> Show a maintenance page during backups. DockNest adds it to this site's nginx, tests it and undoes the change if anything fails.</label>}
    <p className="hint">{isStatic?'Saving does not start a backup. Connect storage, then use Check readiness. Static backups keep your website online and verify the captured files.':'Saving does not start a backup. Connect storage, then use Check readiness. '+(settings.deliveryMode==='direct'?'Direct capture keeps selected services stopped through verification and transfer.':'Selected services stop during the local copy and restart before upload.')}</p>
   </>}
-  {error&&<AlertPanel variant="error" title="The site could not be saved">{error}</AlertPanel>}
-  <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step>1&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>value-1);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step===1&&!!error)}>{busy?'Saving site…':step===3?(initialSite?'Save configuration':'Add site'):'Continue'}</button></div>
+  {error&&<AlertPanel variant="error" title="The app could not be saved">{error}</AlertPanel>}
+  <div className="modal-foot"><button type="button" onClick={onCancel} disabled={busy}>Cancel</button>{step!==order[0]&&<button type="button" disabled={busy} onClick={()=>{setStep(value=>order[Math.max(0,order.indexOf(value)-1)]);setError('');}}>Back</button>}<button className="primary" disabled={busy||loading||!hasSelection||(step==='select'&&!!error)}>{busy?'Saving app…':step==='review'?(initialSite?'Save configuration':'Add app'):'Continue'}</button></div>
  </form>;
 }

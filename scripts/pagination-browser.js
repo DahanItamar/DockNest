@@ -62,15 +62,15 @@ try{
   const phone=page.viewportSize().width<768;
   if(phone){const gap=await pager.evaluate(el=>{const content=el.parentElement.querySelector(':scope>.paged-content');return Math.round(el.getBoundingClientRect().top-content.getBoundingClientRect().bottom)});assert.ok(gap<=24,label+' reserves no empty height on phones ('+gap+'px)');}
   else assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place on a one-item last page');
-  if(label==='Backup sites')await page.screenshot({path:directory+'/backup-last-'+page.viewportSize().width+'x'+page.viewportSize().height+'.png',fullPage:true});
+  if(label==='Backup apps')await page.screenshot({path:directory+'/backup-last-'+page.viewportSize().width+'x'+page.viewportSize().height+'.png',fullPage:true});
   while(!await pager.getByRole('button',{name:label+' previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:label+' previous page',exact:true}).click();
   await settle();if(!phone)assert.ok(Math.abs(await pagerY(pager)-y)<1.1,label+' pager stays in place returning to the full page');
  }
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:1000});
   await navigate('Servers');await partialPage('Servers','.server-card',4);
-  await navigate('Sites & schedules');await partialPage('Sites','.site-card',4);
-  await navigate('Backups');await partialPage('Backup sites','.backup-group');
+  await navigate('Apps & schedules');await partialPage('Apps','.site-card',4);
+  await navigate('Backups');await partialPage('Backup apps','.backup-group');
   await page.locator('.backup-group>summary').first().click();
   await partialPage('Recovery points for Website 0','.backup-group[open] .recovery-row',3);
  }
@@ -80,8 +80,8 @@ try{
  let shorterCount;
  for(const height of [720,1000,1200]){
   await page.setViewportSize({width:1440,height});await settle();
-  const pager=page.getByRole('group',{name:'Backup sites pagination',exact:true});
-  while(!await pager.getByRole('button',{name:'Backup sites previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:'Backup sites previous page',exact:true}).click();
+  const pager=page.getByRole('group',{name:'Backup apps pagination',exact:true});
+  while(!await pager.getByRole('button',{name:'Backup apps previous page',exact:true}).isDisabled())await pager.getByRole('button',{name:'Backup apps previous page',exact:true}).click();
   await settle();
   const count=await page.locator('.backup-group').count();
   if(shorterCount!=null)assert.ok(count>shorterCount,'A taller screen fits more backup site groups');shorterCount=count;
@@ -97,10 +97,10 @@ try{
   assert.ok(Math.abs(main.y+scroll+main.height-height)<1.1,'Backup pagination fills the viewport: '+JSON.stringify({height,main,scroll}));
   assert.equal(await page.locator('.workspace>footer').count(),0,'Redundant branding/status footer removed');
   await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:directory+'/backup-fit-'+height+'.png',fullPage:true});
-  await partialPage('Backup sites','.backup-group');
+  await partialPage('Backup apps','.backup-group');
  }
- const responsivePager=page.getByRole('group',{name:'Backup sites pagination',exact:true});
- await responsivePager.getByRole('button',{name:'Backup sites next page',exact:true}).click();
+ const responsivePager=page.getByRole('group',{name:'Backup apps pagination',exact:true});
+ await responsivePager.getByRole('button',{name:'Backup apps next page',exact:true}).click();
  const anchor=await page.locator('.backup-site-name b').first().textContent();
  await page.setViewportSize({width:1440,height:720});await settle();
  assert.ok((await page.locator('.backup-site-name b').allTextContents()).includes(anchor),'Resizing keeps the first visible site in the new page');
@@ -109,7 +109,7 @@ try{
  const originalBackups=state.backups;state.backups=backups.filter(b=>Number(b.siteId.slice(5))<4);
  await page.getByRole('button',{name:'Refresh dashboard'}).click();await settle();
  assert.equal(await page.locator('.backup-group').count(),4);
- assert.equal(await page.getByRole('group',{name:'Backup sites pagination',exact:true}).count(),0);
+ assert.equal(await page.getByRole('group',{name:'Backup apps pagination',exact:true}).count(),0);
  state.backups=originalBackups;await page.getByRole('button',{name:'Refresh dashboard'}).click();await settle();
  await page.setViewportSize({width:1440,height:1000});
  await navigate('Servers');await page.getByLabel('Filter Servers').fill('Docker host 28');assert.equal(await page.locator('.server-card').count(),1);assert.equal(await page.getByRole('group',{name:'Servers pagination',exact:true}).count(),0,'Single-page search has no empty reserved page or pager');await page.getByLabel('Filter Servers').fill('');
@@ -121,7 +121,7 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Sites & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Apps & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
@@ -142,7 +142,7 @@ try{
  // 2.4.1: the pager keeps one section gap (24px) below the last row of cards on every page, at every desktop width, and stays put.
  for(const [width,height] of [[1024,900],[1440,1000],[1920,1100],[2560,1300],[3840,1600]]){
   await page.setViewportSize({width,height});
-  for(const [route,label,selector] of [['Sites & schedules','Sites','.site-card'],['Servers','Servers','.server-card'],['Storage','Storage destinations','.storage-card']]){
+  for(const [route,label,selector] of [['Apps & schedules','Apps','.site-card'],['Servers','Servers','.server-card'],['Storage','Storage destinations','.storage-card']]){
    await navigate(route);await settle();
    const pager=page.getByRole('group',{name:label+' pagination',exact:true}),next=pager.getByRole('button',{name:label+' next page',exact:true});
    const gap=()=>page.evaluate(sel=>{const cards=[...document.querySelectorAll(sel)],bottom=Math.max(...cards.map(card=>card.getBoundingClientRect().bottom));return Math.round(document.querySelector('.pagination').getBoundingClientRect().top-bottom)},selector);

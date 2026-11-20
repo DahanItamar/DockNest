@@ -195,8 +195,8 @@ test('the padlock: none, red without a backup, green in the last backup, amber w
   view = keysView(siteId);
   assert.equal(view.state, 'green'); assert.ok(view.keys.every(key => key.status === 'in-backup' && key.backupId === backupId && /^[0-9a-f]{8}$/.test(key.fingerprint)));
   // Verified: a restore test whose restored keys matched.
-  const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(backupId).manifest), proven = proof.keys;
-  assert.equal(proven.length, 2); assert.equal(proof.comparable, true);
+  const saved = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(backupId).manifest), proven = saved.keys;
+  assert.equal(proven.length, 2); assert.equal(saved.comparable, true);
   assert.deepEqual(provenKeys(JSON.stringify({ keys: proven.map(key => ({ ...key, inBackup: true })), keysCheck: 'f'.repeat(32) })).comparable, false, 'a proof made with another fingerprint key is not compared');
   assert.deepEqual(restoredKeysRequest(proven).expect, proven.map(({ rule, location }) => ({ rule, location })));
   assert.equal(compareRestoredKeys(proven, undefined).check.status, 'skipped');

@@ -83,7 +83,7 @@ try{
   const dialog=await reviewDialog(page);
   assert.deepEqual(await dialog.locator('.rp-steps li').evaluateAll(els=>els.map(el=>el.innerText.trim())),['1  Review here','2  Open GitHub','3  Describe and submit there']);
   const rows=await dialog.locator('.rp-list .def-row').evaluateAll(els=>els.map(el=>[el.querySelector('dt').textContent,el.querySelector('dd').textContent]));
-  assert.deepEqual(rows,[['Title','Backup failed: send step'],['DockNest','v2.4.0 · image'],['Job','backup'],['Outcome','failed'],['Failed at','send'],['Site kind','docker'],['Storage','sftp'],['Containers','2-5'],['Helper outcome','timeout']]);
+  assert.deepEqual(rows,[['Title','Backup failed: send step'],['DockNest','v2.4.0 · image'],['Job','backup'],['Outcome','failed'],['Failed at','send'],['App kind','docker'],['Storage','sftp'],['Containers','2-5'],['Helper outcome','timeout']]);
   await dialog.getByText('Never shared',{exact:true}).waitFor();
   await dialog.getByText('Error text from your servers, logs and keys').waitFor();assert.ok(/Error text is shared only as DockNest.s own fixed message/.test(await dialog.textContent()));assert.ok(!(await dialog.textContent()).includes('error text, logs'),'No claim that contradicts the What happened row');
   await dialog.getByText('Issues on the DockNest repository are public and linked to your GitHub account. Anyone can read what you share.').waitFor();
