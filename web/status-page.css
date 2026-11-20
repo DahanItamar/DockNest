@@ -5,7 +5,7 @@
 .status-brand{flex:none;padding-top:8px;opacity:.9}
 .status-page:focus-visible{outline:none}
 .status-page{flex:1 0 auto;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:var(--edge);margin-inline:auto;max-width:560px}
-.status-code{margin:0;max-width:none;font-size:clamp(104px,min(30vw,36vh),224px);line-height:1;font-weight:600;letter-spacing:-.045em;color:var(--text-muted);user-select:none;margin-bottom:-.22em;}
+.status-code{margin:0;max-width:none;font-size:clamp(104px,min(30vw,36vh),224px);line-height:1;font-weight:900;letter-spacing:-.045em;color:var(--heading);background:linear-gradient(to bottom,var(--heading) 20%,var(--transparent) 76%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;user-select:none;margin-bottom:-.22em;}
 .status-title{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 .status-page .status-text{margin:4px 0 0;max-width:44ch;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--text-secondary);text-wrap:balance}
 .status-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:32px}
@@ -17,4 +17,3 @@
 @media(min-width:2560px){.status-page{max-width:880px}.status-code{font-size:clamp(320px,12vw,440px)}}
 @media(max-width:480px){.status-actions{width:100%;flex-direction:column;align-items:stretch}.status-actions>:is(button,a){width:100%;min-height:44px}.status-page{padding-inline:0}}
 @media(forced-colors:active){.status-code{background:none;-webkit-text-fill-color:currentColor;color:CanvasText}}
-
