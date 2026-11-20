@@ -146,7 +146,7 @@ export function cancelRechecks() { for (const timer of rechecks.values()) healCl
 // ---------- the tick ----------
 export function tickSelfHeal(nowMs = healClock.now()) {
   for (const { site_id: siteId } of db.prepare('SELECT site_id FROM self_heal_settings WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all()) {
-    try { tickSite(siteId, nowMs); } catch (error) { console.error(`Self-heal tick failed for a site: ${error.code ?? error.name}`); }
+    try { tickSite(siteId, nowMs); } catch (error) { console.error(`Self-heal tick failed for an app: ${error.code ?? error.name}`); }
   }
 }
 function tickSite(siteId, nowMs = healClock.now()) {

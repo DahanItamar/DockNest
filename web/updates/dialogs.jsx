@@ -20,7 +20,7 @@ export function ConsentDialog({client,onClose,onAnswered}){
  if(decided)return <UCDialog title="Update checks are already set" onClose={()=>{onAnswered?.();onClose()}} size="sm" label="dialog"><p>Another administrator already chose: daily checks {decided}. You can change this in the Update Center.</p><div className="modal-foot"><button type="button" className="primary" onClick={()=>{onAnswered?.();onClose()}}>Close</button></div></UCDialog>;
  return <UCDialog title="Check GitHub daily for new versions?" onClose={onClose} size="sm" label="dialog">
   <p>DockNest can look for new versions and tell administrators when one is available. You decide whether it does.</p>
-  <h3>What is sent</h3><p>DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.</p><p><ExtLink href={DOCS_SECURITY}>What is sent</ExtLink></p><p>A check runs right after you choose Yes, then once a day.</p>
+  <h3>What is sent</h3><p>DockNest asks GitHub for the list of releases. Nothing about your servers, apps or users is sent.</p><p><ExtLink href={DOCS_SECURITY}>What is sent</ExtLink></p><p>A check runs right after you choose Yes, then once a day.</p>
   <h3>What stays the same</h3><ul className="plain-list"><li>Until you choose Yes, DockNest makes no requests to GitHub.</li><li>DockNest never installs an update by itself. An administrator must start it.</li><li>You can change this later in the Update Center.</li></ul>
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   <div className="modal-foot"><button type="button" disabled={busy} onClick={()=>answer(false)}>No, keep checks off</button><button type="button" className="primary" disabled={busy} onClick={()=>answer(true)}>Yes, check daily</button></div>
@@ -31,6 +31,8 @@ export function WhatsNewDialog({data,onClose}){
  return <UCDialog title={'What’s new in DockNest '+version} onClose={onClose} label="dialog"><Notes markdown={data.markdown} tag={version}/><p className="notes-foot">These notes are included with this version of DockNest.</p>{link&&<p><ExtLink href={link}>Full release notes on GitHub</ExtLink></p>}<div className="modal-foot"><button type="button" className="primary" onClick={onClose}>Got it</button></div></UCDialog>;
 }
 export function UpdateToast({version,onNotes,onDismiss}){
+ // A success toast clears itself after 5 seconds; an error toast would stay until dismissed.
+ useEffect(()=>{const timer=setTimeout(onDismiss,5000);return()=>clearTimeout(timer)},[]);
  return <div className="toast-wrap"><div className="dn-toast" role="status"><IconCircleCheck size={20} aria-hidden="true"/><span className="dn-toast-text">DockNest updated to {version}</span>{onNotes&&<button type="button" onClick={onNotes}>What{'’'}s new</button>}<button type="button" className="icon" onClick={onDismiss} aria-label="Dismiss message"><IconX size={18}/></button></div></div>;
 }
 // First admin sign-in: consent first, then What's new (dialog, or the toast after an in-app update).

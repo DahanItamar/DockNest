@@ -25,3 +25,9 @@ export function managerBackupFilename(keyId,backupId,at=new Date()){
  backupFilename(backupId,at);
  return 'docknest_'+keyId+'_'+timestamp(at)+'--'+backupId+'.dkit';
 }
+// An emergency kit (docs/emergency-kit.md) under docknest-recovery/emergency/: the key digest prefix tells which split opens it.
+export function emergencyKitFilename(digest,backupId,at=new Date()){
+ if(!/^[a-f0-9]{64}$/.test(digest))throw new Error('Invalid emergency key digest');
+ backupFilename(backupId,at);
+ return 'emergency_'+digest.slice(0,16)+'_'+timestamp(at)+'--'+backupId+'.dkem';
+}

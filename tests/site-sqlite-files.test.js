@@ -21,6 +21,8 @@ for (const server of [host, other]) db.prepare('INSERT INTO servers(id,name,host
 const role = value => db.prepare('UPDATE users SET role=? WHERE id=?').run(value, user);
 const call = (route, method, body) => fetch(base + route, { method, headers: { Cookie: 'dbm_session=' + token, Origin: process.env.APP_ORIGIN, 'x-csrf-token': csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const service = (container, extra = {}) => ({ container, engine: 'generic', sqliteVersion: '3.45.1', sqliteFiles: ['/data/app.db'], ...extra });
+// Every test adds the same two containers, and one container belongs to one app: earlier fixtures are archived first.
+test.beforeEach(() => db.prepare('INSERT OR IGNORE INTO site_archives(site_id,archived_at) SELECT id,? FROM sites').run(new Date().toISOString()));
 const body = (services, name = 'Edit fixture') => ({ serverId: host, name, config: { containers: ['web', 'worker'], services } });
 
 test('SQLite file lists save per service and keep version, engine and SIGTERM confirmation', async () => {

@@ -49,8 +49,8 @@ try{
  const dialog=page.getByRole('dialog').first();
 
  // 1. Site form: one group per service, a shared group for identical lists.
- await nav('Sites & schedules');
- await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+ await nav('Apps & Schedules');
+ await page.getByRole('button',{name:/^Edit configuration/}).click();
  await dialog.getByText('Advanced backup settings',{exact:true}).waitFor();
  assert.equal(await dialog.locator('details[open]>summary',{hasText:'Advanced backup settings'}).count(),1,'opens when the site declares files');
  assert.equal(await dialog.locator('.sq-group').count(),3,'shared web+worker, queue, cache; proxy has no SQLite and no version');
@@ -73,7 +73,7 @@ try{
  assert.equal(first[0].sqliteVersion,'3.45.1');assert.equal(first[0].sqliteSigtermConfirmed,true);assert.equal(first[4].sqliteVersion,undefined);assert.equal(first[0].engine,'generic');
  // Edit separately, and refuse an empty list under SIGTERM acceptance and relative paths.
  site.config.services=services();
- await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+ await page.getByRole('button',{name:/^Edit configuration/}).click();
  await dialog.getByRole('button',{name:'Edit separately',exact:true}).click();
  assert.equal(await dialog.locator('.sq-group').count(),4);
  await dialog.getByLabel('Database files for web',{exact:true}).fill('');
@@ -106,7 +106,7 @@ try{
  assert.equal(saved.length,1,'cancel saves nothing');
  await alert.getByRole('button',{name:'Remove path'}).click();
  await confirm.getByRole('button',{name:'Remove path'}).click();
- await alert.getByText(/was removed from the site/).waitFor();
+ await alert.getByText(/was removed from the app/).waitFor();
  const removed=saved.at(-1).config.services;
  assert.deepEqual(removed.map(x=>x.sqliteFiles),[['/data/sessions.db'],['/data/sessions.db'],['/data/queue.db'],[],[]]);
  assert.equal(removed[0].sqliteSigtermConfirmed,true);
@@ -125,7 +125,7 @@ try{
  assert.equal(await alert.locator('.path-box').count(),0);
  assert.equal(await alert.getByRole('button').allTextContents().then(x=>x.join('|')),'Open settings|Back up now');
  await alert.getByRole('button',{name:'Open settings'}).click();
- await page.getByRole('heading',{name:'Edit site configuration'}).waitFor();
+ await page.getByRole('heading',{name:'Edit app configuration'}).waitFor();
  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
 
  // 3. Jobs list: one row per restore test, steps folded under it.

@@ -36,7 +36,7 @@ const geometry=async dialog=>dialog.evaluate(el=>{const box=n=>{const r=n.getBou
 for(const [theme,width] of [['light',1440],['dark',1440],['light',402],['dark',402]]){
  exportState.current=null;calls.length=0;
  const page=await open(theme,width);
- const trigger=page.getByRole('button',{name:'Download full ZIP fleur-latest'});
+ const trigger={click:async()=>{await page.getByRole('button',{name:'More actions for backup fleur-latest'}).click();await page.getByRole('menuitem',{name:'Download full ZIP fleur-latest'}).click()}};
  await trigger.click();
  const dialog=page.locator('dialog.zip-dialog');await dialog.waitFor();
  await page.waitForFunction(()=>true);
@@ -54,7 +54,7 @@ for(const [theme,width] of [['light',1440],['dark',1440],['light',402],['dark',4
  if(width<500){assert.equal(preparing.dialog[0],0);assert.equal(preparing.dialog[2],width);assert.equal(preparing.dialog[1]+preparing.dialog[3],874,'sheet sits on the bottom edge');assert.ok(preparing.dialog[3]<=340,'sheet is not full height');}
  // Escape closes and returns focus to the trigger; reopening reuses the running preparation.
  await page.keyboard.press('Escape');await dialog.waitFor({state:'detached'});
- await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Download full ZIP fleur-latest');
+ await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='More actions for backup fleur-latest');
  const posts=calls.filter(c=>c.startsWith('POST')).length;
  await trigger.click();
  await dialog.getByText('40%',{exact:true}).waitFor();
@@ -72,7 +72,7 @@ for(const [theme,width] of [['light',1440],['dark',1440],['light',402],['dark',4
  if(await ready.count()===0)await trigger.click();
  await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
  assert.ok(calls.includes('DELETE /api/backups/fleur-latest/zip-exports/e1'),'Cancel deletes the prepared ZIP');
- await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='Download full ZIP fleur-latest');
+ await page.waitForFunction(()=>document.activeElement?.getAttribute('aria-label')==='More actions for backup fleur-latest');
  // Failed, expired and cancelled-elsewhere states: plain text, Try again, same geometry.
  for(const [name,title,patch,text] of [
   ['failed','The ZIP could not be prepared',{status:'failed',error:'The backup could not be verified, so no ZIP was prepared. The encrypted download remains available.'},'could not be verified'],

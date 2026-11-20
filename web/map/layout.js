@@ -1,7 +1,8 @@
+import {engineLabel} from '../../shared/database-engines.js';
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
-// line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Nothing is persisted.
+// line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Moved nodes come in as opts.positions.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
- labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
+ linkBase:56,linkLane:14,labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
 const byName=(a,b)=>{const x=String(a.name||'').toLowerCase(),y=String(b.name||'').toLowerCase();return x<y?-1:x>y?1:String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0};
 
 // Same grouping and order for the canvas, the phone list and screen readers.
@@ -13,13 +14,12 @@ export function groupForList(servers=[],sites=[]){
  return groups;
 }
 
-const ENGINES={postgres:'PostgreSQL',mysql:'MySQL',mariadb:'MariaDB',redis:'Redis'};
 // Databases DockNest already detects for capture: site.config.services entries with a supported engine. Nothing is invented.
 // They are shown in the site's details panel, never as nodes: they always move together with the site.
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
- return list.filter(s=>ENGINES[s?.engine]).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
-  label:ENGINES[s.engine]+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
+ return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
+  label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
 }
 // The domains of a site. No DNS data is available here, so there is no DNS verdict.
 export const domainsOf=site=>Array.isArray(site?.config?.domains)?site.config.domains.filter(d=>typeof d==='string'&&d):[];
@@ -37,16 +37,17 @@ export function elbow(points,r=8){
 }
 const route=(x1,y1,x2,y2,cx)=>y1===y2?[[x1,y1],[x2,y2]]:[[x1,y1],[cx,y1],[cx,y2],[x2,y2]];
 
-// opts.storage: [{id,...}] backup storage nodes; opts.backupOf: {siteId: storageId} (which storage a site backs up to).
+// opts.storage: [{id,...}] backup storage nodes; opts.links: [{id,a,b}] linked app pairs (drawn in a gutter right of the app column); opts.backupOf: {siteId: storageId} (which storage a site backs up to).
 export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const groups=groupForList(servers,sites),storage=[...(opts.storage||[])].sort(byName),backupOf=opts.backupOf||{};
  const serverX=m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
- const out={servers:[],sites:[],storage:[],paths:[],backupPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
+ const out={servers:[],sites:[],storage:[],paths:[],backupPaths:[],linkPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
  // Alerts: a band above the map holds the DockNest source and one lane per line; nothing is drawn until a channel exists.
  const chs=opts.alerts?.channels||[],on=chs.length>0,serverIds=new Set(servers.map(s=>s.id)),siteIds=new Set(sites.map(s=>s.id));
  const rules=on?(opts.alerts.rules||[]).filter(r=>chs.some(c=>c.id===r.channelId)&&(r.sourceKind==='docknest'||(r.sourceKind==='server'?serverIds.has(r.sourceId):siteIds.has(r.sourceId)))):[];
  const lanes=rules.length>6?new Set(rules.map(r=>r.channelId)).size:rules.length,bandH=on?Math.max(112,48+m.laneGap*lanes):0,base=on?m.pad+bandH+8:m.pad;
- const rightEdge=siteX+m.siteS,channelB=rightEdge+m.storageGap+16,storageX=channelB+m.storageGap;
+ const links=opts.links||[],linkLanes=Math.min(links.length,6),linkW=linkLanes?m.linkBase+linkLanes*m.linkLane:0;
+ const rightEdge=siteX+m.siteS,channelB=rightEdge+linkW+m.storageGap+16,storageX=channelB+m.storageGap;
  const rowH=m.siteS+m.label;
  let y=base;
  for(const g of groups){
@@ -88,6 +89,24 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   const pts=route(s.out.x,s.out.y,t.in.x-14,t.in.y,channelB);
   out.backupPaths.push({id:s.id,storageId:t.id,points:pts,d:elbow(pts)});
  }
+ // Linked apps: dashed elbows in the gutter right of the app cards. A line leaves a card below its centre (backup uses the centre).
+ // Short lines take the inner lane, so lines nest and never run through a card or its label.
+ if(links.length){
+  const by=Object.fromEntries(all.map(r=>[r.id,r])),ok=links.filter(l=>by[l.a]&&by[l.b]),yAt={};
+  for(const r of all){ // offsets on one card: lines going up (nearest first), then lines going down (farthest first)
+   const mine=ok.filter(l=>l.a===r.id||l.b===r.id).map(l=>{const o=by[l.a===r.id?l.b:l.a];return {l,d:o.out.y-r.out.y}});
+   const up=mine.filter(x=>x.d<0).sort((p,q)=>q.d-p.d),down=mine.filter(x=>x.d>0).sort((p,q)=>q.d-p.d);
+   [...up,...down].forEach((x,i)=>{(yAt[x.l.id]=yAt[x.l.id]||{})[r.id]=r.out.y+8+i*8});
+  }
+  const items=ok.map(l=>{const ya=yAt[l.id][l.a],yb=yAt[l.id][l.b];return {l,ya,yb,lo:Math.min(ya,yb),hi:Math.max(ya,yb)}}).sort((p,q)=>(p.hi-p.lo)-(q.hi-q.lo)),laneOf=[];
+  for(const it of items){
+   let k=0;for(const o of laneOf)if(o.lo>=it.lo&&o.hi<=it.hi&&o.k>=k)k=o.k+1;
+   while(laneOf.some(o=>o.k===k&&o.lo<it.hi+24&&it.lo<o.hi+24))k++;
+   laneOf.push({...it,k});
+   const x=rightEdge+m.linkBase+Math.min(k,linkLanes-1)*m.linkLane,pts=[[rightEdge,it.ya],[x,it.ya],[x,it.yb],[rightEdge,it.yb]];
+   out.linkPaths.push({id:it.l.id,a:it.l.a,b:it.l.b,kind:it.l.kind,points:pts,d:elbow(pts)});
+  }
+ }
  out.width=Math.max(out.storage.length?storageX+m.storageS+m.pad:rightEdge+m.pad+48,rightEdge+m.pad);
  if(on){
   const alertX=storageX+m.storageS+m.alertGap,sy=m.pad+m.alertS/2;
@@ -114,7 +133,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   }
   out.width=alertX+m.alertS+m.pad;
  }
- out.height=bottom;
+ out.height=bottom;out.x0=0;out.y0=0;
  // Free layout: the owner's saved positions replace the automatic ones node by node (unknown nodes keep their automatic place).
  // Lines are then drawn between the final ports with plain elbows; they can cross a card, which is the owner's choice.
  const pos=opts.positions||{};
@@ -126,15 +145,25 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    const p=pos[k];if(!p)continue;
    const dx=p.x-n.x,dy=p.y-n.y,ports=new Set([n.in,n.out,n.alertOut].filter(Boolean));
    n.x+=dx;n.y+=dy;n.block={...n.block,x:n.block.x+dx,y:n.block.y+dy};for(const q of ports){q.x+=dx;q.y+=dy}
-   if(n.block2)n.block2={...n.block2,x:n.block2.x+dx,y:n.block2.y+dy};
   }
   const gen=(a,b)=>{const x1=a.x,y1=a.y,x2=b.x-14,y2=b.y;if(y1===y2&&x2>x1)return [[x1,y1],[x2,y2]];if(x2>x1+24){const mx=Math.round((x1+x2)/2);return [[x1,y1],[mx,y1],[mx,y2],[x2,y2]]}const lo=Math.max(x1,x2)+24,my=Math.round((y1+y2)/2);return [[x1,y1],[x1+20,y1],[x1+20,my],[x2-20,my],[x2-20,y2],[x2,y2]]};
   const sv=Object.fromEntries(out.servers.map(n=>[n.id,n])),st=Object.fromEntries(out.storage.map(n=>[n.id,n])),al=Object.fromEntries(out.alerts.map(n=>[n.id,n]));
   out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],pts=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:pts,d:elbow(pts)}});
   out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],pts=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:pts,d:elbow(pts)}});
   out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],pts=gen(src.alertOut,node.in);return {...p,points:pts,d:elbow(pts,12)}});
-  let w=0,h=0;for(const [,n] of nodes){w=Math.max(w,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);h=Math.max(h,n.block.y+n.block.h+m.pad)}
-  out.width=Math.max(w,m.pad*2);out.height=Math.max(h,m.pad*2);
+  // The canvas grows in every direction: a node left of or above the automatic layout widens it there, with the same margin.
+  let x0=0,y0=0,x1=0,y1=0;
+  for(const [,n] of nodes){x0=Math.min(x0,n.x-m.pad,n.block.x);y0=Math.min(y0,n.y-m.pad,n.block.y);x1=Math.max(x1,n.block.x+n.block.w+m.pad,n.x+n.w+m.pad);y1=Math.max(y1,n.block.y+n.block.h+m.pad)}
+  out.x0=x0;out.y0=y0;out.width=Math.max(x1-x0,m.pad*2);out.height=Math.max(y1-y0,m.pad*2);
  }
  return out;
 }
+
+// Map coordinates: the canvas spans x0..x0+width and y0..y0+height. x0 and y0 are 0 for the automatic layout and negative once a node
+// sits left of or above it. Everything else (nodes, ports, lines, the view offset) uses the same coordinates, with no wall at 0.
+export const GRID=16;
+export const snapToGrid=v=>Math.round(v/GRID)*GRID||0; // never -0
+// The view offset at zoom k that shows the canvas centred when it fits a w x h view, otherwise from its top left corner.
+export const homeOffset=(l,k,w,h)=>({x:Math.max(0,(w-l.width*k)/2)-l.x0*k,y:Math.max(0,(h-l.height*k)/2)-l.y0*k});
+// Whether part of the canvas lies outside a w x h view at offset t ({x,y,k}).
+export const clippedIn=(l,t,w,h)=>t.x+l.x0*t.k<-2||t.y+l.y0*t.k<-2||t.x+(l.x0+l.width)*t.k>w+2||t.y+(l.y0+l.height)*t.k>h+2;

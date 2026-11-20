@@ -77,7 +77,7 @@ export function installInfo(facts, name, need = {}) {
   // Fail-closed: an offered version that cannot be read does not meet the need.
   if (info.supported && needed && !(offered >= needed)) {
     const shown = offered === null ? "DockNest could not read which Docker version this server's packages offer" : `This server's packages offer Docker ${facts.candidates.docker}`;
-    return { package: name, supported: false, command: `# Follow Docker's official steps for your system: ${DOCKER_DOCS}`, reason: `${shown}; this site needs ${needed} or newer. Install Docker from Docker's own repository instead.` };
+    return { package: name, supported: false, command: `# Follow Docker's official steps for your system: ${DOCKER_DOCS}`, reason: `${shown}; this app needs ${needed} or newer. Install Docker from Docker's own repository instead.` };
   }
   return info;
 }

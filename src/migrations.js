@@ -266,6 +266,26 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Coverage view (docs/coverage-and-restore-check.md A4): containers and volumes skipped on purpose, by name (names
+// survive a recreate, IDs do not). Additive only: one new table, so 2.16 code ignores it.
+export const coverageIgnoresSchema = `
+CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
+`;
+// Linked apps (docs/linked-apps.md): the cleaned container facts of a server's last discovery scan. Links between apps are
+// computed from them on read, never stored. One row per server, replaced by each scan. Additive only: one new table.
+export const serverAppLinksSchema = `
+CREATE TABLE IF NOT EXISTS server_app_links (server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,facts TEXT NOT NULL CHECK (length(facts) <= 2097152),format INTEGER NOT NULL,checked_at TEXT NOT NULL,partial INTEGER NOT NULL CHECK (partial IN (0,1)));
+`;
+// The restore check (docs/restore-check.md): an Ignore or Note answer per finding of a site's readiness check. finding_key is
+// the helper's sha256 of kind, path and match, so a moved line keeps its answer. Additive only: one new table.
+export const restoreDecisionsSchema = `
+CREATE TABLE IF NOT EXISTS site_restore_decisions (site_id TEXT NOT NULL REFERENCES sites(id),finding_key TEXT NOT NULL CHECK (length(finding_key) = 64 AND finding_key NOT GLOB '*[^0-9a-f]*'),decision TEXT NOT NULL CHECK (decision IN ('ignore','note')),note TEXT CHECK (note IS NULL OR length(note) <= 500),decided_by TEXT,decided_at TEXT NOT NULL,PRIMARY KEY (site_id,finding_key));
+`;
+// Kit check and emergency kit (docs/emergency-kit.md, "Data"). Additive only: two new tables and their indexes, no rows,
+// so 2.16 code ignores them. kit_checks holds the outcome of each proof that the newest recovery kit opens (a reason code,
+// never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
+// K-of-N split (the X25519 public key, its digest, the SLIP-0039 identifier, K, N and the holder labels): no row exists
+// unless the owner opts in, and at most one key is not retired.
 // The domain path (docs/domains.md, "Data"): the newest check of each domain. The domain is lowercase and at most 253
 // characters (the certificate module's NAME pattern is checked before storage); either id is null when the domain points
 // nowhere. hops holds states, reason codes and safe parameters only. Additive only: one new table and two indexes.
@@ -273,6 +293,13 @@ export const domainChecksSchema = `
 CREATE TABLE IF NOT EXISTS domain_checks (domain TEXT PRIMARY KEY CHECK (length(domain) BETWEEN 1 AND 253 AND domain = lower(domain)),server_id TEXT REFERENCES servers(id),site_id TEXT REFERENCES sites(id),hops TEXT NOT NULL CHECK (length(hops) <= 8192 AND json_valid(hops)),checked_at TEXT NOT NULL,trigger TEXT NOT NULL CHECK (trigger IN ('manual','discover','readiness','backup','move')));
 CREATE INDEX IF NOT EXISTS domain_checks_server ON domain_checks(server_id);
 CREATE INDEX IF NOT EXISTS domain_checks_site ON domain_checks(site_id);
+`;
+export const kitChecksSchema = `
+CREATE TABLE IF NOT EXISTS kit_checks (id TEXT PRIMARY KEY,backup_id TEXT,requested_by TEXT NOT NULL CHECK (length(requested_by) <= 64),created_at TEXT NOT NULL,checked_at TEXT,result TEXT NOT NULL CHECK (result IN ('queued','running','passed','failed')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 32));
+CREATE UNIQUE INDEX IF NOT EXISTS kit_checks_active ON kit_checks((1)) WHERE result IN ('queued','running');
+CREATE INDEX IF NOT EXISTS kit_checks_created ON kit_checks(created_at);
+CREATE TABLE IF NOT EXISTS emergency_keys (id TEXT PRIMARY KEY,public_key TEXT NOT NULL CHECK (length(public_key) = 43),digest TEXT NOT NULL UNIQUE CHECK (length(digest) = 64),identifier INTEGER NOT NULL CHECK (identifier BETWEEN 0 AND 32767),k INTEGER NOT NULL CHECK (k BETWEEN 2 AND 16),n INTEGER NOT NULL CHECK (n BETWEEN k AND 16),labels TEXT NOT NULL CHECK (length(labels) <= 2048),created_by TEXT NOT NULL,created_at TEXT NOT NULL,retired_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS emergency_keys_active ON emergency_keys((1)) WHERE retired_at IS NULL;
 `;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
@@ -397,9 +424,18 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
-  // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Purely additive: planned
-  // as 22 after 19 to 21 of the other 2.16.5 changes; renumber before release if the order changes.
-  { version: 19, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
+  // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
+  { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
+  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it.
+  { version: 20, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
+  // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it.
+  { version: 21, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
+  // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional
+  // number: the next free one; renumbered at merge if another migration lands first.
+  { version: 22, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
+  // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Provisional number: the
+  // next free one; renumbered at merge if another migration lands first.
+  { version: 23, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

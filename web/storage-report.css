@@ -15,7 +15,7 @@
 .sr-split .card-title{margin:0 0 8px}
 .sr-split>.card .card-body{display:flex;flex-direction:column}
 .sr-scroll{max-height:calc(8 * var(--row-height));overflow-y:auto;margin:0 -8px;padding:0 8px}
-.sr-scroll:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.sr-scroll:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 .sr-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);line-height:var(--lh-body);font-variant-numeric:tabular-nums}
 .sr-page .sr-table td,.sr-page .sr-table tbody th{height:var(--row-height);padding:0;border-bottom:1px solid var(--border-subtle);text-align:left;font-weight:400;vertical-align:middle}
 .sr-page .sr-table tr:last-child td,.sr-page .sr-table tr:last-child th{border-bottom:0}

@@ -80,7 +80,7 @@ test('states, cancel window and reasons', () => {
   assert.equal(cancellable({ result: null, progress: { phase: 'prepare' } }), true);
   assert.equal(cancellable({ result: null, progress: { phase: 'apply', applyStarted: true } }), false);
   assert.equal(cancellable({ result: null, progress: { phase: 'prepare', applyStarted: true } }), false);
-  assert.equal(SAY.unhealthy(120), 'The site did not become healthy in 2 minutes.'); assert.equal(SAY.unhealthy(60), 'The site did not become healthy in 1 minute.'); assert.equal(SAY.unhealthy(90), 'The site did not become healthy in 90 seconds.');
+  assert.equal(SAY.unhealthy(120), 'The app did not become healthy in 2 minutes.'); assert.equal(SAY.unhealthy(60), 'The app did not become healthy in 1 minute.'); assert.equal(SAY.unhealthy(90), 'The app did not become healthy in 90 seconds.');
   assert.equal(reasonFor('NOPE', 'fallback'), 'fallback'); assert.equal(helperCode('rm -rf /'), null); assert.equal(helperCode('PORT_IN_USE'), 'PORT_IN_USE');
 });
 

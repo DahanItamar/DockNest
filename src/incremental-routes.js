@@ -15,7 +15,7 @@ import { discardIncrementalState, busySite, enqueueBackup } from './engine.js';
 import { incrementalSettings, updateIncrementalSettings, applyIncrementalSettings, loadChain, verifyChainLinks, inChain, ChainError, FULL_REASONS } from './incremental.js';
 
 const notFound = message => { throw Object.assign(new Error(message), { status: 404 }); };
-const site = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('Site not found.');
+const site = siteId => parse(db.prepare('SELECT * FROM sites WHERE id=?').get(siteId)) || notFound('App not found.');
 const view = (row, settings) => ({ siteId: row.id, enabled: settings.enabled, interval: settings.interval, fullNext: settings.fullNext, fullNextReason: settings.fullNextReason, fullNextMessage: settings.fullNextReason ? FULL_REASONS[settings.fullNextReason] ?? null : null, available: row.config?.kind !== 'static', beta: true });
 
 // ---- tar (POSIX ustar; sizes past 8 GiB use the GNU/POSIX base-256 form that GNU tar, bsdtar and Python read) ----------
@@ -67,7 +67,7 @@ const fullNowOnly = body => Boolean(body && typeof body === 'object' && !Array.i
 const settingsChange = (req, res, next) => fullNowOnly(req.body) ? next() : requireAdmin(req, res, () => requireRecentAuth(req, res, next));
 incrementalRoutes.put('/sites/:id/incremental', settingsChange, async (req, res) => {
   const row = site(req.params.id);
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(row.id)) return res.status(409).json({ error: 'This site was removed from active sites.', code: 'site_removed' });
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(row.id)) return res.status(409).json({ error: 'This app was removed from active apps.', code: 'site_removed' });
   const staticSite = row.config?.kind === 'static';
   let outcome, job = null;
   try {

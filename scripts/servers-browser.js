@@ -24,7 +24,7 @@ try{
  await page.evaluate(()=>document.fonts.ready);
  const card=name=>page.getByRole('article',{name,exact:true});
  assert.equal(await page.locator('.server-card').count(),4);
- assert.equal(await card('Production EU').getByLabel('1 configured site').count(),1);
+ assert.equal(await card('Production EU').getByLabel('1 configured app').count(),1);
  assert.equal(await card('Production EU').locator('code').filter({hasText:'ab'.repeat(32)}).textContent(),'ab'.repeat(32),'Complete SSH fingerprint remains visible');
  async function measure(){
   const boxes=await page.locator('.server-card').evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect(),f=card.querySelector('footer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,actions:f.y,actionWidth:f.width}}));
@@ -42,13 +42,13 @@ try{
  await page.getByRole('dialog',{name:'Connection diagnostics'}).waitFor();assert.equal(tested,1);
  await page.getByRole('button',{name:'Close dialog'}).click();
  await page.route('**/api/servers/production/discover',r=>r.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:'running'}]}}));
- await card('Production EU').getByRole('button',{name:'Discover sites',exact:true}).click();
- await page.getByRole('dialog').getByRole('button',{name:'Select site shop',exact:true}).waitFor();
+ await card('Production EU').getByRole('button',{name:'Discover apps',exact:true}).click();
+ await page.getByRole('dialog').getByRole('button',{name:'Select app shop',exact:true}).waitFor();
  assert.equal(await page.getByRole('dialog').getByLabel('Source server').inputValue(),'production','Discovery retains selected server');
  await page.getByRole('button',{name:'Close dialog'}).click();
  let edited=0;
  await page.route('**/api/servers/production/details',r=>{edited++;assert.equal(r.request().method(),'PATCH');assert.deepEqual(r.request().postDataJSON(),{name:'Production EU',note:'Main storefront host - reviewed'});state.servers[0].note='Main storefront host - reviewed';return r.fulfill({json:state.servers[0]});});
- await card('Production EU').getByRole('button',{name:'Edit details',exact:true}).click();
+ await card('Production EU').getByRole('button',{name:/^Edit details/}).click();
  await page.getByRole('dialog').getByLabel('Server note (optional)').fill('Main storefront host - reviewed');
  await page.getByRole('dialog').getByRole('button',{name:'Save details',exact:true}).click();
  await page.getByRole('dialog').waitFor({state:'hidden'});assert.equal(edited,1);
@@ -72,7 +72,7 @@ try{
  role='operator';await page.reload();
  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
  await card('Production EU').waitFor();
- assert.equal(await page.getByRole('button',{name:'Edit details',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:/^Edit details/}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),4);
  state.servers=[];state.sites=[];

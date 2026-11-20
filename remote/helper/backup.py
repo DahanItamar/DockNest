@@ -6,13 +6,13 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
-    INCREMENTAL_GUIDE, RESTORE_GUIDE)
+    INCREMENTAL_GUIDE, RESTORE_GUIDE, RUN_DEFINITION_GUIDE, hand_steps_guide)
 from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
     refuse_protected_sources, scoped_classify, source_archive, source_archive_command, within)
 from .databases import (
-    data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
+    ENGINES, data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
     shutdown_evidence, sqlite_check_mode, sqlite_file_source, validate_database_contracts)
 from .incremental import (
     INCREMENTAL_ROOT, annotate_mounts, copy_private, incremental_request, incremental_sources, manifest_snapshots,
@@ -23,10 +23,16 @@ from .maintenance import (
     MAINTENANCE_NOT_SET_UP, MaintenanceOptional, maintenance)
 from .discovery import (
     hardening_report, nginx_sites, temporary_mounts)
+from .restore_gaps import (
+    restore_check)
+from .move import (
+    hand_placed)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
 from .routing import (
     proxy_routes)
+from .runspec import (
+    run_definition, standalone)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
 # </build:header>
 def transfer_progress(count,final=False):
@@ -133,7 +139,7 @@ def stream_file(archive,name,path,expected):
     if file_sha256(path)!=expected or path.stat().st_size!=size:raise ValueError('Snapshot file changed during capture')
     return {'bytes':size,'sha256':expected}
 def stream_document(archive,name,value):
-    data=value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
+    data=value if isinstance(value,bytes) else value.encode();info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o600
     archive.addfile(info,io.BytesIO(data))
 
 def capture_size(containers,configuration,exclusions,images):
@@ -216,23 +222,20 @@ def service_contracts(cfg,containers):
     for c in containers:
         declaration=declarations.get(c['Id'],{})
         engine=declaration.get('engine','auto');detected=None;version=None
-        if c['State']['Running']:
-            for name,binary in [('postgres','postgres'),('mariadb','mariadbd'),('mysql','mysqld'),('redis','redis-server')]:
-                try:
-                    output=run(['docker','exec',c['Id'],binary,'--version'],timeout=10).decode(errors='replace')
-                    match=re.search(r'\bv=(\d+\.\d+\.\d+)\b' if name=='redis' else r'(?:PostgreSQL\)?\s+|Ver\s+)(\d+\.\d+(?:\.\d+)?)',output)
-                    if match:detected=name;version=match[1];break
-                except (subprocess.CalledProcessError,subprocess.TimeoutExpired):pass
         hint=c['Config'].get('Image','')
+        if c['State']['Running']:
+            for name,native in ENGINES.items():
+                version=native.detect(c['Id']) if native.detectable(hint,engine) else None
+                if version:detected=name;break
         if detected and engine not in ['auto',detected]:raise ValueError('Declared database engine does not match the installed binary')
         engine=detected or ('generic' if engine=='auto' else engine)
         if engine=='generic' and image_looks_like_database(hint):raise ValueError('Stateful service requires a supported per-service database contract')
         if engine!='generic' and (not detected or not version):raise ValueError('Database must be running for native version and consistency preflight; stopped database requires an offline adapter')
-        if engine=='redis' and not re.fullmatch(r'7\.4\.\d+',version):raise ValueError('Redis native capture is limited to tested Redis 7.4 versions; reviewed adapter required')
+        if engine!='generic':ENGINES[engine].check_version(version)
         expected=declaration.get('version')
         if expected and version!=expected:raise ValueError('Installed database version differs from the service contract')
         for check in declaration.get('checks',[]):
-            if engine=='generic' or (engine=='redis' and (not check.get('key') or check.get('table'))) or (engine in ['postgres','mysql','mariadb'] and (not check.get('table') or check.get('key'))):
+            if engine=='generic' or not ENGINES[engine].check_shape(check):
                 raise ValueError('Configured data checks do not match the detected native engine')
         dependencies=[]
         for value in declaration.get('dependsOn',[]):
@@ -277,11 +280,26 @@ def artifact_inventory(root):
             result[p.name]={'bytes':p.stat().st_size,'sha256':digest.hexdigest()}
     return result
 
+# run-definition/ files (2.16.5): optional, recorded in manifest.runDefinition, so packages without them still verify.
+RUN_DEFINITION=re.compile(r'run-definition/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:yaml|env)')
+def document_record(data):return {'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+def run_definition_intact(root,records):
+    folder=root/'run-definition'
+    present={'run-definition/'+p.name for p in folder.iterdir()} if folder.is_dir() and not folder.is_symlink() else set()
+    if present!=set(records) or not all(RUN_DEFINITION.fullmatch(name) for name in records):return False
+    return all((root/name).is_file() and not (root/name).is_symlink() and document_record((root/name).read_bytes())==item for name,item in records.items())
+def package_run_definition(cs,images):
+    """A container started without Compose gets a readable Compose file of itself (docs/backup-format.md). It is
+    optional content: if it cannot be written the backup goes on without it (no manifest.runDefinition)."""
+    if not standalone(cs):return {}
+    try:return {name:text.encode() for name,text in run_definition(cs,images).items()}
+    except Exception as error:
+        diagnostic(phase='run-definition-skipped',exceptionType=type(error).__name__);return {}
 def verify_artifacts(root,manifest):
     expected=manifest.get('artifacts')
     if expected is None:return False # Legacy package: no invented artifact evidence.
     actual=artifact_inventory(root)
-    if actual!=expected:raise ValueError('Backup artifacts are missing, changed or unexpected')
+    if actual!=expected or not run_definition_intact(root,manifest.get('runDefinition') or {}):raise ValueError('Backup artifacts are missing, changed or unexpected')
     names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
     if manifest.get('formatVersion')==2:
@@ -470,7 +488,7 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         check('Maintenance proxy and website',proxy)
         if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
-    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'routing':proxy_routes()}
+    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'restoreGaps':restore_check(cfg,selected.get('containers')),'routing':proxy_routes()}
 def capture(req,output=None):
     if req['config'].get('kind')=='static':
         if output is not None:return capture_static_stream(req,output)
@@ -647,6 +665,8 @@ def capture(req,output=None):
     if protected:manifest['protectedMounts']=protected
     if keys_left_out:manifest['protectedPaths']=keys_left_out
     manifest['artifacts']=inventory if output is not None else artifact_inventory(root)
+    definition=package_run_definition(cs,images)
+    if definition:manifest['runDefinition']={name:document_record(data) for name,data in definition.items()}
     manifest['deliveryMode']='direct' if output is not None else 'staged'
     manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
     if increment:
@@ -671,13 +691,22 @@ def capture(req,output=None):
     if keys_left_out:
         with (root/'restore-guide.md').open('a') as guide:
             guide.write('\n# Key folders that were not copied\nThe .ssh and .gnupg entries listed in manifest.protectedPaths sit inside copied bind mounts and hold SSH or GPG keys. DockNest never copies them; the restored mount has no such entry. Recover them separately and never delete the real folders when putting restored data back.\n')
+    hand=set(hand_placed(manifest['configurationFiles'],[m['Source'] for c in cs for m in c['Mounts'] if m['Type']=='bind']))
+    if hand:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(hand_steps_guide([(i,f) for i,f in enumerate(manifest['configurationFiles']) if f in hand]))
     if increment:
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
+    if definition:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(RUN_DEFINITION_GUIDE)
     if output is not None:
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
+        for name,data in definition.items():stream_document(archive,name,data)
         archive.close();output.flush()
-    else:run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar'))])
+    else:
+        if definition:(root/'run-definition').mkdir(mode=0o700)
+        for name,data in definition.items():(root/name).write_bytes(data);os.chmod(root/name,0o600)
+        run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar')),*definition])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass

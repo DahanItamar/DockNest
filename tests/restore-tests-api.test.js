@@ -194,7 +194,7 @@ test('Run test allows 6 manual tests per site in 24 hours, then 429 with the pla
   }
   const refused = await json(await operator('POST', `/sites/${siteId}/restore-tests`, {}));
   assert.equal(refused.status, 429);
-  assert.deepEqual(refused.body, { error: 'You can run 6 tests a day for each site.', code: 'TOO_MANY_TESTS' });
+  assert.deepEqual(refused.body, { error: 'You can run 6 tests a day for each app.', code: 'TOO_MANY_TESTS' });
   now += 86_400_000;
   assert.equal((await operator('POST', `/sites/${siteId}/restore-tests`, {})).status, 202, 'the window moves on');
 });

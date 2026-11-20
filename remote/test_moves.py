@@ -183,6 +183,15 @@ class DeployRestoreTests(unittest.TestCase):
             __import__('shutil').rmtree(base/'volumes');(base/'srv'/'shop').mkdir();(base/'srv'/'shop'/'config.txt').write_text('existing')
             with self.assertRaises(ValueError) as refused:self.deploy(temporary)
             self.assertIn('never overwrites',str(refused.exception))
+    def test_publish_all_reaches_only_loopback_on_a_test_copy(self):
+        for mode,expected,flag in [('test','127.0.0.1::9000/tcp',False),('live',None,True)]:
+            manifest=fixture_manifest()
+            for c in manifest['containers']:c['HostConfig']['PublishAllPorts']=True;c['Config']['ExposedPorts']={'8080/tcp':{},'9000/tcp':{}}
+            with tempfile.TemporaryDirectory() as temporary:
+                host,_,_=self.deploy(temporary,mode=mode,manifest=manifest)
+                web=[c for c in host.calls if c[0]=='create'][0]
+                self.assertEqual('--publish-all' in web,flag,mode)
+                self.assertEqual([web[i+1] for i,a in enumerate(web) if a=='-p' and web[i+1].endswith('9000/tcp')],[expected] if expected else [],mode)
     def test_a_test_copy_never_joins_the_shared_default_bridge(self):
         manifest=fixture_manifest()
         for c in manifest['containers']:
@@ -361,6 +370,31 @@ class MoveSafetyTests(unittest.TestCase):
             self.assertFalse(helper.move_root_allowed('/var/lib/%s/x'%name),name)
         with self.assertRaisesRegex(ValueError,'outside the folders a move may create'):helper.place_tree(pathlib.Path('unused.tar'),'/var/lib/cloud/scripts/per-boot/x.sh',None,None,MOVE)
         with self.assertRaises(ValueError):helper.place_tree(pathlib.Path('unused.tar'),'/var/lib/docker/volumes/x/_data',None,None,MOVE)
+    def test_only_configuration_files_the_preview_named_are_left_out_and_every_other_one_refuses_as_before(self):
+        files=['/srv/shop/.env','/etc/cron.d/shop','/var/lib/cloud/x.sh','/srv/shop/compose.yaml','/etc/shop/compose.yaml','/etc/nginx/shop/site.conf','/etc/cron.d/shop']
+        # Compose files of the project and files inside a bind mount are never named: they refuse as before.
+        self.assertEqual(helper.hand_placed(files,['/etc/shop/compose.yaml','/etc/nginx/shop']),['/etc/cron.d/shop','/var/lib/cloud/x.sh'])
+        written=[]
+        def place(archive,target,*_):written.append((pathlib.PurePath(archive).name,target));return pathlib.PurePosixPath(target)
+        manifest={'configurationFiles':['/srv/shop/.env','//etc/cron.d/shop','/srv/shop/data/inside.conf','/opt/app/app.conf']}
+        with patch('helper.place_tree',side_effect=place):
+            configuration=helper.place_configuration(manifest,pathlib.Path('unpacked'),['/etc/cron.d/shop'],['/srv/shop/data'],None,None,MOVE)
+        self.assertEqual(written,[('config-0.tar','/srv/shop/.env'),('config-3.tar','/opt/app/app.conf')])
+        self.assertEqual(configuration,['/srv/shop/.env','/etc/cron.d/shop','/srv/shop/data/inside.conf','/opt/app/app.conf'])
+        unpacked=pathlib.Path('unpacked')
+        # Not named by the preview: an /etc file, a Compose file under /etc when the move does not use Compose
+        # (compose: null), and a path that becomes a link into /etc only on the new server all refuse.
+        for name in ['/etc/cron.d/shop','/etc/shop/compose.yaml']:
+            with self.assertRaisesRegex(ValueError,'system or protected location',msg=name):
+                helper.place_configuration({'configurationFiles':[name]},unpacked,[],[],None,None,MOVE)
+        with patch('helper.resolved',return_value=['/srv/shop/linked.conf','/etc/shop/linked.conf']):
+            with self.assertRaisesRegex(ValueError,'system or protected location'):
+                helper.place_configuration({'configurationFiles':['/srv/shop/linked.conf']},unpacked,['/etc/cron.d/shop'],[],None,None,MOVE)
+    def test_the_restore_guide_lists_each_configuration_file_to_put_back_by_hand(self):
+        text=helper.hand_steps_guide([(1,'/etc/cron.d/shop'),(3,'/etc/systemd/system/shop.timer')])
+        self.assertIn('# Put back by hand',text)
+        self.assertIn('- copy shop (config-1.tar) from the backup to /etc/cron.d/shop\n',text)
+        self.assertIn('- copy shop.timer (config-3.tar) from the backup to /etc/systemd/system/shop.timer\n',text)
     def test_an_existing_var_lib_folder_of_another_program_is_never_written(self):
         real_is_dir,real_iterdir=pathlib.Path.is_dir,pathlib.Path.iterdir
         held={'/var/lib/gitea'}

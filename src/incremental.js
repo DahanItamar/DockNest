@@ -28,7 +28,7 @@ export const FULL_REASONS = Object.freeze({
   'parent-removing': 'The previous backup of the chain is being removed.',
   'plan-changed': 'The containers, mounts or images changed since the last backup.',
   'storage-changed': 'The main storage destination changed.',
-  'site-moved': 'The site moved to another server.',
+  'site-moved': 'The app moved to another server.',
   'standard-package': 'The previous backup was a standard full package, not part of a chain.',
   'format-changed': 'The backup format changed.',
   'snapshot-not-committed': 'The server could not confirm the change record of the previous backup.',
@@ -69,7 +69,7 @@ export function applyIncrementalSettings(siteId, body, actor, { staticSite = fal
   const before = incrementalSettings(siteId);
   const enabled = input.enabled ?? before.enabled, interval = input.interval ?? before.interval;
   if (enabled && staticSite) throw httpError(400, 'static_site', 'Static sites always make full backups.');
-  if (input.fullNow && !enabled) throw httpError(409, 'incremental_off', 'Incremental backups are off for this site, so every backup is already full.');
+  if (input.fullNow && !enabled) throw httpError(409, 'incremental_off', 'Incremental backups are off for this app, so every backup is already full.');
   let force = before.forceFull;
   if (enabled && !before.enabled) force = FORCE.enabled;
   if (!enabled) force = FORCE.none;

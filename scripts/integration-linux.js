@@ -88,12 +88,16 @@ try {
   record('Remote SFTP storage passes password and SSH-key write/read/rename probes; wrong host fingerprint fails closed');
   // INTEGRATION_ONLY=self-heal or launch (test-only, for a quick re-run of one scenario through workflow_dispatch): the hosts and
   // the remote storage above are what the self-heal scenario needs (it builds its own site image). Unset, the full run
-  // below is unchanged. Partial evidence is marked as such and never reads as a full pass.
+  // below is unchanged. Partial evidence is marked as such and never reads as a full pass. INTEGRATION_ONLY=mongo is the
+  // CI MongoDB matrix (one job per tested major, MONGO_IMAGE); aggregate-gate merges its evidence for the release gate.
   const only = process.env.INTEGRATION_ONLY || '';
   if (only) {
-    if (!['self-heal','launch'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal" or "launch", not "${only.slice(0, 40)}"`);
+    if (!['self-heal','launch','mongo'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch" or "mongo", not "${only.slice(0, 40)}"`);
     evidence.only = only;
-    if (only === 'launch') {
+    if (only === 'mongo') {
+      const {runMongoCompatibility}=await import('./integration-mongo.js');
+      await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
+    } else if (only === 'launch') {
       const {runLaunchScenario}=await import('./integration-launch.js');
       await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
     } else {
@@ -107,7 +111,9 @@ try {
   await run('cp',writeHelperBundle(),hosts[0]+':/qa-helper/bundle/helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_mongo.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_restore_gaps.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_domains.py');
   record('Linux helper unit tests preserve internal symlinks/hardlinks and reject archive traversal, device files and writes through symlinks');
   await run('cp', 'tests/integration/site', hosts[0] + ':/fixture-site');
@@ -197,13 +203,8 @@ try {
   assert.equal(await run('exec',hosts[1],'docker','exec',result.containerId,'python','-c',"from pathlib import Path;import os;assert not Path('/tmp/ephemeral.txt').exists();assert os.stat('/tmp').st_mode&0o7777==0o1777;assert ' /tmp tmpfs ' in Path('/proc/mounts').read_text();print('temporary-empty')"),'temporary-empty');
   record('Declared temporary RAM folders are recreated empty with original permissions, while persistent database data survives');
   // Prepare (verify only), poll until ready, then stream the ZIP; nothing is staged on disk.
-  const {startZipExport,findZipExport,zipExportState,streamZipExport}=await import('../src/backup-export.js');const {createWriteStream}=await import('node:fs');
-  const prepared=startZipExport(backup).item;let zipState=prepared;
-  for(let i=0;i<600&&zipState.status==='preparing';i++){await new Promise(resolve=>setTimeout(resolve,500));zipState=zipExportState(findZipExport(backup.id,prepared.id));}
-  assert.equal(zipState.status,'ready',zipState.error||'ZIP preparation did not finish');
-  const fullZip=join(directory,'full-site.zip'),zipResponse=createWriteStream(fullZip);zipResponse.attachment=()=>zipResponse;zipResponse.set=()=>zipResponse;
-  await streamZipExport(findZipExport(backup.id,prepared.id),backup,zipResponse);
-  await new Promise(resolve=>zipResponse.writableFinished?resolve():zipResponse.once('finish',resolve));
+  const {exportBackupZip}=await import('./integration-zip.js');
+  const fullZip=join(directory,'full-site.zip');await exportBackupZip(backup,fullZip);
   const {execFileSync}=await import('node:child_process');
   execFileSync(process.platform==='win32'?'python':'python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);bad=z.testzip();assert bad is None,repr(bad)",fullZip],{stdio:['ignore','ignore','pipe']});
   await run('cp',fullZip,hosts[1]+':/full-site.zip');
@@ -280,6 +281,8 @@ try {
   assert.equal(await run('exec',hosts[1],'stat','-c','%a',staticResult.documentRoot+'/assets/logo.txt'),'640');assert.equal(await run('exec',hosts[0],'cat',staticRoot+'/index.html'),'live-edit');
   await assert.rejects(remote(servers[0],{operation:'readiness',config:{...staticCfg,documentRoot:'/etc'}}).then(result=>{if(!result.ready)throw new Error('blocked')}));
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
+  const {runRestoreCheckScenario}=await import('./integration-restore-check.js');
+  await runRestoreCheckScenario({run,hosts,servers,db,record});
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
   const {runCopiesScenario,runHardenedRestoreScenario}=await import('./integration-copies.js');
@@ -292,13 +295,15 @@ try {
   const {runMilestones}=await import('./integration-milestones.js');
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
   const {runMoveScenario}=await import('./integration-move.js');
-  await runMoveScenario({run,until,hosts,servers,db,record});
+  await runMoveScenario({run,until,hosts,servers,db,record,directory});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
   await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
   const {runSafeEditScenario}=await import('./integration-safe-edit.js');
   await runSafeEditScenario({run,until,hosts,servers,db,record});
   const {runIncrementalScenario}=await import('./integration-incremental.js');
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
+  const {runEmergencyScenario}=await import('./integration-emergency.js');
+  await runEmergencyScenario({run,hosts,db,record,directory});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
   const {runDomainsScenario}=await import('./integration-domains.js');

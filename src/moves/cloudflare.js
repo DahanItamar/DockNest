@@ -44,7 +44,7 @@ export async function connect(raw, actor) {
     if (batch.length < 50) break;
   }
   const zones = listed.map(zone => ({ id: String(zone.id), name: String(zone.name).toLowerCase() })).filter(zone => /^[a-f0-9]{32}$/.test(zone.id));
-  if (!zones.length) throw httpError(400, 'This token cannot see any zone. Give it Zone.DNS:Edit on the zone of your site.');
+  if (!zones.length) throw httpError(400, 'This token cannot see any zone. Give it Zone.DNS:Edit on the zone of your app.');
   for (const zone of zones) await call(value, `/zones/${zone.id}/dns_records?per_page=1`);
   db.prepare("INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(KEY, JSON.stringify({ token: seal(value), zones, savedAt: new Date().toISOString() }));
   audit(actor, 'dns.connect', null, { provider: 'cloudflare', zones: zones.length });

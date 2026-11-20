@@ -7,6 +7,7 @@ import { claimJob, executeJob, tickScheduler,verifyEncrypted,finishReconciledBac
 import { reconcileArtifacts,claimCopy,recoverInterruptedCopies } from './artifact-journal.js';
 import { executeCopy,maintainCopies } from './backup-copies.js';
 import { tickSelfBackup,claimSelfBackup,executeSelfBackup,recoverInterruptedSelfBackups,pruneSelfBackups } from './self-backup.js';
+import { claimKitCheck,executeKitCheck,queueKitCheckAfterBackup,requeueInterruptedKitChecks } from './kit-check.js';
 import { acquireLease,renewLease,releaseLease,LEASE_TTL_MS } from './worker-lease.js';
 import { runWorkerLoop } from './worker-loop.js';
 import { tickUpdateCheck } from './updates/check.js';
@@ -49,6 +50,8 @@ recoverInterruptedDomainChecks();
 db.prepare("UPDATE jobs SET status='recovery_required',stage='recovery_required',error='Worker interrupted. Inspect remote recovery.json and health before clearing recovery.',finished_at=? WHERE status='running'").run(new Date().toISOString());
 let stopping=false,lost=false;
 await recoverInterruptedSelfBackups();
+// A kit check is one read and one decryption; an interrupted one runs again.
+requeueInterruptedKitChecks();
 // A copy step the previous worker did not finish resumes from its journal (src/artifact-journal.js).
 try{await recoverInterruptedCopies(verifyEncrypted);}catch{console.error('Backup copy recovery is pending; it is retried by the copy step.');}
 // Self-heal restarts queued by an event start at once beside the running job (src/self-heal/engine.js healNow), only
@@ -70,7 +73,7 @@ for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{if(++signals>1){co
 try{
  let reconcileAt=0;
  const maintain=async()=>{if(Date.now()<reconcileAt)return;const reconciliation=await reconcileArtifacts(verifyEncrypted,{checkCompleted:true,onJobCompleted:finishReconciledBackup});db.prepare("INSERT INTO settings VALUES('artifact_reconciliation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({...reconciliation,checkedAt:new Date().toISOString()}));if(!stopping)try{await pruneSelfBackups();}catch{/* Optional kit cleanup does not stop site jobs. */}if(!stopping)try{await maintainCopies(Date.now(),verifyEncrypted);}catch{/* Copy clean-up is retried at the next maintenance. */}try{purgeSelfHealEvents();}catch{/* Self-heal history older than 90 days is deleted at the next maintenance. */}reconcileAt=Date.now()+300000;};
- await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickLaunches();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup,claimJob,executeJob,claimInstall,executeInstall,claimLaunch:()=>claimLaunch(),executeLaunch:executeLaunchStep,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
+ await runWorkerLoop({active:()=>!stopping&&renew(),maintain,tick:()=>{tickScheduler();tickSelfBackup();tickUpdateCheck({db});tickMoves();tickRestoreTestSchedule();tickRestoreTests();tickSiteEdits();tickLaunches();tickAlerts();tickReachability();syncStreams();tickSelfHeal();},claimSelfBackup,executeSelfBackup:async run=>{if(await executeSelfBackup(run))queueKitCheckAfterBackup();},claimKitCheck,executeKitCheck,claimJob,executeJob,claimInstall,executeInstall,claimLaunch:()=>claimLaunch(),executeLaunch:executeLaunchStep,claimCopy:()=>claimCopy(),executeCopy:copy=>executeCopy(copy,verifyEncrypted),idle:()=>new Promise(r=>setTimeout(r,3000))});
 }finally{clearInterval(heartbeatTimer);stopStreams();cancelRechecks();await healRunner.running;if(!lost){heartbeat(false);releaseLease(db,holder);console.log('Worker drained; lease released.');}}
 // Exit explicitly so lingering SSH/SFTP handles cannot keep a drained worker alive past the grace period.
 process.exit(lost?1:0);
