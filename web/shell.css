@@ -46,9 +46,6 @@
 .theme-toggle,.berry-header-tools>.theme-toggle,.auth-header .theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:40px;min-width:40px;min-height:40px;padding:0;border:0;background:transparent;color:var(--header-control);border-radius:8px}
 .theme-toggle:hover{background:transparent;color:var(--header-control-hover)}
 
-.theme-symbol g{transform-origin:12px 12px;transition:opacity var(--dn-dur-base) var(--dn-ease-standard)}
-.theme-symbol.light .theme-moon,.theme-symbol.dark .theme-sun{opacity:0}
-.theme-symbol.light .theme-sun,.theme-symbol.dark .theme-moon{opacity:1;transform:none}
 
 
 @media(max-width:599px){.berry-header-tools>.theme-toggle{width:34px;min-width:34px;min-height:34px}}
@@ -226,3 +223,22 @@ html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,bu
 
 /* A long storage name truncates inside the sidebar card instead of running past its edge. */
 .berry-sidebar-storage>div>span:last-child{min-width:0;flex:1}
+
+/* v2 shell: calm sidebar and header. Blue chrome for the current item, no decorative motion. */
+.berry-sidebar{bottom:0;transition:none}
+.berry-shell .workspace{transition:none}
+.berry-nav-group h2{font-size:var(--dn-text-xs);line-height:var(--dn-leading-xs);font-weight:500;text-transform:none;letter-spacing:0;color:var(--dn-text-tertiary)}
+.berry-nav-group button,.berry-nav-group .berry-nav-toggle{height:36px;min-height:36px;border-radius:var(--dn-radius-md);font-size:var(--dn-text-sm);line-height:var(--dn-leading-sm);font-weight:500}
+.berry-nav-group button .brand-icon,.collapsed .berry-nav-group button .brand-icon{width:20px;height:20px}
+.berry-nav-group button:hover{color:var(--dn-text-primary);background:var(--dn-bg-hover)}
+.berry-nav-group button.selected,.berry-nav-group button.selected:hover{color:var(--dn-chrome-text);background:var(--dn-chrome-surface)}
+.berry-nav-group .berry-nav-toggle{color:var(--dn-text-secondary)}
+.berry-nav-group .berry-nav-toggle:hover{color:var(--dn-text-primary);background:var(--dn-bg-hover)}
+@media(min-width:900px){.collapsed .berry-nav-group button,.collapsed .berry-nav-group .berry-nav-toggle{height:36px;min-height:36px}}
+@media(pointer:coarse),(max-width:899px){.berry-nav-group button,.berry-nav-group .berry-nav-toggle,.collapsed .berry-nav-group button{height:var(--dn-control-h-touch);min-height:var(--dn-control-h-touch)}}
+@media(max-width:899px){.berry-sidebar{transition:transform var(--dn-dur-slow) var(--dn-ease-enter)}}
+.menu-symbol .menu-bar{transition:none}
+@media(hover:hover){.menu-control:hover .menu-symbol:not(.open) .menu-bar-top{transform:translateY(-6px) scaleX(.75) translateX(-2px)}.menu-control:hover .menu-symbol:not(.open) .menu-bar-bottom{transform:translateY(6px) scaleX(.625) translateX(3px)}.menu-control:hover{color:var(--header-control-hover)}}
+.theme-symbol{display:block;flex-shrink:0}
+html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,button,input,dialog,label,p,span,h1,h2,h3,td,th){transition-duration:var(--dn-dur-fast)}
+@media(prefers-reduced-motion:reduce){html.theme-changing,.theme-changing :where(body,header,aside,main,section,div,button,input,dialog,label,p,span,h1,h2,h3,td,th){transition:none}.berry-sidebar{transition:none}}
