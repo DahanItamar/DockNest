@@ -18,7 +18,6 @@
 .sh-limit-control .sh-window{width:132px;height:var(--control-height);min-height:var(--control-height)}
 .sh-count[aria-invalid=true]{border-color:var(--error)}
 
-.map-root dialog.sh-sheet button[role=switch]:not(:focus-visible)::before{outline:0}
 
 .sh-history h3{margin:0 0 8px}
 .rebrand-page .empty.sh-empty,.empty.sh-empty{padding:20px 24px;min-height:0}

@@ -1,5 +1,5 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ChevronDown} from '../icons.jsx';
+import {AlertCircle,ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
 import {useGuard} from '../map/MoveFlow.jsx';
 import {LinkedWarning} from '../linked/LinkedWarning.jsx';
@@ -15,8 +15,8 @@ function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMo
    {spec.presets.map(([value,text])=><option key={value} value={String(value)}>{text}</option>)}
    <option value="custom">Custom</option>
   </select>
-  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
-  <small className={error?'rt-err':undefined} role={error?'alert':undefined}>{error||help}</small>
+  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} aria-describedby={id+'-msg'} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
+  {error?<span className="field-error" id={id+'-msg'} role="alert"><AlertCircle size={16} stroke={2} aria-hidden="true"/>{error}</span>:<small id={id+'-msg'}>{help}</small>}
  </div>;
 }
 

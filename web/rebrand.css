@@ -8,9 +8,7 @@
 .rebrand-page .search input{font-size:var(--fs-body)}
 .rebrand-page .search span{font-size:var(--fs-caption)}
 .rebrand-page .field{font-size:var(--fs-body);line-height:1.5}
-.rebrand-page input:not([type=checkbox]):not([type=radio]),.rebrand-page select{min-height:44px;font-size:var(--fs-body)}
 .rebrand-page .search input:not([type=checkbox]):not([type=radio]){min-height:24px}
-.rebrand-page textarea{font-size:var(--fs-body);line-height:1.6;min-height:112px}
 .rebrand-page .field small{font-size:var(--fs-caption);line-height:1.5}
 .rebrand-page .empty{padding:40px 24px;min-height:240px;justify-content:center}
 .rebrand-page .empty h3{font-size:var(--fs-section);font-weight:600}
@@ -86,7 +84,6 @@
 .auth-card h2{font-size:var(--fs-title);font-weight:600;letter-spacing:-.5px;line-height:1.2;margin-bottom:12px}
 .auth-card p{font-size:var(--fs-body);line-height:1.6}
 .auth-card .field{font-size:var(--fs-body);margin-top:20px}
-.auth-card input:not([type=checkbox]),.auth-card select{min-height:44px;font-size:var(--fs-body)}
 .auth-card .security-note{font-size:var(--fs-caption);align-items:center;margin-top:24px}
 .rebrand-page dialog{border:0;border-radius:var(--radius);max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 32px)}
 .rebrand-page .modal-head{padding:24px}

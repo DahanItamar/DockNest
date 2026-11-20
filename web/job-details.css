@@ -108,7 +108,7 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-level.is-none .dn-level-text b{color:var(--text-secondary)}
 .dn-card p.dn-level-note{font-size:var(--fs-caption)}
 
-.field select.dn-zone-select{min-height:44px;font-size:var(--fs-body);padding:10px 14px}
+
 
 @media(prefers-reduced-motion:reduce){.dn-bar>div{transition:none}}
 @media(max-width:680px){

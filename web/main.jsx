@@ -1,4 +1,5 @@
-import React, {useEffect,useState,useRef} from 'react';
+import React, {useEffect,useId,useState,useRef} from 'react';
+import {AlertCircle} from './icons.jsx';
 import {count,plural} from './plural.js';
 import {createRoot} from 'react-dom/client';
 import {Archive,LayoutDashboard,Server,Layers,Clock,ShieldCheck,Activity,Wrench,LogOut,Plus,ArrowRight,RefreshCw,Download,Pin,RotateCcw,X,CheckCircle2,HardDrive,Filter,AlertTriangle,Home,LogIn,ChevronLeft,ChevronRight} from './icons.jsx';
@@ -87,7 +88,7 @@ function AccessTable({users,all,user,busy,run,setInvitation,setDialog}){
  ]}</tr>)}</DataTable></div>;
 }
 function Badge({value}){return <StatusLabel value={value}/>;}
-function Field({label,help,options,multiline,...props}){return <label className="field"><span>{label}</span>{options?<select {...props}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea {...props}/>:<input {...props}/>} {help&&<small>{help}</small>}</label>;}
+function Field({label,help,error,options,multiline,...props}){const id=useId(),helpId=help?id+'-help':undefined,errorId=error?id+'-error':undefined,describedBy=[props['aria-describedby'],helpId,errorId].filter(Boolean).join(' ')||undefined,control={...props,'aria-describedby':describedBy,...(error?{'aria-invalid':'true'}:{})};return <label className="field"><span>{label}</span>{options?<select {...control}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea {...control}/>:<input {...control}/>} {help&&<small id={helpId}>{help}</small>}{error&&<span className="field-error" id={errorId}><AlertCircle size={16} stroke={2} aria-hidden="true"/>{error}</span>}</label>;}
 function Empty({icon:Icon=Archive,title,children,action}){return <div className="empty"><span className="empty-icon"><Icon size={28}/></span><h3>{title}</h3><p>{children}</p>{action}</div>;}
 function Modal({title,onClose,children,className}){const ref=useRef();useEffect(()=>{ref.current.showModal();return()=>ref.current?.close();},[]);return <dialog ref={ref} className={className} aria-labelledby="dialog-title" onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}}><div className="modal-head"><h2 id="dialog-title">{title}</h2><button className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>{children}</dialog>;}
 function Auth({status,onAuth}) {
