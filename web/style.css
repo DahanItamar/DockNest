@@ -16,7 +16,7 @@ button.danger,.button.danger,.destructive{color:var(--dn-text-on-solid);backgrou
 button.danger:active:not(:disabled,[aria-disabled=true]),.destructive:active:not(:disabled){color:var(--dn-text-on-solid);background:var(--dn-danger-solid-hover);border-color:var(--dn-danger-solid-hover)}
 .text{border-color:transparent;background:transparent;color:var(--dn-text-secondary);padding:0 var(--dn-space-3)}
 .text:is(:disabled,[aria-disabled=true]),.icon:disabled,.icon-button:disabled{background:transparent;border-color:transparent}
-.icon,.icon-button{flex:none;width:var(--dn-control-h);min-width:var(--dn-control-h);padding:0;border-color:transparent;background:transparent;color:var(--dn-text-secondary)}
+.icon,.icon-button{flex:none;width:var(--dn-control-h);min-width:var(--dn-control-h);padding:0;border:0;background:transparent;color:var(--dn-text-secondary)}
 @media(hover:hover){.icon:hover:not(:disabled),.icon-button:hover:not(:disabled){color:var(--dn-text-primary)}}
 .icon-button[aria-pressed=true]{background:var(--dn-brand-surface);color:var(--dn-brand-text)}
 .small{height:var(--dn-control-h-sm);min-height:var(--dn-control-h-sm);padding:0 var(--dn-space-3)}.icon.small,.icon-button.small{width:var(--dn-control-h-sm);min-width:var(--dn-control-h-sm)}

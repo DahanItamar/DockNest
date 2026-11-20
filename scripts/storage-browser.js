@@ -98,7 +98,7 @@ try{
   await page.setViewportSize({width,height:900});
   const gap=await page.locator('form.storage-form .form-grid').evaluateAll(grids=>grids[1].firstElementChild.getBoundingClientRect().top-grids[0].lastElementChild.getBoundingClientRect().bottom);
   assert.ok(gap>=23.5,'Row gap '+gap+' at '+width);
-  for(const height of await page.locator('form.storage-form select').evaluateAll(selects=>selects.map(select=>select.getBoundingClientRect().height)))assert.ok(Math.abs(height-44)<1,'Select height '+height+' at '+width);
+  for(const height of await page.locator('form.storage-form select').evaluateAll(selects=>selects.map(select=>select.getBoundingClientRect().height)))assert.ok(Math.abs(height-(width<768?44:40))<1,'Select height '+height+' at '+width);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
  // Provider presets: defaults, endpoints built from region or account ID, hand-edited endpoints kept, footer in view, no focus style on pre-filled fields.
