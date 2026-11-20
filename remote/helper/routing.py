@@ -9,6 +9,8 @@ from .discovery import (
     nginx_sites)
 from .move import (
     host_addresses, listening_ports, process_running)
+from .restore_gaps import (
+    container_name)
 # </build:header>
 # Only hosts, ports, upstreams (scheme, host and port) and certificate file names leave the server: never a configuration
 # file, a path, a label other than a parsed Traefik rule, a credential, Nginx Proxy Manager's database or Traefik's
@@ -48,7 +50,6 @@ def split_upstream(value):
     host,port=(match.group(1),int(match.group(2))) if match and not rest.endswith(']') else (rest,None)
     return scheme,host.strip('[]'),port
 
-def container_name(c):return (c.get('Name') or '').lstrip('/')
 def container_aliases(c):
     """Names other containers reach this one by on a Docker network: its name, Compose service and network aliases."""
     names={container_name(c),(c.get('Config',{}).get('Labels') or {}).get('com.docker.compose.service','')}
