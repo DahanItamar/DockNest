@@ -7,7 +7,7 @@ import {DataTable} from './data-table.jsx';
 export {bucketActivity} from './chart-data.js';
 // These are the existing bar and line charts' complete feature set. Avoid
 // shipping unused pie, doughnut, radar and polar chart implementations.
-const palette=['--dn-viz-1','--dn-viz-2','--dn-viz-3','--dn-viz-4'];
+const palette=['--dn-viz-1','--dn-viz-3','--dn-viz-2','--dn-viz-4'];
 Chart.register(BarController,BarElement,LineController,LineElement,PointElement,CategoryScale,LinearScale,Tooltip,Legend,Filler);
 export function ActivityChart({s,period}){
  const ref=useRef(null),chart=useRef(null),lastDraw=useRef(null),{theme}=useTheme(),[hidden,setHidden]=useState([]),[menu,setMenu]=useState(false);
@@ -27,6 +27,6 @@ export function ActivityChart({s,period}){
 }
 export function Sparkline({values,labels=[],color='#FFFFFF',area=false,label='Capture history'}){
  const ref=useRef(),{theme}=useTheme(),key=JSON.stringify(values);
- useEffect(()=>{const styles=getComputedStyle(document.documentElement),resolvedColor=area?styles.getPropertyValue('--dn-viz-2').trim():color;const instance=new Chart(ref.current,{type:'line',data:{labels:labels.length?labels:values.map((_,i)=>String(i+1)),datasets:[{label,data:values,borderColor:resolvedColor,borderWidth:area?1:3,pointRadius:0,pointHitRadius:12,tension:.4,fill:area,backgroundColor:area?styles.getPropertyValue('--dn-viz-area').trim():'transparent'}]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{display:false,beginAtZero:true}},interaction:{mode:'index',intersect:false}}});return()=>instance.destroy()},[key,theme,color,area,label]);
+ useEffect(()=>{const styles=getComputedStyle(document.documentElement),resolvedColor=area?styles.getPropertyValue('--secondary-deep').trim():color;const instance=new Chart(ref.current,{type:'line',data:{labels:labels.length?labels:values.map((_,i)=>String(i+1)),datasets:[{label,data:values,borderColor:resolvedColor,borderWidth:area?1:3,pointRadius:0,pointHitRadius:12,tension:.4,fill:area,backgroundColor:context=>{if(!area)return'transparent';const gradient=context.chart.ctx.createLinearGradient(0,0,0,95),fill=styles.getPropertyValue('--dn-viz-area').trim();gradient.addColorStop(0,fill.replace('25%','40%'));gradient.addColorStop(1,fill.replace('25%','10%'));return gradient}}]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{display:false,beginAtZero:true}},interaction:{mode:'index',intersect:false}}});return()=>instance.destroy()},[key,theme,color,area,label]);
  return <div className="berry-sparkline"><canvas ref={ref} role="img" aria-label={label+': '+values.join(', ')}/></div>;
 }

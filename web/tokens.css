@@ -54,8 +54,8 @@
 /* ============ 3. Semantic colour (theme-agnostic: resolves through primitives) ============ */
 :root{
  /* Backgrounds */
- --dn-bg-app:var(--dn-neutral-2);--dn-bg-surface:var(--dn-white);--dn-bg-subtle:var(--dn-neutral-3);
- --dn-bg-hover:var(--dn-neutral-4);--dn-bg-pressed:var(--dn-neutral-5);--dn-bg-selected:var(--dn-brand-2);
+ --dn-bg-app:#F6F4F9;--dn-bg-surface:var(--dn-white);--dn-bg-subtle:#FBFAFD; /* 2.x tints */
+ --dn-bg-hover:#EFECF4;--dn-bg-pressed:var(--dn-neutral-5);--dn-bg-selected:var(--dn-brand-2);
  --dn-bg-raised:var(--dn-white); /* popovers, menus, dialogs, toasts */
  --dn-bg-inverse:var(--dn-neutral-12);--dn-bg-overlay:rgb(15 18 24 / 48%);
  /* Borders */
@@ -88,12 +88,12 @@
  --dn-focus-color:var(--dn-brand-9);--dn-focus-width:2px;--dn-focus-offset:2px;
  --dn-focus-ring:var(--dn-focus-width) solid var(--dn-focus-color);
  /* Data-viz (charts): series must be >=3:1 on surface */
- --dn-viz-1:var(--dn-brand-8);--dn-viz-2:var(--dn-brand-10);--dn-viz-3:var(--dn-chrome-9);--dn-viz-4:var(--dn-red-solid);
- --dn-viz-area:rgb(94 53 177 / 12%);--dn-viz-grid:var(--dn-neutral-4);
+ --dn-viz-1:#9E7EB5;--dn-viz-2:#5E35B1;--dn-viz-3:#4E7FC4;--dn-viz-4:#7A7585; /* 2.x chart palette */
+ --dn-viz-area:rgb(94 53 177 / 25%);--dn-viz-grid:var(--dn-neutral-4);
 }
 :root[data-theme=dark]{
- --dn-bg-app:var(--dn-neutral-1);--dn-bg-surface:var(--dn-neutral-2);--dn-bg-subtle:var(--dn-neutral-3);
- --dn-bg-hover:var(--dn-neutral-4);--dn-bg-pressed:var(--dn-neutral-5);--dn-bg-selected:var(--dn-brand-3);
+ --dn-bg-app:#121113;--dn-bg-surface:#1A191C;--dn-bg-subtle:#201F24;
+ --dn-bg-hover:#2B292F;--dn-bg-pressed:var(--dn-neutral-5);--dn-bg-selected:var(--dn-brand-3);
  --dn-bg-raised:var(--dn-neutral-3);--dn-bg-inverse:var(--dn-neutral-12);--dn-bg-overlay:rgb(0 0 0 / 64%);
  --dn-border-subtle:var(--dn-neutral-5);--dn-border:var(--dn-neutral-6);--dn-border-strong:var(--dn-neutral-9);
  --dn-text-link:var(--dn-brand-11);--dn-text-link-hover:var(--dn-brand-12);
@@ -104,8 +104,8 @@
  --dn-info-text:var(--dn-chrome-11);--dn-info-surface:var(--dn-chrome-2);--dn-info-border:var(--dn-chrome-6);
  --dn-switch-track-off:var(--dn-neutral-9);
  --dn-focus-color:var(--dn-brand-11);
- --dn-viz-1:var(--dn-brand-8);--dn-viz-2:var(--dn-brand-11);--dn-viz-3:var(--dn-chrome-8);--dn-viz-4:var(--dn-red-text);
- --dn-viz-area:rgb(159 126 235 / 18%);
+ --dn-viz-1:#C4A4DA;--dn-viz-2:#BEA3F8;--dn-viz-3:#9E7EB5;--dn-viz-4:#7FAEE0;
+ --dn-viz-area:rgb(190 163 248 / 25%);
 }
 
 /* ============ 4. 3.0.0 feature tokens (map to semantics; no new hues) ============ */
