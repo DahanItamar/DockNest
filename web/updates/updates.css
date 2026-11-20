@@ -120,7 +120,7 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
  .about-report>:is(button,a){width:100%;justify-content:center}
 
 }
-@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc,;.dn-node,details.more summary svg{transition:none}}
+@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc{animation:none!important}.dn-node,details.more summary svg{transition:none}}
 
 /* Recent updates disclosure (replaces the History tab) */
 .uc-recent{padding:0}

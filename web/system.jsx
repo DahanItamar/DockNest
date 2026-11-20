@@ -2,7 +2,7 @@ import React,{useEffect,useId,useRef,useState} from 'react';
 import {IconDots,IconChevronRight} from '@tabler/icons-react';
 import {statusState} from './status-state.js';
 import {CheckCircle2,Loader,Clock,Hourglass,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
-import {IconCheck} from '@tabler/icons-react';
+import {IconCheck,IconX} from '@tabler/icons-react';
 
 // 2.3.0 shared primitives. Styles live in system.css (.status, .alert-panel, .icon-button).
 const STATES={
@@ -24,9 +24,9 @@ export function StatusLabel({value,state,children,icon}){
 
 const ALERT_ICON={error:CircleX,warning:TriangleAlert,info:InfoCircle,success:CheckCircle2};
 // variant: error|warning|info|success. action: optional node, e.g. <a href="#">Open job</a>.
-export function AlertPanel({variant='error',title,children,action}){
+export function AlertPanel({variant='error',title,children,action,onDismiss,dismissLabel='Dismiss message'}){
  const Icon=ALERT_ICON[variant]||CircleX;
- return <div className={'alert-panel alert-'+variant} role={variant==='info'||variant==='success'?'status':'alert'}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body">{title&&<b>{title}</b>}{children&&<span>{children}</span>}{action}</div></div>;
+ return <div className={'alert-panel alert-'+variant} role={variant==='info'||variant==='success'?'status':'alert'}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body">{title&&<b>{title}</b>}{children&&<span>{children}</span>}{action}</div>{onDismiss&&<button type="button" className="icon alert-panel-close" onClick={onDismiss} aria-label={dismissLabel}><IconX size={16} aria-hidden="true"/></button>}</div>;
 }
 
 // One step indicator for wizards. Desktop: numbered steps, completed ones show the check icon. Phones: "Step 2 of 4 - Name".
