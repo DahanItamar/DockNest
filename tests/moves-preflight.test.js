@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateMove, planPorts, maskValue, estimateDowntime, describeDuration, preflightHash, PORT_SEARCH_RANGE } from '../src/moves/preflight.js';
+import { evaluateMove, cpuFit, planPorts, maskValue, estimateDowntime, describeDuration, preflightHash, PORT_SEARCH_RANGE } from '../src/moves/preflight.js';
 
 const GiB = 1024 ** 3;
 // A Compose site that can move without notes. Each test changes only what it is about.
@@ -216,4 +216,28 @@ test('security settings: a copy keeps them, so unreproducible settings and missi
   assert.deepEqual(host(f => { f.target.apparmorEnabled = true; }), []); assert.deepEqual(host(() => {}), [], 'unknown is not claimed');
   assert.equal(evaluateMove(facts(f => { f.site.hardening = { hardened: false, problems: [], apparmor: [], hostAppArmor: ['docker-default'] }; f.target.apparmorEnabled = false; })).verdict, 'ready', 'a note, not a warning');
   assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.hardening = { hardened: true, problems: ['x'], apparmor: [] }; })), 'security'), []);
+});
+
+test('settings a plain container copy cannot recreate are named warnings, never a refusal, and do not change what was reviewed', () => {
+  const unsupported = [{ container: 'shop-gpu', settings: ['GPUs and other device requests', 'the gelf log driver'] }];
+  const result = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unsupported = unsupported; }));
+  assert.equal(result.canStart, true); assert.equal(result.verdict, 'ready-with-notes');
+  assert.deepEqual(only(result, 'settings').map(item => [item.status, item.text]), [['warn', 'shop-gpu uses GPUs and other device requests, the gelf log driver, which DockNest does not recreate on new-srv.']]);
+  assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { f.site.kind = 'container'; }))));
+  assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.unsupported = unsupported; })), 'settings'), []);
+});
+
+test('a mount a copy cannot read blocks the move; CPU limits the new server must fit are named without changing what was reviewed', () => {
+  const blocked = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unreadableMounts = ['shop-db']; }));
+  assert.equal(blocked.canStart, false);
+  assert.equal(blocked.sentence, 'shop-db has a mount without a source or target, which DockNest cannot recreate. Move this app by hand.');
+  const cpu = f => { f.site.kind = 'container'; f.site.cpuLimits = [{ container: 'shop-web', cpus: '8', cpuset: '0-7' }, { container: 'shop-db', cpus: '1.5', cpuset: null }]; f.target.cpuCount = 4; };
+  const result = evaluateMove(facts(cpu));
+  assert.equal(result.canStart, true);
+  assert.deepEqual(only(result, 'settings').map(item => [item.status, item.text]), [
+    ['warn', 'shop-web may use 8 CPUs, but new-srv has 4. The copy may use 4.'],
+    ['warn', 'shop-web runs on CPUs 0-7, which new-srv does not have. The copy may run on any CPU.']]);
+  assert.equal(preflightHash(result), preflightHash(evaluateMove(facts(f => { cpu(f); f.target.cpuCount = 16; }))));
+  assert.deepEqual(cpuFit('2', '0-2', 2), { cpus: '2', cpuset: null }); assert.deepEqual(cpuFit('2', '0-1', 2), { cpus: '2', cpuset: '0-1' });
+  assert.deepEqual(cpuFit(null, null, 1), { cpus: null, cpuset: null });
 });

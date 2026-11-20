@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Coverage view (docs/coverage-and-restore-check.md A4): containers and volumes skipped on purpose, by name (names
+// survive a recreate, IDs do not). Additive only: one new table, so 2.16 code ignores it.
+export const coverageIgnoresSchema = `
+CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
+`;
 // Linked apps (docs/linked-apps.md): the cleaned container facts of a server's last discovery scan. Links between apps are
 // computed from them on read, never stored. One row per server, replaced by each scan. Additive only: one new table.
 export const serverAppLinksSchema = `
@@ -394,9 +399,10 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
-  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it. Purely additive: renumber before release
-  // if another migration lands first (planned as 21 after 19 and 20 of the other 2.16.5 changes).
-  { version: 19, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
+  // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
+  { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
+  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it.
+  { version: 20, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

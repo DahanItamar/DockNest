@@ -120,6 +120,7 @@ def capability_name(value):
 def extra_capabilities(added):
     """True when anything is added beyond Docker's defaults (ALL, NET_RAW, SYS_ADMIN, ... or a value that is no name)."""
     return any(capability_name(cap) not in DEFAULT_CAPABILITIES for cap in added or [])
+SAFE_NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')  # container, network, volume and alias names
 def container_label(c):return str(c.get('Name') or '').lstrip('/') or str(c.get('Id') or '')[:12] or 'A container'
 def seccomp_profile(value,name):
     """'default', 'unconfined' or the profile as canonical JSON. Docker stores a custom profile's contents; an absolute
