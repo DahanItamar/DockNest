@@ -7,7 +7,7 @@
 .server-wizard h4,.site-wizard h4{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:600;color:var(--heading)}
 .server-wizard .hint,.site-wizard .hint,.server-wizard .field small,.site-wizard .field small,.server-details .field small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
 .server-wizard .modal-foot,.site-wizard .modal-foot,.server-details .modal-foot{gap:8px}
-.server-wizard .modal-foot button,.site-wizard .modal-foot button,.server-details .modal-foot button{min-height:var(--control-height);height:var(--control-height);min-width:120px;white-space:nowrap}
+.server-wizard .modal-foot button,.site-wizard .modal-foot button,.server-details .modal-foot button{min-width:120px;white-space:nowrap}
 .server-wizard .alert-panel,.site-wizard .alert-panel,.server-details .alert-panel,.configuration-browser .alert-panel{margin:16px 0}
 .alert-panel button{margin-top:8px;align-self:flex-start}
 .configuration-browser button{white-space:nowrap}

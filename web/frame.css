@@ -7,7 +7,6 @@ main#content{padding-block:var(--edge);min-height:calc(100dvh - var(--header-hei
 .page-head h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;color:var(--heading)}
 .page-head p{font-size:var(--fs-body);line-height:var(--lh-body);margin-top:4px;color:var(--text-secondary);max-width:68ch}
 .page-head .actions{flex:none}
-.rebrand-page button,.rebrand-page .button,.rebrand-page .page-head .primary{font-size:var(--fs-button);line-height:var(--lh-button);min-height:var(--control-height)}
 .rebrand-page input:not([type=checkbox]):not([type=radio]),.rebrand-page select,.rebrand-page textarea,.rebrand-page .field{font-size:var(--fs-body)}
 .rebrand-page .field small{font-size:var(--fs-caption);line-height:var(--lh-caption)}
 @media(max-width:767px){.page-head{flex-wrap:wrap}.page-head .actions{width:100%;display:flex}.page-head .actions>.primary{flex:1}}
