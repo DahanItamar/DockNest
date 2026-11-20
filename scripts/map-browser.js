@@ -4,6 +4,7 @@ import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {EVENTS_FOR,EVENT_LABEL} from '../web/map/alerts-client.js';
 import {providerList} from '../src/alerts/providers/index.js';
+import {linkedChecks} from './linked-browser.js';
 
 // Read-only Map page against a mocked API: servers, sites and connectors, stable automatic layout on reload, no overlaps,
 // zoom and fit, the phone list at 402 px, light and dark, names and roles. Run against a dev server:
@@ -1091,6 +1092,7 @@ try{
   }
  }
  await freeDragTest();
+ for(const scheme of ['light','dark'])await linkedChecks({open,fits,scheme});
  await alertsOperatorAndEmpty();
  // Empty state and tablet width list
  {
