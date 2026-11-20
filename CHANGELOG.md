@@ -10,6 +10,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
 - Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
 - Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
+- Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
 
 ### Changed
 

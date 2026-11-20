@@ -2,7 +2,7 @@ import {engineLabel} from '../../shared/database-engines.js';
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
 // line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Moved nodes come in as opts.positions.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
- labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
+ linkBase:56,linkLane:14,labelW:{server:160,site:144,storage:160,alert:160},alertS:64,alertGap:150,alertPitch:128,laneGap:28};
 const byName=(a,b)=>{const x=String(a.name||'').toLowerCase(),y=String(b.name||'').toLowerCase();return x<y?-1:x>y?1:String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0};
 
 // Same grouping and order for the canvas, the phone list and screen readers.
@@ -37,16 +37,17 @@ export function elbow(points,r=8){
 }
 const route=(x1,y1,x2,y2,cx)=>y1===y2?[[x1,y1],[x2,y2]]:[[x1,y1],[cx,y1],[cx,y2],[x2,y2]];
 
-// opts.storage: [{id,...}] backup storage nodes; opts.backupOf: {siteId: storageId} (which storage a site backs up to).
+// opts.storage: [{id,...}] backup storage nodes; opts.links: [{id,a,b}] linked app pairs (drawn in a gutter right of the app column); opts.backupOf: {siteId: storageId} (which storage a site backs up to).
 export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const groups=groupForList(servers,sites),storage=[...(opts.storage||[])].sort(byName),backupOf=opts.backupOf||{};
  const serverX=m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
- const out={servers:[],sites:[],storage:[],paths:[],backupPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
+ const out={servers:[],sites:[],storage:[],paths:[],backupPaths:[],linkPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
  // Alerts: a band above the map holds the DockNest source and one lane per line; nothing is drawn until a channel exists.
  const chs=opts.alerts?.channels||[],on=chs.length>0,serverIds=new Set(servers.map(s=>s.id)),siteIds=new Set(sites.map(s=>s.id));
  const rules=on?(opts.alerts.rules||[]).filter(r=>chs.some(c=>c.id===r.channelId)&&(r.sourceKind==='docknest'||(r.sourceKind==='server'?serverIds.has(r.sourceId):siteIds.has(r.sourceId)))):[];
  const lanes=rules.length>6?new Set(rules.map(r=>r.channelId)).size:rules.length,bandH=on?Math.max(112,48+m.laneGap*lanes):0,base=on?m.pad+bandH+8:m.pad;
- const rightEdge=siteX+m.siteS,channelB=rightEdge+m.storageGap+16,storageX=channelB+m.storageGap;
+ const links=opts.links||[],linkLanes=Math.min(links.length,6),linkW=linkLanes?m.linkBase+linkLanes*m.linkLane:0;
+ const rightEdge=siteX+m.siteS,channelB=rightEdge+linkW+m.storageGap+16,storageX=channelB+m.storageGap;
  const rowH=m.siteS+m.label;
  let y=base;
  for(const g of groups){
@@ -87,6 +88,24 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   const t=s.backupId&&out.storage.find(n=>n.id===s.backupId);if(!t)continue;
   const pts=route(s.out.x,s.out.y,t.in.x-14,t.in.y,channelB);
   out.backupPaths.push({id:s.id,storageId:t.id,points:pts,d:elbow(pts)});
+ }
+ // Linked apps: dashed elbows in the gutter right of the app cards. A line leaves a card below its centre (backup uses the centre).
+ // Short lines take the inner lane, so lines nest and never run through a card or its label.
+ if(links.length){
+  const by=Object.fromEntries(all.map(r=>[r.id,r])),ok=links.filter(l=>by[l.a]&&by[l.b]),yAt={};
+  for(const r of all){ // offsets on one card: lines going up (nearest first), then lines going down (farthest first)
+   const mine=ok.filter(l=>l.a===r.id||l.b===r.id).map(l=>{const o=by[l.a===r.id?l.b:l.a];return {l,d:o.out.y-r.out.y}});
+   const up=mine.filter(x=>x.d<0).sort((p,q)=>q.d-p.d),down=mine.filter(x=>x.d>0).sort((p,q)=>q.d-p.d);
+   [...up,...down].forEach((x,i)=>{(yAt[x.l.id]=yAt[x.l.id]||{})[r.id]=r.out.y+8+i*8});
+  }
+  const items=ok.map(l=>{const ya=yAt[l.id][l.a],yb=yAt[l.id][l.b];return {l,ya,yb,lo:Math.min(ya,yb),hi:Math.max(ya,yb)}}).sort((p,q)=>(p.hi-p.lo)-(q.hi-q.lo)),laneOf=[];
+  for(const it of items){
+   let k=0;for(const o of laneOf)if(o.lo>=it.lo&&o.hi<=it.hi&&o.k>=k)k=o.k+1;
+   while(laneOf.some(o=>o.k===k&&o.lo<it.hi+24&&it.lo<o.hi+24))k++;
+   laneOf.push({...it,k});
+   const x=rightEdge+m.linkBase+Math.min(k,linkLanes-1)*m.linkLane,pts=[[rightEdge,it.ya],[x,it.ya],[x,it.yb],[rightEdge,it.yb]];
+   out.linkPaths.push({id:it.l.id,a:it.l.a,b:it.l.b,kind:it.l.kind,points:pts,d:elbow(pts)});
+  }
  }
  out.width=Math.max(out.storage.length?storageX+m.storageS+m.pad:rightEdge+m.pad+48,rightEdge+m.pad);
  if(on){

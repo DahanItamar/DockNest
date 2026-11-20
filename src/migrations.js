@@ -271,6 +271,11 @@ CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 export const coverageIgnoresSchema = `
 CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
 `;
+// Linked apps (docs/linked-apps.md): the cleaned container facts of a server's last discovery scan. Links between apps are
+// computed from them on read, never stored. One row per server, replaced by each scan. Additive only: one new table.
+export const serverAppLinksSchema = `
+CREATE TABLE IF NOT EXISTS server_app_links (server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,facts TEXT NOT NULL CHECK (length(facts) <= 2097152),format INTEGER NOT NULL,checked_at TEXT NOT NULL,partial INTEGER NOT NULL CHECK (partial IN (0,1)));
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -396,6 +401,8 @@ export const migrations = [
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
   // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
   { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
+  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it.
+  { version: 20, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {formatBytes} from '../../shared/format-bytes.js';
-import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck} from '@tabler/icons-react';
+import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck,IconLink} from '@tabler/icons-react';
 import {StatusLabel,IconButton} from '../system.jsx';
 import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
@@ -18,6 +18,8 @@ import {LaunchFlow,LaunchOffer,RemoveLaunchDialog,OpenLaunch,offerOpen} from './
 import {SidePanel,AddToMap,AddToServer,DiscoverFooter,useDiscovery,Defs} from './Panels.jsx';
 import {createAlertsClient,sourcesOf,sameSource} from './alerts-client.js';
 import {AlertPanel,PickSheet,DeleteNodeSheet,SourceAlerts,AlertsList,NodeIcon,DockNestIcon,srcKey,providerOf} from './Alerts.jsx';
+import {appNameOf,linkPairs,linksOf,warningsFor,appLinksOf,linkSummary} from '../linked/linked.js';
+import {LinkedSection} from '../linked/LinkedSection.jsx';
 import {useCoverage} from '../backup-coverage/use-coverage.js';
 import {MapCoverage,CoverageLine} from '../backup-coverage/MapCoverage.jsx';
 import './map.css';
@@ -60,7 +62,11 @@ function useNarrow(){
  return narrow;
 }
 
-function MapList({cov,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
+function LinkCaption({links,nameOf}){
+ const text=linkSummary(links,nameOf);
+ return text?<p className="map-caption lk-line"><IconLink size={14} stroke={1.75} aria-hidden="true"/>{text}</p>:null;
+}
+function MapList({cov,servers,nameOf,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onAdd,alertsList,undo}){
  return <div className="map-list">
  {undo}
  {canAdd&&<div className="map-list-top"><button type="button" onClick={e=>onAdd(e.currentTarget)}><IconPlus size={18} stroke={1.75} aria-hidden="true"/>Add to the map</button></div>}
@@ -69,7 +75,7 @@ function MapList({cov,groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite
   return <section key={id} className="map-list-group" aria-labelledby={id}>
    <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span>{cov&&server.status==='connected'&&<CoverageLine entry={cov[server.id]}/>}</>}</div></div>
    {server&&<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}>Details</button>{canMove&&<button type="button" onClick={e=>onAddSite(server.id,e.currentTarget)}>Add app</button>}</div>}
-   {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div><LinkCaption links={linksOf(servers,s).links} nameOf={nameOf}/></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
   </section>;
  })}
  {storage.length>0&&<section className="map-list-group" aria-labelledby="map-list-storage">
@@ -106,7 +112,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  useEffect(()=>{loadAlerts();const t=setInterval(loadAlerts,30000);return()=>clearInterval(t)},[loadAlerts]);
  const alertsOn=canAlert&&mayAlert,alertLayout=useMemo(()=>({channels:alerts.nodes,rules:alerts.rules}),[alerts]);
  const livePos=useMemo(()=>dragPos?{...positions,[dragPos.key]:{x:dragPos.x,y:dragPos.y}}:positions,[positions,dragPos]);
- const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,alerts:alertLayout,positions:livePos}),[servers,sites,storage,backupOf,alertLayout,livePos]);
+ const links=useMemo(()=>linkPairs(servers),[servers]);
+ const target=useMemo(()=>layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:livePos}),[servers,sites,storage,backupOf,links,alertLayout,livePos]);
  // When the arrangement changes (Tidy up, Save changes, a reconnect, new data) nodes glide to their new places and the lines follow every frame.
  // A fresh page, a node being dragged by hand and "reduce motion" all place nodes at once.
  const anim=useRef(null),shown=useRef(null),[tick,setTick]=useState(0);
@@ -125,8 +132,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   raf=requestAnimationFrame(step);
   return()=>cancelAnimationFrame(raf);
  },[target]);
- const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,alerts:alertLayout,positions:shown.current}):target,[target,tick]);
+ const layout=useMemo(()=>anim.current?layoutMap(servers,sites,{storage,backupOf,links,alerts:alertLayout,positions:shown.current}):target,[target,tick]);
  const groups=useMemo(()=>groupForList(servers,sites),[servers,sites]);
+ const nameOf=useMemo(()=>appNameOf(sites),[sites]);
  const byId=useMemo(()=>({servers:Object.fromEntries(servers.map(s=>[s.id,s])),sites:Object.fromEntries(sites.map(s=>[s.id,s])),storage:Object.fromEntries(storage.map(s=>[s.id,s]))}),[servers,sites,storage]);
  const view=useRef(null),mode=useRef('home'),pointers=useRef(new Map()),gesture=useRef(null);
  const [t,setT]=useState({x:0,y:0,k:1}),[drag,setDrag]=useState(null),[note,setNote]=useState('');
@@ -375,7 +383,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const verb=unconnected&&flow?.siteId===unconnected.siteId?'Connect':'Move';
  const dialogs=<>
   {flow?.kind==='target'&&<TargetDialog verb={verb} site={flowSite} servers={servers.filter(s=>s.id!==flowSite.serverId||verb==='Connect')} results={verb==='Connect'?{...(checks[flow.siteId]||{}),[flowSite.serverId]:{ok:true}}:checks[flow.siteId]||{}} onCancel={()=>closeFlow(false)} onPick={id=>narrow?openReview(flow.siteId,id):choose(flow.siteId,id)}/>}
-  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} client={client} onCancel={()=>closeFlow(false)} onMove={startMove} onInstall={c=>setFlow(f=>({...f,kind:'install',check:c}))} onCommand={c=>setFlow(f=>({...f,kind:'command',check:c}))}/>}
+  {flow?.kind==='review'&&flow.preview&&<ReviewDialog key={flow.preview.id||'p'} site={flowSite} linked={warningsFor(appLinksOf(servers,flowSite),flowSite,nameOf,'move')} onOpenApp={id=>openPanel({kind:'site',id},null)} from={flowFrom} to={flowTo} preview={flow.preview} busy={flow.busy} error={flow.error} client={client} onCancel={()=>closeFlow(false)} onMove={startMove} onInstall={c=>setFlow(f=>({...f,kind:'install',check:c}))} onCommand={c=>setFlow(f=>({...f,kind:'command',check:c}))}/>}
   {flow?.kind==='install'&&<InstallConfirmDialog server={checkServer(flow.check)} siteId={serverFlow?undefined:flow.siteId} check={flow.check} client={client} onCancel={backToReview} onStarted={jobId=>setFlow(f=>({...f,kind:'install-run',jobId}))} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='install-run'&&<InstallProgressDialog server={checkServer(flow.check)} pkg={flow.check.install.package} client={client} jobId={flow.jobId} onClose={backToReview} onCheckAgain={serverFlow?recheckServer:()=>openReview(flow.siteId,flow.targetId)}/>}
   {flow?.kind==='command'&&<CommandDialog server={checkServer(flow.check)} check={flow.check} onClose={backToReview} onCheckAgain={()=>openReview(flow.siteId,flow.targetId)}/>}
@@ -411,6 +419,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
     <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
+    <LinkedSection site={s} servers={servers} nameOf={nameOf} onOpen={(id,el)=>openPanel({kind:'site',id},el)}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>
     {api&&s.config?.kind!=='static'&&<button type="button" className="map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the app.</p></section>}
@@ -450,7 +459,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   return null;
  }
  const panelKey=!panel?null:panel.kind==='alert'?'alert:'+panel.id:panel.kind==='docknest'?'docknest:root':['server','site','storage'].includes(panel.kind)?panel.kind+':'+panel.id:null;
- const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
+ const ends=[...layout.paths.map(p=>['w'+p.id,'server:'+p.serverId,'site:'+p.id]),...layout.backupPaths.map(p=>['b'+p.id,'site:'+p.id,'storage:'+p.storageId]),...layout.linkPaths.map(p=>['l'+p.id,'site:'+p.a,'site:'+p.b]),...layout.rulePaths.map(p=>['r'+p.id,p.sourceKind&&p.sourceKind!=='docknest'?p.sourceKind+':'+p.sourceId:'docknest:root','alert:'+p.channelId])];
  const actKey=hot||(sel?.type==='node'?sel.key:null),actLine=!hot&&sel?.type==='line'?sel.id:null,lit=new Set(),litNodes=new Set();
  if(actLine){const e=ends.find(x=>x[0]===actLine);if(e){lit.add(e[0]);litNodes.add(e[1]);litNodes.add(e[2])}}
  else if(actKey){litNodes.add(actKey);for(const [id,a,b] of ends)if(a===actKey||b===actKey){lit.add(id);litNodes.add(a);litNodes.add(b)}}
@@ -459,7 +468,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const sourceList=[{kind:'docknest',id:null,name:'DockNest'},...servers.map(x=>({kind:'server',id:x.id,name:x.name})),...sites.map(x=>({kind:'site',id:x.id,name:x.name}))];
  const alertsList=alertsOn&&<AlertsList nodes={alerts.nodes} rules={alerts.rules} providers={alerts.providers} sourceName={sourceName} onOpen={(n,el)=>openPanel({kind:'alert',id:n.id},el)} onEditRule={editRule} onDelete={requestDelete} onAdd={el=>addNode(el)} onDocknest={el=>pickChannel({kind:'docknest',id:null,name:'DockNest'},el)}/>;
  const undoBar=undone&&<div className="map-undo" role="status"><span>{undone.name} is deleted.</span><button type="button" onClick={undoDelete}>Undo</button></div>;
- if(narrow)return <div className="map-root">{strip}{api&&<div className="map-toolbar">{covToggle}</div>}<MapList cov={showCov?coverage.byServer:null} groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
+ if(narrow)return <div className="map-root">{strip}{api&&<div className="map-toolbar">{covToggle}</div>}<MapList cov={showCov?coverage.byServer:null} servers={servers} nameOf={nameOf} groups={groups} storage={storage} canMove={canMove} canAdd={canMove||alertsOn} undo={undoBar} onMoveTo={moveTo} onDetails={(p,el)=>openPanel(p,el)} onAddSite={(id,el)=>openPanel({kind:'add-server',id},el)} onAdd={el=>openPanel({kind:'add'},el)} alertsList={alertsList}/>{panelBody()}{dialogs}</div>;
 
  const M=METRICS,item=(r)=>({left:r.x,top:r.y,width:r.w,height:r.h});
  const at=(x,y)=>({left:x,top:y});
@@ -497,6 +506,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
      <g aria-hidden="true" className="decor">
      {layout.paths.map(p=>edit?.siteId===p.id||drag?.id===p.id?null:<path key={p.id} data-wire={p.id} className={'wire'+lineCls('w'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
      {layout.backupPaths.map(p=><path key={'b'+p.id} className={'backup'+lineCls('b'+p.id)} markerEnd="url(#map-arrow)" d={p.d}/>)}
+     {layout.linkPaths.map(p=><path key={'l'+p.id} className={'link'+lineCls('l'+p.id)} d={p.d}/>)}
      {pendingLine}
      {amber(draggedSite||broken,brokenPoint)}
      </g>
