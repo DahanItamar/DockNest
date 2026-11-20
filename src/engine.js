@@ -27,7 +27,6 @@ import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFu
 import { takeCertificates } from './alerts/certificates.js';
 import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
 import { recordScan, cleanScan } from './keys-safe/store.js';
-import { confirmKnownGood } from './keys-safe/scan.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
@@ -38,10 +37,13 @@ export const testServer=async server=>takeCertificates({serverId:server.id},awai
 // App keys (docs/keys-safe.md): a discovery an owner runs (`scanKeys`) and every readiness check also scan the keys and
 // configuration files of the apps on that server. The scans are recorded here and never returned.
 const recordKeyScan=(siteId,scan,options)=>{try{recordScan(siteId,scan,options);}catch(error){console.error(`Key scan of an app could not be recorded: ${error.code??error.name}`);}};
-const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
+// An app with work that may be changing it (a backup, restore, move, Safe Edit or restore test) is not scanned now, so
+// its own work never reads as a change made outside DockNest.
+export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(siteId)||editingSite(siteId)||db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type IN ('site-move','restore-test') AND status IN ('move_queued','move_running','test_queued','test_running','test_waiting')").get(siteId));}
+const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
 export const discover=async(server,{record=false,scanKeys=false}={})=>{
   const apps=scanKeys?keyApps(server.id):[];
-  let result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest({apps})}:{})})),scans=null;
+  let result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})})),scans=null;
   if(result&&typeof result==='object'&&!Array.isArray(result)&&'keyScans' in result)({keyScans:scans,...result}=result);
   if(record){
     try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
@@ -70,7 +72,7 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest()}:{})}));
+ const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})}));
  if(keyScan)recordKeyScan(siteId,keyScan);
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
@@ -428,9 +430,6 @@ async function executeRestoreJob(job){
    for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,result.verification?.[kind]||{status:'not-tested'},job.id);
    db.prepare("UPDATE restores SET status='completed',plan=? WHERE id=?").run(JSON.stringify({...restore.plan,result}),restore.id);
    audit('worker','restore.completed',backup.id,{job:job.id,containerIds:result.containerIds,networkMode:result.networkMode});return true;}))supersedeRestore(restore.id);
-  // Keys safe (docs/keys-safe.md): a completed restore of this app's backup is its known-good (source `restore`), from a
-  // fresh scan of the app. Best effort: the restore stands either way.
-  else await confirmKnownGood(backup.site_id,{source:'restore',actor:'worker'}).catch(()=>{});
  }catch(error){
   if(!transaction(()=>{if(!finishJob(job.id,"status='failed',stage='failed',finished_at=?,error=?",now(),String(error.message).slice(0,1000)))return false;
    for(const kind of ['isolatedRestore','application'])recordVerification(backup.id,kind,{status:'failed',method:'isolated recovery attempt did not complete'},job.id);
@@ -505,7 +504,7 @@ export async function executeJob(job){
   // Without the option the request and the package are exactly as before.
   const decision=decideCapture({site,plan,directory,jobDetails});
   // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(site.config.kind!=='static'?{keys:keysRequest()}:{})};
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -537,7 +536,7 @@ export async function executeJob(job){
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
   // keysCheck: which fingerprint key made the proof, so a restore test after a key change does not compare across keys.
-  if(keyProof){manifest.keys=keyProof.keys;manifest.keysCheck=fingerprintKeyCheck();}
+  if(keyProof){manifest.keys=keyProof.keys;manifest.keysServerId=server.id;manifest.keysCheck=fingerprintKeyCheck(server.id);}
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
   // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
   const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});
