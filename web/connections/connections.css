@@ -14,20 +14,18 @@
 .cx-muted{color:var(--text-muted)}
 .data-table td .status{display:inline-flex;align-items:center;min-height:20px;line-height:20px;max-width:100%}
 .cx-page .data-table td.num .row-actions{display:flex;justify-content:flex-end;gap:0;width:auto;min-width:0;margin-right:calc(var(--spacing) * -1)}
-.cx-page .data-table td.num .row-actions .icon-button[disabled]{opacity:.45}
 @media(max-width:680px){.cx-page .data-table td.num .row-actions{justify-content:flex-start;margin:0 0 0 calc(var(--spacing) * -1)}.cx-page .mobile-table .cx-trunc{white-space:normal;overflow-wrap:anywhere}}
 .cx-settings{display:flex;flex-direction:column;gap:var(--spacing)}
 .cx-settings h2{margin:0 0 var(--spacing)}
 .cx-switch-row{border-top:0}
 .cx-switch-row .t-caption{max-width:72ch}
-.cx-settings button[role=switch]:focus:not(:focus-visible):before{outline:none}
 /* Certificate warning: label and help on the left, days and Save on the right; stacked on phones. */
 .cx-days-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 0}
 .cx-days-text{display:flex;flex-direction:column;min-width:0}
 .cx-days-text .t-caption{max-width:72ch}
 .cx-days-control{display:flex;align-items:center;gap:8px;flex:none;min-width:0}
 /* Inputs are 44 px tall in the app; the Save beside the days field matches it. */
-.cx-days-control input,.cx-days-control button{height:44px;min-height:44px}
+.cx-days-control input,.cx-days-control button{height:var(--dn-control-h);min-height:var(--dn-control-h)}
 .cx-days-control input{width:88px;min-width:0;text-align:right}
 .cx-days-control input[aria-invalid=true],.cx-days-control input[aria-invalid=true]:hover,.cx-days-control input[aria-invalid=true]:focus-visible{border-color:var(--error);box-shadow:none}
 .cx-days-text .cx-days-error{display:flex;align-items:center;gap:8px;color:var(--alert-error-text)}

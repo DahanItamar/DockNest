@@ -24,7 +24,6 @@
 .map-root .map-list li .map-name{flex:1;white-space:normal;overflow-wrap:anywhere}
 .map-root .map-none{margin:16px 0 0}
 @media(prefers-reduced-motion:reduce){.map-root *{transition:none!important;animation:none!important}}
-.map-root button:disabled,.map-root button:disabled:hover{background:var(--border-subtle);border-color:var(--border-subtle);color:var(--text-muted);opacity:1;cursor:not-allowed}
 /* Move flow. Dialogs are rendered inside .map-root, so the scope still applies. */
 .map-root .map-toolbar button{white-space:nowrap}
 .map-root .map-moveto{margin-left:auto;white-space:nowrap;min-height:44px}
@@ -92,7 +91,7 @@
 .map-root .map-reauth-actions{display:flex;gap:12px;justify-content:flex-end}
 .map-root .map-reauth-actions button{white-space:nowrap}
 .map-root .map-field input{min-height:40px}
-@media(max-width:767px){.map-root .map-reauth-actions button{flex:1;min-height:44px}.map-root .map-field input{min-height:44px}}
+@media(max-width:767px){.map-root .map-reauth-actions button{flex:1;min-height:44px}}
 
 /* Map v2: n8n-style nodes. Square nodes with a large icon and the label under them. */
 .map-root .map-toolbar{justify-content:flex-end}

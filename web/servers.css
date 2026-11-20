@@ -9,7 +9,7 @@
 .server-card-actions{justify-content:flex-start;padding:0 16px 0 24px}
 .server-card-actions button:not(.icon-button){padding-inline:16px}
 .card-footer.server-card-actions .server-edit{margin-left:auto}
-.server-card-actions button:disabled{opacity:.5;cursor:wait}
+
 .server-empty-panel{background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);min-height:320px;display:flex;align-items:center;justify-content:center}
 .server-empty-panel .empty{padding:40px 24px}
 @media(max-width:767px){

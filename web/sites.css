@@ -11,7 +11,7 @@
 .card-footer.site-card-actions{justify-content:space-between;padding:0 12px}
 .site-card-tools{display:flex;align-items:center;gap:0}
 .site-card-actions .primary{flex:none;padding-inline:16px}
-.site-card-actions button:disabled{opacity:.5;cursor:wait}
+
 .site-card{container-type:inline-size}
 @media(max-width:767px){
  .card-footer.site-card-actions{flex-direction:column-reverse;align-items:stretch;height:auto;padding:16px;gap:12px}

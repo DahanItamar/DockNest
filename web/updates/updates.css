@@ -7,8 +7,6 @@
 /* Buttons: height and type come from the 2.3.0 foundation (40 px, 44 px on phones); labels never wrap. */
 :is(.uc-page,.progress-view,.uc-dialog,.toast-wrap,.about-report) :is(button,a.button):not(.icon,.switch,[role=tab],.text){box-sizing:border-box;padding:0 16px;gap:8px;white-space:nowrap;min-width:0}
 :is(.uc-page,.progress-view,.uc-dialog,.toast-wrap,.about-report) :is(button,a.button):not(.icon,.switch,[role=tab]) svg{width:18px;height:18px}
-.uc-dialog a.button{display:inline-flex;align-items:center;justify-content:center;height:var(--control-height);border:1px solid var(--border-subtle);border-radius:var(--radius);text-decoration:none}
-.uc-dialog a.button.primary{color:var(--primary-foreground);background:var(--button-primary);border-color:var(--button-primary)}.uc-dialog a.button.primary:hover{background:var(--button-primary-hover)}
 .uc-dialog .modal-foot>*{flex:0 1 auto}
 .link-ext{display:inline-flex;align-items:center;gap:4px;font-weight:500;text-underline-offset:3px}
 .code-block{display:flex;align-items:stretch;margin:10px 0;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--surface-muted);overflow:hidden}
@@ -38,7 +36,6 @@
 .uc-hero-text{display:flex;flex-direction:column;gap:8px;min-width:0}
 .uc-hero-text h2,.uc-hero-ok h2{margin:0}
 .uc-hero-row>button{flex:none;padding:0 24px}
-.uc-hero button[aria-disabled=true]{background:var(--surface-hover);border-color:var(--surface-hover);color:var(--text-muted);cursor:not-allowed}
 .uc-hero-ok{flex-direction:row;align-items:center;gap:16px}.uc-ok-icon{flex:none;color:var(--success)}
 .uc-hero-state{display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;padding:32px}
 .uc-hero-state .rel-title{margin:0 0 8px}.uc-hero-state p{margin:0 0 12px}
@@ -49,8 +46,6 @@
 .card-grid.uc-split{grid-template-columns:repeat(2,minmax(0,1fr))}
 .uc-card-head{min-height:var(--control-height);display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.uc-card-head .card-title{flex:1}
 .uc-footer{justify-content:space-between}.uc-footer .foot-status{margin:0;min-width:0;color:var(--text-secondary)}
-button[aria-disabled=true]:not(.link-btn){opacity:.55;cursor:not-allowed}
-.uc-hero button[aria-disabled=true]{opacity:1}
 .uc-setup{padding:24px}
 .uc-foot{margin:16px 0 0}
 .setup{margin:0}.setup .sg-title{font-size:var(--fs-section);font-weight:600;line-height:1.3;margin:0 0 4px}.setup-lead{font-size:var(--fs-body);color:var(--text-secondary);margin:0 0 16px;max-width:none}
