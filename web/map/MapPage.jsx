@@ -5,7 +5,8 @@ import {StatusLabel,IconButton} from '../system.jsx';
 import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
-import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS} from './layout.js';
+import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
+import {loadPositions,savePositions,prunePositions} from './saved-layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {createLaunchClient,stateText} from './launch-client.js';
 import {createSelfHealClient} from '../self-heal/self-heal-client.js';
@@ -90,7 +91,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  // Backup coverage: read for connected servers only while the toggle is on. Nothing is scanned until then.
  const [showCov,setShowCov]=useState(false),connected=servers.filter(server=>server.status==='connected').map(server=>server.id),coverage=useCoverage(api,connected,showCov,onSessionExpired);
  const covToggle=<button type="button" className="bc-toggle" aria-pressed={showCov} onClick={()=>setShowCov(value=>!value)}><IconShieldCheck size={18} stroke={1.75} aria-hidden="true"/>Coverage</button>;
- const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState({}),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
+ const [targets,setTargets]=useState(null),[adrag,setAdrag]=useState(null),[hot,setHot]=useState(null),[positions,setPositions]=useState(()=>loadPositions(user?.id)),[dragPos,setDragPos]=useState(null),[sel,setSel]=useState(null),[ghost,setGhost]=useState(null),[,bump]=useState(0);
  const H=useRef({past:[],future:[]}),dragItem=useRef(null);
  // Backup storage comes from the destinations list (admins). Each site backs up to the destination its backups use; the
  // state does not name one per backup, so a site with backups or an active schedule uses the active destination.
@@ -169,7 +170,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   createLaunchClient(api).forServer(panel.id).then(r=>{if(live)setRunning({id:panel.id,list:(Array.isArray(r?.launches)?r.launches:[]).filter(x=>x.state!=='done')})}).catch(()=>{});
   return()=>{live=false};
  },[panel?.kind,panel?.id,canMove,api,runTick]);
- function closeFlow(finished){setRunTick(n=>n+1);setFlow(null);if(finished){setEdit(null);setPositions({});H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
+ function closeFlow(finished){setRunTick(n=>n+1);setFlow(null);if(finished){const moved='site:'+(flow?.siteId??edit?.siteId);setPositions(({[moved]:_,...rest})=>rest);setEdit(null);H.current={past:[],future:[]};bump(n=>n+1)}loadMoves();setTimeout(()=>opener.current?.focus?.(),0)}
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
@@ -234,7 +235,13 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function closeAflow(){setAflow(null);focusBack()}
  const alertSource=(k,id)=>k==='docknest'?{kind:'docknest',id:null,name:'DockNest',from:layout.docknest?.alertOut}:k==='server'?{kind:'server',id,name:byId.servers[id]?.name,from:layout.servers.find(n=>n.id===id)?.alertOut}:{kind:'site',id,name:byId.sites[id]?.name,from:[...layout.sites,...layout.unassigned].find(n=>n.id===id)?.alertOut};
 
- // Free layout is for working during an edit only: moved nodes are never saved. Save changes, or opening the Map again, re-arranges everything automatically.
+ // Free layout: moved nodes go anywhere, also left of and above the automatic layout, and are kept in this browser. Tidy up arranges everything again.
+ useEffect(()=>savePositions(user?.id,positions),[user?.id,positions]);
+ // Nodes that were removed lose their saved place, once their kind has loaded.
+ useEffect(()=>{
+  const loaded=servers.length>0||sites.length>0,ids=list=>list.map(x=>x.id);
+  setPositions(p=>prunePositions(p,{server:loaded?ids(servers):null,site:loaded?ids(sites):null,storage:targets?ids(storage):null,alert:canAlert?ids(alerts.nodes):null}));
+ },[servers,sites,targets,storage,canAlert,alerts.nodes]);
  const snap=()=>({positions,edit});
  function pushHist(){H.current.past.push(snap());if(H.current.past.length>50)H.current.past.shift();H.current.future=[];bump(n=>n+1)}
  function restore(from,to,word){const h=H.current;if(!h[from].length)return;h[to].push(snap());const v=h[from].pop();setPositions(v.positions);setEdit(v.edit);bump(n=>n+1);setNote(word)}
@@ -249,14 +256,14 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const home=useCallback(()=>{
   const el=view.current;if(!el)return;
   const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
-  setT({k:1,x:Math.max(0,(w-layout.width)/2),y:Math.max(0,(h-layout.height)/2)});
- },[layout.width,layout.height]);
+  setT({k:1,...homeOffset(layout,1,w,h)});
+ },[layout.x0,layout.y0,layout.width,layout.height]);
  const fit=useCallback(()=>{
   const el=view.current;if(!el)return;
   const w=el.clientWidth,h=el.clientHeight;if(!w||!h)return;
   const k=clamp(Math.min(w/layout.width,h/layout.height),FIT_MIN,1);
-  setT({k,x:Math.max(0,(w-layout.width*k)/2),y:Math.max(0,(h-layout.height*k)/2)});
- },[layout.width,layout.height]);
+  setT({k,...homeOffset(layout,k,w,h)});
+ },[layout.x0,layout.y0,layout.width,layout.height]);
  // The map takes the height that is left on screen, so the page never scrolls and the hint below stays in view
  const [viewH,setViewH]=useState(null);
  const size=useCallback(()=>{
@@ -268,7 +275,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(Math.abs(next-box.height)>1)setViewH(next);
  },[]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;size();window.addEventListener('resize',size);return()=>window.removeEventListener('resize',size)},[narrow,size,servers.length,note,!!strip,!!edit]);
- const apply=useCallback(()=>{if(mode.current==='fit')fit();else if(mode.current==='home')home()},[fit,home]);
+ // The view holds still while a node is dragged, so the canvas can grow under it without the map re-centring away from the pointer.
+ const apply=useCallback(()=>{if(gesture.current?.type==='node')return;if(mode.current==='fit')fit();else if(mode.current==='home')home()},[fit,home]);
  useLayoutEffect(()=>{if(narrow||!servers.length)return;apply();},[narrow,apply,servers.length,viewH]);
  useEffect(()=>{
   const el=view.current;if(!el||typeof ResizeObserver==='undefined')return;
@@ -317,7 +325,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    g.moved=true;mode.current='user';setT(p=>({...p,x:p.x+e.clientX-prev.x,y:p.y+e.clientY-prev.y}));}
   else if(g.type==='node'){
    if(!g.moved&&Math.hypot(e.clientX-g.sx,e.clientY-g.sy)<=4)return;
-   g.moved=true;const sn=v=>Math.round(v/16)*16;setDragPos({key:g.key,x:Math.max(0,sn(g.ox+(e.clientX-g.sx)/t.k)),y:Math.max(0,sn(g.oy+(e.clientY-g.sy)/t.k))});
+   g.moved=true;setDragPos({key:g.key,x:snapToGrid(g.ox+(e.clientX-g.sx)/t.k),y:snapToGrid(g.oy+(e.clientY-g.sy)/t.k)});
   }
   else if(g.type==='alert'){
    if(Math.hypot(e.clientX-g.x,e.clientY-g.y)>6)g.moved=true;
@@ -345,7 +353,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  }
  function drop(e){
   const item=dragItem.current;dragItem.current=null;if(!item||!(canMove||alertsOn))return;e.preventDefault();
-  const [px,py]=toCanvas(e),sn=v=>Math.max(0,Math.round(v/16)*16),g={x:sn(px-32),y:sn(py-32),kind:item.kind,name:item.name};
+  const [px,py]=toCanvas(e),g={x:snapToGrid(px-32),y:snapToGrid(py-32),kind:item.kind,name:item.name};
   if(item.kind==='server'){setGhost(g);onAddServer?.()}
   else if(item.kind==='storage'){setGhost(g);onAddStorage?.()}
   else if(item.kind==='site'){setGhost(g);setPanel(null);onAddSite?.(item.serverId,item.name,item.choice)}
@@ -365,7 +373,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  }
 
  if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add an app. They will appear here, arranged automatically.</p></section>;
- const vh=view.current?.clientHeight||0,vw=view.current?.clientWidth||0,clipped=!narrow&&vh>0&&(t.y+layout.height*t.k>vh+2||t.x+layout.width*t.k>vw+2);
+ const vh=view.current?.clientHeight||0,vw=view.current?.clientWidth||0,clipped=!narrow&&vh>0&&clippedIn(layout,t,vw,vh);
  const flowSite=flow&&byId.sites[flow.siteId],flowTo=flow&&byId.servers[flow.targetId],flowFrom=flowSite&&byId.servers[flowSite.serverId];
  const checkServer=c=>byId.servers[c.serverId]||flowTo;
  const serverFlow=flow?.context==='server';
@@ -490,8 +498,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {strip}
   <div className="map-stage">
   <div ref={view} className="map-viewport" style={viewH?{height:viewH}:undefined} tabIndex={0} role="group" aria-label="Map. Use arrow keys to move, plus and minus to zoom, 0 to fit to screen." onKeyDown={key} onDragOver={e=>{if(dragItem.current)e.preventDefault()}} onDrop={drop} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
-   <div className="map-canvas" style={{width:layout.width,height:layout.height,transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
-    <svg className="map-lines" width={layout.width} height={layout.height} viewBox={`0 0 ${layout.width} ${layout.height}`}>
+   <div className="map-canvas" style={{transform:`translate(${t.x}px,${t.y}px) scale(${t.k})`}}>
+    <svg className="map-lines" width={layout.width} height={layout.height} style={{left:layout.x0,top:layout.y0}} viewBox={`${layout.x0} ${layout.y0} ${layout.width} ${layout.height}`}>
      <defs>
       {['','-warn','-pending','-rule'].map(k=><marker key={k} id={'map-arrow'+k} viewBox="0 0 8 8" refX="0" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L8 4 L0 8 Z" className={'arr'+k}/></marker>)}
      </defs>
