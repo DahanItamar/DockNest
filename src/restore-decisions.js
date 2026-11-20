@@ -12,8 +12,8 @@ import { db, audit } from './db.js';
 export const restoreDecisionRoutes = express.Router();
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 const activeSite = siteId => {
-  const site = db.prepare('SELECT id FROM sites WHERE id=?').get(siteId) || fail(404, 'Site not found.');
-  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) fail(409, 'This site was removed from active sites.');
+  const site = db.prepare('SELECT id FROM sites WHERE id=?').get(siteId) || fail(404, 'App not found.');
+  if (db.prepare('SELECT 1 FROM site_archives WHERE site_id=?').get(site.id)) fail(409, 'This app was removed from active apps.');
   return site;
 };
 const findingKey = z.string().regex(/^[0-9a-f]{64}$/);
