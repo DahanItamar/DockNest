@@ -32,8 +32,9 @@ Adding an app: add one entry to `KEY_RULES` and a case to `tests/keys-safe.test.
 
 ## Fingerprints, never values
 
-- `fpKey = HKDF-SHA256(master key, salt = install id, info = "docknest key fingerprint v1")`. The API or worker derives
-  it for one helper request at a time. It is never logged, stored or returned. The install id is a random id in the
+- `fpKey = HKDF-SHA256(master key, salt = install id, info = "docknest key fingerprint v1" || 0x00 || server id)`: one
+  key per server, so fingerprints from two servers cannot be linked. The API or worker derives it for one helper request
+  at a time. It is never logged, stored or returned. The install id is a random id in the
   `settings` table, kept by a self-backup, so a recovered install keeps its fingerprints.
 - A key's fingerprint is `HMAC-SHA256(fpKey, rule id || 0x00 || value)`, truncated to 128 bits (32 hex characters). A
   Compose, env or configuration file is fingerprinted whole the same way with the label `docknest-file`.
@@ -63,14 +64,17 @@ the test, because the restored app could not read its own data.
 
 Each app's Compose, env and configuration files and each detected key are tracked in `config_fingerprints`. They are
 checked on job events that already reach DockNest: a readiness check (which also runs the restore check), a discovery
-and a backup. There is no timer.
+and a backup. There is no timer. A discovery skips an app with work in progress (backup, restore, move, Safe Edit or
+restore test), so its own work never reads as an outside change. The API never returns a backup's full proof list.
 
 - The first observation of an item is its known-good baseline, silently. An upgrade or a new app never raises an alert.
 - A different fingerprint marks the item changed, with the time first seen, and raises `config.changed` once per new set
   of fingerprints through your alert lines. Nothing about the content is compared or shown.
-- Known-good is set by a Safe Edit that was applied (the files it wrote), a completed restore of the app's backup or a move onto a new server (a restore of a
-  backup onto the app), or an administrator's **Mark as known-good** (`POST /api/sites/:id/keys/known-good`, which needs
-  a sign-in re-verified in the last 5 minutes). Each first scans the app afresh and writes an audit entry that names the
+- Known-good is set by a Safe Edit that was applied (the files it wrote, from the full list kept with the edit, and the
+  env of the services it recreated), a move onto a new server (a restore of a backup onto the app; the new server's key
+  re-baselines the key fingerprints), or an administrator's **Mark as known-good** (`POST /api/sites/:id/keys/known-good`, which needs
+  a sign-in re-verified in the last 5 minutes; refused while the app is busy and for static websites). A restore never
+  sets it: it makes a separate copy and leaves the app as it is. Each first scans the app afresh and writes an audit entry that names the
   files and key names, never a value.
 - A new master key (or install id) changes `fpKey`. Each app's next scan then re-baselines it silently, with one
   `keys.rebaselined` audit entry, so no false alert is raised. An item that was changed stays changed.

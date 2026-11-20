@@ -69,17 +69,20 @@ test('the rule list: plain data, every seed rule valid, unique ids, every kind, 
   for (const bad of [null, { id: 'Bad Id', app: 'x', kind: 'env', name: 'A' }, { id: 'a', app: 'x', kind: 'yaml', name: 'A' }, { id: 'a', app: 'x', kind: 'file', path: '../etc/shadow' }, { id: 'a', app: 'x', kind: 'env', name: 'A', path: 'x' }, { id: 'a', app: 'x', kind: 'ini', file: 'app.ini', name: 'A' }, { id: 'a', app: 'x', kind: 'env', name: 'A', image: ['UPPER'] }, { id: 'a', app: '', kind: 'env', name: 'A' }]) assert.ok(keyRuleProblems(bad).length, JSON.stringify(bad));
 });
 
-test('the fingerprint key is HKDF-SHA256 of the master key with the install id, stable, and never stored', () => {
+test('the fingerprint key is HKDF-SHA256 of the master key with the install id and the server id, stable, and never stored', () => {
   const id = installId();
   assert.equal(installId(), id, 'one install id');
   assert.deepEqual(fingerprintKey(), Buffer.from(hkdfSync('sha256', masterKey, id, 'docknest key fingerprint v1', 32)));
+  assert.deepEqual(fingerprintKey('server-a'), Buffer.from(hkdfSync('sha256', masterKey, id, 'docknest key fingerprint v1\0server-a', 32)));
+  assert.notDeepEqual(fingerprintKey('server-a'), fingerprintKey('server-b'), 'fingerprints from two servers cannot be linked');
+  assert.notEqual(fingerprintKeyCheck('server-a'), fingerprintKeyCheck('server-b'));
   // A known answer shared with remote/test_keys.py: the same key, rule and value give the same fingerprint in both.
   assert.equal(createHmac('sha256', Buffer.from([...Array(32).keys()])).update(Buffer.from('laravel-app-key\0base64:example-value')).digest('hex').slice(0, 32), '372a976441289f5e938a50f5f0854fa1');
   assert.equal(Buffer.from(hkdfSync('sha256', Buffer.alloc(32, 7), 'install-example', 'docknest key fingerprint v1', 32)).toString('hex'), '8a83e6d685821150680f171cc6214255eedd47545f27989405563e85ff5a6cdc');
-  const request = keysRequest();
+  const request = keysRequest('server-a');
   assert.equal(Buffer.from(request.fingerprintKey, 'base64').length, 32); assert.equal(request.rules, KEY_RULES);
   const dump = JSON.stringify(db.prepare('SELECT key,value FROM settings').all());
-  assert.ok(!dump.includes(request.fingerprintKey) && !dump.includes(fingerprintKey().toString('hex')), 'fpKey is not in settings');
+  assert.ok(!dump.includes(request.fingerprintKey) && !dump.includes(fingerprintKey('server-a').toString('hex')), 'fpKey is not in settings');
 });
 
 test('the first scan is a silent baseline; a hand change raises config.changed once per new fingerprint set', () => {
@@ -117,7 +120,7 @@ test('known-good: Safe Edit marks the files it wrote, an administrator re-verifi
   const serverId = serverRow('Edit server'), siteId = siteRow(serverId, 'Shop');
   store.recordScan(siteId, scanOf());
   // The scan that marks known-good is the scan that sees the change: trusted items raise no alert, the others do.
-  const only = safeEditItems({ files: [{ path: '/srv/wiki/compose.yaml', before: 'a', after: 'b' }], env: { added: [], replaced: [], removed: [] } });
+  const only = safeEditItems({ written: ['/srv/wiki/compose.yaml'], recreated: ['web'], project: 'wiki' });
   store.recordScan(siteId, scanOf({ compose: 'changed: 1\n', env: 'APP_KEY=x\n', value: 'x' }), { trust: { source: 'safe-edit', actor: 'edit:1', only } });
   assert.deepEqual(audits('config.changed', siteId), [{ files: ['/srv/wiki/.env'], keys: ['APP_KEY'] }], 'only what the edit did not write');
   const after = items(siteId);
@@ -185,7 +188,7 @@ test('the padlock: none, red without a backup, green in the last backup, amber w
   assert.equal(view.state, 'red'); assert.deepEqual(view.keys.map(key => [key.status, key.reason]), [['missing', 'This app has no backup yet.'], ['missing', 'This app has no backup yet.']]);
   const scan = scanOf({ extra: [{ rule: 'rails-secret-key-base', location: 'file:/srv/wiki/extra.env', fingerprint: fp('rails-secret-key-base', 'made-up') }] });
   const proof = { keys: scan.keys.map(key => ({ ...key, inBackup: key.location !== 'file:/srv/wiki/extra.env', ...(key.location === 'file:/srv/wiki/extra.env' ? { reason: 'not-included' } : {}) })), files: scan.files };
-  const backupId = backupRow(siteId, new Date(Date.now() - 60000).toISOString(), { keys: store.cleanScan(proof).keys, keysCheck: fingerprintKeyCheck() });
+  const backupId = backupRow(siteId, new Date(Date.now() - 60000).toISOString(), { keys: store.cleanScan(proof).keys, keysServerId: serverId, keysCheck: fingerprintKeyCheck(serverId) });
   store.recordScan(siteId, proof, { backup: { id: backupId, backupKind: 'full', chainId: null } });
   view = keysView(siteId);
   assert.equal(view.state, 'red');
@@ -254,12 +257,17 @@ test('a backup carries the key proof: request with fpKey, manifest proof list, i
   assert.equal(Buffer.from(capture.keys.fingerprintKey, 'base64').length, 32); assert.equal(capture.keys.rules.length, KEY_RULES.length);
   assert.ok(!JSON.stringify(capture.config).includes(capture.keys.fingerprintKey), 'fpKey stays out of the config the helper journals');
   const backup = db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);
-  assert.equal(JSON.parse(backup.manifest).keysCheck, fingerprintKeyCheck(), 'the proof names the fingerprint key that made it');
+  assert.deepEqual([JSON.parse(backup.manifest).keysServerId, JSON.parse(backup.manifest).keysCheck], [serverId, fingerprintKeyCheck(serverId)], 'the proof names the server key that made it');
+  assert.equal(capture.keys.fingerprintKey, fingerprintKey(serverId).toString('base64'), 'the backup used its server key');
   assert.deepEqual(JSON.parse(backup.manifest).keys.map(key => [key.location, key.inBackup, key.reason ?? null]), [['env:wiki-web-1', true, null], ['file:/srv/wiki/.env', true, null], ['file:/srv/wiki/extra.env', false, 'not-included']]);
   assert.deepEqual(db.prepare('SELECT location,in_backup FROM app_keys WHERE site_id=? ORDER BY location').all(siteId).map(row => [row.location, row.in_backup]), [['env:wiki-web-1', backup.id], ['file:/srv/wiki/.env', backup.id], ['file:/srv/wiki/extra.env', null]]);
   const admin = user('admin'), state = await admin('GET', '/state');
   assert.equal(state.status, 200);
   const ledger = state.body.sites.find(site => site.id === siteId);
+  const listed = state.body.backups.find(item => item.id === backup.id);
+  assert.ok(listed.manifest && !['keys', 'keysCheck', 'keysServerId'].some(name => name in listed.manifest), 'the full key proof stays on the server');
+  const history = await admin('GET', '/backups?limit=50');
+  assert.ok(history.body.items.every(item => !('keys' in (item.manifest ?? {}))));
   assert.equal(ledger.keys.state, 'red'); assert.equal(ledger.keys.keys.length, 3);
   const fpKey = capture.keys.fingerprintKey, fpHex = Buffer.from(fpKey, 'base64').toString('hex');
   for (const [where, text] of [['/api/state', state.text], ['audit_events', JSON.stringify(db.prepare('SELECT * FROM audit_events').all())], ['jobs', JSON.stringify(db.prepare('SELECT * FROM jobs').all())], ['backups', JSON.stringify(db.prepare('SELECT * FROM backups').all())], ['app_keys', JSON.stringify(db.prepare('SELECT * FROM app_keys').all())], ['config_fingerprints', JSON.stringify(db.prepare('SELECT * FROM config_fingerprints').all())], ['alert_outbox', JSON.stringify(db.prepare('SELECT * FROM alert_outbox').all())], ['settings', JSON.stringify(db.prepare('SELECT * FROM settings').all())], ['logs', printed.join('\n')]]) {
@@ -269,7 +277,7 @@ test('a backup carries the key proof: request with fpKey, manifest proof list, i
   assert.deepEqual(ledger.keys.keys.map(key => key.fingerprint), scan.keys.map(key => key.fingerprint.slice(0, 8)), 'the padlock shows 8 characters of a fingerprint');
 });
 
-test('a completed restore of the app is its known-good: a fresh trusted scan, no config.changed; a failed one marks nothing', async () => {
+test('a restore never marks known-good: it makes a separate copy, so the live app is not scanned or trusted', async () => {
   const serverId = serverRow('Restore server'), siteId = siteRow(serverId, 'Journal');
   store.recordScan(siteId, scanOf());
   const restored = scanOf({ compose: 'restored compose\n', env: 'APP_KEY=restored\n', value: 'restored' });
@@ -298,13 +306,11 @@ test('a completed restore of the app is its known-good: a fresh trusted scan, no
   };
   restoreAnswer = () => { throw Object.assign(new Error('restore failed'), { remoteReported: true }); };
   assert.equal(await restore(), 'failed');
-  assert.ok(!requests.includes('key-scan'), 'a failed restore scans and marks nothing');
   restoreAnswer = () => ({ verification: { isolatedRestore: { status: 'passed' } } });
   assert.equal(await restore(), 'completed');
-  assert.equal(requests.filter(operation => operation === 'key-scan').length, 1);
-  assert.ok(Object.values(items(siteId)).every(row => row.known_good_source === 'restore' && row.known_good === row.fingerprint && row.first_seen_changed_at === null));
-  assert.equal(audits('config.changed', siteId).length, 0, 'the restored files raise no alert');
-  assert.equal(audits('config.known_good', siteId).at(-1).source, 'restore');
+  assert.ok(!requests.includes('key-scan'), 'no scan after a restore');
+  assert.ok(Object.values(items(siteId)).every(row => row.known_good_source === 'baseline'), 'a change outside DockNest is never laundered by a restore');
+  assert.equal(audits('config.known_good', siteId).length, 0);
 });
 
 test('readiness and discovery record the scans they carry and never return them', async () => {
@@ -325,4 +331,38 @@ test('readiness and discovery record the scans they carry and never return them'
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM config_fingerprints WHERE site_id=?').get(staticSite).n, 0);
   await engine.discover({ id: serverId });
   assert.equal(requests.at(-1).keys, undefined, 'a discovery for other purposes carries no key');
+  // An app with work in progress (here a Safe Edit, then a move job) is left out of the discovery scan.
+  const editId = randomUUID();
+  db.prepare("INSERT INTO site_edits(id,site_id,server_id,state,created_by,created_at) VALUES(?,?,?,'queued','test',?)").run(editId, siteId, serverId, at);
+  await engine.discover({ id: serverId }, { scanKeys: true });
+  assert.equal(requests.at(-1).keys, undefined, 'the only app is busy, so nothing is scanned');
+  assert.equal(engine.keyScanBusy(siteId), true);
+  db.prepare("UPDATE site_edits SET result='applied',state='done' WHERE id=?").run(editId);
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'site-move','move_queued','queued',?)").run(randomUUID(), siteId, at);
+  assert.equal(engine.keyScanBusy(siteId), true);
+});
+
+test('Safe Edit trust: the full written-file list and only the recreated services, never other containers', () => {
+  const only = safeEditItems({ written: ['/srv/shop/compose.yaml', '/srv/shop/.env'], recreated: ['web'], project: 'shop' });
+  assert.deepEqual(['/srv/shop/compose.yaml', '/srv/shop/.env', '/srv/shop/other.env', 'laravel-app-key@file:/srv/shop/.env', 'laravel-app-key@env:shop-web-1', 'laravel-app-key@env:shop_web_2', 'laravel-app-key@env:shop-worker-1', 'laravel-app-key@env:other-web-1'].map(only), [true, true, false, true, true, true, false, false]);
+  assert.equal(safeEditItems(undefined)('/srv/shop/compose.yaml'), false, 'without the record nothing is trusted');
+  assert.equal(safeEditItems({ written: [], recreated: ['shop-app'], project: null })('laravel-app-key@env:shop-app'), true, 'a single container is its own service');
+});
+
+test('Mark as known-good: busy apps, static websites and a race are refused without a mark', async () => {
+  const serverId = serverRow('Busy server'), siteId = siteRow(serverId, 'Busy'), staticSite = siteRow(serverId, 'Plain', { kind: 'static', documentRoot: '/var/www/plain' });
+  store.recordScan(siteId, scanOf());
+  const admin = user('admin');
+  engine.transport.remote = async (_server, request) => {
+    // A restore test starts while the scan runs: the recorded scan sees it and marks nothing.
+    if (request.operation === 'key-scan') db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'restore-test','test_queued','check_space',?)").run(randomUUID(), siteId, at);
+    return scanOf({ compose: 'raced\n' });
+  };
+  const raced = await admin('POST', `/sites/${siteId}/keys/known-good`);
+  assert.deepEqual([raced.status, raced.body.code], [409, 'SITE_BUSY']);
+  assert.ok(Object.values(items(siteId)).every(row => row.known_good_source === 'baseline'));
+  const busy = await admin('POST', `/sites/${siteId}/keys/known-good`);
+  assert.deepEqual([busy.status, busy.body.code], [409, 'SITE_BUSY'], 'the restore test still runs');
+  const plain = await admin('POST', `/sites/${staticSite}/keys/known-good`);
+  assert.deepEqual([plain.status, plain.body.code], [409, 'NOT_APPLICABLE']);
 });
