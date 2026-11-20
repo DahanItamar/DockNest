@@ -66,14 +66,24 @@ DockNest never holds the private key, so it can make emergency kits but never op
 
 ### Split again, and Go back to one passphrase
 
-**Split again** makes a new key pair. New kits use the new key. Old parts still open kits made before the re-split:
-"Old parts stop opening new kits. Delete the old kits so old parts open nothing."
+Every emergency kit holds the recovery passphrase. K holders who open one keep that passphrase, and it opens the plain
+recovery kit too. So **Split again** and **Go back to one passphrase** both need a new recovery passphrase, given in
+the same request and refused when it is missing or unchanged. The change and the split happen together or not at all,
+and a Self Backup is queued at once (when one can run), so the stored recovery kit is remade with the new passphrase
+and the kit the earlier holders could open is replaced. Keep the new passphrase outside DockNest, as before.
 
-**Go back to one passphrase** retires the key pair: new Self Backups stop making emergency kits. The kits already in
-storage stay until you delete them.
+**Split again** makes a new key pair. New kits use the new key and the new passphrase. Old parts still open the
+emergency kits made before the re-split, and those hold the old passphrase, which opens only recovery kits made before
+it: "Old parts stop opening new kits. Delete the old kits so old parts open nothing."
 
-Every split and re-split is audited with the public digest, and raises **Emergency kit key changed**
-(`emergency.key_changed`) on every alert channel, whatever the alert rules say. An administrator session that someone
+**Go back to one passphrase** retires the key pair and replaces the passphrase: new Self Backups stop making emergency
+kits. The kits already in storage stay until you delete them.
+
+A kit made while the split is on carries the offline tool as `recovery/emergency-open.js`. Releases before 3.0.0 cannot
+restore such a kit; restore it with 3.0.0 or later. A kit made with one passphrase keeps the earlier file set.
+
+Every split, re-split and Go back to one passphrase is audited, and raises **Emergency kit key changed**
+(`emergency.key_changed`, code `split`, `resplit` or `retired`) on every alert channel, whatever the alert rules say. An administrator session that someone
 else took over could otherwise seal your future kits to their own key without you noticing.
 
 API (administrators; split, off and delete need a re-verification in the last 5 minutes, checked on the server):
@@ -81,8 +91,8 @@ API (administrators; split, off and delete need a re-verification in the last 5 
 | Request | Result |
 |---|---|
 | `GET /api/self-backup` | adds `emergency: { split: false, oldKits }`, or with the split on `{ split: true, digest, identifier, k, n, labels, createdAt, latestKitAt, oldKits }` |
-| `POST /api/self-backup/emergency/split` `{ k, n, labels }` | `{ digest, identifier, k, n, createdAt, parts: [{ number, label, words }] }`, once, `Cache-Control: no-store` |
-| `POST /api/self-backup/emergency/off` | `{ split: false }`; `409` when the kit is not split |
+| `POST /api/self-backup/emergency/split` `{ k, n, labels, passphrase? }` | `{ digest, identifier, k, n, createdAt, selfBackupQueued, parts: [{ number, label, words }] }`, once, `Cache-Control: no-store`. `passphrase` (a new recovery passphrase, 24 or more characters) is required to split again and refused on a first split |
+| `POST /api/self-backup/emergency/off` `{ passphrase }` | `{ split: false, selfBackupQueued }`; `400` without a new passphrase, `409` when the kit is not split |
 | `POST /api/self-backup/emergency/delete-old-kits` | `{ deleted, failed }`: removes every emergency kit the current split does not open |
 
 ### Opening an emergency kit without DockNest
@@ -134,6 +144,7 @@ model holds unchanged.
 | K holders together | full access, by design: the owner chooses K and the people |
 | Stolen storage | only ciphertext sealed to a key DockNest does not hold; storage and K parts are both needed |
 | Leaked DockNest database | public key, digest and names only |
+| Holders of an earlier split keep the passphrase from an old emergency kit | Split again and Go back to one passphrase replace the recovery passphrase in the same transaction and queue a Self Backup that remakes the kit; old parts then open only kits made before the change |
 | A taken-over administrator session replaces the key | re-verification to split, audit entry, alert on every channel, digest on the parts |
 | A wrong or damaged part | the RS1024 checksum per part, then the digest check before any decryption |
 | An old kit put back in storage | each header has its creation time and release; the tool lists kits newest first |

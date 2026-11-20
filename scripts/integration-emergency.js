@@ -82,9 +82,14 @@ export async function runEmergencyScenario({ run, hosts, db, record, directory }
   assert.deepEqual((await readdir(await selfBackupDirectory())).filter(name => name.startsWith('.kit-check-')), []);
   record('A wrong kept passphrase fails the kit check at decryption, not at the storage checksum, with the reason code passphrase');
 
-  retireEmergencyKit(actor);
+  // Going back to one passphrase needs a new one (every holder's kit carried the old); the queued Self Backup remakes the kit.
+  const renewed = randomBytes(32).toString('base64url');
+  assert.equal(retireEmergencyKit({ passphrase: renewed }, actor).selfBackupQueued, true);
+  assert.equal(await executeSelfBackup(claimSelfBackup()), true);
+  queueKitCheckAfterBackup(); await executeKitCheck(claimKitCheck());
+  assert.equal(lastCheck().result, 'passed', 'the new kit opens with the new passphrase');
   const removed = await deleteOldEmergencyKits(actor);
   assert.equal(removed.failed, 0); assert.ok(removed.deleted >= 1, 'the main destination and any copy destinations');
   assert.deepEqual(emergencyKits(), []);
-  record('Go back to one passphrase retires the key pair and the old emergency kits are deleted from SFTP storage');
+  record('Go back to one passphrase replaces the recovery passphrase, remakes the kit, retires the key pair, and the old emergency kits are deleted from SFTP storage');
 }

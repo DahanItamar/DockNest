@@ -18,5 +18,5 @@ selfBackupRoutes.get('/download',rateLimit('manager-backup-download',10),async(r
 // The optional split (docs/emergency-kit.md): administrators with a re-verification in the last 5 minutes, checked on
 // the server. The parts are in the split response only, which is never cached.
 selfBackupRoutes.post('/emergency/split',requireRecentAuth,rateLimit('emergency-split',10),(req,res)=>res.set('Cache-Control','no-store').json(splitEmergencyKit(req.body,req.user.id)));
-selfBackupRoutes.post('/emergency/off',requireRecentAuth,rateLimit('emergency-off',10),(req,res)=>res.json(retireEmergencyKit(req.user.id)));
+selfBackupRoutes.post('/emergency/off',requireRecentAuth,rateLimit('emergency-off',10),(req,res)=>res.json(retireEmergencyKit(req.body,req.user.id)));
 selfBackupRoutes.post('/emergency/delete-old-kits',requireRecentAuth,rateLimit('emergency-delete',10),async(req,res)=>res.json(await deleteOldEmergencyKits(req.user.id)));

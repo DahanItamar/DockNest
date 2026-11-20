@@ -10,10 +10,14 @@ import { emit } from '../alerts/delivery.js';
 import { generateKeyPair, publicKeyDigest } from './envelope.js';
 import { generateMnemonics } from './slip39.js';
 import { activeEmergencyKey, emergencyKits } from './kits.js';
+import { replaceRecoveryPassphrase } from '../self-backup.js';
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 const label = z.string().trim().min(1, 'Name each person.').max(60).regex(/^[^\u0000-\u001f\u007f<>]+$/, 'Use plain text for the names.');
-const splitSchema = z.object({ k: z.number().int().min(2).max(16), n: z.number().int().min(2).max(16), labels: z.array(label).min(2).max(16) }).strict()
+// `passphrase`: the new recovery passphrase that Split again and Go back to one passphrase need (replaceRecoveryPassphrase).
+const passphrase = z.string().max(4096).optional();
+const retireSchema = z.object({ passphrase }).strict();
+const splitSchema = z.object({ k: z.number().int().min(2).max(16), n: z.number().int().min(2).max(16), labels: z.array(label).min(2).max(16), passphrase }).strict()
   .refine(value => value.k <= value.n, 'The number of parts needed cannot be more than the number of people.')
   .refine(value => value.labels.length === value.n, 'Name each person who gets a part.');
 
@@ -30,28 +34,36 @@ export function splitEmergencyKit(input, actor) {
   const parsed = splitSchema.safeParse(input);
   if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Choose how many parts are needed and name each person.');
   const { k, n, labels } = parsed.data, { privateKey, publicKey } = generateKeyPair();
+  let selfBackupQueued = false;
   try {
     const { identifier, mnemonics } = generateMnemonics({ secret: privateKey, threshold: k, count: n });
     const digest = publicKeyDigest(publicKey), keyId = id(), createdAt = new Date().toISOString();
     transaction(() => {
       const previous = activeEmergencyKey();
-      if (previous) db.prepare('UPDATE emergency_keys SET retired_at=? WHERE id=?').run(createdAt, previous.id);
+      if (!previous && parsed.data.passphrase !== undefined) throw httpError(400, 'A new recovery passphrase is only needed to split again.');
+      // Every emergency kit holds the recovery passphrase, so the earlier holders must lose it before the new split.
+      if (previous) { selfBackupQueued = replaceRecoveryPassphrase(parsed.data.passphrase, actor); db.prepare('UPDATE emergency_keys SET retired_at=? WHERE id=?').run(createdAt, previous.id); }
       db.prepare('INSERT INTO emergency_keys(id,public_key,digest,identifier,k,n,labels,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(keyId, publicKey.toString('base64url'), digest, identifier, k, n, JSON.stringify(labels), actor, createdAt);
       audit(actor, previous ? 'emergency.resplit' : 'emergency.split', keyId, { k, n, digest });
       emit({ type: 'emergency.key_changed', key: `occ:emergency-key:${keyId}`, at: createdAt, code: previous ? 'resplit' : 'split' });
     });
-    return { digest, identifier, k, n, createdAt, parts: mnemonics.map((words, index) => ({ number: index + 1, label: labels[index], words })) };
+    return { digest, identifier, k, n, createdAt, selfBackupQueued, parts: mnemonics.map((words, index) => ({ number: index + 1, label: labels[index], words })) };
   } finally { privateKey.fill(0); }
 }
 
-// "Go back to one passphrase": the key pair is retired, so Self Backups stop making emergency kits. Kits already in
-// storage stay until the owner deletes them (deleteOldEmergencyKits).
-export function retireEmergencyKit(actor) {
+// "Go back to one passphrase": the key pair is retired, so Self Backups stop making emergency kits, and the recovery
+// passphrase is replaced, because every holder's kit carried the old one. Kits already in storage stay until the owner
+// deletes them (deleteOldEmergencyKits). Raises emergency.key_changed on every channel, like a split.
+export function retireEmergencyKit(input, actor) {
+  const parsed = retireSchema.safeParse(input ?? {});
+  if (!parsed.success) throw httpError(400, 'Enter a new recovery passphrase of at least 24 characters.');
   return transaction(() => {
-    const key = activeEmergencyKey();
+    const key = activeEmergencyKey(), at = new Date().toISOString();
     if (!key) throw httpError(409, 'The kit is not split. It opens with your recovery passphrase.');
-    db.prepare('UPDATE emergency_keys SET retired_at=? WHERE id=?').run(new Date().toISOString(), key.id);
+    const selfBackupQueued = replaceRecoveryPassphrase(parsed.data.passphrase, actor);
+    db.prepare('UPDATE emergency_keys SET retired_at=? WHERE id=?').run(at, key.id);
     audit(actor, 'emergency.retired', key.id, { digest: key.digest });
-    return { split: false };
+    emit({ type: 'emergency.key_changed', key: `occ:emergency-key:${key.id}:retired`, at, code: 'retired' });
+    return { split: false, selfBackupQueued };
   });
 }
