@@ -121,7 +121,7 @@ try {
       const { context, page, errors } = await open(viewport, scheme);
       await go(page, viewport, 'Apps & schedules');
       const card = page.locator('.site-card', { hasText: SITE });
-      assert.match(await card.locator('.def-row', { hasText: 'Incremental' }).innerText(), /Full every 7 backups[\s\S]*Beta/, label);
+      assert.match(await card.locator('.def-row', { hasText: 'Incremental' }).innerText(), /Full every 7 backups/, label);
       assert.match(await page.locator('.site-card', { hasText: 'pawmeadow.com' }).locator('.def-row', { hasText: 'Incremental' }).innerText(), /Off/, label);
       await shot(page, 'sites-row-' + tag);
       let dialog = await openSiteDialog(page, 'pawmeadow.com', 'Incremental backups');

@@ -35,7 +35,7 @@ export function IncrementalDialog({client,site,onClose,onSaved,onSessionExpired}
  const nextFull=enabled&&data.fullNext;
  return <form className="modal-body site-wizard inc-form" onSubmit={save} noValidate>
   <div className="sb-switch-row">
-   <span className="sb-switch-text"><span id="inc-on" className="sb-switch-label">Incremental backups</span><span id="inc-on-help" className="t-caption">Beta. {enabled?'Between full backups, only changed files are saved.':'Every backup is a complete package.'}</span></span>
+   <span className="sb-switch-text"><span id="inc-on" className="sb-switch-label">Incremental backups</span><span id="inc-on-help" className="t-caption">{enabled?'Between full backups, only changed files are saved.':'Every backup is a complete package.'}</span></span>
    <button type="button" role="switch" className="switch" aria-checked={enabled} aria-labelledby="inc-on" aria-describedby="inc-on-help" onPointerDown={event=>event.preventDefault()} onClick={()=>{setError(null);setEnabled(value=>!value)}}></button>
   </div>
   <div className="inc-row">

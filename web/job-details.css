@@ -18,7 +18,7 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-actions button,.dn-link-button,.dn-link{min-height:32px;height:32px;min-width:0;width:auto;padding:0 10px;border:0;border-radius:var(--radius);background:none;color:var(--link);font-size:var(--fs-body);font-weight:500;cursor:pointer;transform:none;box-shadow:none}
 .dn-actions button:hover:not(:disabled),.dn-link:hover{background:var(--surface-muted)}
 .dn-actions button:disabled{color:var(--text-muted);cursor:wait}
-.dn-actions button:focus-visible,.dn-link-button:focus-visible,.dn-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.dn-actions button:focus-visible,.dn-link-button:focus-visible,.dn-link:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 .dn-link-button{justify-self:start;padding:0;font-size:var(--fs-caption)}
 .dn-link-button:hover{text-decoration:underline}
 
@@ -39,7 +39,7 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-xfer-head b{font-size:var(--fs-body);font-weight:600;color:var(--text-secondary)}
 .dn-xfer-head span{font-size:var(--fs-section);font-weight:600;color:var(--text-primary);font-variant-numeric:tabular-nums}
 .dn-bar{height:6px;border-radius:999px;background:var(--surface-muted);overflow:hidden}
-.dn-bar>div{height:100%;border-radius:inherit;background:var(--link);transition:width .6s ease}
+.dn-bar>div{height:100%;border-radius:inherit;background:var(--link);transition:width var(--dn-dur-max) var(--dn-ease-standard)}
 .dn-bar-unknown>div{opacity:.35}
 .dn-xfer-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px 16px;margin:0}
 .dn-xfer-stats div{display:grid;gap:2px}
@@ -59,8 +59,8 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 .dn-tl-item.is-gap .dn-tl-dot{background:var(--text-muted);opacity:.5}
 .dn-tl-item.is-note .dn-tl-dot{background:var(--text-muted)}
 .dn-tl-item.is-bad .dn-tl-dot{background:var(--error)}
-.dn-tl-item.is-running .dn-tl-dot{background:var(--link);box-shadow:0 0 0 4px var(--accent-soft);animation:dn-pulse 1.6s ease-in-out infinite}
-@keyframes dn-pulse{50%{box-shadow:0 0 0 7px transparent}}
+.dn-tl-item.is-running .dn-tl-dot{background:var(--link)}
+
 .dn-tl-name{display:grid;gap:2px;min-width:0;color:var(--text-primary)}
 .dn-tl-item.is-gap .dn-tl-name{color:var(--text-secondary)}
 .dn-tl-name small{font-size:var(--fs-caption);color:var(--error)}
@@ -110,7 +110,7 @@ dialog.job-dialog::-webkit-scrollbar{display:none}
 
 .field select.dn-zone-select{min-height:44px;font-size:var(--fs-body);padding:10px 14px}
 
-@media(prefers-reduced-motion:reduce){.dn-bar>div{transition:none}.dn-tl-item.is-running .dn-tl-dot{animation:none}}
+@media(prefers-reduced-motion:reduce){.dn-bar>div{transition:none}}
 @media(max-width:680px){
  .job-details.dn-jd{padding:16px}
  .dn-tl-item{grid-template-columns:16px minmax(0,1fr) 72px;gap:10px}.dn-tl-time{display:none}

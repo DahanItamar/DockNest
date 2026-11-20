@@ -2,7 +2,7 @@
    Mirrors docs/design/update-center/mockup.html: one button system (44 px, labels never wrap), one type scale. */
 :root{--dn-motion-fast:120ms;--dn-motion-base:200ms;--dn-motion-slow:320ms;--dn-ease-out:cubic-bezier(.2,0,0,1)}
 @keyframes dn-orbit{from{stroke-dashoffset:0}to{stroke-dashoffset:-100}}
-@keyframes dn-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
 .dn-spin{animation:dn-spin 1s linear infinite}
 /* Buttons: height and type come from the 2.3.0 foundation (40 px, 44 px on phones); labels never wrap. */
 :is(.uc-page,.progress-view,.uc-dialog,.toast-wrap,.about-report) :is(button,a.button):not(.icon,.switch,[role=tab],.text){box-sizing:border-box;padding:0 16px;gap:8px;white-space:nowrap;min-width:0}
@@ -80,14 +80,14 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .report-text{font-weight:500;color:var(--heading)}.report-fields{margin:0}.report-fields div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--border-subtle)}.report-fields dt{color:var(--text-muted);font-size:var(--fs-body)}.report-fields dd{margin:0;overflow-wrap:anywhere}
 .about-report{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .toast-wrap{position:fixed;right:24px;bottom:24px;z-index:3000}
-.dn-toast{display:flex;align-items:center;gap:12px;max-width:420px;padding:12px 12px 12px 16px;border-radius:var(--radius);border:1px solid var(--border-subtle);background:var(--surface);box-shadow:0 8px 24px var(--shadow);font-size:var(--fs-body);color:var(--heading);animation:dn-toast-in var(--dn-motion-base) var(--dn-ease-out) both}
+.dn-toast{display:flex;align-items:center;gap:12px;max-width:420px;padding:12px 12px 12px 16px;border-radius:var(--radius);border:1px solid var(--border-subtle);background:var(--surface);box-shadow:var(--dn-shadow-2);transition:opacity var(--dn-dur-slow) var(--dn-ease-enter),translate var(--dn-dur-slow) var(--dn-ease-enter);font-size:var(--fs-body);color:var(--heading)}
 .dn-toast>svg{color:var(--success);flex-shrink:0}.dn-toast-text{flex:1;min-width:0}.toast-wrap button.icon{width:44px;padding:0}
 /* Lock view */
 .progress-view{position:fixed;inset:0;z-index:2500;overflow:auto;background:var(--background);display:flex;flex-direction:column}
 .progress-top{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:88px;padding:16px 24px;background:var(--surface);flex-shrink:0}
 .progress-main{flex:1;display:flex;justify-content:center;padding:24px 20px 48px}
 .progress-card{width:100%;max-width:720px;align-self:flex-start;background:var(--surface);border-radius:var(--radius);padding:32px 40px}
-.progress-card .eyebrow{margin-bottom:12px}.progress-card h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;margin-bottom:8px}.progress-card h1:focus{outline:none}
+.progress-card .eyebrow{margin-bottom:12px}.progress-card h1{font-size:var(--fs-title);line-height:var(--lh-title);font-weight:600;margin-bottom:8px}.progress-card h1:focus-visible{outline:none}
 .progress-card .lead{font-size:var(--fs-body);color:var(--text-secondary);margin-bottom:8px;max-width:none}.progress-card .lead.alert-line{color:var(--heading);font-weight:500}
 .progress-card h2{margin:24px 0 4px;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500}.progress-card h2+p{margin-top:4px}
 .live{margin:0 0 4px}.live b{display:block;font-size:var(--fs-section);font-weight:500;color:var(--heading);line-height:var(--lh-section)}.live span{display:block;font-size:var(--fs-body);color:var(--text-secondary);margin-top:2px}
@@ -112,8 +112,8 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .dn-stage.is-waiting .dn-stage-name{color:var(--text-muted)}
 .dn-stage.is-complete .dn-node{background:var(--button-primary);color:var(--primary-foreground)}
 .dn-stage.is-current .dn-node,.dn-stage.is-current .dn-stage-status{color:var(--accent)}
-.dn-stage.is-failed .dn-node,.dn-stage.is-failed .dn-stage-status{color:var(--error)}.dn-stage.is-failed .dn-node{box-shadow:inset 0 0 0 1.5px var(--error)}
-.dn-stage.is-rolled-back .dn-node,.dn-stage.is-rolled-back .dn-stage-status{color:var(--warning)}.dn-stage.is-rolled-back .dn-node{box-shadow:inset 0 0 0 1.5px var(--warning)}
+.dn-stage.is-failed .dn-node,.dn-stage.is-failed .dn-stage-status{color:var(--error)}.dn-stage.is-failed .dn-node{outline:1.5px solid var(--error);outline-offset:-1.5px}
+.dn-stage.is-rolled-back .dn-node,.dn-stage.is-rolled-back .dn-stage-status{color:var(--warning)}.dn-stage.is-rolled-back .dn-node{outline:1.5px solid var(--warning);outline-offset:-1.5px}
 /* Small screens: rows stack full width at 480 px and below. */
 @media(max-width:767px){.card-grid.uc-split{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:599px){
@@ -137,7 +137,7 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 /* Recent updates disclosure (replaces the History tab) */
 .uc-recent{padding:0}
 .uc-recent-toggle{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;padding:0 16px;border:0;border-radius:var(--radius);background:transparent;color:var(--heading);font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500;cursor:pointer}
-.uc-recent-toggle:hover{background:var(--surface-hover)}.uc-recent-toggle:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.uc-recent-toggle:hover{background:var(--surface-hover)}.uc-recent-toggle:focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
 .uc-recent-body{padding:16px 24px 24px;border-top:1px solid var(--border-subtle)}
 .uc-recent-list{list-style:none;margin:0;padding:0}
 .uc-recent-list li{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:12px 0;border-bottom:1px solid var(--border-subtle)}
