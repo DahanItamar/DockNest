@@ -3,6 +3,9 @@
 // resolve(options,remote) test readiness makeDirectory statFile openRead openWrite
 // syncFile renameFile removeFile removeDirectory capacity — all taking (options,value).
 import path from 'node:path';
+import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import { db } from '../db.js';
 import { open } from '../crypto.js';
@@ -89,6 +92,15 @@ export async function renameFile(from,to){
  if(!isRemoteFile(from)&&!isRemoteFile(to))return local.renameFile(from,to);
  const a=parseRemote(from),b=parseRemote(to);if(a.options.id!==b.options.id)throw new Error('Cannot publish across storage destinations');
  return a.adapter.renameFile(a.options,a.value,b.value);
+}
+// Publishes a local file at `published`: written as .partial, synced, read back for its SHA-256, renamed (never over an
+// existing file) and read back again. Throws on any mismatch, leaving at most the .partial behind.
+export async function storedHash(file){const hash=createHash('sha256');for await(const chunk of await openRead(file))hash.update(chunk);return hash.digest('hex');}
+export async function publishVerified(file,published,sha256){
+ await pipeline(createReadStream(file),await openWrite(published+'.partial'));await syncFile(published+'.partial');
+ if(await storedHash(published+'.partial')!==sha256)throw new Error('Uploaded file checksum mismatch');
+ await renameFile(published+'.partial',published);
+ if(await storedHash(published)!==sha256)throw new Error('Published file checksum mismatch');
 }
 // A backup whose main package aged out while a copy is kept points backups.path at that copy; its bytes are counted once,
 // as a copy. Copies count on the destination that holds them (docs/backup-copies.md).

@@ -50,6 +50,8 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Jobs page with transfer progress, a step timeline and plain-language error explanations.
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
+- After every Self Backup, DockNest checks that the new recovery kit opens and holds the right key, and alerts you if it does not. See [kit check](docs/emergency-kit.md#kit-check).
+- Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time.
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
@@ -199,7 +201,7 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 | Topic | Guides |
 | :-- | :-- |
 | Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [App setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving apps](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) · [Linked apps](docs/linked-apps.md) |
-| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore check](docs/restore-check.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
+| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore check](docs/restore-check.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) · [Kit check and emergency kit](docs/emergency-kit.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |

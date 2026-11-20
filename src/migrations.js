@@ -281,6 +281,18 @@ CREATE TABLE IF NOT EXISTS server_app_links (server_id TEXT PRIMARY KEY REFERENC
 export const restoreDecisionsSchema = `
 CREATE TABLE IF NOT EXISTS site_restore_decisions (site_id TEXT NOT NULL REFERENCES sites(id),finding_key TEXT NOT NULL CHECK (length(finding_key) = 64 AND finding_key NOT GLOB '*[^0-9a-f]*'),decision TEXT NOT NULL CHECK (decision IN ('ignore','note')),note TEXT CHECK (note IS NULL OR length(note) <= 500),decided_by TEXT,decided_at TEXT NOT NULL,PRIMARY KEY (site_id,finding_key));
 `;
+// Kit check and emergency kit (docs/emergency-kit.md, "Data"). Additive only: two new tables and their indexes, no rows,
+// so 2.16 code ignores them. kit_checks holds the outcome of each proof that the newest recovery kit opens (a reason code,
+// never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
+// K-of-N split (the X25519 public key, its digest, the SLIP-0039 identifier, K, N and the holder labels): no row exists
+// unless the owner opts in, and at most one key is not retired.
+export const kitChecksSchema = `
+CREATE TABLE IF NOT EXISTS kit_checks (id TEXT PRIMARY KEY,backup_id TEXT,requested_by TEXT NOT NULL CHECK (length(requested_by) <= 64),created_at TEXT NOT NULL,checked_at TEXT,result TEXT NOT NULL CHECK (result IN ('queued','running','passed','failed')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 32));
+CREATE UNIQUE INDEX IF NOT EXISTS kit_checks_active ON kit_checks((1)) WHERE result IN ('queued','running');
+CREATE INDEX IF NOT EXISTS kit_checks_created ON kit_checks(created_at);
+CREATE TABLE IF NOT EXISTS emergency_keys (id TEXT PRIMARY KEY,public_key TEXT NOT NULL CHECK (length(public_key) = 43),digest TEXT NOT NULL UNIQUE CHECK (length(digest) = 64),identifier INTEGER NOT NULL CHECK (identifier BETWEEN 0 AND 32767),k INTEGER NOT NULL CHECK (k BETWEEN 2 AND 16),n INTEGER NOT NULL CHECK (n BETWEEN k AND 16),labels TEXT NOT NULL CHECK (length(labels) <= 2048),created_by TEXT NOT NULL,created_at TEXT NOT NULL,retired_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS emergency_keys_active ON emergency_keys((1)) WHERE retired_at IS NULL;
+`;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
 // of each watched container (never labels, environment or IDs). The event history is append-only: triggers refuse
@@ -410,6 +422,9 @@ export const migrations = [
   { version: 20, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
   // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it.
   { version: 21, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
+  // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional
+  // number: the next free one; renumbered at merge if another migration lands first.
+  { version: 22, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

@@ -12,6 +12,8 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
 - Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
 - Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
+- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
+- Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels.
 
 ### Changed
 
