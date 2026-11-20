@@ -6,7 +6,7 @@ import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
-import {loadPositions,savePositions} from './saved-layout.js';
+import {loadPositions,savePositions,prunePositions} from './saved-layout.js';
 import {createMovesClient,blocked,why,friendly} from './moves-client.js';
 import {createLaunchClient,stateText} from './launch-client.js';
 import {createSelfHealClient} from '../self-heal/self-heal-client.js';
@@ -229,6 +229,11 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
 
  // Free layout: moved nodes go anywhere, also left of and above the automatic layout, and are kept in this browser. Tidy up arranges everything again.
  useEffect(()=>savePositions(user?.id,positions),[user?.id,positions]);
+ // Nodes that were removed lose their saved place, once their kind has loaded.
+ useEffect(()=>{
+  const loaded=servers.length>0||sites.length>0,ids=list=>list.map(x=>x.id);
+  setPositions(p=>prunePositions(p,{server:loaded?ids(servers):null,site:loaded?ids(sites):null,storage:targets?ids(storage):null,alert:canAlert?ids(alerts.nodes):null}));
+ },[servers,sites,targets,storage,canAlert,alerts.nodes]);
  const snap=()=>({positions,edit});
  function pushHist(){H.current.past.push(snap());if(H.current.past.length>50)H.current.past.shift();H.current.future=[];bump(n=>n+1)}
  function restore(from,to,word){const h=H.current;if(!h[from].length)return;h[to].push(snap());const v=h[from].pop();setPositions(v.positions);setEdit(v.edit);bump(n=>n+1);setNote(word)}

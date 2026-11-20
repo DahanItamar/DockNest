@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {layoutMap,databasesOf,domainsOf,METRICS,snapToGrid,homeOffset,clippedIn} from '../web/map/layout.js';
-import {cleanPositions} from '../web/map/saved-layout.js';
+import {cleanPositions,prunePositions} from '../web/map/saved-layout.js';
 
 const make=(ns,nm)=>{const servers=[],sites=[];for(let i=0;i<ns;i++){servers.push({id:'s'+i,name:'Server '+String(ns-i).padStart(2,'0')});for(let j=0;j<(nm+i)%(nm+1);j++)sites.push({id:`s${i}-w${j}`,serverId:'s'+i,name:'site-'+((j*7)%13)+'.example.com'});}return {servers,sites};};
 const storageFor=(sites,n=3)=>{const storage=Array.from({length:n},(_,i)=>({id:'t'+i,name:'Storage '+i})),backupOf={};sites.forEach((s,i)=>{if(i%4!==3)backupOf[s.id]=storage[i%n].id});return {storage,backupOf};};
@@ -132,4 +132,10 @@ test('saved positions are read back only when they are sound',()=>{
  assert.deepEqual(cleanPositions({'site:a':{x:-480,y:-96},'server:b':{x:32,y:48,extra:1}}),{'site:a':{x:-480,y:-96},'server:b':{x:32,y:48}});
  for(const bad of [null,'x',[],42])assert.deepEqual(cleanPositions(bad),{});
  assert.deepEqual(cleanPositions({'site:a':{x:'1',y:2},'site:b':{x:NaN,y:0},'site:c':{x:1e9,y:0},'nope:d':{x:1,y:1},'site:':{x:1,y:1},'site:e':null}),{});
+});
+test('positions of removed nodes are dropped, kinds not loaded yet are kept',()=>{
+ const p={'server:a':{x:0,y:0},'server:gone':{x:1,y:1},'site:s':{x:2,y:2},'storage:t':{x:3,y:3},'alert:c':{x:4,y:4},'docknest:root':{x:5,y:5}};
+ assert.deepEqual(Object.keys(prunePositions(p,{server:['a'],site:[],storage:null,alert:null})),['server:a','storage:t','alert:c','docknest:root']);
+ assert.equal(prunePositions(p,{server:['a','gone'],site:['s'],storage:['t'],alert:['c']}),p,'nothing removed: the same object, so nothing re-renders');
+ assert.equal(prunePositions(p,{server:null,site:null,storage:null,alert:null}),p,'nothing loaded yet: everything is kept');
 });

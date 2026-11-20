@@ -126,7 +126,6 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    const p=pos[k];if(!p)continue;
    const dx=p.x-n.x,dy=p.y-n.y,ports=new Set([n.in,n.out,n.alertOut].filter(Boolean));
    n.x+=dx;n.y+=dy;n.block={...n.block,x:n.block.x+dx,y:n.block.y+dy};for(const q of ports){q.x+=dx;q.y+=dy}
-   if(n.block2)n.block2={...n.block2,x:n.block2.x+dx,y:n.block2.y+dy};
   }
   const gen=(a,b)=>{const x1=a.x,y1=a.y,x2=b.x-14,y2=b.y;if(y1===y2&&x2>x1)return [[x1,y1],[x2,y2]];if(x2>x1+24){const mx=Math.round((x1+x2)/2);return [[x1,y1],[mx,y1],[mx,y2],[x2,y2]]}const lo=Math.max(x1,x2)+24,my=Math.round((y1+y2)/2);return [[x1,y1],[x1+20,y1],[x1+20,my],[x2-20,my],[x2-20,y2],[x2,y2]]};
   const sv=Object.fromEntries(out.servers.map(n=>[n.id,n])),st=Object.fromEntries(out.storage.map(n=>[n.id,n])),al=Object.fromEntries(out.alerts.map(n=>[n.id,n]));

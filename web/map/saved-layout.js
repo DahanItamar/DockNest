@@ -14,3 +14,10 @@ export function loadPositions(userId){
 export function savePositions(userId,positions){
  try{if(Object.keys(positions).length)localStorage.setItem(keyOf(userId),JSON.stringify(positions));else localStorage.removeItem(keyOf(userId))}catch{}
 }
+// Drops positions of nodes that no longer exist. known: {server, site, storage, alert} as id lists, or null while that kind is not
+// loaded yet (its positions are kept until it is). Returns the same object when nothing is dropped.
+export function prunePositions(positions,known){
+ const ids=Object.fromEntries(Object.entries(known).map(([kind,list])=>[kind,list&&new Set(list)]));
+ const keep=Object.entries(positions).filter(([key])=>{const at=key.indexOf(':'),set=ids[key.slice(0,at)];return !set||set.has(key.slice(at+1))});
+ return keep.length===Object.keys(positions).length?positions:Object.fromEntries(keep);
+}
