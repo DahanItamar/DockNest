@@ -2,7 +2,7 @@
 
 Each `config.services` entry names a selected container, `engine` (`auto`, `generic`, `postgres`, `mysql`, `mariadb`, `redis`), optional exact `version`, local `database` and `user`, and `dependsOn` selected services. Empty contracts use native detection automatically; adding a standard supported service needs no manually maintained engine list. Versions come from native binaries, not image tags. Database services must be running for planning; previously stopped databases require an offline adapter and are never started automatically for capture. Known unsupported stateful images cannot silently pass as generic applications.
 
-All application writers stop before databases. Explicit dependencies add ordering; cycles and dependencies outside the site block preflight. Restart reverses this order, waiting for container health and a local native `SELECT 1` or Redis `PING` before starting database dependants. Independent peers start together before their health barrier. Originally stopped generic containers remain stopped.
+All application writers stop before databases. Explicit dependencies add ordering; cycles and dependencies outside the app block preflight. Restart reverses this order, waiting for container health and a local native `SELECT 1` or Redis `PING` before starting database dependants. Independent peers start together before their health barrier. Originally stopped generic containers remain stopped.
 
 PostgreSQL requires the running server's `SHOW data_directory` path inside a captured writable mount, local socket access as the `postgres` operating-system user and a primary outside recovery. Environment `PGDATA` alone does not identify the active cluster. After stop, the original image runs `pg_controldata` against that directory with read-only mounts and no network. Only `Database cluster state: shut down` passes. Standbys and unusual authentication/tool layouts need reviewed adapters. See [PostgreSQL pg_controldata](https://www.postgresql.org/docs/16/app-pgcontroldata.html).
 
@@ -12,6 +12,6 @@ Redis 7.4 uses a native standalone-primary contract, not a disposable-cache assu
 
 Generic writers require the operator's explicit clean-shutdown confirmation and zero exit without OOM. This is declared application consistency, not engine-validated database consistency. External writers, tablespaces, plugins, credentials and configuration dependencies still need inventory and inclusion. A supported engine name does not certify every version or deployment; consult the tested support matrix before beta use.
 
-The editor preserves saved service contracts when editing other settings. Advanced contracts can be supplied through the existing authenticated site API; automatic discovery supplies native defaults. Do not add passwords to service contracts.
+The editor preserves saved service contracts when editing other settings. Advanced contracts can be supplied through the existing authenticated app API; automatic discovery supplies native defaults. Do not add passwords to service contracts.
 
 MySQL/MariaDB clients use their normal local socket configuration. When the container sets `MYSQL_UNIX_PORT`, DockNest explicitly uses that absolute local socket path, including when an image's client option file specifies a different default. Unsupported socket paths fail preflight; credentials remain inside the container.

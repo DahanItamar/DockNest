@@ -1,6 +1,8 @@
-# Site setup
+# App setup
 
-Choose **Add site**, select the source server, and search by domain, project or container. Discovery includes stopped Docker services and static nginx websites with an `index.html` document root. Docker project labels suggest membership; review all services and shared data before saving.
+Choose **Add app**, select the source server, and search by domain, project or container. Discovery includes stopped Docker services and static nginx websites with an `index.html` document root. Docker project labels suggest membership; review all services and shared data before saving.
+
+**Containers that are already backed up.** Discovery hides containers that another app on the same server already backs up, so the same container is not captured twice. When only part of a Compose project is covered, the project is still listed with just its free services, and a note says that the other services belong to an existing app. When every discovered container is already covered, the dialog says so instead of listing anything. If a request would still back up a container that belongs to another app (for example through the API or a stale dialog), the server refuses it with a message that names that app. To change which app owns a container, edit or remove the existing app first.
 
 ## Docker websites
 
@@ -12,15 +14,32 @@ Temporary RAM folders (`tmpfs`) are listed in the wizard for information. Docker
 
 Connect **Storage** and use **Check readiness**.
 
-**Maintenance page (optional).** While a Docker site's containers are stopped for a backup, visitors can see a friendly "back in a minute" page instead of an error. When you add a site, **Show a maintenance page during backups** is ticked. For an existing site, run **Check readiness** and choose **Set up maintenance page** next to the maintenance check (administrators only). DockNest then:
+**Maintenance page (optional).** While a Docker app's containers are stopped for a backup, visitors can see a friendly "back in a minute" page instead of an error. When you add an app, **Show a maintenance page during backups** is ticked. For an existing app, run **Check readiness** and choose **Set up maintenance page** next to the maintenance check (administrators only). DockNest then:
 
 1. copies the page from **Maintenance** to the server,
-2. writes its own file `/etc/nginx/docknest/<site id>.conf` and adds one `include` line after `server_name` in each nginx server block that serves the site's domain (blocks that only redirect are left alone),
+2. writes its own file `/etc/nginx/docknest/<site id>.conf` and adds one `include` line after `server_name` in each nginx server block that serves the app's domain (blocks that only redirect are left alone),
 3. runs `nginx -t` and reloads nginx,
-4. switches the page on, checks that your domain answers with the maintenance page, switches it off, and checks that the site answers normally,
-5. only then marks the site ready.
+4. switches the page on, checks that your domain answers with the maintenance page, switches it off, and checks that the app answers normally,
+5. only then marks the app ready.
 
-If any step fails, DockNest puts every file back and reloads nginx. The site is still added and its backups still run without the page. Automatic setup needs nginx running on the server itself. For Caddy, Traefik, Nginx Proxy Manager or nginx inside a container, integrate the page by hand; without it, backups still work. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
+If any step fails, DockNest puts every file back and reloads nginx. The app is still added and its backups still run without the page. Automatic setup needs nginx running on the server itself. For Caddy, Traefik, Nginx Proxy Manager or nginx inside a container, integrate the page by hand; without it, backups still work. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
+
+## Coverage
+
+Coverage shows, per server, every container and volume and whether an app backs it up.
+
+1. Open **Apps & schedules** and the **Coverage** panel, then pick a server. DockNest scans it when you open the
+   panel; **Scan again** checks it again. Nothing runs in the background.
+2. Each item is **Backed up** (with its app), **First backup pending** (it is in an app whose latest verified backup
+   does not hold it yet), **Not backed up**, or **Skipped**. A volume follows the app whose container mounts it.
+   DockNest's own restore copies, restore test copies and move test copies are not listed.
+3. For something not backed up, **Add app** opens the add flow with it already selected. For something you leave out
+   on purpose, **Skip** asks for an optional note (one line, up to 200 characters); **Unskip** brings it back. A server
+   holds up to 1000 skipped items. Skips are kept in the audit log, without the note.
+4. On the **Map**, the **Coverage** toggle adds the counts to each server and the list to the server panel.
+
+If the scan could not read everything (volumes, or a container that disappeared), the panel says so and never shows
+"everything is backed up". The endpoints are in [the design](coverage-and-restore-check.md#a4-coverage-view).
 
 ## Static nginx websites
 
@@ -28,4 +47,4 @@ Select the detected domain to include its website directory and nginx virtual-ho
 
 Encrypted storage, schedules, retention, ZIP downloads and restore jobs work through the existing pipeline. Static public HTTP probes are informational because a CDN can reject the source server while its files remain readable. A failed probe is reported explicitly; file/configuration and storage checks remain required. A static restore extracts into a new private directory and verifies its file digest. It leaves the live document root and nginx unchanged. Review the restored files before an explicit cutover. TLS keys, DNS, external services and dynamic PHP applications are not included in this static adapter.
 
-Linux verification on 2026-10-02 covered real encrypted Docker and native static backup/restore in isolated fixtures. Site-specific operational findings are retained privately rather than in source control. Readiness remains separate from actual recovery validation.
+Linux verification on 2026-10-02 covered real encrypted Docker and native static backup/restore in isolated fixtures. App-specific operational findings are retained privately rather than in source control. Readiness remains separate from actual recovery validation.

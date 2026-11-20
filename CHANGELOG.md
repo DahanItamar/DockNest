@@ -6,12 +6,21 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
+- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
+- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
+- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
 - After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
 - Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels.
 
+### Changed
+
+- Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
+
 ### Fixed
 
-- A backup that stops because a folder changed while the site was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
+- A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 
 ## [2.16.4] - 2026-11-14
 
@@ -365,7 +374,7 @@ See [docs/releases/2026-10-24-v2.7.0.md](docs/releases/2026-10-24-v2.7.0.md).
 - Map: the map takes exactly the height left on the screen, so the whole map and the hint below it are visible without scrolling on any screen size.
 - Map on phones: in "Move … to", a long reason a server cannot be used wraps inside its card instead of running off the screen, and the sheet opens with focus on its title, so Cancel no longer shows a focus ring on open and keeps clear of the iPhone home bar.
 - Update button: a run that stopped before changing anything (for example a failed signature check, low disk space, or jobs still running) no longer uses up one of the 6 updates allowed per day. Before, a few such stops could block the button for the rest of the day. A separate limit of 24 attempts per day still applies. Takes effect after `sudo scripts/install-updater.sh --repair` on the host.
-- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "phaseX needs nginx. Install it, then try again." instead of a longer technical one.
+- Moving a site: every "cannot move here" reason is one short, plain sentence that says what to do, for example "web-box needs nginx. Install it, then try again." instead of a longer technical one.
 
 ### Changed
 

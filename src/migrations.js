@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Coverage view (docs/coverage-and-restore-check.md A4): containers and volumes skipped on purpose, by name (names
+// survive a recreate, IDs do not). Additive only: one new table, so 2.16 code ignores it.
+export const coverageIgnoresSchema = `
+CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
+`;
 // Kit check and emergency kit (docs/emergency-kit.md, "Data"). Additive only: two new tables and their indexes, no rows,
 // so 2.16 code ignores them. kit_checks holds the outcome of each proof that the newest recovery kit opens (a reason code,
 // never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
@@ -401,9 +406,11 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
+  // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
+  { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
   // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional number
   // (planned as 24): versions stay contiguous here and it is renumbered at merge after the other 2.16.5 and 3.0 ones.
-  { version: 19, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
+  { version: 20, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

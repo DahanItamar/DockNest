@@ -14,7 +14,9 @@ from .net import (
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
-    configuration_paths, hardening_report, list_project_files, nginx_sites, web_hints)
+    configuration_paths, discovered_volumes, hardening_report, inspect_each, list_project_files, nginx_sites, user_networks, web_hints)
+from .runspec import (
+    describe_containers)
 from .restore import (
     external_restore_plan, prepare_restore, restore, restore_chain_offline, verify_recovery,
     verify_restore_recovery)
@@ -115,13 +117,13 @@ def main(req):
     elif op=='test':
         emit(result={'helperVersion':VERSION,'docker':docker('version','--format','{{.Server.Version}}').decode().strip(),'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'freeBytes':shutil.disk_usage('/').free,'uid':os.geteuid(),'certificates':certbot_certificates()})
     elif op=='discover':
-        ids=docker('ps','-aq').decode().split()
-        cs=inspect(ids) if ids else []
+        cs,uninspected=inspect_each(docker('ps','-aq').decode().split())
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
         routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts in zip(cs,reports)],'certificates':certbot_certificates()})
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c),'networks':user_networks(c)} for c,facts in zip(cs,reports)],'volumes':discovered_volumes(),'uninspected':uninspected,'certificates':certbot_certificates()})
+    elif op=='describe-containers':describe_containers(req)
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)
     elif op=='capture-stream':capture(req,sys.stdout.buffer)

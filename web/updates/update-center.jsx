@@ -72,7 +72,7 @@ function HostUpdaterCard({up,status,busy,onCheck}){
 function AutoChecksCard({data,busy,checking,onToggle}){
  const on=data.consent?.checkEnabled===true,pending=data.consent?.checkEnabled==null,who=data.consent?.decidedBy?.name;
  return <article className="card uc-card" aria-labelledby="uc-auto-title"><div className="card-body"><div className="uc-card-head"><h2 className="card-title" id="uc-auto-title">Automatic checks</h2><button type="button" role="switch" className="switch" aria-checked={on} aria-labelledby="uc-auto-title" aria-describedby="uc-auto-desc" disabled={busy} onClick={onToggle}></button></div>
-  <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, sites or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
+  <p className="t-body uc-quiet" id="uc-auto-desc">Once a day, DockNest asks GitHub for the list of releases. Nothing about your servers, apps or users is sent.{pending?' Not set up yet.':!on&&who?` Set by ${who}, ${fmt(data.consent.decidedAt,true)}.`:''}</p>
   {checking&&<p className="t-caption" id="uc-checking-note" role="status">DockNest is asking GitHub for the list of releases.</p>}</div>
 </article>;
 }
