@@ -1,5 +1,5 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
-import {IconDots} from '@tabler/icons-react';
+import {IconDots,IconChevronRight} from '@tabler/icons-react';
 import {statusState} from './status-state.js';
 import {CheckCircle2,Loader,Clock,Hourglass,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
 
@@ -33,7 +33,7 @@ export function IconButton({label,icon:Icon,size=20,className='',...rest}){
  return <button type="button" className={('icon-button '+className).trim()} aria-label={label} title={label} {...rest}><Icon size={size} stroke={1.75} aria-hidden="true"/></button>;
 }
 
-// Overflow menu for the secondary actions of a row. items: [{label, icon, onSelect, disabled}]. Arrow keys, Home and End
+// Overflow menu for the secondary actions of a row. items: [{label, name (optional accessible name), icon, onSelect, disabled}]. Arrow keys, Home and End
 // move, Escape and a press outside close it, and focus returns to the trigger. Uncontrolled by default; pass open and
 // onOpenChange when a row opens it from elsewhere. The list opens upward when it would be clipped below (last row of a
 // dialog or table). A press inside the parent row is left to the row, so its click can toggle the menu.
@@ -60,7 +60,20 @@ export function OverflowMenu({label,items,disabled,open:controlled,onOpenChange}
   else if(e.key==='Tab')setOpen(false);
  };
  return <span className="overflow-menu" ref={root} onKeyDown={open?key:undefined}>
-  <button type="button" ref={trigger} className="icon-button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open?id:undefined} disabled={disabled} onClick={()=>setOpen(!open)} onKeyDown={e=>{if(e.key==='ArrowDown'&&!open){e.preventDefault();setOpen(true)}}}><IconDots size={20} stroke={1.75} aria-hidden="true"/></button>
-  {open&&<div className={'overflow-menu-list'+(up?' up':'')} role="menu" id={id} aria-label={label} ref={list}>{items.map(({label:text,icon:Icon,onSelect,disabled:off})=><button type="button" role="menuitem" key={text} disabled={off} onClick={()=>{setOpen(false);trigger.current?.focus();onSelect();}}>{Icon&&<Icon size={18} stroke={1.75} aria-hidden="true"/>}{text}</button>)}</div>}
+  <button type="button" ref={trigger} className="icon-button small" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open?id:undefined} disabled={disabled} onClick={()=>setOpen(!open)} onKeyDown={e=>{if(e.key==='ArrowDown'&&!open){e.preventDefault();setOpen(true)}}}><IconDots size={20} stroke={2} aria-hidden="true"/></button>
+  {open&&<div className={'overflow-menu-list'+(up?' up':'')} role="menu" id={id} aria-label={label} ref={list}>{items.map(({label:text,name,icon:Icon,onSelect,disabled:off})=><button type="button" role="menuitem" key={text} aria-label={name} disabled={off} onClick={()=>{setOpen(false);trigger.current?.focus();onSelect();}}>{Icon&&<Icon size={18} stroke={1.75} aria-hidden="true"/>}{text}</button>)}</div>}
  </span>;
+}
+
+// List row head (design system v2, section 4): the whole head is one button that opens details, with a trailing chevron.
+// Put the status, caption or any other plain content inside as children; actions live beside it, never inside it.
+export function RowOpen({label,onClick,icon:Icon,chip=false,className='',children,...rest}){
+ return <button type="button" className={('row-open '+className).trim()} aria-label={label} onClick={onClick} {...rest}>{Icon&&<span className={chip?'icon-chip':'row-open-icon'}><Icon size={chip?20:18} stroke={1.75} aria-hidden="true"/></span>}<span className="row-open-text">{children}</span><IconChevronRight className="row-open-chevron" size={18} stroke={1.75} aria-hidden="true"/></button>;
+}
+
+// One empty, loading or error state for every list and page: icon, title, one sentence, one primary action.
+// tone: 'empty' (default) | 'error' | 'loading' (the icon becomes the spinner).
+export function EmptyState({icon:Icon,title,children,action,tone='empty',className=''}){
+ const Glyph=tone==='loading'?Loader:Icon;
+ return <div className={('empty-state '+(tone!=='empty'?'is-'+tone+' ':'')+className).trim()} role={tone==='error'?'alert':tone==='loading'?'status':undefined}><span className="empty-state-icon">{Glyph&&<Glyph size={24} stroke={1.75} aria-hidden="true"/>}</span><h3>{title}</h3>{children&&<p>{children}</p>}{action}</div>;
 }

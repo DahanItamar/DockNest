@@ -72,3 +72,34 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 .overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
 .overflow-menu-list button[role=menuitem]:focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
 .overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}
+
+/* List row head (design system v2, section 4): one button opens details. Hover bg-hover, focus ring, trailing chevron. */
+.row-open{display:flex;align-items:center;justify-content:flex-start;gap:var(--dn-space-3);width:100%;min-width:0;height:auto;min-height:var(--dn-control-h);padding:var(--dn-space-2) var(--dn-space-3);border:0;border-radius:var(--dn-radius-md);background:transparent;color:var(--dn-text-primary);text-align:left;white-space:normal}
+.row-open-text{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:var(--dn-space-1)}
+.row-open-icon{flex:none;display:inline-flex;color:var(--dn-brand-text)}
+.row-open-chevron{flex:none;color:var(--dn-text-tertiary)}
+@media(hover:hover){.row-open:hover:not(:disabled){background:var(--dn-bg-hover)}.row-open:hover:not(:disabled) .row-open-chevron{color:var(--dn-text-primary)}}
+.row-open:active:not(:disabled){background:var(--dn-bg-pressed)}
+/* Coloured icon chip from the dashboard: 40px square behind a 20px icon. */
+.icon-chip{flex:none;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:var(--dn-radius-md);background:var(--dn-brand-chip);color:var(--dn-brand-text)}
+/* Text link action: quiet, brand text, icon allowed. Used where a menu would be overkill. */
+button.text-link{height:auto;min-height:var(--dn-control-h-sm);padding:0 var(--dn-space-2);border:0;background:transparent;color:var(--link);font-weight:500;gap:var(--dn-space-1)}
+@media(hover:hover){button.text-link:hover:not(:disabled){background:transparent;text-decoration:underline;text-underline-offset:3px}}
+button.text-link:disabled{background:transparent;border:0;color:var(--dn-text-disabled)}
+@media(max-width:767px){button.text-link{min-height:var(--dn-control-h-touch)}}
+/* Empty, loading and error state: icon in a neutral 40px square, title, one sentence, one action. */
+.empty-state{display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;gap:var(--dn-space-2);padding:var(--dn-space-10) var(--dn-space-6);min-height:240px}
+.empty-state-icon{display:flex;align-items:center;justify-content:center;width:40px;height:40px;margin-bottom:var(--dn-space-1);border-radius:var(--dn-radius-md);background:var(--dn-bg-subtle);border:1px solid var(--dn-border-subtle);color:var(--dn-text-secondary)}
+.empty-state.is-error .empty-state-icon{color:var(--dn-danger-text)}
+.empty-state.is-loading .empty-state-icon svg{animation:dn-spin 1s linear infinite}
+.empty-state h3{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:600;color:var(--heading)}
+.empty-state p{max-width:50ch;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-secondary)}
+.empty-state>button,.empty-state>.button,.empty-state>a{margin-top:var(--dn-space-2)}
+@media(prefers-reduced-motion:reduce){.empty-state.is-loading .empty-state-icon svg{animation:none}}
+/* Card head: a coloured icon chip, the title and optionally one action. */
+.card-head{display:flex;align-items:center;gap:var(--dn-space-3);min-width:0}
+.card-head .card-title{margin:0;min-width:0;overflow-wrap:anywhere}
+.card-title>.row-open{font:inherit;font-weight:600;color:inherit;margin:calc(-1*var(--dn-space-2));width:calc(100% + var(--dn-space-4));min-height:var(--dn-control-h)}
+.row-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.site-card-actions .overflow-menu-list{left:0;right:auto}
+.icon.small,.icon-button.small{padding:0}

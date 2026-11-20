@@ -23,8 +23,11 @@ await mkdir('data/screenshots/dashboard',{recursive:true});
 await page.screenshot({path:'data/screenshots/dashboard/dashboard-desktop.png',fullPage:true,animations:'disabled'});
 await page.locator('.dash-site summary').first().click();
 assert.equal(await page.locator('.dash-site[open] .dash-backup').count(),2);
-assert.equal(await page.getByRole('button',{name:'Download full ZIP fleur-latest'}).count(),1);
-assert.equal(await page.getByRole('link',{name:'Download encrypted backup fleur-latest'}).getAttribute('href'),'/api/backups/fleur-latest/download');
+await page.getByRole('button',{name:'More actions for backup fleur-latest'}).click();
+assert.equal(await page.getByRole('menuitem',{name:'Download full ZIP fleur-latest'}).count(),1);
+assert.equal(await page.getByRole('menuitem',{name:'Download encrypted backup fleur-latest'}).count(),1);
+const [download]=await Promise.all([page.waitForRequest(r=>new URL(r.url()).pathname==='/api/backups/fleur-latest/download'),page.getByRole('menuitem',{name:'Download encrypted backup fleur-latest'}).click()]);
+assert.equal(new URL(download.url()).pathname,'/api/backups/fleur-latest/download');
 // Legacy verified packages (API legacy shape and bare verified flag) agree across counter, rows and details.
 assert.equal(await page.locator('.activity-feature b').first().textContent(),String(state.backups.length),'Integrity-checked captures count every legacy verified package');
 // 2.9.0: each recovery point shows its restore-test status (no restore-test API in this fixture, so Not tested).
@@ -39,7 +42,7 @@ assert.match(await page.getByRole('dialog').textContent(),/restore/i);
 await page.getByRole('button',{name:'Close dialog'}).click();
 let pinRequest;
 await page.route('**/api/backups/fleur-latest/pin',r=>{pinRequest=r.request().postDataJSON();return r.fulfill({json:{ok:true}});});
-await page.getByRole('button',{name:'Pin backup fleur-latest',exact:true}).click();
+await page.getByRole('button',{name:'More actions for backup fleur-latest'}).click();await page.getByRole('menuitem',{name:'Pin backup fleur-latest',exact:true}).click();
 await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();
 assert.deepEqual(pinRequest,{pinned:true});
 await page.getByRole('button',{name:'Dismiss message'}).click();

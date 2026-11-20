@@ -215,7 +215,7 @@ const switchOf=d=>d.getByRole('switch',{name:'Auto tests'});
 
 async function dialogFlow(scheme){
  const {context,page,card}=await settingsDialog({scheme});
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d=dialog(page);
  await d.getByRole('heading',{name:'Restore tests'}).waitFor();
  await d.getByRole('switch').waitFor();
@@ -316,7 +316,7 @@ async function dialogFlow(scheme){
  const saved=mock.saves.at(-1).body;
  assert.deepEqual({...saved,probe:saved.probe},{enabled:true,cadence:'monthly',serverId:'ash',allowLiveServer:true,allowInternet:false,timeLimitMinutes:45,memoryMb:1536,cpus:1.5,probe:{path:'/health'}});
  // Reopen: saved values come back; non-preset values open as Custom
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d2=dialog(page);
  await d2.getByRole('switch').waitFor();
  assert.equal(await switchOf(d2).getAttribute('aria-checked'),'true');
@@ -329,7 +329,7 @@ async function dialogFlow(scheme){
 
 async function dialogErrors(){
  const {context,page,card}=await settingsDialog();
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch').waitFor();
  await d.getByLabel('Test server').selectOption({label:'Home NAS'});
  mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each app.'};
@@ -354,7 +354,7 @@ async function dialogErrors(){
 async function internetAndReverify(){
  const {context,page,card}=await settingsDialog();
  mock.needReverify=true;
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();
  await d.getByLabel('Test server').selectOption({label:'Home NAS'});
  await d.locator('details.rt-adv summary').click();
@@ -380,7 +380,7 @@ async function internetAndReverify(){
  assert.equal(mock.saves.at(-1).body.allowInternet,true);assert.equal(mock.reauths,1);
  // Live server needs the same check
  mock.reverified=false;
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d2=dialog(page);await d2.getByRole('switch',{name:'Auto tests'}).waitFor();
  await d2.getByLabel('Test server').selectOption({label:'Ashburn-1 (live server)'});
  await d2.getByLabel('Allow live server').check();
@@ -393,7 +393,7 @@ async function internetAndReverify(){
 
 async function operator(){
  const {context,page,card}=await settingsDialog({role:'operator'});
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch').waitFor();
  assert.equal(await d.getByRole('button',{name:'Save'}).count(),0,'operators cannot save settings');
  assert.equal(await switchOf(d).isDisabled(),true);
@@ -406,7 +406,7 @@ async function operator(){
  freshMock();
  const second=await open({role:'operator',page:'Apps & Schedules'});
  const p=second.page;
- await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();
+ await p.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d3=dialog(p);await d3.getByRole('switch').waitFor();
  assert.equal(await d3.getByRole('button',{name:'Run test'}).isDisabled(),false);
  mock.runError={code:'TOO_MANY_TESTS',message:'You can run 6 tests a day for each app.'};
@@ -423,7 +423,7 @@ async function operator(){
 async function phone(scheme){
  const {context,page,card}=await settingsDialog({width:390,height:844,scheme});
  await noOverflow(page,'sites 390');
- await card.getByRole('button',{name:'Restore tests'}).click();
+ await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d=dialog(page);await d.getByRole('switch').waitFor();
  await d.getByLabel('Test server').selectOption({label:'Ashburn-1 (live server)'});
  await d.locator('details.rt-adv summary').click();
@@ -521,7 +521,7 @@ async function realApi(){
  db.prepare("INSERT INTO update_preferences(id,check_enabled,decided_by,decided_at) VALUES(1,0,(SELECT id FROM users LIMIT 1),?)").run(now());
  const signedIn=async token=>{const context=await browser.newContext({viewport:{width:1440,height:900}});await context.addCookies([{name:'dbm_session',value:token,url:base}]);const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();return {context,page};};
  const goto=async(page,name)=>page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name,exact:true}).click();
- const openDialog=async page=>{await goto(page,'Apps & Schedules');await page.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:'Restore tests'}).click();const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();return d;};
+ const openDialog=async page=>{await goto(page,'Apps & Schedules');await page.locator('.site-card',{hasText:'cinderbean.com'}).getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();const d=dialog(page);await d.getByRole('switch',{name:'Auto tests'}).waitFor();return d;};
  try{
   // Settings go through the real PUT: off on a fresh install, then on with a spare server.
   const {context,page}=await signedIn(fresh);

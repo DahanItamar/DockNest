@@ -72,7 +72,7 @@ try{
  await page.getByText('Recovery passphrases do not match.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('navigation').getByRole('button',{name:'Storage',exact:true}).click();
- await page.getByRole('button',{name:'Browse backup folders',exact:true}).click();
+ await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Browse backup folders'}).click();
  await page.getByText('docknest-recovery',{exact:true}).waitFor();
  await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit',exact:true}).waitFor();
  assert.ok((await page.locator('.backup-tree code').allTextContents()).some(path=>/^BACKUP\/docknest-recovery\/docknest_.*\.dkit$/.test(path)));

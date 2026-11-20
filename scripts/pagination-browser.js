@@ -117,9 +117,9 @@ try{
  const historyPager=page.getByRole('group',{name:'Recovery points for Website 0 pagination',exact:true});
  assert.equal(await page.locator('.backup-group[open] .recovery-row').count(),3);
  await historyPager.getByRole('button',{name:'Recovery points for Website 0 next page',exact:true}).click();
- assert.equal(await page.getByRole('button',{name:'Download full ZIP backup-3',exact:true}).count(),1);
+ await page.getByRole('button',{name:'More actions for backup backup-3'}).click();assert.equal(await page.getByRole('menuitem',{name:'Download full ZIP backup-3',exact:true}).count(),1);await page.keyboard.press('Escape');
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
- await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
+ await page.getByRole('button',{name:'More actions for backup backup-3'}).click();await page.getByRole('menuitem',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
  const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Apps & Schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
  for(const theme of ['light']){

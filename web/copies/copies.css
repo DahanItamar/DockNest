@@ -49,6 +49,6 @@
 .sr-destinations .card-title{margin:0 0 8px}
 .storage-card-top{display:flex;align-items:center;gap:12px;min-width:0}
 .storage-card-top .storage-card-head{flex:1;min-width:0}
-.storage-card-top .cp-remove{margin-block:calc((var(--lh-card) - var(--control-height)) / 2);margin-right:-8px}
+.storage-card-top .overflow-menu{margin-right:-8px}
 /* The heading above names the table; the caption stays for screen readers only. */
 .rebrand-page .sr-destinations .data-table caption{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

@@ -10,10 +10,6 @@
 .rebrand-page .field{font-size:var(--fs-body);line-height:1.5}
 .rebrand-page .search input:not([type=checkbox]):not([type=radio]){min-height:24px}
 .rebrand-page .field small{font-size:var(--fs-caption);line-height:1.5}
-.rebrand-page .empty{padding:40px 24px;min-height:240px;justify-content:center}
-.rebrand-page .empty h3{font-size:var(--fs-section);font-weight:600}
-.rebrand-page .empty p{font-size:var(--fs-body);line-height:1.6}
-.rebrand-page .empty-icon .brand-icon{width:28px;height:28px}
 .rebrand-page .overview-grid,.rebrand-page .access-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:stretch}
 .rebrand-page .overview-grid>.panel,.rebrand-page .access-grid>.panel{align-self:stretch;margin-bottom:0}
 .rebrand-page .access-grid{margin-bottom:24px}
@@ -58,12 +54,11 @@
 .recovery-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(100px,.8fr) minmax(100px,.7fr) auto;align-items:center;gap:24px;padding:20px 0;border-bottom:1px solid var(--border-subtle);font-size:var(--fs-body)}
 .recovery-row:last-child{border-bottom:0}
 .recovery-status{min-width:0}.recovery-status small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.recovery-point{display:flex;align-items:center;gap:12px;min-width:0}
-.recovery-point>div{min-width:0}
+.recovery-point{min-width:0}
 .recovery-point b{font-family:inherit;font-variant-numeric:tabular-nums;font-size:var(--fs-body);font-weight:400;line-height:1.5;display:block}
 .recovery-point code{display:block;color:var(--text-secondary);font-size:var(--fs-caption);margin-top:4px;overflow-wrap:anywhere}
 .recovery-size b{font-weight:500}
-.recovery-actions{display:flex;gap:4px}
+.recovery-actions{display:flex;align-items:center;gap:var(--dn-space-2)}
 .storage-card-content{padding:24px;flex:1;min-width:0}
 .storage-card-content h3{font-size:var(--fs-section);line-height:1.5;font-weight:600;min-height:54px;overflow-wrap:anywhere;display:flex;align-items:flex-start;gap:12px}
 .storage-card-content>p{font-family:ui-monospace,Consolas,monospace;font-size:var(--fs-caption);line-height:1.6;overflow-wrap:anywhere;margin:16px 0}
@@ -120,8 +115,7 @@
  .recovery-point{grid-column:1/-1}
  .recovery-status{grid-column:1;grid-row:2}
  .recovery-size{grid-column:2;grid-row:2}
- .recovery-actions{grid-column:1/-1;grid-row:3;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));width:100%;justify-self:stretch}
- .recovery-actions .recovery-action{width:100%;min-width:0}
+ .recovery-actions{grid-column:1/-1;grid-row:3;justify-content:flex-end}
  .rebrand-page .table-wrap table{min-width:640px}
  .rebrand-page th,.rebrand-page td{padding:16px}
  .storage-card-actions{padding:16px;grid-template-columns:1fr}
@@ -142,7 +136,7 @@
  .auth-header{padding:20px}
  .auth-card{padding:28px 24px}
 }
-@media(prefers-reduced-motion:reduce){.recovery-action,.backup-group>summary>svg{transition:none}}
+@media(prefers-reduced-motion:reduce){.backup-group>summary>svg{transition:none}}
 
 
 /* One clear paging control per collection; natural page flow, horizontal table scrolling only. */
