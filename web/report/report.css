@@ -1,7 +1,7 @@
 /* Problem reports: the review dialog and report buttons. Tokens only; type scale only; 8 px geometry. */
 .rp-button{white-space:nowrap}
-:root dialog.rp-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 32px));max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 104px);margin:72px auto auto;padding:0;border:0;border-radius:12px;background:var(--surface);color:var(--text-primary);box-shadow:0 24px 64px var(--shadow);overflow:hidden;font-size:var(--fs-body);line-height:var(--lh-body)}
-.rp-dialog[open]{display:flex;flex-direction:column;animation:dn-enter var(--dur-slow) var(--ease) backwards}
+:root dialog.rp-dialog{box-sizing:border-box;width:min(760px,calc(100vw - 32px));max-width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 104px);margin:72px auto auto;padding:0;border:0;border-radius:12px;background:var(--surface);color:var(--text-primary);box-shadow:var(--dn-shadow-3);overflow:hidden;font-size:var(--fs-body);line-height:var(--lh-body)}
+.rp-dialog[open]{display:flex;flex-direction:column}
 .rp-dialog::backdrop{background:var(--backdrop)}
 .rp-grabber{display:none}
 .rp-main{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain}
@@ -47,7 +47,7 @@
 .rp-dialog .rp-foot>:is(button,a){box-sizing:border-box;flex:0 0 auto;min-width:176px;height:var(--control-height);min-height:var(--control-height);margin:0;padding:0 16px;gap:8px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;border-radius:var(--radius)}
 .rp-dialog a.rp-open{border:1px solid var(--button-primary);background:var(--button-primary);color:var(--primary-foreground);text-decoration:none}
 .rp-dialog a.rp-open:hover{background:var(--button-primary-hover);border-color:var(--button-primary-hover)}
-.rp-dialog a.rp-open:focus-visible,.rp-check input:focus-visible,.rp-excerpt textarea:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.rp-dialog a.rp-open:focus-visible,.rp-check input:focus-visible,.rp-excerpt textarea:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 /* Report buttons inside red failure panels sit next to the primary next action. */
 .rp-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .rp-actions>:is(button,a){min-width:120px;white-space:nowrap}

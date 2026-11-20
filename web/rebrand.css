@@ -56,7 +56,7 @@
 .backups-page main#content{padding-bottom:12px}
 .backup-group>summary::-webkit-details-marker{display:none}
 .backup-group>summary:hover,.backup-group[open]>summary{background:var(--surface-muted)}
-.backup-group>summary>svg{color:var(--text-secondary);transition:transform 160ms ease-out}
+.backup-group>summary>svg{color:var(--text-secondary);transition:transform var(--dn-dur-base) var(--dn-ease-standard)}
 .backup-group[open]>summary>svg{transform:rotate(180deg)}
 .backup-site-name{display:flex;gap:16px;align-items:center;min-width:0}
 .backup-site-name b{font-size:var(--fs-section);font-weight:600;overflow-wrap:anywhere}

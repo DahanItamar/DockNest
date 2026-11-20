@@ -1,5 +1,5 @@
 /* DockNest 2.3.0 system primitives. Tokens come from tokens.css; no hex values here. Loaded after style.css and rebrand.css. */
-@keyframes dn-enter{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
 @keyframes dn-spin{to{transform:rotate(360deg)}}
 
 /* Type roles */
@@ -21,8 +21,6 @@ main#content{padding-inline:var(--edge);max-width:var(--content-max);margin-inli
 .status-running .status-icon{animation:dn-spin 1s linear infinite}
 
 /* Buttons: one height, one type size, label never wraps */
-button,.button{min-height:var(--control-height);height:var(--control-height);padding-block:0;font-size:var(--fs-button);line-height:var(--lh-button);font-weight:500;white-space:nowrap;transition:background-color var(--dur-base) var(--ease),border-color var(--dur-base) var(--ease),color var(--dur-base) var(--ease)}
-button:active{transform:none}
 button.danger,.button.danger,.destructive{color:var(--primary-foreground);background:var(--error);border-color:var(--error)}
 :root[data-theme=dark] button.danger,:root[data-theme=dark] .destructive{color:var(--surface);}
 td button,td .button{min-height:var(--control-height);height:var(--control-height);padding:0 16px;font-size:var(--fs-button)}
@@ -38,7 +36,7 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 /* Switch timing follows the motion tokens (geometry lives in style.css) */
 
 /* Alert panel */
-.alert-panel{display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);font-size:var(--fs-body);line-height:var(--lh-body);animation:dn-enter var(--dur-slow) var(--ease) both}
+.alert-panel{display:flex;align-items:flex-start;gap:12px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);font-size:var(--fs-body);line-height:var(--lh-body)}
 .alert-panel-icon{flex:none;margin-top:0}
 .alert-panel-body{display:flex;flex-direction:column;gap:4px;min-width:0}
 .alert-panel-body b{font-weight:600}
@@ -48,7 +46,7 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 .alert-info{background:var(--info-surface);border-color:var(--alert-info-border);color:var(--alert-info-text)}.alert-info .alert-panel-icon{color:var(--info)}
 
 /* Card with optional pinned footer */
-.card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);animation:dn-enter var(--dur-slow) var(--ease) both}
+.card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius)}
 .card-body{flex:1 1 auto;padding:24px;min-width:0}
 .card-footer{flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:var(--card-footer-height);height:var(--card-footer-height);padding:0 24px;border-top:1px solid var(--border-subtle)}
 .card-title{font-size:var(--fs-card);line-height:var(--lh-card);font-weight:600;color:var(--heading)}
@@ -70,18 +68,18 @@ td button,td .button{min-height:var(--control-height);height:var(--control-heigh
 @media(max-width:767px){.data-table{min-width:640px}}
 
 /* Enter motion for existing panels */
-.panel{animation:dn-enter var(--dur-slow) var(--ease) both}
+
 
 /* Focus ring for the new primitives */
-.icon-button:focus-visible,.card a:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.icon-button:focus-visible,.card a:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 
-@media(prefers-reduced-motion:reduce){.card,.panel,.alert-panel,.status-running .status-icon{animation:none!important}.icon-button{transition:none}}
+@media(prefers-reduced-motion:reduce){.status-running .status-icon{animation:none}.icon-button{transition:none}}
 
 /* Overflow menu: one icon button and a short list of actions. The list opens upward (.up) where it would be clipped. */
 .overflow-menu{position:relative;display:inline-flex}
-.overflow-menu-list{position:absolute;z-index:20;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:0 8px 24px var(--shadow)}
+.overflow-menu-list{position:absolute;z-index:20;top:100%;right:0;min-width:168px;margin-top:4px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);box-shadow:var(--dn-shadow-2)}
 .overflow-menu-list.up{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}
 .overflow-menu-list button[role=menuitem]{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%;height:var(--control-height);padding:0 12px;border:0;background:var(--transparent);color:var(--text-primary);font-weight:400;text-align:left;white-space:nowrap}
 .overflow-menu-list button[role=menuitem]:hover,.overflow-menu-list button[role=menuitem]:focus-visible{background:var(--surface-hover);color:var(--heading)}
-.overflow-menu-list button[role=menuitem]:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+.overflow-menu-list button[role=menuitem]:focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
 .overflow-menu-list button[role=menuitem]:disabled{color:var(--text-muted);background:var(--transparent)}
