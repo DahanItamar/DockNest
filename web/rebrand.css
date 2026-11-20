@@ -69,7 +69,7 @@
 .storage-card-content>p{font-family:ui-monospace,Consolas,monospace;font-size:var(--fs-caption);line-height:1.6;overflow-wrap:anywhere;margin:16px 0}
 .storage-card-content>small{font-size:var(--fs-caption);line-height:1.6;overflow-wrap:anywhere}
 .storage-card-actions{padding:16px 24px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;border-top:1px solid var(--border-subtle);margin-top:auto;flex-wrap:wrap}
-.storage-card-actions button{flex:1;justify-content:center;gap:8px;white-space:normal;min-height:56px}
+.storage-card-actions button{flex:1;justify-content:center;gap:8px}
 .storage-intro{display:flex;justify-content:space-between;align-items:center;gap:24px}
 .storage-intro>div{max-width:80ch}
 .storage-intro .form-actions{border:0;margin:0;padding:0;flex-shrink:0}
