@@ -13,3 +13,16 @@ export function containerGroups(containers){
  }
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }
+// Plain containers that share a user-defined network (discovery's `networks`), offered as one suggested app. Containers
+// joined through any chain of shared networks form one suggestion; only a pre-selection, the user can untick any of them.
+export function suggestedGroups(containers){
+ const plain=containerGroups(containers).find(group=>group.kind==='standalone')?.containers||[];
+ let groups=[];
+ for(const container of plain){
+  const networks=container.networks||[];if(!networks.length)continue;
+  const joined=groups.filter(group=>networks.some(name=>group.networks.has(name)));
+  const merged={networks:new Set([...networks,...joined.flatMap(group=>[...group.networks])]),containers:[...joined.flatMap(group=>group.containers),containerName(container)]};
+  groups=[...groups.filter(group=>!joined.includes(group)),merged];
+ }
+ return groups.filter(group=>group.containers.length>1).map(group=>({networks:[...group.networks].sort(),containers:group.containers.sort()})).sort((a,b)=>a.networks[0].localeCompare(b.networks[0]));
+}

@@ -26,6 +26,23 @@ Maintenance HTML distribution over SSH is implemented; proxy maintenance uses an
 
 Retention removes only ordinary verified backups beyond the configured count after a new successful capture, and respects active download and restore records. Pinned backups are additional to the count. Interrupted jobs enter recovery_required and prevent further work on their server. Resolve source health and watchdog state before changing job status. A single expiring SQLite worker lease (not a lock file) prevents concurrent workers; after an unclean death the next worker takes it over once it is 60 seconds stale and marks interrupted jobs recovery_required. Central restart does not silently assume remote recovery succeeded.
 
+## Run definition (containers started without Compose, 2.16.5)
+
+A backup of a site whose containers were not started by Docker Compose also holds `run-definition/compose.yaml` and
+one `run-definition/<container>.env` per container that has environment variables. The Compose file recreates each
+container as `docker inspect` showed it (remote/helper/runspec.py): the image is its snapshot image from `images.tar`
+(writable layer kept) with the label `docknest.original-image=<original reference>`, and comment lines at the top name
+any setting it cannot recreate. Every key and value is a JSON-quoted string (valid YAML, no YAML library). The env
+files hold the environment values, single-quoted; a value with a quote or a line break is left out by name (the
+snapshot image keeps it). They contain secrets like the manifest, and live only inside the encrypted package.
+
+The files are optional package content, recorded in `manifest.runDefinition` (path to `bytes` and `sha256`) rather than
+in `manifest.artifacts`. Restore verifies them when the record is present and refuses a package whose
+`run-definition/` folder holds a file the record does not list. Packages without the record, and every older package,
+restore exactly as before. Older releases restore these packages (they ignore the folder) but cannot ZIP-export them:
+their export refuses the unknown entries. ZIP export keeps the files in `recovery-originals/`. Values are written as
+JSON strings with `$` doubled, so Compose never reads part of a value (a path, a log option) as a variable.
+
 ## Backup format v2 (incremental backups, 2.12)
 
 An app with incremental backups turned on makes format 2 packages. The envelope is unchanged: the same DBM1 header,

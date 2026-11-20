@@ -24,6 +24,23 @@ Connect **Storage** and use **Check readiness**.
 
 If any step fails, DockNest puts every file back and reloads nginx. The app is still added and its backups still run without the page. Automatic setup needs nginx running on the server itself. For Caddy, Traefik, Nginx Proxy Manager or nginx inside a container, integrate the page by hand; without it, backups still work. Readiness reads configuration, health, proxy markers and storage metadata; it does not stop services or prove a real backup/restore. Docker capture still verifies clean stopping, maintenance activation, recovery and encrypted transfer. Unsupported devices, external volumes, shared writers, escaping links and privileged configurations remain blocked. Saved Compose files need review before a separate production cutover.
 
+## Coverage
+
+Coverage shows, per server, every container and volume and whether an app backs it up.
+
+1. Open **Apps & schedules** and the **Coverage** panel, then pick a server. DockNest scans it when you open the
+   panel; **Scan again** checks it again. Nothing runs in the background.
+2. Each item is **Backed up** (with its app), **First backup pending** (it is in an app whose latest verified backup
+   does not hold it yet), **Not backed up**, or **Skipped**. A volume follows the app whose container mounts it.
+   DockNest's own restore copies, restore test copies and move test copies are not listed.
+3. For something not backed up, **Add app** opens the add flow with it already selected. For something you leave out
+   on purpose, **Skip** asks for an optional note (one line, up to 200 characters); **Unskip** brings it back. A server
+   holds up to 1000 skipped items. Skips are kept in the audit log, without the note.
+4. On the **Map**, the **Coverage** toggle adds the counts to each server and the list to the server panel.
+
+If the scan could not read everything (volumes, or a container that disappeared), the panel says so and never shows
+"everything is backed up". The endpoints are in [the design](coverage-and-restore-check.md#a4-coverage-view).
+
 ## Static nginx websites
 
 Select the detected domain to include its website directory and nginx virtual-host file. Confirm that deployments will not change the files during capture. nginx keeps serving visitors; no containers or daemons are stopped and no maintenance proxy is needed. Capture checks file contents, paths, modes and ownership against the source and its copied archive. Links, special files and roots outside detected static sites are rejected.

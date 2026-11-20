@@ -83,7 +83,8 @@ def export_zip(payload,output):
 #          (a ZIP can only write one entry at a time). Hard links cannot be re-read from a stream: they are written as
 #          small .docknest-link.txt notes; the exact bytes remain in recovery-originals/.
 # snapshot-*.snar: GNU tar snapshot files of a format v2 package; kept in recovery-originals, never browsed.
-OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar|snapshot-[0-9a-f]{64}\.snar)')
+# run-definition/*: the Compose file and env files of containers started without Compose (2.16.5), kept in recovery-originals.
+OUTER=re.compile(r'(?:manifest.json|images.tar|static-files.tar|restore-guide.md|mount-\d+-\d+\.tar|config-\d+\.tar|snapshot-[0-9a-f]{64}\.snar|run-definition/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:yaml|env))')
 SNAPSHOT=re.compile(r'snapshot-[0-9a-f]{64}\.snar')
 MOUNT=re.compile(r'mount-\d+-\d+\.tar')
 MAX_MANIFEST=16*1024*1024
