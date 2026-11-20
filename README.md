@@ -37,6 +37,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Per-app schedules, retention, and pinned backups.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate that would back up the same container twice.
 - Restore to a separate copy; DockNest does not replace a live app by itself.
+- Apps started with plain `docker run` are backed up too, with a readable Compose file and env files in the encrypted backup that recreate them with the same settings.
 - Restore copies, restore tests and moves keep the original's protections (read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor), or refuse with a clear reason.
 - Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. See [restore tests](docs/restore-tests-guide.md).
 - Restore check: Check readiness also lists what a restore on a new server would miss, such as cron jobs and systemd timers that use the app, Docker networks it does not create itself and its certificates. Commands and values from those files are never shown. See [restore check](docs/restore-check.md).
@@ -52,6 +53,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Storage page with space per app and per destination, and growth over time.
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
+- Backup coverage: on the Apps page and the Map, see which containers and volumes on a server no app backs up, add them as an app, or skip them on purpose with a note. It reads Docker only when you open it. Adding a plain `docker run` container previews the Compose file DockNest keeps for it.
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.

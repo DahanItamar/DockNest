@@ -6,16 +6,20 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 
+- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
+- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
+- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
 - Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
 
 ### Changed
 
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
-- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate.
+- Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
 - A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
 
 ### Fixed
 
+- Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
 - A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
 
 ## [2.16.4] - 2026-11-14

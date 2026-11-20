@@ -38,9 +38,10 @@ function serverRow(name, host) {
   return serverId;
 }
 const oldServer = serverRow('old-srv', '203.0.113.7'), newServer = serverRow('new-srv', '198.51.100.9');
+// Each app has its own container: a move refuses one an app on the new server already backs up (moved apps stay there).
 function siteRow(name) {
   const siteId = randomUUID();
-  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, oldServer, name, JSON.stringify({ containers: ['web'], domains: [name + '.example.com'], healthUrl: 'http://127.0.0.1:8080/health' }), at());
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, oldServer, name, JSON.stringify({ containers: [name + '-web'], domains: [name + '.example.com'], healthUrl: 'http://127.0.0.1:8080/health' }), at());
   return siteId;
 }
 function backupRow(siteId, seconds = 20) {

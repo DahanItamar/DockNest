@@ -91,12 +91,12 @@ before.
   Administrators and operators may answer. The audit trail records the key and the answer, never the note.
 
 Answers are kept in `site_restore_decisions (site_id, finding_key, decision, note, decided_by, decided_at)`, one row per
-site and finding (migration `site-restore-decisions`, 19, compatible). Sites are archived, never deleted, so answers
+site and finding (migration `site-restore-decisions`, 20, compatible). Sites are archived, never deleted, so answers
 stay with the site's history.
 
 ## Upgrade safety
 
-- One new table in its own compatible migration (19); older releases ignore it.
+- One new table in its own compatible migration (20); older releases ignore it.
 - `readiness` gains one field. A helper that does not send it leaves the API answer without `restoreGaps`.
 - A backup's `restore-guide.md` gains a **Put back by hand** section when it holds configuration files outside the
   folders a move may create. Nothing else in a backup or restore changes.
@@ -110,7 +110,7 @@ stay with the site's history.
 - `remote/test_restore_gaps.py`: cron and timer matching, a token on a cron line never appearing in the result or the
   helper's output, links and protected paths, limits, Compose networks, volumes, secrets, configs and env files,
   certificates, and readiness staying the same when the check fails.
-- `tests/restore-decisions.test.js`: the answer routes, the readiness join and migration 19.
+- `tests/restore-decisions.test.js`: the answer routes, the readiness join and migration 20.
 - Linux Docker integration (`scripts/integration-restore-check.js`): a cron.d file and a systemd timer touching the app
   and a user network are found through Check readiness; the cron token is absent from the result, the audit trail and
   the logs.

@@ -339,3 +339,5 @@
 .map-root .cx-stack{flex-direction:column;flex-wrap:nowrap}
 .map-root .cx-stack button{width:100%;min-height:44px;white-space:nowrap}
 @media(prefers-reduced-motion:reduce){.map-root .map-alert .cx-del{transition:none}.map-root .map-undo{animation:none}}
+.map-root .map-toolbar .bc-toggle{margin-right:auto}
+.map-root .map-toolbar .bc-toggle[aria-pressed=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}

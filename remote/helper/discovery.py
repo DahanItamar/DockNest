@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    DEFAULT_CAPABILITIES, inspect, run)
+    DEFAULT_CAPABILITIES, docker, inspect, run)
 from .paths import (
     SITE_PATH)
 # </build:header>
@@ -88,6 +88,29 @@ def web_hints(container,routes):
                 if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
     return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
 
+def inspect_each(ids):
+    """Inspect records of the listed containers and how many could not be read (one removed meanwhile, say): a scan
+    never fails on one container, and the count tells the coverage view the scan is incomplete."""
+    if not ids:return [],0
+    try:return inspect(ids),0
+    except subprocess.CalledProcessError:
+        records=[]
+        for cid in ids:
+            try:records+=inspect([cid])
+            except subprocess.CalledProcessError:pass
+        return records,len(ids)-len(records)
+DOCKER_NETWORKS={'bridge','host','none','default'}
+def user_networks(container):
+    """The user-defined networks a container is on: the hint that plain containers belong to one app."""
+    return sorted(name for name in (container.get('NetworkSettings') or {}).get('Networks') or {} if name not in DOCKER_NETWORKS)
+def volume_labels(text):
+    # `docker volume ls` prints labels as one "key=value,key=value" string; a comma inside a value cannot be told apart.
+    return dict(item.partition('=')[::2] for item in str(text or '').split(',') if item)
+def discovered_volumes():
+    """Every volume on the server: name, driver and labels only (never its contents or mount point). None when they
+    cannot be listed: a scan never fails on them, and None is never read as "no volumes"."""
+    try:return [{'name':v.get('Name'),'driver':v.get('Driver'),'labels':volume_labels(v.get('Labels'))} for v in map(json.loads,filter(str.strip,docker('volume','ls','--format','{{json .}}').decode().splitlines()))]
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError,AttributeError):return None
 def configuration_paths(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     roots=project_roots(container)

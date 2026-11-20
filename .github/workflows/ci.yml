@@ -93,6 +93,7 @@ jobs:
           npm run test:map
           npm run test:hardening
           npm run test:restore-check
+          npm run test:backup-coverage
           npm run test:connections
           npm run test:layout
           npm run test:jobs-sqlite

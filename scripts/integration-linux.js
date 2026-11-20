@@ -195,13 +195,8 @@ try {
   assert.equal(await run('exec',hosts[1],'docker','exec',result.containerId,'python','-c',"from pathlib import Path;import os;assert not Path('/tmp/ephemeral.txt').exists();assert os.stat('/tmp').st_mode&0o7777==0o1777;assert ' /tmp tmpfs ' in Path('/proc/mounts').read_text();print('temporary-empty')"),'temporary-empty');
   record('Declared temporary RAM folders are recreated empty with original permissions, while persistent database data survives');
   // Prepare (verify only), poll until ready, then stream the ZIP; nothing is staged on disk.
-  const {startZipExport,findZipExport,zipExportState,streamZipExport}=await import('../src/backup-export.js');const {createWriteStream}=await import('node:fs');
-  const prepared=startZipExport(backup).item;let zipState=prepared;
-  for(let i=0;i<600&&zipState.status==='preparing';i++){await new Promise(resolve=>setTimeout(resolve,500));zipState=zipExportState(findZipExport(backup.id,prepared.id));}
-  assert.equal(zipState.status,'ready',zipState.error||'ZIP preparation did not finish');
-  const fullZip=join(directory,'full-site.zip'),zipResponse=createWriteStream(fullZip);zipResponse.attachment=()=>zipResponse;zipResponse.set=()=>zipResponse;
-  await streamZipExport(findZipExport(backup.id,prepared.id),backup,zipResponse);
-  await new Promise(resolve=>zipResponse.writableFinished?resolve():zipResponse.once('finish',resolve));
+  const {exportBackupZip}=await import('./integration-zip.js');
+  const fullZip=join(directory,'full-site.zip');await exportBackupZip(backup,fullZip);
   const {execFileSync}=await import('node:child_process');
   execFileSync(process.platform==='win32'?'python':'python3',['-c',"import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);bad=z.testzip();assert bad is None,repr(bad)",fullZip],{stdio:['ignore','ignore','pipe']});
   await run('cp',fullZip,hosts[1]+':/full-site.zip');
@@ -292,7 +287,7 @@ try {
   const {runMilestones}=await import('./integration-milestones.js');
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
   const {runMoveScenario}=await import('./integration-move.js');
-  await runMoveScenario({run,until,hosts,servers,db,record});
+  await runMoveScenario({run,until,hosts,servers,db,record,directory});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
   await runRestoreTestScenario({run,until,hosts,servers,db,record,evidence,staticSiteId:staticId});
   const {runSafeEditScenario}=await import('./integration-safe-edit.js');

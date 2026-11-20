@@ -99,7 +99,7 @@ class CaptureTests(CaptureHarness):
         tar=[call for call in self.calls if call[0]=='tar' and '-cpf' in call]
         self.assertEqual(tar[0][:4],['tar','--xattrs','--acls','--numeric-owner'],'v1 archives keep the original flags')
         self.assertFalse(any(a.startswith('--listed-incremental') for call in self.calls for a in call))
-        self.assertEqual(self.payload_names(),['images.tar','manifest.json','mount-0-0.tar','restore-guide.md'])
+        self.assertEqual(self.payload_names(),['images.tar','manifest.json','mount-0-0.tar','restore-guide.md','run-definition/compose.yaml'],'a plain container also gets its run definition (2.16.5)')
         self.assertEqual(self.saved,[['sha256:'+'0'*64,'sha256:'+'e'*63+'1']])
         self.assertFalse((self.root/'incremental').exists());self.assertFalse(self.state.exists())
         self.assertNotIn('Incremental backups',(self.root/'restore-guide.md').read_text())

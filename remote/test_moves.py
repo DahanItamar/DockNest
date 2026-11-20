@@ -183,6 +183,15 @@ class DeployRestoreTests(unittest.TestCase):
             __import__('shutil').rmtree(base/'volumes');(base/'srv'/'shop').mkdir();(base/'srv'/'shop'/'config.txt').write_text('existing')
             with self.assertRaises(ValueError) as refused:self.deploy(temporary)
             self.assertIn('never overwrites',str(refused.exception))
+    def test_publish_all_reaches_only_loopback_on_a_test_copy(self):
+        for mode,expected,flag in [('test','127.0.0.1::9000/tcp',False),('live',None,True)]:
+            manifest=fixture_manifest()
+            for c in manifest['containers']:c['HostConfig']['PublishAllPorts']=True;c['Config']['ExposedPorts']={'8080/tcp':{},'9000/tcp':{}}
+            with tempfile.TemporaryDirectory() as temporary:
+                host,_,_=self.deploy(temporary,mode=mode,manifest=manifest)
+                web=[c for c in host.calls if c[0]=='create'][0]
+                self.assertEqual('--publish-all' in web,flag,mode)
+                self.assertEqual([web[i+1] for i,a in enumerate(web) if a=='-p' and web[i+1].endswith('9000/tcp')],[expected] if expected else [],mode)
     def test_a_test_copy_never_joins_the_shared_default_bridge(self):
         manifest=fixture_manifest()
         for c in manifest['containers']:

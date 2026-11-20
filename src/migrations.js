@@ -266,6 +266,11 @@ export const safeEditUndoSchema = `
 CREATE TABLE IF NOT EXISTS site_edit_undo (edit_id TEXT PRIMARY KEY REFERENCES site_edits(id),site_id TEXT NOT NULL REFERENCES sites(id),payload TEXT CHECK (payload IS NULL OR length(payload) <= 4194304),created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 `;
+// Coverage view (docs/coverage-and-restore-check.md A4): containers and volumes skipped on purpose, by name (names
+// survive a recreate, IDs do not). Additive only: one new table, so 2.16 code ignores it.
+export const coverageIgnoresSchema = `
+CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
+`;
 // The restore check (docs/restore-check.md): an Ignore or Note answer per finding of a site's readiness check. finding_key is
 // the helper's sha256 of kind, path and match, so a moved line keeps its answer. Additive only: one new table.
 export const restoreDecisionsSchema = `
@@ -394,9 +399,10 @@ export const migrations = [
   { version: 17, name: 'site-launches', compatible: true, up: siteLaunches },
   // Undo a Safe Edit Replace (docs/safe-edit.md): one new table and index, so 2.16 code ignores them.
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
-  // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it. Purely additive: renumber
-  // before release if another migration lands first.
-  { version: 19, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
+  // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
+  { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
+  // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it.
+  { version: 20, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
