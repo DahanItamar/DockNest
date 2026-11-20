@@ -31,7 +31,7 @@
 /* Notices: inline notice, page banner, toast. Semantic surface plus icon plus one sentence plus an optional action; no stripe. */
 .alert-panel{align-items:flex-start;gap:var(--dn-space-3);padding:var(--dn-space-3) var(--dn-space-4);border-radius:var(--dn-radius-lg)}
 .alert-panel-body{flex:1}
-.alert-panel-body>:is(button,a.button,.rp-actions,.cx-panel-actions,.sc-actions){align-self:flex-start;margin-top:var(--dn-space-2)}
+.alert-panel-body>:is(button,a.button){align-self:flex-start;margin-top:var(--dn-space-2)}
 .alert-success{background:var(--dn-success-surface);border-color:var(--dn-success-border);color:var(--dn-success-text)}.alert-success .alert-panel-icon{color:var(--dn-success-text)}
 
 /* Toast: bottom-right on desktop, full width at the bottom on phones. 150ms fade, none under reduced motion. */
