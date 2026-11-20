@@ -86,7 +86,7 @@ async function states(open, options) {
 
 async function appsPage(open, options) {
   const {context, page, backups} = await start(open, linkedState(), options);
-  await page.getByRole('navigation', {name: 'Main navigation'}).getByRole('button', {name: 'Apps & schedules', exact: true}).click();
+  await page.getByRole('navigation', {name: 'Main navigation'}).getByRole('button', {name: 'Apps & Schedules', exact: true}).click();
   const card = name => page.getByRole('article', {name});
   const dialog = page.getByRole('dialog');
   // Warning links: confirm first, nothing queued until "Back up now" in the confirm
@@ -104,7 +104,7 @@ async function appsPage(open, options) {
   assert.equal(await dialog.count(), 0, 'no confirm without warnings');
   assert.deepEqual(backups, ['/api/sites/shop/backup', '/api/sites/media/backup']);
   // Restore test start: the warning shows, the rest behind "and N more"
-  await card('Ledger').getByRole('button', {name: 'Restore tests'}).click();
+  await card('Ledger').getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
   await dialog.getByText('Ledger shares the folder /srv/shared with Wiki, so the test copy may not work without it.').waitFor();
   await expandsLines(dialog, 'Ledger uses demo-cache, which no app backs up, so the test copy may not work without it.');
   await context.close();

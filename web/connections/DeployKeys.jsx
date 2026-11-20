@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {IconKey,IconPlus,IconCopy,IconRefresh,IconTrash,IconX,IconLock} from '@tabler/icons-react';
-import {AlertPanel,IconButton} from '../system.jsx';
+import {AlertPanel,EmptyState,IconButton} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
 import {ago} from './client.js';
@@ -148,7 +148,7 @@ export function DeployKeys({api,connections,servers=[]}){
    {error&&!keys?<div className="loading" role="alert">{error.message||'Deploy keys could not be loaded.'}<button type="button" onClick={load}>Retry</button></div>
     :!keys?<div className="loading" role="status">Loading deploy keys…</div>
     :keys.length?<Paginated rows={keys} label="Deploy keys" pageSize={10}>{visible=><DataTable headers={['Name','Git host','Pinned from','Created','Actions']} columns={['26%','20%','22%','18%','14%']} numeric={[4]}>{rows(visible)}</DataTable>}</Paginated>
-    :<div className="empty"><span className="empty-icon"><IconKey size={28} stroke={1.5} aria-hidden="true"/></span><h3>No deploy keys yet</h3><p>A deploy key lets DockNest read one private Git repository. Add its public key at your Git host as read-only.</p>{newButton}</div>}
+    :<EmptyState icon={IconKey} title="No deploy keys yet" action={newButton}>A deploy key lets DockNest read one private Git repository. Add its public key at your Git host as read-only.</EmptyState>}
   </section>
   {dialog?.kind==='new'&&<NewKeyDialog client={client} connections={connections} servers={servers} onClose={()=>{close();load()}} onCreated={load}/>}
   {dialog?.kind==='repin'&&<RepinDialog client={client} connections={connections} item={dialog.item} servers={servers} onClose={close} onDone={async()=>{close();setNote({ok:true,text:`${dialog.item.gitHost} is pinned again.`});await load()}}/>}

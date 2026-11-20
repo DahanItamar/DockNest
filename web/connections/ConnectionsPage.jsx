@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {IconPencil,IconSend,IconTrash,IconPlugConnected,IconPlus,IconEye} from '@tabler/icons-react';
-import {AlertPanel,IconButton,StatusLabel} from '../system.jsx';
+import {AlertPanel,EmptyState,IconButton,StatusLabel} from '../system.jsx';
 import {CircleX} from '../icons.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
@@ -56,7 +56,7 @@ export function ConnectionsPage({api,user,servers=[],openNew=0,onSessionExpired}
   <div role="status" aria-live="polite">{note&&<AlertPanel variant={note.ok?'info':'error'}>{note.text}</AlertPanel>}</div>
   <section className="panel" aria-label="Connections">
    {list.length?<Paginated rows={list} label="Connections" pageSize={10}>{visible=><DataTable headers={['Name','Provider','Used by','Last test','Actions']} columns={['22%','18%','20%','24%','16%']} numeric={[4]}>{rows(visible)}</DataTable>}</Paginated>
-    :<div className="empty"><span className="empty-icon"><IconPlugConnected size={28} stroke={1.5} aria-hidden="true"/></span><h3>No connections yet</h3><p>A connection holds the login for one provider. Add one, then pick it on an alert node.</p><button type="button" className="primary" onClick={()=>setDialog({kind:'new'})}><IconPlus size={18} stroke={2} aria-hidden="true"/>New connection</button></div>}
+    :<EmptyState icon={IconPlugConnected} title="No connections yet" action={<button type="button" className="primary" onClick={()=>setDialog({kind:'new'})}><IconPlus size={18} stroke={2} aria-hidden="true"/>New connection</button>}>A connection holds the login for one provider. Add one, then pick it on an alert node.</EmptyState>}
   </section>
   {role==='admin'&&<DeployKeys api={api} connections={client} servers={servers}/>}
   {role==='admin'&&<Settings client={client} settings={data.settings} onChanged={load}/>}

@@ -61,7 +61,7 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
 
 
         <section className="dash-panel dash-sites" aria-labelledby="dash-sites-title">
-          <header className="dash-panel-head"><div><h2 id="dash-sites-title">Apps at a glance</h2></div><button className="dash-link" onClick={()=>navigate('Apps & schedules')}>Manage apps <ArrowRight size={16}/></button></header>
+          <header className="dash-panel-head"><div><h2 id="dash-sites-title">Apps at a glance</h2></div><button className="dash-link" onClick={()=>navigate('Apps & Schedules')}>Manage apps <ArrowRight size={16}/></button></header>
           {attention.length>0?<AlertPanel variant={attentionFailed?'error':'warning'} title={`${attention.length} ${attention.length===1?'app needs':'apps need'} attention`} action={<button type="button" className="text link-btn dash-alert-action" onClick={()=>attentionJob.status==='recovery_required'?open({type:'recovery',item:attentionJob}):open({type:'job',item:attentionJob})}>{attentionJob.status==='recovery_required'?'Review recovery':'Open job'}</button>}>{attentionJob.error?String(attentionJob.error).slice(0,160):attentionFailed?'The latest backup job failed.':'A job needs recovery review before your next capture.'}</AlertPanel>:<div className="dash-summary">
             <span className="dash-summary-icon"><BrandIcon name="sites" size={20}/></span>
             <div><strong>{s.sites.length?'Your apps, in one place':s.servers.length?'Choose your first app':'Start with your first Docker host'}</strong><p>{s.sites.length?'Expand an app to browse its recovery points.':s.servers.length?'Select the containers that make up the app you want to protect.':'Connect a server, then choose the apps you want to back up.'}</p></div>
@@ -87,11 +87,11 @@ export function Dashboard({s,active,busy,user,name,bytes,date,open,action,naviga
                       <IconButton label={`Restore backup ${backup.id}`} onClick={()=>open({type:'restore',item:backup})}><BrandIcon name="restore" size={22}/></IconButton>
                       <IconButton label={`Backup details ${backup.id}`} onClick={()=>open({type:'result',title:'Backup details',item:backup})}><BrandIcon name="details" size={22}/></IconButton>
                     </div>
-                  </div>)}</Paginated>:<p className="dash-history-empty">No recovery points yet. Run your first backup from Apps & schedules.</p>}
+                  </div>)}</Paginated>:<p className="dash-history-empty">No recovery points yet. Run your first backup from Apps & Schedules.</p>}
                 </div>
               </details>;
             })}</Paginated>
-          </>:<Empty icon={s.servers.length?Layers:Server} title={s.servers.length?'Choose an app to protect':user?.role==='admin'?'Your first server starts here':'No apps configured yet'} action={s.servers.length?<button className="primary" onClick={()=>navigate('Apps & schedules')}>Choose an app <ArrowRight size={16}/></button>:user?.role==='admin'?<button className="primary" onClick={()=>open({type:'server'})}>Connect a server <ArrowRight size={16}/></button>:null}>{s.servers.length?'Your server is connected. Group the containers for your first app and set its schedule.':user?.role==='admin'?'Add a Docker host to discover its containers and configure your first app.':'Ask your administrator to connect a Docker host.'}</Empty>}
+          </>:<Empty icon={s.servers.length?Layers:Server} title={s.servers.length?'Choose an app to protect':user?.role==='admin'?'Your first server starts here':'No apps configured yet'} action={s.servers.length?<button className="primary" onClick={()=>navigate('Apps & Schedules')}>Choose an app <ArrowRight size={16}/></button>:user?.role==='admin'?<button className="primary" onClick={()=>open({type:'server'})}>Connect a server <ArrowRight size={16}/></button>:null}>{s.servers.length?'Your server is connected. Group the containers for your first app and set its schedule.':user?.role==='admin'?'Add a Docker host to discover its containers and configure your first app.':'Ask your administrator to connect a Docker host.'}</Empty>}
           
         </section>
 

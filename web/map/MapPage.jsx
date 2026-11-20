@@ -1,7 +1,7 @@
 import React,{useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import {formatBytes} from '../../shared/format-bytes.js';
 import {IconServer,IconBox,IconAppWindow,IconDatabaseExport,IconPlus,IconMinus,IconArrowsMaximize,IconMap2,IconAlertTriangle,IconCircleCheck,IconClock,IconInfoCircle,IconCopy,IconCheck,IconRocket,IconShieldCheck,IconLink} from '@tabler/icons-react';
-import {StatusLabel,IconButton} from '../system.jsx';
+import {StatusLabel,IconButton,RowOpen,OverflowMenu} from '../system.jsx';
 import {IconTrash,IconBell} from '@tabler/icons-react';
 import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
@@ -73,14 +73,15 @@ function MapList({cov,servers,nameOf,groups,storage,canMove,canAdd,onMoveTo,onDe
  {groups.map(({server,sites})=>{
   const id='map-list-'+(server?server.id:'unassigned');
   return <section key={id} className="map-list-group" aria-labelledby={id}>
-   <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span>{cov&&server.status==='connected'&&<CoverageLine entry={cov[server.id]}/>}</>}</div></div>
-   {server&&<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}>Details</button>{canMove&&<button type="button" onClick={e=>onAddSite(server.id,e.currentTarget)}>Add app</button>}</div>}
-   {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div><LinkCaption links={linksOf(servers,s).links} nameOf={nameOf}/></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
+   <div className="map-list-head">{server?<h2><RowOpen chip icon={IconServer} label={'Details for '+server.name} onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}><span className="row-title" id={id}>{server.name}</span></RowOpen></h2>:<><span className="icon-chip"><IconServer size={20} stroke={1.75} aria-hidden="true"/></span><h2 id={id}>Not on a server</h2></>}</div>
+   {server&&<div className="map-list-meta">{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span>{cov&&server.status==='connected'&&<CoverageLine entry={cov[server.id]}/>}</div>}
+   {server&&canMove&&<div className="map-list-actions"><button type="button" className="text-link" onClick={e=>onAddSite(server.id,e.currentTarget)}><IconPlus size={16} stroke={2} aria-hidden="true"/>Add app</button></div>}
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><RowOpen icon={props=><SiteIcon site={s} size={props.size}/>} label={'Details for '+s.name} onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></RowOpen>{canMove&&server&&<OverflowMenu label={'More actions for '+s.name} items={[{label:'Move to…',onSelect:()=>onMoveTo(s.id,document.activeElement)}]}/>}<LinkCaption links={linksOf(servers,s).links} nameOf={nameOf}/></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
   </section>;
  })}
  {storage.length>0&&<section className="map-list-group" aria-labelledby="map-list-storage">
   <div className="map-list-head"><IconDatabaseExport size={20} stroke={1.75} aria-hidden="true"/><div><h2 id="map-list-storage">Backup storage</h2></div></div>
-  <div className="map-list-store">{storage.map(t=>{const f=storageFacts(t);return <div key={t.id}><span className="map-name">{t.name}</span><span className="map-caption">{f.text}</span>{f.pct!==null&&<div className="map-meter" role="meter" aria-label={t.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'storage',id:t.id},e.currentTarget)}>Details</button></div></div>})}</div>
+  <div className="map-list-store">{storage.map(t=>{const f=storageFacts(t);return <div key={t.id}><RowOpen label={'Details for '+t.name} onClick={e=>onDetails({kind:'storage',id:t.id},e.currentTarget)}><span className="map-name">{t.name}</span><span className="map-caption">{f.text}</span></RowOpen>{f.pct!==null&&<div className="map-meter" role="meter" aria-label={t.name+' used'} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(f.pct*100)}><span style={{width:Math.round(f.pct*100)+'%'}}/></div>}</div>})}</div>
  </section>}
  {alertsList}
  </div>;

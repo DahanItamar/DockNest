@@ -124,7 +124,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
   await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
-  await page.getByRole('article',{name:'Production',exact:true}).getByRole('button',{name:'Edit details',exact:true}).click();
+  await page.getByRole('article',{name:'Production',exact:true}).getByRole('button',{name:/^Edit details/}).click();
   const detailsDialog=page.getByRole('dialog');
   await detailsDialog.getByLabel('Server name',{exact:true}).fill('DemoBlog_srv');
   await detailsDialog.getByLabel('Server note (optional)',{exact:true}).fill('DemoBlog production');
@@ -148,7 +148,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
-  await page.getByRole('navigation').getByRole('button',{name:'Apps & schedules'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules'}).click();
   await page.getByRole('button',{name:'Add app',exact:true}).click();
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
@@ -210,7 +210,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     assert.deepEqual(body.config.temporaryMemoryFolders,[{container:'shop',destination:'/tmp'}]);
     fixtureSites=[{id:'fixture-site',...body}];return route.fulfill({json:fixtureSites[0]});
   });
-  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+  await page.getByRole('button',{name:/^Edit configuration/}).click();
   assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'My shop','Editing opens saved site details');
   await siteDialog.getByLabel('App name',{exact:true}).fill('My shop edited');
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
@@ -240,7 +240,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     const body=route.request().postDataJSON();assert.equal(body.schedule,expectedSchedule);assert.equal(body.timezone,'Asia/Jerusalem');
     fixturePolicies=[{siteId:'fixture-site',...body}];return route.fulfill({json:fixturePolicies[0]});
   });
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   const scheduleDialog=page.getByRole('dialog');
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'daily');
   await scheduleDialog.getByLabel('Hour (00–23)',{exact:true}).selectOption('23');
@@ -255,7 +255,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.setViewportSize({width:1440,height:960});
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();
   await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   assert.equal(await scheduleDialog.getByLabel('Hour (00–23)',{exact:true}).inputValue(),'23','Saved 24-hour time survives reopening');
   expectedSchedule='15 9 * * 5';
   await scheduleDialog.getByLabel('Back up',{exact:true}).selectOption('weekly');
@@ -264,25 +264,25 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await scheduleDialog.getByLabel('Minute (00–59)',{exact:true}).selectOption('15');
   await scheduleDialog.getByText(/Every Friday at 09:15/).waitFor();
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   expectedSchedule='0 */6 * * *';
   await scheduleDialog.getByLabel('Back up',{exact:true}).selectOption('custom');
   await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).fill(expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Save schedule',exact:true}).click();await scheduleDialog.waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Schedule',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Schedule'}).click();
   assert.equal(await scheduleDialog.getByLabel('Back up',{exact:true}).inputValue(),'custom','Unrecognized schedules remain custom rather than silently changing');
   assert.equal(await scheduleDialog.getByLabel('Custom cron expression',{exact:true}).inputValue(),expectedSchedule);
   await scheduleDialog.getByRole('button',{name:'Cancel',exact:true}).click();
   await page.route('**/api/sites/fixture-site/readiness',route=>route.fulfill({json:{ready:false,readOnly:true,checks:[{name:'Containers and configuration files',ok:true,message:'Ready'},{name:'Maintenance proxy and website',ok:false,message:'Deploy the maintenance page and integrate it with the source proxy.'}]}}));
-  await page.getByRole('button',{name:'Check readiness',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Check readiness'}).click();
   await page.getByRole('dialog').getByRole('heading',{name:'Setup needs attention',exact:true}).waitFor();
   await page.getByRole('dialog').getByText('Deploy the maintenance page and integrate it with the source proxy.',{exact:true}).waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'Done',exact:true}).click();
-  await page.getByRole('button',{name:'Remove app',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Remove app'}).click();
   const removeDialog=page.getByRole('dialog');
   await removeDialog.getByText(/Existing backup files and history will be kept/).waitFor();
   await removeDialog.getByRole('button',{name:'Cancel',exact:true}).click();
-  await page.getByRole('button',{name:'Remove app',exact:true}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Remove app'}).click();
   await removeDialog.getByRole('button',{name:'Remove app',exact:true}).click();await removeDialog.waitFor({state:'hidden'});
   await page.getByRole('heading',{name:'Choose the apps to protect',exact:true}).waitFor();
   let storageFixture=[];
@@ -312,7 +312,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.getByRole('heading',{name:'Hetzner Storage Box',exact:true}).waitFor();await page.locator('.storage-card .status-success',{hasText:'Used for new backups'}).waitFor();
   assert.equal(await page.getByLabel('Password',{exact:true}).count(),0,'Successful connection discards the password input');
   await page.route('**/api/storage-targets/storage-fixture/tree',route=>route.fulfill({json:{root:'/home/docknest',managedRoot:'/home/docknest/BACKUP',limited:false,recovery:{folder:'docknest-recovery',files:[{id:'manager-fixture',createdAt:'2026-10-03T12:13:14Z',size:1024,filename:'docknest_fixture.dkit',relativePath:'BACKUP/docknest-recovery/docknest_fixture.dkit',downloadable:true}]},servers:[{id:'host-one',name:'Production',sites:[{id:'fixture-site',name:'Shop',days:[{date:'2026-10-01',backups:[{id:'fixture-backup',capturedAt:'2026-10-01T20:30:00Z',size:1024*1024,pinned:false,verified:true,filename:'backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',relativePath:'BACKUP/production--host-one/shop--fixture-site/backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc'}]}]}]}]}}));
-  await page.getByRole('button',{name:'Browse backup folders'}).click();
+  await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Browse backup folders'}).click();
   await page.getByText('Server: Production',{exact:true}).waitFor();
   await page.getByText('backup_2026-10-01_20-30-00Z--fixture-backup.tar.gz.enc',{exact:true}).waitFor();
   assert.equal(await page.locator('.backup-tree').getByRole('link',{name:'Download recovery kit'}).getAttribute('href'),'/api/self-backup/download');
@@ -323,7 +323,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
   await page.screenshot({path:path.join(screenshotDir,'storage-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
-  for (const name of ['Servers', 'Apps & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
+  for (const name of ['Servers', 'Apps & Schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
   }
