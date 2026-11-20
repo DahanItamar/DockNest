@@ -12,7 +12,7 @@ try{
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{id:'admin',name:'Reviewer',role:'admin'},serverTime:Date.now(),idleExpiresAt:Date.now()+1800000,absoluteExpiresAt:Date.now()+28800000}}));
  await page.route('**/api/auth/activity',r=>r.fulfill({json:{}}));await page.route('**/api/state',r=>r.fulfill({json:state}));
  await page.route('**/api/servers/host/discover',r=>r.fulfill({json:{containers:docker,staticSites:[staticSite]}}));
- await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5176');await page.getByRole('navigation').getByRole('button',{name:'Apps & schedules',exact:true}).click();
+ await page.goto(process.env.TEST_BASE_URL||'http://127.0.0.1:5176');await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules',exact:true}).click();
  const dialog=page.getByRole('dialog');let submitted;
  await page.route('**/api/sites',r=>{submitted=r.request().postDataJSON();state.sites=[{id:'site',...submitted}];return r.fulfill({json:state.sites[0]});});
  await page.getByRole('button',{name:'Add app',exact:true}).click();await dialog.getByRole('button',{name:'Select app leads',exact:true}).click();await dialog.getByRole('button',{name:'Continue',exact:true}).click();
@@ -28,7 +28,7 @@ try{
  const app=(id,name,containers)=>({id,serverId:'host',name,config:{kind:'docker',containers}});
  state.sites.push(app('media','Gallery',['media-web','media-db']),app('paper','Paperless',['paper-redis']));
  await page.setViewportSize({width:1440,height:1000});
- const openWizard=async()=>{await page.reload();await page.getByRole('navigation').getByRole('button',{name:'Apps & schedules',exact:true}).click();await page.getByRole('button',{name:'Add app',exact:true}).click();await dialog.getByRole('button',{name:'Refresh containers',exact:true}).waitFor();};
+ const openWizard=async()=>{await page.reload();await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules',exact:true}).click();await page.getByRole('button',{name:'Add app',exact:true}).click();await dialog.getByRole('button',{name:'Refresh containers',exact:true}).waitFor();};
  await openWizard();
  await dialog.getByText('Hidden because other apps already back them up: example.org, Gallery.',{exact:true}).waitFor();
  for(const name of ['media','example.org'])assert.equal(await dialog.getByRole('button',{name:'Select app '+name,exact:true}).count(),0,name);

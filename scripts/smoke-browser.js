@@ -148,7 +148,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
     createdSites++;return route.fulfill({status:201,json:{id:'fixture-site'}});
   });
   await page.getByRole('button',{name:'Refresh dashboard'}).click();
-  await page.getByRole('navigation').getByRole('button',{name:'Apps & schedules'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules'}).click();
   await page.getByRole('button',{name:'Add app',exact:true}).click();
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
@@ -323,7 +323,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'Storage tree fits mobile');
   await page.screenshot({path:path.join(screenshotDir,'storage-mobile.png'),fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:1440,height:960});
-  for (const name of ['Servers', 'Apps & schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
+  for (const name of ['Servers', 'Apps & Schedules', 'Backups', 'Jobs', 'Maintenance', 'Audit', 'Storage', 'Access']) {
     await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
     await page.locator('#content h1').waitFor();
   }

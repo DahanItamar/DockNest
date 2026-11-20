@@ -39,7 +39,7 @@ const shot=async(page,name,theme,width)=>{if(shots)await page.screenshot({path:`
 const noOverflow=page=>page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth);
 
 // scenario.coverage(serverId, attempt) -> {status, body}; calls collects every request that reaches the mock.
-async function open(theme,width,{role='admin',route='Apps & schedules',coverage,helper='ok',delay=0}={}){
+async function open(theme,width,{role='admin',route='Apps & Schedules',coverage,helper='ok',delay=0}={}){
  const calls=[],attempts={};
  const page=await browser.newPage({viewport:{width,height:width<500?874:900}});
  page.on('pageerror',e=>errors.push(e.message));

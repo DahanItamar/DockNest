@@ -49,7 +49,7 @@ try{
  const dialog=page.getByRole('dialog').first();
 
  // 1. Site form: one group per service, a shared group for identical lists.
- await nav('Apps & schedules');
+ await nav('Apps & Schedules');
  await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
  await dialog.getByText('Advanced backup settings',{exact:true}).waitFor();
  assert.equal(await dialog.locator('details[open]>summary',{hasText:'Advanced backup settings'}).count(),1,'opens when the site declares files');
