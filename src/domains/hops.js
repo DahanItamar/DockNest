@@ -72,9 +72,11 @@ export const siteOfTargets = (targets, sites) => sites.find(site => targets.some
 function proxyHop(domain, server, declared, sites, servers) {
   const facts = server?.facts;
   if (!facts) return { hop: hop('unknown', 'not-checked'), route: null, site: declared };
-  const partial = facts.incomplete || facts.notUnderstood.length > 0;
+  // A container DockNest could not read may hide or change any route, so nothing found is ok then. A rule it does not
+  // understand only means a missing route may exist after all.
+  const partial = facts.incomplete, unknownRoutes = partial || facts.notUnderstood.length > 0;
   const [route] = routesFor(facts, domain);
-  if (!route) return { hop: partial ? hop('warn', 'route-unknown') : hop('fail', 'no-route'), route: null, site: declared };
+  if (!route) return { hop: unknownRoutes ? hop('warn', 'route-unknown') : hop('fail', 'no-route'), route: null, site: declared };
   const params = { proxy: route.proxy, serverId: server.id, ...(route.container ? { container: route.container } : {}) };
   const proxy = facts.proxies.find(item => item.proxy === route.proxy && (item.container ?? null) === (route.container ?? null));
   if (proxy && !proxy.running) return { hop: hop('fail', 'proxy-stopped', params), route, site: declared };

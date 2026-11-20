@@ -44,7 +44,8 @@ Old results are shown with their time and are not refreshed in the background.
 A route reaches an app when its target is a port the app's container publishes (on loopback, on all interfaces, or on
 an address of the server), or the container's Docker network name and port (`http://shop-web:8080`). A route on one
 server can also reach an app on another connected server through that server's address and a published port. When a
-container cannot be read, or a route is not understood, the proxy hop is at best amber ("this list may be incomplete").
+container cannot be read, the proxy hop is at best amber ("this list may be incomplete"). When a rule is not understood,
+a domain with no route found is amber rather than red, because that rule may be the one serving it.
 
 ## Reasons
 

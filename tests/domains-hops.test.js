@@ -59,6 +59,7 @@ const cases = [
   ['proxy', 'fail:no-route', c => { facts(c).routes = []; }],
   ['proxy', 'warn:route-unknown', c => { facts(c).routes = []; facts(c).notUnderstood = [{ proxy: 'traefik', container: 'forum-web', router: 'api' }]; }],
   ['proxy', 'warn:route-unknown', c => { facts(c).routes = []; facts(c).incomplete = true; }],
+  ['proxy', 'ok:routed', c => { facts(c).notUnderstood = [{ proxy: 'traefik', container: 'forum-web', router: 'api' }]; }],
   ['proxy', 'fail:proxy-stopped', c => { facts(c).proxies[0].running = false; }],
   ['proxy', 'fail:routes-elsewhere', c => { route(c).containers = ['other-web']; }],
   ['proxy', 'fail:routes-elsewhere', c => { route(c).containers = []; }],

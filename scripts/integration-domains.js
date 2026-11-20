@@ -72,8 +72,8 @@ export async function runDomainsScenario({ run, until, hosts, servers, db, recor
     assert.deepEqual(states('dom.example.com'), { dns: 'ok:points-to-server', proxy: 'ok:routed', app: 'ok:running', certificate: 'fail:no-certificate' });
     assert.equal(byName['dom.example.com'].siteId, shopId);
     assert.deepEqual(byName['dom.example.com'].hops.proxy.params, { proxy: 'nginx', serverId: server.id, upstream: 'http://127.0.0.1:18080' });
-    // The second Traefik router has a matcher DockNest does not read, so the list says it may be incomplete.
-    assert.deepEqual(states('forum.example.com'), { dns: 'ok:points-to-server', proxy: 'warn:incomplete', app: 'ok:running', certificate: 'unknown:managed-by-proxy' });
+    // The second Traefik router has a matcher DockNest does not read: it is listed as not understood, never guessed.
+    assert.deepEqual(states('forum.example.com'), { dns: 'ok:points-to-server', proxy: 'ok:routed', app: 'ok:running', certificate: 'unknown:managed-by-proxy' });
     assert.equal(byName['forum.example.com'].siteId, forumId);
 
     // Routing facts also ride on an administrator's discovery scan and never come back with its answer.
