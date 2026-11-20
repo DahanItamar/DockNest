@@ -74,7 +74,8 @@ export function messageFor(event) {
     case 'launch.needs_you': return `Launch needs you: DockNest could not remove everything a failed launch made on ${server}. Open DockNest to try again.`;
     // Self Backup and the emergency kit (docs/emergency-kit.md): fixed sentences, never a key, a part or an error text.
     case 'selfbackup.kit_check_failed': return `Self Backup kit check failed${when}: the newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.`;
-    case 'emergency.key_changed': return `Emergency kit key changed${when}: new emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.`;
+    case 'emergency.key_changed': if (event.code === 'retired') return `Emergency kit split turned off${when}: the kit opens with one recovery passphrase again. If you did not do this, open DockNest now.`;
+      return `Emergency kit key changed${when}: new emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.`;
     default: return null;
   }
 }

@@ -18,7 +18,7 @@ const printed = [];
 for (const method of ['log', 'error', 'warn', 'info']) { const original = console[method]; console[method] = (...args) => { printed.push(args.map(String).join(' ')); original.apply(console, args); }; }
 const { app } = await import('../src/server.js');
 const { db, id } = await import('../src/db.js');
-const { digest, seal } = await import('../src/crypto.js');
+const { digest, seal, open: openSealed } = await import('../src/crypto.js');
 const { saveSelfBackupSettings, enqueueSelfBackup, claimSelfBackup, executeSelfBackup, readLatestSelfBackup, selfBackupDirectory } = await import('../src/self-backup.js');
 const { restoreRecoveryKit, exportRecoveryKit, checkRecoveryKit } = await import('../src/recovery-kit.js');
 const { claimKitCheck, executeKitCheck, queueKitCheckAfterBackup, requeueInterruptedKitChecks } = await import('../src/kit-check.js');
@@ -57,11 +57,13 @@ const emergencyFiles = (storageRoot = '/backups') => [...fixture.files.keys()].f
 const kitFiles = () => [...fixture.files.keys()].filter(name => name.startsWith('/backups/') && name.endsWith('.dkit'));
 const toolFile = storageRoot => fixture.files.get(storageRoot + '/BACKUP/docknest-recovery/emergency/emergency-open.js');
 // The worker's path: run the Self Backup, then the kit check it queues.
+// A Self Backup already queued (by a passphrase change) is the one that runs.
 async function selfBackup() {
-  enqueueSelfBackup(administrator);
+  if (!db.prepare("SELECT 1 FROM manager_backups WHERE status='queued'").get()) enqueueSelfBackup(administrator);
   let idle = false;
   await runWorkerLoop({ active: () => !idle, maintain: async () => {}, tick: () => {}, claimSelfBackup, executeSelfBackup: async run => { if (await executeSelfBackup(run)) queueKitCheckAfterBackup(); }, claimKitCheck, executeKitCheck, claimJob: () => null, executeJob: async () => {}, idle: async () => { idle = true; } });
 }
+const keptPassphrase = () => openSealed(JSON.parse(db.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get().value).passphrase);
 const outbox = event => db.prepare('SELECT connection_id FROM alert_outbox WHERE event=? ORDER BY connection_id').all(event).map(row => row.connection_id);
 const secrets = new Set();
 const split = async (body, index = 0) => {
@@ -194,9 +196,18 @@ test('a split returns 33-word parts once, stores only public material, alerts ev
 });
 
 test('a re-split retires the old key, keeps its kit until deleted, and old parts open only that old kit', async () => {
-  const oldFile = emergencyFiles()[0];
-  const { response, result } = await split({ k: 3, n: 4, labels: ['Dana', 'Noam', 'Lior', 'Maya'] });
-  assert.equal(response.status, 200); assert.notEqual(result.digest, firstDigest);
+  const oldFile = emergencyFiles()[0], body = { k: 3, n: 4, labels: ['Dana', 'Noam', 'Lior', 'Maya'] }, keptBefore = keptPassphrase();
+  db.prepare('DELETE FROM rate_limits').run(); // the earlier tests used up the split rate limit
+  // Every earlier holder's kit carries the current recovery passphrase, so a re-split needs a new one.
+  for (const bad of [{}, { passphrase: 'short' }, { passphrase: keptBefore }]) {
+    const refused = await split({ ...body, ...bad }); assert.equal(refused.response.status, 400, JSON.stringify(Object.keys(bad)));
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM emergency_keys WHERE retired_at IS NOT NULL').get().n, 0, 'nothing changed');
+  const renewed = randomBytes(32).toString('base64url'); secrets.add(renewed);
+  const { response, result } = await split({ ...body, passphrase: renewed });
+  assert.equal(response.status, 200); assert.notEqual(result.digest, firstDigest); assert.equal(result.selfBackupQueued, true);
+  assert.equal(keptPassphrase(), renewed);
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM audit_events').all()).includes(renewed));
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM emergency_keys WHERE retired_at IS NOT NULL').get().n, 1);
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='emergency.resplit'").get());
   assert.equal(outbox('emergency.key_changed').length, 6, 'every channel again');
@@ -206,15 +217,28 @@ test('a re-split retires the old key, keeps its kit until deleted, and old parts
   secrets.add(newKey.toString('hex')); secrets.add(newKey.toString('base64'));
   assert.throws(() => open(fixture.files.get(newFile), oldKey), /do not open/); assert.ok(open(fixture.files.get(oldFile), oldKey));
   assert.ok(open(fixture.files.get(newFile), newKey));
+  // K old holders learn the old passphrase from their old kit, and it no longer opens the plain kit made after the re-split.
+  const learned = unpackKit(open(fixture.files.get(oldFile), oldKey)).passphrase, live = Buffer.from((await readFile(process.env.MASTER_KEY_FILE, 'utf8')).trim(), 'base64'), latest = await readLatestSelfBackup();
+  assert.equal(learned, keptBefore);
+  assert.deepEqual(await checkRecoveryKit({ bytes: latest.bytes, passphrase: learned, masterKey: live, parent: await selfBackupDirectory() }), { passed: false, reason: 'passphrase' });
+  assert.deepEqual(await checkRecoveryKit({ bytes: latest.bytes, passphrase: renewed, masterKey: live, parent: await selfBackupDirectory() }), { passed: true, reason: null });
+  assert.equal((await status()).kitCheck.last.result, 'passed');
   const deleted = await request('/emergency/delete-old-kits', { body: {} });
   assert.deepEqual(await deleted.json(), { deleted: 2, failed: 0 });
   assert.deepEqual(emergencyFiles(), [newFile]); assert.equal((await status()).emergency.oldKits, 0);
 });
 
 test('Go back to one passphrase stops new emergency kits and lets the owner delete the last ones', async () => {
-  const off = await request('/emergency/off', { body: {} });
-  assert.equal(off.status, 200); assert.deepEqual(await off.json(), { split: false });
+  const kept = keptPassphrase();
+  for (const bad of [{}, { passphrase: kept }, { passphrase: 'x'.repeat(30), extra: 1 }]) assert.equal((await request('/emergency/off', { body: bad })).status, 400);
+  assert.equal((await status()).emergency.split, true, 'still split');
+  const alerts = outbox('emergency.key_changed').length, renewed = randomBytes(32).toString('base64url'); secrets.add(renewed);
+  const off = await request('/emergency/off', { body: { passphrase: renewed } });
+  assert.equal(off.status, 200); assert.deepEqual(await off.json(), { split: false, selfBackupQueued: true });
   assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='emergency.retired'").get());
+  assert.equal(keptPassphrase(), renewed);
+  assert.equal(outbox('emergency.key_changed').length, alerts + 3, 'turning the split off alerts every channel too');
+  assert.match(db.prepare("SELECT message FROM alert_outbox WHERE event='emergency.key_changed' ORDER BY created_at DESC,rowid DESC LIMIT 1").get().message, /split turned off/);
   const before = emergencyFiles();
   await selfBackup();
   assert.deepEqual(emergencyFiles(), before, 'no new emergency kit');

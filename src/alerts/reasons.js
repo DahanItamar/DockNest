@@ -48,6 +48,7 @@ const catalogue = Object.freeze({
   'selfbackup.kit_check_failed:key_mismatch': 'The newest recovery kit holds a different master key than this DockNest. Run a new Self Backup and check again.',
   'selfbackup.kit_check_failed:unreadable': 'The newest recovery kit could not be read from storage. Check the storage connection.',
   'emergency.key_changed': 'New emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.',
+  'emergency.key_changed:retired': 'The split was turned off: the kit opens with one recovery passphrase again. If you did not do this, open DockNest now.',
   'test': 'Your alerts are connected.',
 });
 export const REASON_KEYS = Object.freeze(Object.keys(catalogue));

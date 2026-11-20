@@ -50,6 +50,20 @@ function queue(actor){
  audit(actor,'manager-backup.queued',runId,{targetId:selected.id});return {id:runId,status:'queued'};
 }
 export const enqueueSelfBackup=actor=>transaction(()=>queue(actor));
+// A new recovery passphrase for "Split again" and "Go back to one passphrase" (docs/emergency-kit.md): every emergency kit
+// holds the passphrase, so holders of an earlier split must not be able to open the plain kits made from now on. The
+// caller holds the transaction. A Self Backup is queued at once, when one can run, so the stored kit is remade with the
+// new passphrase and the one an earlier split could open is replaced. Returns whether that backup was queued.
+export function replaceRecoveryPassphrase(passphrase,actor){
+ const saved=selfBackupConfig();
+ if(!saved?.passphrase)return false;
+ if(active())throw Object.assign(new Error('Wait for the current DockNest backup before changing the split.'),{status:409});
+ if(typeof passphrase!=='string'||passphrase.length<24||passphrase.length>4096)throw Object.assign(new Error('Enter a new recovery passphrase of at least 24 characters: holders of the earlier split know the current one.'),{status:400});
+ if(passphrase===open(saved.passphrase))throw Object.assign(new Error('Use a different recovery passphrase: holders of the earlier split know the current one.'),{status:400});
+ db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({...saved,passphrase:seal(passphrase)}),settingsKey);
+ audit(actor,'manager-backup.settings',null,{enabled:saved.enabled,passphraseChanged:true,reason:'emergency-split'});
+ try{queue(actor);return true;}catch(error){if(error.status===409)return false;throw error;}
+}
 export function tickSelfBackup(currentDate=new Date()){
  transaction(()=>{
   // Under the hold a due run stays due (nextRun unchanged) and is queued after the release, like site schedules.
