@@ -13,7 +13,7 @@ import './deploy-keys.css';
 // confirm; then the public key to add at the Git host as a read-only deploy key. The private key stays sealed in DockNest.
 function Dlg({labelId,title,onClose,foot,confirm,children}){
  const ref=useRef(null);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();(confirm?d?.querySelector('.modal-foot button'):d?.querySelector('h2'))?.focus();return()=>{if(d?.open)d.close()}},[]);
  return <dialog ref={ref} className={confirm?'cx-dialog cx-confirm':'site-wizard rt-dialog cx-dialog'} aria-labelledby={labelId} onCancel={e=>{e.preventDefault();onClose()}}>
   <div className="modal-head"><h2 id={labelId} tabIndex={-1}>{title}</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>
   <form className="modal-body cx-form" onSubmit={e=>e.preventDefault()}>{children}<div className="modal-foot">{foot}</div></form>

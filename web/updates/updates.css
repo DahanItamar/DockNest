@@ -24,9 +24,6 @@
 /* Update Center */
 
 .uc-page{max-width:880px;margin:0 auto}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-subtle);margin:0 0 24px;align-items:flex-end}
-.tabs [role=tab]{display:inline-flex;align-items:center;border:0;border-bottom:3px solid transparent;border-radius:0;background:transparent;min-height:44px;padding:8px 16px;font-weight:500;color:var(--text-secondary);white-space:nowrap}
-.tabs [role=tab][aria-selected=true]{color:var(--heading);border-bottom-color:var(--accent)}.tabs [role=tab]:hover{background:var(--surface-muted)}
 [role=tabpanel][hidden]{display:none}
 .uc-stack{display:grid;gap:var(--edge)}
 .uc-quiet{color:var(--text-secondary);margin:0}.uc-quiet a,.uc-hero a{font-weight:500}
@@ -65,7 +62,6 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .uc-stack>/* History table */
 .dlg-alert{margin:12px 0 0}
 /* Dialogs */
-.dialog-md{width:min(620px,calc(100vw - 32px))}.dialog-sm{width:min(540px,calc(100vw - 32px))}
 .uc-dialog .modal-head h2{line-height:1.3}.uc-dialog h3{margin:20px 0 8px;font-size:var(--fs-body);font-weight:600}.uc-dialog .modal-body>h3:first-child{margin-top:0}
 .uc-dialog .modal-body>p{max-width:none}
 .dlg-meta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.dlg-meta small{font-size:var(--fs-caption)}
@@ -74,9 +70,6 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 .reauth-fields input[aria-invalid=true]{border-color:var(--error)}
 .report-text{font-weight:500;color:var(--heading)}.report-fields{margin:0}.report-fields div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid var(--border-subtle)}.report-fields dt{color:var(--text-muted);font-size:var(--fs-body)}.report-fields dd{margin:0;overflow-wrap:anywhere}
 .about-report{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.toast-wrap{position:fixed;right:24px;bottom:24px;z-index:3000}
-.dn-toast{display:flex;align-items:center;gap:12px;max-width:420px;padding:12px 12px 12px 16px;border-radius:var(--radius);border:1px solid var(--border-subtle);background:var(--surface);box-shadow:var(--dn-shadow-2);transition:opacity var(--dn-dur-slow) var(--dn-ease-enter),translate var(--dn-dur-slow) var(--dn-ease-enter);font-size:var(--fs-body);color:var(--heading)}
-.dn-toast>svg{color:var(--success);flex-shrink:0}.dn-toast-text{flex:1;min-width:0}.toast-wrap button.icon{width:44px;padding:0}
 /* Lock view */
 .progress-view{position:fixed;inset:0;z-index:2500;overflow:auto;background:var(--background);display:flex;flex-direction:column}
 .progress-top{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:88px;padding:16px 24px;background:var(--surface);flex-shrink:0}
@@ -113,7 +106,7 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
 @media(max-width:767px){.card-grid.uc-split{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:599px){
  .uc-hero{padding:24px 16px}.uc-hero-state{grid-template-columns:minmax(0,1fr);gap:12px}.uc-hero-row{flex-direction:column;align-items:stretch;gap:16px}.uc-hero-row>button{width:100%}.uc-setup{padding:20px 16px}
- .uc-page>.tabs{overflow-x:auto}.tabs [role=tab]{padding:8px 12px}
+ .uc-page>.tabs{overflow-x:auto}
  .progress-card{padding:24px 16px}.progress-top{padding:12px 16px}.progress-main{padding:16px 12px 32px}
  .dn-node{width:40px;height:40px}.dn-stage-link{top:19px}.dn-stage-status{font-size:var(--fs-caption)}
  .reauth-fields{grid-template-columns:1fr}
@@ -125,9 +118,9 @@ details.more summary svg{transition:transform 180ms ease}details.more[open] summ
  .progress-actions .why{width:100%}
  .uc-dialog .modal-foot{flex-direction:column-reverse;align-items:stretch}.uc-dialog .modal-foot>:is(button,a){width:100%;flex:none;justify-content:center}
  .about-report>:is(button,a){width:100%;justify-content:center}
- .dn-toast{flex-wrap:wrap}.dn-toast-text{flex:1 1 100%}.toast-wrap{left:16px;right:16px;bottom:16px}.toast-wrap button:not(.icon){flex:1}
+
 }
-@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc,.dn-toast{animation:none!important}.dn-node,details.more summary svg{transition:none}}
+@media(prefers-reduced-motion:reduce){.dn-spin,.dn-node-arc{animation:none!important}.dn-node,details.more summary svg{transition:none}}
 
 /* Recent updates disclosure (replaces the History tab) */
 .uc-recent{padding:0}

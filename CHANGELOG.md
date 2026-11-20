@@ -5,6 +5,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Consistent dialogs, tabs, notices and step-by-step flows.
 
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
 - Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.

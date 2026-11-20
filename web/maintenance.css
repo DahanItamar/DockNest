@@ -6,9 +6,6 @@
 .studio-section-head,.studio-canvas-toolbar{padding:20px 24px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;gap:12px;min-height:88px}
 .studio-canvas-toolbar{justify-content:space-between}.studio-canvas-toolbar h2{margin-top:8px!important;font-size:var(--fs-section)!important}
 .studio-inspector form{display:flex;flex-direction:column;flex:1}
-.studio-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-bottom:1px solid var(--border-subtle);padding:8px 24px;gap:8px}
-.rebrand-page .studio-tabs button{border:0;background:transparent;border-radius:6px;justify-content:center;gap:8px;color:var(--text-secondary)}
-.rebrand-page .studio-tabs button[aria-selected=true]{background:var(--accent-soft);color:var(--link)}
 .studio-fields{padding:24px;flex:1}.studio-fields[hidden]{display:none}
 .studio-field-intro{font-size:var(--fs-body);line-height:1.6;color:var(--text-secondary);margin-bottom:20px}
 .studio-fields .field{margin:0 0 24px!important}.studio-fields textarea{min-height:144px;resize:vertical}
@@ -45,8 +42,6 @@
 .studio-section-head,.studio-canvas-toolbar{min-height:96px;padding:24px;box-sizing:border-box}
 .studio-section-head h2,.studio-canvas-toolbar h2{font-size:var(--fs-card)!important;line-height:var(--lh-card);font-weight:600;margin:0}
 .studio-canvas-toolbar h2{margin-top:4px!important}
-.studio-tabs{padding:8px 24px}
-.rebrand-page .studio-tabs button{border-radius:var(--radius)}
 .studio-starting h3,.studio-publish-note b{font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500}
 .studio-presets{gap:var(--edge)}
 .studio-presets span{font-size:var(--fs-body);line-height:var(--lh-body);font-weight:500}

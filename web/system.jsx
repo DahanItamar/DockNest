@@ -2,6 +2,7 @@ import React,{useEffect,useId,useRef,useState} from 'react';
 import {IconDots,IconChevronRight} from '@tabler/icons-react';
 import {statusState} from './status-state.js';
 import {CheckCircle2,Loader,Clock,Hourglass,CircleX,TriangleAlert,InfoCircle} from './icons.jsx';
+import {IconCheck,IconX} from '@tabler/icons-react';
 
 // 2.3.0 shared primitives. Styles live in system.css (.status, .alert-panel, .icon-button).
 const STATES={
@@ -21,11 +22,19 @@ export function StatusLabel({value,state,children,icon}){
  return <span className={'status status-'+s}><Icon className="status-icon" size={16} stroke={2} aria-hidden="true"/>{text}</span>;
 }
 
-const ALERT_ICON={error:CircleX,warning:TriangleAlert,info:InfoCircle};
-// variant: error|warning|info. action: optional node, e.g. <a href="#">Open job</a>.
-export function AlertPanel({variant='error',title,children,action}){
+const ALERT_ICON={error:CircleX,warning:TriangleAlert,info:InfoCircle,success:CheckCircle2};
+// variant: error|warning|info|success. action: optional node, e.g. <a href="#">Open job</a>.
+export function AlertPanel({variant='error',title,children,action,onDismiss,dismissLabel='Dismiss message'}){
  const Icon=ALERT_ICON[variant]||CircleX;
- return <div className={'alert-panel alert-'+variant} role={variant==='info'?'status':'alert'}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body">{title&&<b>{title}</b>}{children&&<span>{children}</span>}{action}</div></div>;
+ return <div className={'alert-panel alert-'+variant} role={variant==='info'||variant==='success'?'status':'alert'}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body">{title&&<b>{title}</b>}{children&&<span>{children}</span>}{action}</div>{onDismiss&&<button type="button" className="icon alert-panel-close" onClick={onDismiss} aria-label={dismissLabel}><IconX size={16} aria-hidden="true"/></button>}</div>;
+}
+
+// One step indicator for wizards. Desktop: numbered steps, completed ones show the check icon. Phones: "Step 2 of 4 - Name".
+export function Stepper({steps,current,label}){
+ return <nav className="stepper" aria-label={label}>
+  <ol className="stepper-list">{steps.map((name,i)=><li key={name} className="stepper-step" data-state={i<current?'done':i===current?'current':'todo'} aria-current={i===current?'step':undefined}><span className="stepper-mark" aria-hidden="true">{i<current?<IconCheck size={14} stroke={2.5}/>:i+1}</span><span className="stepper-name">{name}{i<current&&<span className="sr-only"> (done)</span>}</span></li>)}</ol>
+  <p className="stepper-compact" aria-hidden="true">Step {current+1} of {steps.length} - {steps[current]}</p>
+ </nav>;
 }
 
 // Frameless 40x40 icon button. label is required (aria-label and tooltip).

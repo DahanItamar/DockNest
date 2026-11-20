@@ -31,6 +31,8 @@ export function WhatsNewDialog({data,onClose}){
  return <UCDialog title={'What’s new in DockNest '+version} onClose={onClose} label="dialog"><Notes markdown={data.markdown} tag={version}/><p className="notes-foot">These notes are included with this version of DockNest.</p>{link&&<p><ExtLink href={link}>Full release notes on GitHub</ExtLink></p>}<div className="modal-foot"><button type="button" className="primary" onClick={onClose}>Got it</button></div></UCDialog>;
 }
 export function UpdateToast({version,onNotes,onDismiss}){
+ // A success toast clears itself after 5 seconds; an error toast would stay until dismissed.
+ useEffect(()=>{const timer=setTimeout(onDismiss,5000);return()=>clearTimeout(timer)},[]);
  return <div className="toast-wrap"><div className="dn-toast" role="status"><IconCircleCheck size={20} aria-hidden="true"/><span className="dn-toast-text">DockNest updated to {version}</span>{onNotes&&<button type="button" onClick={onNotes}>What{'’'}s new</button>}<button type="button" className="icon" onClick={onDismiss} aria-label="Dismiss message"><IconX size={18}/></button></div></div>;
 }
 // First admin sign-in: consent first, then What's new (dialog, or the toast after an in-app update).
