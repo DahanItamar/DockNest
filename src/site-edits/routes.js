@@ -58,7 +58,7 @@ siteEditRoutes.post('/sites/:id/edit/apply', requireAdmin, requireRecentAuth, ha
 }));
 siteEditRoutes.get('/sites/:id/edits', handle(async (req, res) => {
   const id = siteId(req);
-  if (!db.prepare('SELECT 1 FROM sites WHERE id=?').get(id)) return res.status(404).json({ error: 'Site not found.', code: 'NOT_FOUND' });
+  if (!db.prepare('SELECT 1 FROM sites WHERE id=?').get(id)) return res.status(404).json({ error: 'App not found.', code: 'NOT_FOUND' });
   res.json(historyOf(id, historyQuery.parse(req.query)));
 }));
 siteEditRoutes.get('/site-edits/:id', handle(async (req, res) => {

@@ -47,12 +47,12 @@ const SETTINGS_ERRORS={
  CPUS_ABOVE_SERVER:'The test server has fewer cores than that.'
 };
 const RUN_ERRORS={
- TEST_ACTIVE:'A test is already running for this site.',
- NO_VERIFIED_BACKUP:'This site has no verified backup yet.',
- SITE_BUSY:'This site is busy right now. Try again soon.',
+ TEST_ACTIVE:'A test is already running for this app.',
+ NO_VERIFIED_BACKUP:'This app has no verified backup yet.',
+ SITE_BUSY:'This app is busy right now. Try again soon.',
  NO_TEST_SERVER:'Choose a test server first.',
- EXTERNAL_STORAGE:'This site needs external storage that a restore test cannot attach.'
+ EXTERNAL_STORAGE:'This app needs external storage that a restore test cannot attach.'
 };
 export const settingsError=e=>SETTINGS_ERRORS[e?.code]||e?.message||'Could not save. Try again.';
 // TOO_MANY_TESTS shows the API's own limit message.
-export const runError=e=>e?.code==='TOO_MANY_TESTS'?(e.message||'You have reached the limit of '+MANUAL_TESTS_PER_DAY+' tests for this site today.'):RUN_ERRORS[e?.code]||e?.message||'Could not start the test. Try again.';
+export const runError=e=>e?.code==='TOO_MANY_TESTS'?(e.message||'You have reached the limit of '+MANUAL_TESTS_PER_DAY+' tests for this app today.'):RUN_ERRORS[e?.code]||e?.message||'Could not start the test. Try again.';

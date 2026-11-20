@@ -179,7 +179,7 @@ async function failures(){
  assert.equal((await dlg.locator('.alert-warning').innerText()).trim(),'Not watching: this server already watches 50 containers.');
  await context.close();
  // Every real status keeps the sheet open with the right panel
- for(const [code,text] of [['SITE_REMOVED',/Site removed/],['FORBIDDEN',/Not allowed/],['INVALID',/Could not save/],['NOT_FOUND',/Could not save/]]){
+ for(const [code,text] of [['SITE_REMOVED',/App removed/],['FORBIDDEN',/Not allowed/],['INVALID',/Could not save/],['NOT_FOUND',/Could not save/]]){
   fresh();mock.putError=code;
   ({context,page}=await open({}));
   dlg=await openSheet(page,1280);
@@ -337,7 +337,7 @@ try{
  for(const scheme of ['light','dark'])for(const width of [1280,390]){
   await board('05-self-heal-settings',{},{scheme,width});
   await board('16-self-heal-off',{enabled:false,events:{items:[],nextCursor:null}},{scheme,width});
-  await board('17-self-heal-no-healthcheck',{enabled:false,watched:[],stream:{state:'off',reason:'no_healthcheck',notWatching:'Not watching: no container in this site has a health check'},events:{items:[],nextCursor:null}},{scheme,width});
+  await board('17-self-heal-no-healthcheck',{enabled:false,watched:[],stream:{state:'off',reason:'no_healthcheck',notWatching:'Not watching: no container in this app has a health check'},events:{items:[],nextCursor:null}},{scheme,width});
  }
  await behaviour('light');await behaviour('dark');
  await failures();

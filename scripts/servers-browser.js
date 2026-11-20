@@ -24,7 +24,7 @@ try{
  await page.evaluate(()=>document.fonts.ready);
  const card=name=>page.getByRole('article',{name,exact:true});
  assert.equal(await page.locator('.server-card').count(),4);
- assert.equal(await card('Production EU').getByLabel('1 configured site').count(),1);
+ assert.equal(await card('Production EU').getByLabel('1 configured app').count(),1);
  assert.equal(await card('Production EU').locator('code').filter({hasText:'ab'.repeat(32)}).textContent(),'ab'.repeat(32),'Complete SSH fingerprint remains visible');
  async function measure(){
   const boxes=await page.locator('.server-card').evaluateAll(cards=>cards.map(card=>{const r=card.getBoundingClientRect(),f=card.querySelector('footer').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,actions:f.y,actionWidth:f.width}}));
@@ -42,8 +42,8 @@ try{
  await page.getByRole('dialog',{name:'Connection diagnostics'}).waitFor();assert.equal(tested,1);
  await page.getByRole('button',{name:'Close dialog'}).click();
  await page.route('**/api/servers/production/discover',r=>r.fulfill({json:{containers:[{name:'shop',image:'shop:latest',state:'running'}]}}));
- await card('Production EU').getByRole('button',{name:'Discover sites',exact:true}).click();
- await page.getByRole('dialog').getByRole('button',{name:'Select site shop',exact:true}).waitFor();
+ await card('Production EU').getByRole('button',{name:'Discover apps',exact:true}).click();
+ await page.getByRole('dialog').getByRole('button',{name:'Select app shop',exact:true}).waitFor();
  assert.equal(await page.getByRole('dialog').getByLabel('Source server').inputValue(),'production','Discovery retains selected server');
  await page.getByRole('button',{name:'Close dialog'}).click();
  let edited=0;

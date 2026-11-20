@@ -3,6 +3,7 @@ import {IconX,IconSearch,IconChevronRight,IconRefresh,IconServer,IconDatabaseExp
 import {IconButton} from '../system.jsx';
 import {count} from '../plural.js';
 import {containerName,containerGroups} from '../container-groups.js';
+import {coverageIndex,availableChoices,coveredCaption,hiddenCaption} from '../../shared/backup-coverage.js';
 import {Sheet,Note} from './MoveFlow.jsx';
 
 // One panel at a time, on the right. Same size every time, footer pinned, content scrolls. Escape or Close closes it and
@@ -35,22 +36,21 @@ export function AddToMap({onAddServer,onAddStorage,onAddAlert,onConnections,onDr
  </>;
 }
 
-// Sites found on a server by the existing discovery, minus the ones already added.
+// Apps found on a server by the existing discovery, minus what apps there already back up (shared/backup-coverage.js).
 export function useDiscovery(api,server,sites){
  const [state,setState]=useState({loading:true,error:'',containers:[],statics:[]}),[run,setRun]=useState(0);
  useEffect(()=>{
   let live=true;setState(s=>({...s,loading:true,error:''}));
   api('/servers/'+encodeURIComponent(server.id)+'/discover').then(r=>{if(live)setState({loading:false,error:'',containers:(r.containers||[]).filter(c=>containerName(c)),statics:r.staticSites||[]})})
-   .catch(e=>{if(live)setState(s=>({...s,loading:false,error:e.message||'Could not look for sites on this server.'}))});
+   .catch(e=>{if(live)setState(s=>({...s,loading:false,error:e.message||'Could not look for apps on this server.'}))});
   return()=>{live=false};
  },[api,server.id,run]);
  const choices=useMemo(()=>{
-  const have=new Set(sites.filter(s=>s.serverId===server.id).flatMap(s=>s.config?.containers||[])),roots=new Set(sites.filter(s=>s.serverId===server.id).map(s=>s.config?.documentRoot).filter(Boolean));
-  const all=[...state.statics.map(s=>({id:'static:'+s.documentRoot,name:s.name||s.documentRoot,kind:'static',containers:[]})),
+  const all=[...state.statics.map(s=>({id:'static:'+s.documentRoot,name:s.name||s.documentRoot,kind:'static',documentRoot:s.documentRoot,containers:[]})),
    ...containerGroups(state.containers).flatMap(g=>g.kind==='standalone'?g.containers.map(c=>({id:'container:'+containerName(c),name:containerName(c),kind:'container',containers:[c]})):[g])];
-  return all.filter(c=>c.kind==='static'?!roots.has(c.id.slice(7)):!c.containers.every(x=>have.has(containerName(x))));
+  return availableChoices(all,coverageIndex(sites,server.id),containerName);
  },[state,sites,server.id]);
- return {...state,choices,again:()=>setRun(n=>n+1)};
+ return {...state,choices:choices.shown,hidden:choices.hidden,again:()=>setRun(n=>n+1)};
 }
 export function AddToServer({found,onPick,onDragItem,onNewSite}){
  const [q,setQ]=useState('');
@@ -59,10 +59,11 @@ export function AddToServer({found,onPick,onDragItem,onNewSite}){
   <Search value={q} onChange={setQ}/>
   {onNewSite&&<ul className="map-rows"><Row icon={IconPlus} title="New site" caption="From a Compose file or a Git repository" onClick={onNewSite}/></ul>}
   <h3 className="map-group-title">Found on this server ({found.choices.length})</h3>
-  <div role="status" aria-live="polite">{found.loading&&<p className="map-caption">Looking for sites{'…'}</p>}{found.error&&<Note kind="error" icon={IconInfoCircle}>{found.error}</Note>}
-   {!found.loading&&!found.error&&!found.choices.length&&<p className="map-caption">No sites left to add on this server.</p>}
+  {!found.loading&&!found.error&&found.hidden.length>0&&<p className="map-caption" role="note">{hiddenCaption(found.hidden)}</p>}
+  <div role="status" aria-live="polite">{found.loading&&<p className="map-caption">Looking for apps{'…'}</p>}{found.error&&<Note kind="error" icon={IconInfoCircle}>{found.error}</Note>}
+   {!found.loading&&!found.error&&!found.choices.length&&<p className="map-caption">No apps left to add on this server.</p>}
    {!found.loading&&found.choices.length>0&&!rows.length&&<p className="map-caption">Nothing matches this search.</p>}</div>
-  {rows.length>0&&<ul className="map-rows">{rows.map(c=><Row key={c.id} icon={c.kind==='static'?IconAppWindow:IconBox} title={c.name} caption={c.kind==='static'?'nginx site · static files':'Docker · '+count(c.containers.length,'container')} onClick={()=>onPick(c)} onDrag={onDragItem?()=>onDragItem({kind:'site',name:c.name,choice:c}):undefined}/>)}</ul>}
+  {rows.length>0&&<ul className="map-rows">{rows.map(c=><Row key={c.id} icon={c.kind==='static'?IconAppWindow:IconBox} title={c.name} caption={c.kind==='static'?'nginx site · static files':'Docker · '+count(c.containers.length,'container')+(c.covered.length?' · '+coveredCaption(c):'')} onClick={()=>onPick(c)} onDrag={onDragItem?()=>onDragItem({kind:'site',name:c.name,choice:c}):undefined}/>)}</ul>}
  </>;
 }
 export const DiscoverFooter=({found})=><><span className="map-caption">Not listed?</span><button type="button" className="map-link" disabled={found.loading} onClick={found.again}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Discover again</button></>;

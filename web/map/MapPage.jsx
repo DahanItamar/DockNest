@@ -34,9 +34,9 @@ function serverStatus(server){
 }
 function serverFacts(server,sites){
  const free=bytes(server.capabilities?.freeBytes);
- return count(sites,'site')+(free?' · '+free+' free':'');
+ return count(sites,'app')+(free?' · '+free+' free':'');
 }
-const siteFacts=site=>Array.isArray(site.config?.containers)?count(site.config.containers.length,'container'):'Docker site';
+const siteFacts=site=>Array.isArray(site.config?.containers)?count(site.config.containers.length,'container'):'Docker app';
 const SiteIcon=({site,size})=>{const I=!site.config?.containers?.length&&site.config?.documentRoot?IconAppWindow:IconBox;return <I size={size} stroke={1.5} aria-hidden="true"/>};
 // What a storage destination reports: free space when it has a known size.
 function storageFacts(t){
@@ -66,8 +66,8 @@ function MapList({groups,storage,canMove,canAdd,onMoveTo,onDetails,onAddSite,onA
   const id='map-list-'+(server?server.id:'unassigned');
   return <section key={id} className="map-list-group" aria-labelledby={id}>
    <div className="map-list-head"><IconServer size={20} stroke={1.75} aria-hidden="true"/><div><h2 id={id}>{server?server.name:'Not on a server'}</h2>{server&&<>{serverStatus(server)}<span className="map-caption">{serverFacts(server,sites.length)}</span></>}</div></div>
-   {server&&<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}>Details</button>{canMove&&<button type="button" onClick={e=>onAddSite(server.id,e.currentTarget)}>Add site</button>}</div>}
-   {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div></li>)}</ul>:<p className="map-caption map-none">No sites on this server yet.</p>}
+   {server&&<div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'server',id:server.id},e.currentTarget)}>Details</button>{canMove&&<button type="button" onClick={e=>onAddSite(server.id,e.currentTarget)}>Add app</button>}</div>}
+   {sites.length?<ul>{sites.map(s=><li key={s.id}><SiteIcon site={s} size={18}/><div className="map-list-text"><span className="map-name">{s.name}</span><span className="map-caption">{server?siteFacts(s):'Not connected'}</span></div><div className="map-list-actions"><button type="button" onClick={e=>onDetails({kind:'site',id:s.id},e.currentTarget)}>Details</button>{canMove&&server&&<button type="button" className="map-moveto" onClick={e=>onMoveTo(s.id,e.currentTarget)}>Move to{'…'}</button>}</div></li>)}</ul>:<p className="map-caption map-none">No apps on this server yet.</p>}
   </section>;
  })}
  {storage.length>0&&<section className="map-list-group" aria-labelledby="map-list-storage">
@@ -354,7 +354,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(handled){e.preventDefault();if(/Arrow/.test(e.key))mode.current='user';}
  }
 
- if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add a site. They will appear here, arranged automatically.</p></section>;
+ if(!servers.length&&!sites.length)return <section className="map-root map-empty"><IconMap2 size={28} stroke={1.5} aria-hidden="true"/><h2>Nothing to show yet</h2><p>Connect a server and add an app. They will appear here, arranged automatically.</p></section>;
  const vh=view.current?.clientHeight||0,vw=view.current?.clientWidth||0,clipped=!narrow&&vh>0&&clippedIn(layout,t,vw,vh);
  const flowSite=flow&&byId.sites[flow.siteId],flowTo=flow&&byId.servers[flow.targetId],flowFrom=flowSite&&byId.servers[flowSite.serverId];
  const checkServer=c=>byId.servers[c.serverId]||flowTo;
@@ -400,10 +400,10 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={s.name} onClose={close} footer={<>{canMove&&home&&<button type="button" onClick={e=>moveTo(s.id,opener.current||e.currentTarget)}>Move to{'…'}</button>}{canMove&&onSafeEdit&&s.config?.kind!=='static'&&<button type="button" onClick={()=>onSafeEdit(s)}>Edit</button>}<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenSite?.(s)}}>Open site</button></>}>
     {canMove&&offerOpen(s.launch)&&<LaunchOffer launch={s.launch} onRemove={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'remove-launch',siteId:s.id})}}/>}
     {failed&&<p className="map-panel-warn"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>The last backup failed.</p>}
-    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker site'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
+    <Defs rows={[['Server',home?home.name:'Not connected'],['Type',s.config?.kind==='static'?'Static nginx site':'Docker app'],doms.length&&['Domains',<span className="map-vals">{doms.map(d=><Val key={d} text={d} label={d}><a href={'https://'+d} target="_blank" rel="noreferrer">{d}</a></Val>)}</span>],names&&['Containers',names],ports.length>0&&['Ports',ports.join(', ')],['Schedule',sched],['Backup storage',target?target.name:'Not backed up yet'],['Last backup',lb||lastJob(s.id)?[lb?when(lb.capturedAt):when(lastJob(s.id).finishedAt||lastJob(s.id).createdAt),lastResult(s.id)].filter(Boolean).join(', '):'No backup yet'],lb?.size>0&&['Backup size',bytes(lb.size)]]}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>
     {api&&s.config?.kind!=='static'&&<button type="button" className="map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
-    {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the site.</p></section>}
+    {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the app.</p></section>}
     {onEditHistory&&<button type="button" className="map-found" onClick={()=>onEditHistory(s)}>Edit history</button>}
     {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
@@ -412,9 +412,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    const sv=byId.servers[panel.id],c=sv.capabilities||{},mine=sites.filter(x=>x.serverId===sv.id).length,free=bytes(c.freeBytes);
    const nginx=c.nginx===undefined?undefined:(c.nginx?.installed??!!c.nginx),certbot=c.certbot===undefined?undefined:(c.certbot?.installed??!!c.certbot);
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={sv.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenServer?.(sv)}}>Open server</button>}>
-    <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Sites',String(mine)]]}/>
+    <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
-    {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add a site found here</button>}
+    {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button>}
     {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
@@ -432,8 +432,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   if(panel.kind==='storage'&&byId.storage[panel.id]){
    const t=byId.storage[panel.id],f=storageFacts(t),here=sites.filter(x=>backupOf[x.id]===t.id),lastUp=(backups||[]).filter(b=>here.some(x=>x.id===b.siteId)&&b.capturedAt).sort((a,b)=>String(b.capturedAt).localeCompare(String(a.capturedAt)))[0];
    return <SidePanel narrow={narrow} labelId="map-panel-title" title={t.name} onClose={close} footer={<button type="button" className="primary" onClick={()=>{closePanel(false);onOpenStorage?.(t)}}>Open storage</button>}>
-    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':'SFTP server'],['Space',f.text],['Status',t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet'],['Sites using it',String(here.length)],lastUp&&['Last upload',when(lastUp.capturedAt)]]}/>
-    <section><h3 className="map-group-title">Backed up here</h3>{here.length?<ul className="map-plain">{here.map(x=><li key={x.id}>{x.name}</li>)}</ul>:<p className="map-caption">No sites back up here yet.</p>}</section>
+    <Defs rows={[['Type',t.kind==='s3'?'S3-compatible storage':'SFTP server'],['Space',f.text],['Status',t.status==='connected'?'Connected':t.status?'Needs attention':'Not checked yet'],['Apps using it',String(here.length)],lastUp&&['Last upload',when(lastUp.capturedAt)]]}/>
+    <section><h3 className="map-group-title">Backed up here</h3>{here.length?<ul className="map-plain">{here.map(x=><li key={x.id}>{x.name}</li>)}</ul>:<p className="map-caption">No apps back up here yet.</p>}</section>
    </SidePanel>;
   }
   return null;
@@ -470,7 +470,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  };
  return <section className="map-root" aria-label="Infrastructure map">
   {canMove&&<div className="map-toolbar">
-   {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every site to a server to save</span>}
+   {unconnected&&<span className="map-warn" role="status"><IconAlertTriangle size={18} stroke={1.75} aria-hidden="true"/>Connect every app to a server to save</span>}
    <button type="button" disabled={!H.current.past.length} onClick={undo}>Undo</button><button type="button" disabled={!H.current.future.length} onClick={redo}>Redo</button><button type="button" onClick={tidy}>Tidy up</button>
    {edit&&<button type="button" onClick={cancelEdit}>Cancel</button>}
    <button type="button" className="primary" disabled={!pending||!!flow} onClick={e=>{opener.current=e.currentTarget;openReview(pending.siteId,pending.targetId)}}>Save changes</button>
@@ -548,7 +548,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
   {panelBody()}
   </div>
   {undoBar}
-  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. ':''}{canMove?'Click a node to open it. Drag a site’s line to another server to move it.':'Click a node for details. Drag the background to move around.'}</span></p>
+  <p className="map-hint map-caption"><IconInfoCircle size={16} stroke={1.75} aria-hidden="true"/><span>{clipped?'Part of the map is out of view. ':''}{canMove?'Click a node to open it. Drag an app’s line to another server to move it.':'Click a node for details. Drag the background to move around.'}</span></p>
   <div className="map-live" role="status" aria-live="polite">{note}</div>
   {dialogs}
  </section>;
