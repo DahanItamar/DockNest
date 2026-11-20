@@ -1,0 +1,57 @@
+/* Design system v2: dialogs, tabs, notices, toasts and steppers. Loaded last so these are the one definition of each. */
+
+/* Dialog: sm 440 (confirm), md 640 (forms), lg 880 (details). Radius lg, shadow-3, overlay backdrop. */
+:root dialog{box-sizing:border-box;width:min(640px,calc(100vw - 2*var(--dn-space-4)));max-width:calc(100vw - 2*var(--dn-space-4));border:0;border-radius:var(--dn-radius-lg);background:var(--dn-bg-raised);color:var(--dn-text-primary);box-shadow:var(--dn-shadow-3)}
+:root dialog::backdrop{background:var(--dn-bg-overlay)}
+:root dialog:is(.dialog-sm,.cx-confirm,.sc-dialog,.bc-dialog,.zip-dialog){width:min(440px,calc(100vw - 2*var(--dn-space-4)))}
+:root dialog:is(.dialog-lg,.job-dialog){width:min(880px,calc(100vw - 2*var(--dn-space-4)))}
+.modal-head{border-bottom:1px solid var(--dn-border-subtle)}
+.modal-head h2{font-size:var(--dn-text-lg);line-height:var(--dn-leading-lg);font-weight:600}
+/* Footer: right-aligned, Cancel then the one Primary or Danger verb. */
+.modal-foot{justify-content:flex-end}
+/* Phones: a bottom sheet; the footer stacks full width with the primary verb on top. */
+@media(max-width:600px){
+ :root dialog:not(.map-dialog){width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:var(--dn-radius-lg) var(--dn-radius-lg) 0 0}
+ :root dialog .modal-foot{flex-direction:column-reverse;align-items:stretch;padding-bottom:max(var(--dn-space-4),env(safe-area-inset-bottom))}
+ :root dialog .modal-foot>:is(button,a){width:100%;flex:none;min-height:var(--dn-control-h-touch);justify-content:center}
+}
+@media(prefers-reduced-motion:reduce){:root dialog{transition:none}@starting-style{dialog[open]{opacity:1;translate:none}}}
+
+/* Tabs: one underline style, 40px (44 on touch), current = primary text and a 2px brand underline. Scrolls, never wraps. */
+:is(.tabs,.map-tabs,.studio-tabs){display:flex;flex:none;gap:var(--dn-space-1);overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--dn-border-subtle);padding:0}
+:is(.tabs,.map-tabs,.studio-tabs)::-webkit-scrollbar{display:none}
+:is(.tabs,.map-tabs,.studio-tabs) :is([role=tab],button){flex:none;display:inline-flex;align-items:center;justify-content:center;gap:var(--dn-space-2);height:auto;min-height:var(--dn-control-h);margin:0 0 -1px;padding:0 var(--dn-space-3);border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--dn-text-secondary);font-weight:500;white-space:nowrap}
+:is(.tabs,.map-tabs,.studio-tabs) :is([role=tab],button):is([aria-selected=true],.on){background:transparent;color:var(--dn-text-primary);border-bottom-color:var(--dn-brand-9)}
+@media(hover:hover){:is(.tabs,.map-tabs,.studio-tabs) :is([role=tab],button):hover:not(:is([aria-selected=true],.on)){background:var(--dn-bg-hover);color:var(--dn-text-primary)}}
+:is(.tabs,.map-tabs,.studio-tabs) :is([role=tab],button):focus-visible{outline:var(--dn-focus-ring);outline-offset:-2px}
+.tabs{margin:0 0 var(--dn-space-6)}
+.studio-tabs{padding-inline:var(--dn-space-6)}
+@media(max-width:767px){.studio-tabs{padding-inline:var(--dn-space-4)}}
+
+/* Notices: inline notice, page banner, toast. Semantic surface plus icon plus one sentence plus an optional action; no stripe. */
+.alert-panel{align-items:flex-start;gap:var(--dn-space-3);padding:var(--dn-space-3) var(--dn-space-4);border-radius:var(--dn-radius-lg)}
+.alert-panel-body{flex:1}
+.alert-panel-body>:is(button,a.button){align-self:flex-start;margin-top:var(--dn-space-2)}
+.alert-success{background:var(--dn-success-surface);border-color:var(--dn-success-border);color:var(--dn-success-text)}.alert-success .alert-panel-icon{color:var(--dn-success-text)}
+
+/* Toast: bottom-right on desktop, full width at the bottom on phones. 150ms fade, none under reduced motion. */
+.toast-wrap{position:fixed;right:var(--dn-space-6);bottom:var(--dn-space-6);z-index:var(--dn-z-toast)}
+.dn-toast{display:flex;align-items:center;gap:var(--dn-space-3);max-width:420px;padding:var(--dn-space-2) var(--dn-space-2) var(--dn-space-2) var(--dn-space-4);border:1px solid var(--dn-border-subtle);border-radius:var(--dn-radius-lg);background:var(--dn-bg-raised);box-shadow:var(--dn-shadow-2);color:var(--dn-text-primary);font-size:var(--dn-text-sm);opacity:1;transition:opacity var(--dn-dur-base) var(--dn-ease-enter),translate var(--dn-dur-base) var(--dn-ease-enter)}
+.dn-toast>svg{flex:none;color:var(--dn-success-text)}
+.dn-toast-text{flex:1;min-width:0}
+.dn-toast.is-error>svg{color:var(--dn-danger-text)}
+@starting-style{.dn-toast{opacity:0;translate:0 4px}}
+@media(max-width:600px){.toast-wrap{left:var(--dn-space-4);right:var(--dn-space-4);bottom:max(var(--dn-space-4),env(safe-area-inset-bottom))}.dn-toast{max-width:none;flex-wrap:wrap}.dn-toast-text{flex:1 1 100%}}
+@media(prefers-reduced-motion:reduce){.dn-toast{transition:none}@starting-style{.dn-toast{opacity:1;translate:none}}}
+
+/* Stepper: numbered steps, a check icon once done. On phones one line: "Step 2 of 4 - Name". */
+.stepper{margin:0 0 var(--dn-space-6)}
+.stepper-list{display:flex;gap:var(--dn-space-2);margin:0;padding:0;list-style:none;border-bottom:1px solid var(--dn-border-subtle)}
+.stepper-step{display:flex;align-items:center;gap:var(--dn-space-2);min-height:var(--dn-control-h);margin-bottom:-1px;padding:0 var(--dn-space-3);border-bottom:2px solid transparent;color:var(--dn-text-secondary);font-size:var(--dn-text-sm);font-weight:500}
+.stepper-mark{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;border-radius:var(--dn-radius-full);border:1px solid var(--dn-border);font-size:var(--dn-text-xs);font-weight:600}
+.stepper-step[data-state=current]{color:var(--dn-text-primary);border-bottom-color:var(--dn-brand-9)}
+.stepper-step[data-state=current] .stepper-mark{background:var(--dn-brand-solid);border-color:var(--dn-brand-solid);color:var(--dn-text-on-solid)}
+.stepper-step[data-state=done] .stepper-mark{background:var(--dn-success-surface);border-color:var(--dn-success-border);color:var(--dn-success-text)}
+.stepper-compact{display:none;margin:0;font-size:var(--dn-text-sm);font-weight:500;color:var(--dn-text-primary)}
+@media(max-width:600px){.stepper-list{display:none}.stepper-compact{display:block;padding-bottom:var(--dn-space-3);border-bottom:1px solid var(--dn-border-subtle)}}
+.alert-panel-close{flex:none;margin:-4px -8px -4px 0;border:0;background:transparent;color:inherit}

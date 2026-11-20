@@ -9,7 +9,7 @@ const ACTIONS={
  'backup.scrub.enqueue':'Integrity check queued','backup.scrub.completed':'Integrity check completed','backup.scrub.failed':'Integrity check failed',
  'restore.enqueue':'Restore queued','restore.completed':'Restore completed','restore.failed':'Restore failed',
  'server.create':'Server added','server.update':'Server updated','server.details_updated':'Server details updated','server.test':'Server tested','server.connected':'Server connected','server.key_prepared':'Server key prepared','server.cleanup':'Server cleaned up','coverage.skip':'Item skipped in coverage','coverage.unskip':'Item unskipped in coverage',
- 'site.create':'App added','site.update':'App updated','site.removed':'App removed','policy.update':'Schedule updated',
+ 'site.create':'App added','site.update':'App updated','site.removed':'App removed','site.restore_decision':'Restore check answer saved','site.restore_decision_removed':'Restore check answer removed','policy.update':'Schedule updated',
  'storage.connected':'Storage connected','storage.selected':'Storage selected','storage.test':'Storage tested',
  'maintenance.design':'Maintenance page designed','maintenance.set':'Maintenance mode changed',
  'access.invitation_created':'Invitation created','access.invitation_revoked':'Invitation revoked','access.account_revoked':'Account revoked','access.universal_password_changed':'Shared password changed',

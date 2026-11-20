@@ -33,7 +33,7 @@ dialog.inc-dialog::-webkit-scrollbar{display:none}
 .inc-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
 .inc-link{width:auto;min-height:32px;height:auto;padding:8px 12px;margin:-8px -12px -8px 0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500;white-space:nowrap}
 .inc-link:hover{background:var(--transparent);text-decoration:underline}
-.inc-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.inc-link:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 .inc-spacer{flex:1}
 
 /* Chain dialog: a compact table at every width. 40px header on the muted surface, 56px rows, numbers right-aligned. */

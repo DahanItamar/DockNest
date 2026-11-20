@@ -269,6 +269,44 @@ test('a backup carries the key proof: request with fpKey, manifest proof list, i
   assert.deepEqual(ledger.keys.keys.map(key => key.fingerprint), scan.keys.map(key => key.fingerprint.slice(0, 8)), 'the padlock shows 8 characters of a fingerprint');
 });
 
+test('a completed restore of the app is its known-good: a fresh trusted scan, no config.changed; a failed one marks nothing', async () => {
+  const serverId = serverRow('Restore server'), siteId = siteRow(serverId, 'Journal');
+  store.recordScan(siteId, scanOf());
+  const restored = scanOf({ compose: 'restored compose\n', env: 'APP_KEY=restored\n', value: 'restored' });
+  let restoreAnswer = () => ({ verification: { isolatedRestore: { status: 'passed' } } });
+  const requests = [];
+  engine.transport.remote = async (_server, request) => {
+    requests.push(request.operation);
+    if (request.operation === 'plan') return { fingerprint: 'plan' };
+    if (request.operation === 'capture') return { remotePath: '/var/lib/docknest/job/payload.tar.gz', root: '/var/lib/docknest/' + request.job, manifest: { kind: 'docker', complete: true, capturedAt: Date.now() / 1000, downtimeSeconds: 1, originalImages: [], architecture: 'amd64', containers: [], consistency: { status: 'passed' } } };
+    if (request.operation === 'list-staging') return { root: '/var/lib/docknest', jobs: [] };
+    if (request.operation === 'prepare-restore') return { remotePath: '/var/lib/docker-backup-manager/restore/' + request.job + '/payload.tar.gz' };
+    if (request.operation === 'restore') return restoreAnswer();
+    if (request.operation === 'key-scan') return restored;
+    return {};
+  };
+  engine.transport.download = async (_server, _path, output) => { output.end(Buffer.from('authenticated fixture payload')); };
+  engine.transport.uploadStream = async (_server, input) => { for await (const _chunk of input); };
+  engine.enqueueBackup(siteId, 'test'); await engine.executeJob(engine.claimJob());
+  const backup = db.prepare('SELECT * FROM backups WHERE site_id=?').get(siteId);
+  const restore = async () => {
+    const restoreId = randomUUID(), jobId = randomUUID();
+    db.prepare("INSERT INTO restores(id,backup_id,server_id,mode,plan,status,created_at) VALUES(?,?,?,'new-copy',?,'queued',?)").run(restoreId, backup.id, serverId, JSON.stringify({ mappings: {} }), at);
+    db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at,details) VALUES(?,?,'restore','queued','queued',?,?)").run(jobId, siteId, at, JSON.stringify({ restoreId, backupId: backup.id, targetServerId: serverId }));
+    await engine.executeJob(engine.claimJob());
+    return db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId).status;
+  };
+  restoreAnswer = () => { throw Object.assign(new Error('restore failed'), { remoteReported: true }); };
+  assert.equal(await restore(), 'failed');
+  assert.ok(!requests.includes('key-scan'), 'a failed restore scans and marks nothing');
+  restoreAnswer = () => ({ verification: { isolatedRestore: { status: 'passed' } } });
+  assert.equal(await restore(), 'completed');
+  assert.equal(requests.filter(operation => operation === 'key-scan').length, 1);
+  assert.ok(Object.values(items(siteId)).every(row => row.known_good_source === 'restore' && row.known_good === row.fingerprint && row.first_seen_changed_at === null));
+  assert.equal(audits('config.changed', siteId).length, 0, 'the restored files raise no alert');
+  assert.equal(audits('config.known_good', siteId).at(-1).source, 'restore');
+});
+
 test('readiness and discovery record the scans they carry and never return them', async () => {
   const serverId = serverRow('Scan server'), siteId = siteRow(serverId, 'Board'), staticSite = siteRow(serverId, 'Static', { kind: 'static', documentRoot: '/var/www/site' });
   const requests = [];

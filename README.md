@@ -33,13 +33,14 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 ## Features
 
 **Backup and restore**
-- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB and Redis. SQLite files you declare are checked and captured, and you can edit that list per service in the app settings.
+- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB, Redis and MongoDB. SQLite files you declare are checked and captured, and you can edit that list per service in the app settings.
 - Per-app schedules, retention, and pinned backups.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate that would back up the same container twice.
 - Restore to a separate copy; DockNest does not replace a live app by itself.
 - Apps started with plain `docker run` are backed up too, with a readable Compose file and env files in the encrypted backup that recreate them with the same settings.
 - Restore copies, restore tests and moves keep the original's protections (read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor), or refuse with a clear reason.
 - Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. See [restore tests](docs/restore-tests-guide.md).
+- Restore check: Check readiness also lists what a restore on a new server would miss, such as cron jobs and systemd timers that use the app, Docker networks it does not create itself and its certificates. Commands and values from those files are never shown. See [restore check](docs/restore-check.md).
 - Keep up to three extra copies of each backup on other storage, for example SFTP plus S3, each with its own retention.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.
 - Incremental backups (beta, off by default): a full backup, then increments that hold only the files that changed in your mounts. Every restore point still restores to a complete copy. Images are saved as before, so the saving comes from mount data. After a backup that contains folder renames, the next backup is full. See [incremental backups](docs/incremental-backups.md).
@@ -49,10 +50,13 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Jobs page with transfer progress, a step timeline and plain-language error explanations.
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
+- After every Self Backup, DockNest checks that the new recovery kit opens and holds the right key, and alerts you if it does not. See [kit check](docs/emergency-kit.md#kit-check).
+- Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time.
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
 - Backup coverage: on the Apps page and the Map, see which containers and volumes on a server no app backs up, add them as an app, or skip them on purpose with a note. It reads Docker only when you open it. Adding a plain `docker run` container previews the Compose file DockNest keeps for it.
+- Linked apps: each server scan shows which apps depend on each other, such as a database, network or volume they share, and which containers they use that no app backs up. Read-only and warn-only. See [linked apps](docs/linked-apps.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
 - Light and dark themes, and a layout for phones.
@@ -197,8 +201,8 @@ Full model: [docs/security.md](docs/security.md). Report vulnerabilities private
 
 | Topic | Guides |
 | :-- | :-- |
-| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [App setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving apps](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) · [Keys safe](docs/keys-safe.md) |
-| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) |
+| Setup | [Deployment](docs/deployment.md) · [Server connection](docs/server-connection.md) · [App setup](docs/site-setup.md) · [Storage backends](docs/storage-backends.md) · [Moving apps](docs/moving-sites.md) · [Safe Edit](docs/safe-edit-guide.md) · [Self-heal](docs/self-heal-guide.md) · [Alerts](docs/alerts.md) · [Server cleanup](docs/server-cleanup.md) · [Hardening score](docs/hardening-score.md) · [Linked apps](docs/linked-apps.md) · [Keys safe](docs/keys-safe.md) |
+| Recovery | [Support matrix](docs/support-matrix.md) · [Database contracts](docs/database-contracts.md) · [Recovery verification](docs/recovery-verification.md) · [Independent recovery](docs/independent-recovery.md) · [Restore check](docs/restore-check.md) · [Restore tests](docs/restore-tests-guide.md) · [Incremental backups](docs/incremental-backups.md) · [DockNest self-backup](docs/docknest-self-backup.md) · [Kit check and emergency kit](docs/emergency-kit.md) |
 | Internals | [Backup format](docs/backup-format.md) · [Remote helper](docs/remote-helper.md) · [Security](docs/security.md) · [History API](docs/history-api.md) · [Interface design](docs/design/DESIGN.md) |
 | Upgrades | [Upgrading and rollback](docs/upgrading.md) · [Update Center design](docs/update-center.md) · [Host updater threat model](docs/updater-threat-model.md) · [Release validation](docs/release-validation.md) |
 | Quality | [Acceptance and limits](docs/acceptance.md) · [Repository privacy](docs/repository-privacy.md) |

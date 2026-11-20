@@ -120,7 +120,7 @@ try {
     const tag = (viewport.width === 1280 ? '1280' : '390') + '-' + scheme;
     { // Sites: the Storage row, Copy missing, and a site without storage data.
       const { context, page, errors } = await open(viewport, scheme);
-      await go(page, viewport, 'Apps & schedules');
+      await go(page, viewport, 'Apps & Schedules');
       const card = page.locator('.site-card', { hasText: LONG_SITE });
       await card.waitFor();
       assert.match(await card.locator('.def-row', { hasText: 'Storage' }).innerText(), /Default destination[\s\S]*2 extra copies[\s\S]*Copy missing/, label + ': storage row');
@@ -160,7 +160,7 @@ try {
     const { context, page, calls } = await open(wide, 'light', { onApi: ({ path, method, route }) => {
       if (/^\/sites\/site-1\/storage$/.test(path) && method === 'PUT' && refused.length) return route.fulfill({ status: 400, json: { error: 'x', code: refused.shift() } });
     } });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     for (const code of ['copy_equals_main', 'duplicate_copy', 'too_many_copies', 'unknown_destination', 'invalid_retention']) {
       refused.push(code);
       await page.locator('.site-card', { hasText: LONG_SITE }).getByRole('button', { name: /^Change storage for/ }).click();
@@ -200,7 +200,7 @@ try {
 
   { // Only one destination: nothing to copy to, said plainly.
     const { context, page } = await open(wide, 'light', { targets: [TARGETS[0]] });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     await page.locator('.site-card', { hasText: 'pawmeadow.com' }).getByRole('button', { name: /^Change storage for/ }).click();
     const dialog = page.getByRole('dialog', { name: 'App storage' });
     await dialog.getByLabel('Main destination').waitFor();
@@ -211,7 +211,7 @@ try {
 
   { // Server older than 2.11 (no storage or copies in the state): the pages look exactly as before.
     const { context, page } = await open(wide, 'light', { copies: false });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     await page.locator('.site-card').first().waitFor();
     assert.equal(await page.locator('.site-card .def-row', { hasText: 'Storage' }).count(), 0, 'no Storage row without data');
     await go(page, wide, 'Backups');
@@ -274,9 +274,10 @@ try {
       assert.match(await card.locator('tbody tr').nth(1).innerText(), /7 GB[\s\S]*0 B[\s\S]*7 GB/);
       assert.equal(await card.locator('th.num').count(), 4, label + ': numeric headers right aligned');
       await card.scrollIntoViewIfNeeded(); await shot(page, 'storage-report-' + tag);
-      const remove = page.getByRole('button', { name: 'Remove ' + TARGETS[1].name });
-      await remove.scrollIntoViewIfNeeded();
-      await remove.click();
+      const more = page.getByRole('button', { name: 'More actions for ' + TARGETS[1].name, exact: true });
+      await more.scrollIntoViewIfNeeded();
+      await more.click();
+      await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[1].name }).click();
       const confirm = page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[1].name });
       await confirm.waitFor();
       assert.equal(calls.filter(c => c.method === 'DELETE').length, 0, label + ': nothing is deleted before the confirmation');
@@ -294,7 +295,8 @@ try {
       await page.waitForFunction(() => document.querySelector('.alert-panel')?.textContent.includes('Deleting 3 copies'));
       assert.deepEqual(calls.find(c => c.path === '/storage-targets/t2/copies/delete').body, {});
       // A destination nothing uses is removed after one confirmation.
-      await page.getByRole('button', { name: 'Remove ' + TARGETS[2].name }).click();
+      await page.getByRole('button', { name: 'More actions for ' + TARGETS[2].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[2].name }).click();
       await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[2].name }).getByRole('button', { name: 'Remove', exact: true }).click();
       await page.waitForFunction(() => document.body.textContent.includes('Destination removed'));
       assert.deepEqual(errors, [], label);
@@ -307,7 +309,8 @@ try {
       if (path === '/storage-targets/t1' && method === 'DELETE') return route.fulfill({ status: 409, json: { error: 'In use.', code: 'destination_in_use', copies: 0, copyBackups: 0, bytes: 0, mainForSites: [], copyForSites: [], mainBackups: 4, recoveryKits: 1, isDefault: true } });
     } });
     await go(page, wide, 'Storage');
-    await page.getByRole('button', { name: 'Remove ' + TARGETS[0].name }).click();
+    await page.getByRole('button', { name: 'More actions for ' + TARGETS[0].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[0].name }).click();
     await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[0].name }).getByRole('button', { name: 'Remove', exact: true }).click();
     const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
     await inUse.waitFor();
@@ -323,7 +326,8 @@ try {
       if (path === '/storage-targets/t2/copies/delete' && method === 'POST') return body?.includeLastPackages ? route.fulfill({ status: 202, json: { deleting: 3 } }) : route.fulfill({ status: 409, json: { error: 'x', code: 'last_packages', onlyPackageBackups: 2 } });
     } });
     await go(page, wide, 'Storage');
-    await page.getByRole('button', { name: 'Remove ' + TARGETS[1].name }).click();
+    await page.getByRole('button', { name: 'More actions for ' + TARGETS[1].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[1].name }).click();
     await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[1].name }).getByRole('button', { name: 'Remove', exact: true }).click();
     const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
     await inUse.waitFor();

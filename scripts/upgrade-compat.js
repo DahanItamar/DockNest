@@ -29,6 +29,8 @@ db.prepare("INSERT INTO sites VALUES('site','server','Fixture site',?,?)").run(J
 db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone,retention) VALUES('site',1,'0 3 * * *','UTC',7)").run();
 db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job','site','backup','completed','completed',?)").run(now);
 db.prepare("INSERT INTO backups VALUES('backup','site','job',?,'fixture/site.enc',1024,?,'{}',1,1,?)").run(now,'a'.repeat(64),now);
+db.prepare("INSERT INTO settings VALUES('manager_backup_config',?)").run(JSON.stringify({enabled:true,schedule:'0 3 * * *',timezone:'UTC',nextRun:null,passphrase:'sealed-fixture'}));
+db.prepare("INSERT INTO manager_backups(id,status,created_at,finished_at,checksum,size,release) VALUES('kit','completed',?,?,?,2048,'fixture')").run(now,now,'b'.repeat(64));
 db.close();`, { cwd: old });
   const state = join(data, 'state.sqlite');
   const from = version(state);
@@ -59,7 +61,12 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare("SELECT schedule FROM policies WHERE site_id='site'").get().schedule, '0 3 * * *');
   assert.equal(db.prepare("SELECT pinned FROM backups WHERE id='backup'").get().pinned, 1);
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
-  // Keys safe (migration 20, a placeholder number): the tables arrive empty, so the first scan of each app is a silent baseline and an upgrade
+  // Self Backup keeps its settings and kit; the kit check and the optional split start empty (one passphrase, no key pair).
+  assert.equal(JSON.parse(db.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get().value).passphrase, 'sealed-fixture');
+  assert.equal(db.prepare("SELECT status FROM manager_backups WHERE id='kit'").get().status, 'completed');
+  for (const table of ['kit_checks', 'emergency_keys']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, `${table} starts empty`);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key='emergency_kits'").get().count, 0);
+  // Keys safe (migration 23, a placeholder number): the tables arrive empty, so the first scan of each app is a silent baseline and an upgrade
   // raises no config.changed alert.
   for (const table of ['app_keys', 'config_fingerprints']) assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count, 0, `${table} starts empty`);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action='config.changed'").get().count, 0, 'no configuration alert after the upgrade');

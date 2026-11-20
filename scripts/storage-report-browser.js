@@ -155,7 +155,8 @@ try {
   }
   { // Three destinations: two columns, and the odd last card stays a normal half-width cell.
     const targets = [sftpTarget(1, 'Storage box'), sftpTarget(2, 'Offsite box'), sftpTarget(3, 'Third box')], { context, page } = await openStorage(wide, 'dark', { report: mockReport({ targets }), targets });
-    await page.locator('.storage-card').first().waitFor();
+    await page.waitForFunction(n => document.querySelectorAll('.storage-card').length === n, targets.length);
+    await page.evaluate(() => document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))));
     const cards = page.locator('.storage-card'), a = await box(cards.nth(0)), b = await box(cards.nth(1)), c = await box(cards.nth(2));
     assert.ok(Math.abs(a.y - b.y) < 1 && b.x > a.x, 'two columns');
     assert.ok(Math.abs(c.width - a.width) < 1 && Math.abs(c.x - a.x) < 1 && c.y > a.y, 'the odd last card is a half-width cell under the first');
@@ -186,7 +187,7 @@ try {
     const { context, page } = await openStorage(wide, 'light', { report: mockReport({ sites: 1 }), targets: [] });
     const region = page.getByLabel('Storage report'); await region.waitFor();
     assert.equal(await region.locator('.sr-table tbody tr').count(), 1);
-    assert.match(await page.locator('.notice').innerText(), /Connect your first destination/);
+    assert.match(await page.locator('.alert-panel').innerText(), /Connect your first destination/);
     await context.close();
   }
   { // A report load error leaves the destinations usable.

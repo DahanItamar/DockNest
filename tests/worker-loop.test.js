@@ -39,3 +39,11 @@ test('backup copies run only when no site job waits, and never after a drain sig
  assert.deepEqual(calls,['maintain','tick','claimSelf','claim','run','maintain','tick','claimSelf','claim','claimCopy','copy:copy-1','maintain','tick','claimSelf','claim','claimCopy','copy:copy-2']);
  assert.equal(due.length,0);
 });
+test('a kit check runs right after the Self Backup that queued it, before any site job',async()=>{
+ let rounds=0;const {calls,steps}=loopSteps(()=>rounds<1,async()=>{});const runs=[{id:'kit'}],checks=[];
+ steps.claimSelfBackup=()=>{calls.push('claimSelf');return runs.shift()??null;};steps.executeSelfBackup=async()=>{calls.push('runSelf');checks.push({id:'check'});};
+ steps.claimKitCheck=()=>{calls.push('claimCheck');return checks.shift()??null;};steps.executeKitCheck=async()=>calls.push('runCheck');
+ steps.idle=async()=>{rounds++;calls.push('idle');};
+ await runWorkerLoop(steps);
+ assert.deepEqual(calls,['maintain','tick','claimSelf','runSelf','maintain','tick','claimSelf','claimCheck','runCheck','maintain','tick','claimSelf','claimCheck','claim','idle']);
+});

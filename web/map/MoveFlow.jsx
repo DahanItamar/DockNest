@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
+import {LinkedLines} from '../linked/LinkedWarning.jsx';
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
@@ -50,11 +51,12 @@ export function useGuard(client,{verifyLabel}={}){
 }
 
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
-export const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
+const NOTE_TONE={error:'error',warn:'warning',ok:'success'};
+export const Note=({kind,icon:Icon,role,children})=><div className={'alert-panel alert-'+(NOTE_TONE[kind]||'info')} role={role}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body"><span>{children}</span></div></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
-export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
+export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
  const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
@@ -80,6 +82,7 @@ export function ReviewDialog({site,from,to,preview,onCancel,onMove,error,busy,cl
    <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
    <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>
   </div>})}
+  {!blocked&&linked.length>0&&<Note kind="warn" icon={IconAlertTriangle}><LinkedLines items={linked} onOpenApp={onOpenApp}/></Note>}
   {!blocked&&<div className="map-facts">
    <Fact label="Takes about" value={duration(preview.estimateSeconds)||unknown}/>
    <Fact label="App offline about" value={duration(preview.downtimeSeconds)||unknown}/>

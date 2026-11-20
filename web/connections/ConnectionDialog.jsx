@@ -47,7 +47,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
  const [values,setValues]=useState(initial),[name,setName]=useState(()=>connection?.name||(item?'My '+(item.id==='webhook'?'webhook':item.label):'')),[replacing,setReplacing]=useState(()=>new Set());
  const [busy,setBusy]=useState(false),[error,setError]=useState(null),[result,setResult]=useState(null),[testing,setTesting]=useState(false),[customLang,setCustomLang]=useState(false);
  const readOnly=(edit&&connection.editable===false)||(!!item?.adminOnly&&role!=='admin');
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();setTimeout(()=>(edit?nameRef.current:d?.querySelector('.cx-combo'))?.focus(),0);return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();const first=()=>(edit?nameRef.current:d?.querySelector('.cx-combo'))?.focus();first();return()=>{if(d?.open)d.close()}},[]);
  // A new provider starts from its own defaults; the name follows the provider until the user types one.
  function pickProvider(id){const p=providers.find(x=>x.id===id);setProviderId(id);setResult(null);setError(null);setReplacing(new Set());setCustomLang(false);
   const next={};for(const f of p?.fields||[])if(!f.secret)next[f.key]=text(prefill?.[f.key]??defaultOf(f));setValues(next);
@@ -138,7 +138,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
 // Delete a Connection: refused while a node uses it, with the nodes named. The API checks again (a node made meanwhile).
 export function DeleteConnectionDialog({client,connection,onClose,onDeleted}){
  const ref=useRef(null),guard=useReauth(client),[busy,setBusy]=useState(false),[error,setError]=useState(''),used=(connection.usedBy||[]).map(n=>n.name);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('.modal-foot button')?.focus();return()=>{if(d?.open)d.close()}},[]);
  async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.remove(connection.id);await onDeleted()},e=>setError(e.code==='CONNECTION_IN_USE'?e.message:e.message||'This connection could not be deleted.'));setBusy(false)}
  return <dialog ref={ref} className="cx-dialog cx-confirm" aria-labelledby="cx-delete-title" onCancel={e=>{e.preventDefault();onClose()}}>
   <div className="modal-head"><h2 id="cx-delete-title" tabIndex={-1}>Delete {connection.name}?</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>

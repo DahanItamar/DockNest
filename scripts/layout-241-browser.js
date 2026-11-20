@@ -43,18 +43,18 @@ try{
  // 4: wide screens use the width: modest edge padding, no big empty side margins, rail expanded or collapsed.
  for(const [width,height] of [[1920,1100],[2560,1300],[3840,1600]])for(const side of ['expanded','collapsed']){
   const app=await open(width,height,{side});
-  for(const route of ['Overview','Servers','Apps & schedules','Backups','Jobs','Audit','Storage']){
+  for(const route of ['Overview','Servers','Apps & Schedules','Backups','Jobs','Audit','Storage']){
    await app.navigate(route);
    const margins=await app.page.evaluate(()=>{const main=document.querySelector('main#content').getBoundingClientRect(),workspace=document.querySelector('.workspace').getBoundingClientRect(),style=getComputedStyle(document.querySelector('main#content'));return {left:Math.round(main.left-workspace.left),right:Math.round(workspace.right-main.right),padding:parseFloat(style.paddingLeft),scroll:document.documentElement.scrollWidth-innerWidth};});
    assert.ok(margins.left<=200&&margins.right<=200,`${route} side margins at ${width} ${side}: ${JSON.stringify(margins)}`);
    assert.ok(margins.padding>=40&&margins.padding<=48,`${route} edge padding at ${width}: ${margins.padding}`);assert.ok(margins.scroll<=0,'no horizontal scroll');
   }
-  if(width===2560){await app.navigate('Audit');await shot(app.page,'audit-2560-'+side);await app.navigate('Overview');await shot(app.page,'overview-2560-'+side);await app.navigate('Apps & schedules');await shot(app.page,'sites-2560-'+side);await app.navigate('Jobs');await shot(app.page,'jobs-2560-'+side);}
+  if(width===2560){await app.navigate('Audit');await shot(app.page,'audit-2560-'+side);await app.navigate('Overview');await shot(app.page,'overview-2560-'+side);await app.navigate('Apps & Schedules');await shot(app.page,'sites-2560-'+side);await app.navigate('Jobs');await shot(app.page,'jobs-2560-'+side);}
   assert.deepEqual(app.errors,[]);await app.close();
  }
  // Site card footers: every tool and the button stay fully inside the card at 3-column desktop widths and on a phone.
  for(const [width,height] of [[390,900],[900,900],[1024,900],[1280,900],[1440,900],[1920,1100]]){
-  const app=await open(width,height);await app.navigate('Apps & schedules');
+  const app=await open(width,height);await app.navigate('Apps & Schedules');
   const boxes=await app.page.evaluate(()=>[...document.querySelectorAll('.site-card')].map(card=>{const c=card.getBoundingClientRect(),parts=[...card.querySelectorAll('.site-card-actions .icon-button,.site-card-actions .primary')].map(el=>el.getBoundingClientRect());return {left:c.left,right:c.right,parts:parts.map(r=>({left:r.left,right:r.right}))}}));
   assert.ok(boxes.length>0,'site cards render at '+width);
   for(const card of boxes)for(const part of card.parts)assert.ok(part.left>=card.left&&part.right<=card.right,`site card footer control inside the card at ${width}: ${JSON.stringify({card:[card.left,card.right],part})}`);
@@ -102,7 +102,7 @@ try{
  // Phones keep the same 24px gap between the last card or row and the pager, and Audit's details icon shares its label row.
  {
   const app=await open(402,900);
-  for(const [route,label,selector] of [['Apps & schedules','Apps','.site-card'],['Servers','Servers','.server-card'],['Audit','Audit','.table-wrap']]){
+  for(const [route,label,selector] of [['Apps & Schedules','Apps','.site-card'],['Servers','Servers','.server-card'],['Audit','Audit','.table-wrap']]){
    await app.navigate(route);const pager=app.page.getByRole('group',{name:label+' pagination',exact:true}),next=pager.getByRole('button',{name:label+' next page',exact:true});
    const gap=()=>app.page.evaluate(sel=>{const items=[...document.querySelectorAll(sel)],bottom=Math.max(...items.map(item=>item.getBoundingClientRect().bottom));return Math.round(document.querySelector('.pagination').getBoundingClientRect().top-bottom)},selector);
    for(let page=1;page<=2;page++){assert.equal(await gap(),24,label+' pager gap on a phone, page '+page);if(await next.isDisabled())break;await next.click();await app.page.waitForTimeout(150);}
@@ -115,7 +115,7 @@ try{
  // 9: the header has no search box; each list page has one funnel filter with the record count.
  {
   const app=await open(1440,1000);assert.equal(await app.page.getByLabel('Search pages').count(),0);assert.equal(await app.page.locator('.berry-header input').count(),0);
-  for(const [route,placeholder] of [['Servers','Filter servers'],['Apps & schedules','Filter apps'],['Backups','Filter recovery points'],['Jobs','Filter jobs'],['Audit','Filter audit events']]){
+  for(const [route,placeholder] of [['Servers','Filter servers'],['Apps & Schedules','Filter apps'],['Backups','Filter recovery points'],['Jobs','Filter jobs'],['Audit','Filter audit events']]){
    await app.navigate(route);const filter=app.page.getByLabel('Filter '+route,{exact:true});assert.equal(await filter.count(),1,route);assert.match(await filter.getAttribute('placeholder'),new RegExp('^'+placeholder));
    const bar=await app.page.evaluate(()=>{const b=document.querySelector('.filter-bar');return {icon:b.querySelector('svg')?.getAttribute('class')||'',count:b.querySelector('span')?.textContent||'',border:getComputedStyle(b).borderTopWidth}});
    assert.match(bar.icon,/filter/);assert.doesNotMatch(bar.icon,/search/);assert.match(bar.count,/^\d+ (record|records|server|servers)$/);assert.equal(bar.border,'1px');

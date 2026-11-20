@@ -1,6 +1,6 @@
 import './wizards.css';
 import {Paginated} from './pagination.jsx';
-import {AlertPanel} from "./system.jsx";
+import {AlertPanel,Stepper} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
 import {containerName,containerGroups,suggestedGroups} from './container-groups.js';
@@ -122,7 +122,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
   }catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}finally{setBusy(false);}
  }
  return <form className="modal-body site-wizard" onSubmit={submit}>
-  <ol className="wizard-steps" aria-label="App setup steps">{order.map((name,index)=><li key={name} aria-current={step===name?'step':undefined}>{index+1}. {labels[name]}</li>)}</ol>
+  <Stepper label="App setup steps" steps={order.map(name=>labels[name])} current={Math.max(0,order.indexOf(step))}/>
   {step==='select'&&<>
    <h3>Which app do you want to back up?</h3>
    <Field label="Source server" value={serverId} onChange={event=>setServerId(event.target.value)} options={[[ '', 'Choose a server'],...servers.map(server=>[server.id,server.name+(server.note?' · '+server.note:'')])]} required/>

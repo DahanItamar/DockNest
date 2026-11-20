@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {IconKey,IconPlus,IconCopy,IconRefresh,IconTrash,IconX,IconLock} from '@tabler/icons-react';
-import {AlertPanel,IconButton} from '../system.jsx';
+import {AlertPanel,EmptyState,IconButton} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {Paginated} from '../pagination.jsx';
 import {ago} from './client.js';
@@ -13,7 +13,7 @@ import './deploy-keys.css';
 // confirm; then the public key to add at the Git host as a read-only deploy key. The private key stays sealed in DockNest.
 function Dlg({labelId,title,onClose,foot,confirm,children}){
  const ref=useRef(null);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();(confirm?d?.querySelector('.modal-foot button'):d?.querySelector('h2'))?.focus();return()=>{if(d?.open)d.close()}},[]);
  return <dialog ref={ref} className={confirm?'cx-dialog cx-confirm':'site-wizard rt-dialog cx-dialog'} aria-labelledby={labelId} onCancel={e=>{e.preventDefault();onClose()}}>
   <div className="modal-head"><h2 id={labelId} tabIndex={-1}>{title}</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>
   <form className="modal-body cx-form" onSubmit={e=>e.preventDefault()}>{children}<div className="modal-foot">{foot}</div></form>
@@ -148,7 +148,7 @@ export function DeployKeys({api,connections,servers=[]}){
    {error&&!keys?<div className="loading" role="alert">{error.message||'Deploy keys could not be loaded.'}<button type="button" onClick={load}>Retry</button></div>
     :!keys?<div className="loading" role="status">Loading deploy keys…</div>
     :keys.length?<Paginated rows={keys} label="Deploy keys" pageSize={10}>{visible=><DataTable headers={['Name','Git host','Pinned from','Created','Actions']} columns={['26%','20%','22%','18%','14%']} numeric={[4]}>{rows(visible)}</DataTable>}</Paginated>
-    :<div className="empty"><span className="empty-icon"><IconKey size={28} stroke={1.5} aria-hidden="true"/></span><h3>No deploy keys yet</h3><p>A deploy key lets DockNest read one private Git repository. Add its public key at your Git host as read-only.</p>{newButton}</div>}
+    :<EmptyState icon={IconKey} title="No deploy keys yet" action={newButton}>A deploy key lets DockNest read one private Git repository. Add its public key at your Git host as read-only.</EmptyState>}
   </section>
   {dialog?.kind==='new'&&<NewKeyDialog client={client} connections={connections} servers={servers} onClose={()=>{close();load()}} onCreated={load}/>}
   {dialog?.kind==='repin'&&<RepinDialog client={client} connections={connections} item={dialog.item} servers={servers} onClose={close} onDone={async()=>{close();setNote({ok:true,text:`${dialog.item.gitHost} is pinned again.`});await load()}}/>}

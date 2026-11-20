@@ -15,12 +15,12 @@ try{
    return [['text-primary','surface',4.5],['text-secondary','background',4.5],['text-muted','surface',4.5],['text-muted','surface-muted',4.5],['primary-foreground','button-primary',4.5],['primary-foreground','button-primary-hover',4.5],['link','surface',4.5],['accent','accent-soft',4.5],['success','success-surface',4.5],['warning','warning-surface',4.5],['error','error-surface',4.5],['info','info-surface',4.5],['border-control','surface',3],['border-control','surface-muted',3],['focus-ring','background',3],['focus-ring','surface',3]].flatMap(([a,b,min])=>{const n=[l(a),l(b)].sort((x,y)=>y-x),r=(n[0]+.05)/(n[1]+.05);return r>=min?[]:[a+'/'+b+': '+r.toFixed(2)]});
   });assert.deepEqual(failures,[]);
  }
- await contrast();const toggle=page.getByRole('button',{name:'Switch to dark theme'});await toggle.hover();await page.waitForTimeout(280);assert.notEqual(await toggle.locator('.sun-rays').evaluate(el=>getComputedStyle(el).transform),'none');
+ await contrast();const toggle=page.getByRole('button',{name:'Switch to dark theme'});await toggle.hover();await page.waitForTimeout(280);assert.equal(await toggle.locator('.theme-symbol').evaluate(el=>getComputedStyle(el).transform),'none');
  await page.evaluate(()=>{const start=document.startViewTransition.bind(document);document.startViewTransition=update=>{const transition=start(update);window.themeFade=transition;return transition}});
  await toggle.click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
- assert.equal(await page.evaluate(async()=>{await window.themeFade.ready;return getComputedStyle(document.documentElement,'::view-transition-new(root)').animationDuration}),'0.38s');await contrast();
+ assert.equal(await page.evaluate(async()=>{await window.themeFade.ready;return getComputedStyle(document.documentElement,'::view-transition-new(root)').animationDuration}),'0.15s');await contrast();
  assert.match(await page.locator('.brand-image').getAttribute('src'),/logo-blue/);await page.waitForFunction(()=>document.querySelector('.brand-image').complete&&document.querySelector('.brand-image').naturalWidth>0);
- await page.getByRole('button',{name:'Switch to light theme'}).hover();await page.waitForTimeout(280);assert.notEqual(await page.locator('.theme-symbol .moon-star').first().evaluate(el=>getComputedStyle(el).transform),'none');
+ await page.getByRole('button',{name:'Switch to light theme'}).hover();await page.waitForTimeout(280);assert.equal(await page.locator('.theme-symbol').first().evaluate(el=>getComputedStyle(el).transform),'none');
  // Hold the React bundle to verify the saved dark preference is applied before it runs.
  let release;const gate=new Promise(r=>release=r);await page.route('**/assets/index-*.js',async r=>{await gate;await r.continue()});
  await page.reload({waitUntil:'commit'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),'rgb(26, 25, 28)');release();await page.locator('.dash-metrics').waitFor();await page.unroute('**/assets/index-*.js');
@@ -29,7 +29,7 @@ try{
  // Bare header controls, a real fade, System tracking, and saved account choices.
  await page.waitForTimeout(450);
  for(const selector of ['.theme-toggle','.berry-bell'])assert.equal(await page.locator(selector).evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');
- assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement,'::view-transition-new(root)').animationName),'theme-reveal');
+ assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement,'::view-transition-new(root)').animationName),'none');
  await page.getByRole('button',{name:'Open account preferences'}).click();
  await page.getByRole('radio',{name:'System',exact:true}).check();
  assert.equal(await page.evaluate(()=>localStorage.getItem('docknest-theme:user:admin')),'system');
@@ -49,7 +49,7 @@ try{
  await page.keyboard.press('Escape');await page.locator('#compact-storage-details').waitFor({state:'hidden'});
  await mkdir('data/theme-verification',{recursive:true});await page.screenshot({path:'data/theme-verification/compact-dark.png',animations:'disabled'});
  await page.getByRole('button',{name:'Toggle navigation'}).click();await page.waitForTimeout(450);
- await page.emulateMedia({reducedMotion:'reduce'});await page.getByRole('button',{name:'Switch to light theme'}).hover();assert.equal(await page.locator('.moon-star').first().evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
+ await page.emulateMedia({reducedMotion:'reduce'});await page.getByRole('button',{name:'Switch to light theme'}).hover();assert.equal(await page.locator('.theme-symbol').first().evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
  await mkdir('data/theme-verification',{recursive:true});await page.screenshot({path:'data/theme-verification/dashboard-dark.png',animations:'disabled'});
  for(const width of [1440,1024,768,390,320]){await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);const box=await page.locator('.theme-toggle').boundingBox();assert.ok(box.width>=34&&box.height>=34);assert.equal(box.width,box.height,'Theme control stays square at every viewport')}
  await page.getByRole('button',{name:'Switch to light theme'}).click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');account='second';await page.reload();await page.locator('.dash-metrics').waitFor();await page.getByRole('button',{name:'Switch to dark theme'}).click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>localStorage.getItem('docknest-theme:user:second')),'dark');

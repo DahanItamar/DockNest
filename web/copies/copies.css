@@ -35,7 +35,7 @@
 /* Site card: the Storage row. */
 .site-metadata .cp-link{width:auto;min-height:0;height:auto;padding:0;border:0;background:var(--transparent);color:var(--link);font-size:var(--fs-caption);line-height:var(--lh-caption);font-weight:500}
 .site-metadata .cp-link:hover{text-decoration:underline}
-.site-metadata .cp-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.site-metadata .cp-link:focus-visible{outline:var(--dn-focus-ring);outline-offset:var(--dn-focus-offset)}
 .site-metadata .cp-missing{margin-top:4px;font-size:var(--fs-caption);line-height:var(--lh-caption)}
 
 /* Destination removal panel and the card's remove button. */
@@ -49,6 +49,6 @@
 .sr-destinations .card-title{margin:0 0 8px}
 .storage-card-top{display:flex;align-items:center;gap:12px;min-width:0}
 .storage-card-top .storage-card-head{flex:1;min-width:0}
-.storage-card-top .cp-remove{margin-block:calc((var(--lh-card) - var(--control-height)) / 2);margin-right:-8px}
+.storage-card-top .overflow-menu{margin-right:-8px}
 /* The heading above names the table; the caption stays for screen readers only. */
 .rebrand-page .sr-destinations .data-table caption{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}

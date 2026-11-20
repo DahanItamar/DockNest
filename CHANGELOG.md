@@ -5,23 +5,32 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Consistent dialogs, tabs, notices and step-by-step flows.
 
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
 - Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
 - Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
+- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
+- Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
+- Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
+- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
+- Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels. Splitting again, or going back to one passphrase, asks for a new recovery passphrase, so earlier holders cannot open new kits.
 - Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
 - Restore tests check that the restored app has the same keys as the backup.
 - A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
 
 ### Changed
 
+- Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
+- A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.
 
 ### Fixed
 
 - Moving an app started with plain `docker run` now keeps its hostname, TTY, memory, CPU and process limits, ulimits, log settings, DNS, shm size, sysctls, extra groups, `-P` and stop timeout. Settings DockNest cannot recreate (such as devices or GPUs) are named in the move preview.
 - A backup that stops because a folder changed while the app was paused now names that folder (for example a host timer that writes into it), instead of a general message.
+- On the Map, nodes you drag now go anywhere, also further left and up, instead of stopping at an invisible edge. Where you put them is kept the next time you open the Map; Tidy up arranges everything again.
 
 ## [2.16.4] - 2026-11-14
 

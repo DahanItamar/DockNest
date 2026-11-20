@@ -1,7 +1,8 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ChevronDown} from '../icons.jsx';
+import {AlertCircle,ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
 import {useGuard} from '../map/MoveFlow.jsx';
+import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
 
@@ -14,12 +15,12 @@ function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMo
    {spec.presets.map(([value,text])=><option key={value} value={String(value)}>{text}</option>)}
    <option value="custom">Custom</option>
   </select>
-  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
-  <small className={error?'rt-err':undefined} role={error?'alert':undefined}>{error||help}</small>
+  {custom&&<input ref={input} type="text" inputMode={inputMode} autoComplete="off" spellCheck={false} aria-label={aria} aria-invalid={!!error} aria-describedby={id+'-msg'} placeholder={placeholder} disabled={disabled} value={state.custom} onChange={event=>onChange({...state,custom:event.target.value})}/>}
+  {error?<span className="field-error" id={id+'-msg'} role="alert"><AlertCircle size={16} stroke={2} aria-hidden="true"/>{error}</span>:<small id={id+'-msg'}>{help}</small>}
  </div>;
 }
 
-export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
+export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
  const [card,setCard]=useState(null),[loaded,setLoaded]=useState(false),[loadError,setLoadError]=useState('');
  const [form,setForm]=useState(null),[startN,setStartN]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[started,setStarted]=useState(false),[tried,setTried]=useState(false),[advOpen,setAdvOpen]=useState(false);
  const focusRef=useRef(null),guard=useGuard(client);
@@ -113,6 +114,7 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
      <small>Optional</small>
     </label>
    </details>
+  <LinkedWarning items={linked} onOpenApp={onOpenApp}/>
   {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title="Could not finish">{error}</AlertPanel>}
   <div className="modal-foot">

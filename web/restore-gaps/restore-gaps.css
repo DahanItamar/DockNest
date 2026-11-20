@@ -1,0 +1,34 @@
+/* "Restore on a new server" section of the Check readiness dialog. Rows are compact: one quiet link plus an overflow menu. */
+.rg{display:flex;flex-direction:column;gap:12px;margin-top:24px;padding-top:24px;border-top:1px solid var(--border-subtle)}
+.rg h3{margin:0;font-size:var(--fs-section);line-height:var(--lh-section)}
+.rg p{margin:0}
+.rg-lede{color:var(--text-secondary)}
+.rg-count{margin:0}
+.rg-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.rg-item{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:start;padding:12px 0;border-top:1px solid var(--border-subtle)}
+.rg-item:first-child{border-top:0}
+.rg-icon{display:flex;padding-top:2px;color:var(--primary-main)}
+.rg-item.decided .rg-icon{color:var(--text-muted)}
+.rg-body{display:flex;flex-direction:column;gap:4px;min-width:0}
+.rg-body p{color:var(--text-secondary);overflow-wrap:anywhere}
+.rg-head{display:flex;align-items:center;gap:4px 12px;flex-wrap:wrap}
+.rg-head b{color:var(--heading);font-weight:500;overflow-wrap:anywhere}
+.rg-path{align-self:flex-start;max-width:100%;padding:2px 8px;border-radius:4px;background:var(--surface-muted);color:var(--text-primary);font-size:var(--fs-caption);line-height:var(--lh-caption);overflow-wrap:anywhere}
+.rg-body .rg-note{display:flex;gap:8px;align-items:flex-start;color:var(--text-primary)}
+.rg-note svg{flex:none;margin-top:2px;color:var(--text-muted)}
+.rg-hint{margin:0}
+.rg-actions{display:flex;align-items:center;gap:4px;min-height:var(--control-height);margin-top:-8px}
+.rg-links{display:flex;gap:16px}
+.rg-link{height:auto;min-height:32px;padding:0 4px;border:0;border-radius:var(--radius);background:none;color:var(--link);font-weight:500;white-space:nowrap;cursor:pointer}
+.rg-link:hover:not(:disabled){text-decoration:underline;background:none}
+.rg-link:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+.rg-link:disabled{color:var(--text-muted);cursor:not-allowed}
+.rg-link-quiet{color:var(--text-secondary)}
+.rg-note-edit .field{margin:4px 0 8px}
+.rg-note-edit textarea{min-height:80px}
+@media(max-width:767px){
+ .rg-item.has-link{grid-template-columns:24px minmax(0,1fr)}
+ .rg-item.has-link .rg-actions{grid-column:2;justify-content:space-between;margin-top:0}
+ .rg-item:not(.has-link) .rg-actions{margin-top:-8px}
+ .rg-link{min-height:44px}
+}

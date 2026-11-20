@@ -1,6 +1,6 @@
 import React,{useEffect,useId,useState} from 'react';
 import {Sheet} from '../map/MoveFlow.jsx';
-import {AlertPanel,StatusLabel} from '../system.jsx';
+import {AlertPanel,EmptyState,StatusLabel} from '../system.jsx';
 import {DataTable} from '../data-table.jsx';
 import {RefreshCw} from '../icons.jsx';
 import {notWatching,WINDOWS,DEFAULT_RESTARTS,DEFAULT_WINDOW,MIN_RESTARTS,MAX_RESTARTS,validRestarts,RESULTS,rows,timeOf,saveError,windowLabel} from './model.js';
@@ -9,7 +9,7 @@ import './self-heal.css';
 const SESSION='Your session ended. Sign in again.';
 function Restarts({events,narrow,more,onMore,moreBusy}){
  const list=rows(events);
- if(!list.length)return <div className="data-table-wrap"><div className="empty sh-empty"><span className="empty-icon"><RefreshCw size={28} stroke={1.75} aria-hidden="true"/></span><h3>No restarts yet</h3></div></div>;
+ if(!list.length)return <div className="data-table-wrap"><EmptyState className="sh-empty" icon={RefreshCw} title="No restarts yet"/></div>;
  const result=e=>{const r=RESULTS[e.kind];return <StatusLabel state={r.state}>{r.label}</StatusLabel>};
  const why=e=>(e.kind==='skipped'||e.kind==='restart_failed')&&e.reason?<small className="sh-reason">{e.reason}</small>:null;
  const key=e=>e.id||e.at+e.container;

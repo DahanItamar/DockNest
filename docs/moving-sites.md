@@ -213,6 +213,12 @@ Collapsed by default and pre-filled; most moves need no changes here.
   - a non-hidden folder inside a home folder other than `~/bin` (`/home/<user>/<folder>`; also `/var/home`,
     `/var/srv` and friends on image-based systems).
 
+  A configuration file outside these locations (for example `/etc/cron.d/shop` or a systemd unit, added with the
+  restore check's **Include in backup**) no longer blocks the move: the preview names it as a note ("Put back by hand:
+  /etc/cron.d/shop"), the move leaves out exactly the files the preview named, and the backup's restore guide says
+  where to copy each one. A move never writes into `/etc`. The Compose files of the site's project, files inside bind
+  mounts and any file the preview did not name still block, as before.
+
   The path must not pass through a symbolic link on the new server. The one exception is image-based systems
   (Fedora CoreOS, Silverblue, IoT): a root-owned top-level `/home`, `/srv`, `/opt` or `/mnt` link whose target is
   `var/<name>` is accepted when `/var` and `/var/<name>` are not links themselves. Any other link on the way is

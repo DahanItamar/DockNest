@@ -15,3 +15,12 @@ not be hidden, obscured or replaced by other text.
 
 This term does not restrict any other change you make under the AGPL-3.0.
 Bundled fonts and dependencies keep their own licenses.
+
+Third-party data
+----------------
+
+src/emergency/wordlist.js holds the SLIP-0039 word list, Copyright SatoshiLabs,
+licensed under CC BY-SA 4.0 (https://github.com/satoshilabs/slips).
+tests/fixtures/slip39-vectors.json holds the SLIP-0039 test vectors from
+python-shamir-mnemonic, Copyright 2019 SatoshiLabs, MIT License
+(https://github.com/trezor/python-shamir-mnemonic).

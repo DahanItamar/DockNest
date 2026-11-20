@@ -7,8 +7,9 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const HELPER_MODULES = Object.freeze(['common', 'guides', 'paths', 'keys', 'databases', 'backup', 'incremental', 'net',
-  'maintenance', 'discovery', 'runspec', 'restore', 'staging', 'move', 'install', 'restore_test', 'cleanup', 'edit', 'heal', 'launch', '__main__']);
+export const HELPER_MODULES = Object.freeze(['common', 'guides', 'paths', 'keys', 'engine_base', 'engine_postgres', 'engine_mysql',
+  'engine_redis', 'engine_mongo', 'databases', 'backup', 'incremental', 'net',
+  'maintenance', 'discovery', 'runspec', 'restore_gaps', 'restore', 'staging', 'move', 'install', 'restore_test', 'cleanup', 'edit', 'heal', 'launch', '__main__']);
 const source = fileURLToPath(new URL('../remote/helper/', import.meta.url));
 const OPEN = '# <build:header>', CLOSE = '# </build:header>';
 

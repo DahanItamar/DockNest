@@ -4,6 +4,7 @@ import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {EVENTS_FOR,EVENT_LABEL} from '../web/map/alerts-client.js';
 import {providerList} from '../src/alerts/providers/index.js';
+import {linkedChecks} from './linked-browser.js';
 
 // Read-only Map page against a mocked API: servers, sites and connectors, stable automatic layout on reload, no overlaps,
 // zoom and fit, the phone list at 402 px, light and dark, names and roles. Run against a dev server:
@@ -114,8 +115,8 @@ function moveState(){
   dns:mock.withDns?{type:'A',name:'shop.example.com',value:'203.0.113.7'}:null};
 }
 
-async function open({role='admin',width=1440,height=900,scheme='light',appState=state,motion=false}={}){
- const context=await browser.newContext({viewport:{width,height},reducedMotion:motion?'no-preference':'reduce',colorScheme:scheme});
+async function open({role='admin',width=1440,height=900,scheme='light',appState=state,motion=false,touch=false}={}){
+ const context=await browser.newContext({viewport:{width,height},reducedMotion:motion?'no-preference':'reduce',colorScheme:scheme,hasTouch:touch});
  await context.addInitScript(s=>{try{localStorage.setItem('docknest-theme',s)}catch{}},scheme);
  const page=await context.newPage(),offOrigin=[];
  page.on('pageerror',e=>errors.push(e.message));
@@ -808,6 +809,43 @@ async function glideTest(scheme){
  assert.ok(lines>=6,'the lines follow while it moves ('+lines+')');
  await context.close();
 }
+// Free drag: a node goes left of and above the automatic layout (no wall at 0), stays there after a reload, and Tidy up arranges
+// everything neatly again. Mouse and touch at 1280 px; at 390 px the Map is the list, with nothing to drag.
+async function freeDragTest(){
+ resetAlerts(true);
+ const place=loc=>loc.evaluate(e=>[parseFloat(e.style.left),parseFloat(e.style.top)]);
+ const reopen=async page=>{await page.reload();await page.locator('.berry-sidebar').waitFor();await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Map',exact:true}).click();await page.locator('.map-site[data-site="s2"]').waitFor()};
+ const inView=async(page,loc,label)=>{const v=await page.locator('.map-viewport').boundingBox(),b=await loc.boundingBox();assert.ok(b.x>=v.x&&b.y>=v.y&&b.x+b.width<=v.x+v.width&&b.y+b.height<=v.y+v.height,label)};
+ const neat=async(page,label)=>{const all=await boxes(page,'.map-server,.map-site,.map-storage,.map-alert,.map-docknest');for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)assert.ok(!overlap(all[i],all[j]),label+': nodes overlap')};
+ const viewBox=page=>page.locator('.map-lines').evaluate(e=>e.getAttribute('viewBox').split(' ').map(Number));
+ const {context,page}=await open({width:1280,height:800,appState:alertState});
+ const node=page.locator('.map-site[data-site="s2"]');await node.waitFor();
+ const auto=await place(node),vp=await page.locator('.map-viewport').boundingBox();await page.getByRole('button',{name:'Fit to screen'}).click();
+ // Drag to the top left corner, pan the view with the arrow keys, drag again: well past the old edge at 0
+ for(let i=0;i<2;i++){
+  const b=await node.boundingBox();await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();await page.mouse.move(vp.x+40,vp.y+40,{steps:8});await page.mouse.up();
+  await page.locator('.map-viewport').focus();for(let k=0;k<5;k++){await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowUp')}
+ }
+ const far=await place(node);
+ assert.ok(far[0]<-150&&far[1]<-150,'the node went left of and above 0: '+JSON.stringify([auto,far]));
+ assert.ok(far[0]%16===0&&far[1]%16===0,'it still snaps to the grid');
+ const vb=await viewBox(page);assert.ok(vb[0]<=far[0]&&vb[1]<=far[1],'the lines canvas grew to the left and up');
+ await page.getByRole('button',{name:'Fit to screen'}).click();await inView(page,node,'Fit shows the moved node');
+ await reopen(page);
+ assert.deepEqual(await place(node),far,'the moved node stays after a reload');await inView(page,node,'and opens in view');
+ await page.getByRole('button',{name:'Tidy up'}).click();await page.waitForTimeout(150);
+ assert.deepEqual(await place(node),auto,'Tidy up puts it back in the automatic layout');await neat(page,'after Tidy up');
+ assert.deepEqual((await viewBox(page)).slice(0,2),[0,0],'and the canvas starts at 0 again');
+ await reopen(page);assert.deepEqual(await place(node),auto,'Tidy up is kept after a reload');
+ await context.close();
+ // Touch: the same drag with a finger
+ {const {context:c,page:p}=await open({width:1280,height:800,appState:alertState,touch:true});const n=p.locator('.map-site[data-site="s2"]');await n.waitFor();
+  await p.getByRole('button',{name:'Fit to screen'}).click();const a=await place(n),b=await n.boundingBox(),v=await p.locator('.map-viewport').boundingBox(),cdp=await c.newCDPSession(p);
+  const x0=b.x+b.width/2,y0=b.y+b.height/2,touch=(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'?[]:[{x,y,id:1}]});
+  await touch('touchStart',x0,y0);for(let i=1;i<=8;i++)await touch('touchMove',x0+(v.x+20-x0)*i/8,y0+(v.y+20-y0)*i/8);await touch('touchEnd');
+  const m=await place(n);assert.ok(m[0]<a[0]-48&&m[1]<a[1]-48,'a finger moves the node left and up: '+JSON.stringify([a,m]));await c.close();}
+ {const {context:c,page:p}=await open({width:390,height:844,appState:alertState});await p.locator('.map-list').waitFor();assert.equal(await p.locator('.map-canvas').count(),0,'phones get the list');await fits(p,'free drag 390');await c.close();}
+}
 async function alertsOperatorAndEmpty(){
  // Operators get no alert data while the setting is off, so the Map is the plain one for them
  resetAlerts(true);
@@ -1025,7 +1063,7 @@ try{
    await fits(page,'phone panels '+scheme);
    // Move to... opens the same dialogs as full-screen sheets
    Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
-   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
+   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'More actions for shop.example.com'}).click();await page.getByRole('menuitem',{name:'Move to…'}).click();
    const d=dialog(page);
    await d.getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
    await d.getByText('This server is not connected. Reconnect it first.').waitFor();
@@ -1053,6 +1091,8 @@ try{
    await context.close();
   }
  }
+ await freeDragTest();
+ for(const scheme of ['light','dark'])await linkedChecks({open,fits,scheme});
  await alertsOperatorAndEmpty();
  // Empty state and tablet width list
  {

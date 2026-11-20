@@ -528,7 +528,7 @@ async function roles(){
  assert.equal(await editButton(page).count(),0,'static sites hide Edit');
  await context.close();
  // Sites page: Edit and History on the card, history opens an edit timeline, static card has no Edit.
- ({context,page}=await open({width:1280,start:'Apps & schedules'}));
+ ({context,page}=await open({width:1280,start:'Apps & Schedules'}));
  await page.locator('.site-card').first().waitFor();
  const card=page.locator('.site-card',{hasText:'Demo Shop'});
  await card.getByRole('button',{name:'Edit history for Demo Shop'}).click();
@@ -754,7 +754,7 @@ async function realApi(){
   await context.addCookies([{name:'dbm_session',value:token,url:base}]);
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(base+'/');await page.locator('.berry-sidebar').waitFor();
-  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Apps & schedules',exact:true}).click();
+  await page.getByRole('navigation',{name:'Main navigation'}).getByRole('button',{name:'Apps & Schedules',exact:true}).click();
   const card=page.locator('.site-card',{hasText:'shop'});
   await card.getByRole('button',{name:'Edit shop with Safe Edit'}).click();
   const d=dlg(page);
