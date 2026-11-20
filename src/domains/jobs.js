@@ -5,10 +5,11 @@
 import { db, id, audit } from '../db.js';
 import { transport, jobRunners, siteInfo } from '../engine.js';
 import { takeCertificates } from '../alerts/certificates.js';
-import { recordRouting, checkDomains, siteDomains, domainClock } from './check.js';
+import { recordRouting, checkDomains, siteDomains, moveDomains, domainClock } from './check.js';
 
 const iso = () => new Date(domainClock.now()).toISOString();
-const FAILED = 'DockNest could not read the proxy routes on this server. Test the server connection, then check again.';
+const ROUTES_FAILED = 'DockNest could not read the proxy routes on a server. Test the server connection, then check again.';
+const CHECK_FAILED = 'DockNest read the proxy routes but could not finish the check (DNS or Cloudflare). Check again in a minute.';
 
 // A request joins a check that has not started yet and covers it (the whole app, or the same domain).
 export function enqueueDomainCheck(siteId, domain, actor) {
@@ -20,16 +21,28 @@ export function enqueueDomainCheck(siteId, domain, actor) {
   return { jobId, status: 'queued' };
 }
 
+async function readRoutes(server) {
+  const answer = await transport.remote(server, { operation: 'domain-routes' });
+  recordRouting(server.id, answer);
+  takeCertificates({ serverId: server.id }, answer);
+}
 async function executeDomainCheck(job) {
   let details = {}; try { details = JSON.parse(job.details || '{}'); } catch { details = {}; }
   let error = null;
   try {
     const { server } = siteInfo(job.site_id);
-    const answer = await transport.remote(server, { operation: 'domain-routes' });
-    recordRouting(server.id, answer);
-    takeCertificates({ serverId: server.id }, answer);
-    await checkDomains(details.domain ? [details.domain] : await siteDomains(job.site_id), { trigger: 'manual', force: true });
-  } catch { error = FAILED; }
+    await readRoutes(server);
+    // A domain another server's proxy sends to this app is checked with that proxy's newest routes too.
+    const { viaProxy } = await moveDomains(job.site_id, server.id);
+    for (const serverId of new Set(viaProxy.filter(item => !details.domain || item.domain === details.domain).map(item => item.serverId))) {
+      const proxy = db.prepare('SELECT * FROM servers WHERE id=?').get(serverId);
+      if (proxy) await readRoutes(proxy);
+    }
+  } catch { error = ROUTES_FAILED; }
+  if (!error) {
+    try { await checkDomains(details.domain ? [details.domain] : await siteDomains(job.site_id), { trigger: 'manual', force: true }); }
+    catch { error = CHECK_FAILED; }
+  }
   db.prepare("UPDATE jobs SET status=?,stage=?,finished_at=?,error=? WHERE id=? AND status='domain_running'").run(error ? 'failed' : 'completed', error ? 'failed' : 'completed', iso(), error, job.id);
 }
 jobRunners['domain-check'] = executeDomainCheck;

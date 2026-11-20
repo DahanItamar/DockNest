@@ -26,9 +26,11 @@ function sites() {
     return { id: row.id, serverId: row.server_id, kind: config.kind === 'static' ? 'static' : 'docker', domains: names(config.domains), containers: (Array.isArray(config.containers) ? config.containers : []).filter(value => typeof value === 'string') };
   });
 }
+// Each connection host is looked up once per check, however many servers share it.
 async function servers() {
+  const lookups = new Map(), resolve = host => { if (!lookups.has(host)) lookups.set(host, hostResolver.lookup(host).catch(() => [])); return lookups.get(host); };
   return Promise.all(db.prepare('SELECT id,host FROM servers ORDER BY created_at').all().map(async row => {
-    const facts = routingOf(row.id), resolved = await hostResolver.lookup(row.host).catch(() => []);
+    const facts = routingOf(row.id), resolved = await resolve(row.host);
     return { id: row.id, facts, interfaces: facts?.addresses ?? [], addresses: [...new Set([...resolved, ...(facts?.addresses ?? [])])] };
   }));
 }
@@ -100,6 +102,12 @@ export function recordRouting(serverId, answer, at = domainClock.now()) {
 }
 // Takes the routing facts out of a helper answer (they are never returned by the API with it), stores them, and checks
 // that server's domains in the background with the hourly DNS limit. Never throws and never delays the operation.
+// The answer without its routing facts, which are dropped unstored (a scan that records nothing).
+export function withoutRouting(answer) {
+  if (!answer || typeof answer !== 'object' || !('routing' in answer)) return answer;
+  const { routing: _routing, ...rest } = answer;
+  return rest;
+}
 export function takeRouting({ serverId }, answer, trigger) {
   if (!answer || typeof answer !== 'object' || !('routing' in answer)) return answer;
   const { routing, ...rest } = answer;

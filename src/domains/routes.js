@@ -4,7 +4,7 @@
 // sentences; nothing here echoes request bodies or remote output.
 import express from 'express';
 import { z } from 'zod';
-import { db } from '../db.js';
+import { db, audit } from '../db.js';
 import { userRateLimit } from '../auth.js';
 import { domainName } from './facts.js';
 import { domainsView, resolveDomain, checkDomains } from './check.js';
@@ -31,6 +31,7 @@ domainRoutes.post('/domains/check', operators, checkLimit, async (req, res) => {
   const { site, known } = await resolveDomain(domain);
   if (site) return res.status(202).json(enqueueDomainCheck(site.id, domain, req.user.id));
   if (!known) return fail(res, 404, 'DockNest does not know this domain. Add it to an app first.', 'NOT_FOUND');
+  audit(req.user.id, 'domain.check', null, { domain });
   const [row] = await checkDomains([domain], { trigger: 'manual', force: true });
   res.json({ domain: row });
 });

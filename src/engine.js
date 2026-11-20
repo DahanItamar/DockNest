@@ -25,7 +25,7 @@ import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 import { takeCertificates } from './alerts/certificates.js';
-import { takeRouting } from './domains/check.js';
+import { takeRouting, withoutRouting } from './domains/check.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
@@ -34,7 +34,9 @@ const now=()=>new Date().toISOString();
 // other roles only read.
 export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
 export const discover=async(server,{record=false}={})=>{
-  const result=takeCertificates({serverId:server.id},takeRouting({serverId:server.id},await transport.remote(server,{operation:'discover'}),'discover'));
+  // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
+  const answer=await transport.remote(server,{operation:'discover'});
+  const result=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
   if(record){
     try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
     try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}

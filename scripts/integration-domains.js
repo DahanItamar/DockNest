@@ -72,8 +72,8 @@ export async function runDomainsScenario({ run, until, hosts, servers, db, recor
     assert.deepEqual(states('forum.example.com'), { dns: 'ok:points-to-server', proxy: 'warn:incomplete', app: 'ok:running', certificate: 'unknown:managed-by-proxy' });
     assert.equal(byName['forum.example.com'].siteId, forumId);
 
-    // Routing facts also ride on a discovery scan and never come back with its answer.
-    const scan = await discover(server);
+    // Routing facts also ride on an administrator's discovery scan and never come back with its answer.
+    const scan = await discover(server, { record: true });
     assert.equal('routing' in scan, false);
     await until(async () => Boolean(db.prepare("SELECT 1 FROM domain_checks WHERE domain='dom.example.com' AND trigger='discover'").get()), 'the scan did not check the server domains', 30);
     const stored = JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(`domain_routes:${server.id}`).value);

@@ -16,7 +16,7 @@ await mkdir(process.env.BACKUP_DIR, { recursive: true });
 const { app } = await import('../src/server.js');
 const { db } = await import('../src/db.js');
 const { digest, seal } = await import('../src/crypto.js');
-const { claimJob, executeJob, transport } = await import('../src/engine.js');
+const { claimJob, executeJob, transport, discover } = await import('../src/engine.js');
 const { dnsResolver, setProxyRanges } = await import('../src/moves/dns.js');
 const { cloudflareHttp } = await import('../src/moves/cloudflare.js');
 const domains = await import('../src/domains/check.js');
@@ -125,6 +125,39 @@ test('a domain only a stored check knows is looked up again at once, DNS only', 
   assert.equal(answer.body.domain.hops.dns.reason, 'wrong-record'); assert.deepEqual(answer.body.domain.hops.dns.params, { address: '192.0.2.99' });
   assert.equal(requests.length, before, 'no helper call');
   assert.ok((await admin('GET', '/domains')).body.groups.pointsNowhere.includes('gone.example.net'));
+  assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='domain.check' AND detail LIKE '%gone.example.net%'").get(), 'the direct check is audited');
+});
+
+test('only a scan that records facts stores routing and checks domains; any other scan drops them unstored', async () => {
+  const key = `domain_routes:${serverId}`, before = db.prepare('SELECT value FROM settings WHERE key=?').get(key).value;
+  const original = transport.remote;
+  transport.remote = async () => ({ containers: [], ...helperAnswer(), routing: { ...helperAnswer().routing, addresses: ['203.0.113.99'] } });
+  try {
+    lookups.length = 0;
+    const scan = await discover({ id: serverId, host: '203.0.113.10' });
+    assert.equal('routing' in scan, false);
+    assert.equal(db.prepare('SELECT value FROM settings WHERE key=?').get(key).value, before, 'routing facts unchanged');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(lookups, [], 'no DNS lookup');
+    await discover({ id: serverId, host: '203.0.113.10' }, { record: true });
+    assert.ok(db.prepare('SELECT value FROM settings WHERE key=?').get(key).value.includes('203.0.113.99'), 'a recording scan stores them');
+  } finally { transport.remote = original; }
+});
+
+test('Check again also reads the routes of another server whose proxy sends a domain to the app', async () => {
+  const edgeId = randomUUID();
+  db.prepare('INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(edgeId, 'Edge', '198.51.100.30', 22, 'root', 'fixture', '0'.repeat(64), at());
+  const edgeAnswer = () => ({ certificates: [], routing: { format: 1, incomplete: false, port80: true, addresses: ['198.51.100.30'], routes: [{ proxy: 'caddy', domains: ['edge.example.net'], upstreams: ['http://203.0.113.10:8080'], containers: [], static: false, understood: true, listen: [443], certificates: [] }], notUnderstood: [], proxies: [{ proxy: 'caddy', container: null, running: true }], containers: [] } });
+  domains.recordRouting(edgeId, edgeAnswer());
+  const original = transport.remote, seen = [];
+  transport.remote = async (server, request) => { seen.push(`${server.id === edgeId ? 'edge' : 'app'}:${request.operation}`); return server.id === edgeId ? edgeAnswer() : helperAnswer(); };
+  try {
+    await admin('POST', '/domains/check', { siteId });
+    assert.equal((await runQueued()).status, 'completed');
+    assert.deepEqual(seen, ['app:domain-routes', 'edge:domain-routes']);
+    const edge = (await admin('GET', '/domains')).body.domains.find(row => row.domain === 'edge.example.net');
+    assert.equal(edge.siteId, siteId); assert.equal(edge.trigger, 'manual');
+  } finally { transport.remote = original; }
 });
 
 test('routing facts ride on an operation answer, never reach the caller, and DNS is looked up at most once an hour', async () => {
@@ -179,6 +212,7 @@ test('an interrupted check fails and can run again; a release without domain che
   await admin('POST', '/domains/check', { siteId });
   const failed = await runQueued();
   assert.equal(failed.status, 'failed'); assert.ok(!failed.error.includes(SECRET), 'remote output never reaches the job');
+  assert.match(failed.error, /could not read the proxy routes/, 'a route read failure says so');
 });
 
 test('the table refuses an uppercase or overlong domain, an unknown trigger and hops over 8 KB', () => {

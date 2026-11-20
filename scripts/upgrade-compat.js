@@ -68,7 +68,7 @@ db.close();`, { cwd: old });
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM settings WHERE key='emergency_kits'").get().count, 0);
   assert.deepEqual({ ...db.prepare('SELECT version,schema_version FROM release_history WHERE version=?').get(release.version) }, { version: release.version, schema_version: schemaVersion }, 'the started API records its release');
   db.close();
-  // Domain path (migration 22): the table starts empty, and a check of the released site's domain fits its limits and
+  // Domain path (migration 23): the table starts empty, and a check of the released site's domain fits its limits and
   // foreign keys. The released code never reads it, so the rollback below restores data from before the table.
   const domains = new DatabaseSync(state);
   assert.equal(domains.prepare('SELECT COUNT(*) AS count FROM domain_checks').get().count, 0);
