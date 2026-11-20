@@ -89,7 +89,6 @@
 .rebrand-page .application-group{border-radius:var(--radius)}
 .rebrand-page .application-group h4{font-size:var(--fs-body)}
 .rebrand-page .setup-command,.rebrand-page .command-preview{font-family:ui-monospace,Consolas,monospace;border-radius:8px}
-.rebrand-page .notice,.rebrand-page .alert{font-size:var(--fs-body);line-height:1.6;border-radius:8px}
 @media(max-width:899px){
  .storage-grid{grid-template-columns:1fr}
  .storage-card:last-child:nth-child(odd){grid-column:auto}

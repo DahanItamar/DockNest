@@ -51,7 +51,8 @@ export function useGuard(client,{verifyLabel}={}){
 }
 
 function Fact({label,value}){return <div className="map-fact"><span className="map-caption">{label}</span><b>{value}</b></div>}
-export const Note=({kind,icon:Icon,role,children})=><div className={'map-note map-note-'+kind} role={role}><Icon size={20} stroke={2} aria-hidden="true"/><span>{children}</span></div>;
+const NOTE_TONE={error:'error',warn:'warning',ok:'success'};
+export const Note=({kind,icon:Icon,role,children})=><div className={'alert-panel alert-'+(NOTE_TONE[kind]||'info')} role={role}><Icon className="alert-panel-icon" size={20} stroke={2} aria-hidden="true"/><div className="alert-panel-body"><span>{children}</span></div></div>;
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 

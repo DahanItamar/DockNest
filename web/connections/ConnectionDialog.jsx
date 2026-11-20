@@ -138,7 +138,7 @@ export function ConnectionDialog({client,providers,connection,initialProvider,pr
 // Delete a Connection: refused while a node uses it, with the nodes named. The API checks again (a node made meanwhile).
 export function DeleteConnectionDialog({client,connection,onClose,onDeleted}){
  const ref=useRef(null),guard=useReauth(client),[busy,setBusy]=useState(false),[error,setError]=useState(''),used=(connection.usedBy||[]).map(n=>n.name);
- useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('h2')?.focus();return()=>{if(d?.open)d.close()}},[]);
+ useEffect(()=>{const d=ref.current;if(d&&!d.open)d.showModal();d?.querySelector('.modal-foot button')?.focus();return()=>{if(d?.open)d.close()}},[]);
  async function go(){setBusy(true);setError('');await guard.run(async()=>{await client.remove(connection.id);await onDeleted()},e=>setError(e.code==='CONNECTION_IN_USE'?e.message:e.message||'This connection could not be deleted.'));setBusy(false)}
  return <dialog ref={ref} className="cx-dialog cx-confirm" aria-labelledby="cx-delete-title" onCancel={e=>{e.preventDefault();onClose()}}>
   <div className="modal-head"><h2 id="cx-delete-title" tabIndex={-1}>Delete {connection.name}?</h2><button type="button" className="icon" aria-label="Close dialog" onClick={onClose}><IconX size={20}/></button></div>

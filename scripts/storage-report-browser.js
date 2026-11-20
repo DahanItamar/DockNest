@@ -187,7 +187,7 @@ try {
     const { context, page } = await openStorage(wide, 'light', { report: mockReport({ sites: 1 }), targets: [] });
     const region = page.getByLabel('Storage report'); await region.waitFor();
     assert.equal(await region.locator('.sr-table tbody tr').count(), 1);
-    assert.match(await page.locator('.notice').innerText(), /Connect your first destination/);
+    assert.match(await page.locator('.alert-panel').innerText(), /Connect your first destination/);
     await context.close();
   }
   { // A report load error leaves the destinations usable.
