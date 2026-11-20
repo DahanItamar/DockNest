@@ -2,7 +2,7 @@
 Proves each adapter (nginx, Nginx Proxy Manager, Caddy JSON and Caddyfile, Traefik labels) returns only hosts, ports,
 upstreams and certificate file names, that the shared matcher finds the right container, that the Caddy admin call is a
 loopback GET with a 1 MB limit, and that a secret written in any configuration never reaches the output."""
-import json, pathlib, shutil, sys, tempfile, unittest
+import json, os, pathlib, shutil, sys, tempfile, unittest
 from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
@@ -135,6 +135,59 @@ class TraefikTests(unittest.TestCase):
             self.assertIsNone(helper.traefik_rule_hosts(rule), rule)
 
 
+def can_link():
+    with tempfile.TemporaryDirectory() as folder:
+        try: os.symlink(__file__, pathlib.Path(folder) / 'link'); return True
+        except (OSError, NotImplementedError): return False
+
+
+class ConfigFileTests(unittest.TestCase):
+    """A container that controls a config folder cannot make the root helper follow a link or hang on a FIFO."""
+    @unittest.skipUnless(can_link(), 'symbolic links need privileges on this system')
+    def test_a_symbolic_link_is_refused_in_container_folders_and_followed_on_the_host(self):
+        with tempfile.TemporaryDirectory() as data:
+            hosts = pathlib.Path(data) / 'nginx' / 'proxy_host'; hosts.mkdir(parents=True)
+            target = pathlib.Path(data) / 'outside.conf'; shutil.copy(FIXTURES / 'npm-proxy-host.conf', target)
+            os.symlink(target, hosts / '1.conf')
+            npm = container('npm', 'jc21/nginx-proxy-manager:2', mounts=[{'Type': 'bind', 'Source': str(pathlib.Path(data).resolve()), 'Destination': '/data'}])
+            self.assertEqual(helper.npm_routes(npm), [])
+            self.assertIsNone(helper.read_config(hosts / '1.conf', follow_links=False))
+            self.assertIsNotNone(helper.read_config(hosts / '1.conf'), 'host nginx keeps its sites-enabled links')
+            caddy = container('caddy', 'caddy:2', mounts=[{'Type': 'bind', 'Source': str(hosts / '1.conf'), 'Destination': '/etc/caddy/Caddyfile'}])
+            self.assertEqual(helper.caddy_routes(caddy), ([], False))
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFOs need a POSIX system')
+    def test_a_fifo_is_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fifo = pathlib.Path(folder) / 'Caddyfile'; os.mkfifo(fifo)
+            self.assertIsNone(helper.read_config(fifo, follow_links=False))
+            self.assertIsNone(helper.read_config(fifo))
+            caddy = container('caddy', 'caddy:2', mounts=[{'Type': 'bind', 'Source': folder, 'Destination': '/etc/caddy'}])
+            self.assertEqual(helper.caddy_routes(caddy), ([], False))
+
+    def test_an_oversized_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            big = pathlib.Path(folder) / 'big.conf'; big.write_bytes(b'#' * (helper.CONFIG_LIMIT + 1))
+            self.assertIsNone(helper.read_config(big))
+
+
+class CaddyAdminOnceTests(unittest.TestCase):
+    def test_the_admin_answer_is_attributed_once_to_the_host_and_each_caddyfile_is_still_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            shutil.copy(FIXTURES / 'Caddyfile', pathlib.Path(folder) / 'Caddyfile')
+            mounted = container('caddy-a', 'caddy:2', mounts=[{'Type': 'bind', 'Source': str(pathlib.Path(folder).resolve()), 'Destination': '/etc/caddy'}])
+            bare = container('caddy-b', 'caddy:2')
+            admin = json.loads((FIXTURES / 'caddy-config.json').read_text())
+            with patch('helper.caddy_admin_config', return_value=admin) as call, patch('helper.shutil.which', return_value=None),                  patch('helper.host_addresses', return_value=[]), patch('helper.listening_ports', return_value=[]), patch('helper.pathlib.Path.is_dir', return_value=False):
+                facts = helper.proxy_routes([mounted, bare])
+        self.assertEqual(call.call_count, 1)
+        notes = [r for r in facts['routes'] if r['domains'] == ['notes.example.com']]
+        self.assertEqual(len(notes), 1); self.assertNotIn('container', notes[0])
+        self.assertEqual({r.get('container') for r in facts['routes'] if 'wiki.example.com' in r['domains']}, {'caddy-a'})
+        self.assertIn({'proxy': 'caddy', 'container': None, 'running': True}, facts['proxies'])
+        self.assertFalse(facts['incomplete'], 'a container without a Caddyfile is covered by the admin answer')
+
+
 class MatcherTests(unittest.TestCase):
     def test_published_ports_network_names_and_own_addresses(self):
         web = container('shop-web', ports={'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '8080'}]}, exposed={'8080/tcp': {}},
@@ -162,7 +215,7 @@ class ProxyRoutesTests(unittest.TestCase):
             containers = json.loads((FIXTURES / 'traefik-containers.json').read_text())
             containers.append(container('shop-web', ports={'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '8080'}]}, health='unhealthy'))
             original = helper.nginx_routes
-            with patch('helper.nginx_routes', lambda proxy: original(proxy, [folder])), patch('helper.shutil.which', lambda name: '/usr/sbin/nginx' if name == 'nginx' else None), \
+            with patch('helper.nginx_routes', lambda proxy, sites=None: original(proxy, [folder])), patch('helper.shutil.which', lambda name: '/usr/sbin/nginx' if name == 'nginx' else None), \
                  patch('helper.host_addresses', return_value=['192.0.2.10', '100.100.1.2']), patch('helper.listening_ports', return_value=[22, 443]), \
                  patch('helper.process_running', return_value=True):
                 facts = helper.proxy_routes(containers)

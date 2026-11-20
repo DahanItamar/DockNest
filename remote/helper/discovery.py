@@ -41,20 +41,35 @@ def nginx_walk(nodes):
     for name,args,children in nodes:
         yield name,args,children
         yield from nginx_walk(children)
-def nginx_file_nodes(file):
+CONFIG_LIMIT=1024*1024
+def read_config(path,follow_links=True,limit=CONFIG_LIMIT):
+    """The text of one regular configuration file of at most `limit` bytes, or None. Opened without blocking and checked
+    on the open descriptor, so a FIFO or device swapped in never hangs the helper; with follow_links False a symbolic
+    link is refused too (files a container controls, such as Nginx Proxy Manager's and Caddy's)."""
+    flags=os.O_RDONLY|getattr(os,'O_NONBLOCK',0)|(0 if follow_links else getattr(os,'O_NOFOLLOW',0))
+    if not follow_links and os.path.islink(path):return None
+    try:descriptor=os.open(str(path),flags)
+    except OSError:return None
+    with os.fdopen(descriptor,'rb') as handle:
+        info=os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size>limit:return None
+        data=handle.read(limit+1)
+    return data.decode('utf-8','replace') if len(data)<=limit else None
+def nginx_file_nodes(file,follow_links=True):
     """The parsed directives of one nginx file of at most 1 MB, or None."""
+    text=read_config(file,follow_links)
+    if text is None:return None
     try:
-        if not file.is_file() or file.stat().st_size>1024*1024:return None
-        lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True
+        lexer=shlex.shlex(text,posix=True,punctuation_chars='{};');lexer.whitespace_split=True
         return nginx_parse(iter(lexer))
-    except (ValueError,OSError):return None
-def nginx_servers(folders=None):
+    except ValueError:return None
+def nginx_servers(folders=None,follow_links=True):
     """(file, domains, directives) of every nginx server block with a domain name. Contents never leave the helper."""
     for folder in folders or ['/etc/nginx/sites-enabled','/etc/nginx/conf.d']:
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
         for file in sorted(directory.iterdir()):
-            nodes=nginx_file_nodes(file)
+            nodes=nginx_file_nodes(file,follow_links)
             for name,args,children in nginx_walk(nodes or []):
                 if name!='server':continue
                 domains=[v for key,values,_ in children if key=='server_name' for v in values if re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]+',v) and '.' in v]
@@ -76,9 +91,9 @@ def nginx_certificate_name(path):
     if match:return match.group(1)
     name=path.rsplit('/',1)[-1]
     return name if CERTIFICATE_FILE.fullmatch(name) else None
-def nginx_pools(file):
+def nginx_pools(file,follow_links=True):
     """Named upstream blocks of one file: proxy_pass http://shop reaches their servers."""
-    return {args[0]:[v[0] for k,v,_ in children if k=='server' and v] for name,args,children in nginx_walk(nginx_file_nodes(file) or []) if name=='upstream' and args}
+    return {args[0]:[v[0] for k,v,_ in children if k=='server' and v] for name,args,children in nginx_walk(nginx_file_nodes(file,follow_links) or []) if name=='upstream' and args}
 def nginx_targets(flattened,pools):
     """proxy_pass targets of one server block. Nginx Proxy Manager writes `set $server "app"; set $port 8080;` and proxies
     to $forward_scheme://$server:$port through an include, so those variables are filled in."""
@@ -88,11 +103,11 @@ def nginx_targets(flattened,pools):
     if not proxies and {'server','port'}<=set(variables):proxies=[substitute('$forward_scheme://$server:$port',{'forward_scheme':'http',**variables})]
     names=[value.split('://',1)[-1].rstrip('/') for value in proxies]
     return [target for value,name in zip(proxies,names) for target in (['http://'+server for server in pools[name]] if name in pools else [value])]
-def nginx_sites(folders=None):
+def nginx_sites(folders=None,follow_links=True):
     """Return routing metadata only, never nginx configuration contents or TLS keys."""
     sites=[];pools={}
-    for file,domains,children in nginx_servers(folders):
-        if file not in pools:pools[file]=nginx_pools(file)
+    for file,domains,children in nginx_servers(folders,follow_links):
+        if file not in pools:pools[file]=nginx_pools(file,follow_links)
         flattened=list(nginx_walk(children))
         proxies=nginx_targets(flattened,pools[file])
         dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)

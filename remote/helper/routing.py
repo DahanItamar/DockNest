@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     docker, inspect)
 from .discovery import (
-    nginx_sites)
+    CONFIG_LIMIT, nginx_sites, read_config)
 from .move import (
     host_addresses, listening_ports, process_running)
 from .restore_gaps import (
@@ -17,7 +17,6 @@ from .restore_gaps import (
 # dashboard. Nothing here changes the server, and nothing here can fail the operation it rides on.
 ROUTING_FORMAT=1
 ROUTE_LIMIT=200
-CONFIG_LIMIT=1024*1024
 CADDY_ADMIN=('127.0.0.1',2019,'/config/')
 ROUTE_DOMAIN=re.compile(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+')
 UPSTREAM_HOST=re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,252})|\[[0-9A-Fa-f:.]{2,45}\]')
@@ -86,9 +85,11 @@ def match_upstream(upstream,containers,addresses=()):
         if hit and name not in matched:matched.append(name)
     return matched
 
-def nginx_routes(proxy,folders=None,container=None):
+def nginx_routes(proxy,folders=None,container=None,sites=None):
+    """Routes of nginx files. Files a container writes (Nginx Proxy Manager) are read without following links. `sites`
+    reuses nginx_sites() a caller already read."""
     routes=[]
-    for site in nginx_sites(folders):
+    for site in sites if sites is not None else nginx_sites(folders,follow_links=container is None):
         upstreams=[value for value in (upstream_address(raw) for raw in site.get('upstreams',[])) if value]
         routes.append({'proxy':proxy,'domains':route_domains(site['domains']),'upstreams':upstreams,'static':site['kind']=='static',
             'understood':len(upstreams)==len(site.get('upstreams',[])),'listen':site.get('listen',[]),'certificates':site.get('certificates',[]),
@@ -105,7 +106,9 @@ def mount_source(c,destination):
 def npm_routes(c):
     """Nginx Proxy Manager: the nginx files it generates under its /data mount, read with the nginx parser."""
     data=mount_source(c,'/data')
-    return nginx_routes('npm',[str(data/'nginx'/'proxy_host')],container_name(c)) if data else []
+    folder=data/'nginx'/'proxy_host' if data else None
+    if not folder or os.path.realpath(folder)!=os.path.abspath(folder):return []
+    return nginx_routes('npm',[str(folder)],container_name(c))
 
 def caddy_admin_config():
     """GET the Caddy admin API's configuration on loopback only, with a fixed path and a 1 MB limit."""
@@ -119,7 +122,7 @@ def caddy_admin_config():
         if len(body)>CONFIG_LIMIT:return None
         return json.loads(body)
     finally:connection.close()
-def caddy_json_routes(config,container=None):
+def caddy_json_routes(config):
     """Reduces Caddy's JSON to hosts and reverse_proxy upstreams. Handlers, headers and matchers stay on the server."""
     routes=[]
     def upstreams_of(handlers,hosts,listen):
@@ -136,7 +139,7 @@ def caddy_json_routes(config,container=None):
             hosts=route_domains(h for m in route.get('match') or [] if isinstance(m,dict) for h in m.get('host') or [])
             hosts=hosts or inherited
             upstreams=upstreams_of(route.get('handle'),hosts,listen)
-            if hosts and upstreams:routes.append({'proxy':'caddy','domains':hosts,'upstreams':upstreams,'static':False,'understood':True,'listen':listen,'certificates':[],**({'container':container} if container else {})})
+            if hosts and upstreams:routes.append({'proxy':'caddy','domains':hosts,'upstreams':upstreams,'static':False,'understood':True,'listen':listen,'certificates':[]})
     servers=(((config or {}).get('apps') or {}).get('http') or {}).get('servers') or {}
     for server in servers.values() if isinstance(servers,dict) else []:
         if not isinstance(server,dict):continue
@@ -176,18 +179,17 @@ def caddyfile_routes(text,container=None):
             if site is not None and site['domains'] and site['upstreams']:routes.append(site)
             if site is not None and words[-1]!='{':site=None
     return routes,understood
-def caddy_routes(c):
-    """The admin API first (loopback, GET only); then the Caddyfile mounted into the Caddy container."""
+def caddy_admin_routes():
+    """Routes from the admin API on this host's loopback (GET only), or None when it does not answer."""
     try:config=caddy_admin_config()
-    except (OSError,ValueError,http.client.HTTPException):config=None
-    if config is not None:return caddy_json_routes(config,container_name(c) if c else None),True
-    if c is None:return [],False
+    except (OSError,ValueError,http.client.HTTPException):return None
+    return None if config is None else caddy_json_routes(config)
+def caddy_routes(c):
+    """The Caddyfile mounted into one Caddy container, read without following links. (routes, complete)"""
     for destination,name in (('/etc/caddy/Caddyfile',''),('/etc/caddy','Caddyfile')):
         source=mount_source(c,destination)
-        path=source/name if source and name else source
-        try:
-            if path and path.is_file() and path.stat().st_size<=CONFIG_LIMIT:return caddyfile_routes(path.read_text(errors='replace'),container_name(c))
-        except OSError:continue
+        text=read_config(source/name if source and name else source,follow_links=False) if source else None
+        if text is not None:return caddyfile_routes(text,container_name(c))
     return [],False
 
 TRAEFIK_ROUTER=re.compile(r'traefik\.(http|tcp)\.routers\.([A-Za-z0-9_-]{1,64})\.rule')
@@ -226,9 +228,10 @@ def container_state(c):
     state=c.get('State') or {}
     return {'name':container_name(c),'running':bool(state.get('Running')),'health':(state.get('Health') or {}).get('Status') or None,
         'published':sorted({port for bound,port,_ in published_ports(c) if bound in ALL_INTERFACES})[:64]}
-def proxy_routes(containers=None):
+def proxy_routes(containers=None,nginx=None):
     """Routing facts of this server, or None when they cannot be read at all. `incomplete` says the list may miss
-    routes (a container that could not be inspected, an adapter that failed, a Caddyfile import)."""
+    routes (a container that could not be inspected, an adapter that failed, a Caddyfile import). `nginx` reuses the
+    host's nginx_sites() when the caller already read them."""
     try:
         incomplete=False
         if containers is None:
@@ -243,17 +246,24 @@ def proxy_routes(containers=None):
             except Exception:incomplete=True;return
             if isinstance(found,tuple):found,complete=found;incomplete=incomplete or not complete
             routes.extend(found);proxies.append({'proxy':kind,'container':container_name(c) if c else None,'running':bool((c.get('State') or {}).get('Running')) if c else process_running(kind)})
-        if shutil.which('nginx') or pathlib.Path('/etc/nginx').is_dir():adapter('nginx',None,lambda:nginx_routes('nginx'))
+        if shutil.which('nginx') or pathlib.Path('/etc/nginx').is_dir():adapter('nginx',None,lambda:nginx_routes('nginx',sites=nginx))
+        # Caddy's admin API answers on this host's loopback once, whichever Caddy serves it: read once and attributed to the
+        # host. Each Caddy container's own mounted Caddyfile is still read; a missing one makes the list partial only when
+        # the admin API did not answer either.
+        caddies=[c for c in containers if re.search(r'(^|/)caddy(:|@|$)',image_of(c))]
+        admin=caddy_admin_routes() if caddies or shutil.which('caddy') else None
+        if admin is not None:routes.extend(admin);proxies.append({'proxy':'caddy','container':None,'running':True})
         for c in containers:
-            image=image_of(c)
-            if 'nginx-proxy-manager' in image:adapter('npm',c,lambda c=c:npm_routes(c))
-            elif re.search(r'(^|/)caddy(:|@|$)',image):adapter('caddy',c,lambda c=c:caddy_routes(c))
+            if 'nginx-proxy-manager' in image_of(c):adapter('npm',c,lambda c=c:npm_routes(c))
+        def caddyfile(c):
+            found,complete=caddy_routes(c)
+            return found,complete or admin is not None
+        for c in caddies:adapter('caddy',c,lambda c=c:caddyfile(c))
         # Traefik reads the labels of every container, so its routes are read once however many Traefik containers run.
         traefik=[c for c in containers if re.search(r'(^|/)traefik(:|@|$)',image_of(c))]
         if traefik:
             found,skipped=traefik_routes(containers);routes.extend(found);unparsed.extend(skipped)
             proxies.extend({'proxy':'traefik','container':container_name(c),'running':bool((c.get('State') or {}).get('Running'))} for c in traefik)
-        if shutil.which('caddy') and not any(p['proxy']=='caddy' for p in proxies):adapter('caddy',None,lambda:caddy_routes(None))
         for route in routes:
             route.setdefault('containers',sorted({name for upstream in route['upstreams'] for name in match_upstream(upstream,containers,addresses)}))
         try:port80=80 in listening_ports()
