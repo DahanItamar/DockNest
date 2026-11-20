@@ -62,13 +62,13 @@ the test, because the restored app could not read its own data.
 ## Changed since last known-good
 
 Each app's Compose, env and configuration files and each detected key are tracked in `config_fingerprints`. They are
-checked on job events that already reach DockNest: a readiness check, a discovery and a backup (the restore check joins
-when it lands). There is no timer.
+checked on job events that already reach DockNest: a readiness check (which also runs the restore check), a discovery
+and a backup. There is no timer.
 
 - The first observation of an item is its known-good baseline, silently. An upgrade or a new app never raises an alert.
 - A different fingerprint marks the item changed, with the time first seen, and raises `config.changed` once per new set
   of fingerprints through your alert lines. Nothing about the content is compared or shown.
-- Known-good is set by a Safe Edit that was applied (the files it wrote), a move onto a new server (a restore of a
+- Known-good is set by a Safe Edit that was applied (the files it wrote), a completed restore of the app's backup or a move onto a new server (a restore of a
   backup onto the app), or an administrator's **Mark as known-good** (`POST /api/sites/:id/keys/known-good`, which needs
   a sign-in re-verified in the last 5 minutes). Each first scans the app afresh and writes an audit entry that names the
   files and key names, never a value.
@@ -91,7 +91,7 @@ websites have no keys and no Compose files, so they are not scanned.
 
 ## Data
 
-Migration 20 (a placeholder number, set in merge order), additive and compatible: `app_keys` (site, rule, location, fingerprint, in backup,
+Migration 23 (a placeholder number, set in merge order), additive and compatible: `app_keys` (site, rule, location, fingerprint, in backup,
 verified test, first seen, changed at) and `config_fingerprints` (site, item, fingerprint, known-good, its source and
 time, first seen changed, alerted fingerprint). Both start empty.
 
