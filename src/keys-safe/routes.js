@@ -6,7 +6,7 @@ import express from 'express';
 import { z } from 'zod';
 import { db } from '../db.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from '../auth.js';
-import { busySite } from '../engine.js';
+import { keyScanBusy } from '../engine.js';
 import { confirmKnownGood } from './scan.js';
 import { keysView } from './padlock.js';
 
@@ -17,9 +17,12 @@ keysSafeRoutes.post('/sites/:id/keys/known-good', requireAdmin, requireRecentAut
   if (!parsed.success) return res.status(400).json({ error: 'The request is not valid.', code: 'INVALID' });
   const siteId = parsed.data;
   if (!db.prepare('SELECT 1 FROM sites WHERE id=? AND id NOT IN (SELECT site_id FROM site_archives)').get(siteId)) return res.status(404).json({ error: 'App not found.', code: 'NOT_FOUND' });
-  if (busySite(siteId)) return res.status(409).json({ error: 'This app is busy. Try again when its job finishes.', code: 'SITE_BUSY' });
-  try { await confirmKnownGood(siteId, { source: 'admin', actor: req.user.id }); }
+  // Busy: a backup, restore, move, Safe Edit or restore test of the app. Checked again when the scan is recorded.
+  const busy = { error: 'This app is busy. Try again when its job finishes.', code: 'SITE_BUSY' };
+  if (keyScanBusy(siteId)) return res.status(409).json(busy);
+  try { await confirmKnownGood(siteId, { source: 'admin', actor: req.user.id, blocked: () => keyScanBusy(siteId) }); }
   catch (error) {
+    if (['SITE_BUSY', 'NOT_APPLICABLE'].includes(error?.code)) return res.status(409).json(error.code === 'SITE_BUSY' ? busy : { error: error.message, code: error.code });
     console.error(`Mark as known-good failed: ${error?.code ?? error?.name}`);
     return res.status(409).json({ error: 'DockNest could not read the configuration of this app. Nothing was marked.', code: 'SCAN_FAILED' });
   }

@@ -125,14 +125,17 @@ function alertChanged(siteId, changed) {
 
 // Records one scan of an app. `backup` ({ id, backupKind, chainId }) is given for the scan a backup made: then each
 // key's in_backup names this backup only when the helper proved the packaged bytes match the live ones.
-// `trust` ({ source, actor, only }) is a known-good decision taken on this scan, in the same transaction: the items
-// `only` accepts (all when absent) become known-good without an alert, with one audit entry naming files and keys.
+// `trust` ({ source, actor, only, rekey, blocked }) is a known-good decision taken on this scan, in the same transaction:
+// the items `only` accepts (all when absent) become known-good without an alert, with one audit entry naming files and
+// keys. `rekey`: the fingerprint key changed with the app's server, so its keys keep their state. `blocked()`: when it
+// is true inside the transaction, nothing is recorded (the caller's check-then-act gap is closed here).
 export function recordScan(siteId, raw, { backup = null, trust = null, at = now() } = {}) {
   const scan = cleanScan(raw);
   if (!scan) return false;
   return atomic(() => {
+    if (trust?.blocked?.()) throw Object.assign(new Error('This app is busy. Try again when its job finishes.'), { status: 409, code: 'SITE_BUSY' });
     const rebaseline = takeRebaseline(siteId), trusted = item => Boolean(trust) && (!trust.only || trust.only(item));
-    recordKeys(siteId, scan.keys, { backup, at, rebaseline });
+    recordKeys(siteId, scan.keys, { backup, at, rebaseline: rebaseline || Boolean(trust?.rekey) });
     const items = [...scan.files.map(file => [file.path, file.fingerprint]), ...scan.keys.map(key => [keyItem(key.rule, key.location), key.fingerprint])];
     const changed = recordItems(siteId, items, { at, rebaseline, trust, trusted });
     if (changed) alertChanged(siteId, changed);

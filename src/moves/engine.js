@@ -680,7 +680,7 @@ const STEPS = {
     // (the site's server changed). Best effort, never fails the move.
     if (incrementalSettings(site.id).enabled) await discardIncrementalState(site.id, { server: source });
     // Keys safe (docs/keys-safe.md): the app now runs from a restored backup, which is its known-good. Best effort.
-    await confirmKnownGood(site.id, { source: 'restore', actor: 'move:' + move.id, remote }).catch(() => {});
+    await confirmKnownGood(site.id, { source: 'restore', actor: 'move:' + move.id, rekey: true, remote }).catch(() => {});
   },
 };
 
