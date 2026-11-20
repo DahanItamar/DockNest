@@ -120,7 +120,7 @@ try {
     const tag = (viewport.width === 1280 ? '1280' : '390') + '-' + scheme;
     { // Sites: the Storage row, Copy missing, and a site without storage data.
       const { context, page, errors } = await open(viewport, scheme);
-      await go(page, viewport, 'Apps & schedules');
+      await go(page, viewport, 'Apps & Schedules');
       const card = page.locator('.site-card', { hasText: LONG_SITE });
       await card.waitFor();
       assert.match(await card.locator('.def-row', { hasText: 'Storage' }).innerText(), /Default destination[\s\S]*2 extra copies[\s\S]*Copy missing/, label + ': storage row');
@@ -160,7 +160,7 @@ try {
     const { context, page, calls } = await open(wide, 'light', { onApi: ({ path, method, route }) => {
       if (/^\/sites\/site-1\/storage$/.test(path) && method === 'PUT' && refused.length) return route.fulfill({ status: 400, json: { error: 'x', code: refused.shift() } });
     } });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     for (const code of ['copy_equals_main', 'duplicate_copy', 'too_many_copies', 'unknown_destination', 'invalid_retention']) {
       refused.push(code);
       await page.locator('.site-card', { hasText: LONG_SITE }).getByRole('button', { name: /^Change storage for/ }).click();
@@ -200,7 +200,7 @@ try {
 
   { // Only one destination: nothing to copy to, said plainly.
     const { context, page } = await open(wide, 'light', { targets: [TARGETS[0]] });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     await page.locator('.site-card', { hasText: 'pawmeadow.com' }).getByRole('button', { name: /^Change storage for/ }).click();
     const dialog = page.getByRole('dialog', { name: 'App storage' });
     await dialog.getByLabel('Main destination').waitFor();
@@ -211,7 +211,7 @@ try {
 
   { // Server older than 2.11 (no storage or copies in the state): the pages look exactly as before.
     const { context, page } = await open(wide, 'light', { copies: false });
-    await go(page, wide, 'Apps & schedules');
+    await go(page, wide, 'Apps & Schedules');
     await page.locator('.site-card').first().waitFor();
     assert.equal(await page.locator('.site-card .def-row', { hasText: 'Storage' }).count(), 0, 'no Storage row without data');
     await go(page, wide, 'Backups');

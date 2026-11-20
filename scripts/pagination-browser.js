@@ -69,7 +69,7 @@ try{
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:1000});
   await navigate('Servers');await partialPage('Servers','.server-card',4);
-  await navigate('Apps & schedules');await partialPage('Apps','.site-card',4);
+  await navigate('Apps & Schedules');await partialPage('Apps','.site-card',4);
   await navigate('Backups');await partialPage('Backup apps','.backup-group');
   await page.locator('.backup-group>summary').first().click();
   await partialPage('Recovery points for Website 0','.backup-group[open] .recovery-row',3);
@@ -121,7 +121,7 @@ try{
  let pin;await page.route('**/api/backups/backup-3/pin',r=>{pin=r.request().postDataJSON();return r.fulfill({json:{ok:true}})});
  await page.getByRole('button',{name:'Pin backup backup-3',exact:true}).click();await page.getByRole('status').filter({hasText:'Backup pinned.'}).waitFor();assert.deepEqual(pin,{pinned:true});
  await page.getByRole('button',{name:'Restore backup backup-3',exact:true}).click();await page.getByRole('dialog').getByLabel('Target server').waitFor();await page.getByRole('button',{name:'Close dialog'}).click();
- const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Apps & schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
+ const routes=[['Overview','dashboard','.dash-site',5],['Servers','servers','.server-card',4],['Apps & Schedules','sites','.site-card',4],['Backups','backups','.backup-group',null],['Jobs','jobs','tbody tr',null],['Maintenance','maintenance','tbody tr',5],['Audit','audit','tbody tr',null],['Storage','storage','.storage-card',4],['Access','access','tbody tr',5]];
  for(const theme of ['light']){
   if(theme==='dark')await page.getByRole('button',{name:'Switch to dark theme'}).click();
   for(const [route,slug,selector,count] of routes){
@@ -142,7 +142,7 @@ try{
  // 2.4.1: the pager keeps one section gap (24px) below the last row of cards on every page, at every desktop width, and stays put.
  for(const [width,height] of [[1024,900],[1440,1000],[1920,1100],[2560,1300],[3840,1600]]){
   await page.setViewportSize({width,height});
-  for(const [route,label,selector] of [['Apps & schedules','Apps','.site-card'],['Servers','Servers','.server-card'],['Storage','Storage destinations','.storage-card']]){
+  for(const [route,label,selector] of [['Apps & Schedules','Apps','.site-card'],['Servers','Servers','.server-card'],['Storage','Storage destinations','.storage-card']]){
    await navigate(route);await settle();
    const pager=page.getByRole('group',{name:label+' pagination',exact:true}),next=pager.getByRole('button',{name:label+' next page',exact:true});
    const gap=()=>page.evaluate(sel=>{const cards=[...document.querySelectorAll(sel)],bottom=Math.max(...cards.map(card=>card.getBoundingClientRect().bottom));return Math.round(document.querySelector('.pagination').getBoundingClientRect().top-bottom)},selector);

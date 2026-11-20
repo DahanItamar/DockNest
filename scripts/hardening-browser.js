@@ -30,7 +30,7 @@ const sites=[
 const state=extra=>({servers:[{id:'s1',name:'Production',host:'srv.example.invalid',port:22,username:'root',status:'connected'}],sites:extra.sites||sites,policies:[],backups:[],jobs:extra.jobs||[],restores:[],audit:[],storage:{used:0,total:1e12},worker:{online:true},maintenance:{}});
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 const errors=[],writes=[];
-async function open(theme,width,{role='admin',data=state({}),route='Apps & schedules'}={}){
+async function open(theme,width,{role='admin',data=state({}),route='Apps & Schedules'}={}){
  const page=await browser.newPage({viewport:{width,height:width<500?874:900}});
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/api/auth/status',r=>r.fulfill({json:{authenticated:true,csrfToken:'fixture',user:{name:'Person',role},serverTime:now,idleExpiresAt:now+1800000,absoluteExpiresAt:now+28800000}}));

@@ -306,7 +306,7 @@ async function manyAndRoles(){
  // The job link in an alert opens that job after sign-in, then the address is plain again
  {const {context,page}=await open({nav:false,path:'/?job=job-0001-aaaa'});
   await page.locator('dialog.job-dialog[open]').waitFor();assert.equal(await page.evaluate(()=>location.search),'');
-  await page.getByRole('heading',{level:1,name:'Job activity'}).waitFor();await context.close();}
+  await page.getByRole('heading',{level:1,name:'Job Activity'}).waitFor();await context.close();}
  {const {context,page}=await open({nav:false,path:'/?job=job-gone-0000'});
   await page.getByText('This job is not in DockNest any more.',{exact:false}).waitFor();await context.close();}
 }

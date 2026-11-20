@@ -55,7 +55,7 @@ await page.locator('.dash-site summary').first().click();
 await page.locator('.dash-site summary').first().click();
 assert.equal(await page.locator('.dash-site-history').first().evaluate(el=>getComputedStyle(el).animationName),'none');
 await page.getByRole('button',{name:'Manage apps',exact:true}).click();
-await page.getByRole('heading',{name:'Apps & schedules',exact:true}).waitFor();
+await page.getByRole('heading',{name:'Apps & Schedules',exact:true}).waitFor();
 assert.equal(await page.locator('.dashboard-page').count(),0,'Other routes retain existing styles');
 await page.setViewportSize({width:1440,height:1100});
 await page.getByRole('navigation').getByRole('button',{name:'Backups',exact:true}).click();

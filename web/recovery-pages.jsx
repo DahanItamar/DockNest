@@ -56,7 +56,7 @@ export function Sites({sites,allSites,policies,user,busy,name,Empty,onClearFilte
 }
 
 export function Backups({backups,allBackups,busy,name,date,bytes,Badge,Empty,onClearFilter,onPin,onRestore,onDetails,onRetryCopy,retrying,onChain,query}){
- if(!allBackups.length)return <section className="panel"><Empty icon={BackupIcon} title="No recovery points yet">Run a backup from Apps &amp; schedules. A recovery point appears only after the job is verified.</Empty></section>;
+ if(!allBackups.length)return <section className="panel"><Empty icon={BackupIcon} title="No recovery points yet">Run a backup from Apps &amp; Schedules. A recovery point appears only after the job is verified.</Empty></section>;
  if(!backups.length)return <section className="panel"><Empty icon={BackupIcon} title="No matching recovery points" action={<button onClick={onClearFilter}>Clear filter</button>}>Try another recovery point, timestamp or app identifier.</Empty></section>;
  const groups=new Map();
  for(const backup of backups){const group=groups.get(backup.siteId)||[];group.push(backup);groups.set(backup.siteId,group);}

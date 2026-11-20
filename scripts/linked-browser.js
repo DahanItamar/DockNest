@@ -86,7 +86,7 @@ async function states(open, options) {
 
 async function appsPage(open, options) {
   const {context, page, backups} = await start(open, linkedState(), options);
-  await page.getByRole('navigation', {name: 'Main navigation'}).getByRole('button', {name: 'Apps & schedules', exact: true}).click();
+  await page.getByRole('navigation', {name: 'Main navigation'}).getByRole('button', {name: 'Apps & Schedules', exact: true}).click();
   const card = name => page.getByRole('article', {name});
   const dialog = page.getByRole('dialog');
   // Warning links: confirm first, nothing queued until "Back up now" in the confirm
