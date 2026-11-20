@@ -35,6 +35,8 @@ The helper also checks paths, for every role. It never captures `/etc/shadow`, `
 
 Upgrading: an app that already lists a protected path stops backing up with "Protected system path refused" until an administrator removes that path. An app whose staging directory is inside a system folder keeps backing up, but it can be saved again only after its staging directory is moved, for example to `/var/lib/docknest`. No other saved app changes behaviour.
 
+The restore check of Check readiness ([restore check](restore-check.md)) reads cron files, systemd timer and service units, Compose files and nginx site files on the source server. Only paths, line numbers, schedules and the app folder, container or project that matched leave the server; the command, the line text and every value stay there and are never logged. Reads are bounded, never follow a link out of the folder being scanned and skip the protected paths above. Ignore and Note answers are audited with the finding key and the answer only.
+
 ## Session expiry
 
 The server rejects sessions after 30 minutes without reported user interaction and after eight hours from login, even with continued activity. Dashboard polling and ordinary reads do not renew the idle timer. The UI reports trusted keyboard/pointer interaction through the protected activity endpoint; that endpoint cannot revive an expired session.

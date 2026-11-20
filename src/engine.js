@@ -15,6 +15,7 @@ import { packagePath } from './artifact-journal.js';
 import { storedProbeProblem } from './probe-url.js';
 import { CLAIMABLE_JOB_SQL, CLAIMABLE_HEAL_SQL } from './job-claim.js';
 import { recordHardening, recordDiscoveredHardening } from './hardening.js';
+import { recordDiscoveredLinks } from './server-links.js';
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, stat, readFile, appendFile, rm, statfs } from 'node:fs/promises';
@@ -24,12 +25,21 @@ import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 import { takeCertificates } from './alerts/certificates.js';
+import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
-// facts of the sites on that server (docs/hardening-score.md); other roles only read.
+// facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
+// other roles only read.
 export const testServer=async server=>takeCertificates({serverId:server.id},await remote(server,{operation:'test'}));
-export const discover=async(server,{recordHardening:record=false}={})=>{const result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover'}));if(record){try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}}return result;};
+export const discover=async(server,{record=false}={})=>{
+  const result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover'}));
+  if(record){
+    try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
+    try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}
+  }
+  return result;
+};
 export const browseProjectFiles=(server,containers,directory)=>remote(server,{operation:'list-project-files',containers,directory});
 // Read-only: how DockNest would recreate plain containers (run spec, unsupported settings, Compose preview). The helper
 // never returns environment values here, only their names.
@@ -50,10 +60,12 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const result=takeCertificates({serverId:server.id,siteId},await remote(server,{operation:'readiness',config:site.config}));
+ const result=takeCertificates({serverId:server.id,siteId},await transport.remote(server,{operation:'readiness',config:site.config}));
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
  result.ready=result.checks.every(check=>check.ok||check.required===false);
+ // The restore check never changes `ready`; stored Ignore and Note answers are joined onto its findings.
+ if(result.restoreGaps)result.restoreGaps=withRestoreDecisions(siteId,result.restoreGaps);
  return result;
 }
 export async function verifyRecovery(job){

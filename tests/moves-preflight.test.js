@@ -218,6 +218,13 @@ test('security settings: a copy keeps them, so unreproducible settings and missi
   assert.deepEqual(only(evaluateMove(facts(f => { f.site.kind = 'static'; f.site.hardening = { hardened: true, problems: ['x'], apparmor: [] }; })), 'security'), []);
 });
 
+test('configuration files outside the folders a move may create are a note to put back by hand, never a blocker', () => {
+  const result = evaluateMove(facts(f => { f.site.handPlaced = ['/etc/cron.d/shop']; }));
+  assert.equal(result.verdict, 'ready-with-notes'); assert.equal(result.canStart, true);
+  assert.deepEqual(only(result, 'paths').map(item => [item.status, item.title, item.text]), [['warn', 'Put back by hand', 'Put back by hand: /etc/cron.d/shop. DockNest does not write there during a move; copy it from the backup to the same path on new-srv.']]);
+  assert.equal(evaluateMove(facts()).verdict, 'ready', 'a site without such files is unchanged');
+});
+
 test('settings a plain container copy cannot recreate are named warnings, never a refusal, and do not change what was reviewed', () => {
   const unsupported = [{ container: 'shop-gpu', settings: ['GPUs and other device requests', 'the gelf log driver'] }];
   const result = evaluateMove(facts(f => { f.site.kind = 'container'; f.site.unsupported = unsupported; }));

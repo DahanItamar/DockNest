@@ -16,6 +16,8 @@ PROTECTED_CONTENT=tuple(PROTECTED_FILES)+PROTECTED_TREES+('/etc/ssh','/etc/sudoe
 # Per-user key folders: an entry with one of these names is never captured, wherever it is (a /home/<user> bind mount
 # would otherwise carry ~/.ssh and ~/.gnupg). Only private key stores; tokens such as ~/.aws stay application data.
 PROTECTED_NAMES=('.ssh','.gnupg')
+# A path the API accepts in a site's file lists (src/server.js linuxPath).
+SITE_PATH=re.compile(r'/[a-zA-Z0-9_./-]+')
 def lexical(value):
     # The helper runs on Linux; the separator swap only lets the unit tests run on a Windows workstation.
     path=posixpath.normpath(str(value).replace(os.sep,'/'))

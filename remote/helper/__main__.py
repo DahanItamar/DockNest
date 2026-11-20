@@ -14,7 +14,7 @@ from .net import (
 from .maintenance import (
     deploy_maintenance, maintenance, setup_maintenance)
 from .discovery import (
-    configuration_paths, discovered_volumes, hardening_report, inspect_each, list_project_files, nginx_sites, user_networks, web_hints)
+    configuration_paths, discovered_volumes, hardening_report, inspect_each, link_report, list_project_files, nginx_sites, user_networks, web_hints)
 from .runspec import (
     describe_containers)
 from .restore import (
@@ -121,8 +121,8 @@ def main(req):
         # Safe Edit's image holders (never started, docknest.edit.hold) are DockNest's own, never a site to add.
         cs=[c for c in cs if 'docknest.edit.hold' not in ((c.get('Config') or {}).get('Labels') or {})]
         # Do not expose environment secrets to dashboard.
-        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs)
-        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c),'networks':user_networks(c)} for c,facts in zip(cs,reports)],'volumes':discovered_volumes(),'uninspected':uninspected,'certificates':certbot_certificates()})
+        routes=nginx_sites();reports=hardening_report(cs) or [None]*len(cs);links=link_report(cs)
+        emit(result={'staticSites':[site for site in routes if site['kind']=='static'],'containers':[{'hardening':facts,'links':link,'id':c['Id'],'name':c['Name'].lstrip('/'),'image':c['Config']['Image'],'state':c['State']['Status'],'running':c['State']['Running'],'health':c['State'].get('Health',{}).get('Status'),'labels':c['Config'].get('Labels',{}),'mounts':c['Mounts'],'temporaryMemoryFolders':list(c.get('HostConfig',{}).get('Tmpfs',{})),'ports':c['NetworkSettings']['Ports'],'webHints':web_hints(c,routes),'backupConfiguration':configuration_paths(c)} for c,facts,link in zip(cs,reports,links)],'certificates':certbot_certificates()})
     elif op=='describe-containers':describe_containers(req)
     elif op=='list-project-files':emit(result=list_project_files(req['containers'],req.get('directory')))
     elif op=='capture':capture(req)

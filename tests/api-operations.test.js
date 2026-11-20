@@ -40,6 +40,19 @@ test('native Redis checks persist while ambiguous or mismatched check definition
   const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,services:[invalid]}})});assert.equal(response.status,400);
  }
 });
+test('native MongoDB collection checks persist while table, key or misplaced database checks are rejected',async()=>{
+ // Older API callers may still send a stray database on a table or key check: it is dropped, not refused.
+ const sql={container:'fixture-db',engine:'postgres',checks:[{name:'Rows',table:'orders',database:'shop'}]};
+ const legacy=await request('/sites',{method:'POST',body:JSON.stringify({serverId:host,name:'SQL check fixture',config:{containers:['fixture-db'],services:[sql]}})});assert.equal(legacy.status,201);
+ assert.deepEqual((await legacy.json()).config.services[0].checks,[{name:'Rows',table:'orders'}]);
+ const service={container:'demo-shop-mongo',engine:'mongo',database:'shop',checks:[{name:'Orders',collection:'orders'},{name:'Archived orders',collection:'orders.archive',database:'archive'}]};
+ const payload={serverId:host,name:'MongoDB contract fixture',config:{containers:['demo-shop-mongo'],services:[service]}};
+ const saved=await request('/sites',{method:'POST',body:JSON.stringify(payload)});assert.equal(saved.status,201);
+ assert.deepEqual((await saved.json()).config.services[0].checks,service.checks);
+ for(const invalid of [{...service,checks:[{name:'Table',table:'orders'}]},{...service,checks:[{name:'Both',collection:'orders',key:'orders'}]},{...service,checks:[{name:'System',collection:'system.users'}]},{...service,checks:[{name:'Bad',collection:'$where'}]},{...service,engine:'postgres'},{...service,engine:'redis',database:'0'}]){
+  const response=await request('/sites',{method:'POST',body:JSON.stringify({...payload,config:{...payload.config,services:[invalid]}})});assert.equal(response.status,400,JSON.stringify(invalid));
+ }
+});
 
 test('download range streams the selected bytes and releases its retention lease',async()=>{
  const file=join(process.env.BACKUP_DIR,'range.enc');await writeFile(file,Buffer.from('0123456789'));backup('range',file,10);

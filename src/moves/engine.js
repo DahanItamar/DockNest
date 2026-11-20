@@ -125,7 +125,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const mailBlocking = sf.kind !== 'static' && !!targetFacts?.firewall?.mailBlocking;
   const facts = {
     site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
-      ports: sf.ports, bindPaths: sf.bindPaths, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
+      ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
       ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
@@ -151,7 +151,7 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
     Object.assign(result, { verdict: 'blocked', canStart: false, sentence: result.details.checks.at(-1).text });
   }
   const plan = { kind: sf.kind, domains: sf.domains, nginxDirectives: sf.nginxDirectives ?? [], web: sf.web ?? null, running: sf.running, networks: sf.networks, portMap: result.details.portMap, healthPath: healthPath(cfg),
-    targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
+    targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, handPlaced: sf.handPlaced ?? [], volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
   return { site, source, target, result, plan, hash: preflightHash(result, options) };
 }
 function composeAtLeast(text, need) {
@@ -613,7 +613,7 @@ export const targetMaintenanceDirectory = site => `/var/lib/docknest/maintenance
 async function fallbackHtml() { try { return await maintenanceHtml(); } catch { return (await readFile(new URL('../../remote/maintenance.html', import.meta.url))).toString('base64'); } }
 async function deploy(context, mode, backupId) {
   const { move, job, site, target, plan } = context;
-  const request = { operation: 'deploy-restore', moveId: move.id, job: job.id, mode, portMap: plan.portMap, networks: plan.networks, volumes: plan.volumes ?? [], ...(plan.compose ? { compose: plan.compose } : {}),
+  const request = { operation: 'deploy-restore', moveId: move.id, job: job.id, mode, portMap: plan.portMap, networks: plan.networks, volumes: plan.volumes ?? [], handPlaced: plan.handPlaced ?? [], ...(plan.compose ? { compose: plan.compose } : {}),
     ...(move.options.envRewrite.length && plan.recordValue ? { envRewrite: { keys: move.options.envRewrite, from: plan.oldAddresses, to: plan.recordValue } } : {}),
     ...(mode === 'live' && plan.domains.length ? { nginx: { siteId: site.id, domains: plan.domains, upstreamPort: plan.web ? mappedPort(plan, plan.web) : null, maintenanceDirectory: plan.maintenanceDirectory ?? targetMaintenanceDirectory(site), stagingRoot: site.config.stagingRoot || '/var/lib/docknest', maintenanceHtml: await fallbackHtml(), path: plan.healthPath } } : {}) };
   if (mode === 'live' && plan.kind !== 'static' && plan.domains.length && !plan.web) throw new Error('DockNest could not find which port serves the website, so it cannot route the domain on the new server.');

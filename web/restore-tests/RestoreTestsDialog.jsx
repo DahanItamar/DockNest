@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {ChevronDown} from '../icons.jsx';
 import {AlertPanel} from '../system.jsx';
 import {useGuard} from '../map/MoveFlow.jsx';
+import {LinkedWarning} from '../linked/LinkedWarning.jsx';
 import {runError,settingsError} from './restore-tests-client.js';
 import {CADENCES,CPU,DEFAULT_SETTINGS,MEMORY,TIME,cpuLimit,limitFrom,memoryLimit,timeLimit,whyNoRun} from './model.js';
 
@@ -19,7 +20,7 @@ function LimitField({label,spec,state,onChange,disabled,help,placeholder,inputMo
  </div>;
 }
 
-export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
+export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAdmin,onClose,onSaved,onChanged,onSessionExpired}){
  const [card,setCard]=useState(null),[loaded,setLoaded]=useState(false),[loadError,setLoadError]=useState('');
  const [form,setForm]=useState(null),[startN,setStartN]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState(''),[started,setStarted]=useState(false),[tried,setTried]=useState(false),[advOpen,setAdvOpen]=useState(false);
  const focusRef=useRef(null),guard=useGuard(client);
@@ -113,6 +114,7 @@ export function RestoreTestsDialog({client,site,servers,isAdmin,onClose,onSaved,
      <small>Optional</small>
     </label>
    </details>
+  <LinkedWarning items={linked} onOpenApp={onOpenApp}/>
   {guard.prompt&&<div className="map-root">{guard.prompt}</div>}
   {error&&<AlertPanel variant="error" title="Could not finish">{error}</AlertPanel>}
   <div className="modal-foot">

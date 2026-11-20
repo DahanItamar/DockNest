@@ -271,6 +271,16 @@ CREATE INDEX IF NOT EXISTS site_edit_undo_site ON site_edit_undo(site_id);
 export const coverageIgnoresSchema = `
 CREATE TABLE IF NOT EXISTS server_coverage_ignores (server_id TEXT NOT NULL REFERENCES servers(id),kind TEXT NOT NULL CHECK (kind IN ('container','volume')),name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 255),note TEXT CHECK (note IS NULL OR length(note) <= 200),created_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY (server_id,kind,name));
 `;
+// Linked apps (docs/linked-apps.md): the cleaned container facts of a server's last discovery scan. Links between apps are
+// computed from them on read, never stored. One row per server, replaced by each scan. Additive only: one new table.
+export const serverAppLinksSchema = `
+CREATE TABLE IF NOT EXISTS server_app_links (server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,facts TEXT NOT NULL CHECK (length(facts) <= 2097152),format INTEGER NOT NULL,checked_at TEXT NOT NULL,partial INTEGER NOT NULL CHECK (partial IN (0,1)));
+`;
+// The restore check (docs/restore-check.md): an Ignore or Note answer per finding of a site's readiness check. finding_key is
+// the helper's sha256 of kind, path and match, so a moved line keeps its answer. Additive only: one new table.
+export const restoreDecisionsSchema = `
+CREATE TABLE IF NOT EXISTS site_restore_decisions (site_id TEXT NOT NULL REFERENCES sites(id),finding_key TEXT NOT NULL CHECK (length(finding_key) = 64 AND finding_key NOT GLOB '*[^0-9a-f]*'),decision TEXT NOT NULL CHECK (decision IN ('ignore','note')),note TEXT CHECK (note IS NULL OR length(note) <= 500),decided_by TEXT,decided_at TEXT NOT NULL,PRIMARY KEY (site_id,finding_key));
+`;
 // Kit check and emergency kit (docs/emergency-kit.md, "Data"). Additive only: two new tables and their indexes, no rows,
 // so 2.16 code ignores them. kit_checks holds the outcome of each proof that the newest recovery kit opens (a reason code,
 // never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
@@ -408,9 +418,13 @@ export const migrations = [
   { version: 18, name: 'safe-edit-undo', compatible: true, up: db => db.exec(safeEditUndoSchema) },
   // Coverage view (docs/coverage-and-restore-check.md A4): one new table, so 2.16.4 code ignores it.
   { version: 19, name: 'server-coverage-ignores', compatible: true, up: db => db.exec(coverageIgnoresSchema) },
-  // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional number
-  // (planned as 24): versions stay contiguous here and it is renumbered at merge after the other 2.16.5 and 3.0 ones.
-  { version: 20, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
+  // Linked apps facts (docs/linked-apps.md): one new table, so 2.16 code ignores it.
+  { version: 20, name: 'server-app-links', compatible: true, up: db => db.exec(serverAppLinksSchema) },
+  // Restore check answers (docs/restore-check.md): one new table, so 2.16 code ignores it.
+  { version: 21, name: 'site-restore-decisions', compatible: true, up: db => db.exec(restoreDecisionsSchema) },
+  // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional
+  // number: the next free one; renumbered at merge if another migration lands first.
+  { version: 22, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;
