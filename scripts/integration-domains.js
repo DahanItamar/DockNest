@@ -24,7 +24,7 @@ const NGINX_SITE = `server {
 
 export async function runDomainsScenario({ run, until, hosts, servers, db, record }) {
   const host = hosts[2], server = servers[2];
-  const { claimJob, executeJob, discover } = await import('../src/engine.js');
+  const { claimJob, executeJob, discover, transport } = await import('../src/engine.js');
   const { dnsResolver } = await import('../src/moves/dns.js');
   const { enqueueDomainCheck } = await import('../src/domains/jobs.js');
   const { domainsView } = await import('../src/domains/check.js');
@@ -51,8 +51,12 @@ export async function runDomainsScenario({ run, until, hosts, servers, db, recor
     const shopId = randomUUID(), forumId = randomUUID(), now = new Date().toISOString();
     db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(shopId, server.id, 'Domains QA shop', JSON.stringify({ kind: 'docker', containers: ['qa-dom-web'], domains: ['dom.example.com'], stagingRoot: '/var/lib/docknest' }), now);
     db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(forumId, server.id, 'Domains QA forum', JSON.stringify({ kind: 'docker', containers: ['qa-dom-forum'], domains: ['forum.example.com'], stagingRoot: '/var/lib/docknest' }), now);
-    // Public DNS is faked to answer with the server's connection address; nothing leaves the test network.
-    dnsResolver.resolve = async () => [{ A: [server.host], AAAA: [] }, { A: [server.host], AAAA: [] }];
+    // Public DNS is faked to answer with this host's own interface address, as the helper reports it; nothing leaves the
+    // test network. (Every test host is reached through 127.0.0.1, so the connection address would name the first server.)
+    const { addresses } = (await transport.remote(server, { operation: 'domain-routes' })).routing;
+    const address = addresses[0];
+    assert.ok(address, 'the helper reports an interface address of the host');
+    dnsResolver.resolve = async () => [{ A: [address], AAAA: [] }, { A: [address], AAAA: [] }];
     const before = await fingerprint();
 
     for (const siteId of [shopId, forumId]) {
