@@ -47,15 +47,11 @@
 .recovery-point code{font-size:var(--fs-caption);line-height:var(--lh-caption);margin-top:0}
 .recovery-size{text-align:right;font-variant-numeric:tabular-nums}
 .recovery-size b{font-weight:500}
-.recovery-actions{justify-content:flex-end;gap:0}
+.recovery-actions{justify-content:flex-end}
 @media(max-width:899px){
  .recovery-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 16px;padding:12px 0}
  .recovery-size{text-align:left}
  .recovery-actions{justify-content:flex-end}
-}
-@media(max-width:680px){
- .recovery-actions{display:flex;width:100%;justify-content:space-between}
- .recovery-actions .recovery-action{width:var(--control-height)}
 }
 
 /* 2.3.1 phone pagination: compact, one row (Previous, Page X of Y, Next), 44px targets, count kept for screen readers. */

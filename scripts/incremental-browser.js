@@ -172,9 +172,14 @@ try {
       const rows = page.locator('.recovery-row');
       await rows.first().waitFor();
       assert.match(await rows.first().innerText(), /Increment 1/, label + ': newest is an increment');
-      assert.equal(await rows.first().getByLabel(/^Download full ZIP/).count(), 0, label + ': no ZIP for an increment');
-      assert.equal(await rows.first().getByLabel(/^Download chain/).count(), 1, label + ': chain download');
-      assert.equal(await rows.nth(1).getByLabel(/^Download full ZIP/).count(), 1, label + ': ZIP for a full backup');
+      const menuFor = async row => { await row.getByRole('button', { name: /^More actions for backup/ }).click(); };
+      await menuFor(rows.first());
+      assert.equal(await page.getByRole('menuitem', { name: /^Download full ZIP/ }).count(), 0, label + ': no ZIP for an increment');
+      assert.equal(await page.getByRole('menuitem', { name: /^Download chain/ }).count(), 1, label + ': chain download');
+      await page.keyboard.press('Escape');
+      await menuFor(rows.nth(1));
+      assert.equal(await page.getByRole('menuitem', { name: /^Download full ZIP/ }).count(), 1, label + ': ZIP for a full backup');
+      await page.keyboard.press('Escape');
       await noOverflow(page, label + ' list');
       await shot(page, 'backups-list-' + tag);
       await next(page).click();

@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useState,useRef} from 'react';
 import {Monitor,Smartphone,Type,Palette,RotateCcw,Save,Columns2,AlignCenter,PanelTop} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
 import {maintenancePresets,normalizeMaintenance,renderMaintenancePage} from '../shared/maintenance-design.js';
+import {StatusLabel} from './system.jsx';
 import './maintenance.css';
 
 export function MaintenanceStudio({settings,busy,onSave,children}){
@@ -16,7 +17,7 @@ export function MaintenanceStudio({settings,busy,onSave,children}){
  const update=event=>setDraft(previous=>({...previous,[event.target.name]:event.target.value}));
  async function save(event){event.preventDefault();const result=await onSave(draft);if(result){const normalized=normalizeMaintenance(result);setSaved(normalized);setDraft(normalized);}}
  return <div className="maintenance-studio">
-  <div className="studio-topline"><div><span className="studio-kicker">MAINTENANCE STUDIO</span><h2>Your message. Your stage.</h2><p>Design a calm pause for your visitors, then publish it to your sites.</p></div><span className={'studio-save-state '+(dirty?'dirty':'')}>{dirty?'Unsaved changes':'Saved design'}</span></div>
+  <div className="studio-topline"><div><span className="studio-kicker">MAINTENANCE STUDIO</span><h2>Your message. Your stage.</h2><p>Design a calm pause for your visitors, then publish it to your sites.</p></div><StatusLabel state={dirty?'needs-review':'success'}>{dirty?'Unsaved changes':'Saved design'}</StatusLabel></div>
   <div className="studio-grid">
    <section className="studio-inspector panel" aria-label="Maintenance design settings">
     <header className="studio-section-head"><BrandIcon name="maintenance" size={24}/><h2>Design settings</h2></header>

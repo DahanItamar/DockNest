@@ -31,7 +31,7 @@ import {RestoreGaps} from './restore-gaps/RestoreGaps.jsx';
 import {CoveragePanel} from './backup-coverage/CoveragePanel.jsx';
 import {ConnectionsPage} from './connections/ConnectionsPage.jsx';
 import './rebrand.css';
-import {StatusLabel,IconButton,AlertPanel} from './system.jsx';
+import {StatusLabel,IconButton,AlertPanel,EmptyState} from './system.jsx';
 import './system.css';
 import './tables.css';
 import './frame.css';
@@ -89,7 +89,7 @@ function AccessTable({users,all,user,busy,run,setInvitation,setDialog}){
 }
 function Badge({value}){return <StatusLabel value={value}/>;}
 function Field({label,help,error,options,multiline,...props}){const id=useId(),helpId=help?id+'-help':undefined,errorId=error?id+'-error':undefined,describedBy=[props['aria-describedby'],helpId,errorId].filter(Boolean).join(' ')||undefined,control={...props,'aria-describedby':describedBy,...(error?{'aria-invalid':'true'}:{})};return <label className="field"><span>{label}</span>{options?<select {...control}>{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:multiline?<textarea {...control}/>:<input {...control}/>} {help&&<small id={helpId}>{help}</small>}{error&&<span className="field-error" id={errorId}><AlertCircle size={16} stroke={2} aria-hidden="true"/>{error}</span>}</label>;}
-function Empty({icon:Icon=Archive,title,children,action}){return <div className="empty"><span className="empty-icon"><Icon size={28}/></span><h3>{title}</h3><p>{children}</p>{action}</div>;}
+function Empty({icon=Archive,...rest}){return <EmptyState icon={icon} {...rest}/>;}
 function Modal({title,onClose,children,className}){const ref=useRef();useEffect(()=>{ref.current.showModal();return()=>ref.current?.close();},[]);return <dialog ref={ref} className={className} aria-labelledby="dialog-title" onCancel={onClose} onClick={e=>{if(e.target===ref.current)onClose();}}><div className="modal-head"><h2 id="dialog-title">{title}</h2><button className="icon" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div>{children}</dialog>;}
 function Auth({status,onAuth}) {
  const [error,setError]=useState(''),[bad,setBad]=useState(false),[busy,setBusy]=useState(false),[challenge,setChallenge]=useState(null),[code,setCode]=useState(''),[recovery,setRecovery]=useState(false),[fails,setFails]=useState(0),[pw,setPw]=useState('');

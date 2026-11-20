@@ -14,14 +14,16 @@
 .map-root.map-empty h2{margin:0;font-size:var(--fs-section);line-height:var(--lh-section);color:var(--heading)}
 .map-root.map-empty p{margin:0}
 .map-root .map-list{display:flex;flex-direction:column;gap:var(--edge)}
-.map-root .map-list-group{background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);padding:16px;min-width:0}
-.map-root .map-list-head{display:flex;gap:12px;align-items:flex-start;color:var(--accent)}
-.map-root .map-list-head>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.map-root .map-list-group{background:var(--dn-bg-surface);border:1px solid var(--dn-border-subtle);border-radius:var(--dn-radius-lg);padding:16px;min-width:0}
+.map-root .map-list-head{display:flex;gap:12px;align-items:center;min-width:0}
+.map-root .map-list-head h2{flex:1;min-width:0}
+.map-root .map-list-meta{display:flex;flex-direction:column;gap:4px;margin-top:8px;padding-inline:4px}
 .map-root .map-list-head h2{margin:0;font-size:var(--fs-section);line-height:var(--lh-section);font-weight:500;color:var(--heading);overflow-wrap:anywhere}
 .map-root .map-list ul{list-style:none;margin:16px 0 0;padding:0;border-top:1px solid var(--border-subtle)}
-.map-root .map-list li{display:flex;align-items:center;gap:12px;min-height:var(--row-height);padding-block:8px;box-sizing:border-box;border-bottom:1px solid var(--border-subtle);color:var(--text-secondary)}
+.map-root .map-list li{display:flex;align-items:center;gap:4px;min-height:var(--row-height);padding-block:4px;box-sizing:border-box;border-bottom:1px solid var(--border-subtle);color:var(--text-secondary)}
 .map-root .map-list li:last-child{border-bottom:0}
-.map-root .map-list li .map-name{flex:1;white-space:normal;overflow-wrap:anywhere}
+.map-root .map-list li .map-name,.map-root .map-list-store .map-name{white-space:normal;overflow-wrap:anywhere;font-weight:500;color:var(--dn-text-primary)}
+.map-root .map-list li .row-open{flex:1;width:auto}
 .map-root .map-none{margin:16px 0 0}
 @media(prefers-reduced-motion:reduce){.map-root *{transition:none!important;animation:none!important}}
 /* Move flow. Dialogs are rendered inside .map-root, so the scope still applies. */
@@ -143,7 +145,7 @@
 .map-root .map-list-text{display:flex;flex-direction:column;flex:1;min-width:0}
 .map-root .map-list-store{display:flex;flex-direction:column;gap:12px;margin-top:16px;border-top:1px solid var(--border-subtle);padding-top:12px}
 .map-root .map-list-store>div{display:flex;flex-direction:column;gap:4px}
-.map-root .map-list-store .map-meter{width:100%}
+.map-root .map-list-store .map-meter{width:calc(100% - 24px);margin-inline:12px}
 /* Move and install sheets are one size, with the same two footer buttons in the same place on every step. */
 .map-root dialog.map-dialog{width:min(560px,calc(100vw - 32px));height:min(600px,calc(100dvh - 32px));padding:0;overflow:hidden;display:none;flex-direction:column}
 .map-root .map-dialog-body{flex:1;min-height:0;padding:24px;display:flex;flex-direction:column;gap:16px;overflow:auto;font-size:var(--fs-body);line-height:var(--lh-body)}
@@ -197,10 +199,9 @@
 .map-root .map-sheet-close{position:absolute;top:12px;right:8px;z-index:1}
 .map-root .map-list-top{display:flex}
 .map-root .map-list-actions{display:flex;gap:8px;flex-wrap:wrap}
-.map-root .map-list-group>.map-list-actions{margin-top:12px}
+.map-root .map-list-group>.map-list-actions{margin-top:4px}
 .map-root .map-list li{flex-wrap:wrap}
-.map-root .map-list-store .map-list-actions{margin-top:4px}
-.map-root .map-list button{min-height:44px;white-space:nowrap}
+.map-root .map-list button:not(.row-open,.icon-button){min-height:44px;white-space:nowrap}
 @media(max-width:767px){.map-root .map-panel-foot{padding:16px 16px max(16px,env(safe-area-inset-bottom))}.map-root .map-row{min-height:56px}}
 .map-root .map-dialog-foot .map-panel-foot{border:0;padding:0;min-height:0}
 

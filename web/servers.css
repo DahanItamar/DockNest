@@ -1,19 +1,16 @@
 ﻿/* Servers page: layout comes from .card-grid, .card and .def-list in system.css; only server specifics live here. */
 .server-grid{grid-auto-rows:1fr}
 .servers-page .search{margin-bottom:var(--edge)}
-.server-card-head{display:flex;align-items:center;gap:12px;color:var(--primary-deep)}
-.server-card-head .card-title{margin:0;min-width:0;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.server-card-head{display:flex;align-items:center;gap:12px}
+.server-card-head .card-title{margin:0;min-width:0;flex:1;display:flex;align-items:center;gap:12px}
 .server-card-body>.status{margin-top:8px}
 .server-card-note{min-height:calc(2*var(--lh-caption));margin:8px 0 16px;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .server-metadata code{font-size:var(--fs-caption);line-height:var(--lh-caption);color:var(--text-primary);overflow-wrap:anywhere}
 .server-card-actions{justify-content:flex-start;padding:0 16px 0 24px}
-.server-card-actions button:not(.icon-button){padding-inline:16px}
-.card-footer.server-card-actions .server-edit{margin-left:auto}
+.server-card-actions button:not(.icon-button,.text-link){padding-inline:16px}
 
-.server-empty-panel{background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--radius);min-height:320px;display:flex;align-items:center;justify-content:center}
-.server-empty-panel .empty{padding:40px 24px}
+.server-empty-panel{background:var(--dn-bg-surface);border:1px solid var(--dn-border-subtle);border-radius:var(--dn-radius-lg);min-height:320px;display:flex;align-items:center;justify-content:center}
 @media(max-width:767px){
  .card-footer.server-card-actions{flex-direction:column;align-items:stretch;height:auto;padding:16px}
- .server-card-actions button:not(.icon-button){width:100%}
- .card-footer.server-card-actions .server-edit{margin-left:auto;align-self:flex-end}
+ .server-card-actions button:not(.icon-button,.text-link){width:100%}
 }

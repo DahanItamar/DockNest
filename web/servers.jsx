@@ -2,14 +2,13 @@
 import {Paginated} from './pagination.jsx';
 import {ArrowRight} from './icons.jsx';
 import {BrandIcon} from './brand.jsx';
-import {StatusLabel,IconButton,AlertPanel} from './system.jsx';
+import {StatusLabel,RowOpen,AlertPanel} from './system.jsx';
 import {ReportProblem} from './report/ReportProblem.jsx';
 import {buildServerReport} from './report/builders.js';
 import {catalogued,EXPLAIN} from './report/catalogue.js';
 import './servers.css';
 
 const ServerIcon=props=><BrandIcon name="server" {...props}/>;
-const EditIcon=({size})=><BrandIcon name="edit" size={size}/>;
 
 export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,onEdit,onAdd,onClearFilter,Empty,query,failure}) {
  if(!allServers.length)return <section className="server-empty-panel"><Empty icon={ServerIcon} title="Connect your first Docker host" action={user?.role==='admin'?<button className="primary" onClick={onAdd}>Add server <ArrowRight size={16}/></button>:null}>{user?.role==='admin'?'Connect a host with an SSH key and its independently verified host fingerprint.':'Ask your administrator to connect a Docker host with a verified SSH host key.'}</Empty></section>;
@@ -18,7 +17,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
   const count=sites.filter(site=>site.serverId===server.id).length;
   return <article className="card server-card" key={server.id} aria-labelledby={`server-title-${server.id}`}>
    <div className="card-body server-card-body">
-    <header className="server-card-head"><ServerIcon size={24}/><h2 className="card-title" id={`server-title-${server.id}`} title={server.name}>{server.name}</h2></header>
+    <header className="server-card-head"><h2 className="card-title" title={server.name}>{user?.role==='admin'?<RowOpen chip icon={ServerIcon} label={'Edit details for '+server.name} onClick={()=>onEdit(server)}><span className="row-title" id={`server-title-${server.id}`}>{server.name}</span></RowOpen>:<><span className="icon-chip"><ServerIcon size={20}/></span><span className="row-title" id={`server-title-${server.id}`}>{server.name}</span></>}</h2></header>
     <StatusLabel value={server.status||'unchecked'}/>
     <p className="t-caption server-card-note" title={server.note||undefined}>{server.note}</p>
     <dl className="def-list server-metadata">
@@ -31,8 +30,7 @@ export function Servers({servers,allServers,sites,user,busy,onTest,onDiscover,on
    </div>
    <footer className="card-footer server-card-actions">
     <button disabled={busy} onClick={()=>onTest(server)}>Test connection</button>
-    <button onClick={()=>onDiscover(server)}>Discover apps</button>
-    {user?.role==='admin'&&<IconButton className="server-edit" label="Edit details" icon={EditIcon} onClick={()=>onEdit(server)}/>}
+    <button type="button" className="text-link" onClick={()=>onDiscover(server)}>Discover apps</button>
    </footer>
   </article>;
  })}</div>}</Paginated>;

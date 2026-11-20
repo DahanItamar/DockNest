@@ -53,7 +53,7 @@ async function open(theme,width,{role='admin',scene='findings',onWrite=()=>null}
  if(width<500)await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('navigation').getByRole('button',{name:'Apps & Schedules',exact:true}).click();
  if(width<500)await page.locator('.berry-shell.mobile-open').waitFor({state:'detached'});
- await page.getByRole('button',{name:'Check readiness',exact:true}).click();
+ await page.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Check readiness'}).click();
  await page.locator('dialog[open]').waitFor();
  page.calls=calls;
  return page;

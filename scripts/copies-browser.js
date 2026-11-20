@@ -274,9 +274,10 @@ try {
       assert.match(await card.locator('tbody tr').nth(1).innerText(), /7 GB[\s\S]*0 B[\s\S]*7 GB/);
       assert.equal(await card.locator('th.num').count(), 4, label + ': numeric headers right aligned');
       await card.scrollIntoViewIfNeeded(); await shot(page, 'storage-report-' + tag);
-      const remove = page.getByRole('button', { name: 'Remove ' + TARGETS[1].name });
-      await remove.scrollIntoViewIfNeeded();
-      await remove.click();
+      const more = page.getByRole('button', { name: 'More actions for ' + TARGETS[1].name, exact: true });
+      await more.scrollIntoViewIfNeeded();
+      await more.click();
+      await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[1].name }).click();
       const confirm = page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[1].name });
       await confirm.waitFor();
       assert.equal(calls.filter(c => c.method === 'DELETE').length, 0, label + ': nothing is deleted before the confirmation');
@@ -294,7 +295,8 @@ try {
       await page.waitForFunction(() => document.querySelector('.alert-panel')?.textContent.includes('Deleting 3 copies'));
       assert.deepEqual(calls.find(c => c.path === '/storage-targets/t2/copies/delete').body, {});
       // A destination nothing uses is removed after one confirmation.
-      await page.getByRole('button', { name: 'Remove ' + TARGETS[2].name }).click();
+      await page.getByRole('button', { name: 'More actions for ' + TARGETS[2].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[2].name }).click();
       await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[2].name }).getByRole('button', { name: 'Remove', exact: true }).click();
       await page.waitForFunction(() => document.body.textContent.includes('Destination removed'));
       assert.deepEqual(errors, [], label);
@@ -307,7 +309,8 @@ try {
       if (path === '/storage-targets/t1' && method === 'DELETE') return route.fulfill({ status: 409, json: { error: 'In use.', code: 'destination_in_use', copies: 0, copyBackups: 0, bytes: 0, mainForSites: [], copyForSites: [], mainBackups: 4, recoveryKits: 1, isDefault: true } });
     } });
     await go(page, wide, 'Storage');
-    await page.getByRole('button', { name: 'Remove ' + TARGETS[0].name }).click();
+    await page.getByRole('button', { name: 'More actions for ' + TARGETS[0].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[0].name }).click();
     await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[0].name }).getByRole('button', { name: 'Remove', exact: true }).click();
     const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
     await inUse.waitFor();
@@ -323,7 +326,8 @@ try {
       if (path === '/storage-targets/t2/copies/delete' && method === 'POST') return body?.includeLastPackages ? route.fulfill({ status: 202, json: { deleting: 3 } }) : route.fulfill({ status: 409, json: { error: 'x', code: 'last_packages', onlyPackageBackups: 2 } });
     } });
     await go(page, wide, 'Storage');
-    await page.getByRole('button', { name: 'Remove ' + TARGETS[1].name }).click();
+    await page.getByRole('button', { name: 'More actions for ' + TARGETS[1].name, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove ' + TARGETS[1].name }).click();
     await page.getByRole('alert').filter({ hasText: 'Remove ' + TARGETS[1].name }).getByRole('button', { name: 'Remove', exact: true }).click();
     const inUse = page.getByRole('alert').filter({ hasText: 'still in use' });
     await inUse.waitFor();

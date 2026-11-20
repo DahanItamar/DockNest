@@ -5,8 +5,6 @@
 .cx-page{display:flex;flex-direction:column;gap:var(--edge)}
 .cx-page>.panel{margin:0}
 .cx-page>.alert-panel,.cx-page [role=status]>.alert-panel{margin:0}
-.cx-page .empty-icon{background:var(--transparent);color:var(--text-muted)}
-.cx-page .empty>button{display:inline-flex;align-items:center;gap:var(--spacing)}
 .cx-panel-actions{display:flex;gap:var(--spacing);margin-top:var(--spacing)}
 .cx-prov{display:flex;align-items:center;gap:var(--spacing);min-width:0}
 .cx-prov .cx-ic,.cx-val .cx-ic,.cx-opt .cx-ic{flex:none;color:var(--accent)}

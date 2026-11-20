@@ -1063,7 +1063,7 @@ try{
    await fits(page,'phone panels '+scheme);
    // Move to... opens the same dialogs as full-screen sheets
    Object.assign(mock,{previews:[],starts:[],cancels:[],continues:[],switchBacks:0,removals:[],resolves:[],tokens:[],cfSaved:false,askRemove:false,listMoves:[],needReauth:false,reauths:0,siteMoving:false,forceAnyway:false,phase:'running',blockA:false,changeOnce:false,dnsWrong:false});
-   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Move to…'}).click();
+   await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'More actions for shop.example.com'}).click();await page.getByRole('menuitem',{name:'Move to…'}).click();
    const d=dialog(page);
    await d.getByRole('heading',{name:'Move shop.example.com to'}).waitFor();
    await d.getByText('This server is not connected. Reconnect it first.').waitFor();

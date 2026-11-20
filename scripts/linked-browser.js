@@ -104,7 +104,7 @@ async function appsPage(open, options) {
   assert.equal(await dialog.count(), 0, 'no confirm without warnings');
   assert.deepEqual(backups, ['/api/sites/shop/backup', '/api/sites/media/backup']);
   // Restore test start: the warning shows, the rest behind "and N more"
-  await card('Ledger').getByRole('button', {name: 'Restore tests'}).click();
+  await card('Ledger').getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
   await dialog.getByText('Ledger shares the folder /srv/shared with Wiki, so the test copy may not work without it.').waitFor();
   await expandsLines(dialog, 'Ledger uses demo-cache, which no app backs up, so the test copy may not work without it.');
   await context.close();

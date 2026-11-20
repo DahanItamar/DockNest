@@ -48,7 +48,7 @@ try{
  await page.getByRole('button',{name:'Close dialog'}).click();
  let edited=0;
  await page.route('**/api/servers/production/details',r=>{edited++;assert.equal(r.request().method(),'PATCH');assert.deepEqual(r.request().postDataJSON(),{name:'Production EU',note:'Main storefront host - reviewed'});state.servers[0].note='Main storefront host - reviewed';return r.fulfill({json:state.servers[0]});});
- await card('Production EU').getByRole('button',{name:'Edit details',exact:true}).click();
+ await card('Production EU').getByRole('button',{name:/^Edit details/}).click();
  await page.getByRole('dialog').getByLabel('Server note (optional)').fill('Main storefront host - reviewed');
  await page.getByRole('dialog').getByRole('button',{name:'Save details',exact:true}).click();
  await page.getByRole('dialog').waitFor({state:'hidden'});assert.equal(edited,1);
@@ -72,7 +72,7 @@ try{
  role='operator';await page.reload();
  await page.getByRole('navigation').getByRole('button',{name:'Servers',exact:true}).click();
  await card('Production EU').waitFor();
- assert.equal(await page.getByRole('button',{name:'Edit details',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:/^Edit details/}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Add server',exact:true}).count(),0);
  assert.equal(await page.getByRole('button',{name:'Test connection',exact:true}).count(),4);
  state.servers=[];state.sites=[];

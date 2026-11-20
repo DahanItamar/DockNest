@@ -50,7 +50,7 @@ try{
 
  // 1. Site form: one group per service, a shared group for identical lists.
  await nav('Apps & Schedules');
- await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+ await page.getByRole('button',{name:/^Edit configuration/}).click();
  await dialog.getByText('Advanced backup settings',{exact:true}).waitFor();
  assert.equal(await dialog.locator('details[open]>summary',{hasText:'Advanced backup settings'}).count(),1,'opens when the site declares files');
  assert.equal(await dialog.locator('.sq-group').count(),3,'shared web+worker, queue, cache; proxy has no SQLite and no version');
@@ -73,7 +73,7 @@ try{
  assert.equal(first[0].sqliteVersion,'3.45.1');assert.equal(first[0].sqliteSigtermConfirmed,true);assert.equal(first[4].sqliteVersion,undefined);assert.equal(first[0].engine,'generic');
  // Edit separately, and refuse an empty list under SIGTERM acceptance and relative paths.
  site.config.services=services();
- await page.getByRole('button',{name:'Edit configuration',exact:true}).click();
+ await page.getByRole('button',{name:/^Edit configuration/}).click();
  await dialog.getByRole('button',{name:'Edit separately',exact:true}).click();
  assert.equal(await dialog.locator('.sq-group').count(),4);
  await dialog.getByLabel('Database files for web',{exact:true}).fill('');

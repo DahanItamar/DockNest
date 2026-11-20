@@ -20,7 +20,7 @@
 
 
 .sh-history h3{margin:0 0 8px}
-.rebrand-page .empty.sh-empty,.empty.sh-empty{padding:20px 24px;min-height:0}
+.empty-state.sh-empty{padding:20px 24px;min-height:0}
 .sh-rows{padding:0 16px}
 .sh-row{min-height:var(--row-height);box-sizing:border-box;align-items:center}
 .sh-rows .sh-row dt{color:var(--text-primary);font-size:var(--fs-body)}
