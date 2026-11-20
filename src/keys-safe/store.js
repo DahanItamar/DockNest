@@ -75,11 +75,17 @@ function recordKeys(siteId, keys, { backup, at, rebaseline }) {
   for (const row of rows.values()) db.prepare('DELETE FROM app_keys WHERE site_id=? AND rule_id=? AND location=?').run(siteId, row.rule_id, row.location);
 }
 
-// Returns the changed items that were not alerted for their current fingerprint yet.
-function recordItems(siteId, items, { at, rebaseline }) {
+// Returns the changed items that were not alerted for their current fingerprint yet. `trusted(item)` items become
+// known-good from this very scan (source `trust.source`), so a trusted change never raises an alert.
+function recordItems(siteId, items, { at, rebaseline, trust, trusted }) {
   const rows = new Map(db.prepare('SELECT * FROM config_fingerprints WHERE site_id=?').all(siteId).map(row => [row.item, row]));
   for (const [item, fingerprint] of items) {
     const row = rows.get(item); rows.delete(item);
+    if (trusted(item)) {
+      db.prepare('INSERT INTO config_fingerprints(site_id,item,fingerprint,known_good,known_good_source,known_good_at,first_seen_changed_at,alerted_fingerprint) VALUES(?,?,?,?,?,?,NULL,NULL) ON CONFLICT(site_id,item) DO UPDATE SET fingerprint=excluded.fingerprint,known_good=excluded.known_good,known_good_source=excluded.known_good_source,known_good_at=excluded.known_good_at,first_seen_changed_at=NULL,alerted_fingerprint=NULL')
+        .run(siteId, item, fingerprint, fingerprint, trust.source, at);
+      continue;
+    }
     if (!row) { db.prepare("INSERT INTO config_fingerprints(site_id,item,fingerprint,known_good,known_good_source,known_good_at,first_seen_changed_at,alerted_fingerprint) VALUES(?,?,?,?,'baseline',?,NULL,NULL)").run(siteId, item, fingerprint, fingerprint, at); continue; }
     if (rebaseline) {
       // Same files, new key: an item that matched known-good still does; a changed one stays changed, already alerted.
@@ -119,25 +125,19 @@ function alertChanged(siteId, changed) {
 
 // Records one scan of an app. `backup` ({ id, backupKind, chainId }) is given for the scan a backup made: then each
 // key's in_backup names this backup only when the helper proved the packaged bytes match the live ones.
-export function recordScan(siteId, raw, { backup = null, at = now() } = {}) {
+// `trust` ({ source, actor, only }) is a known-good decision taken on this scan, in the same transaction: the items
+// `only` accepts (all when absent) become known-good without an alert, with one audit entry naming files and keys.
+export function recordScan(siteId, raw, { backup = null, trust = null, at = now() } = {}) {
   const scan = cleanScan(raw);
   if (!scan) return false;
   return atomic(() => {
-    const rebaseline = takeRebaseline(siteId);
+    const rebaseline = takeRebaseline(siteId), trusted = item => Boolean(trust) && (!trust.only || trust.only(item));
     recordKeys(siteId, scan.keys, { backup, at, rebaseline });
-    const changed = recordItems(siteId, [...scan.files.map(file => [file.path, file.fingerprint]), ...scan.keys.map(key => [keyItem(key.rule, key.location), key.fingerprint])], { at, rebaseline });
+    const items = [...scan.files.map(file => [file.path, file.fingerprint]), ...scan.keys.map(key => [keyItem(key.rule, key.location), key.fingerprint])];
+    const changed = recordItems(siteId, items, { at, rebaseline, trust, trusted });
     if (changed) alertChanged(siteId, changed);
+    if (trust) audit(trust.actor, 'config.known_good', siteId, { source: trust.source, ...itemNames(items.map(([item]) => item).filter(trusted).sort()) });
     return true;
-  });
-}
-
-// Known-good for the app's items (`only` narrows them). The caller has just recorded a fresh scan.
-export function markKnownGood(siteId, { source, actor, only = null, at = now() }) {
-  return atomic(() => {
-    const items = db.prepare('SELECT item FROM config_fingerprints WHERE site_id=? ORDER BY item').all(siteId).map(row => row.item).filter(item => !only || only(item));
-    for (const item of items) db.prepare('UPDATE config_fingerprints SET known_good=fingerprint,known_good_source=?,known_good_at=?,first_seen_changed_at=NULL,alerted_fingerprint=NULL WHERE site_id=? AND item=?').run(source, at, siteId, item);
-    audit(actor, 'config.known_good', siteId, { source, ...itemNames(items) });
-    return items.length;
   });
 }
 

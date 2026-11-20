@@ -2,15 +2,18 @@
 // which keys its package holds; the helper fingerprints the same keys in the restored copy (container env as created,
 // restored configuration and mount files) and DockNest compares. Only a test that passes with every key matching sets
 // "Verified in a restore test".
-import { FINGERPRINT, keysRequest } from './fingerprint.js';
+import { FINGERPRINT, keysRequest, fingerprintKeyCheck } from './fingerprint.js';
 import { keyRule } from '../../shared/key-rules.js';
 
-// The keys a backup proved, from its stored manifest.
+// The keys a backup proved, from its stored manifest, and whether they can be compared now: a proof made with another
+// fingerprint key (the master key changed since the backup) cannot, and the test says so instead of failing.
 export function provenKeys(manifestText) {
-  let keys = [];
-  try { keys = JSON.parse(manifestText || '{}').keys ?? []; } catch { return []; }
-  return (Array.isArray(keys) ? keys : []).filter(key => key?.inBackup === true && keyRule(key.rule) && typeof key.location === 'string' && FINGERPRINT.test(String(key.fingerprint))).map(({ rule, location, fingerprint }) => ({ rule, location, fingerprint }));
+  let manifest = {};
+  try { manifest = JSON.parse(manifestText || '{}') ?? {}; } catch { return { keys: [], comparable: false }; }
+  const keys = (Array.isArray(manifest.keys) ? manifest.keys : []).filter(key => key?.inBackup === true && keyRule(key.rule) && typeof key.location === 'string' && FINGERPRINT.test(String(key.fingerprint))).map(({ rule, location, fingerprint }) => ({ rule, location, fingerprint }));
+  return { keys, comparable: manifest.keysCheck === fingerprintKeyCheck() };
 }
+export const KEY_CHANGED_CHECK = Object.freeze({ name: 'App keys', kind: 'keys', target: null, status: 'skipped', detail: "Can't compare: the fingerprint key changed since this backup." });
 export const restoredKeysRequest = proven => keysRequest({ expect: proven.map(({ rule, location }) => ({ rule, location })) });
 // The check a test shows, and the keys it verifies. `answered` is the helper's list (missing when it could not read them).
 export function compareRestoredKeys(proven, answered) {

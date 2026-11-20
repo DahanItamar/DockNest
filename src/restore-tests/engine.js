@@ -20,7 +20,7 @@ import { validateLimits, cpuProblem } from './limits.js';
 import { heldBy } from './hold.js';
 import { cleanupHeld } from '../cleanup-hold.js';
 import { launchHeld } from '../launches/hold.js';
-import { provenKeys, restoredKeysRequest, compareRestoredKeys } from '../keys-safe/restored.js';
+import { provenKeys, restoredKeysRequest, compareRestoredKeys, KEY_CHANGED_CHECK } from '../keys-safe/restored.js';
 import { markVerified } from '../keys-safe/store.js';
 
 export const STEPS = Object.freeze(['check_space', 'copy_backup', 'restore_copy', 'start_containers', 'check_health', 'clean_up']);
@@ -336,10 +336,11 @@ const STEP_RUNNERS = {
     advanceTo(test, 'copy_backup', null, { plaintextChecksum: upload.plaintextChecksum, ...(upload.chain ? { chain: upload.chain } : {}) });
   },
   async restore_copy(test, signal) {
-    const proven = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id)?.manifest);
+    const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id)?.manifest), proven = proof.comparable ? proof.keys : [];
     const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test), ...(proven.length ? { keys: restoredKeysRequest(proven) } : {}) }, signal);
     if (!verdict(test, 'restore_copy', answer)) return;
     let keysVerified = [];
+    if (proof.keys.length && !proof.comparable && answer.kind !== 'static') addChecks(test, [KEY_CHANGED_CHECK]);
     if (proven.length && answer.kind !== 'static') {
       const { check, verified, failed } = compareRestoredKeys(proven, answer.keys);
       if (failed) { conclude(loadTest(test.id), 'failed', { step: 'restore_copy', reason: 'An app key in the restored copy is missing or differs from the backup, so the restored app could not read its own data.', checks: [check] }); return; }

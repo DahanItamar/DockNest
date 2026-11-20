@@ -49,9 +49,17 @@ def rule_fingerprint(context,rule,value):
     """HMAC-SHA256(fpKey, rule id || 0x00 || value), truncated to 128 bits."""
     return hmac.new(context['secret'],rule['id'].encode()+b'\0'+value,hashlib.sha256).hexdigest()[:32]
 
+def contained(path,root=None):
+    """True when the path is its own real path (no symlinked folder on the way and no '..'; O_NOFOLLOW alone covers
+    only the last part) and, with `root`, lies inside root."""
+    try:real=os.path.realpath(path)
+    except (OSError,ValueError):return False
+    return real==path and (root is None or path==root or path.startswith(root.rstrip('/')+'/'))
+
 def file_fingerprint(context,path):
     """Whole-file HMAC of a Compose, env or configuration file, or None when it cannot be read as a regular file."""
     digest=hmac.new(context['secret'],FILE_LABEL+b'\0',hashlib.sha256)
+    if not contained(path):return None
     try:
         fd=os.open(path,os.O_RDONLY|NOFOLLOW)
         with os.fdopen(fd,'rb') as source:
@@ -60,8 +68,9 @@ def file_fingerprint(context,path):
     except OSError:return None
     return digest.hexdigest()[:32]
 
-def read_small(path):
-    """A regular file's bytes (no symlink, at most KEY_FILE_LIMIT), or None."""
+def read_small(path,root=None):
+    """A regular file's bytes (no symlink anywhere on its path, inside `root` when given, at most KEY_FILE_LIMIT), or None."""
+    if not contained(path,root):return None
     try:
         fd=os.open(path,os.O_RDONLY|NOFOLLOW)
         with os.fdopen(fd,'rb') as source:
@@ -198,8 +207,8 @@ def key_hits(context,cfg,containers):
         service=(c.get('Name') or '').lstrip('/');env=env_map(c)
         for rule in context['rules']:
             if rule['kind']=='env' and env.get(rule['name']) and hint_matches(rule,[images[i]]):hit(rule,'env:'+service,env[rule['name']].encode('utf-8','surrogateescape'),'env',service=service)
-    def scan_file(path,env_format,source,**extra):
-        data=read_small(path)
+    def scan_file(path,env_format,source,root=None,**extra):
+        data=read_small(path,root)
         if data is None:return
         for rule in context['rules']:
             if not hint_matches(rule,images):continue
@@ -214,7 +223,7 @@ def key_hits(context,cfg,containers):
         files.append({'path':path,'fingerprint':fingerprint})
         scan_file(path,env_format,'config' if included else 'outside')
     for path,i,j,env_format in mount_key_files(context['rules'],containers,[path for path,_,_ in sources]):
-        scan_file(path,env_format,'mount',container=i,mount=j)
+        scan_file(path,env_format,'mount',containers[i]['Mounts'][j]['Source'],container=i,mount=j)
     return hits,files
 
 def public_key(hit):

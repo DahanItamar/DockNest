@@ -22,7 +22,7 @@ const { app } = await import('../src/server.js');
 const { db } = await import('../src/db.js');
 const { digest } = await import('../src/crypto.js');
 const { KEY_RULES, KEY_KINDS, keyRuleProblems, keyRule } = await import('../shared/key-rules.js');
-const { fingerprintKey, installId, keysRequest } = await import('../src/keys-safe/fingerprint.js');
+const { fingerprintKey, fingerprintKeyCheck, installId, keysRequest } = await import('../src/keys-safe/fingerprint.js');
 const store = await import('../src/keys-safe/store.js');
 const { keysView } = await import('../src/keys-safe/padlock.js');
 const { safeEditItems } = await import('../src/keys-safe/scan.js');
@@ -116,9 +116,10 @@ test('the first scan is a silent baseline; a hand change raises config.changed o
 test('known-good: Safe Edit marks the files it wrote, an administrator re-verifies, audit entries name files and keys only', async () => {
   const serverId = serverRow('Edit server'), siteId = siteRow(serverId, 'Shop');
   store.recordScan(siteId, scanOf());
-  store.recordScan(siteId, scanOf({ compose: 'changed: 1\n', env: 'APP_KEY=x\n', value: 'x' }));
+  // The scan that marks known-good is the scan that sees the change: trusted items raise no alert, the others do.
   const only = safeEditItems({ files: [{ path: '/srv/wiki/compose.yaml', before: 'a', after: 'b' }], env: { added: [], replaced: [], removed: [] } });
-  assert.equal(store.markKnownGood(siteId, { source: 'safe-edit', actor: 'edit:1', only }), 2, 'the Compose file and the container env it recreated');
+  store.recordScan(siteId, scanOf({ compose: 'changed: 1\n', env: 'APP_KEY=x\n', value: 'x' }), { trust: { source: 'safe-edit', actor: 'edit:1', only } });
+  assert.deepEqual(audits('config.changed', siteId), [{ files: ['/srv/wiki/.env'], keys: ['APP_KEY'] }], 'only what the edit did not write');
   const after = items(siteId);
   assert.equal(after['/srv/wiki/compose.yaml'].known_good_source, 'safe-edit'); assert.equal(after['/srv/wiki/compose.yaml'].first_seen_changed_at, null);
   assert.equal(after['laravel-app-key@env:wiki-web-1'].known_good_source, 'safe-edit');
@@ -128,7 +129,7 @@ test('known-good: Safe Edit marks the files it wrote, an administrator re-verifi
 
   // The API: operators cannot, a stale sign-in cannot, an administrator with a fresh one can, after a fresh scan.
   const scans = [];
-  engine.transport.remote = async (_server, request) => { scans.push(request); return request.operation === 'key-scan' ? scanOf({ compose: 'changed: 1\n', env: 'APP_KEY=x\n', value: 'x' }) : {}; };
+  engine.transport.remote = async (_server, request) => { scans.push(request); return request.operation === 'key-scan' ? scanOf({ compose: 'changed again: 2\n', env: 'APP_KEY=x\n', value: 'x' }) : {}; };
   const operator = user('operator'), stale = user('admin', { recent: false }), admin = user('admin');
   assert.equal((await operator('POST', `/sites/${siteId}/keys/known-good`)).status, 403);
   assert.equal((await stale('POST', `/sites/${siteId}/keys/known-good`)).body.code, 'REAUTH_REQUIRED');
@@ -137,6 +138,7 @@ test('known-good: Safe Edit marks the files it wrote, an administrator re-verifi
   assert.equal(marked.status, 200, marked.text);
   assert.equal(scans.length, 1); assert.equal(scans[0].operation, 'key-scan'); assert.equal(Buffer.from(scans[0].keys.fingerprintKey, 'base64').length, 32);
   assert.deepEqual(marked.body.changed, []); assert.equal(marked.body.knownGood.source, 'admin');
+  assert.equal(audits('config.changed', siteId).length, 1, 'a change the administrator marks raises no alert');
   assert.ok(Object.values(items(siteId)).every(row => row.first_seen_changed_at === null && row.known_good === row.fingerprint));
   const entry = audits('config.known_good', siteId).at(-1);
   assert.deepEqual(entry, { source: 'admin', files: ['/srv/wiki/.env', '/srv/wiki/compose.yaml'], keys: ['APP_KEY'] });
@@ -178,13 +180,12 @@ test('the padlock: none, red without a backup, green in the last backup, amber w
   assert.equal(keysView(siteId).state, 'none', 'files only, unchanged');
   store.recordScan(siteId, { keys: [], files: [{ path: '/srv/wiki/compose.yaml', fingerprint: fileFp('b') }] });
   assert.equal(keysView(siteId).state, 'amber', 'a changed item without keys');
-  store.recordScan(siteId, scanOf());
-  store.markKnownGood(siteId, { source: 'admin', actor: 'test' });
+  store.recordScan(siteId, scanOf(), { trust: { source: 'admin', actor: 'test' } });
   let view = keysView(siteId);
   assert.equal(view.state, 'red'); assert.deepEqual(view.keys.map(key => [key.status, key.reason]), [['missing', 'This app has no backup yet.'], ['missing', 'This app has no backup yet.']]);
   const scan = scanOf({ extra: [{ rule: 'rails-secret-key-base', location: 'file:/srv/wiki/extra.env', fingerprint: fp('rails-secret-key-base', 'made-up') }] });
   const proof = { keys: scan.keys.map(key => ({ ...key, inBackup: key.location !== 'file:/srv/wiki/extra.env', ...(key.location === 'file:/srv/wiki/extra.env' ? { reason: 'not-included' } : {}) })), files: scan.files };
-  const backupId = backupRow(siteId, new Date(Date.now() - 60000).toISOString(), { keys: store.cleanScan(proof).keys });
+  const backupId = backupRow(siteId, new Date(Date.now() - 60000).toISOString(), { keys: store.cleanScan(proof).keys, keysCheck: fingerprintKeyCheck() });
   store.recordScan(siteId, proof, { backup: { id: backupId, backupKind: 'full', chainId: null } });
   view = keysView(siteId);
   assert.equal(view.state, 'red');
@@ -194,8 +195,9 @@ test('the padlock: none, red without a backup, green in the last backup, amber w
   view = keysView(siteId);
   assert.equal(view.state, 'green'); assert.ok(view.keys.every(key => key.status === 'in-backup' && key.backupId === backupId && /^[0-9a-f]{8}$/.test(key.fingerprint)));
   // Verified: a restore test whose restored keys matched.
-  const proven = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(backupId).manifest);
-  assert.equal(proven.length, 2);
+  const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(backupId).manifest), proven = proof.keys;
+  assert.equal(proven.length, 2); assert.equal(proof.comparable, true);
+  assert.deepEqual(provenKeys(JSON.stringify({ keys: proven.map(key => ({ ...key, inBackup: true })), keysCheck: 'f'.repeat(32) })).comparable, false, 'a proof made with another fingerprint key is not compared');
   assert.deepEqual(restoredKeysRequest(proven).expect, proven.map(({ rule, location }) => ({ rule, location })));
   assert.equal(compareRestoredKeys(proven, undefined).check.status, 'skipped');
   assert.deepEqual(compareRestoredKeys(proven, [{ ...proven[0] }, { ...proven[1], fingerprint: null }]).failed, true);
@@ -252,6 +254,7 @@ test('a backup carries the key proof: request with fpKey, manifest proof list, i
   assert.equal(Buffer.from(capture.keys.fingerprintKey, 'base64').length, 32); assert.equal(capture.keys.rules.length, KEY_RULES.length);
   assert.ok(!JSON.stringify(capture.config).includes(capture.keys.fingerprintKey), 'fpKey stays out of the config the helper journals');
   const backup = db.prepare('SELECT * FROM backups WHERE job_id=?').get(job.id);
+  assert.equal(JSON.parse(backup.manifest).keysCheck, fingerprintKeyCheck(), 'the proof names the fingerprint key that made it');
   assert.deepEqual(JSON.parse(backup.manifest).keys.map(key => [key.location, key.inBackup, key.reason ?? null]), [['env:wiki-web-1', true, null], ['file:/srv/wiki/.env', true, null], ['file:/srv/wiki/extra.env', false, 'not-included']]);
   assert.deepEqual(db.prepare('SELECT location,in_backup FROM app_keys WHERE site_id=? ORDER BY location').all(siteId).map(row => [row.location, row.in_backup]), [['env:wiki-web-1', backup.id], ['file:/srv/wiki/.env', backup.id], ['file:/srv/wiki/extra.env', null]]);
   const admin = user('admin'), state = await admin('GET', '/state');

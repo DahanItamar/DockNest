@@ -541,14 +541,14 @@ def capture(req,output=None):
     keys_left_out,_=protected_paths(cs,exclusions)
     # App keys (docs/keys-safe.md): found from the live sources before anything stops. Finding them never fails a
     # backup; without a result the package simply proves no key.
-    key_request=key_context(req);key_found=None;packaged={}
+    key_request=key_context(req);key_found=None;packaged={};key_members={}
     if key_request:
-        try:key_found=key_hits(key_request,cfg,cs)
-        except Exception:key_found=None
-    key_members={}
-    for hit in key_found[0] if key_found else []:
-        if hit['source'] in ('config','mount'):
-            archive_name,member=key_archive_member(hit,cfg,cs);key_members.setdefault(archive_name,set()).add(member)
+        try:
+            key_found=key_hits(key_request,cfg,cs)
+            for hit in key_found[0]:
+                if hit['source'] in ('config','mount'):
+                    archive_name,member=key_archive_member(hit,cfg,cs);key_members.setdefault(archive_name,set()).add(member)
+        except Exception:key_found=None;key_members={}
     increment=None;snapshot_sources={}
     if inc is not None:
         snapshot_sources=incremental_sources(cs)

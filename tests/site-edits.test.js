@@ -317,6 +317,24 @@ test('a change that comes up: backup, prepare, apply, check health (polls), fini
   assert.equal(detail.body.maintenance, 'off'); assert.equal(detail.body.dataRollback, true);
 });
 
+test('an applied change is the known-good of the files it wrote: its own key scan raises no config.changed (docs/keys-safe.md)', async () => {
+  const { siteId } = site('keyshop');
+  const { recordScan } = await import('../src/keys-safe/store.js');
+  const scan = compose => ({ keys: [], files: [{ path: '/srv/shop/compose.yaml', fingerprint: compose.repeat(32) }, { path: '/srv/shop/.env', fingerprint: 'e'.repeat(32) }] });
+  recordScan(siteId, scan('a'));
+  answers['key-scan'] = request => { assert.equal(Buffer.from(request.keys.fingerprintKey, 'base64').length, 32); return scan('b'); };
+  const editId = await apply(siteId);
+  await drive(60);
+  assert.equal(edit(editId).result, 'applied');
+  assert.equal(ops().filter(op => op === 'key-scan').length, 1, 'one fresh scan after the edit');
+  const count = sql => db.prepare(sql).get(siteId).n;
+  assert.equal(count("SELECT COUNT(*) AS n FROM audit_events WHERE action='config.changed' AND target=?"), 0);
+  assert.equal(count("SELECT COUNT(*) AS n FROM alert_outbox WHERE event='config.changed' AND dedupe_key LIKE '%' || ? || '%'"), 0);
+  const row = db.prepare('SELECT * FROM config_fingerprints WHERE site_id=? AND item=?').get(siteId, '/srv/shop/compose.yaml');
+  assert.deepEqual([row.known_good, row.known_good_source, row.first_seen_changed_at], ['b'.repeat(32), 'safe-edit', null]);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='config.known_good' AND target=?").get(siteId).detail), { source: 'safe-edit', files: ['/srv/shop/compose.yaml'], keys: [] });
+});
+
 test('health check fails after an image change: files and data rolled back in place from the safety copy', async () => {
   const { siteId } = site();
   answers['edit-apply'] = () => ({ ok: true, startedAt: now / 1000, dataCopy: true, dataBytes: 5 * 1024 ** 2 });

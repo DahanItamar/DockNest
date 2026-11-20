@@ -154,6 +154,19 @@ class Scans(unittest.TestCase):
         os.remove(self.root+'/manifest.json')
         self.assertIsNone(helper.packaged_keys(CONTEXT,(hits,files),root,False,members,{},self.cfg,self.cs,{}),'a proof that fails proves nothing')
 
+    def test_a_symlinked_parent_folder_or_a_path_outside_the_root_is_never_read(self):
+        outside=self.root+'/outside';write(outside+'/rsa_key.pem',b'outside pem\n');write(outside+'/.env','APP_KEY=outside-made-up\n')
+        os.symlink(outside,self.data+'/linked');os.symlink(outside,self.root+'/srvlink')
+        self.assertIsNone(helper.read_small(self.data+'/linked/rsa_key.pem',self.data),'a symlinked folder inside the mount')
+        self.assertIsNone(helper.read_small(self.root+'/srvlink/.env'),'a symlinked folder above a configuration file')
+        self.assertIsNone(helper.read_small(self.data+'/../outside/rsa_key.pem',self.data),'no ..')
+        self.assertIsNone(helper.read_small(outside+'/rsa_key.pem',self.data),'outside the mount')
+        self.assertEqual(helper.read_small(outside+'/rsa_key.pem'),b'outside pem\n')
+        self.assertIsNone(helper.file_fingerprint(CONTEXT,self.root+'/srvlink/.env'))
+        hits,files=helper.key_hits(CONTEXT,{**self.cfg,'configFiles':[self.root+'/srvlink/.env']},self.cs)
+        self.assertNotIn(self.root+'/srvlink/.env',[item['path'] for item in files])
+        self.assertFalse([hit['location'] for hit in hits if 'srvlink' in hit['location'] or 'linked' in hit['location']])
+
     def test_restored_copy_fingerprints(self):
         expected=[{'rule':'laravel-app-key','location':'env:wiki-web-1'},{'rule':'laravel-app-key','location':'file:/srv/wiki/.env'},{'rule':'vaultwarden-rsa','location':'file:/data/rsa_key.pem'},{'rule':'no-such-rule','location':'env:x'}]
         files={'/srv/wiki/.env':b'APP_KEY=%s\n'%VALUE.encode()}

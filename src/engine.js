@@ -24,7 +24,7 @@ import { Transform, Writable } from 'node:stream';
 import { CronExpressionParser } from 'cron-parser';
 import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFull,FORCE,linkOf,loadChain,verifyChainLinks,inChain,ChainError,ChainIntegrityError,hasDependents,dependentsOf } from './incremental.js';
 import { takeCertificates } from './alerts/certificates.js';
-import { keysRequest } from './keys-safe/fingerprint.js';
+import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
 import { recordScan, cleanScan } from './keys-safe/store.js';
 const now=()=>new Date().toISOString();
 // Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
@@ -521,7 +521,8 @@ export async function executeJob(job){
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
-  if(keyProof)manifest.keys=keyProof.keys;
+  // keysCheck: which fingerprint key made the proof, so a restore test after a key change does not compare across keys.
+  if(keyProof){manifest.keys=keyProof.keys;manifest.keysCheck=fingerprintKeyCheck();}
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
   // What the helper made (never the engine's guess): format v2 with its kind and chain link, or a standard package.
   const chain=chainRecord(decision,result.manifest,{serverId:site.server_id,mainTargetId:targetIdOfPath(directory),plan});

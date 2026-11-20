@@ -475,7 +475,7 @@ def restored_test_keys(req,manifest,unpacked,sources,created):
             for m in c['Mounts']:
                 source=m['Source'];restored=sources.get((m['Type'],source))
                 if restored is not None and (path==source or path.startswith(source.rstrip('/')+'/')):
-                    return read_small(str(restored) if path==source else os.path.join(str(restored),posixpath.relpath(path,source)))
+                    return read_small(str(restored) if path==source else os.path.join(str(restored),posixpath.relpath(path,source)),str(restored))
         return None
     try:return restored_keys(context,expected,env_of,file_of)
     except Exception:return None  # no comparison means no "verified"; the test itself goes on

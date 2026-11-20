@@ -3,18 +3,15 @@
 // is always what runs now, never an older observation.
 import { siteInfo, transport } from '../engine.js';
 import { keysRequest } from './fingerprint.js';
-import { recordScan, markKnownGood } from './store.js';
+import { recordScan } from './store.js';
 
 // `remote`: the caller's SSH transport (Safe Edit and moves pass their own, which tests replace).
-export async function scanApp(siteId, { remote = transport.remote } = {}) {
-  const { site, server } = siteInfo(siteId);
-  if (site.config.kind === 'static') return false;
-  return recordScan(siteId, await remote(server, { operation: 'key-scan', config: site.config, keys: keysRequest() }));
-}
+// The scan and the known-good decision are one recorded transaction, so a trusted change never raises config.changed.
 // Throws when the scan fails, so nothing is marked from stale facts.
-export async function confirmKnownGood(siteId, { source, actor, only = null, remote }) {
-  if (!(await scanApp(siteId, { remote }))) throw Object.assign(new Error('DockNest could not read the configuration of this app. Nothing was marked.'), { status: 409, code: 'SCAN_FAILED' });
-  return markKnownGood(siteId, { source, actor, only });
+export async function confirmKnownGood(siteId, { source, actor, only = null, remote = transport.remote }) {
+  const { site, server } = siteInfo(siteId);
+  const recorded = site.config.kind !== 'static' && recordScan(siteId, await remote(server, { operation: 'key-scan', config: site.config, keys: keysRequest() }), { trust: { source, actor, only } });
+  if (!recorded) throw Object.assign(new Error('DockNest could not read the configuration of this app. Nothing was marked.'), { status: 409, code: 'SCAN_FAILED' });
 }
 // A Safe Edit that was applied: the files it wrote and the keys in them, and the container env it recreated.
 export function safeEditItems(changes) {
