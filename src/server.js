@@ -113,6 +113,9 @@ const view = (row, verifications) => {
   for (const [name, value] of Object.entries(parsed)) converted[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
   if ('verified' in converted) {converted.status=converted.verified?'Verified':'Unverified';converted.verification=verifications instanceof Map&&verifications.has(converted.id)?verifications.get(converted.id):backupVerification(converted.id);}
   if (converted.manifest?.downtimeSeconds != null) converted.downtimeMs = converted.manifest.downtimeSeconds * 1000;
+  // Keys safe: a backup's key proof (full fingerprints and the key that made them) stays on the server; the padlock
+  // shows 8 characters of a fingerprint.
+  if (converted.manifest && typeof converted.manifest === 'object' && ['keys', 'keysCheck', 'keysServerId'].some(name => name in converted.manifest)) { const { keys: _keys, keysCheck: _check, keysServerId: _server, ...manifest } = converted.manifest; converted.manifest = manifest; }
   if (converted.detail) converted.details = converted.detail;
   if (converted.target) converted.targetId = converted.target;
   return converted;

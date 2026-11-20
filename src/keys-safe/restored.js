@@ -5,16 +5,19 @@
 import { FINGERPRINT, keysRequest, fingerprintKeyCheck } from './fingerprint.js';
 import { keyRule } from '../../shared/key-rules.js';
 
-// The keys a backup proved, from its stored manifest, and whether they can be compared now: a proof made with another
-// fingerprint key (the master key changed since the backup) cannot, and the test says so instead of failing.
+// The keys a backup proved, from its stored manifest, the server whose fingerprint key made them, and whether they can
+// be compared now: a proof made with another key (the master key changed since the backup) cannot, and the test says so
+// instead of failing.
 export function provenKeys(manifestText) {
   let manifest = {};
   try { manifest = JSON.parse(manifestText || '{}') ?? {}; } catch { return { keys: [], comparable: false }; }
   const keys = (Array.isArray(manifest.keys) ? manifest.keys : []).filter(key => key?.inBackup === true && keyRule(key.rule) && typeof key.location === 'string' && FINGERPRINT.test(String(key.fingerprint))).map(({ rule, location, fingerprint }) => ({ rule, location, fingerprint }));
-  return { keys, comparable: manifest.keysCheck === fingerprintKeyCheck() };
+  const serverId = typeof manifest.keysServerId === 'string' ? manifest.keysServerId : null;
+  return { keys, serverId, comparable: Boolean(serverId) && manifest.keysCheck === fingerprintKeyCheck(serverId) };
 }
 export const KEY_CHANGED_CHECK = Object.freeze({ name: 'App keys', kind: 'keys', target: null, status: 'skipped', detail: "Can't compare: the fingerprint key changed since this backup." });
-export const restoredKeysRequest = proven => keysRequest({ expect: proven.map(({ rule, location }) => ({ rule, location })) });
+// The test server fingerprints with the key of the server the backup was made on, so the values compare.
+export const restoredKeysRequest = (proven, serverId) => keysRequest(serverId, { expect: proven.map(({ rule, location }) => ({ rule, location })) });
 // The check a test shows, and the keys it verifies. `answered` is the helper's list (missing when it could not read them).
 export function compareRestoredKeys(proven, answered) {
   if (!Array.isArray(answered)) return { check: { name: 'App keys', kind: 'keys', target: null, status: 'skipped', detail: 'The keys of the restored copy could not be read.' }, verified: [], failed: false };

@@ -337,7 +337,7 @@ const STEP_RUNNERS = {
   },
   async restore_copy(test, signal) {
     const proof = provenKeys(db.prepare('SELECT manifest FROM backups WHERE id=?').get(test.backup_id)?.manifest), proven = proof.comparable ? proof.keys : [];
-    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test), ...(proven.length ? { keys: restoredKeysRequest(proven) } : {}) }, signal);
+    const answer = await call(test, { operation: 'restore-test-run', phase: 'restore', testId: test.id, plaintextChecksum: test.progress.plaintextChecksum, ...(test.progress.chain ? { chain: test.progress.chain } : {}), limits: helperLimits(test), ...(proven.length ? { keys: restoredKeysRequest(proven, proof.serverId) } : {}) }, signal);
     if (!verdict(test, 'restore_copy', answer)) return;
     let keysVerified = [];
     if (proof.keys.length && !proof.comparable && answer.kind !== 'static') addChecks(test, [KEY_CHANGED_CHECK]);

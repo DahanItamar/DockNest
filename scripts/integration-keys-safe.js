@@ -52,9 +52,9 @@ export async function runKeysSafeScenario({ run, until, hosts, servers, db, reco
   assert.equal(changedEvents(siteId), 0);
   assert.equal(keysView(siteId).state, 'red', 'no backup yet');
   // Raw helper answers carry rule ids, locations and fingerprints only.
-  const scan = await remote(server, { operation: 'key-scan', config, keys: keysRequest() });
+  const scan = await remote(server, { operation: 'key-scan', config, keys: keysRequest(server.id) });
   assertNoValue(JSON.stringify(scan), 'key-scan stdout');
-  assertNoValue(JSON.stringify(await remote(server, { operation: 'readiness', config, keys: keysRequest() })), 'readiness stdout');
+  assertNoValue(JSON.stringify(await remote(server, { operation: 'readiness', config, keys: keysRequest(server.id) })), 'readiness stdout');
   record('Keys safe: readiness finds APP_KEY in the container env and .env, SECRET_KEY_BASE in an env_file and rsa_key.pem in a volume, takes a silent baseline, and helper stdout holds fingerprints only');
 
   // 2. A backup proves each key from the bytes it packaged; the key in the file outside the backup is missing.
