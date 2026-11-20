@@ -16,12 +16,17 @@ remote/
 │   │                       and ALL mutable runtime state
 │   ├── guides.py           restore guide texts written into every backup
 │   ├── paths.py            protected paths, mount table, source classification, source archives
-│   ├── databases.py        SQLite proofs, PostgreSQL/MySQL/Redis contracts, clean shutdown, data checks
+│   ├── engine_base.py      what every database engine provides (DatabaseEngine, SqlEngine), shared mount check
+│   ├── engine_postgres.py  PostgreSQL: contract, control-file clean-stop proof, readiness, row counts
+│   ├── engine_mysql.py     MySQL and MariaDB: contract, verified slow shutdown, clean-stop log proof, row counts
+│   ├── engine_redis.py     Redis 7.4: standalone contract, final-save proof, offline RDB/AOF checks, key digests
+│   ├── engine_mongo.py     MongoDB 6.0/7.0/8.0: mongosh contract, WiredTiger clean-stop proof, document counts
+│   ├── databases.py        SQLite proofs, the ENGINES registry, contracts, clean shutdown, restart, data checks
 │   ├── backup.py           backup plan, artifact streaming and checks, static sites, preflight, readiness, capture
 │   ├── incremental.py      snapshot state, chain records, commit and discard
 │   ├── net.py              pinned HTTP(S), probe URL policy, public probes, health checks
 │   ├── maintenance.py      maintenance page on/off, deployment, automatic nginx setup
-│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs
+│   ├── discovery.py        Docker project and nginx site discovery, configuration files, tmpfs, hardening and linked apps facts
 │   ├── runspec.py          run spec of plain containers: docker create flags, Compose file, describe-containers
 │   ├── restore_gaps.py     restore check: host schedules, Docker objects and files a new server would miss
 │   ├── restore.py          recovery checks, safe extraction, chains (incl. restore-chain), isolated restore
@@ -47,7 +52,7 @@ build/remote/helper.py      written by `npm run build:helper` for tests (gitigno
 
 ```mermaid
 flowchart LR
-  subgraph Source["remote/helper/ (21 modules)"]
+  subgraph Source["remote/helper/ (26 modules)"]
     M1[common.py] --> M2[guides.py] --> M3[...] --> M15[__main__.py]
   end
   Source -->|"src/helper-bundle.js<br/>fixed order, build headers removed, LF"| B["helper.py<br/>(one namespace)"]
@@ -106,7 +111,8 @@ classDiagram
   class edit { edit_operation() edit_gate() edit_env_apply() edit_apply() edit_rollback() }
   class heal { health_events() self_heal_resolve() self_heal_restart() }
   class launch { launch_facts() launch_fetch() launch_build() launch_start() launch_runtime_gate() launch_teardown() }
-  class databases { sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
+  class databases { ENGINES sqlite_file_proof() validate_database_contracts() shutdown_evidence() }
+  class engines["engine_*"] { detect() validate() prepare_stop() stop_evidence() ready() data_check() }
   class incremental { plan_incremental() incremental_commit() }
   class net { PinnedHTTPSConnection probe_policy_preflight() public_probe() health() }
   class maintenance { maintenance() setup_maintenance() }
@@ -140,6 +146,7 @@ classDiagram
   backup --> runspec
   maintenance --> net
   databases --> net
+  databases --> engines
   backup ..> common
   restore ..> common
   move ..> common

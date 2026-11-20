@@ -1,5 +1,5 @@
 // The restore check (docs/restore-check.md): Ignore and Note answers per finding, joined onto the readiness result;
-// migration 20 adds one compatible table and nothing else.
+// migration 21 adds one compatible table and nothing else.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, readFile, rm } from 'node:fs/promises';
@@ -77,25 +77,25 @@ test('readiness joins stored answers onto the helper findings and leaves ready a
   assert.deepEqual((await checkReadiness('site')).restoreGaps, answer.restoreGaps);
 });
 
-test('migration 20 is one compatible line, adds only site_restore_decisions to a schema-19 database, keeps rows and restarts as a no-op', async () => {
-  const lines = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/).filter(line => /^\s*\{\s*version:\s*20\b/.test(line));
+test('migration 21 is one compatible line, adds only site_restore_decisions to a schema-20 database, keeps rows and restarts as a no-op', async () => {
+  const lines = (await readFile(new URL('../src/migrations.js', import.meta.url), 'utf8')).split(/\r?\n/).filter(line => /^\s*\{\s*version:\s*21\b/.test(line));
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /^ {2}\{ version: 20, name: 'site-restore-decisions', compatible: true, up: db => db\.exec\(restoreDecisionsSchema\) \},$/);
+  assert.match(lines[0], /^ {2}\{ version: 21, name: 'site-restore-decisions', compatible: true, up: db => db\.exec\(restoreDecisionsSchema\) \},$/);
   assert.equal(compatFloor(migrations), 1);
   const folder = await mkdtemp(join(tmpdir(), 'docknest-restore-decisions-migration-')), file = join(folder, 'state.sqlite'), target = new DatabaseSync(file);
   try {
     target.exec('PRAGMA journal_mode=WAL;PRAGMA foreign_keys=ON;');
-    const released = migrations.filter(migration => migration.version <= 19), schema = () => target.prepare('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name').all().map(row => ({ ...row }));
+    const released = migrations.filter(migration => migration.version <= 20), schema = () => target.prepare('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name').all().map(row => ({ ...row }));
     migrate(target, { file, list: released, log: () => {} });
     target.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('s','n','h',22,'root','k','f','2026-01-01')").run();
     target.prepare("INSERT INTO sites VALUES('site','s','shop','{}','2026-01-01')").run();
     const before = schema(), sites = target.prepare('SELECT * FROM sites').all().map(row => ({ ...row }));
-    const result = migrate(target, { file, list: [...released, migrations.find(migration => migration.version === 20)], now: () => new Date('2026-11-19T08:00:00.000Z'), log: () => {} });
-    assert.deepEqual([result.from, result.to], [19, 20]); assert.match(result.snapshot, /state-v19-to-v20-/);
+    const result = migrate(target, { file, list: [...released, migrations.find(migration => migration.version === 21)], now: () => new Date('2026-11-19T08:00:00.000Z'), log: () => {} });
+    assert.deepEqual([result.from, result.to], [20, 21]); assert.match(result.snapshot, /state-v20-to-v21-/);
     for (const row of before) assert.deepEqual(schema().find(item => item.name === row.name), row, `${row.name} keeps its definition`);
     assert.deepEqual(schema().map(row => row.name).filter(name => !before.some(row => row.name === name)), ['site_restore_decisions']);
     assert.deepEqual(target.prepare('SELECT * FROM sites').all().map(row => ({ ...row })), sites);
-    assert.deepEqual(migrate(target, { file, list: migrations.filter(migration => migration.version <= 20), log: () => {} }).snapshot, null);
+    assert.deepEqual(migrate(target, { file, list: migrations.filter(migration => migration.version <= 21), log: () => {} }).snapshot, null);
     const insert = target.prepare('INSERT INTO site_restore_decisions VALUES(?,?,?,?,?,?)');
     insert.run('site', key, 'note', 'kept', 'u', '2026-11-19');
     for (const values of [['site', 'A'.repeat(64), 'ignore', null], ['site', key.slice(1), 'ignore', null], ['site', other, 'include', null], ['site', other, 'note', 'x'.repeat(501)], ['nowhere', other, 'ignore', null]]) {

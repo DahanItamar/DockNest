@@ -125,6 +125,35 @@ jobs:
         with:
           name: linux-integration-results
           path: data/qa/linux-integration.json
+  # MongoDB, once per tested major (shared/database-engines.js testedVersions), on the same ready-only rule as the
+  # Linux suite. Each job runs only the MongoDB scenario on fresh nested hosts; the release gate needs all three.
+  mongo-integration:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        mongo: ['6.0', '7.0', '8.0']
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:integration
+        env:
+          INTEGRATION_ONLY: mongo
+          MONGO_IMAGE: mongo:${{ matrix.mongo }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: mongo-integration-${{ matrix.mongo }}
+          path: data/qa/linux-integration.json
   upgrade:
     if: github.event_name != 'workflow_dispatch'
     # Starts this commit on metadata written by every final release since minUpgradeFrom, then checks the downgrade
@@ -149,11 +178,19 @@ jobs:
           for tag in $tags; do echo "::group::$tag"; npm run --silent test:upgrade -- "$tag"; echo '::endgroup::'; done
       - name: Upgrade script against a Compose test double
         run: node --test tests/upgrade-script.test.js
+  # A required check that a failed need would otherwise turn into "skipped", which branch protection counts as
+  # passing. always() makes it run anyway and its first step fails unless every need succeeded. On drafts the whole
+  # integration chain is skipped by design, so this gate stays skipped there exactly as before.
   controlled-beta-gate:
-    if: github.event_name != 'workflow_dispatch'
-    needs: [privacy, check, browser, linux-integration]
+    if: always() && github.event_name != 'workflow_dispatch' && (github.event_name == 'push' || github.event.pull_request.draft == false)
+    needs: [privacy, check, browser, linux-integration, mongo-integration]
     runs-on: ubuntu-26.04
     steps:
+      - name: Every needed job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          node -e "const failed=Object.entries(JSON.parse(process.env.NEEDS)).filter(([,job])=>job.result!=='success');if(failed.length){console.error('Needed jobs did not pass: '+failed.map(([name,job])=>name+'='+job.result).join(', '));process.exit(1);}"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
@@ -164,7 +201,11 @@ jobs:
         with:
           name: linux-integration-results
           path: data/qa
-      - run: node scripts/aggregate-gate.js data/qa/linux-integration.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: mongo-integration-*
+          path: data/qa/mongo
+      - run: node scripts/aggregate-gate.js data/qa/linux-integration.json data/qa/mongo
         env:
           NODE_CHECKS: ${{ needs.check.result }}
           PRIVACY_CHECKS: ${{ needs.privacy.result }}

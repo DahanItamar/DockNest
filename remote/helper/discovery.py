@@ -237,3 +237,31 @@ def hardening_report(containers):
         engine=engine_rootless() if containers else None
         return [container_hardening_facts(c,engine) for c in containers]
     except Exception:return None
+
+# ---- Linked apps facts (docs/linked-apps.md) ----
+# Read-only facts that show how containers depend on each other, from the same `docker inspect` output: the Compose
+# project, service and depends_on service names, user-defined network names, named volumes, bind sources
+# and legacy links. Never environment values, commands, other labels or file contents. DockNest validates them again.
+LINKS_FORMAT=1
+DEFAULT_NETWORKS=('bridge','host','none')
+def depends_on_services(label):
+    """Service names from a Compose depends_on label such as db:service_healthy:false,cache:service_started:true."""
+    return sorted({part.split(':',1)[0].strip() for part in (label or '').split(',') if part.split(':',1)[0].strip()})
+def link_target(value):
+    """The linked container of a HostConfig.Links entry such as /db:/web/db."""
+    return value.split(':',1)[0].lstrip('/')
+def container_link_facts(c):
+    labels=(c.get('Config') or {}).get('Labels') or {};mounts=c.get('Mounts') or []
+    networks=(c.get('NetworkSettings') or {}).get('Networks') or {}
+    def mounted(kind,field):return sorted({m[field] for m in mounts if m.get('Type')==kind and isinstance(m.get(field),str) and m[field]})
+    return {'format':LINKS_FORMAT,'project':labels.get('com.docker.compose.project') or None,'service':labels.get('com.docker.compose.service') or None,
+        'networks':sorted(name for name in networks if name not in DEFAULT_NETWORKS),
+        'volumes':mounted('volume','Name'),'binds':mounted('bind','Source'),
+        'links':sorted({link_target(v) for v in (c.get('HostConfig') or {}).get('Links') or [] if isinstance(v,str) and link_target(v)}),
+        'dependsOn':depends_on_services(labels.get('com.docker.compose.depends_on'))}
+def link_report(containers):
+    """Facts per container; None for one that cannot be read, so a scan never fails because of them."""
+    def facts(c):
+        try:return container_link_facts(c)
+        except Exception:return None
+    return [facts(c) for c in containers]
