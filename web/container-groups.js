@@ -1,4 +1,7 @@
 export const containerName=container=>container.name||container.Name?.replace(/^\//,'')||container.id||container.Id;
+// The stack managers discovery recognises (backupConfiguration.manager, docs/site-setup.md); any other value is ignored.
+export const STACK_MANAGERS={portainer:'Portainer',dockge:'Dockge'};
+export const stackManager=container=>{const manager=container?.backupConfiguration?.manager;return Object.hasOwn(STACK_MANAGERS,manager)?manager:null;};
 export function containerGroups(containers){
  const groups=new Map();
  for(const container of containers){
@@ -8,8 +11,10 @@ export function containerGroups(containers){
   const kind=project?'compose':stack?'swarm':'standalone';
   const name=project||stack||'Ungrouped containers';
   const id=kind+':'+(project||stack||'');
-  if(!groups.has(id))groups.set(id,{id,name,kind,compose:kind==='compose',containers:[]});
-  groups.get(id).containers.push({...container,service:labels['com.docker.compose.service']||labels['com.docker.swarm.service.name']||''});
+  if(!groups.has(id))groups.set(id,{id,name,kind,compose:kind==='compose',manager:null,containers:[]});
+  const group=groups.get(id);
+  if(kind==='compose'&&!group.manager)group.manager=stackManager(container);
+  group.containers.push({...container,service:labels['com.docker.compose.service']||labels['com.docker.swarm.service.name']||''});
  }
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }

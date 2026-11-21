@@ -4,35 +4,48 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ## [Unreleased]
 
-### Added
-- Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
-- Recovery Guide page: read the plain steps for a new server, the order to restore your apps and one page per app, see when it is out of date or not verified, and download the PDF from a short dialog (login details ask you to sign in again first).
-- Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
-- Sign-in: each password dot and 2FA digit now animates in as you type, with no focus border on those inputs (the caret and active-box tint show where you are). Off under reduced motion.
-- Consistent dialogs, tabs, notices and step-by-step flows.
-- Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. On the Map, domains are a column left of your servers (you can hide it), each line coloured by its worst step, and every app lists its domains; open one for its path and press Check again. See [domains](docs/domains.md).
-- A move preview lists every domain that stops working until DNS points to the new server, and separately the domains another server's proxy sends to the app.
+Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading.md#upgrading-to-300).
 
-- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
-- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
-- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
-- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
-- Restore tests can test a backup copy on your second storage (SFTP or S3) instead of the main backup. The whole chain must be on that storage or the test says it couldn't run; it never uses the main backup instead. Test details show which storage was tested. See [restore tests](docs/restore-tests-guide.md#test-a-backup-copy-optional).
-- Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
-- Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
-- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
+### Added
+
+**Recovery**
 - Recovery Guide: plain, numbered steps to bring every app back on a new server, made from what DockNest knows now, with the exact commands for each app. Download it as a PDF (Hebrew included); addresses and storage logins are added only if you choose, and logins need you to confirm again. A copy without any login is saved next to the recovery kit after every Self Backup, and an optional alert tells you when the guide is out of date.
+- After every Self Backup, and when you ask, DockNest opens the newest recovery kit with the passphrase it keeps and checks that it is complete and holds this DockNest's key. If the check fails, you get an alert.
 - Optional emergency kit split: K of N trusted people can open your kit together with their 33-word parts, using an offline tool, while fewer of them learn nothing. Off by default; one passphrase stays the default. Every split alerts all your channels. Splitting again, or going back to one passphrase, asks for a new recovery passphrase, so earlier holders cannot open new kits.
 - Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
 - Restore tests check that the restored app has the same keys as the backup.
+- Check readiness now also lists what a restore on a new server would miss: cron jobs and systemd timers that use the app's folders or containers, Docker networks and volumes the app does not create itself, Compose secrets, configs and environment files outside its folder, and its HTTPS certificates. Commands and values from these files are never shown. You can ignore a finding or keep a note with it. See [restore check](docs/restore-check.md).
+
+**Apps and servers**
+- Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.
+- Linked apps: scanning a server now finds which apps depend on each other (a shared database, network or volume, or a container linked to another app's), and which containers they use that no app backs up. Read-only; nothing is changed.
+- Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).
+- A move preview lists every domain that stops working until DNS points to the new server, and separately the domains another server's proxy sends to the app.
+- Domains on the Map: a Domains column shows where each domain really points, with the broken step and what to do about it. Each app panel lists its domains. Checks run only when you ask.
+- Adding an app started with plain `docker run` shows how DockNest will recreate it, as a read-only Compose preview, and suggests containers that share a network as one app.
+- A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
+- Back up MongoDB apps with a verified clean stop (MongoDB 6.0, 7.0 and 8.0, standalone servers).
+- Adding an app finds stacks that Portainer or Dockge manage, fills in their Compose file from the manager's stacks folder and shows the manager on the app card. DockNest only reads it and never changes Portainer or Dockge.
+
+**Storage and backups**
+- Online database dumps (opt-in per app): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
+- Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or change stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
+- Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
+
+**Sign-in**
+- Sign-in: password dots and two-factor code digits animate as you type; the focus border is gone. Off under reduced motion.
+
+**Alerts**
+- Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
 - A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
 - Keys safe on screen: a padlock on each app in the Map and a Keys line on each app card (found in the last backup, missing, or changed), a Keys section in the app's Map panel with each key's name, place and short fingerprint (never the key), "Add file" for a key in a file the app does not back up, and "Mark as known-good" for administrators after a sign-in check. Self Backup shows a Recovery kit check card with its last result, and a move review lists owner, file-mode and target-folder findings as separate notes.
 
 ### Changed
 
-- Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are now plain underlined links instead of outlined buttons; main actions stay filled buttons.
-- DockNest's own backup is now called **Self Backup** in the menu, page, alerts and docs. Nothing changes in how it works, and your existing settings and backups are untouched.
+- Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are plain underlined links instead of outlined buttons; main actions stay filled buttons.
+- A new look across the dashboard: consistent dialogs, tabs, notices, step-by-step flows, fields and buttons. Sign-in animates each password dot and 2FA digit as you type, with no focus border on those inputs. Off under reduced motion.
 - Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
+- DockNest's own backup is now called **Self Backup** in the menu, page, alerts and docs. Nothing changes in how it works, and your existing settings and backups are untouched.
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate. Moving an app is refused too when an app on the new server already backs up one of its containers.
 - A move no longer stops when an app's configuration files live outside the app folders, such as `/etc/cron.d`. It leaves them out, names them in the preview to put back by hand, and the backup's restore guide says where each one goes. A move still never writes into `/etc`.

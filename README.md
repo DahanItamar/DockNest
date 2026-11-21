@@ -33,7 +33,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 ## Features
 
 **Backup and restore**
-- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB, Redis and MongoDB. SQLite files you declare are checked and captured, and you can edit that list per service in the app settings.
+- Captures images, volumes, bind mounts, writable layers and databases. Database capture is handled for PostgreSQL, MySQL/MariaDB, Redis and MongoDB. PostgreSQL, MySQL and MariaDB can also stay running while a consistent dump is taken ([online dumps](docs/online-dumps.md), opt-in per app). SQLite files you declare are checked and captured, and you can edit that list per service in the app settings.
 - Per-app schedules, retention, and pinned backups.
 - Adding an app hides containers that are already backed up on that server, and DockNest refuses a duplicate that would back up the same container twice.
 - Restore to a separate copy; DockNest does not replace a live app by itself.
@@ -57,10 +57,11 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
 - Backup coverage: on the Apps page and the Map, see which containers and volumes on a server no app backs up, add them as an app, or skip them on purpose with a note. It reads Docker only when you open it. Adding a plain `docker run` container previews the Compose file DockNest keeps for it.
+- Portainer and Dockge stacks: adding an app finds the stack's Compose file in the manager's stacks folder and shows which manager runs it. Read-only; the manager is never changed. See [app setup](docs/site-setup.md).
 - Linked apps: each server scan shows which apps depend on each other, such as a database, network or volume they share, and which containers they use that no app backs up. Read-only and warn-only. See [linked apps](docs/linked-apps.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
-- Light and dark themes, and a layout for phones.
+- A refreshed interface (design system v2) in light and dark themes, with a layout for phones and a sign-in page where the password dots and code digits animate as you type.
 
 **Map and moving apps**
 - A Map page shows your servers, their apps and your backup storage as connected nodes. Click any node for its details, such as the databases that move with an app.
@@ -84,6 +85,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Keys safe on screen: a padlock on the Map and a Keys line on each app card show whether the keys are in the last backup; the app panel lists each key's name, place and short fingerprint (never the key), and Self Backup shows the Recovery kit check.
 - Backups are encrypted with AES-256-GCM.
 - Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
+- Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites and keeps working with it. While the storage server enforces this, ransomware that reaches DockNest cannot delete or change backups already stored there (files written before need to be made read-only on the server).
 - SSH host keys are pinned and checked before connecting.
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.
@@ -99,7 +101,17 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
     <td width="50%"><img src="docs/media/update-center.png" width="100%" alt="Update Center showing an available update and the host updater status" /></td>
     <td width="50%"><img src="docs/media/job-details.png" width="100%" alt="Job details for a running backup of a synthetic app, with transfer progress and a step timeline" /></td>
   </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/self-backup.png" width="100%" alt="Self Backup page with the latest recovery kit and recovery settings" /></td>
+    <td width="50%"><img src="docs/media/login.png" width="100%" alt="Sign-in page with a password field showing typed dots" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/dashboard-dark.png" width="100%" alt="Dashboard in the dark theme" /></td>
+    <td width="50%"><img src="docs/media/self-backup-dark.png" width="100%" alt="Self Backup page in the dark theme" /></td>
+  </tr>
 </table>
+
+<!-- Screenshots for Recovery Guide, Keys safe and Domains are added when their pages land. -->
 
 ## Requirements
 
@@ -188,6 +200,8 @@ scripts/upgrade.sh --dry-run    # show the plan only
 ```
 
 With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
+
+Upgrading from 2.16.x to 3.0.0 adds only compatible database tables, so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300).
 
 Before going back to 2.11 from 2.12, turn incremental backups off for every app, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path is in use on a real Linux Docker host.
 

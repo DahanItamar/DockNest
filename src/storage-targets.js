@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from './auth.js';
-import { testStorageTarget, probeTargetCapacity, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn } from './storage.js';
+import { testStorageTarget, probeTargetCapacity, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn, parseRemote } from './storage.js';
+import { writeMode, recordWriteMode, markUnverified, releaseKept, keptSummary, holdsFiles, leftovers, recordLeftovers, forgetLeftovers } from './storage/write-mode.js';
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
@@ -42,8 +43,40 @@ function safe(row){
   const settings=JSON.parse(db.prepare('SELECT settings FROM storage_target_settings WHERE target_id=?').get(row.id)?.settings||'{}');
   return {id:row.id,name:row.name,kind:'s3',status:row.status,created_at:row.created_at,last_tested_at:row.last_tested_at,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,hasCredential:Boolean(credential),trackedBytes:used};
  }
- return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used};
+ const write=writeMode(row.id);
+ return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used,writeMode:write.writeMode,writeModeCheckedAt:write.checkedAt,deletesRefusedAt:write.deletesRefusedAt,writeModeUnverifiedAt:write.unverifiedAt,unprotectedBefore:write.unprotectedBefore,keptByStorage:keptSummary(row.id,targetPrefix({mode,id:row.id}))};
 }
+// Probe files a test could not delete (src/storage/sftp.js) are listed for the owner, never retried.
+const probeRefs=(targetId,files=[])=>files.map(file=>targetPrefix({mode:'sftp',id:targetId})+file);
+// After a test of a saved SFTP destination: records the detected write mode. A destination found normal again releases
+// what it kept (retention then deletes it as usual) and gets one removal attempt for each listed leftover.
+async function settleWriteMode(targetId,result,actor){
+ if(targetMode(db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(targetId)??{})!=='sftp'||!result?.writeMode)return;
+ recordLeftovers(targetId,probeRefs(targetId,result.probeLeftovers));
+ const prefix=targetPrefix({mode:'sftp',id:targetId}),previous=recordWriteMode(targetId,result.writeMode,actor,undefined,{holdsFiles:holdsFiles(targetId,prefix)});
+ // Newly append-only while it already holds DockNest files: those are protected only once made read-only on the server.
+ if(result.writeMode==='append-only'&&previous.writeMode!=='append-only'&&writeMode(targetId).unprotectedBefore)result.olderFilesWritable=true;
+ if(result.writeMode!=='normal'||!previous.keepsFiles)return;
+ const released=releaseKept(targetId,prefix);
+ if(released.backups||released.copies)audit(actor,'storage.kept_released',targetId,released);
+ const gone=[];
+ // Straight to the adapter: a leftover that still cannot be removed stays listed without marking the destination again.
+ for(const item of leftovers(targetId)){try{const {adapter,options,value}=parseRemote(item.path);await adapter.removeFile(options,value);gone.push(item.path);}catch(error){if(error?.code===2)gone.push(item.path);}}
+ if(gone.length)forgetLeftovers(gone);
+}
+// A test that failed on a saved destination: its kept probe files are still listed. One that found it broken (deletes
+// refused, files still changeable) leaves it unverified: every file is kept and the card warns until a test passes.
+function recordFailedProbe(targetId,error,actor){
+ if(!db.prepare('SELECT 1 FROM storage_targets WHERE id=?').get(targetId))return;
+ if(error?.probeLeftovers?.length)recordLeftovers(targetId,probeRefs(targetId,error.probeLeftovers));
+ if(error?.writeMode==='broken')markUnverified(targetId,actor);
+}
+export async function testSaved(targetId,actor){
+ try{const result=await testStorageTarget(targetOptions(targetId));await settleWriteMode(targetId,result,actor);return result;}
+ catch(error){recordFailedProbe(targetId,error,actor);throw error;}
+}
+// Public shape of a test result: never the probe paths.
+const testView=result=>{const {probeLeftovers,...rest}=result;return {...rest,...(probeLeftovers?.length?{probeLeftovers:probeLeftovers.length}:{})};};
 storageTargets.get('/',(_req,res)=>res.json({targets:db.prepare('SELECT * FROM storage_targets ORDER BY created_at').all().map(safe),activeTargetId:activeStorage().id}));
 storageTargets.get('/:id/tree',(req,res)=>{
  const target=db.prepare('SELECT id,root,auth_type FROM storage_targets WHERE id=?').get(req.params.id);
@@ -80,13 +113,21 @@ storageTargets.post('/connect',rateLimit('storage-connect',10),async(req,res)=>{
  const data=schema.parse(req.body),targetId=id(),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
  const root=data.root.replace(/\/+$/,'');
  const options={host:data.host,port:data.port,username:data.username,hostKey,root,...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})};
- await testStorageTarget(options);
+ let result;
+ try{result=await testStorageTarget(options);}
+ catch(error){
+  // Nothing is saved, so probe files the storage kept are named in the answer (relative to the folder) and audited by count.
+  if(error?.probeLeftovers?.length){audit(req.user.id,'storage.probe_kept',null,{count:error.probeLeftovers.length});error.message+=` DockNest could not delete its ${error.probeLeftovers.length===1?'test file':'test files'} in ${root}/.docknest-probe; remove ${error.probeLeftovers.length===1?'it':'them'} on the server.`;}
+  throw error;
+ }
  const capacityBytes=data.capacityBytes??await probeTargetCapacity(options)??DEFAULT_CAPACITY;
  const credential=seal(data.authType==='password'?data.password:data.privateKey),now=new Date().toISOString();
  transaction(()=>{
   db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,capacityBytes,'connected',now,now);
   db.prepare("INSERT OR IGNORE INTO settings VALUES('backup_storage_target',?)").run(targetId);
-  audit(req.user.id,'storage.connected',targetId,{authType:data.authType});
+  recordWriteMode(targetId,result.writeMode,req.user.id,now);
+  recordLeftovers(targetId,probeRefs(targetId,result.probeLeftovers));
+  audit(req.user.id,'storage.connected',targetId,{authType:data.authType,writeMode:result.writeMode});
  });
  res.status(201).json(safe(db.prepare('SELECT * FROM storage_targets WHERE id=?').get(targetId)));
 });
@@ -129,13 +170,12 @@ storageTargets.post('/:id/copies/delete',requireRecentAuth,(req,res)=>{
  catch(error){if(error.code==='pinned_copies')return res.status(409).json({error:error.message,code:error.code,pinned:error.pinned});if(error.code==='last_packages')return res.status(409).json({error:error.message,code:error.code,lastPackages:error.lastPackages});throw error;}
 });
 storageTargets.post('/:id/test',rateLimit('storage-test',10),async(req,res)=>{
- const result=await testStorageTarget(targetOptions(req.params.id));
+ const result=await testSaved(req.params.id,req.user.id);
  db.prepare("UPDATE storage_targets SET status='connected',last_tested_at=? WHERE id=?").run(new Date().toISOString(),req.params.id);
- audit(req.user.id,'storage.test',req.params.id);res.json(result);
+ audit(req.user.id,'storage.test',req.params.id);res.json(testView(result));
 });
 storageTargets.post('/:id/use',async(req,res)=>{
- const options=targetOptions(req.params.id);
- await testStorageTarget(options);
+ await testSaved(req.params.id,req.user.id);
  transaction(()=>{
   db.prepare("INSERT INTO settings VALUES('backup_storage_target',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(req.params.id);
   audit(req.user.id,'storage.selected',req.params.id);

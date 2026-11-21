@@ -50,7 +50,9 @@ Engine knowledge is spread over six functions as `if engine == ...` branches, pl
    - Ready after start: `db.runCommand({ping:1})`. Data checks: `{name, collection}` with an optional `database`,
      read-only `countDocuments`, kept as a hash like the other engines. A missing database or collection fails the
      check instead of counting zero.
-3. **No logical dumps** (owner decision): cold capture is final. `mongodump` is not needed for consistency, because
+3. **No logical dumps for MongoDB** (owner decision): cold capture stays its method. Since 3.0.0 PostgreSQL, MySQL and
+   MariaDB can opt in to [online dumps](online-dumps.md); MongoDB keeps the cold copy until a replica set adapter exists.
+   Original text: `mongodump` is not needed for consistency, because
    writers are already stopped, and it would add a second restore path.
 4. **Second engine**: not in 3.0.0. Follow-up candidates, in order: Elasticsearch/OpenSearch single node,
    CouchDB. Each is one new `engine_*.py` module plus its integration scenario.

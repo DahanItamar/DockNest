@@ -23,6 +23,8 @@ from .staging import (
     is_regular)
 from .restore_test import (
     load_images_keeping_tags)
+from .dumps import (
+    dump_bytes, load_dumps)
 # Mutable state lives in common and is never copied by import: CHAIN_LINKS, PROBE_POLICY_FALLBACKS
 # </build:header>
 def recover(root,ids,cfg,deadline,parent):
@@ -581,7 +583,7 @@ def restore(req):
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise ValueError('Missing snapshot images')
     multi=len(containers)>1
     if multi and int(docker('version','--format','{{.Server.Version}}').decode().split('.')[0])<28:raise ValueError('Grouped isolated restores require Docker 28 or newer')
-    if shutil.disk_usage(root).free<mount_bytes(unpacked)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
+    if shutil.disk_usage(root).free<mount_bytes(unpacked)+dump_bytes(manifest)+1024**3:raise ValueError('Insufficient target capacity for extracted data')
     definitions=[];sources={}
     for i,c in enumerate(containers):
         name='dbm-restore-'+req['job'][:12]+('-'+str(i) if multi else '')
@@ -608,6 +610,8 @@ def restore(req):
         if actual!=service.get('expectedSqliteChecks'):raise ValueError('Isolated offline SQLite checks differ from capture')
         sqlite_checks.extend({'container':service['container'],'name':check['path'],'method':check['method'],'status':'passed'} for check in actual)
     for archive in image_archives(unpacked):load_images_keeping_tags(archive)
+    # Online logical dumps: each is loaded into its restored data folder before the app's containers exist.
+    load_dumps(manifest,unpacked,root,definitions,sources)
     created=[];networks={};running=[]
     try:
         for index,original in enumerate(dict.fromkeys(name for plan in plans for name in plan)):
