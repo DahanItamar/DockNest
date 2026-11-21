@@ -61,6 +61,37 @@ the feature ships with its own "beta" label, like moves did. It left beta in 2.1
 - "Run test now": administrators and operators (as safe as a manual restore), at most one unfinished test per app and
   6 manual tests per app per 24 hours. Settings stay administrator-only.
 
+## Testing a copy
+
+Since 3.0.0 a restore test can read a backup copy on another destination (docs/backup-copies.md) instead of the main
+package, so the owner learns that the off-site copy itself restores.
+
+- Settings gain "Test from": Main storage (the default, and the value of every existing row) or one of the app's copy
+  destinations (`sourceTargetId`). It applies to scheduled tests and to "Run test now". A client that leaves the field
+  out keeps the saved choice. A destination the app no longer copies to stays valid while it exists, until the owner
+  changes it.
+- Which backup: the newest backup with a verified copy on that destination that retention is not removing. The main
+  package may be unverified or gone. With none, the scheduled test is skipped with "Not tested: no verified copy on
+  <destination> yet." (`restore_test.skipped`, reason `no_verified_copy`); a removed destination is `source_unavailable`.
+- Fail closed, never a silent fallback to the main package:
+  - Check space first loads the chain (`loadChain`, `verifyChainLinks`) and needs a verified copy on that destination
+    for the backup and every package it builds on. A missing or unverified one ends the test as "couldn't run" before
+    anything reaches the test server, with a reason that names the backup and the destination.
+  - Copy backup reads every package from that destination only (`uploadBackupTo` with `sourceTargetId`, strict). One
+    that cannot be read there or fails authentication ends the test as "couldn't run" (`copy_unavailable`). It does not
+    mark the main package unverified and writes no backup evidence.
+  - A chain whose links do not match is still a failed test, as for the main package: that is the backup's fault, not the
+    storage's.
+- The result records what was read: `progress.source` (`role` main or copy, destination id and name; never paths).
+  The test detail and the card's last test return `source` (`role`, `name`, `chosen`), the Copy backup step says "From
+  the copy on <destination>", and passed or failed evidence carries `sourceTargetId`. A test of the main package that
+  fell back to a copy (the existing restore rule) also shows that copy.
+- No new timer or loop: the same steps and worker tick. Data: migration 26 adds `restore_test_settings.source_target_id`
+  (NULL means the main package); the chosen copy of a test is kept in its `limits`.
+- Linux integration (`scripts/integration-incremental.js`): with the S3 (MinIO) copy of an incremental chain, a test from
+  the copy is "couldn't run" when a link is not verified there or its object is missing (main packages intact), and passes
+  with every main package deleted.
+
 ## Resource limits
 
 - Every test container gets `--memory M --memory-swap M --cpus C --pids-limit 1024 --restart no` and
@@ -452,6 +483,8 @@ arguments (they hold data paths).
   jobs and the new tables, but it also does not see a test holding a server. `upgrading.md` gets: "Finish or cancel
   restore tests before rolling back to 2.8.x." A test caught mid-run is removed by its reaper.
 - Upgrade fixtures (PM-01) gain a 2.8.2 database; the test asserts exact preservation and idempotence.
+- 3.0.0 (migration 26, compatible): `restore_test_settings.source_target_id` is added as NULL for every row, so every
+  existing schedule keeps testing the main package. Older releases ignore the column.
 
 ## Security review points
 

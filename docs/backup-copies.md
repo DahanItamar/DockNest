@@ -34,6 +34,7 @@ Real copy and restore count as validated only after the Linux integration tests 
 | How | Read the ciphertext from the main destination and stream it to the copy destination through the existing publication journal: write `.partial`, sync, authenticate (SHA-256 and GCM tag), rename. A copy is recorded only after authentication. |
 | Failure | Retry after 5 minutes, 30 minutes, 2 hours, then every 6 hours, for up to 7 days. Alerts: `backup.copy_failed` (first failure), `backup.copy_recovered`. After 7 days the copy is marked `gave_up`; the next backup tries again. |
 | Restore | From the main copy. If it is missing or fails authentication, DockNest offers the copies, newest-verified first. The owner can also pick a copy directly. |
+| Restore tests | Since 3.0.0 a restore test can read a copy instead of the main package ("Test from" in its settings). Every package of the chain must be verified and readable on that destination, or the test is "couldn't run"; it never falls back to the main package. See [restore tests](restore-tests.md#testing-a-copy). |
 | Retention | Per destination. Pins apply to every copy. Object Lock deferrals are per copy. Deleting a backup deletes all its copies. |
 | Incremental chains | Each destination holds whole chains. A copy of an increment is made only after its parent is copied there. |
 | Recovery kit | Written to every destination that holds copies, so each one can be recovered on its own. |
