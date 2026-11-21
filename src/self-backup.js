@@ -9,7 +9,7 @@ import { seal,open,digest } from './crypto.js';
 import { exportRecoveryKit } from './recovery-kit.js';
 import { deploymentHeld,requireNoDeploymentHold,deploymentHoldMessage } from './deployment-hold.js';
 import { backupRoot,managerBackupFilename } from './backup-layout.js';
-import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openRead,removeFile,publishVerified } from './storage.js';
+import { activeStorage,targetOptions,targetPrefix,remoteModes,managerBackupDirectory,storageJoin,makeDirectory,openRead,removeFile,publishVerified,storageKeepsFiles } from './storage.js';
 import { writeEmergencyKit,activeEmergencyKey } from './emergency/kits.js';
 import { writeGuideCopies } from './runbook/copy.js';
 
@@ -91,6 +91,8 @@ export async function pruneSelfBackups(){
  const latest=db.prepare("SELECT id FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
  const lastAttempt=db.prepare('SELECT id FROM manager_backups ORDER BY rowid DESC LIMIT 1').get();
  for(const row of db.prepare("SELECT * FROM manager_backups WHERE status IN ('completed','failed') AND id<>? AND NOT EXISTS(SELECT 1 FROM manager_backup_downloads d WHERE d.backup_id=manager_backups.id)").all(latest?.id||'')){
+  // An append-only destination keeps older kits (docs/storage-backends.md): the row stays as their record, never retried.
+  if(row.path&&storageKeepsFiles(row.path))continue;
   try{
    if(row.path){validateRemotePath(row);for(const file of [row.path+'.partial',row.path])try{await removeFile(file);}catch(error){if(error.code!==2&&error.code!=='ENOENT')throw error;}}
    else await rm(filename(await selfBackupDirectory(),row.id),{force:true});
@@ -160,6 +162,7 @@ async function copyKitToCopyDestinations(run,file,evidence,mainTargetId){
 // its upload was verified), so a failed upload never leaves a destination without a kit.
 export async function pruneKitCopies(){
  for(const row of db.prepare('SELECT * FROM manager_backup_copies m WHERE EXISTS(SELECT 1 FROM manager_backup_copies n WHERE n.target_id=m.target_id AND n.rowid>m.rowid)').all()){
+  if(storageKeepsFiles(row.path))continue;
   try{
    const selected=targetOptions(row.target_id),recovery=targetPrefix(selected)+backupRoot(selected.root)+'/docknest-recovery/';
    if(!row.path.startsWith(recovery)||!/^docknest_[a-f0-9]{16}_[0-9TZ_-]+--[0-9a-f-]{36}\.dkit$/.test(row.path.slice(recovery.length)))throw new Error('Invalid manager backup copy path');
