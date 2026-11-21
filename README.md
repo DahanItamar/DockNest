@@ -51,7 +51,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - DockNest can back up its own data to your storage. See [self-backup](docs/docknest-self-backup.md).
 - A recovery kit restores DockNest and rebuilds backups without it. See [independent recovery](docs/independent-recovery.md).
 - After every Self Backup, DockNest checks that the new recovery kit opens and holds the right key, and alerts you if it does not. See [kit check](docs/emergency-kit.md#kit-check).
-- Recovery Guide: plain steps and the exact commands to bring every app back on a new server, as a PDF to print or keep with the emergency kit, also in Hebrew. A copy without logins is saved next to the recovery kit after every Self Backup. See [Recovery Guide](docs/recovery-guide.md).
+- Recovery Guide: plain steps and the exact commands to bring every app back on a new server, as a PDF to print or keep with the emergency kit, also in Hebrew. Open it from Recovery Guide in the menu, choose the apps and what goes in, and download. A copy without logins is saved next to the recovery kit after every Self Backup. See [Recovery Guide](docs/recovery-guide.md).
 - Optional emergency kit: split access between trusted people, so that K of N of them together can open the kit with their 33-word parts, offline. Off by default; one passphrase stays the default. See [emergency kit](docs/emergency-kit.md).
 - Storage page with space per app and per destination, and growth over time.
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
@@ -70,7 +70,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Administrators move an app to another server by dragging it to that server and pressing Save changes. DockNest shows how long the move takes and how long the app is offline, then backs up the app, tests a copy on the new server and waits for your DNS change before switching.
 - The old copy is kept stopped for 7 days, so you can switch back. Removing it is never automatic. See [moving apps](docs/moving-sites.md).
 - When the new server is missing nginx, Docker, Docker Compose or certbot, DockNest can install it for you after you confirm, or show you the command to run yourself.
-- Domain checks follow each domain of an app through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and name the broken step in plain words. They run when you ask and after scans, readiness checks and backups, never on a timer, and only read. Before a move, the preview lists every domain that stops working. See [domains](docs/domains.md).
+- Domain checks follow each domain of an app through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and name the broken step in plain words. On the Map they are a Domains column that you can hide, coloured by the broken step, and each app lists its domains; a domain's panel has Check again. They run when you ask and after scans, readiness checks and backups, never on a timer, and only read. Before a move, the preview lists every domain that stops working. See [domains](docs/domains.md).
 
 **Safe changes (beta)**
 - Administrators change an app's Compose file, environment values, published ports or image tag from DockNest. Each change takes a backup first, shows the maintenance page, checks the app comes up and undoes the change by itself when it does not. Environment values are write-only (they can be replaced or removed), a finished Compose change can be undone, and a change can never add privileges the app did not have. See [Safe Edit](docs/safe-edit-guide.md).
@@ -82,6 +82,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 
 **Security**
 - Keys safe: DockNest finds the encryption keys apps keep in their settings (such as Laravel `APP_KEY`, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden) and checks that each one is inside the last backup, without ever reading the key into DockNest. A restore test confirms the restored copy has the same keys. It also tells you when an app's Compose or env files change outside Safe Edit. See [keys safe](docs/keys-safe.md).
+- Keys safe on screen: a padlock on the Map and a Keys line on each app card show whether the keys are in the last backup; the app panel lists each key's name, place and short fingerprint (never the key), and Self Backup shows the Recovery kit check.
 - Backups are encrypted with AES-256-GCM.
 - Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
 - Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites and keeps working with it. While the storage server enforces this, ransomware that reaches DockNest cannot delete or change backups already stored there (files written before need to be made read-only on the server).

@@ -12,7 +12,7 @@ function Summary({sum}){
  return <p className="bc-summary" role="status">{parts.map(([n,label],index)=><React.Fragment key={label}>{index>0&&', '}<b>{n}</b> {label}</React.Fragment>)}.{!sum.partial&&!sum.notBackedUp&&!sum.pending&&sum.total>0&&' Everything here is covered by an app or skipped on purpose.'}</p>;
 }
 
-const ScanAgain=({label='Scan again',onScan})=><button type="button" className="bc-link" onClick={onScan}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{label}</button>;
+const ScanAgain=({label='Scan again',onScan})=><button type="button" className="link-action" onClick={onScan}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{label}</button>;
 
 // One server's coverage: loading, error with retry, empty, partial and the list. Reads only through entry/onScan, so the Apps
 // page and the Map share it. Skip and Unskip change the list in place and never start a scan.

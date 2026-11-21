@@ -1126,6 +1126,20 @@ try{
   const {context,page}=await open({width:760,height:900});
   await page.locator('.map-list').waitFor();await fits(page,'tablet');await context.close();
  }
+ {
+  // Secondary actions are docs-style links (no box, underlined), never bulky outlined buttons
+  const asLink=async(loc,label,w)=>{await loc.waitFor();const s=await loc.evaluate(e=>{const c=getComputedStyle(e);return {bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor,td:c.textDecorationLine,sw:document.documentElement.scrollWidth}});
+   assert.equal(s.bw,0,label+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(s.bg),label+' has no fill: '+s.bg);assert.ok(s.td.includes('underline'),label+' is underlined');assert.ok(s.sw<=w,label+' does not overflow at '+w)};
+  for(const w of [1280,390]){
+   const {context,page}=await open({width:w,height:900});
+   if(w>=768){await page.locator('.map-site[data-site="'+SHOP+'"]').focus();await page.keyboard.press('Enter')}
+   else{await page.locator('.map-list').waitFor();await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click()}
+   const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();
+   await asLink(panel.getByRole('button',{name:'Self-heal'}),'Self-heal at '+w,w);
+   await asLink(panel.getByRole('button',{name:'Edit history'}),'Edit history at '+w,w);
+   await context.close();
+  }
+ }
  assert.deepEqual(errors,[],'page errors');
  console.log('Map browser checks passed.');
 }finally{await browser.close();}

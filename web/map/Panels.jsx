@@ -66,6 +66,6 @@ export function AddToServer({found,onPick,onDragItem,onNewSite}){
   {rows.length>0&&<ul className="map-rows">{rows.map(c=><Row key={c.id} icon={c.kind==='static'?IconAppWindow:IconBox} title={c.name} caption={c.kind==='static'?'nginx site · static files':'Docker · '+count(c.containers.length,'container')+(c.covered.length?' · '+coveredCaption(c):'')} onClick={()=>onPick(c)} onDrag={onDragItem?()=>onDragItem({kind:'site',name:c.name,choice:c}):undefined}/>)}</ul>}
  </>;
 }
-export const DiscoverFooter=({found})=><><span className="map-caption">Not listed?</span><button type="button" className="map-link" disabled={found.loading} onClick={found.again}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Discover again</button></>;
+export const DiscoverFooter=({found})=><><span className="map-caption">Not listed?</span><button type="button" className="link-action" disabled={found.loading} onClick={found.again}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Discover again</button></>;
 
 export const Defs=({rows})=><dl className="map-defs">{rows.filter(Boolean).map(([k,v])=><div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;

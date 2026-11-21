@@ -78,6 +78,10 @@ from certbot's log category and from what listens on the server, and say so.
 
 Domains whose DNS reaches none of your servers are grouped as **Points nowhere**.
 
+## On the Map and the app pages
+
+The Map has a Domains column left of the servers: one node per domain, placed by the server its DNS answers with, and a line to that server coloured by the domain's worst step (dashed when never checked). Domains whose DNS reaches none of your servers sit under **Points nowhere** with a red stub; domains never looked up and without a server sit under **Not placed yet**. A **Domains** button on the canvas hides or shows the column (kept in this browser). Opening a node shows its five steps (domain, DNS, proxy, app, certificate), each with its state, one reason and a next step, the time of the last check, and **Check again** (**Check now** when never checked). While a check runs every step says Checking; if it fails the last results stay with their time. An app's panel lists its domains, one row each, and on a phone the Map lists them under each app (the rest under **Domains that point nowhere** or **Other domains**). A check is followed for at most two minutes; if it is still running then, the panel says so and you check again later. Domain nodes can be moved like others by administrators; nodes never connect to anything but their server. Viewers see no domains.
+
 ## Moving an app
 
 A Move preview lists every domain that stops working until DNS points to the new server: the app's own domains and the

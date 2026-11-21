@@ -23,7 +23,7 @@ export function PickSheet({source,nodes,rules,providers,onPick,onAdd,onClose}){
   {nodes.length>0?<ul className="map-targets">{nodes.map(n=>{const has=rules.some(r=>nodeOf(r)===n.id&&sameSource(r,source));
    return <li key={n.id}><button type="button" onClick={()=>onPick(n)}><b>{n.name}</b><span className="map-caption">{label(providers,n.provider)}{has?'. Already connected, you can change it.':''}</span></button></li>})}</ul>
   :<p>You have no alert nodes yet. Add one, then connect it.</p>}
-  <div className="map-inline-actions"><button type="button" onClick={onAdd}>Add alert node</button></div>
+  <div className="map-inline-actions link-row"><button type="button" className="link-action" onClick={onAdd}>Add alert node</button></div>
  </Sheet>;
 }
 
@@ -102,7 +102,7 @@ export function AlertPanel({narrow,node,startProvider,rules,connections,provider
    {visible.map(d=><fieldset key={d.key} className="map-src" data-src={d.key}><legend>{d.source.name}<span className="map-caption"> {d.source.kind==='docknest'?'DockNest':d.source.kind==='server'?'Server':'App'}</span></legend>
     {EVENTS_FOR[d.source.kind].map(e=><label key={e} className="map-check"><input type="checkbox" checked={d.events.has(e)} onChange={()=>toggle(d.key,e)}/>{EVENT_LABEL[e]}</label>)}
     {d.events.size===0&&<p className="map-caption" role="status">Choose at least one.</p>}
-    <button type="button" aria-label={`Disconnect ${d.source.name}`} onClick={()=>disconnect(d.key)}>Disconnect</button>
+    <button type="button" className="link-action" aria-label={`Disconnect ${d.source.name}`} onClick={()=>disconnect(d.key)}>Disconnect</button>
    </fieldset>)}
    {free.length>0&&<div className="map-connect"><label className="map-field">Connect another source<select value={pick} onChange={e=>setPick(e.target.value)}><option value="">Choose…</option>{free.map(s=><option key={srcKey(s)} value={srcKey(s)}>{s.name}</option>)}</select></label><button type="button" disabled={!pick} onClick={addSource}>Connect</button></div>}
   </section>}
@@ -129,7 +129,7 @@ export function SourceAlerts({source,rules,nodes,onEdit,onAdd}){
  return <section aria-labelledby={'map-alerts-'+source.kind}>
   <h3 id={'map-alerts-'+source.kind} className="map-group-title">Alerts</h3>
   {mine.length>0?<ul className="map-alert-rows">{mine.map(r=><li key={r.id}><span><b className="map-name">To {name(nodeOf(r))}</b><span className="map-caption">{words(r.events)}</span></span><button type="button" className="icon-button" title="Open" aria-label={`Open alerts to ${name(nodeOf(r))}`} onClick={e=>onEdit(r,e.currentTarget)}><IconChevronRight size={16} stroke={1.75} aria-hidden="true"/></button></li>)}</ul>:<p className="map-caption map-alerts-none">No alerts yet.</p>}
-  <button type="button" className="map-alerts-add" onClick={e=>onAdd(source,e.currentTarget)}><IconBell size={16} stroke={1.75} aria-hidden="true"/>Add alert</button>
+  <button type="button" className="link-action map-alerts-add" onClick={e=>onAdd(source,e.currentTarget)}><IconBell size={16} stroke={1.75} aria-hidden="true"/>Add alert</button>
  </section>;
 }
 
@@ -142,6 +142,6 @@ export function AlertsList({nodes,rules,providers,sourceName,onOpen,onEditRule,o
     <IconButton label={'Delete '+n.name} icon={IconTrash} onClick={e=>onDelete(n,e.currentTarget)}/></div>
    {mine.length>0?<ul className="cx-srcs">{mine.map(r=><li key={r.id}><button type="button" className="cx-src" aria-label={`Events from ${sourceName(r)} to ${n.name}`} onClick={e=>onEditRule(r,e.currentTarget)}><span className="cx-node-text"><span className="map-name">{sourceName(r)}</span><span className="map-caption cx-trunc">{words(r.events)||'No events'}</span></span><IconChevronRight size={18} stroke={1.75} aria-hidden="true"/></button></li>)}</ul>:<p className="map-caption cx-none">No sources yet.</p>}
   </li>})}</ul>:<p className="map-caption map-none">No alert nodes yet.</p>}
-  <div className="map-list-actions map-list-add cx-stack"><button type="button" onClick={e=>onAdd(e.currentTarget)}>Add alert node</button><button type="button" onClick={e=>onDocknest(e.currentTarget)}>Alerts from DockNest</button></div>
+  <div className="map-list-actions map-list-add cx-stack link-row"><button type="button" className="link-action" onClick={e=>onAdd(e.currentTarget)}>Add alert node</button><button type="button" className="link-action" onClick={e=>onDocknest(e.currentTarget)}>Alerts from DockNest</button></div>
  </section>;
 }

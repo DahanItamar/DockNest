@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
 import {LinkedLines} from '../linked/LinkedWarning.jsx';
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
+import {isDomainWarning} from './domains-model.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
 export function Sheet({title,labelId,onClose,children,actions,className,fixedHead}){
@@ -56,6 +57,10 @@ export const Note=({kind,icon:Icon,role,children})=><div className={'alert-panel
 const CHECK_ICON={ok:IconCheck,info:IconInfoCircle,warn:IconAlertTriangle,block:IconCircleX};
 const CHECK_WORD={ok:'Fine',info:'Note',warn:'Warning',block:'Needs fixing'};
 
+// Keys safe: what the new server does to owners, modes and the target folder (docs/adr-3.0.0-keys-safe.md, section 6). They come
+// as preflight checks with these ids and show as their own notes, a block stays a block.
+const OWNERSHIP=new Set(['owner-map','file-mode','target-filesystem']);
+const ownershipChecks=p=>[...(p?.advanced?.checks||[]),...(p?.checks||[])].filter(c=>OWNERSHIP.has(c?.id)&&c.text).filter((c,i,all)=>all.findIndex(x=>x.id===c.id&&x.text===c.text)===i);
 export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,onMove,error,busy,client,onInstall,onCommand}){
  const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
@@ -64,7 +69,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
  const canMove=!blocked&&(!long||anyway)&&!busy;
- const warns=(preview.warnings||[]).filter(w=>!w.advanced),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
+ const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
  const cfReady=tokenSaved||cfConfigured;
  useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
  const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
@@ -77,7 +82,8 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const unknown='Not known yet';
  return <Sheet title={blocked?'Cannot move yet':'Ready to move'} labelId="map-review-title" onClose={onCancel} actions={<><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="primary" disabled={!canMove} onClick={submit}>Move</button></>}>
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
-  {blocked&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
+  {blocked&&!own.some(c=>c.status==='block'&&c.text===why(preview))&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
+  {own.map(c=><Note key={c.id+c.text} kind={c.status==='block'?'error':'warn'} icon={c.status==='block'?IconCircleX:IconAlertTriangle} role={c.status==='block'?'alert':undefined}>{c.text}</Note>)}
   {installChecks(preview).map(c=>{const i=c.install,name=PACKAGE_NAME[i.package];return <div key={c.id||i.package} className="map-install">
    <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
    <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>
@@ -90,6 +96,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
   </div>}
   {long&&<Note kind="warn" icon={IconAlertTriangle} role="alert">Your app will be offline for a long time.{warns[0]?' '+warningText(warns[0]):''}</Note>}
   {!blocked&&!long&&warns.length>0&&<Note kind="warn" icon={IconAlertTriangle}>{warns.map(warningText).join(' ')}</Note>}
+  {!blocked&&domainNotes.map((w,i)=><Note key={'d'+i} kind="warn" icon={IconAlertTriangle}>{w.text}</Note>)}
   {long&&<label className="map-check"><input type="checkbox" checked={anyway} onChange={e=>setAnyway(e.target.checked)}/>I accept about {duration(preview.downtimeSeconds)||"a long time"} offline</label>}
   {!blocked&&<div className="map-advanced">
    <button type="button" className="map-disclose" aria-expanded={open} aria-controls="map-adv" onClick={()=>setOpen(!open)}>Advanced settings<IconChevronDown size={18} stroke={1.75} aria-hidden="true" className={open?'open':''}/></button>
@@ -111,7 +118,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
       {tokenErr&&<Note kind="error" icon={IconCircleX} role="alert">{tokenErr}</Note>}
      </div>}
     </section>
-    {adv.checks?.length>0&&<section><h3>Checks</h3><ul className="map-checks">{adv.checks.map(c=>{const I=CHECK_ICON[c.status]||IconInfoCircle;return <li key={c.id} className={'chk-'+c.status}><I size={18} stroke={2} aria-hidden="true"/><span><b>{c.title}</b> <span className="sr-only">{CHECK_WORD[c.status]}. </span>{c.text}</span></li>})}</ul></section>}
+    {adv.checks?.some(c=>!OWNERSHIP.has(c.id))&&<section><h3>Checks</h3><ul className="map-checks">{adv.checks.filter(c=>!OWNERSHIP.has(c.id)).map(c=>{const I=CHECK_ICON[c.status]||IconInfoCircle;return <li key={c.id} className={'chk-'+c.status}><I size={18} stroke={2} aria-hidden="true"/><span><b>{c.title}</b> <span className="sr-only">{CHECK_WORD[c.status]}. </span>{c.text}</span></li>})}</ul></section>}
    </div>}
   </div>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}

@@ -91,13 +91,16 @@ jobs:
           npm run test:reports
           npm run test:status-pages
           npm run test:map
+          npm run test:domains
           npm run test:hardening
+          npm run test:keys-safe
           npm run test:restore-check
           npm run test:backup-coverage
           npm run test:connections
           npm run test:layout
           npm run test:jobs-sqlite
           npm run test:login-typing
+          npm run test:recovery-guide
         env:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000

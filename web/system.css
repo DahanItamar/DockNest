@@ -102,3 +102,12 @@ button.text-link:disabled{background:transparent;border:0;color:var(--dn-text-di
 .row-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .site-card-actions .overflow-menu-list{left:0;right:auto}
 .icon.small,.icon-button.small{padding:0}
+
+/* Secondary actions: one shared docs-style link. Real filled buttons stay for the single primary action of a view. */
+button.link-action,.map-root button.link-action,.map-root .map-panel-foot button.link-action,.map-root .map-inline-actions button.link-action,.rb button.link-action{display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;width:auto;height:auto;min-height:0;margin:0;padding:4px 0;border:0;border-radius:2px;background:transparent;box-shadow:none;color:var(--link);font-size:inherit;line-height:inherit;font-weight:500;text-decoration:underline;text-underline-offset:3px;white-space:normal;text-align:left;cursor:pointer}
+button.link-action:hover:not(:disabled),.map-root button.link-action:hover:not(:disabled){background:transparent;color:var(--accent-hover)}
+button.link-action:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+button.link-action:disabled,.map-root button.link-action:disabled{background:transparent;border:0;color:var(--text-muted);cursor:not-allowed}
+.link-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px}
+@media(max-width:767px){.link-row button.link-action{min-height:44px}}
+.map-root .map-dialog-foot button.link-action,.map-root .map-panel-foot button.link-action{min-height:44px;padding-inline:8px}
