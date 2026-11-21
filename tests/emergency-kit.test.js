@@ -82,7 +82,8 @@ test('one passphrase is the default: no key pair, no emergency kit, and the kit 
   assert.equal(toolFile('/backups'), undefined, 'no tool in storage without the split');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM emergency_keys').get().n, 0);
   const after = await status();
-  assert.equal(after.kitCheck.last.result, 'passed'); assert.equal(after.kitCheck.last.reason, null); assert.equal(after.kitCheck.active, false);
+  assert.equal(after.kitCheck.last.result, 'passed'); assert.equal(after.kitCheck.last.reason, null);
+  assert.equal(after.kitCheck.last.kitDate, db.prepare('SELECT created_at FROM manager_backups WHERE id=?').get(after.latest.id).created_at, 'the check names the date of the kit it opened'); assert.equal(after.kitCheck.active, false);
   assert.equal(db.prepare("SELECT backup_id FROM kit_checks WHERE result='passed'").get().backup_id, after.latest.id);
   assert.deepEqual((await readdir(await selfBackupDirectory())).filter(name => name.startsWith('.')), [], 'no kit check folder is left behind');
   assert.deepEqual(outbox('selfbackup.kit_check_failed'), []);

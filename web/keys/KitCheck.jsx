@@ -30,7 +30,7 @@ export function KitCheckCard({kit,busy,onCheck,onNewKit}){
   {failed&&!running&&<AlertPanel variant="error" title="The newest kit did not open">The newest kit did not open: {kitReason(last.reason)}</AlertPanel>}
   {never&&!running&&<p className="t-body">No kit checked yet. It is checked after the next Self Backup.</p>}
   {last&&!failed&&<p className="t-body">This proves the kit file is whole and the passphrase DockNest keeps opens it. It cannot prove your own copy of the passphrase is right.</p>}
-  <dl className="def-list backup-facts"><div className="def-row"><dt>Schedule</dt><dd>Checked after every Self Backup</dd></div></dl>
+  <dl className="def-list backup-facts"><div className="def-row"><dt>Schedule</dt><dd>Checked after every Self Backup</dd></div>{last?.kitDate&&<div className="def-row"><dt>Kit checked</dt><dd>Kit from {formatDate(last.kitDate,{shortTime:true})}</dd></div>}</dl>
  </div><div className="card-footer sb-footer">
   <button type="button" disabled={busy||running} onClick={onCheck}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>Check now</button>
   {failed&&<button type="button" className="primary" disabled={busy||running} onClick={onNewKit}>Make a new kit</button>}

@@ -15,8 +15,9 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 const active = () => db.prepare("SELECT * FROM kit_checks WHERE result IN ('queued','running')").get();
 
 export function kitCheckStatus() {
-  const last = db.prepare("SELECT * FROM kit_checks WHERE result IN ('passed','failed') ORDER BY checked_at DESC,rowid DESC LIMIT 1").get();
-  return { last: last ? { checkedAt: last.checked_at, result: last.result, reason: last.reason } : null, active: Boolean(active()) };
+  const last = db.prepare("SELECT k.*,b.created_at AS kit_created_at FROM kit_checks k LEFT JOIN manager_backups b ON b.id=k.backup_id WHERE k.result IN ('passed','failed') ORDER BY k.checked_at DESC,k.rowid DESC LIMIT 1").get();
+  // kitDate: when the checked kit (its Self Backup) was made; null when the check never reached a kit.
+  return { last: last ? { checkedAt: last.checked_at, result: last.result, reason: last.reason, kitDate: last.kit_created_at ?? null } : null, active: Boolean(active()) };
 }
 export function queueKitCheck(actor) {
   return transaction(() => {
