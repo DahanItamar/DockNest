@@ -76,3 +76,18 @@ test('restore test constraints: limit ranges, one active test per site and per s
   assert.throws(() => db.prepare("UPDATE restore_tests SET result='odd' WHERE id='4'").run(), /CHECK/);
   assert.throws(() => db.prepare('UPDATE restore_tests SET reason=? WHERE id=?').run('x'.repeat(301), '4'), /CHECK/);
 }));
+
+test('migration 26 (restore test source): a 25-schema database keeps its settings rows, which test the main package', () => withDatabase(25, async (db, file) => {
+  db.prepare("INSERT INTO servers(id,name,host,port,username,private_key,host_key,created_at) VALUES('s','n','h',22,'root','k','f','2026-01-01')").run();
+  db.prepare("INSERT INTO sites VALUES('site','s','shop','{}','2026-01-01')").run();
+  db.prepare("INSERT INTO restore_test_settings(site_id,enabled,server_id,updated_at) VALUES('site',1,'s','x')").run();
+  const before = { ...db.prepare('SELECT * FROM restore_test_settings').get() };
+  const upTo26 = migrations.slice(0, 26), result = migrate(db, { file, list: upTo26, log: quiet });
+  assert.equal(result.from, 25); assert.equal(result.to, 26);
+  assert.deepEqual({ ...db.prepare('SELECT * FROM restore_test_settings').get() }, { ...before, source_target_id: null }, 'every existing row means the main package');
+  assert.throws(() => db.prepare("UPDATE restore_test_settings SET source_target_id=?").run('x'.repeat(65)), /CHECK/);
+  assert.deepEqual(migrate(db, { file, list: upTo26, log: quiet }), { from: 26, to: 26, snapshot: null }, 'restarting is a no-op');
+  // Idempotent when run again (the column already exists).
+  migrations[25].up(db);
+  assert.equal(compatFloor(migrations), 1, 'the migration is compatible: older releases ignore the column');
+}));

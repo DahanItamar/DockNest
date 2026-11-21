@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db } from '../db.js';
 import { loadTest, loadSteps, testState, LABELS } from './engine.js';
 import { settingsRow, settingsView } from './settings.js';
+import { siteCopyTargets, targetSummary } from '../site-storage.js';
 
 const PAGE = 20;
 const serverName = serverId => db.prepare('SELECT name FROM servers WHERE id=?').get(serverId)?.name ?? null;
@@ -15,6 +16,22 @@ const cursorSchema = z.string().max(512).transform((value, context) => {
 });
 export const cardQuery = z.object({ cursor: cursorSchema.optional(), backupId: z.uuid().optional() });
 
+// What a test read (docs/restore-tests.md, "Testing a copy"): the source Copy backup recorded, or, before that step, the
+// copy the test was asked to use. null for tests that read the main package before 3.0.0 recorded sources.
+const destinationName = targetId => targetSummary(targetId)?.name ?? 'Removed destination';
+export function sourceOf(limits, progress) {
+  const chosen = typeof limits?.sourceTargetId === 'string' ? limits.sourceTargetId : null, used = progress?.source;
+  if (used && ['main', 'copy'].includes(used.role)) return { role: used.role, name: used.name || destinationName(used.targetId), chosen: !!chosen };
+  return chosen ? { role: 'copy', name: destinationName(chosen), chosen: true } : null;
+}
+// The settings sheet's "Test from" choices: the app's copy destinations, in the owner's order, then the saved choice
+// when the app no longer copies there (it stays selectable until the owner changes it).
+function copyChoices(siteId, saved) {
+  const ids = siteCopyTargets(siteId).map(row => row.target_id);
+  if (saved && !ids.includes(saved)) ids.push(saved);
+  return ids.map(targetId => { const target = targetSummary(targetId); return { targetId, name: target?.name ?? 'Removed destination', mode: target?.mode ?? null }; });
+}
+
 export function cardFor(siteId, { cursor, backupId } = {}) {
   const last = db.prepare('SELECT * FROM restore_tests WHERE site_id=? AND result IS NOT NULL ORDER BY finished_at DESC,id DESC LIMIT 1').get(siteId);
   const active = db.prepare("SELECT * FROM restore_tests WHERE site_id=? AND (result IS NULL OR cleanup='pending') ORDER BY created_at DESC,id DESC LIMIT 1").get(siteId);
@@ -22,10 +39,11 @@ export function cardFor(siteId, { cursor, backupId } = {}) {
   if (backupId) { where.push('backup_id=?'); params.push(backupId); }
   if (cursor) { where.push('(created_at,id)<(?,?)'); params.push(...cursor); }
   const rows = db.prepare(`SELECT id,backup_id,backup_captured_at,trigger,result,finished_at,restore_seconds,created_at FROM restore_tests WHERE ${where.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params, PAGE + 1);
-  const page = rows.slice(0, PAGE), end = page.at(-1);
+  const page = rows.slice(0, PAGE), end = page.at(-1), settings = settingsView(settingsRow(siteId));
   return {
-    settings: settingsView(settingsRow(siteId)),
-    last: last ? { id: last.id, result: last.result, finishedAt: last.finished_at, restoreSeconds: last.restore_seconds, internet: !!parse(last.limits, {}).internet, failedStep: last.failed_step, reason: last.reason, serverName: serverName(last.server_id) } : null,
+    settings,
+    copyTargets: copyChoices(siteId, settings.sourceTargetId),
+    last: last ? { id: last.id, result: last.result, finishedAt: last.finished_at, restoreSeconds: last.restore_seconds, internet: !!parse(last.limits, {}).internet, failedStep: last.failed_step, reason: last.reason, serverName: serverName(last.server_id), source: sourceOf(parse(last.limits, {}), parse(last.progress, {})) } : null,
     active: active ? { id: active.id, state: testState(active), step: active.step ?? 'check_space' } : null,
     items: page.map(row => ({ id: row.id, backupId: row.backup_id, backupCapturedAt: row.backup_captured_at, trigger: row.trigger, result: row.result, finishedAt: row.finished_at, restoreSeconds: row.restore_seconds })),
     next: rows.length > PAGE ? Buffer.from(JSON.stringify([end.created_at, end.id])).toString('base64url') : null,
@@ -42,6 +60,7 @@ export function detailFor(testId) {
     createdAt: test.created_at, startedAt: test.started_at, finishedAt: test.finished_at, deadlineAt: test.deadline_at, cancelRequested: test.cancel_requested,
     cleanup: test.cleanup,
     limits: { memoryMb: test.limits.memoryMb, cpus: test.limits.cpus, timeLimitMinutes: test.limits.timeLimitMinutes, internet: !!test.limits.internet },
+    source: sourceOf(test.limits, test.progress),
     steps: loadSteps(test.id).map(step => ({ step: step.step, label: LABELS[step.step], state: step.state, startedAt: step.started_at, finishedAt: step.finished_at, detail: step.detail })),
     checks: (Array.isArray(test.checks) ? test.checks : []).map(check => ({ name: check.name, kind: check.kind, target: check.target ?? null, status: check.status, detail: check.detail ?? null })),
   };

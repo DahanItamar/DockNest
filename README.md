@@ -39,7 +39,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Restore to a separate copy; DockNest does not replace a live app by itself.
 - Apps started with plain `docker run` are backed up too, with a readable Compose file and env files in the encrypted backup that recreate them with the same settings.
 - Restore copies, restore tests and moves keep the original's protections (read-only root, dropped capabilities, no-new-privileges, seccomp and AppArmor), or refuse with a clear reason.
-- Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. See [restore tests](docs/restore-tests-guide.md).
+- Automatic restore tests: on a schedule, DockNest restores the latest verified backup onto a test server, starts it in isolation, checks it and removes it. It can also test the copy on your second storage, never falling back to the main backup. See [restore tests](docs/restore-tests-guide.md).
 - Restore check: Check readiness also lists what a restore on a new server would miss, such as cron jobs and systemd timers that use the app, Docker networks it does not create itself and its certificates. Commands and values from those files are never shown. See [restore check](docs/restore-check.md).
 - Keep up to three extra copies of each backup on other storage, for example SFTP plus S3, each with its own retention.
 - Download a backup as an encrypted file or as a ZIP. An increment downloads as a chain (encrypted packages plus an order file) from the backup library.

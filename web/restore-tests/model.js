@@ -5,7 +5,13 @@ export const TIME={min:10,max:120,def:30,presets:[[15,'15 min'],[30,'30 min'],[6
 export const MEMORY={min:256,max:16384,def:1024,presets:[[512,'512 MB'],[1024,'1 GB'],[2048,'2 GB'],[4096,'4 GB'],[8192,'8 GB']],unit:'MB'};
 export const CPU={min:0.5,def:1,presets:[[0.5,'Half a core'],[1,'1 core'],[2,'2 cores'],[4,'4 cores']],unit:'cores'};
 
-export const DEFAULT_SETTINGS={enabled:false,cadence:'weekly',serverId:null,allowLiveServer:false,allowInternet:false,timeLimitMinutes:TIME.def,memoryMb:MEMORY.def,cpus:CPU.def,probe:null,nextDueAt:null,skipReason:null};
+export const DEFAULT_SETTINGS={enabled:false,cadence:'weekly',serverId:null,allowLiveServer:false,allowInternet:false,timeLimitMinutes:TIME.def,memoryMb:MEMORY.def,cpus:CPU.def,probe:null,sourceTargetId:null,nextDueAt:null,skipReason:null};
+
+// "Tested from" in the test details: the main storage or the named copy. Empty for older tests that did not record it.
+export function sourceText(source){
+ if(!source)return '';
+ return source.role==='copy'?'Copy on '+(source.name||'another storage'):'Main storage';
+}
 
 // A limit is edited as {pick:'30'|'custom', custom:''}. A saved value that is not a preset opens as Custom.
 export function limitFrom(spec,value){

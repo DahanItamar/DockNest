@@ -16,6 +16,8 @@ export function generateHostKey(){
 export async function startSftpFixture(){
  const host={private:generateHostKey()},password=randomBytes(32).toString('base64url');
  const files=new Map(),directories=new Set(['/']),clients=new Set(),events=[];
+ // Filesystem the fixture reports through statvfs@openssh.com; blocks of 0 means "not supported" (failure status).
+ const volume={blockSize:4096,blocks:0,free:0,available:0};
  const faults={writes:false,fsync:false,rename:false,remove:false,corruptReads:false};
  // Append-only servers (docs/storage-backends.md): each flag answers that request with PERMISSION_DENIED, like OpenSSH
  // internal-sftp -P. reopen refuses opening an existing file for writing (a 0400 file under a non-root account).
@@ -36,13 +38,12 @@ export async function startSftpFixture(){
     const protocol=stream._protocol,send=protocol.channelData;
     protocol.channelData=function(channel,packet){
      if(channel===stream.outgoing.id&&packet.length===9&&packet[4]===2){
-      // posix-rename is offered only when a test asks for it (features.posixRename, read when the session starts).
-      for(const extensionName of ['fsync@openssh.com',...(features.posixRename?['posix-rename@openssh.com']:[])]){
-       const name=Buffer.from(extensionName),value=Buffer.from('1'),extension=Buffer.alloc(8+name.length+value.length);
-       extension.writeUInt32BE(name.length);name.copy(extension,4);extension.writeUInt32BE(value.length,4+name.length);value.copy(extension,8+name.length);
-       packet=Buffer.concat([packet,extension]);
-      }
-      packet.writeUInt32BE(packet.length-4);
+      // statvfs always; posix-rename only when a test asks for it (features.posixRename, read when the session starts).
+      const extension=Buffer.concat(['fsync@openssh.com','statvfs@openssh.com',...(features.posixRename?['posix-rename@openssh.com']:[])].map(extensionName=>{
+       const name=Buffer.from(extensionName),value=Buffer.from(extensionName.startsWith('statvfs')?'2':'1'),entry=Buffer.alloc(8+name.length+value.length);
+       entry.writeUInt32BE(name.length);name.copy(entry,4);entry.writeUInt32BE(value.length,4+name.length);value.copy(entry,8+name.length);return entry;
+      }));
+      packet=Buffer.concat([packet,extension]);packet.writeUInt32BE(packet.length-4);
      }
      return send.call(this,channel,packet);
     };
@@ -73,6 +74,11 @@ export async function startSftpFixture(){
     stream.on('RMDIR',(request,file)=>{if(denied.remove)return status(request,constants.STATUS_CODE.PERMISSION_DENIED);if(!directories.has(file)||[...files.keys(),...directories].some(entry=>entry.startsWith(file+'/')))return status(request,constants.STATUS_CODE.FAILURE);directories.delete(file);status(request);});
     stream.on('CLOSE',(request,handle)=>{handles.delete(handle.readUInt32BE());status(request);});
     stream.on('EXTENDED',(request,name,data)=>{
+     if(name==='statvfs@openssh.com'&&volume.blocks>0){
+      const reply=Buffer.alloc(9+11*8);reply.writeUInt32BE(reply.length-4);reply[4]=201;reply.writeUInt32BE(request,5);
+      [volume.blockSize,volume.blockSize,volume.blocks,volume.free,volume.available,0,0,0,0,0,255].forEach((value,index)=>reply.writeBigUInt64BE(BigInt(value),9+index*8));
+      return send.call(protocol,stream.outgoing.id,reply);
+     }
      if(name==='posix-rename@openssh.com'){
       if(denied.posixRename)return status(request,constants.STATUS_CODE.PERMISSION_DENIED);
       const from=data.subarray(4,4+data.readUInt32BE(0)).toString(),rest=data.subarray(4+data.readUInt32BE(0)),to=rest.subarray(4,4+rest.readUInt32BE(0)).toString();
@@ -91,5 +97,5 @@ export async function startSftpFixture(){
   }));
  });
  server.listen(0,'127.0.0.1');await new Promise((resolve,reject)=>server.once('listening',resolve).once('error',reject));
- return {files,faults,denied,features,modes,events,options:{host:'127.0.0.1',port:server.address().port,username:'fixture',password,hostKey:createHash('sha256').update(utils.parseKey(host.private).getPublicSSH()).digest('hex')},async close(){for(const client of clients)client.end();await new Promise(resolve=>server.close(resolve));}};
+ return {files,faults,denied,features,modes,events,volume,options:{host:'127.0.0.1',port:server.address().port,username:'fixture',password,hostKey:createHash('sha256').update(utils.parseKey(host.private).getPublicSSH()).digest('hex')},async close(){for(const client of clients)client.end();await new Promise(resolve=>server.close(resolve));}};
 }
