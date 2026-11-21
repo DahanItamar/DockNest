@@ -28,12 +28,13 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
   const sh = (host, text) => run('exec', host, 'sh', '-c', text);
   await mkdir(work, { recursive: true, mode: 0o700 });
 
-  // Two Compose demo apps, one with a bind-mounted data folder and one with a Docker named volume, each with its record
-  // changed after the image was made, then backed up for real.
-  const demos = [{ name: 'recoverydemo', label: 'הדגמה Demo', port: 8311, mount: './site:/site', volumes: '' }, { name: 'recoveryvolume', label: 'Volume demo', port: 8312, mount: 'data:/site', volumes: 'volumes:\n  data: {}\n' }];
+  // Two Compose demo apps, one with a bind-mounted data folder and one with a Docker named volume used by an image that
+  // runs as a non-root user (UID 1234), each with its record changed after the image was made, then backed up for real.
+  await sh(source, "printf 'FROM docknest-fixture:local\\nRUN mkdir -p /site && chown -R 1234:2345 /site /app\\nUSER 1234:2345\\n' | docker build -q -t docknest-fixture:nonroot -");
+  const demos = [{ name: 'recoverydemo', label: 'הדגמה Demo', port: 8311, image: 'docknest-fixture:local', mount: './site:/site', volumes: '' }, { name: 'recoveryvolume', label: 'Volume demo', port: 8312, image: 'docknest-fixture:nonroot', mount: 'data:/site', volumes: 'volumes:\n  data: {}\n' }];
   for (const demo of demos) {
     const folder = demo.folder = `/srv/${demo.name}`, container = `${demo.name}-web-1`;
-    await sh(source, `mkdir -p ${folder} && printf 'services:\n  web:\n    image: docknest-fixture:local\n    restart: unless-stopped\n    ports:\n      - "127.0.0.1:${demo.port}:8080"\n    volumes:\n      - ${demo.mount}\n${demo.volumes}' > ${folder}/compose.yaml && cd ${folder} && docker compose -f ${folder}/compose.yaml up -d`);
+    await sh(source, `mkdir -p ${folder} && printf 'services:\n  web:\n    image: ${demo.image}\n    restart: unless-stopped\n    ports:\n      - "127.0.0.1:${demo.port}:8080"\n    volumes:\n      - ${demo.mount}\n${demo.volumes}' > ${folder}/compose.yaml && cd ${folder} && docker compose -f ${folder}/compose.yaml up -d`);
     await until(async () => (await sh(source, `docker exec ${container} python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/record').read().decode())"`)) === 'snapshot-record', `The demo app ${demo.name} did not start`);
     await sh(source, `docker exec ${container} python -c "import sqlite3;d=sqlite3.connect('/site/database.sqlite');d.execute(\\"UPDATE records SET value='runbook-${demo.name}'\\");d.commit()"`);
     demo.siteId = randomUUID();
@@ -78,15 +79,16 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
     const guide = buildGuide(await loadInventory({ logins: true }), { appIds: demos.map(demo => demo.siteId), include: { logins: true }, version: VERSION });
     for (const demo of demos) {
       const page = guide.apps.find(item => item.id === demo.siteId), steps = page.restore.independent;
-      assert.deepEqual(steps.map(item => item.text.split('.')[0]), ['Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder and Docker volume back where it was', 'Put the Compose files back', 'Start the app with its Compose file']);
+      assert.deepEqual(steps.map(item => item.text.split('.')[0]), ['Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder and Docker volume back', 'Put the Compose files back', 'Start the app with its Compose file']);
       const commands = steps.map(item => item.command).join('\n').replaceAll(PLACEHOLDERS.storageAddress, storageAddress);
       assert.ok(!commands.includes('<'), 'no placeholder is left');
+      assert.ok(!commands.includes('/var/lib/docker'), 'no Docker data folder is assumed');
       await run('exec', clean, 'sh', '-ec', commands);
       await until(async () => (await sh(clean, `wget -qO- http://127.0.0.1:${demo.port}/record || true`)) === `runbook-${demo.name}`, `The restored demo app ${demo.name} did not answer with its data`);
       assert.match(await sh(clean, page.works.command), new RegExp(`${demo.name}-web-1.*Up`, 's'), "the guide's own check shows the container up");
     }
-    assert.match(await run('exec', clean, 'docker', 'volume', 'inspect', '--format', '{{.Labels}}', 'recoveryvolume_data'), /com\.docker\.compose\.project:recoveryvolume/, 'the named volume belongs to the restored Compose project');
-    record("On a clean Linux Docker host, the Recovery Guide's printed restore commands (download over SFTP with the pinned key, decrypt with the kit, images, data back into a bind folder and into a Docker named volume, Compose file, start) bring both demo apps back with their data");
+    assert.equal(await sh(clean, `stat -c %u:%g "$(docker volume inspect -f '{{.Mountpoint}}' recoveryvolume_data)"`), '1234:2345', "the volume's own folder keeps the non-root owner from the backup");
+    record("On a clean Linux Docker host, the Recovery Guide's printed restore commands (download over SFTP with the pinned key, decrypt with the kit, images, data back into a bind folder and into a Docker named volume created there for a non-root app, Compose file, start) bring both demo apps back with their data");
   } finally {
     await run('rm', '-f', '-v', clean).catch(() => {});
     for (const demo of demos) {
