@@ -16,9 +16,11 @@ export function groupForList(servers=[],sites=[]){
 
 // Databases DockNest already detects for capture: site.config.services entries with a supported engine. Nothing is invented.
 // They are shown in the site's details panel, never as nodes: they always move together with the site.
+// How the database is backed up, from what the app already records: a service's own mode, else the app's online-dumps switch.
+const dbMode=(site,s)=>typeof s.backupMode==='string'&&s.backupMode?s.backupMode:site?.config?.onlineDumps===true?'Moves with the app':'Stopped file copy';
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
- return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
+ return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,mode:dbMode(site,s),
   label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
 }
 // The domains an app lists. Their DNS verdicts come from /api/domains (web/map/domains-model.js).

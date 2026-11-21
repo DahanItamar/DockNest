@@ -11,6 +11,7 @@ import {linkedChecks} from './linked-browser.js';
 // TEST_BASE_URL=http://127.0.0.1:5205. Set SHOTS_DIR to also write screenshots (1440x900 and 402x874, both themes).
 const base=process.env.TEST_BASE_URL||'http://127.0.0.1:5173',origin=new URL(base).origin,shots=process.env.SHOTS_DIR;
 if(shots)await mkdir(shots,{recursive:true});
+if(process.env.PANEL_SHOTS)await mkdir(process.env.PANEL_SHOTS,{recursive:true});
 // The shop site has a real UUID: the install API answers 400 for any other site id.
 const SHOP='5e0f3b1c-6a2d-4c8e-9f10-2b3c4d5e6f70';
 const long='very-long-site-name-'.repeat(8)+'.example.com';
@@ -406,8 +407,10 @@ async function panelChecks(page,scheme){
  assert.equal(await panel.getByRole('heading',{name:'shop.example.com'}).evaluate(e=>document.activeElement===e),true,'panel title is focused on open');
  await panel.getByText('PostgreSQL 16.2 · shop_db').waitFor();await panel.getByText('Redis 7.4.1').waitFor();
  assert.equal(await panel.getByText('Generic').count()+await panel.getByText('app',{exact:true}).count(),0,'only detected databases are listed');
- await panel.getByText('Moves together with the app.').waitFor();
- await panel.getByText(/^Today .*, passed$/).waitFor();
+ // Databases are label/value rows; the mode comes from the app's data (no online-dumps switch: the stopped file copy)
+ await panel.locator('dt',{hasText:'Redis 7.4.1'}).waitFor();assert.equal(await panel.locator('dt',{hasText:'Redis 7.4.1'}).locator('xpath=following-sibling::dd').innerText(),'Stopped file copy');
+ // The header status line is the one source of the last backup: no separate Last backup row
+ await panel.getByText(/^Backed up Today /).waitFor();assert.equal(await panel.locator('dt',{hasText:/^Last backup$/}).count(),0,'no duplicate Last backup row');
  assert.equal(await panel.locator('dd',{hasText:/^3$/}).count(),1,'containers show a count, never indexes');
  assert.equal(await panel.getByText('1, 2, 3').count(),0);
  await panel.getByText('nas-backup').waitFor();await panel.getByText('office-box').waitFor();
@@ -1143,6 +1146,38 @@ try{
    assert.equal(await panel.locator('.map-panel-foot button.primary').count(),1,'one filled action in the footer at '+w);
    assert.equal(await panel.locator('.map-panel-foot button.primary').innerText(),'Open site');
    await context.close();
+  }
+ }
+ {
+  // n8n-style panel layout: one label column, one filled primary, quiet link actions, no overflow, no cards in cards
+  for(const scheme of ['light','dark']){
+   for(const w of [1280,390]){
+    const {context,page}=await open({width:w,height:900,scheme});
+    if(w>=768){await page.locator('.map-site[data-site="'+SHOP+'"]').focus();await page.keyboard.press('Enter')}
+    else{await page.locator('.map-list').waitFor();await page.getByRole('listitem').filter({hasText:'shop.example.com'}).getByRole('button',{name:'Details'}).click()}
+    const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();
+    const m=await panel.evaluate(root=>{
+     const xs=[...root.querySelectorAll('.map-defs > div > dt')].map(e=>Math.round(e.getBoundingClientRect().x));
+     const vs=[...root.querySelectorAll('.map-defs > div > dd')].map(e=>Math.round(e.getBoundingClientRect().x));
+     const quiet=[...root.querySelectorAll('button.link-action')].map(e=>{const c=getComputedStyle(e);return {name:e.textContent,bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor}});
+     const filled=[...root.querySelectorAll('button.primary')].map(e=>e.textContent);
+     const cols=getComputedStyle(root.querySelector('.map-defs > div')).gridTemplateColumns.split(' ')[0];
+     const nested=[...root.querySelectorAll('.map-panel-body > section section, .map-dialog-body > section section')].length;
+     return {xs,vs,quiet,filled,cols,sw:document.documentElement.scrollWidth,pw:root.scrollWidth,cw:root.clientWidth,nested};
+    });
+    const L=scheme+' '+w;
+    assert.ok(m.xs.length>=5,L+': details rows exist');
+    assert.equal(new Set(m.xs).size,1,L+': label column x is equal across rows '+m.xs);
+    assert.equal(new Set(m.vs).size,1,L+': value column x is equal across rows '+m.vs);
+    assert.equal(m.cols,'104px',L+': label column is 104px');
+    assert.ok(m.quiet.length>=3,L+': link actions exist');
+    for(const q of m.quiet){assert.equal(q.bw,0,L+': '+q.name+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(q.bg),L+': '+q.name+' has no fill: '+q.bg)}
+    assert.deepEqual(m.filled,['Open site'],L+': exactly one filled primary');
+    assert.ok(m.sw<=w&&m.pw<=m.cw+1,L+': no horizontal overflow');
+    assert.equal(m.nested,0,L+': no cards in cards');
+    if(process.env.PANEL_SHOTS)await panel.screenshot({path:path.join(process.env.PANEL_SHOTS,'app-'+w+'-'+scheme+'.png')});
+    await context.close();
+   }
   }
  }
  assert.deepEqual(errors,[],'page errors');
