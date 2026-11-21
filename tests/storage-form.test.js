@@ -49,3 +49,8 @@ test('S3 is no longer labelled beta anywhere',async()=>{
  assert.equal(readme.includes('S3-compatible storage is in beta'),false);
  assert.doesNotMatch(ui,/Beta|BETA|\(beta\)/);
 });
+test('capacity text keeps small sizes visible and rejects unusable values',async()=>{
+ const {capacityText}=await import('../web/storage-form.js');
+ assert.equal(capacityText(1000000000000),'1');assert.equal(capacityText(250000000000),'0.25');assert.equal(capacityText(10000000000000),'10');
+ assert.equal(capacityText(300000000),'0.0003');assert.equal(capacityText(1),'');assert.equal(capacityText(null),'');assert.equal(capacityText(0),'');
+});

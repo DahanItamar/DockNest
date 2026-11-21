@@ -59,6 +59,8 @@ export async function checkStorageReadiness(options=activeStorage()){
  if(capacity.available!==null&&capacity.available<1024**3)throw new Error('Insufficient storage capacity');
  return {reachable:true,writeTested:false};
 }
+// Total size an unsaved SFTP destination reports, or null (S3 never reports one).
+export const probeTargetCapacity=options=>sftp.probeCapacity({mode:'sftp',...options});
 export const testStorageTarget=options=>remoteOf({mode:'sftp',...options}).test(options);
 // `options`: the site's main destination (src/site-storage.js); the default destination when omitted.
 export function backupDirectory(server,site,options=activeStorage()){

@@ -3,20 +3,22 @@ import { z } from 'zod';
 import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from './auth.js';
-import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn } from './storage.js';
+import { testStorageTarget, probeTargetCapacity, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn } from './storage.js';
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
 
 export const storageTargets=Router();
 storageTargets.use(requireAdmin);
-const schema=z.object({
+const connection=z.object({
  name:z.string().trim().min(1).max(100),host:z.string().regex(/^[a-zA-Z0-9_.:-]{1,253}$/),port:z.number().int().min(1).max(65535).default(23),username:z.string().regex(/^[a-zA-Z0-9_.-]{1,100}$/),
  hostKey:z.string().regex(/^(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+/]{43}=?)$/),
  authType:z.enum(['password','ssh-key']),password:z.string().min(1).max(4096).optional(),privateKey:z.string().min(50).max(30000).optional(),
  root:z.string().regex(/^\/[a-zA-Z0-9_./-]+$/).refine(value=>value!=='/'&&!value.split('/').includes('..'),'Use a dedicated absolute storage directory.'),
- capacityBytes:z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(1000000000000),
-}).superRefine((value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});});
+}),needsCredential=(value,ctx)=>{if(value.authType==='password'&&!value.password)ctx.addIssue({code:'custom',message:'Enter the storage password.',path:['password']});if(value.authType==='ssh-key'&&!value.privateKey)ctx.addIssue({code:'custom',message:'Enter the SSH private key.',path:['privateKey']});};
+// Empty capacity means: use what the server reports, else 1 TB.
+const DEFAULT_CAPACITY=1000000000000;
+const schema=connection.extend({capacityBytes:z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional()}).superRefine(needsCredential),probeSchema=connection.omit({name:true}).superRefine(needsCredential);
 // S3 endpoints: HTTPS (plain HTTP only on loopback), no embedded credentials, query or fragment.
 const endpoint=z.string().trim().max(512).transform((value,ctx)=>{
  let url;try{url=new URL(value);}catch{ctx.addIssue({code:'custom',message:'Enter the S3 endpoint as a URL, for example https://s3.eu-central-1.amazonaws.com.'});return z.NEVER;}
@@ -68,13 +70,21 @@ storageTargets.get('/:id/tree',(req,res)=>{
  const recovery={folder:'docknest-recovery',limited:recoveryLimited,files:kits.map(row=>({id:row.id,createdAt:row.created_at,size:row.size,filename:row.path.slice(row.path.lastIndexOf('/')+1),relativePath:row.path.startsWith(root)?row.path.slice(root.length):null,downloadable:row.id===latest?.id}))};
  res.json({root:target.root,managedRoot:backupRoot(target.root),limited,recovery,servers:[...servers.values()].map(server=>({...server,sites:[...server.sites.values()].map(site=>({...site,days:[...site.days.values()]}))}))});
 });
+// Pre-fills the capacity field. Nothing is saved or logged; an unreadable server answers null so the form just stays empty.
+storageTargets.post('/capacity',rateLimit('storage-probe',30),async(req,res)=>{
+ const data=probeSchema.parse(req.body),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
+ const total=await probeTargetCapacity({host:data.host,port:data.port,username:data.username,hostKey,root:data.root.replace(/\/+$/,''),...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})});
+ res.json({capacityBytes:Number.isSafeInteger(total)&&total>0?total:null});
+});
 storageTargets.post('/connect',rateLimit('storage-connect',10),async(req,res)=>{
  const data=schema.parse(req.body),targetId=id(),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
  const root=data.root.replace(/\/+$/,'');
- await testStorageTarget({host:data.host,port:data.port,username:data.username,hostKey,root,...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})});
+ const options={host:data.host,port:data.port,username:data.username,hostKey,root,...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})};
+ await testStorageTarget(options);
+ const capacityBytes=data.capacityBytes??await probeTargetCapacity(options)??DEFAULT_CAPACITY;
  const credential=seal(data.authType==='password'?data.password:data.privateKey),now=new Date().toISOString();
  transaction(()=>{
-  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,data.capacityBytes,'connected',now,now);
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId,data.name,data.host,data.port,data.username,hostKey,data.authType,credential,root,capacityBytes,'connected',now,now);
   db.prepare("INSERT OR IGNORE INTO settings VALUES('backup_storage_target',?)").run(targetId);
   audit(req.user.id,'storage.connected',targetId,{authType:data.authType});
  });
