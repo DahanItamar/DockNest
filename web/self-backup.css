@@ -1,4 +1,4 @@
-/* DockNest backup (recovery kit). 2.3.0 system: cards share height and a pinned footer. */
+/* Self Backup (recovery kit). 2.3.0 system: cards share height and a pinned footer. */
 .self-backup{display:grid;gap:var(--edge)}
 .sb-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
 .sb-quiet{margin:0;color:var(--text-secondary)}

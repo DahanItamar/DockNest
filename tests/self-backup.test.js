@@ -160,7 +160,7 @@ test('the deployment hold stops self-backup enqueue, schedules, claims, the work
 });
 test('deployment-preflight hold counts queued and running DockNest backups in the transaction that sets the hold',async()=>{
  const queued=enqueueSelfBackup(administrator);
- for(const mode of ['check','hold']){const result=preflight(mode);assert.equal(result.status,1);assert.equal(result.stderr.trim(),'Deployment blocked: a DockNest self-backup is queued or running. Retry when it finishes.');}
+ for(const mode of ['check','hold']){const result=preflight(mode);assert.equal(result.status,1);assert.equal(result.stderr.trim(),'Deployment blocked: a Self Backup is queued or running. Retry when it finishes.');}
  // Site work keeps its own message, and takes precedence when both block.
  const jobId=id(),siteId=id();db.exec('PRAGMA foreign_keys=OFF');db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','queued','queued',?)").run(jobId,siteId,new Date().toISOString());db.exec('PRAGMA foreign_keys=ON');
  assert.equal(preflight('hold').stderr.trim(),'Deployment blocked: queued/running/recovery work or pending artifact operations must be resolved first.');
@@ -186,7 +186,7 @@ test('deployment-preflight hold counts queued and running DockNest backups in th
  assert.ok(probed);assert.equal(preflight('hold').status,1);assert.equal(holdValue(),'false');
  await executeSelfBackup(claimSelfBackup());assert.equal(db.prepare('SELECT status FROM manager_backups WHERE id=?').get(raced.id).status,'completed');
 });
-test('a hold forced under a running DockNest backup records the hold reason and keeps the previous copy',async()=>{
+test('a hold forced under a running Self Backup records the hold reason and keeps the previous copy',async()=>{
  const latest=selfBackupStatus().latest,queued=enqueueSelfBackup(administrator),run=claimSelfBackup();assert.equal(run.id,queued.id);
  // A forced upgrade, or an operator editing the database, sets the hold without the empty-queue check.
  db.prepare("UPDATE settings SET value='true' WHERE key='deployment_hold'").run();
