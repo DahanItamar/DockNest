@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { quote, COLUMNS, CHECKED_ENGINES, fetchCommand, storageCheckCommand, installCommands, restoreCommands, checkCommands, revealer } from '../src/runbook/commands.js';
 import { font } from '../src/runbook/fonts.js';
+import { ENGINE_IDS } from '../shared/database-engines.js';
 
 const shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 const needsShell = { skip: !shell && 'needs a POSIX shell' };
@@ -137,11 +138,11 @@ test('restore an incremental chain: every package downloaded, then decrypt-backu
 });
 
 test('checks for each database engine, SQLite files, containers and domains', needsShell, () => {
-  assert.deepEqual([...CHECKED_ENGINES].sort(), ['mariadb', 'mysql', 'postgres', 'redis', 'sqlite']);
-  const services = [{ container: 'pg', engine: 'postgres' }, { container: 'my', engine: 'mysql' }, { container: 'maria', engine: 'mariadb' }, { container: 'cache', engine: 'redis' }, { container: 'web', engine: 'generic', sqliteFiles: ['/data/app.sqlite'] }, { container: 'other', engine: 'auto' }];
+  assert.deepEqual([...CHECKED_ENGINES].sort(), [...ENGINE_IDS, 'sqlite'].sort(), 'every database engine DockNest knows has a check');
+  const services = [{ container: 'pg', engine: 'postgres' }, { container: 'my', engine: 'mysql' }, { container: 'maria', engine: 'mariadb' }, { container: 'cache', engine: 'redis' }, { container: 'docs-db', engine: 'mongo' }, { container: 'web', engine: 'generic', sqliteFiles: ['/data/app.sqlite'] }, { container: 'other', engine: 'auto' }];
   const lines = unfold(checkCommands({ app: { ...compose, services } })).split('\n');
   syntax(lines.join('\n'));
-  for (const expected of ['docker exec pg pg_isready', 'docker exec my mysqladmin ping', 'docker exec maria mariadb-admin ping', 'docker exec cache redis-cli ping']) assert.ok(lines.includes(expected), expected);
+  for (const expected of ['docker exec pg pg_isready', 'docker exec my mysqladmin ping', 'docker exec maria mariadb-admin ping', 'docker exec cache redis-cli ping', "docker exec docs-db mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"]) assert.ok(lines.includes(expected), expected);
   assert.ok(lines.some(line => line.startsWith('docker cp web:/data/app.sqlite /root/docknest-restore/shop--abc/check-app.sqlite && python3 -c')));
   assert.ok(lines.includes("curl --fail --silent --show-error --output /dev/null --write-out '%{http_code}\\n' https://shop.example.com/"));
   assert.ok(!lines.some(line => line.includes('other')), 'no check is guessed for an engine DockNest did not choose');

@@ -183,6 +183,7 @@ const ENGINE_CHECKS = {
   mysql: container => command('docker', 'exec', container, 'mysqladmin', 'ping'),
   mariadb: container => command('docker', 'exec', container, 'mariadb-admin', 'ping'),
   redis: container => command('docker', 'exec', container, 'redis-cli', 'ping'),
+  mongo: container => command('docker', 'exec', container, 'mongosh', '--quiet', '--eval', 'db.runCommand({ ping: 1 }).ok'),
 };
 export const CHECKED_ENGINES = Object.freeze([...Object.keys(ENGINE_CHECKS), 'sqlite']);
 
