@@ -200,7 +200,7 @@ def v1_plan(plan):
     """Format v1 manifests keep the plan exactly as before chain fingerprints existed."""
     return {k:v for k,v in plan.items() if k!='chainFingerprint'}
 def public_plan(plan):
-    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn']} for s in plan['services']]}
+    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn','flavor','persistence']} for s in plan['services']]}
 
 def revalidate_sources(plan):
     table=mount_table()
@@ -460,6 +460,12 @@ def preflight(cfg):
     if cfg.get('externalSources'):raise ValueError('External sources require a capture adapter')
     if os.geteuid()!=0:raise ValueError('Root SSH required to preserve ownership and read volume data')
     return cs
+def redis_summary(name,service):
+    """One calm line per Redis or Valkey server: what it is and whether anything is kept on disk."""
+    label=('Valkey' if service.get('flavor')=='valkey' else 'Redis')+' '+'.'.join(str(service.get('version') or '').split('.')[:2])
+    if service.get('persistence')=='cache':return '%s (%s): cache only, nothing to back up. The app folders are still included.'%(name,label)
+    return '%s (%s): saved to disk, included in the backup.'%(name,label)
+
 def readiness(cfg):
     checks=[]
     def check(name,fn):
@@ -471,9 +477,14 @@ def readiness(cfg):
     selected={}
     check('Website files and configuration' if cfg.get('kind')=='static' else 'Containers and configuration files',lambda:selected.update(containers=preflight(cfg)))
     if cfg.get('kind')!='static':
+        redis_notes=[]
         def contracts():
-            backup_plan(cfg,preflight(cfg))
+            plan=backup_plan(cfg,preflight(cfg))
+            names={c['Id']:c.get('Name','').lstrip('/') for c in selected.get('containers',[])}
+            for service in plan['services']:
+                if service['engine']=='redis':redis_notes.append(redis_summary(names.get(service['container'],service['container']),service))
         check('Per-service database consistency contracts',contracts)
+        if redis_notes:checks.append({'name':'Redis and Valkey','ok':True,'required':False,'message':'; '.join(redis_notes)})
     def direct_health():
         try:healthy=health(cfg['containers'],cfg.get('healthUrl') or cfg.get('maintenance',{}).get('healthUrl'),cfg.get('domains',()))
         except ProbePolicyError as error:raise ValueError("Probe URL policy: %s. Update the site's health URL."%error)

@@ -19,7 +19,7 @@ export function groupForList(servers=[],sites=[]){
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
  return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
-  label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
+  label:(s.flavor==='valkey'?'Valkey':engineLabel(s.engine))+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')+(s.engine==='redis'&&s.persistence==='cache'?' · cache only':s.engine==='redis'&&s.persistence==='disk'?' · saved to disk':'')}));
 }
 // The domains of a site. No DNS data is available here, so there is no DNS verdict.
 export const domainsOf=site=>Array.isArray(site?.config?.domains)?site.config.domains.filter(d=>typeof d==='string'&&d):[];

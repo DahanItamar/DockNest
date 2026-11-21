@@ -6,7 +6,7 @@ before ([database contracts](database-contracts.md)).
 
 ## What it does
 
-With the option on, each running PostgreSQL, MySQL or MariaDB database of the app takes a consistent logical dump with
+With the option on, each running PostgreSQL, MySQL, MariaDB, Redis or Valkey database of the app takes a consistent logical dump with
 its own tools, inside its own container, and keeps running. Writers of the app still stop first (they hold files a
 dump cannot cover), so the dump sees a quiet database and matches the writers' files. An app made only of databases
 has no downtime and no maintenance page at all.
@@ -16,7 +16,8 @@ has no downtime and no maintenance page at all.
 | PostgreSQL | `pg_dumpall --globals-only` (roles) and one `pg_dump --format=custom` per database that accepts connections | each database is one snapshot transaction |
 | MySQL | `mysqldump --single-transaction --all-databases --routines --events --triggers --flush-privileges --set-gtid-purged=OFF` | one InnoDB transaction for every database |
 | MariaDB | `mariadb-dump` with the same options (no GTID option) | the same |
-| MongoDB, Redis | not yet: they keep the stopped copy, with a warning | |
+| Redis, Valkey | `BGSAVE` snapshot: DockNest waits for the save to finish and be counted (`rdb_saves` or `LASTSAVE` moves on, no save in progress, last save ok), copies the RDB file and checks it with the image's own `redis-check-rdb` or `valkey-check-rdb` | a point-in-time snapshot of the whole dataset |
+| MongoDB | not yet: it keeps the stopped copy, with a warning | |
 
 The tools connect over the container's local socket. PostgreSQL uses local trust as the `postgres` user, as DockNest's
 checks already do. MySQL and MariaDB read the root password from the container's own `MYSQL_ROOT_PASSWORD` or
@@ -29,7 +30,11 @@ the helper and never leaves it; reasons are fixed sentences.
 DockNest decides before anything stops, read-only, and fails closed. A database keeps the stopped file copy, and the
 backup carries a warning "Online dumps: NAME stopped for a file copy because REASON", when:
 
-- the engine has no dump (MongoDB, Redis);
+- the engine has no dump (MongoDB);
+- Redis or Valkey: it keeps nothing on disk (a cache; the stopped copy still includes the app's folders), or it also keeps an
+  append-only file (a server with one starts from that file and ignores a snapshot, so only RDB-only servers take a
+  snapshot), a save is already running, its data folder holds files other than the snapshot, or a setting changed since
+  planning;
 - the image does not use the official `docker-entrypoint.sh`, which sets up an empty data folder on restore;
 - the data folder is not a plain folder in a captured writable mount, or another container of the app mounts it;
 - PostgreSQL: `pg_dump`, `pg_dumpall` or `pg_restore` is missing, the server has replication slots, a database name
@@ -87,3 +92,18 @@ Python: `remote/test_dumps.py`. Linux Docker integration (`scripts/integration-o
 the backup, the isolated restore loads roles, a second database or accounts and the data checks pass; a MyISAM table
 falls back with its warning; an app with a writer next to PostgreSQL stops only the writer and restores both; an
 automatic restore test of a dumped backup passes.
+
+## Redis and Valkey
+
+Valkey is a Redis fork with the same protocol and files, so both are one engine. Supported: Redis 7.x and Valkey 7.2 or
+8.x (standalone, default user). The Databases list shows each one with what it keeps, for example "Redis 7.4 - saved to
+disk" or "Valkey 8.0 - cache only". Check readiness says the same in plain words.
+
+- **Cache only** (no `save` rule and no append-only file): nothing is on disk, so there is nothing to back up. This is not
+  an error. The normal stopped copy still includes the app's folders.
+- **Passwords**: a password set with `requirepass`, `REDIS_PASSWORD` or a password file is read inside the container and
+  given to the CLI through `REDISCLI_AUTH`. It never appears in a command line, evidence, a log or the manifest.
+- **Restore**: the snapshot is placed in the data folder of a throwaway copy that has no network, the copy starts, and
+  DockNest checks that the keys came back. The usual data checks (`checks` with a key) then compare values.
+- **Fail closed**: a save that errors, does not finish before the deadline or does not pass the file check never leaves a
+  file; the server then stops and is copied as before, with the reason in the warning.

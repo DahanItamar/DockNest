@@ -83,10 +83,9 @@ class Candidates(unittest.TestCase):
         self.assertNotIn('server.crt', POSTGRES_DATA_ENTRIES)
 
     def test_engines_without_a_dump_and_shared_data_folders_fall_back(self):
-        redis = container('cache', 'shop-cache', str(self.data), image='redis:7.4')
         mongo = container('docs', 'shop-docs', str(self.data), image='mongo:7.0')
-        _, fallbacks = self.candidates([redis, mongo], [database('cache', 'redis', '/data'), database('docs', 'mongo', '/data/db')])
-        self.assertEqual([item['reason'] for item in fallbacks], ['Redis has no online dump yet', 'MongoDB has no online dump yet'])
+        _, fallbacks = self.candidates([mongo], [database('docs', 'mongo', '/data/db')])
+        self.assertEqual([item['reason'] for item in fallbacks], ['MongoDB has no online dump yet'])
         shared = [container('db', 'shop-db', str(self.data)), {**container('side', 'shop-side', str(self.data)), 'Mounts': [{'Type': 'volume', 'Source': str(self.data), 'Destination': '/backup', 'RW': False}]}]
         _, fallbacks = self.candidates(shared, [database('db')])
         self.assertIn('another container in this app mounts its data folder', fallbacks[0]['reason'])

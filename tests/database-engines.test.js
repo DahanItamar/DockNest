@@ -32,3 +32,11 @@ test('every JS engine has a helper engine module and a registry entry', () => {
   const registry = readFileSync(new URL('../remote/helper/databases.py', import.meta.url), 'utf8').match(/^ENGINES=\{(.*)\}$/m)[1];
   assert.deepEqual([...registry.matchAll(/'([a-z]+)':/g)].map(match => match[1]).sort(), [...ENGINE_IDS].sort());
 });
+
+test('the map lists Redis and Valkey with what they keep', () => {
+  const site = { id: 's1', config: { services: [
+    { container: 'cache', engine: 'redis', version: '7.4.1', persistence: 'cache' },
+    { container: 'queue', engine: 'redis', flavor: 'valkey', version: '8.0.1', persistence: 'disk' },
+    { container: 'plain', engine: 'redis', version: '7.2.5' }] } };
+  assert.deepEqual(databasesOf(site).map(item => item.label), ['Redis 7.4.1 · cache only', 'Valkey 8.0.1 · saved to disk', 'Redis 7.2.5']);
+});

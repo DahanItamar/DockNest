@@ -1,8 +1,8 @@
-import hashlib, json, secrets, subprocess, unittest, tempfile, pathlib, os
+import hashlib, json, secrets, subprocess, time, unittest, tempfile, pathlib, os
 from types import SimpleNamespace
 from unittest.mock import patch
 import helper_path  # the built helper.py (one file, as servers run it); see helper_path.py
-from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services, redis_aof_check
+from helper import service_contracts, validate_database_contracts, redis_query, redis_info, data_checks, shutdown_evidence, restart_services, redis_aof_check, ENGINES
 
 
 def fixture():
@@ -42,9 +42,9 @@ class RedisContracts(unittest.TestCase):
             contract=service_contracts({},[container])[0]
             self.assertEqual((contract['engine'],contract['version']),('redis','7.4.7'))
             with self.assertRaises(ValueError):service_contracts({'services':[{'container':'redis-fixture','engine':'postgres'}]},[container])
-        def older(args,**kwargs):return binary(args,**kwargs).replace(b'7.4.7',b'7.2.8')
+        def older(args,**kwargs):return binary(args,**kwargs).replace(b'v=7.4.7',b'v=6.2.14')
         with patch('helper.run',side_effect=older):
-            with self.assertRaisesRegex(ValueError,'7.4'):service_contracts({},[container])
+            with self.assertRaisesRegex(ValueError,'Redis 7 and Valkey 8'):service_contracts({},[container])
 
     def test_primary_persistence_contract_tracks_rdb_and_multipart_aof_paths(self):
         container,service,options,infos,_,_,query=fixture()
@@ -55,7 +55,7 @@ class RedisContracts(unittest.TestCase):
         self.assertNotIn('password',json.dumps(service).lower())
 
     def test_unhealthy_external_replica_cluster_acl_tls_and_cache_configurations_block(self):
-        changes=[('info','replication','role','slave'),('info','replication','connected_slaves','1'),('info','server','redis_mode','sentinel'),('info','persistence','loading','1'),('info','persistence','rdb_last_bgsave_status','err'),('info','persistence','aof_last_write_status','err'),('info','persistence','aof_rewrite_in_progress','1'),('option','dir','/outside'),('option','dbfilename','../outside.rdb'),('option','appenddirname','../outside'),('option','port','6380'),('option','tls-port','6380'),('option','cluster-enabled','yes'),('option','aclfile','users.acl'),('acl','commands','+get'),('reply','users',['default','operator']),('reply','modules',[['name','module']]),('cache',)]
+        changes=[('info','replication','role','slave'),('info','replication','connected_slaves','1'),('info','server','redis_mode','sentinel'),('info','persistence','loading','1'),('info','persistence','rdb_last_bgsave_status','err'),('info','persistence','aof_last_write_status','err'),('info','persistence','aof_rewrite_in_progress','1'),('option','dir','/outside'),('option','dbfilename','../outside.rdb'),('option','appenddirname','../outside'),('option','port','6380'),('option','tls-port','6380'),('option','cluster-enabled','yes'),('option','aclfile','users.acl'),('acl','commands','+get'),('reply','users',['default','operator']),('reply','modules',[['name','module']])]
         for change in changes:
             with self.subTest(change=change):
                 container,service,options,infos,acl,replies,query=fixture()
@@ -123,7 +123,7 @@ class RedisContracts(unittest.TestCase):
         container,service,_,infos,_,_,query=fixture()
         with patch('helper.redis_query',side_effect=query),patch('helper.redis_info',side_effect=lambda _c,_s,section:infos[section]),patch('helper.run',return_value=b'/data\n'):validate_database_contracts([service],[container])
         container['State']={'Running':False,'ExitCode':0}
-        def proof(args,**_):return b'RDB looks OK!' if 'redis-check-rdb' in args else b'All AOF files and manifest are valid'
+        def proof(args,**_):return b'RDB looks OK!' if any('check-rdb' in str(part) for part in args) else b'All AOF files and manifest are valid'
         valid_log=b'1:M # Calling fsync() on the AOF file.\n1:M * Saving the final RDB snapshot before exiting.\n1:M * DB saved on disk\n1:M # Redis is now ready to exit, bye bye...\n'
         log=subprocess.CompletedProcess([],0,valid_log,b'')
         with patch('helper.inspect',return_value=[container]),patch('helper.subprocess.run',return_value=log) as logs,patch('helper.run',side_effect=proof) as native,patch('helper.redis_aof_check',return_value={'aofValidationCopyVerified':True,'aofSourceUnchangedVerified':True}) as aof:
@@ -248,5 +248,153 @@ class RedisContracts(unittest.TestCase):
             self.assertEqual([call.args for call in command.call_args_list],[('start','redis-id'),('start','writer')])
             self.assertTrue(all(call.args[2]==['PING'] for call in native.call_args_list));sql.assert_not_called()
 
+
+def online_fixture(**changes):
+    """An RDB-only server for the online snapshot."""
+    service={'container':'redis-id','engine':'redis','version':'7.4.7','flavor':'redis','persistence':'disk','rdbEnabled':True,'aofEnabled':False,'rdbFilename':'dump.rdb','dataDirectory':'/data','database':'0','user':None}
+    service.update(changes)
+    return service
+
+
+IDLE={'rdb_bgsave_in_progress':'0','rdb_saves':'4','rdb_last_bgsave_status':'ok'}
+
+
+class RedisFlavors(unittest.TestCase):
+    """Valkey is detected like Redis, cache-only servers are accepted, and the online snapshot fails closed."""
+
+    def setUp(self):
+        self.engine=ENGINES['redis']
+        real=subprocess.run
+        def readable_logs(args,*rest,**kwargs):
+            if list(args[:4])==['docker','logs','--tail','0']:return subprocess.CompletedProcess(args,0,b'',b'')
+            return real(args,*rest,**kwargs)
+        patcher=patch('helper.subprocess.run',side_effect=readable_logs);patcher.start();self.addCleanup(patcher.stop)
+        self.addCleanup(patch.stopall)
+
+    def contract(self,server,options):
+        container,service,base,base_infos,acl,replies,_=fixture()
+        base.update(options);base_infos['server'].update(server)
+        service['version']=server.get('valkey_version',server.get('redis_version',service['version']))
+        def query(_c,_s,command,raw=False):
+            if command[:2]==['CONFIG','GET']:return [part for pair in base.items() for part in pair]
+            if command==['ACL','USERS']:return replies['users']
+            if command==['MODULE','LIST']:return replies['modules']
+            if command==['ACL','GETUSER','default']:return [part for pair in acl.items() for part in pair]
+            raise AssertionError('Unexpected native query')
+        with patch('helper.redis_query',side_effect=query),patch('helper.redis_info',side_effect=lambda _c,_s,section:base_infos[section]),patch('helper.run',return_value=b'/data\n'):
+            validate_database_contracts([service],[container])
+        return service
+
+    def test_detects_valkey_by_its_own_binary_and_version(self):
+        container,*_=fixture()
+        def binary(args,**_):
+            if args[-2]=='valkey-server':return b'Valkey server v=8.0.1 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=fixture'
+            raise subprocess.CalledProcessError(127,args)
+        with patch('helper.run',side_effect=binary):
+            contract=service_contracts({},[container])[0]
+        self.assertEqual((contract['engine'],contract['version']),('redis','8.0.1'))
+
+    def test_valkey_uses_its_own_version_and_is_marked(self):
+        service=self.contract({'valkey_version':'8.0.1','redis_version':'7.2.4'},{})
+        self.assertEqual((service['flavor'],service['persistence']),('valkey','disk'))
+        self.assertEqual(self.contract({},{})['flavor'],'redis')
+        with self.assertRaises(ValueError):self.contract({'redis_version':'6.2.14'},{})
+
+    def test_cache_only_server_is_accepted_and_needs_no_shutdown_proof(self):
+        service=self.contract({},{'appendonly':'no','save':''})
+        self.assertEqual((service['persistence'],service['rdbEnabled'],service['aofEnabled']),('cache',False,False))
+        container,*_=fixture()
+        evidence=self.engine.stop_evidence(service,container,container,123,None)
+        self.assertTrue(evidence['cacheOnly']);self.assertFalse(evidence['finalRdbSaveVerified'])
+
+    def test_valkey_shutdown_log_is_accepted(self):
+        service=online_fixture(flavor='valkey',version='8.0.1')
+        container,*_=fixture()
+        log=b'1:M * Saving the final RDB snapshot before exiting.\n1:M * DB saved on disk\n1:M # Valkey is now ready to exit, bye bye...\n'
+        with patch('helper.subprocess.run',return_value=subprocess.CompletedProcess([],0,log,b'')),patch('helper.run',return_value=b'RDB looks OK!') as native:
+            evidence=self.engine.stop_evidence(service,container,container,123,None)
+        self.assertTrue(evidence['rdbOfflineVerified'])
+        self.assertIn('valkey',native.call_args.args[0])
+
+    def test_blockers_name_the_reason_and_keep_the_stopped_copy(self):
+        container,*_=fixture()
+        with tempfile.TemporaryDirectory() as folder:
+            host=pathlib.Path(folder);(host/'dump.rdb').write_bytes(b'x')
+            cases=[({'persistence':'cache','rdbEnabled':False},'it keeps nothing on disk',False),({'aofEnabled':True},'append-only file',False),({'rdbFilename':'../x'},'file name',False),({},'saving to disk right now',True),({},'files a snapshot does not keep',False)]
+            for change,reason,busy in cases:
+                with self.subTest(reason=reason):
+                    extra=host/'notes.txt'
+                    if reason.startswith('files'):extra.write_text('mine')
+                    with patch('helper.redis_info',return_value={'rdb_bgsave_in_progress':'1' if busy else '0'}):
+                        self.assertIn(reason,self.engine.dump_blocker(online_fixture(**change),container,host))
+            (host/'notes.txt').unlink()
+            with patch('helper.redis_info',return_value={'rdb_bgsave_in_progress':'0'}):
+                self.assertIsNone(self.engine.dump_blocker(online_fixture(),container,host))
+
+    def snapshot(self,persistence,lastsave=('100','100','101'),checker=b'RDB looks OK!',copy_code=0):
+        replies=iter(persistence);saves=list(lastsave)
+        def info(_c,_s,section):
+            return {'db0':'keys=3,expires=0,avg_ttl=0'} if section=='keyspace' else next(replies)
+        def query(_c,_s,command,raw=False):
+            if command[0]=='CONFIG':return ['dir','/data','dbfilename','dump.rdb','appendonly','no']
+            if command[0]=='LASTSAVE':return int(saves.pop(0)) if len(saves)>1 else int(saves[0])
+            if command[0]=='BGSAVE':return 'Background saving started'
+            raise AssertionError(command)
+        def copy(args,timeout,stdin=None,stdout=None):
+            if stdout:pathlib.Path(stdout).write_bytes(b'REDIS0011')
+            self.copied.append(args)
+            return copy_code,''
+        self.copied=[]
+        for item in (patch('helper.redis_info',side_effect=info),patch('helper.redis_query',side_effect=query),patch('helper.dump_command',side_effect=copy),
+            patch('helper.inspect',return_value=[{'Image':'sha256:image'}]),patch('helper.run',return_value=checker),patch('helper.time.sleep')):item.start()
+
+    def run_dump(self,persistence,deadline=60,**kwargs):
+        self.snapshot(persistence,**kwargs)
+        with tempfile.TemporaryDirectory() as folder:
+            return self.engine.dump('redis-id',online_fixture(),pathlib.Path(folder),time.monotonic()+deadline),
+
+    def test_snapshot_waits_for_bgsave_to_finish_and_the_save_to_count(self):
+        running={**IDLE,'rdb_bgsave_in_progress':'1'};done={**IDLE,'rdb_saves':'5'}
+        record,=self.run_dump([IDLE,running,done])
+        self.assertEqual((record['databases'],record['listing']),(['dump.rdb'],{'keys':3}))
+        self.assertEqual(self.copied[0][:2],['docker','exec'])
+        patch.stopall()
+        # LASTSAVE (whole seconds) moving on counts when rdb_saves is not reported.
+        old={'rdb_bgsave_in_progress':'0','rdb_last_bgsave_status':'ok'}
+        record,=self.run_dump([old,old,old])
+        self.assertEqual(record['listing']['keys'],3)
+
+    def test_snapshot_fails_closed(self):
+        failed={**IDLE,'rdb_saves':'5','rdb_last_bgsave_status':'err'};done={**IDLE,'rdb_saves':'5'}
+        cases=[([IDLE,failed],{},'could not write'),([{**IDLE,'rdb_bgsave_in_progress':'1'}],{},'already saving'),([IDLE,done],{'copy_code':1},'could not be read'),([IDLE,done],{'checker':b'Wrong signature'},'file check')]
+        for persistence,kwargs,message in cases:
+            with self.subTest(message=message):
+                patch.stopall()
+                with self.assertRaisesRegex(ValueError,message):self.run_dump(persistence,**kwargs)
+        patch.stopall()
+        # A save that never counts runs into the shared deadline.
+        with self.assertRaises(subprocess.TimeoutExpired):self.run_dump([IDLE]*50,deadline=-1)
+
+    def test_password_never_reaches_a_command_line_or_the_listing(self):
+        self.snapshot([IDLE,{**IDLE,'rdb_saves':'5'}])
+        with tempfile.TemporaryDirectory() as folder:
+            record=self.engine.dump('redis-id',online_fixture(),pathlib.Path(folder),time.monotonic()+60)
+        text=json.dumps([self.copied,record])
+        self.assertNotIn('REDISCLI_AUTH',text);self.assertNotIn('requirepass',text)
+
+    def test_load_places_the_snapshot_and_checks_keys_came_back(self):
+        listing={'databases':['dump.rdb'],'dataDirectory':'/data','keys':3}
+        with tempfile.TemporaryDirectory() as folder:
+            commands=[]
+            def run(args,**_):commands.append(args);return b''
+            with patch('helper.run',side_effect=run),patch('helper.inspect',return_value=[{'Image':'sha256:image'}]),patch('helper.redis_query',return_value='PONG'),patch('helper.redis_info',return_value={'db0':'keys=3,expires=0'}):
+                self.engine.load_dump('loader',online_fixture(),pathlib.Path(folder),listing,60)
+            self.assertEqual([c[1] for c in commands],['stop','run','start'])
+            place=commands[1]
+            for part in ['--network','none','--volumes-from','--read-only']:self.assertIn(part,place)
+            with patch('helper.run',return_value=b''),patch('helper.inspect',return_value=[{'Image':'x'}]),patch('helper.redis_query',return_value='PONG'),patch('helper.redis_info',return_value={}):
+                with self.assertRaisesRegex(ValueError,'no keys'):self.engine.load_dump('loader',online_fixture(),pathlib.Path(folder),listing,60)
+            for bad in [{**listing,'databases':['../x']},{**listing,'keys':'3'},{**listing,'databases':[]}]:
+                with self.assertRaisesRegex(ValueError,'no valid listing'):self.engine.load_dump('loader',online_fixture(),pathlib.Path(folder),bad,60)
 
 if __name__=='__main__':unittest.main()
