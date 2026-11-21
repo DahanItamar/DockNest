@@ -22,7 +22,8 @@ The guide is made from the database each time you ask for it. In this order:
 Every step is one short sentence that starts with a verb. Where a step has a command, the exact command follows in a
 monospaced box, made from DockNest's own records: the real backup file of that app on its storage, its Compose files,
 folders and containers. The commands follow [independent recovery](independent-recovery.md): download with curl (a pinned curl image, run with Docker, as many servers' own curl has no SFTP) over
-SFTP (checking the storage server's pinned host key) or signed S3 requests, decrypt with the recovery kit's
+SFTP (first `ssh-keyscan`, from a pinned image, keeps only the storage server key whose SHA-256 DockNest pinned,
+and nothing is sent unless it matches; curl then checks that key again) or signed S3 requests, decrypt with the recovery kit's
 `decrypt-backup.js`, load the saved images, put each data folder and settings file back where it was (files already
 there are kept; a Docker named volume is created on the new server with `docker volume create` and filled through the
 folder `docker volume inspect` names, wherever that server keeps its volumes, and keeps the owner and mode it had), then start the app (`docker compose up -d` for a Compose project, the saved snapshot for a single

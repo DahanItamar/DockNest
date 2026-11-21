@@ -76,21 +76,21 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
     await run('exec', clean, 'apk', 'add', '--no-cache', 'nodejs');
     await run('cp', opened, `${clean}:/root/docknest-kit`);
     // Docker 29 has no top-level NetworkSettings.IPAddress any more: the address on the default bridge network.
-    const storageAddress = `${await run('inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', hosts[2])}:22`;
-    assert.match(storageAddress, /^\d+\.\d+\.\d+\.\d+:22$/, 'the storage host has one address on the test network');
+    const storageHost = await run('inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', hosts[2]);
+    assert.match(storageHost, /^\d+\.\d+\.\d+\.\d+$/, 'the storage host has one address on the test network');
     const inventory = await loadInventory({ logins: true }), guide = buildGuide(inventory, { appIds: demos.map(demo => demo.siteId), include: { logins: true }, version: VERSION });
     // Each printed step runs on its own, in the app's restore folder; a failing one is named, with the storage password
     // removed from what it printed.
     const runStep = async (step, folder) => {
-      const text = step.command.replaceAll(PLACEHOLDERS.storageAddress, storageAddress);
+      const text = step.command.replaceAll(PLACEHOLDERS.storageAddress, storageHost).replaceAll(PLACEHOLDERS.storagePort, '22');
       try { await run('exec', clean, 'sh', '-ec', `${folder ? `mkdir -p ${folder} && cd ${folder}\n` : ''}${text}`); }
       catch (error) { throw new Error(`Recovery Guide step failed: ${step.text} ${String(error.stderr ?? '').replaceAll(storagePassword, '[storage password]').slice(-800)}`); }
     };
     await runStep(guide.startHere.install.find(item => item.text.startsWith('Get the download tool')));
     for (const demo of demos) {
       const page = guide.apps.find(item => item.id === demo.siteId), steps = page.restore.independent, folder = `/root/docknest-restore/${inventory.apps.find(app => app.id === demo.siteId).folder}`;
-      assert.deepEqual(steps.map(item => item.text.split('.')[0]), ['Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder and Docker volume back', 'Put the Compose files back', 'Start the app with its Compose file']);
-      const commands = steps.map(item => item.command).join('\n').replaceAll(PLACEHOLDERS.storageAddress, storageAddress);
+      assert.deepEqual(steps.map(item => item.text.split('.')[0]), ["Check the storage server's key against the one DockNest pinned", 'Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder and Docker volume back', 'Put the Compose files back', 'Start the app with its Compose file']);
+      const commands = steps.map(item => item.command).join('\n').replaceAll(PLACEHOLDERS.storageAddress, storageHost).replaceAll(PLACEHOLDERS.storagePort, '22');
       assert.ok(!commands.includes('<'), 'no placeholder is left');
       assert.ok(!commands.includes('/var/lib/docker'), 'no Docker data folder is assumed');
       for (const step of steps) await runStep(step, folder);

@@ -13,7 +13,7 @@ export const REPOSITORY = 'https://github.com/DahanItamar/DockNest.git';
 export const KIT = '/root/docknest-kit';
 export const RESTORE_ROOT = '/root/docknest-restore';
 export const PLACEHOLDERS = Object.freeze({
-  storageAddress: '<storage-address>', storageUser: '<storage-user>', storagePassword: '<storage-password>',
+  storageAddress: '<storage-address>', storagePort: '<storage-port>', storageUser: '<storage-user>', storagePassword: '<storage-password>',
   storageBucket: '<storage-bucket>', storageAccessKey: '<storage-access-key>', storageSecretKey: '<storage-secret-key>',
 });
 
@@ -105,17 +105,36 @@ export const STORAGE_KEY = '/root/storage-key';
 // listing).
 export function fetchCommand(storage, { path: objectPath = '', query = '' }, output, reveal) {
   const folder = output ? path.posix.dirname(output) : null, key = storage.mode === 'sftp' && storage.auth === 'key';
-  const curl = ['docker', 'run', '--rm', '--user', '0:0', ...(folder ? ['-v', `${folder}:${folder}`, '-w', folder] : []), ...(key ? ['-v', `${STORAGE_KEY}:${STORAGE_KEY}:ro`] : []), CURL, '--fail', '--silent', '--show-error'];
+  const curl = ['docker', 'run', '--rm', '--user', '0:0', ...(folder ? ['-v', `${folder}:${folder}`, '-w', folder] : []), ...(storage.mode === 'sftp' ? ['-v', '/root/.ssh:/root/.ssh:ro'] : []), ...(key ? ['-v', `${STORAGE_KEY}:${STORAGE_KEY}:ro`] : []), CURL, '--fail', '--silent', '--show-error'];
   const target = output ? ['--output', path.posix.basename(output)] : [];
   if (storage.mode === 's3') {
     const endpoint = new URL(storage.endpoint), host = reveal.address(endpoint.host), bucket = reveal.login(storage.bucket, PLACEHOLDERS.storageBucket), objectKey = encodePath(objectPath) + query;
     const url = storage.pathStyle ? `${endpoint.protocol}//${host}/${bucket}${objectKey ? '/' + objectKey : ''}` : `${endpoint.protocol}//${bucket}.${host}/${objectKey}`;
     return command(curl, '--aws-sigv4', `aws:amz:${storage.region || 'us-east-1'}:s3`, '--user', `${reveal.login(storage.accessKeyId, PLACEHOLDERS.storageAccessKey)}:${reveal.login(storage.secretAccessKey, PLACEHOLDERS.storageSecretKey)}`, target, url);
   }
-  const user = reveal.login(storage.username, PLACEHOLDERS.storageUser), url = `sftp://${hostPort(reveal.address(storage.host), reveal.address(storage.port, ''))}${encodePath(objectPath)}`;
+  const user = reveal.login(storage.username, PLACEHOLDERS.storageUser), url = `sftp://${hostPort(reveal.address(storage.host), reveal.address(storage.port, PLACEHOLDERS.storagePort))}${encodePath(objectPath)}`;
   const login = key ? ['--user', user, '--key', STORAGE_KEY] : ['--user', `${user}:${reveal.login(storage.password, PLACEHOLDERS.storagePassword)}`];
   return command(curl, '--hostpubsha256', hostKeyHash(storage.hostKey), login, target, url);
 }
+// ssh-keyscan from a pinned image, to trust the SFTP storage server before any login is sent: of the keys the server
+// offers, only the one whose SHA-256 is the key DockNest pinned goes into /root/.ssh/known_hosts, and the command fails
+// when none matches. curl (libssh2) then asks for that key type, and --hostpubsha256 checks it again.
+export const KEYSCAN_IMAGE = 'alpine/git:2.47.2@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c';
+const KEYSCAN = [
+  'ssh-keyscan -p "$2" -t ed25519,ecdsa,rsa "$1" 2>/dev/null |',
+  'while read -r host type key; do',
+  '  sum=$(printf %s "$key" | base64 -d 2>/dev/null | sha256sum)',
+  '  [ "${sum%% *}" = "$3" ] && echo "$host $type $key"',
+  'done > /root/.ssh/known_hosts.docknest',
+  'test -s /root/.ssh/known_hosts.docknest || exit 1',
+  'cat /root/.ssh/known_hosts.docknest >> /root/.ssh/known_hosts',
+].join('\n');
+export function trustCommand(storage, reveal) {
+  if (storage.mode !== 'sftp') return null;
+  return [command('mkdir', '-p', '-m', '0700', '/root/.ssh'), command('docker', 'run', '--rm', '-v', '/root/.ssh:/root/.ssh', '--entrypoint', 'sh', KEYSCAN_IMAGE, '-c', raw(`'${KEYSCAN}'`), 'sh', reveal.address(storage.host), String(reveal.address(storage.port, PLACEHOLDERS.storagePort)), storage.hostKey)].join('\n');
+}
+// The step that trusts an SFTP storage server, for the lists of steps; none for S3.
+export const trusted = (storage, reveal) => (storage.mode === 'sftp' ? [{ text: "Check the storage server's key against the one DockNest pinned. Nothing is sent before it matches.", command: trustCommand(storage, reveal) }] : []);
 // Lists the backup folder on the storage: proof that the address and the login work.
 export const storageCheckCommand = (storage, reveal) => fetchCommand(storage, storage.mode === 's3' ? { query: '?list-type=2&max-keys=20' } : { path: backupRoot(storage.root) + '/' }, null, reveal);
 
@@ -134,12 +153,14 @@ export function installCommands({ version, kit, storage, reveal, emergency = nul
   if (kit && storage && emergency) {
     const folder = path.posix.dirname(emergency.kit.path);
     steps.push(
+      ...trusted(storage, reveal),
       { text: 'Copy the emergency folder from the backup storage. The tool that opens the kit is in it.', command: [command('mkdir', '-p', '-m', '0700', `${files}/emergency`), fetchCommand(storage, { path: `${folder}/emergency-open.js` }, `${files}/emergency/emergency-open.js`, reveal), fetchCommand(storage, emergency.kit, `${files}/emergency/${path.posix.basename(emergency.kit.path)}`, reveal)].join('\n') },
       { text: 'Ask the people who hold the parts to type them in, one at a time, when the tool asks.', command: [command('cd', `${files}/emergency`), command('node', 'emergency-open.js', 'open', '.', `${files}/opened`), command('cd', raw('-'))].join('\n') },
     );
     opened = { kit: `${files}/opened/docknest-recovery.dkit`, passphrase: `${files}/opened/recovery-passphrase.txt` };
   } else if (kit && storage) {
     steps.push(
+      ...trusted(storage, reveal),
       { text: 'Download the newest recovery kit from the backup storage.', command: [command('mkdir', '-p', '-m', '0700', files), fetchCommand(storage, kit, `${files}/docknest-recovery.dkit`, reveal)].join('\n') },
       { text: 'Type the recovery passphrase into a private file. It is not in this guide.', command: [command('install', '-m', '600', '/dev/null', `${files}/recovery.passphrase`), command('nano', `${files}/recovery.passphrase`)].join('\n') },
     );
@@ -165,6 +186,7 @@ const restorable = mount => mount.type === 'bind' || mount.type === 'volume';
 export function restoreCommands({ app, backup, storage, reveal }) {
   const folder = appFolder(app), steps = [];
   const fetchAll = (backup.chain ?? [backup.location]).map(location => fetchCommand(storage, location, `${folder}/${path.posix.basename(location.path)}`, reveal));
+  steps.push(...trusted(storage, reveal));
   steps.push({ text: 'Make a private folder for this app and download its backup into it.', command: [command('mkdir', '-p', '-m', '0700', folder), command('cd', folder), ...fetchAll].join('\n') });
   if (backup.chain) {
     steps.push({ text: 'Check and decrypt the whole backup chain with the recovery kit.', command: command('node', `${KIT}/recovery/decrypt-backup.js`, '--chain', backup.fileName, `${KIT}/master.key`, 'chain') });

@@ -2,7 +2,7 @@
 // the inventory when it is asked for. Sections, in order: Start here, Restore everything in this order, Fleet overview
 // and one page per app. Short sentences, one action per step, each starting with a verb; expert detail is in the
 // command boxes and the linked docs. Addresses and login details appear only when `include` says so.
-import { installCommands, restoreCommands, checkCommands, storageCheckCommand, revealer } from './commands.js';
+import { installCommands, restoreCommands, checkCommands, storageCheckCommand, trusted, revealer } from './commands.js';
 
 export const INCLUDE_DEFAULTS = Object.freeze({ addresses: false, logins: false, commands: true, tests: true, schedules: true, notes: true });
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -105,7 +105,7 @@ export function buildGuide(inventory, { appIds, include: chosen = {}, version, m
         'Open DockNest and sign in with an administrator account.',
         'Open Storage. Each backup storage should say Connected.',
         'If one does not, choose it, enter its login details and test the connection.',
-        ...(mainStorage ? [step(`Check from the server that ${mainStorage.name} answers. This lists its backup folder.`, storageCheckCommand(mainStorage, reveal), include)] : []),
+        ...(mainStorage ? [...trusted(mainStorage, reveal).map(item => step(item.text, item.command, include)), step(`Check from the server that ${mainStorage.name} answers. This lists its backup folder.`, storageCheckCommand(mainStorage, reveal), include)] : []),
       ].map(item => (typeof item === 'string' ? { text: item } : item)),
     },
     order: restoreOrder(apps, inventory.links),

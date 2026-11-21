@@ -83,7 +83,7 @@ test('the page data is for administrators only, starts as never made and holds n
   assert.ok(page.guide.startHere.install.some(item => item.command?.includes('git clone --branch v')));
   const restore = page.guide.apps[0].restore.independent.map(item => item.command).join('\n');
   assert.match(restore, /'<storage-user>:<storage-password>'/);
-  assert.match(restore, /'sftp:\/\/<storage-address>\/backups\/BACKUP\/web-1--/);
+  assert.match(restore, /'sftp:\/\/<storage-address>:<storage-port>\/backups\/BACKUP\/web-1--/);
   assert.match(page.guide.apps[0].works.command, /docker exec shop-db pg_isready/);
 });
 
