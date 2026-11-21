@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { db,transaction } from './db.js';
 import { backupRoot,backupLayout,backupFilename,managerBackupFilename } from './backup-layout.js';
-import { targetOptions,parseRemote,isRemoteFile,targetPrefix,openRead,openWrite,makeDirectory,statFile,syncFile,renameFile,removeFile } from './storage.js';
+import { targetOptions,parseRemote,isRemoteFile,targetPrefix,openRead,openWrite,makeDirectory,statFile,syncFile,renameFile,removeFile,keptByStorage } from './storage.js';
 import { fileExists } from './artifact-journal.js';
 
 export function migrationPlan(){
@@ -62,14 +62,15 @@ export async function migrateStorage(){
  async function copyEntry(entry){
   const saved=db.prepare('SELECT * FROM storage_migrations WHERE kind=? AND id=?').get(entry.kind,entry.id);
   if(saved&&['source','destination','checksum','size'].some(key=>saved[key]!==entry[key]))throw new Error('Migration journal changed');
-  const temporary=entry.destination+'.migration-partial';
+  let temporary=entry.destination+'.migration-partial';
   if(!saved){
    if(await fileExists(entry.destination)||await fileExists(temporary))throw new Error('Migration destination collision');
    db.prepare("INSERT INTO storage_migrations VALUES(?,?,?,?,?,?,'copying')").run(entry.kind,entry.id,entry.source,entry.destination,entry.checksum,entry.size);
   }
   await verify(entry,entry.source);
   if(!await fileExists(entry.destination)){
-   if(await fileExists(temporary))await removeFile(temporary);
+   // An append-only destination keeps an interrupted run's partial file (a listed leftover): this run writes beside it.
+   if(await fileExists(temporary))try{await removeFile(temporary);}catch(error){if(!keptByStorage(error))throw error;temporary=entry.destination+'.'+randomUUID().slice(0,8)+'.migration-partial';}
    await makeDirectory(entry.destination.slice(0,entry.destination.lastIndexOf('/')));
    const input=await openRead(entry.source);let output;
    try{output=await openWrite(temporary);await pipeline(input,output);}finally{input.destroy();output?.destroy();}

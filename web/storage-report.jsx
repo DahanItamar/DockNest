@@ -36,9 +36,13 @@ function Metric({icon,label,value,hint,children,action}) {
 // Main copies, extra copies and the parts kept for an incremental chain, one row per destination (2.11.0).
 // Shown once there is more than one destination or any copy; older servers do not send the split fields.
 export const hasDestinationSplit=storages=>storages.length>0&&storages.every(storage=>storage.mainBytes!=null)&&(storages.length>1||storages.some(storage=>storage.copyBytes>0));
+// Append-only SFTP (docs/storage-backends.md): a "Kept by storage" column only when a destination keeps backups past
+// retention; those bytes are already inside Main and Copies.
 export function DestinationsCard({storages}){
+ const kept=storages.some(storage=>storage.keptByStorageBytes>0);
  return <section className="card sr-destinations"><div className="card-body"><h2 className="card-title">By destination</h2>
-  <Paginated rows={storages} label="Destinations" pageSize={5}>{visible=><DataTable caption="Space by destination" headers={['Destination','Main','Copies','Kept for chain','Total']} columns={[null,'16%','16%','18%','16%']} numeric={[1,2,3,4]}>{visible.map(storage=><tr key={storage.targetId||storage.id}><td title={storage.name}>{storage.name}</td><td>{size(storage.mainBytes)}</td><td title={storage.copyCount?`${storage.copyCount} ${storage.copyCount===1?'copy':'copies'}`:undefined}>{size(storage.copyBytes)}</td><td>{size(storage.chainBytes||0)}</td><td>{size(storage.bytes)}</td></tr>)}</DataTable>}</Paginated>
+  <Paginated rows={storages} label="Destinations" pageSize={5}>{visible=><DataTable caption="Space by destination" headers={['Destination','Main','Copies','Kept for chain',...(kept?['Kept by storage']:[]),'Total']} columns={kept?[null,'14%','14%','15%','15%','14%']:[null,'16%','16%','18%','16%']} numeric={kept?[1,2,3,4,5]:[1,2,3,4]}>{visible.map(storage=><tr key={storage.targetId||storage.id}><td title={storage.name}>{storage.name}</td><td>{size(storage.mainBytes)}</td><td title={storage.copyCount?`${storage.copyCount} ${storage.copyCount===1?'copy':'copies'}`:undefined}>{size(storage.copyBytes)}</td><td>{size(storage.chainBytes||0)}</td>{kept&&<td title={storage.keptByStorageCount?`${storage.keptByStorageCount} ${storage.keptByStorageCount===1?'backup':'backups'} past retention`:undefined}>{size(storage.keptByStorageBytes||0)}</td>}<td>{size(storage.bytes)}</td></tr>)}</DataTable>}</Paginated>
+  {kept&&<p className="t-caption">Kept by storage: an append-only destination refuses deletes, so backups past retention stay there and still count toward its space. Expire them on the storage server.</p>}
  </div></section>;
 }
 

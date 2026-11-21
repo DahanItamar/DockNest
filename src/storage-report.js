@@ -5,6 +5,7 @@ import express from 'express';
 import { db } from './db.js';
 import { requireAdmin } from './auth.js';
 import { adapters, targetOptions } from './storage/index.js';
+import { keptSummary } from './storage/write-mode.js';
 import * as local from './storage/local.js';
 
 export const reportMethod = 'A rough best-case estimate from package sizes. DockNest cannot see inside encrypted backups.';
@@ -62,7 +63,9 @@ export function incrementalSaving(backups, chains = [], keptForChain = new Set()
   return { bytesSaved: Math.max(0, fullEquivalentBytes - storedBytes), fullEquivalentBytes, storedBytes, increments, chains: withIncrements.size, keptForChain: kept.length, keptForChainBytes: kept.reduce((sum, id) => sum + sizes.get(id), 0), method: incrementalMethod };
 }
 
-export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now(), copies = [], mainRemoved = new Set(), chains = [], keptForChain = new Set() }) {
+// keptByStorage: { [targetId]: { backups, bytes } } that an append-only destination keeps past retention (already inside its
+// mainBytes and copyBytes, shown apart so the owner sees why they stay).
+export function buildReport({ backups, sites, targets, capacities = {}, nowMs = Date.now(), copies = [], mainRemoved = new Set(), chains = [], keptForChain = new Set(), keptByStorage = {} }) {
   const names = new Map(sites.map(site => [site.id, site.name]));
   const storageNames = new Map([['local', 'Local disk'], ['env', 'Configured storage'], ...targets.map(target => [target.id, target.name])]);
   const storageModes = new Map([['local', 'local'], ['env', 'sftp'], ...targets.map(target => [target.id, target.mode ?? null])]);
@@ -84,7 +87,7 @@ export function buildReport({ backups, sites, targets, capacities = {}, nowMs = 
     const estimate = siteEstimate(rows.map(row => row.size));
     return { siteId, name: names.get(siteId) ?? 'Removed app', packages: rows.length, bytes: estimate.stored, newestBytes: rows.at(-1).size, growthPerBackupBytes: estimate.growthPerBackupBytes, estimate: { upToBytes: estimate.upToBytes, upToPercent: estimate.upToPercent } };
   }).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
-  const storages = [...byStorage.values()].map(entry => ({ ...entry, capacityBytes: capacities[entry.id] ?? null })).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  const storages = [...byStorage.values()].map(entry => ({ ...entry, capacityBytes: capacities[entry.id] ?? null, ...(keptByStorage[entry.id]?.backups ? { keptByStorageBytes: keptByStorage[entry.id].bytes, keptByStorageCount: keptByStorage[entry.id].backups } : {}) })).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
   const bytes = siteRows.reduce((sum, row) => sum + row.bytes, 0), estimateUpToBytes = siteRows.reduce((sum, row) => sum + row.estimate.upToBytes, 0);
   const growth = growthSeries(backups, nowMs);
   return { generatedAt: new Date(nowMs).toISOString(), storages, sites: siteRows,
@@ -118,7 +121,8 @@ export async function storageReport() {
   const ids = [...new Set([...backups.filter(row => !mainRemoved.has(row.id)).map(row => storageIdOf(row.path)), ...copies.map(row => row.targetId)])];
   const capacities = Object.fromEntries(await Promise.all(ids.map(async id => [id, await capacityOf(id)])));
   const chains = db.prepare('SELECT backup_id AS backupId,backup_kind AS kind,chain_id AS chainId,chain_position AS position FROM backup_chain_links WHERE backup_id NOT IN (SELECT backup_id FROM retention_operations)').all();
-  return buildReport({ backups, sites, targets, capacities, copies, mainRemoved, chains, keptForChain: keptForChainIds() });
+  const keptByStorage = Object.fromEntries(targets.filter(target => target.mode === 'sftp').map(target => [target.id, keptSummary(target.id, 'sftp:' + target.id + ':')]));
+  return buildReport({ backups, sites, targets, capacities, copies, mainRemoved, chains, keptForChain: keptForChainIds(), keptByStorage });
 }
 // The same rule as retention (src/engine.js retain): past the count, unpinned, still kept because something builds on it.
 export function keptForChainIds() {

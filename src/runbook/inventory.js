@@ -100,7 +100,7 @@ export function loadInventory({ logins = false, digestOnly = false } = {}) {
   const kit = db.prepare("SELECT path,finished_at FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
   const selfBackup = selfBackupConfig(), key = activeEmergencyKey();
   // The newest emergency kit of the active split on each destination (docs/emergency-kit.md), next to its offline tool.
-  const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => locationOf(item.path)).filter(Boolean) : [];
+  const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => { const location = locationOf(item.path), tool = item.tool && locationOf(item.tool.path); return location && { ...location, ...(tool && /^[a-f0-9]{64}$/.test(item.tool.sha256) ? { tool: { path: tool.path, sha256: item.tool.sha256 } } : {}) }; }).filter(Boolean) : [];
   return {
     servers, apps, links: digestOnly ? [] : appLinks(servers), defaultTarget,
     storage: db.prepare('SELECT * FROM storage_targets ORDER BY created_at,id').all().map(row => storageTarget(row, logins)),

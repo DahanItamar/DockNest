@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { db, audit, transaction } from '../db.js';
 import { digest } from '../crypto.js';
 import { backupRoot } from '../backup-layout.js';
-import { managerBackupDirectory, storageJoin, publishVerified, removeFile, targetOptions, targetPrefix } from '../storage.js';
+import { managerBackupDirectory, storageJoin, publishVerified, removeFile, targetOptions, targetPrefix, storageKeepsFiles } from '../storage.js';
 import { loadInventory } from './inventory.js';
 import { INCLUDE_DEFAULTS } from './guide.js';
 import { guidePdf } from './render.js';
@@ -47,7 +47,8 @@ export async function writeGuideCopies({ run, targetIds, keyId, temporary }) {
       changeCopies(list => [...list.filter(item => item.path !== published), { targetId, path: published, createdAt: at.toISOString() }]);
       audit('worker', 'runbook.copy_written', run.id, { targetId });
       written++;
-      for (const older of guideCopies().filter(item => item.targetId === targetId && item.path !== published)) try { await removeCopy(older); } catch { /* Kept; replaced after the next Self Backup. */ }
+      // An append-only destination keeps older copies: they stay listed and are never retried.
+      for (const older of guideCopies().filter(item => item.targetId === targetId && item.path !== published && !storageKeepsFiles(item.path))) try { await removeCopy(older); } catch { /* Kept; replaced after the next Self Backup. */ }
     } catch { audit('worker', 'runbook.copy_failed', run.id, { targetId }); }
   }
   return written;
