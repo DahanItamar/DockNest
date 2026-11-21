@@ -18,16 +18,18 @@ export const MISSING_TEXT = Object.freeze({
   older: 'The newest backup did not prove this key.',
 });
 const short = fingerprint => fingerprint.slice(0, 8);
+// `reasonCode` lets the page act on a reason ("Add file" for not-included) without matching the English text.
+const missing = code => ({ status: 'missing', reasonCode: code, reason: MISSING_TEXT[code] });
 
 // The newest backup's proof list says whether it saw this exact value; a value it did not see and that appeared after
 // it was captured is "changed after the newest backup".
 function keyStatus(row, latest, proofs) {
   if (latest && row.in_backup === latest.id) return { status: row.verified_test_id ? 'verified' : 'in-backup' };
-  if (!latest) return { status: 'missing', reason: MISSING_TEXT['no-backup'] };
+  if (!latest) return missing('no-backup');
   const proof = proofs.get(`${row.rule_id}@${row.location}`), since = row.changed_at ?? row.first_seen_at;
-  if (proof?.fingerprint === row.fingerprint) return { status: 'missing', reason: MISSING_TEXT[proof.reason] ?? MISSING_TEXT.older };
+  if (proof?.fingerprint === row.fingerprint) return missing(MISSING_TEXT[proof.reason] ? proof.reason : 'older');
   if (since > latest.captured_at) return { status: 'changed', changedAt: since };
-  return { status: 'missing', reason: MISSING_TEXT.older };
+  return missing('older');
 }
 
 export function keysView(siteId) {

@@ -92,6 +92,7 @@ jobs:
           npm run test:status-pages
           npm run test:map
           npm run test:hardening
+          npm run test:keys-safe
           npm run test:restore-check
           npm run test:backup-coverage
           npm run test:connections

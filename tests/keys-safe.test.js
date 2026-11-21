@@ -192,7 +192,7 @@ test('the padlock: none, red without a backup, green in the last backup, amber w
   store.recordScan(siteId, proof, { backup: { id: backupId, backupKind: 'full', chainId: null } });
   view = keysView(siteId);
   assert.equal(view.state, 'red');
-  assert.deepEqual(view.keys.find(key => key.location === 'file:/srv/wiki/extra.env'), { ruleId: 'rails-secret-key-base', app: 'Rails apps (Mastodon, GitLab)', name: 'SECRET_KEY_BASE', location: 'file:/srv/wiki/extra.env', fingerprint: fp('rails-secret-key-base', 'made-up').slice(0, 8), backupId: null, status: 'missing', reason: 'The file is not one of the files this app backs up.' });
+  assert.deepEqual(view.keys.find(key => key.location === 'file:/srv/wiki/extra.env'), { ruleId: 'rails-secret-key-base', app: 'Rails apps (Mastodon, GitLab)', name: 'SECRET_KEY_BASE', location: 'file:/srv/wiki/extra.env', fingerprint: fp('rails-secret-key-base', 'made-up').slice(0, 8), backupId: null, status: 'missing', reasonCode: 'not-included', reason: 'The file is not one of the files this app backs up.' });
   const inBackup = { ...proof, keys: proof.keys.filter(key => key.inBackup) };
   store.recordScan(siteId, inBackup, { backup: { id: backupId, backupKind: 'full', chainId: null } });
   view = keysView(siteId);
