@@ -1,4 +1,4 @@
-import {engineLabel} from '../../shared/database-engines.js';
+import {engineLabel,engineOnlineCopy} from '../../shared/database-engines.js';
 // Pure, deterministic map layout (n8n style). Columns, left to right: servers, sites, backup storage. Groups are contiguous and in the same order on both sides, and every
 // line runs in a free gutter or through free space of its own row, so no line ever crosses a card. Moved nodes come in as opts.positions.
 export const METRICS={pad:40,serverS:96,siteS:64,storageS:96,label:44,serverGap:140,rowGap:24,groupGap:32,storageGap:60,storagePitch:168,
@@ -16,8 +16,9 @@ export function groupForList(servers=[],sites=[]){
 
 // Databases DockNest already detects for capture: site.config.services entries with a supported engine. Nothing is invented.
 // They are shown in the site's details panel, never as nodes: they always move together with the site.
-// How the database is backed up, from what the app already records: a service's own mode, else the app's online-dumps switch.
-const dbMode=(site,s)=>typeof s.backupMode==='string'&&s.backupMode?s.backupMode:site?.config?.onlineDumps===true?'Moves with the app':'Stopped file copy';
+// How the database is backed up: an online copy only when the app's switch is on, the engine can take one (the shared
+// capability table) and incremental backups are off; otherwise the stopped file copy (docs/online-dumps.md).
+const dbMode=(site,s)=>site?.config?.onlineDumps===true&&engineOnlineCopy(s.engine)&&site?.incremental?.enabled!==true?'Online copy, stays running':'Stopped file copy';
 export function databasesOf(site){
  const list=Array.isArray(site?.config?.services)?site.config.services:[];
  return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,mode:dbMode(site,s),
