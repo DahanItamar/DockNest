@@ -73,6 +73,32 @@ export async function runOnlineDumpScenario({ run, until, hosts, servers, db, re
     record(`Online dump: ${definition.engine} (${definition.delivery}) keeps running through the backup; the isolated restore loads the dump into a fresh database, with its ${definition.engine === 'postgres' ? 'roles and second database' : 'accounts'}, and the data checks pass`);
   }
 
+  // A writer next to the database: the writer stops (its files need it), the database keeps running, and the
+  // restore brings back both the writer's files and the dumped data.
+  const postgresFixture = fixtures.find(item => item.engine === 'postgres'), writer = 'qa-dump-writer';
+  await run('exec', source, 'docker', 'pull', '-q', 'busybox:1.36');
+  await run('exec', source, 'docker', 'run', '-d', '--name', writer, '--restart', 'no', '-v', writer + '-data:/data', 'busybox:1.36', 'sh', '-c', "echo uploaded > /data/upload.txt; trap 'exit 0' TERM; while true; do sleep 1; done");
+  await until(async () => (await run('exec', source, 'docker', 'exec', writer, 'cat', '/data/upload.txt')) === 'uploaded', 'Writer fixture did not start');
+  const single = JSON.parse(db.prepare('SELECT config FROM sites WHERE id=?').get(postgresFixture.siteId).config);
+  const mixedId = randomUUID(), mixed = { ...single, containers: [writer, postgresFixture.name], services: [...single.services, { container: writer, engine: 'generic', dependsOn: [] }] };
+  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(mixedId, servers[0].id, 'Online dump with a writer', JSON.stringify(mixed), new Date().toISOString());
+  const [writerBefore, databaseBefore] = [await started(writer), await started(postgresFixture.name)];
+  const mixedDone = await job(() => enqueueBackup(mixedId, 'qa'));
+  assert.notEqual(await started(writer), writerBefore, 'the writer stopped for its file copy');
+  assert.equal(await started(postgresFixture.name), databaseBefore, 'the database kept running');
+  const mixedBackup = db.prepare('SELECT * FROM backups WHERE job_id=?').get(mixedDone.id), mixedManifest = JSON.parse(mixedBackup.manifest);
+  assert.ok(mixedManifest.downtimeSeconds > 0, 'the writer was down');
+  assert.ok(mixedManifest.consistency.services.some(item => item.method === 'online logical dump'), JSON.stringify(mixedManifest.consistency));
+  const mixedRestore = JSON.parse((await job(async () => enqueueRestore(mixedBackup.id, await planRestore(mixedBackup.id, { serverId: servers[1].id }), 'qa'))).details).result;
+  // restoreTested stays false: a generic writer has no native data check of its own.
+  const outputs = await Promise.all(mixedRestore.containerIds.map(id => run('exec', target, 'docker', 'exec', id, 'cat', '/data/upload.txt').catch(() => null)));
+  assert.ok(outputs.includes('uploaded'), 'the writer files were restored');
+  const restoredDatabase = mixedRestore.containerIds[outputs.indexOf(null)];
+  assert.equal(await postgresFixture.query(target, restoredDatabase, 'SELECT value FROM records WHERE id=1;'), 'live-change', 'the dumped data was restored');
+  await run('exec', target, 'docker', 'rm', '-f', ...mixedRestore.containerIds);
+  await run('exec', source, 'docker', 'rm', '-f', '-v', writer);
+  record('Online dump with a writer in the app: the writer stops for its file copy, the database keeps running, and the restore brings back both');
+
   // Fail closed: a MySQL table without transactions keeps the stopped file copy, named in a warning.
   const mysql = fixtures.find(item => item.engine === 'mysql');
   await mysql.query(source, mysql.name, 'USE fixture; CREATE TABLE legacy (id INTEGER) ENGINE=MyISAM;');
