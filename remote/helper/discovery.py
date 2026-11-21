@@ -6,23 +6,84 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .paths import (
-    SITE_PATH)
+    SITE_PATH, lexical, within)
 from .routing import (
     match_upstream, upstream_address)
 # </build:header>
-def project_roots(container):
+# Stack managers (since 3.0.0, docs/site-setup.md): Portainer and Dockge run `docker compose` inside their own container,
+# so a stack's Compose labels name its folder as that container sees it (Portainer: /data/compose/<id>). Through the
+# manager's mounts that folder maps to the host. Read only: DockNest reads the manager's image, mounts and stacks setting.
+STACK_MANAGER_IMAGES=(('portainer',re.compile(r'(?:[a-zA-Z0-9.:-]+/)?portainer/portainer(?:-ce|-ee)?')),('dockge',re.compile(r'(?:[a-zA-Z0-9.:-]+/)?louislam/dockge')))
+def image_repository(image):
+    name=str(image or '').split('@')[0];head,_,tail=name.rpartition('/')
+    return (head+'/' if head else '')+tail.split(':')[0]
+def stack_manager_kind(image):
+    repository=image_repository(image)
+    return next((kind for kind,pattern in STACK_MANAGER_IMAGES if pattern.fullmatch(repository)),None)
+def stack_managers(containers):
+    """The Portainer and Dockge containers among `containers`: kind, the stacks folder as the manager sees it, and its
+    mounts (destination, host source), longest destination first."""
+    managers=[]
+    for c in containers:
+        config=c.get('Config') or {};kind=stack_manager_kind(config.get('Image'))
+        if not kind:continue
+        if kind=='portainer':
+            args=[str(value) for value in config.get('Cmd') or []]
+            data=next((value.partition('=')[2] for value in args if value.startswith('--data=')),None) or next((args[i+1] for i,value in enumerate(args[:-1]) if value in ('--data','-d')),None) or '/data'
+            stacks=posixpath.join(data,'compose')
+        else:
+            # Only this one setting is read from the environment; no other value leaves the container record.
+            stacks=next((str(value).partition('=')[2] for value in config.get('Env') or [] if str(value).startswith('DOCKGE_STACKS_DIR=')),'') or '/opt/stacks'
+        # A stacks folder of '/' would map every path a container names; such a manager is skipped.
+        if not stacks.startswith('/') or '..' in stacks.split('/') or lexical(stacks)=='/':continue
+        mounts=[(lexical(m['Destination']),m['Source']) for m in c.get('Mounts') or [] if m.get('Type') in ('bind','volume')
+            and isinstance(m.get('Destination'),str) and m['Destination'].startswith('/') and isinstance(m.get('Source'),str) and m['Source']]
+        managers.append({'kind':kind,'stacks':lexical(stacks),'mounts':sorted(mounts,key=lambda m:-len(m[0]))})
+    return managers
+def managed_path(value,managers):
+    """(host path, manager kind) for a path inside a stack manager's stacks folder, or None when no manager holds it.
+    The path comes from container labels: an unusual one ('..', relative, the stacks folder itself) maps to nothing."""
+    value=str(value or '')
+    if not value.startswith('/') or '..' in value.split('/'):return None
+    path=lexical(value)
+    for manager in managers:
+        if path==manager['stacks'] or not within(path,manager['stacks']):continue
+        for destination,source in manager['mounts']:
+            if not within(path,destination):continue
+            rest=[part for part in path[len(destination):].split('/') if part]
+            return str(pathlib.Path(source).joinpath(*rest)),manager['kind']
+    return None
+def host_path(value,managers):
+    mapped=managed_path(value,managers)
+    return mapped[0] if mapped else value
+def project_root(value):
+    p=pathlib.Path(value)
+    if not value or not p.is_absolute() or '..' in p.parts:return False
+    if str(p) in ['/', '/etc','/home','/root','/var','/srv','/opt','/tmp']:return False
+    if str(p).startswith(('/proc','/sys','/dev','/run')):return False
+    return p.is_dir() and os.path.realpath(p)==os.path.abspath(p)
+def project_folders(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
     if not labels.get('com.docker.compose.project'):return []
     paths=[labels.get('com.docker.compose.project.working_dir','')]
-    paths.extend(str(pathlib.Path(value.strip()).parent) for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip())
+    # A label path is a Linux path; PurePosixPath keeps its parent the same when the unit tests run on Windows.
+    paths.extend(str((pathlib.PurePosixPath if value.strip().startswith('/') else pathlib.Path)(value.strip()).parent) for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip())
+    return paths
+def project_roots(container,managers=()):
+    """The container's Compose project folders on this host. A folder a stack manager names maps to the host first; the
+    label path as written stays the fallback, exactly as before stack managers were read."""
     roots=[]
-    for value in paths:
-        p=pathlib.Path(value)
-        if not value or not p.is_absolute() or '..' in p.parts:continue
-        if str(p) in ['/', '/etc','/home','/root','/var','/srv','/opt','/tmp']:continue
-        if str(p).startswith(('/proc','/sys','/dev','/run')):continue
-        if p.is_dir() and os.path.realpath(p)==os.path.abspath(p) and str(p) not in roots:roots.append(str(p))
+    for value in project_folders(container):
+        mapped=managed_path(value,managers)
+        root=next((str(pathlib.Path(candidate)) for candidate in ([mapped[0]] if mapped else [])+[value] if project_root(candidate)),None)
+        if root and root not in roots:roots.append(root)
     return roots
+def container_stack_manager(container,managers,roots):
+    """'portainer' or 'dockge' when the container's project folder is a manager's stack found on this host."""
+    for value in project_folders(container):
+        mapped=managed_path(value,managers)
+        if mapped and str(pathlib.Path(mapped[0])) in roots:return mapped[1]
+    return None
 
 def nginx_parse(tokens):
     nodes=[];words=[]
@@ -164,13 +225,13 @@ def discovered_volumes():
     cannot be listed: a scan never fails on them, and None is never read as "no volumes"."""
     try:return [{'name':v.get('Name'),'driver':v.get('Driver'),'labels':volume_labels(v.get('Labels'))} for v in map(json.loads,filter(str.strip,docker('volume','ls','--format','{{json .}}').decode().splitlines()))]
     except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError,AttributeError):return None
-def configuration_paths(container):
+def configuration_paths(container,managers=()):
     labels=container.get('Config',{}).get('Labels',{}) or {}
-    roots=project_roots(container)
+    roots=project_roots(container,managers)
     def valid_file(value):
         p=pathlib.Path(value)
         return p.is_absolute() and '..' not in p.parts and any(p.is_relative_to(root) for root in roots) and p.is_file() and os.path.realpath(p)==os.path.abspath(p) and os.access(p,os.R_OK)
-    compose=[value.strip() for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip()]
+    compose=[host_path(value.strip(),managers) for value in labels.get('com.docker.compose.project.config_files','').split(',') if value.strip()]
     configs=[]
     for root in roots:
         candidate=str((pathlib.Path(root)/'.env').resolve())
@@ -194,11 +255,20 @@ def configuration_paths(container):
             if '$' in value:continue
             candidate=str((pathlib.Path(filename).parent/value).resolve())
             if valid_file(candidate) and candidate not in configs:configs.append(candidate)
-    return {'composeFiles':[value for value in compose if valid_file(value)],'configFiles':configs,'directory':roots[0] if roots else ''}
+    manager=container_stack_manager(container,managers,roots)
+    return {'composeFiles':[value for value in compose if valid_file(value)],'configFiles':configs,'directory':roots[0] if roots else '',**({'manager':manager} if manager else {})}
 
+def manager_containers():
+    """Inspect records of the server's Portainer and Dockge containers only, picked by image; [] when none can be read."""
+    try:
+        lines=docker('ps','-a','--no-trunc','--format','{{.ID}} {{.Image}}').decode().splitlines()
+        ids=[cid for cid,_,image in (line.partition(' ') for line in lines) if re.fullmatch(r'[0-9a-f]{12,64}',cid) and stack_manager_kind(image)]
+        return inspect_each(ids)[0]
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired,OSError,ValueError):return []
 def list_project_files(ids,directory=None):
     if not ids or len(ids)>30 or not all(isinstance(value,str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}',value) for value in ids):raise ValueError('Choose valid site containers')
-    roots=list(dict.fromkeys(root for container in inspect(ids) for root in project_roots(container)))
+    selected=inspect(ids);managers=stack_managers(manager_containers()) if any(project_folders(c) for c in selected) else []
+    roots=list(dict.fromkeys(root for container in selected for root in project_roots(container,managers)))
     if not roots:raise ValueError('No project configuration folder was detected. Enter the file paths manually.')
     p=pathlib.Path(directory or roots[0])
     if not p.is_absolute() or '..' in p.parts or not any(p.is_relative_to(root) for root in roots):raise ValueError('Choose a folder inside this site\'s detected project directory')

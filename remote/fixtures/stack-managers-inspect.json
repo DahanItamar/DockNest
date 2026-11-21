@@ -1,0 +1,38 @@
+[
+  {
+    "Id": "1111111111111111111111111111111111111111111111111111111111111111",
+    "Name": "/portainer",
+    "Config": {"Image": "portainer/portainer-ce:2.21.4", "Cmd": ["-H", "unix:///var/run/docker.sock"], "Env": ["PATH=/usr/local/sbin:/usr/bin"], "Labels": {}},
+    "Mounts": [
+      {"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/var/run/docker.sock"},
+      {"Type": "volume", "Name": "portainer_data", "Source": "{root}/volumes/portainer_data/_data", "Destination": "/data"}
+    ]
+  },
+  {
+    "Id": "2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "/dockge",
+    "Config": {"Image": "louislam/dockge:1", "Env": ["DOCKGE_STACKS_DIR=/opt/stacks", "DOCKGE_SECRET=do-not-print"], "Labels": {"com.docker.compose.project": "dockge", "com.docker.compose.project.working_dir": "/opt/dockge", "com.docker.compose.project.config_files": "/opt/dockge/compose.yaml"}},
+    "Mounts": [
+      {"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/var/run/docker.sock"},
+      {"Type": "bind", "Source": "{root}/srv/stacks", "Destination": "/opt/stacks"}
+    ]
+  },
+  {
+    "Id": "3333333333333333333333333333333333333333333333333333333333333333",
+    "Name": "/wiki-web-1",
+    "Config": {"Image": "example/wiki:1", "Labels": {"com.docker.compose.project": "wiki", "com.docker.compose.service": "web", "com.docker.compose.project.working_dir": "/data/compose/12", "com.docker.compose.project.config_files": "/data/compose/12/docker-compose.yml"}},
+    "Mounts": []
+  },
+  {
+    "Id": "4444444444444444444444444444444444444444444444444444444444444444",
+    "Name": "/notes-app-1",
+    "Config": {"Image": "example/notes:2", "Labels": {"com.docker.compose.project": "notes", "com.docker.compose.service": "app", "com.docker.compose.project.working_dir": "/opt/stacks/notes", "com.docker.compose.project.config_files": "/opt/stacks/notes/compose.yaml"}},
+    "Mounts": []
+  },
+  {
+    "Id": "5555555555555555555555555555555555555555555555555555555555555555",
+    "Name": "/escape-app-1",
+    "Config": {"Image": "example/escape:1", "Labels": {"com.docker.compose.project": "escape", "com.docker.compose.project.working_dir": "/opt/stacks/../../etc", "com.docker.compose.project.config_files": "/opt/stacks/../../etc/passwd"}},
+    "Mounts": []
+  }
+]

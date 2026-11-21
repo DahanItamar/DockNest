@@ -32,3 +32,13 @@ test('plain containers on a shared user network are suggested as one app; Compos
  assert.deepEqual(groups,[{networks:['backend','shopnet'],containers:['shop-cache','shop-db','shop-web']},{networks:['wikinet'],containers:['wiki-a','wiki-b']}]);
  assert.deepEqual(suggestedGroups([]),[]);
 });
+
+test('a Compose group names the stack manager discovery found; unknown or plain values are ignored',async()=>{
+ const {detectedConfiguration}=await import('../web/site-configuration.js');
+ const compose=(name,project,manager)=>({name,labels:{'com.docker.compose.project':project},backupConfiguration:{composeFiles:[],configFiles:[],directory:'',...(manager===undefined?{}:{manager})}});
+ const rows=[compose('wiki-db','wiki'),compose('wiki-web','wiki','portainer'),compose('notes','notes','dockge'),compose('odd','odd','<b>x</b>'),compose('proto','proto','__proto__'),{name:'loose',backupConfiguration:{manager:'portainer'}}];
+ const groups=containerGroups(rows),manager=id=>groups.find(g=>g.id===id).manager;
+ assert.deepEqual([manager('compose:wiki'),manager('compose:notes'),manager('compose:odd'),manager('compose:proto'),manager('standalone:')],['portainer','dockge',null,null,null]);
+ assert.equal(detectedConfiguration(rows,['wiki-db','wiki-web']).manager,'portainer');
+ assert.equal(detectedConfiguration(rows,['odd']).manager,null);
+});
