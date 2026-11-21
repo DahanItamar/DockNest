@@ -11,6 +11,7 @@ import { activeEmergencyKey, emergencyKits } from '../emergency/kits.js';
 import { appsWithLoginNotes, openLoginNotes } from './login-notes.js';
 import { serverLinksView } from '../server-links.js';
 import { keysView } from '../keys-safe/padlock.js';
+import { loadChain, ChainError } from '../incremental.js';
 
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 // "sftp:<target id>:/path" or "s3:<target id>:key": the destination and the path inside it. A local or legacy path has none.
@@ -32,28 +33,24 @@ function storageTarget(row, logins) {
   return mode === 's3' ? { ...base, accessKeyId: opened.accessKeyId, secretAccessKey: opened.secretAccessKey } : { ...base, ...(opened.password ? { password: opened.password } : { privateKey: opened.privateKey }) };
 }
 
-// The backups a restore needs, oldest first: the backup itself, or for an increment its whole chain back to the full one.
-function chainOf(backup) {
-  const link = db.prepare('SELECT * FROM backup_chain_links WHERE backup_id=?').get(backup.id);
-  if (link?.backup_kind !== 'incremental') return null;
-  const chain = [backup];
-  for (let parent = link.parent_id; parent && chain.length <= 31;) {
-    const row = db.prepare('SELECT id,path FROM backups WHERE id=?').get(parent);
-    if (!row) break;
-    chain.unshift(row);
-    parent = db.prepare('SELECT parent_id FROM backup_chain_links WHERE backup_id=?').get(row.id)?.parent_id;
-  }
-  return chain.map(item => locationOf(item.path));
+// The packages a restore of this backup needs, full backup first (src/incremental.js loadChain): null for a backup
+// outside a chain, or `broken` when a package is missing or is not on SFTP or S3 storage.
+function chainOf(backupId) {
+  let members;
+  try { members = loadChain(backupId); } catch (error) { if (error instanceof ChainError) return { broken: true }; throw error; }
+  if (members.length < 2) return null;
+  const locations = members.map(member => locationOf(member.path));
+  return locations.every(Boolean) ? { locations } : { broken: true };
 }
 
 function newestBackup(siteId) {
   const row = db.prepare('SELECT id,captured_at,path,manifest FROM backups WHERE site_id=? ORDER BY captured_at DESC,rowid DESC LIMIT 1').get(siteId);
   if (!row) return null;
   const manifest = json(row.manifest, {}), evidence = Object.values(backupVerification(row.id)).find(item => item.method === TEST_METHOD && item.status === 'passed');
-  const location = locationOf(row.path), chain = location ? chainOf(row) : null;
+  const location = locationOf(row.path), chain = chainOf(row.id);
   return {
     id: row.id, capturedAt: row.captured_at, location, fileName: location ? location.path.split('/').at(-1) : null,
-    chain: chain?.every(Boolean) ? chain : null,
+    chain: chain?.locations ?? null, chainBroken: Boolean(chain?.broken),
     containers: (manifest.containers ?? []).map(container => ({ name: String(container.name ?? '').replace(/^\//, ''), image: container.image, mounts: (container.mounts ?? []).map(mount => ({ type: mount.type, destination: mount.destination })) })),
     // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. Restore tests read
     // the main backup.

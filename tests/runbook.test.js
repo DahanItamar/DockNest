@@ -192,6 +192,27 @@ test('keys safe: how many app keys the newest backup holds, and each missing key
   db.prepare('DELETE FROM app_keys').run();
 });
 
+test('an incremental backup: its whole chain is downloaded; a missing parent or a package not on storage leaves it to DockNest', async () => {
+  const chained = site('Chained', { kind: 'docker', containers: ['chained'], domains: [] });
+  const container = [{ name: '/chained', image: 'app:1', mounts: [] }];
+  const full = backup(chained, container, '2026-11-17T03:00:00.000Z'), increment = backup(chained, container, '2026-11-18T03:00:00.000Z');
+  db.prepare("INSERT INTO backup_chain_links VALUES(?,'full','chain-1',NULL,0)").run(full.backupId);
+  db.prepare("INSERT INTO backup_chain_links VALUES(?,'incremental','chain-1',?,1)").run(increment.backupId, full.backupId);
+  const restore = async () => buildGuide(await loadInventory(), { version: '3.0.0', appIds: [chained] }).apps[0].restore;
+  const whole = (await restore()).independent.map(item => item.command).join('\n');
+  assert.equal(whole.match(/^curl /gm).length, 2, 'the full backup and the increment');
+  assert.match(whole, /decrypt-backup\.js --chain/);
+  db.prepare('UPDATE backups SET path=? WHERE id=?').run('/var/lib/docknest/backups/full.tar.gz.enc', full.backupId);
+  let page = await restore();
+  assert.equal(page.independent, undefined, 'no commands when a package of the chain is not on SFTP or S3 storage');
+  assert.match(page.note, /only DockNest can restore it/);
+  db.prepare('UPDATE backup_chain_links SET parent_id=? WHERE backup_id=?').run(id(), increment.backupId);
+  page = await restore();
+  assert.equal(page.independent, undefined, 'no commands when the parent backup is missing');
+  assert.match(page.note, /needs earlier backups of its chain/);
+  db.prepare('INSERT INTO site_archives VALUES(?,?)').run(chained, now());
+});
+
 test('the restore order puts the app that owns a shared database first', () => {
   const apps = [{ id: 'a', name: 'Shop', containers: ['shop-web'] }, { id: 'b', name: 'Database', containers: ['main-db'] }, { id: 'c', name: 'Docs', containers: [] }];
   assert.deepEqual(restoreOrder(apps, [{ appIds: ['a', 'b'], kind: 'database', via: 'main-db' }]).map(item => [item.name, item.reason]), [

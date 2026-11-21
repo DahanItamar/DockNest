@@ -68,7 +68,7 @@ function storageLogin(storage) {
 
 function appPage(app, inventory, { include, version, reveal }) {
   const server = inventory.servers.find(item => item.id === app.serverId), storage = inventory.storage.find(item => item.id === app.mainTargetId) ?? null;
-  const backup = app.backup, independent = backup?.location && storage && backup.location.targetId === storage.id;
+  const backup = app.backup, independent = backup?.location && !backup.chainBroken && storage && backup.location.targetId === storage.id;
   const works = app.domains.length ? app.domains.map(domain => `Open https://${domain}. The website should load.`) : ['Open the app the way you normally do. DockNest has no web address for it.'];
   return {
     id: app.id, name: app.name, server: server.name, kind: app.kind,
@@ -83,7 +83,7 @@ function appPage(app, inventory, { include, version, reveal }) {
     down: ['Open DockNest and sign in.', `Open Apps and choose ${app.name}.`, 'Read its newest job under Jobs. It says what went wrong.', `Check under Servers that ${server.name} answers.`, 'If the server is lost, restore the app on a new server with the steps below.'],
     restore: {
       steps: backup ? ['Open DockNest and sign in.', `Open Apps and choose ${app.name}.`, 'Open Backups and choose the newest backup.', 'Choose Restore, choose the server and confirm.', 'Wait until its job under Jobs has finished.', 'Check that the app works, as described above.'] : ['Make a backup first: there is none yet.'],
-      ...(backup && !independent ? { note: 'This backup is not on SFTP or S3 storage, so only DockNest can restore it.' } : {}),
+      ...(backup && !independent ? { note: backup.chainBroken ? 'This backup needs earlier backups of its chain that are missing or not on SFTP or S3 storage, so only DockNest can restore it.' : 'This backup is not on SFTP or S3 storage, so only DockNest can restore it.' } : {}),
       ...(independent && include.commands ? { independent: restoreCommands({ app, backup, storage, reveal }) } : {}),
       expertGuide: docsLink(version, 'independent-recovery.md'),
     },
