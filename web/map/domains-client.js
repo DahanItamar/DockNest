@@ -11,6 +11,7 @@ export const createDomainsClient=api=>({
 const FINISHED=new Set(['completed','failed','cancelled']);
 const wait=ms=>new Promise(done=>setTimeout(done,ms));
 const FAILED='DockNest could not check this domain. Check again in a minute.';
+const SLOW='The check is taking longer than usual, so DockNest stopped waiting for it. Check again in a few minutes to see the result.';
 
 // enabled: operators and administrators (viewers get a 403 and see no domains). `key` re-reads the list when apps or their domains change.
 export function useDomains(api,enabled,key=''){
@@ -28,11 +29,14 @@ export function useDomains(api,enabled,key=''){
   try{
    const c=client(),r=await c.check(domain);
    if(r?.jobId){
+    let done=false;
     for(let i=0;i<80&&live.current;i++){
      await wait(i?1500:600);
      const job=await c.job(r.jobId);
-     if(FINISHED.has(job?.status)){if(job.status!=='completed')mark(setErrors,domain,job.error||FAILED);break}
+     if(FINISHED.has(job?.status)){done=true;if(job.status!=='completed')mark(setErrors,domain,job.error||FAILED);break}
     }
+    // Two minutes passed and the job is still waiting or running: stop following it and say so (no background polling).
+    if(!done&&live.current)mark(setErrors,domain,SLOW);
    }
   }catch(e){mark(setErrors,domain,e?.status===429?(e.message||'Too many checks. Try again in a few minutes.'):e?.message||FAILED)}
   await load();
