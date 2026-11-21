@@ -43,7 +43,7 @@ export function ExportDialog({api,apps,only,onClose,onMade}){
   <form className="rg-form-wrap" onSubmit={e=>{e.preventDefault();if(!locked&&!need&&sel.length)make()}}>
    <div className="rg-body">
     <fieldset disabled={locked} className="rg-form">
-     <section className="rg-stack"><div className="rg-group-head"><h3>Apps</h3><span className="rg-links"><button type="button" className="rb-link" onClick={()=>setSel(ids)}>Select all</button><button type="button" className="rb-link" onClick={()=>setSel([])}>Select none</button></span></div>
+     <section className="rg-stack"><div className="rg-group-head"><h3>Apps</h3><span className="rg-links"><button type="button" className="link-action" onClick={()=>setSel(ids)}>Select all</button><button type="button" className="link-action" onClick={()=>setSel([])}>Select none</button></span></div>
       <div className="rg-checks">{apps.map(a=><label className="check" key={a.id}><input type="checkbox" checked={sel.includes(a.id)} onChange={()=>setSel(v=>v.includes(a.id)?v.filter(x=>x!==a.id):[...v,a.id])}/> {a.name}</label>)}</div>
       {!sel.length&&<p className="t-caption" role="status">Choose at least one app.</p>}</section>
      <section className="rg-stack"><h3>Include</h3>

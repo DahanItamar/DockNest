@@ -42,6 +42,7 @@ const shot=async(page,name,theme,width)=>{if(shots)await page.screenshot({path:`
 const noOverflow=page=>page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth);
 
 // scenario: {role, domains (rows), failJob, holdJob (a promise the job waits for), deniedDomains}. calls records every domain request.
+const asLink=async(loc,label,w)=>{await loc.waitFor();const s=await loc.evaluate(e=>{const c=getComputedStyle(e);return {bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor,td:c.textDecorationLine,sw:document.documentElement.scrollWidth}});assert.equal(s.bw,0,label+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(s.bg),label+' has no fill: '+s.bg);assert.ok(s.td.includes('underline'),label+' is underlined');assert.ok(s.sw<=w,label+' does not overflow at '+w)};
 async function open(theme,width,scenario={}){
  const {role='admin',failJob=false,hold=null,denied=false}=scenario,calls=[],rows=scenario.rows||domainRows();
  const page=await browser.newPage({viewport:{width,height:width<500?874:900}});
@@ -125,6 +126,7 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
   for(const t of texts)assert.ok((await side.innerText()).includes(t),`${domain} says: ${t}`);
   assert.ok((await side.innerText()).includes('Checked 3 hours ago, during a backup'),'the time of the last check');
   assert.equal(await side.getByRole('button',{name:'Check again'}).count(),1,'Check again');
+  await asLink(side.getByRole('button',{name:'Check again'}),'Check again',width);
   assert.equal(await side.getByRole('button',{name:'Open app'}).count(),domain==='old.example.invalid'?0:1);
   if(name==='A6-path-token')assert.equal(await side.getByRole('button',{name:'Open Connections'}).count(),1,'a link to Connections for the token');
   await noOverflow(page);await shot(page,name,theme,width);

@@ -17,8 +17,8 @@ function WhoToAsk({text,api,onSaved}){
  return <section><h2>Who to ask</h2>
   {edit?<div className="rg-notes"><label className="rg-field">Who to ask, and where to find things<textarea rows={5} maxLength={4000} value={value} onChange={e=>setValue(e.target.value)} disabled={busy}/></label>
    {error&&<AlertPanel variant="error">{error}</AlertPanel>}
-   <div className="rg-actions"><button type="button" disabled={busy} onClick={()=>{setEdit(false);setValue(text||'')}}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>Save note</button></div></div>
-  :<div className="rb-note">{text?<p>{text}</p>:<p>No note yet. Write who to call first and where the shared accounts are kept. Do not write passwords here.</p>}<button type="button" className="rb-link" onClick={()=>setEdit(true)}>{text?'Edit note':'Write a note'}</button></div>}
+   <div className="rg-actions"><button type="button" className="link-action" disabled={busy} onClick={()=>{setEdit(false);setValue(text||'')}}>Cancel</button><button type="button" className="primary" disabled={busy} onClick={save}>Save note</button></div></div>
+  :<div className="rb-note">{text?<p>{text}</p>:<p>No note yet. Write who to call first and where the shared accounts are kept. Do not write passwords here.</p>}<button type="button" className="link-action" onClick={()=>setEdit(true)}>{text?'Edit note':'Write a note'}</button></div>}
  </section>;
 }
 
@@ -57,7 +57,7 @@ export function RecoveryGuide({api,onSessionExpired}){
  const [data,setData]=useState(null),[error,setError]=useState(''),[tab,setTab]=useState('Fleet overview'),[open,setOpen]=useState(false);
  const load=useCallback(async()=>{try{setData(await api('/runbook'));setError('')}catch(e){if(e.status===401){onSessionExpired?.();return}setError(e.message||'The Recovery Guide could not be loaded.')}},[api,onSessionExpired]);
  useEffect(()=>{load()},[load]);
- if(error&&!data)return <div className="rb"><AlertPanel variant="error" title="The Recovery Guide could not be loaded" action={<div><button type="button" onClick={load}>Try again</button></div>}>{error}</AlertPanel></div>;
+ if(error&&!data)return <div className="rb"><AlertPanel variant="error" title="The Recovery Guide could not be loaded" action={<div><button type="button" className="link-action" onClick={load}>Try again</button></div>}>{error}</AlertPanel></div>;
  if(!data)return <div className="loading">Loading the Recovery Guide…</div>;
  const {guide}=data,app=guide.apps.find(a=>a.id===tab),untested=guide.apps.filter(a=>a.status!=='verified');
  const dialog=open&&<ExportDialog api={api} apps={guide.apps.map(a=>({id:a.id,name:a.name}))} only={app?.id} onClose={()=>setOpen(false)} onMade={load}/>;
@@ -68,7 +68,7 @@ export function RecoveryGuide({api,onSessionExpired}){
   {error&&<AlertPanel variant="error">{error}</AlertPanel>}
   <div className="rb-tabs" role="group" aria-label="Recovery Guide pages">{[['Fleet overview','Fleet overview'],...guide.apps.map(a=>[a.id,a.name])].map(([id,label])=><button type="button" key={id} aria-pressed={tab===id} onClick={()=>setTab(id)}>{label}</button>)}</div>
   <article className="rb-paper" aria-label="Recovery Guide">
-   <header className="rb-head"><div><h2 className="rb-title">{app?app.name+': what to do':'If something happens to me'}</h2><div className="rb-meta"><span>Made on {when(data.madeAt)}{data.madeBy?` by ${data.madeBy}`:''}</span><button type="button" className="rb-link" onClick={()=>setOpen(true)}><IconFileTypePdf size={16} stroke={1.75} aria-hidden="true"/>Download Recovery Guide (PDF)</button>{data.outdated?<StatusLabel state="needs-review">Out of date</StatusLabel>:<StatusLabel state="success">Up to date</StatusLabel>}</div></div></header>
+   <header className="rb-head"><div><h2 className="rb-title">{app?app.name+': what to do':'If something happens to me'}</h2><div className="rb-meta"><span>Made on {when(data.madeAt)}{data.madeBy?` by ${data.madeBy}`:''}</span><button type="button" className="link-action" onClick={()=>setOpen(true)}><IconFileTypePdf size={16} stroke={1.75} aria-hidden="true"/>Download Recovery Guide (PDF)</button>{data.outdated?<StatusLabel state="needs-review">Out of date</StatusLabel>:<StatusLabel state="success">Up to date</StatusLabel>}</div></div></header>
    {app?<AppPage app={app}/>:<Fleet guide={guide} api={api} reload={load}/>}
   </article>
   {dialog}

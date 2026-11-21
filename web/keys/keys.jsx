@@ -89,7 +89,7 @@ export function KeysSection({site,canEdit,api,onChanged}){
      <span className="map-caption">{where&&<>{where}{key.app?` (${key.app})`:''} · </>}<code>{fp(key.fingerprint)}</code></span>
      <StatusLabel state={state}>{word}</StatusLabel>
      {key.reason&&<p className="keys-reason">{addable?`${key.reason} Add ${where} to the app's configuration files.`:key.reason}</p>}
-     {canEdit&&addable&&<button type="button" disabled={busy} onClick={()=>addFile(key)}>Add file</button>}
+     {canEdit&&addable&&<button type="button" className="link-action" disabled={busy} onClick={()=>addFile(key)}>Add file</button>}
     </li>})}</ul>
    <p className="map-caption">DockNest never shows or stores key values. It compares fingerprints.</p>
   </>}
@@ -97,7 +97,7 @@ export function KeysSection({site,canEdit,api,onChanged}){
    <h3 className="map-group-title">Changed since known-good</h3>
    <ul className="keys-list">{changed.map(c=><li key={c.item}><code className="keys-name">{changedName(c)}</code>
     <StatusLabel state="needs-review">{c.kind==='file'?'Changed outside Safe Edit':'Changed'}{c.firstSeenAt?', '+formatDate(c.firstSeenAt,{shortTime:true}):''}</StatusLabel></li>)}</ul>
-   {markable&&<div className="keys-mark"><button type="button" disabled={busy||guard.waiting} onClick={mark}>Mark as known-good</button><p className="map-caption">Do this after you checked the change.</p></div>}
+   {markable&&<div className="keys-mark"><button type="button" className="link-action" disabled={busy||guard.waiting} onClick={mark}>Mark as known-good</button><p className="map-caption">Do this after you checked the change.</p></div>}
   </>}
   {!changed.length&&k.knownGood&&<p className="map-caption">Compose, env and configuration files unchanged since known-good, {formatDate(k.knownGood.at,{shortTime:true})}.</p>}
   {guard.prompt&&<div ref={askRef}>{guard.prompt}</div>}

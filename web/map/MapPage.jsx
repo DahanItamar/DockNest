@@ -422,7 +422,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  const tool=(label,pkg,v,server)=>{
   if(v===undefined)return null;
   if(v)return [label,typeof v==='string'?v:'Installed'];
-  return [label,<span className="map-missing"><span>Missing</span>{canMove&&<button type="button" onClick={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'install',context:'server',check:{serverId:server.id,install:{package:pkg,command:'',supported:true}}})}}>Install {pkg}</button>}</span>];
+  return [label,<span className="map-missing"><span>Missing</span>{canMove&&<button type="button" className="link-action" onClick={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'install',context:'server',check:{serverId:server.id,install:{package:pkg,command:'',supported:true}}})}}>Install {pkg}</button>}</span>];
  };
  // The rows of one app: every domain it lists, with what DockNest knows of each.
  const appDomainRows=s=>[...new Set([...domainsOf(s),...(dom.view?.domains||[]).filter(r=>r.siteId===s.id).map(r=>r.domain)])].map(d=>domRows[d]).filter(Boolean);
@@ -443,9 +443,9 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     <LinkedSection site={s} servers={servers} nameOf={nameOf} onOpen={(id,el)=>openPanel({kind:'site',id},el)}/>
     <KeysSection site={s} canEdit={canMove} api={api} onChanged={onRefresh}/>
     <HardeningSection site={s} checking={(jobs||[]).some(j=>j.siteId===s.id&&/backup/i.test(j.type||'')&&['queued','running'].includes(j.status))}/>
-    {api&&s.config?.kind!=='static'&&<button type="button" className="map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
+    {api&&s.config?.kind!=='static'&&<button type="button" className="link-action map-found" onClick={e=>{opener.current=e.currentTarget;setShFlow(s.id)}}>Self-heal</button>}
     {dbs.length>0&&<section><h3 className="map-group-title">Databases</h3><ul className="map-plain">{dbs.map(d=><li key={d.id}>{d.label}</li>)}</ul><p className="map-caption">Moves together with the app.</p></section>}
-    {onEditHistory&&<button type="button" className="map-found" onClick={()=>onEditHistory(s)}>Edit history</button>}
+    {onEditHistory&&<button type="button" className="link-action map-found" onClick={()=>onEditHistory(s)}>Edit history</button>}
     {alertsOn&&<SourceAlerts source={{kind:'site',id:s.id,name:s.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }
@@ -456,7 +456,7 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
     <Defs rows={[['Status',serverStatus(sv)],['Address',<Val text={sv.host} label="address"/>],['SSH','Port '+sv.port+', user '+sv.username],sv.hostKey&&['Host key',<Val text={sv.hostKey} label="host key">{String(sv.hostKey).replace(/^SHA256:/,'').slice(0,16)+'…'}</Val>],(c.os||c.osName)&&['System',c.os||c.osName],c.architecture&&['Architecture',c.architecture],['Docker',c.dockerVersion||c.docker||'Not checked yet'],tool('Compose','compose',c.composeVersion===null?false:c.composeVersion,sv),tool('nginx','nginx',nginx,sv),tool('Certbot','certbot',certbot,sv),(free||c.totalBytes)&&['Disk',free?free+' free'+(c.totalBytes?' of '+bytes(c.totalBytes):''):bytes(c.totalBytes)+' total'],['Apps',String(mine)]]}/>
     {canMove&&running.id===sv.id&&running.list.length>0&&<section><h3 className="map-group-title">Launches</h3><ul className="map-rows">{running.list.map(x=><LaunchRow key={x.id} item={x} onOpen={e=>{opener.current=e.currentTarget;setPanel(null);setFlow({kind:'launch-open',serverId:sv.id,launchId:x.id})}}/>)}</ul></section>}
     {showCov&&sv.status==='connected'&&<MapCoverage api={api} server={sv} coverage={coverage} onSessionExpired={onSessionExpired} onAddApp={(serverId,names)=>{closePanel(false);onAddSite?.(serverId,names)}} onOpenApp={siteId=>{if(byId.sites[siteId])openPanel({kind:'site',id:siteId},opener.current)}}/>}
-    {canMove&&<button type="button" className="map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button>}
+    {canMove&&<button type="button" className="link-action map-found" onClick={e=>openPanel({kind:'add-server',id:sv.id},e.currentTarget)}>Add an app found here</button>}
     {alertsOn&&<SourceAlerts source={{kind:'server',id:sv.id,name:sv.name}} rules={alerts.rules} nodes={alerts.nodes} onEdit={editRule} onAdd={pickChannel}/>}
    </SidePanel>;
   }

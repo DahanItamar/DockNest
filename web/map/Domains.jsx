@@ -30,8 +30,8 @@ export function PathStepper({row,ctx,checking,error,onLink,now}){
 // The path panel for one domain (a node on the Map, or a row in an app's panel).
 export function DomainPanel({row,narrow,ctx,checking,error,canCheck,onCheck,onClose,onOpenApp,onConnections,now}){
  const never=!row.hops,busy=!!checking;
- const check=canCheck&&<button type="button" className={never&&!busy?'primary':''} disabled={busy} onClick={()=>onCheck(row.domain)}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{never?'Check now':'Check again'}</button>;
- const open=row.siteId&&onOpenApp&&<button type="button" className={never&&canCheck?'':'primary'} onClick={()=>onOpenApp(row.siteId)}>Open app</button>;
+ const check=canCheck&&<button type="button" className={never&&!busy?'primary':'link-action'} disabled={busy} onClick={()=>onCheck(row.domain)}><IconRefresh size={18} stroke={1.75} aria-hidden="true"/>{never?'Check now':'Check again'}</button>;
+ const open=row.siteId&&onOpenApp&&<button type="button" className={never&&canCheck?'link-action':'primary'} onClick={()=>onOpenApp(row.siteId)}>Open app</button>;
  return <SidePanel narrow={narrow} labelId="map-panel-title" title={row.domain} onClose={onClose} icon={<IconWorld size={24} stroke={1.5} aria-hidden="true"/>}
   footer={<>{never&&canCheck?<>{open}{check}</>:<>{check}{open}</>}</>}>
   <div role="status" aria-live="polite" className="map-domain-live">

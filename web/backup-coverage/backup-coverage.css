@@ -10,8 +10,6 @@
 .bc-bar{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .bc-summary{margin:0;color:var(--text-secondary)}
 .bc-summary b{color:var(--heading);font-weight:500}
-button.bc-link{display:inline-flex;align-items:center;gap:8px;flex:none;min-height:var(--control-height);padding:0 8px;border:0;background:var(--transparent);color:var(--link);font-weight:500}
-button.bc-link:hover{background:var(--surface-hover);color:var(--accent-hover)}
 .bc-state{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 0}
 .bc-problem{display:flex;flex-direction:column;gap:2px;margin-top:4px;overflow-wrap:anywhere}
 .bc-problems{display:flex;flex-direction:column}

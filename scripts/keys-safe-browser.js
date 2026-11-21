@@ -37,6 +37,7 @@ const preview=({siteId,targetServerId})=>({id:'m1',siteId,targetServerId,ok:fals
 
 const browser=await chromium.launch({channel:process.env.TEST_BROWSER_CHANNEL||'chrome',headless:true});
 const errors=[],offOrigin=[];
+const asLink=async(loc,label,w)=>{await loc.waitFor();const s=await loc.evaluate(e=>{const c=getComputedStyle(e);return {bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor,td:c.textDecorationLine,sw:document.documentElement.scrollWidth}});assert.equal(s.bw,0,label+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(s.bg),label+' has no fill: '+s.bg);assert.ok(s.td.includes('underline'),label+' is underlined');assert.ok(s.sw<=w,label+' does not overflow at '+w)};
 async function open(theme,width,{role='admin',route='Map',self=kitState(mock.kit)}={}){
  const page=await browser.newPage({viewport:{width,height:width<500?874:900}});
  page.on('pageerror',e=>errors.push(e.message));
@@ -119,7 +120,7 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
   await openSite(page,LEDGER);
   await keys.getByText('Missing from last backup',{exact:true}).waitFor();
   await keys.getByText(/The file is not one of the files this app backs up\. Add \/srv\/ledger\/\.env\.production/).waitFor();
-  await keys.getByRole('button',{name:'Add file'}).waitFor();
+  await asLink(keys.getByRole('button',{name:'Add file'}),'Add file',width);
   await keys.scrollIntoViewIfNeeded();await shot(page,'keys-panel-missing',theme,width);
   await openSite(page,MEDIA);
   await keys.getByText(/No app keys found\./).waitFor();
@@ -131,6 +132,7 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
   await keys.getByText('/srv/wiki/compose.yaml',{exact:true}).waitFor();
   await keys.getByText(/Changed 2 days ago, newer than the last backup/).waitFor();
   await keys.scrollIntoViewIfNeeded();await shot(page,'keys-panel-changed',theme,width);
+  await asLink(keys.getByRole('button',{name:'Mark as known-good'}),'Mark as known-good',width);
   await keys.getByRole('button',{name:'Mark as known-good'}).click();
   await keys.getByRole('group',{name:'Please confirm it is you'}).waitFor();
   assert.deepEqual(mock.known,[],'nothing is marked before the sign-in check');

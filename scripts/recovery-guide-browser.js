@@ -46,6 +46,7 @@ async function open(theme,width,{role='admin',kind='ok',pdf,loadFails=false,reau
 const shot=async(page,name,theme,width,full=true)=>{if(shots)await page.screenshot({path:`${shots}/recovery-guide-${name}-${width}-${theme}.png`,fullPage:full});};
 const noOverflow=async(page,what)=>assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no sideways scroll: '+what);
 const dialogOf=page=>page.locator('dialog.rg-dialog');
+const asLink=async(loc,label,w)=>{await loc.waitFor();const s=await loc.evaluate(e=>{const c=getComputedStyle(e);return {bw:parseFloat(c.borderTopWidth)+parseFloat(c.borderLeftWidth),bg:c.backgroundColor,td:c.textDecorationLine,sw:document.documentElement.scrollWidth}});assert.equal(s.bw,0,label+' has no border');assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(s.bg),label+' has no fill: '+s.bg);assert.ok(s.td.includes('underline'),label+' is underlined');assert.ok(s.sw<=w,label+' does not overflow at '+w)};
 const openDialog=async page=>{await page.getByRole('button',{name:'Download Recovery Guide (PDF)',exact:true}).click();await dialogOf(page).waitFor()};
 
 for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',390]]){
@@ -55,7 +56,8 @@ for(const [theme,width] of [['light',1280],['dark',1280],['light',390],['dark',3
  await page.getByRole('heading',{name:'If something happens to me'}).waitFor();
  for(const h of ['Start here','Restore everything in this order','Who to ask','Your servers','Your apps','Where the backups are','The emergency kit'])await page.getByRole('heading',{name:h,exact:true}).waitFor();
  assert.equal(await page.getByText('Runbook').count(),0,'the word Runbook is never shown');
- assert.equal(await page.locator('.rb-meta button.rb-link').count(),1,'one text link for the PDF');
+ assert.equal(await page.locator('.rb-meta button.link-action').count(),1,'one text link for the PDF');
+ await asLink(page.locator('.rb-meta button.link-action'),'PDF link',width);
  assert.equal(await page.getByRole('button',{name:/Download Recovery Guide/}).evaluate(b=>b.classList.contains('primary')),false,'the PDF link is not a primary button');
  await page.getByText('Up to date',{exact:true}).waitFor();
  assert.equal(await page.locator('.rb-start .rb-note').count(),3,'new server, install DockNest, connect storage');

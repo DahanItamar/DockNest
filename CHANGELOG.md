@@ -30,6 +30,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Changed
 
+- Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are now plain underlined links instead of outlined buttons; main actions stay filled buttons.
 - DockNest's own backup is now called **Self Backup** in the menu, page, alerts and docs. Nothing changes in how it works, and your existing settings and backups are untouched.
 - Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
 - Sites are now called Apps, because DockNest backs up any Docker app or stack, not only websites. The menu entry is now Apps & schedules. There is nothing to do: your data, links and bookmarks keep working.
