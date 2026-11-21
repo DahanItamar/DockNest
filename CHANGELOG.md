@@ -23,6 +23,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 - Keys safe: DockNest finds the encryption keys of apps such as Laravel, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden, and checks that each key is inside the last backup. A key kept in a file the app does not back up is shown as missing, with the file. Key values never leave the server.
 - Restore tests check that the restored app has the same keys as the backup.
 - A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
+- Keys safe on screen: a padlock on each app in the Map and a Keys line on each app card (found in the last backup, missing, or changed), a Keys section in the app's Map panel with each key's name, place and short fingerprint (never the key), "Add file" for a key in a file the app does not back up, and "Mark as known-good" for administrators after a sign-in check. Self Backup shows a Recovery kit check card with its last result, and a move review lists owner, file-mode and target-folder findings as separate notes.
 
 ### Changed
 

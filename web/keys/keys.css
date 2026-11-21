@@ -16,3 +16,5 @@
 .keys-reason{margin:0;font-size:var(--fs-body);line-height:var(--lh-body);color:var(--text-primary);overflow-wrap:anywhere}
 .keys-mark{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
 @media(max-width:767px){.keys-section button{min-height:44px}}
+.kit-check .status{white-space:normal;align-items:flex-start}
+.kit-check .status-icon{margin-top:2px}

@@ -21,7 +21,7 @@ export const kitReason=code=>KIT_REASON[code]||'DockNest could not finish the ch
 
 export function KitCheckCard({kit,busy,onCheck,onNewKit}){
  const last=kit?.last,running=Boolean(kit?.active),failed=last?.result==='failed',never=!last;
- return <section className="card" aria-labelledby="kc-title"><div className="card-body sb-stack">
+ return <section className="card kit-check" aria-labelledby="kc-title"><div className="card-body sb-stack">
   <h2 className="card-title" id="kc-title">Recovery kit check</h2>
   <span className="sb-state" role="status">{running?<StatusLabel state="running">Checking the newest kit</StatusLabel>
    :never?<StatusLabel state="queued">Not checked yet</StatusLabel>
