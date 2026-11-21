@@ -28,7 +28,7 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - Adding an app finds stacks that Portainer or Dockge manage, fills in their Compose file from the manager's stacks folder and shows the manager on the app card. DockNest only reads it and never changes Portainer or Dockge.
 
 **Storage and backups**
-- Online database dumps (opt-in per app): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
+- Online database dumps (opt-in per app, a switch under Advanced backup settings; each database says whether it can stay running): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
 - Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or change stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
 - Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
 

@@ -492,7 +492,7 @@ def readiness(cfg):
             names=[c.get('Name','').lstrip('/') for c in cs if c['Id'] in chosen]
             message='; '.join((['Online dump: '+', '.join(names)] if names else [])+['%s stops for a file copy: %s'%(item['container'],item['reason']) for item in fallbacks]) or 'No running database to dump'
             message+='. With incremental backups on, every database stops for a file copy instead.'
-            checks.append({'name':'Online database dumps','ok':not fallbacks,'required':False,'message':message})
+            checks.append({'name':'Online database dumps','ok':not fallbacks,'required':False,'message':message,'dumped':names,'fallbacks':[{'container':item['container'],'reason':item['reason']} for item in fallbacks]})
         except ValueError:pass  # the contracts check above already names the problem
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
