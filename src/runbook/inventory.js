@@ -75,7 +75,8 @@ function appKeys(siteId) {
   };
 }
 
-export function loadInventory({ logins = false } = {}) {
+// `digestOnly`: only what the out-of-date digest reads (src/runbook/state.js), without backups, keys, links or notes.
+export function loadInventory({ logins = false, digestOnly = false } = {}) {
   const servers = db.prepare('SELECT id,name,host,port,note FROM servers ORDER BY created_at,id').all();
   const serverById = new Map(servers.map(server => [server.id, server]));
   const noted = appsWithLoginNotes(), notes = logins ? openLoginNotes() : new Map();
@@ -92,7 +93,7 @@ export function loadInventory({ logins = false } = {}) {
       copyTargetIds: db.prepare('SELECT target_id FROM site_storage_copies WHERE site_id=? ORDER BY target_id').all(site.id).map(row => row.target_id),
       schedule: policy ? { enabled: Boolean(policy.enabled), schedule: policy.schedule, timezone: policy.timezone } : null,
       lastTest: test ? { result: test.result, finishedAt: test.finished_at } : null,
-      backup: newestBackup(site.id), ...appKeys(site.id),
+      ...(digestOnly ? {} : { backup: newestBackup(site.id), ...appKeys(site.id) }),
       hasLoginNote: noted.has(site.id), ...(logins && notes.has(site.id) ? { loginNote: notes.get(site.id) } : {}),
     };
   });
@@ -101,7 +102,7 @@ export function loadInventory({ logins = false } = {}) {
   // The newest emergency kit of the active split on each destination (docs/emergency-kit.md), next to its offline tool.
   const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => locationOf(item.path)).filter(Boolean) : [];
   return {
-    servers, apps, links: appLinks(servers), defaultTarget,
+    servers, apps, links: digestOnly ? [] : appLinks(servers), defaultTarget,
     storage: db.prepare('SELECT * FROM storage_targets ORDER BY created_at,id').all().map(row => storageTarget(row, logins)),
     selfBackup: { schedule: selfBackup ? { enabled: Boolean(selfBackup.enabled), schedule: selfBackup.schedule, timezone: selfBackup.timezone } : null, kit: kit ? { location: locationOf(kit.path), finishedAt: kit.finished_at } : null, emergencyKits: emergencyKitLocations },
     emergency: emergencyStatus(), notes: runbookState().notes,

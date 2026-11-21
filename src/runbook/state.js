@@ -22,7 +22,7 @@ export function canonical(value) {
 const perApp = (inventory, pick) => Object.fromEntries(inventory.apps.map(app => [app.id, sha(pick(app))]));
 export function inventoryParts(inventory) {
   return {
-    apps: Object.fromEntries(inventory.apps.map(app => [app.id, sha({ name: app.name, serverId: app.serverId, domains: [...app.domains].sort() })])),
+    apps: perApp(inventory, app => ({ name: app.name, serverId: app.serverId, domains: [...app.domains].sort() })),
     servers: Object.fromEntries(inventory.servers.map(server => [server.id, { name: sha(server.name), address: sha({ host: server.host, port: server.port }) }])),
     storage: { targets: sha({ targets: inventory.storage.map(target => ({ id: target.id, name: target.name, mode: target.mode, host: target.host ?? target.endpoint, port: target.port ?? null, root: target.root, bucket: target.bucket ?? null })), default: inventory.defaultTarget }), apps: perApp(inventory, app => ({ main: app.mainTargetId, copies: app.copyTargetIds })) },
     schedules: { selfBackup: sha(inventory.selfBackup.schedule), apps: perApp(inventory, app => app.schedule) },
@@ -56,7 +56,7 @@ export function changesBetween(before, after) {
 const madeBy = userId => (userId ? db.prepare('SELECT name,email FROM users WHERE id=?').get(userId) : null);
 // The page state: never made, current, or out of date with the categories of what changed.
 export async function runbookStatus() {
-  const state = runbookState(), parts = inventoryParts(await loadInventory()), digest = digestOf(parts);
+  const state = runbookState(), parts = inventoryParts(loadInventory({ digestOnly: true })), digest = digestOf(parts);
   const user = madeBy(state.made_by), outdated = Boolean(state.digest) && state.digest !== digest;
   return {
     made: Boolean(state.digest), madeAt: state.made_at, madeBy: user ? user.name || user.email : null, outdated,
@@ -82,7 +82,7 @@ export function saveNotes(notes, actor) {
 export async function noteInventoryChange() {
   const state = runbookState();
   if (!state.digest) return;
-  const digest = digestOf(inventoryParts(await loadInventory())), outdated = digest !== state.digest;
+  const digest = digestOf(inventoryParts(loadInventory({ digestOnly: true }))), outdated = digest !== state.digest;
   transaction(() => {
     const previous = JSON.parse(db.prepare('SELECT value FROM settings WHERE key=?').get(CHECK)?.value ?? '{}');
     const alerted = outdated && previous.alerted !== digest;

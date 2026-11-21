@@ -213,6 +213,20 @@ test('an incremental backup: its whole chain is downloaded; a missing parent or 
   db.prepare('INSERT INTO site_archives VALUES(?,?)').run(chained, now());
 });
 
+test('only a change to the inventory routes compares the digest; other changes leave it alone', async () => {
+  await pdf({ apps: allApps });
+  const check = () => JSON.parse(db.prepare("SELECT value FROM settings WHERE key='runbook_check'").get().value);
+  db.prepare('UPDATE servers SET note=? WHERE id=?').run('Changed outside the API', server);
+  db.prepare('UPDATE servers SET name=? WHERE id=?').run('web-renamed', server);
+  assert.equal((await request(`/runbook/apps/${shop}/login-note`, { body: { note: '' } })).status, 200);
+  await settle();
+  assert.equal(check().outdated, false, 'a login note is not an inventory change');
+  assert.equal((await request('/runbook/notes', { body: { notes: 'Ask Dana at dana@example.com.' } })).status, 200);
+  await settle();
+  assert.equal(check().outdated, true, 'the note route compares');
+  db.prepare('UPDATE servers SET name=? WHERE id=?').run('web-1', server);
+});
+
 test('the restore order puts the app that owns a shared database first', () => {
   const apps = [{ id: 'a', name: 'Shop', containers: ['shop-web'] }, { id: 'b', name: 'Database', containers: ['main-db'] }, { id: 'c', name: 'Docs', containers: [] }];
   assert.deepEqual(restoreOrder(apps, [{ appIds: ['a', 'b'], kind: 'database', via: 'main-db' }]).map(item => [item.name, item.reason]), [

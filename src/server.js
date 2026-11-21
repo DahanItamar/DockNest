@@ -85,9 +85,11 @@ app.use('/api', lockMiddleware(updates));
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
-// A change that succeeded may leave the Recovery Guide out of date (src/runbook/state.js): compare once it is answered.
+// A change to servers, apps, storage, Self Backup or the guide's note may leave the Recovery Guide out of date
+// (src/runbook/state.js): compare the digest once such a request has succeeded. Other changes do not touch its inputs.
+const INVENTORY_ROUTES = /^\/(servers|sites|storage-targets|self-backup|moves|runbook\/notes)(\/|$)/;
 app.use('/api', (req, res, next) => {
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) res.once('finish', () => { if (res.statusCode < 400) noteInventoryChange().catch(() => {}); });
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && INVENTORY_ROUTES.test(req.path)) res.once('finish', () => { if (res.statusCode < 400) noteInventoryChange().catch(() => {}); });
   next();
 });
 app.use('/api/access', access);
