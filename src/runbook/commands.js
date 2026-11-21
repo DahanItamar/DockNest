@@ -57,29 +57,26 @@ function join(...parts) {
 const field = (...keys) => raw(`$(field ${keys.join(' ')})`);
 const assign = (name, word) => raw(`${name}=${word.raw}`);
 const TAR = ['tar', '--xattrs', '--acls', '--numeric-owner', '--skip-old-files', '-xpf'];
+// Small shell functions with a Python program in single quotes (no heredoc, so a copied box has no "<<" marker and
+// nothing in it reads like a placeholder to fill in).
+const pythonFunction = (name, lines) => [`${name}() { python3 -c '`, ...lines, `' "$@"; }`].join('\n');
 // Reads one value from the package's manifest.json, for example: field containers 0 Mounts 1 Source
-const FIELD = [
-  "field() { python3 - \"$@\" <<'PY'",
+const FIELD = pythonFunction('field', [
   'import json, sys',
-  "value = json.load(open('package/manifest.json'))",
+  'value = json.load(open("package/manifest.json"))',
   'for key in sys.argv[1:]:',
   '    value = value[int(key)] if isinstance(value, list) else value[key]',
   'print(value)',
-  'PY',
-  '}',
-].join('\n');
+]);
 // Gives a folder the owner, group and mode of the first entry of a mount archive: a Docker volume's own folder, which
 // tar --strip-components leaves as Docker made it.
-const OWNER = [
-  "owner() { python3 - \"$@\" <<'PY'",
+const OWNER = pythonFunction('owner', [
   'import os, sys, tarfile',
   'with tarfile.open(sys.argv[1]) as archive:',
   '    top = archive.next()',
   'os.chown(sys.argv[2], top.uid, top.gid)',
   'os.chmod(sys.argv[2], top.mode)',
-  'PY',
-  '}',
-].join('\n');
+]);
 
 // Whether addresses and login details appear, or their placeholders.
 export function revealer({ addresses = false, logins = false } = {}) {
