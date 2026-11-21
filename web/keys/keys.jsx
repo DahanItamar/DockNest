@@ -1,4 +1,4 @@
-import React,{useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {IconLockCheck,IconLockExclamation,IconLockX,IconCircleX} from '@tabler/icons-react';
 import {StatusLabel} from '../system.jsx';
 import {formatDate} from '../date-format.js';
@@ -35,7 +35,7 @@ const place=location=>String(location||'').startsWith('file:')?location.slice(5)
 export function keysWords(site){
  const k=site?.keys,state=keyState(site);if(!state)return null;
  const missing=k.keys.filter(x=>x.status==='missing'),verified=k.keys.length>0&&k.keys.every(x=>x.status==='verified');
- if(state==='red')return missing.every(x=>x.reason===NO_BACKUP)?`No backup yet, ${count(k.keys.length,'key')} found`:`${missing.length} missing from last backup`;
+ if(state==='red')return missing.every(x=>x.reasonCode?x.reasonCode==='no-backup':x.reason===NO_BACKUP)?`No backup yet, ${count(k.keys.length,'key')} found`:`${missing.length} missing from last backup`;
  if(state==='amber')return k.keys.some(x=>x.status==='changed')?'Key changed since last backup':'Changed since known-good';
  return verified?`${k.keys.length} found, verified in a restore test`:`${k.keys.length} found, in last backup`;
 }
@@ -59,7 +59,9 @@ const changedName=c=>c.kind==='file'?c.item:'An app key';
 export function KeysSection({site,canEdit,api,onChanged}){
  const k=site?.keys;
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[done,setDone]=useState(false);
- const guard=useGuard({reauth:(password,code)=>api('/auth/reauth',{password,code})});
+ const guard=useGuard({reauth:(password,code)=>api('/auth/reauth',{password,code})}),askRef=useRef(null);
+ // The sign-in check opens below the list in a scrolling panel: bring it into view.
+ useEffect(()=>{if(guard.waiting)askRef.current?.scrollIntoView?.({block:'nearest'})},[guard.waiting]);
  if(!k||isStatic(site))return null;
  const none=!k.keys.length,changed=k.changed||[];
  const markable=canEdit&&changed.length>0;
@@ -81,7 +83,7 @@ export function KeysSection({site,canEdit,api,onChanged}){
  return <section className="keys-section" aria-labelledby={'keys-title-'+site.id}>
   <h3 className="map-group-title" id={'keys-title-'+site.id}>Keys this app needs</h3>
   {none?<p className="map-caption">No app keys found. DockNest looks for keys such as APP_KEY, N8N_ENCRYPTION_KEY and SECRET_KEY_BASE.</p>:<>
-   <ul className="keys-list">{k.keys.map(key=>{const [state,word]=keyStatus(key),where=place(key.location),addable=key.status==='missing'&&key.reason===NOT_INCLUDED&&String(key.location).startsWith('file:');
+   <ul className="keys-list">{k.keys.map(key=>{const [state,word]=keyStatus(key),where=place(key.location),addable=key.status==='missing'&&(key.reasonCode?key.reasonCode==='not-included':key.reason===NOT_INCLUDED)&&String(key.location).startsWith('file:');
     return <li key={key.ruleId+key.location}>
      <code className="keys-name">{key.name}</code>
      <span className="map-caption">{where&&<>{where}{key.app?` (${key.app})`:''} · </>}<code>{fp(key.fingerprint)}</code></span>
@@ -98,7 +100,7 @@ export function KeysSection({site,canEdit,api,onChanged}){
    {markable&&<div className="keys-mark"><button type="button" disabled={busy||guard.waiting} onClick={mark}>Mark as known-good</button><p className="map-caption">Do this after you checked the change.</p></div>}
   </>}
   {!changed.length&&k.knownGood&&<p className="map-caption">Compose, env and configuration files unchanged since known-good, {formatDate(k.knownGood.at,{shortTime:true})}.</p>}
-  {guard.prompt}
+  {guard.prompt&&<div ref={askRef}>{guard.prompt}</div>}
   {done&&<p className="map-caption" role="status">Marked as known-good.</p>}
   {error&&<Note kind="error" icon={IconCircleX} role="alert">{error}</Note>}
  </section>;

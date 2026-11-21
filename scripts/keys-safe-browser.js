@@ -19,7 +19,7 @@ const sites=[
   key('rails-secret-key-base','SECRET_KEY_BASE','Rails apps (Mastodon, GitLab)','file:/srv/shop/.env','8d04b6f1',{status:'in-backup'})])),
  site(WIKI,'Wiki',keysOf('amber',[key('n8n-encryption-key','N8N_ENCRYPTION_KEY','n8n','file:/srv/wiki/.env','51be0a7d',{status:'changed',changedAt:past(2*DAY)})],
   [{item:'/srv/wiki/compose.yaml',kind:'file',firstSeenAt:past(2*DAY)},{item:'/srv/wiki/.env',kind:'file',firstSeenAt:past(2*DAY)}])),
- site(LEDGER,'Ledger',keysOf('red',[key('laravel-app-key','APP_KEY','Laravel or Firefly III','file:/srv/ledger/.env.production','c2175e90',{status:'missing',reason:'The file is not one of the files this app backs up.'})])),
+ site(LEDGER,'Ledger',keysOf('red',[key('laravel-app-key','APP_KEY','Laravel or Firefly III','file:/srv/ledger/.env.production','c2175e90',{status:'missing',reasonCode:'not-included',reason:'The file is not one of the files this app backs up.'})])),
  site(MEDIA,'Media',keysOf('none',[],[],null)),
  {id:LAND,name:'Landing',serverId:'s1',config:{kind:'static',documentRoot:'/var/www/landing'},keys:keysOf('none',[],[],null)}
 ];
