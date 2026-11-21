@@ -107,3 +107,4 @@ disk" or "Valkey 8.0 - cache only". Check readiness says the same in plain words
   DockNest checks that the keys came back. The usual data checks (`checks` with a key) then compare values.
 - **Fail closed**: a save that errors, does not finish before the deadline or does not pass the file check never leaves a
   file; the server then stops and is copied as before, with the reason in the warning.
+- **For the interface**: the plan's `services[]` entries carry `onlineCopy` (true when the engine can take an online copy: PostgreSQL, MySQL, MariaDB, Redis, Valkey) and, for Redis and Valkey, `flavor` (`redis` or `valkey`) and `persistence` (`disk` or `cache`).

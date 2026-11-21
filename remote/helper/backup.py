@@ -200,7 +200,7 @@ def v1_plan(plan):
     """Format v1 manifests keep the plan exactly as before chain fingerprints existed."""
     return {k:v for k,v in plan.items() if k!='chainFingerprint'}
 def public_plan(plan):
-    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn','flavor','persistence']} for s in plan['services']]}
+    return {**{k:v for k,v in plan.items() if k not in ['sources','services']},'sources':[{'filesystem':s['filesystem'],'classification':'local'} for s in plan['sources']],'services':[{**{k:v for k,v in s.items() if k in ['container','engine','version','role','dependsOn','flavor','persistence']},'onlineCopy':bool(getattr(ENGINES.get(s['engine']),'dump_format',None))} for s in plan['services']]}
 
 def revalidate_sources(plan):
     table=mount_table()

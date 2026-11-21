@@ -175,6 +175,7 @@ async function runRedisSnapshotScenario({ run, until, hosts, servers, db, record
     assert.equal(plan.services[0].engine, 'redis');
     assert.equal(plan.services[0].flavor, flavor);
     assert.equal(plan.services[0].persistence, 'disk');
+    assert.equal(plan.services[0].onlineCopy, true);
     const first = await started(name);
     const done = await job(() => enqueueBackup(siteId, 'qa'));
     assert.equal(await started(name), first, flavor + ' kept running through the backup: ' + JSON.stringify(JSON.parse(done.details).warnings || []));
