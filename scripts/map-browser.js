@@ -1205,6 +1205,21 @@ try{
     assert.ok(m.sw<=w&&m.pw<=m.cw+1,L+': no horizontal overflow');
     assert.equal(m.nested,0,L+': no cards in cards');
     if(process.env.PANEL_SHOTS)await panel.screenshot({path:path.join(process.env.PANEL_SHOTS,'app-'+w+'-'+scheme+'.png')});
+    // The server panel (media-box misses nginx): status in the header line only, Open server the one filled action
+    await page.keyboard.press('Escape');await panel.waitFor({state:'detached'});
+    if(w>=768)await page.locator('.map-server[data-node="server:a"]').click();
+    else await page.getByRole('region',{name:'media-box'}).getByRole('button',{name:'Details'}).first().click();
+    const sp=w>=768?page.locator('.map-panel'):dialog(page);await sp.getByRole('heading',{name:'media-box'}).waitFor();await sp.getByText('Missing').first().waitFor();
+    const s=await sp.evaluate(root=>({filled:[...root.querySelectorAll('button.primary')].map(e=>e.textContent),
+     boxed:[...root.querySelectorAll('.map-panel-body button:not(.primary):not(.link-action):not(.icon-button), .map-dialog-body button:not(.primary):not(.link-action):not(.icon-button)')].filter(e=>parseFloat(getComputedStyle(e).borderTopWidth)>0).map(e=>e.textContent),
+     status:[...root.querySelectorAll('.map-defs dt')].filter(e=>/^Status$/.test(e.textContent)).length,cols:getComputedStyle(root.querySelector('.map-defs > div')).gridTemplateColumns.split(' ')[0],
+     sw:document.documentElement.scrollWidth,pw:root.scrollWidth,cw:root.clientWidth}));
+    assert.deepEqual(s.filled,['Open server'],L+': server panel has one filled primary');
+    assert.deepEqual(s.boxed,[],L+': no boxed secondary buttons in the server panel');
+    assert.equal(s.status,0,L+': server status shows once, in the header line');assert.equal(s.cols,'104px',L+': server label column');
+    assert.ok(s.sw<=w&&s.pw<=s.cw+1,L+': server panel has no horizontal overflow');
+    assert.equal(await page.getByText(/\bBeta\b/).count(),0,L+': no Beta label');
+    if(process.env.PANEL_SHOTS)await sp.screenshot({path:path.join(process.env.PANEL_SHOTS,'server-missing-'+w+'-'+scheme+'.png')});
     await context.close();
    }
   }
