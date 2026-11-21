@@ -441,3 +441,13 @@ test('a test from a copy fails closed: a missing or unverified link is "couldn\'
   const removed = await drive(queued);
   assert.equal(removed.result, 'couldnt_run'); assert.match(removed.reason, /copy storage chosen for this test was removed/);
 });
+
+test('a test from a copy ignores copies queued for deletion on that storage', async () => {
+  const f = fixture('offsite-deleting'), target = copyTarget('Offsite deleting');
+  const { full, increment } = chainRows(f.siteId);
+  copyOf(full, target); copyOf(increment, target);
+  db.prepare("UPDATE backup_copies SET delete_state='pending' WHERE backup_id=? AND target_id=?").run(full, target);
+  const done = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, backupId: increment, sourceTargetId: target, actor: 'a' }).id);
+  assert.equal(done.result, 'couldnt_run'); assert.equal(done.failed_step, 'check_space');
+  assert.match(done.reason, new RegExp(`^Backup ${full}, which this backup builds on, has no verified copy on Offsite deleting`));
+});

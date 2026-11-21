@@ -471,3 +471,22 @@ test('testing a copy: settings accept only the app copy destinations, old client
   assert.equal(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='restore_test.skipped' AND target=? ORDER BY created_at DESC LIMIT 1").get(siteId).detail).reason, 'no_verified_copy');
   assert.equal((await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: null }))).body.sourceTargetId, null, 'back to the main storage');
 });
+
+test('testing a copy: after its destination is removed, saving clears the choice instead of failing', async () => {
+  const { siteId, testServer } = fixture('offsite-removed');
+  const targetId = randomUUID();
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId, 'Gone SFTP', '192.0.2.31', 22, 'docknest', 'a'.repeat(64), 'password', 'sealed-fixture', '/home/docknest', 1e12, 'connected', at(), at());
+  db.prepare('INSERT INTO site_storage_copies(site_id,target_id,retention,created_at) VALUES(?,?,NULL,?)').run(siteId, targetId, at());
+  assert.equal((await put(admin, siteId, good(testServer, { sourceTargetId: targetId }))).body.sourceTargetId, targetId);
+  db.prepare('DELETE FROM site_storage_copies WHERE target_id=?').run(targetId);
+  db.prepare('DELETE FROM storage_targets WHERE id=?').run(targetId);
+  // Asking for it again while tests stay on is refused: tests never switch to the main storage on their own.
+  const refused = await put(admin, siteId, good(testServer, { sourceTargetId: targetId }));
+  assert.equal(refused.status, 400); assert.equal(refused.body.field, 'sourceTargetId');
+  // Turning tests off with the stale value, or a client that leaves the field out, saves main storage.
+  const off = await put(admin, siteId, good(testServer, { enabled: false, sourceTargetId: targetId }));
+  assert.equal(off.status, 200); assert.equal(off.body.sourceTargetId, null);
+  db.prepare('UPDATE restore_test_settings SET source_target_id=? WHERE site_id=?').run(targetId, siteId);
+  const omitted = await put(admin, siteId, good(testServer));
+  assert.equal(omitted.status, 200); assert.equal(omitted.body.sourceTargetId, null);
+});

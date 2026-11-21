@@ -45,7 +45,7 @@ function freshMock({failed=false}={}){
    s1:{settings:settings({enabled:true,cadence:'daily',serverId:'ash'}),last:failed?last('t1','failed',30,{failedStep:'check_health',reason:REASON}):last('t1','passed',48),active:null,items:[],next:null},
    s2:{settings:settings({enabled:true,serverId:'nas'}),last:last('t2','passed',24*5),active:null,items:[],next:null},
    s3:{settings:settings({enabled:true,serverId:'ash'}),last:last('t3','couldnt_run',24*3,{reason:'The test server ran low on disk.'}),active:null,items:[],next:null},
-   s4:{settings:settings(),last:null,active:null,items:[],next:null}
+   s4:{settings:settings(),copyTargets:[{targetId:'bkt',name:'Offsite bucket',mode:'s3'}],last:null,active:null,items:[],next:null}
   },
   details:{t1:detailFor('t1','s1',failed?'failed':'passed',failed?'check_health':null),t2:detailFor('t2','s2','passed'),running:{...detailFor('t9','s4','passed'),id:'t9',state:'running',result:null,finishedAt:null,steps:STEP_ORDER.map((step,i)=>({step,label:LABEL[step],state:i<2?'done':i===2?'running':'pending',startedAt:i<3?ago(0.1):null,finishedAt:i<2?ago(0.05):null,detail:null}))}},
   jobs:[
@@ -238,6 +238,9 @@ async function dialogFlow(scheme){
  // Server choices: placeholder first, live server marked
  const options=await d.getByLabel('Test server').locator('option').allTextContents();
  assert.deepEqual(options,['Choose a server','Frankfurt-1','Ashburn-1 (live server)','Home NAS']);
+ // Test from: main storage by default, then the app's copy destinations
+ assert.deepEqual(await d.getByLabel('Test from').locator('option').allTextContents(),['Main storage','Copy on Offsite bucket']);
+ assert.equal(await d.getByLabel('Test from').inputValue(),'');
  assert.equal(await d.locator('.alert-panel.alert-warning').count(),0);
  // Live server gate
  await d.getByLabel('Test server').selectOption({label:'Ashburn-1 (live server)'});
@@ -264,6 +267,7 @@ async function dialogFlow(scheme){
  assert.match(await css(done,'animationName'),/dn-enter/);
  assert.equal(mock.saves.at(-1).body.enabled,false);
  assert.equal(mock.saves.at(-1).body.allowLiveServer,true);
+ assert.equal(mock.saves.at(-1).body.sourceTargetId,null,'main storage is sent as null');
  assert.deepEqual(mock.runs.map(r=>r.siteId),['s4']);
  await shot(page,`dialog-live-${scheme}`);
  // Footer order and sizes
@@ -314,7 +318,7 @@ async function dialogFlow(scheme){
  await d.getByRole('button',{name:'Save'}).click();
  await page.getByRole('status').filter({hasText:'Restore test settings saved.'}).waitFor();
  const saved=mock.saves.at(-1).body;
- assert.deepEqual({...saved,probe:saved.probe},{enabled:true,cadence:'monthly',serverId:'ash',allowLiveServer:true,allowInternet:false,timeLimitMinutes:45,memoryMb:1536,cpus:1.5,probe:{path:'/health'}});
+ assert.deepEqual({...saved,probe:saved.probe},{enabled:true,cadence:'monthly',serverId:'ash',allowLiveServer:true,allowInternet:false,timeLimitMinutes:45,memoryMb:1536,cpus:1.5,probe:{path:'/health'},sourceTargetId:null});
  // Reopen: saved values come back; non-preset values open as Custom
  await card.getByRole('button',{name:/^More actions for /}).first().click();await page.getByRole('menuitem',{name:'Restore tests'}).click();
  const d2=dialog(page);

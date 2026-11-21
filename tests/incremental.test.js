@@ -416,6 +416,14 @@ test('a restore test from a copy reads every chain package from that destination
   db.prepare("UPDATE backup_copies SET status='failed' WHERE backup_id=? AND target_id=?").run(chain[2].id, target);
   error = await attempt();
   assert.equal(error.code, 'copy_unavailable'); assert.equal(error.own, true);
+  // A main package on the chosen destination that is not verified is never read either (strict: verified sources only).
+  db.prepare("UPDATE backup_copies SET status='verified' WHERE backup_id=? AND target_id=?").run(chain[2].id, target);
+  const mainTarget = (await import('../src/site-storage.js')).targetIdOfPath(chain[0].path);
+  assert.equal((await uploadBackupTo({ id: 'srv' }, chain[2].id, 'main-target', { sourceTargetId: mainTarget })).source.role, 'main', 'the main destination itself can be the strict source');
+  db.prepare('UPDATE backups SET verified=0 WHERE id=?').run(chain[0].id);
+  error = await uploadBackupTo({ id: 'srv' }, chain[2].id, 'unverified-main', { sourceTargetId: mainTarget }).catch(caught => caught);
+  assert.equal(error.code, 'copy_unavailable'); assert.equal(error.backupId, chain[0].id, 'an unverified main package on the chosen target does not count');
+  db.prepare('UPDATE backups SET verified=1 WHERE id=?').run(chain[0].id);
   // Without a source the same chain restores from its main packages, exactly as before.
   helper.uploads.length = 0;
   assert.equal((await uploadBackupTo({ id: 'srv' }, chain[2].id, 'main-job')).source.role, 'main');
