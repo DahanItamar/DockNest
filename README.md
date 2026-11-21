@@ -77,7 +77,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Self-heal (off by default): when Docker marks a container of an app unhealthy, DockNest restarts it a few times per hour at most and tells you through your alert lines. It never restarts during a backup, restore, move or change of that app, and works while DockNest is running. See [self-heal](docs/self-heal-guide.md).
 
 **Alerts**
-- Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a move finishes or needs you, a server is unreachable or low on disk, an app's certificate is about to expire or failed to renew, or a new version is out.
+- Get an alert in Telegram, email, WhatsApp, Discord, Slack, Microsoft Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, Matrix or a webhook when a backup fails or passes, a scheduled backup is missed (for example DockNest was down at the time), a move finishes or needs you, a server is unreachable or low on disk, an app's certificate is about to expire or failed to renew, or a new version is out.
 - Save the login once in Administration, Connections (encrypted, never shown again), then add an alert node on the Map, draw a line from DockNest, a server or an app, and pick the events. See [alerts](docs/alerts.md).
 
 **Security**
