@@ -4,7 +4,7 @@ If you are not around, someone you trust has to find the backups and bring the a
 who can. The Recovery Guide is that hand-over: plain, numbered steps made from what DockNest knows right now, as a page
 for administrators and as a PDF you print or keep with the emergency kit.
 
-The page and its dialog come in a later release; this release has the guide, the PDF and the API behind them.
+The **Recovery Guide** page in the menu shows the guide, says when it is out of date or has steps that are not verified, and has one text link, "Download Recovery Guide (PDF)", which opens the dialog where you choose the apps and what goes in.
 
 ## What is in it
 
