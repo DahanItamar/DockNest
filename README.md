@@ -60,7 +60,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Linked apps: each server scan shows which apps depend on each other, such as a database, network or volume they share, and which containers they use that no app backs up. Read-only and warn-only. See [linked apps](docs/linked-apps.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.
-- Light and dark themes, and a layout for phones.
+- A refreshed interface (design system v2) in light and dark themes, with a layout for phones and a sign-in page where the password dots and code digits animate as you type.
 
 **Map and moving apps**
 - A Map page shows your servers, their apps and your backup storage as connected nodes. Click any node for its details, such as the databases that move with an app.
@@ -98,7 +98,17 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
     <td width="50%"><img src="docs/media/update-center.png" width="100%" alt="Update Center showing an available update and the host updater status" /></td>
     <td width="50%"><img src="docs/media/job-details.png" width="100%" alt="Job details for a running backup of a synthetic app, with transfer progress and a step timeline" /></td>
   </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/self-backup.png" width="100%" alt="Self Backup page with the latest recovery kit and recovery settings" /></td>
+    <td width="50%"><img src="docs/media/login.png" width="100%" alt="Sign-in page with a password field showing typed dots" /></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/media/dashboard-dark.png" width="100%" alt="Dashboard in the dark theme" /></td>
+    <td width="50%"><img src="docs/media/self-backup-dark.png" width="100%" alt="Self Backup page in the dark theme" /></td>
+  </tr>
 </table>
+
+<!-- Screenshots for Recovery Guide, Keys safe and Domains are added when their pages land. -->
 
 ## Requirements
 
