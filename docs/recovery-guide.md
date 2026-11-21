@@ -24,8 +24,8 @@ monospaced box, made from DockNest's own records: the real backup file of that a
 folders and containers. The commands follow [independent recovery](independent-recovery.md): download with curl over
 SFTP (checking the storage server's pinned host key) or signed S3 requests, decrypt with the recovery kit's
 `decrypt-backup.js`, load the saved images, put each data folder and settings file back where it was (files already
-there are kept; a Docker named volume goes back into Docker's own volume folder, which Compose then takes over when it
-creates the volume), then start the app (`docker compose up -d` for a Compose project, the saved snapshot for a single
+there are kept; a Docker named volume is created on the new server with `docker volume create` and filled through the
+folder `docker volume inspect` names, wherever that server keeps its volumes, and keeps the owner and mode it had), then start the app (`docker compose up -d` for a Compose project, the saved snapshot for a single
 container, an nginx reload for a static website). An incremental backup uses `decrypt-backup.js --chain` and
 `helper.py restore-chain`. The check commands show the containers, ask each database DockNest knows (PostgreSQL, MySQL,
 MariaDB, Redis, MongoDB) whether it answers, run `PRAGMA integrity_check` on each SQLite file and open each domain over HTTPS.
@@ -61,7 +61,8 @@ never the content. At most 200 apps, 2,000 pages and 64 MB.
 The PDF is written by DockNest itself (`src/runbook/pdf.js`, PDF 1.7, no extra package). Its fonts are Roboto, Roboto
 Mono and Noto Sans Hebrew (in `assets/fonts/`, SIL Open Font License), embedded so the text can be selected and searched.
 Hebrew and other right-to-left text is laid out right to left, also when it is mixed with English words and numbers on
-one line. Commands are folded to fit the box with a `\` at the end of the line, so they still work when copied. The PDF
+one line. Commands are folded to fit the box, measured with its font, with a `\` at the end of the line, so they still work when
+copied; a command line is never wrapped any other way. The PDF
 has no scripts, forms, attachments or links.
 
 ## Login notes
@@ -86,8 +87,8 @@ When you download a guide, DockNest keeps a digest of what it was made from: the
 apps (names, servers and domains), the storage and copies, the schedules, each app's newest restore test result, the
 emergency kit split and your note. It keeps only hashes, never the values. When any of them changes, the page says
 "This Recovery Guide is out of date" and what changed (an app was added, a server address changed, and so on), and the
-Overview shows one quiet line. There is no timer: DockNest compares after each change you make and after each restore
-test. With an alert rule for **Recovery Guide out of date** (`runbook.outdated`), each new change is sent once.
+Overview shows one quiet line. There is no timer: DockNest compares after each change to servers, apps, storage, Self
+Backup or your note, and after each restore test. With an alert rule for **Recovery Guide out of date** (`runbook.outdated`), each new change is sent once.
 
 ## API
 
