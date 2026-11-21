@@ -68,7 +68,7 @@ function storageLogin(storage) {
 
 function appPage(app, inventory, { include, version, reveal }) {
   const server = inventory.servers.find(item => item.id === app.serverId), storage = inventory.storage.find(item => item.id === app.mainTargetId) ?? null;
-  const backup = app.backup, independent = backup?.location && !backup.chainBroken && storage && backup.location.targetId === storage.id;
+  const backup = app.backup, independent = backup?.location && !backup.chainBroken && storage && [backup.location, ...(backup.chain ?? [])].every(location => location.targetId === storage.id);
   const works = app.domains.length ? app.domains.map(domain => `Open https://${domain}. The website should load.`) : ['Open the app the way you normally do. DockNest has no web address for it.'];
   return {
     id: app.id, name: app.name, server: server.name, kind: app.kind,

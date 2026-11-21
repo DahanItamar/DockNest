@@ -29,13 +29,14 @@ const cut = (units, wrap) => {
   const pieces = [];
   let piece = '';
   for (const unit of units) {
-    if (piece && !commandFits('  ' + wrap(piece + unit) + '\\')) { pieces.push(wrap(piece)); piece = ''; }
+    if (piece && !commandFits('  ' + wrap(piece + unit) + ' \\')) { pieces.push(wrap(piece)); piece = ''; }
     piece += unit;
   }
   return [...pieces, wrap(piece)];
 };
 const single = text => `'${text}'`, double = text => `"${text}"`;
-const pieces = value => (commandFits(quote(value) + ' \\') ? [quote(value)] : cut([...String(value)].map(character => (character === "'" ? `'\\''` : character)), single));
+// Every piece is measured as if it started a continuation line ("  ") and ended one (" \").
+const pieces = value => (commandFits('  ' + quote(value) + ' \\') ? [quote(value)] : cut([...String(value)].map(character => (character === "'" ? `'\\''` : character)), single));
 const raw = text => ({ raw: text });
 function command(...words) {
   const lines = [];

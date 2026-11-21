@@ -169,3 +169,18 @@ test('checks for each database engine, SQLite files, containers and domains', ne
   const sqlite = args(unfold(checkCommands({ app: { kind: 'container', folder: 'f', containers: [], services: [{ container: 'w', engine: 'generic', sqliteFiles: ['/d/x.db'] }], domains: [] } })).replace(' && ', '\n'), ['docker', 'python3']);
   assert.deepEqual(sqlite.slice(0, 3), ['cp', 'w:/d/x.db', '/root/docknest-restore/f/check-x.db']);
 });
+
+test('fuzz: any names, paths and images give lines that fit the box, parse in a shell and read back the same', needsShell, () => {
+  let seed = 42;
+  const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const alphabet = "abcXYZ09 -_./'\"$`\:=@%+,()[]{}<>!?*&;|~#שלום", text = size => Array.from({ length: 1 + Math.floor(next() * size) }, () => alphabet[Math.floor(next() * alphabet.length)]).join('');
+  for (let round = 0; round < 150; round++) {
+    const size = round % 2 ? 40 : 200, value = text(size);
+    const app = { folder: 'app--x', name: 'App', kind: ['container', 'compose', 'static'][round % 3], documentRoot: '/' + text(size), composeFiles: ['/' + text(size)], configFiles: ['/' + text(size)], containers: [text(size)], domains: [text(size)], services: [{ container: text(size), engine: ENGINE_IDS[round % ENGINE_IDS.length], sqliteFiles: ['/' + text(size)] }] };
+    const fuzzed = backup([{ name: text(size), image: text(size), mounts: [{ type: 'bind', destination: '/' + text(size) }, { type: 'volume', destination: '/' + text(size) }] }]);
+    const script = [...restoreCommands({ app, backup: fuzzed, storage: sftp, reveal: hidden }).map(item => item.command), checkCommands({ app })].join('\n');
+    for (const line of script.split('\n')) assert.ok(commandFits(line), line);
+    syntax(script);
+    assert.deepEqual(args(fetchCommand(sftp, { path: '/' + value }, '/root/x/out', shown), ['docker']).at(-1), `sftp://192.0.2.10:2222/${value.split('/').map(encodeURIComponent).join('/')}`);
+  }
+});
