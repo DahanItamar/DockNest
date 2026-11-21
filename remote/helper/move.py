@@ -10,6 +10,8 @@ from .paths import (
     SYSTEM_TREES, lexical, protected_lexical, protected_mount, resolved, within)
 from .databases import (
     restart_services)
+from .dumps import (
+    dumped_services)
 from .backup import (
     backup_plan, tree_digest)
 from .net import (
@@ -552,6 +554,9 @@ def deploy_unpacked(req,mid,mode,d,state,unpacked,manifest):
     keys=set(rewrite.get('keys') or []);tokens=[t for t in rewrite.get('from') or [] if isinstance(t,str) and t];target=str(rewrite.get('to') or '')
     if keys and (not tokens or not re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',target)):raise ValueError('Settings rewrite needs the old and new server address')
     placed=[]
+    # A move copies data folders as they are; a package with an online database dump has an empty one (moves always
+    # take a stopped copy, so this only refuses a package that was not made for a move).
+    if dumped_services(manifest):raise ValueError('This backup holds an online database dump; a move needs a stopped copy of every database')
     if manifest.get('kind')=='static':
         if manifest.get('containers'):raise ValueError('Invalid static backup manifest')
         document=place_tree(unpacked/'static-files.tar',manifest['documentRoot'],d,state,mid)

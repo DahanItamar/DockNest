@@ -1,4 +1,4 @@
-# helper/engine_postgres.py: PostgreSQL contract, control-file clean-stop proof, readiness and row-count checks.
+# helper/engine_postgres.py: PostgreSQL contract, control-file clean-stop proof, readiness, row-count checks and online dumps.
 # <build:header>
 # Removed when src/helper-bundle.js joins the modules into one helper.py (one namespace).
 # These imports exist only so editors and linters can resolve names.
@@ -6,12 +6,25 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     run)
 from .engine_base import (
-    SqlEngine, in_writable_mount)
+    SqlEngine, dump_command, in_writable_mount, time_left)
 from .databases import (
     database_query)
 # </build:header>
+# What PostgreSQL itself keeps at the top of its data folder (12 to 18). A dump restores into a fresh folder, so
+# anything else there (a certificate, a user's own file) would be lost: such a server keeps the stopped file copy.
+POSTGRES_DATA_ENTRIES=frozenset(['PG_VERSION','base','global','pg_commit_ts','pg_dynshmem','pg_logical','pg_multixact',
+    'pg_notify','pg_replslot','pg_serial','pg_snapshots','pg_stat','pg_stat_tmp','pg_subtrans','pg_tblspc','pg_twophase',
+    'pg_wal','pg_xact','postgresql.conf','postgresql.auto.conf','pg_hba.conf','pg_ident.conf','postmaster.opts',
+    'postmaster.pid','current_logfiles','log','pg_log'])
+# Database names DockNest passes to pg_dump and pg_restore as --dbname values.
+POSTGRES_DATABASE_NAME=re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}')
+POSTGRES_ROLE_EXISTS=re.compile(r'ERROR:\s+role ".{1,63}" already exists')
+
 class PostgresEngine(SqlEngine):
     binary='postgres'
+    dump_format='pg_dump custom archive per database and pg_dumpall globals'
+    dump_config=('postgresql.conf','postgresql.auto.conf','pg_hba.conf','pg_ident.conf')
+    init_marker='PostgreSQL init process complete'
     version_pattern=r'PostgreSQL\)?\s+(\d+\.\d+(?:\.\d+)?)'
 
     def query(self,container,service,query):
@@ -37,3 +50,58 @@ class PostgresEngine(SqlEngine):
 
     def count_query(self,service,table):
         return 'BEGIN READ ONLY; SELECT COUNT(*) FROM "'+table+'"; COMMIT;'
+
+    def client(self,container,tool,service,database,interactive=False):
+        """A PostgreSQL tool over the container's local socket, as the server's own user. Local socket trust: no password.
+        pg_dumpall reads --dbname as a connection string, so it gets --database."""
+        return ['docker','exec',*(['-i'] if interactive else []),'--user','postgres',container,tool,'-w','-h','/var/run/postgresql','-U',service.get('user') or 'postgres',('--database=' if tool=='pg_dumpall' else '--dbname=')+database]
+
+    def data_directory(self,service,c):
+        return service.get('dataDirectory')
+
+    def dump_databases(self,cid,service):
+        names=database_query(cid,service,'SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname;').splitlines()
+        if not names or not all(POSTGRES_DATABASE_NAME.fullmatch(name) for name in names):raise ValueError('a database name cannot be passed to pg_dump safely')
+        return names
+
+    def dump_blocker(self,service,c,host):
+        for tool in ['pg_dump','pg_dumpall','pg_restore']:
+            try:run(['docker','exec',c['Id'],'sh','-c','command -v "$1"','docknest',tool],timeout=10)
+            except subprocess.CalledProcessError:return 'its image has no '+tool
+        if database_query(c['Id'],service,'SELECT COUNT(*) FROM pg_replication_slots;')!='0':return 'it has replication slots, which a dump does not keep'
+        if database_query(c['Id'],service,'SELECT COUNT(*) FROM pg_tablespace;')!='2':return 'it has its own tablespaces, which a dump does not keep'
+        # Every database but template0 must be dumped: a database that refuses connections, a user template or a
+        # template1 with objects of its own would not be in the dump.
+        if database_query(c['Id'],service,"SELECT COUNT(*) FROM pg_database WHERE datname NOT IN ('template0','template1') AND (datistemplate OR NOT datallowconn);")!='0':return 'it has a template database or one that refuses connections, which a dump does not keep'
+        template={**service,'database':'template1'}
+        objects=database_query(c['Id'],template,"SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%')+(SELECT COUNT(*) FROM pg_extension WHERE extname<>'plpgsql');")
+        if objects!='0':return 'its template1 database has objects of its own, which a dump does not keep'
+        self.dump_databases(c['Id'],service)
+        others=sorted(entry.name for entry in host.iterdir() if entry.name not in POSTGRES_DATA_ENTRIES)
+        if others:return 'its data folder holds files a dump does not keep ('+', '.join(others[:5])+')'
+        return None
+
+    def dump(self,cid,service,directory,deadline):
+        names=self.dump_databases(cid,service)
+        code,_=dump_command([*self.client(cid,'pg_dumpall',service,'postgres'),'--globals-only'],time_left(deadline),stdout=directory/'globals.sql')
+        if code:raise ValueError('pg_dumpall could not save the roles')
+        for index,name in enumerate(names):
+            target=directory/('database-%d.pgdump'%index)
+            code,_=dump_command([*self.client(cid,'pg_dump',service,name),'--format=custom'],time_left(deadline),stdout=target)
+            if code:raise ValueError('pg_dump failed')
+            code,_=dump_command(self.client(cid,'pg_restore',service,name,True)[:-1]+['--list'],time_left(deadline),stdin=target)
+            if code:raise ValueError('pg_restore could not read the dump it made')
+        return {'format':self.dump_format,'databases':names}
+
+    def load_dump(self,cid,service,directory,listing,timeout):
+        # Roles first: the superuser already exists in the fresh copy, so only "role ... already exists" may fail.
+        code,errors=dump_command(self.client(cid,'psql',service,'postgres',True)+['-X','-q'],timeout,stdin=directory/'globals.sql')
+        problems=[line for line in errors.splitlines() if 'ERROR:' in line and not POSTGRES_ROLE_EXISTS.search(line)]
+        if code or problems:raise ValueError('The saved PostgreSQL roles could not be loaded')
+        existing=set(database_query(cid,service,'SELECT datname FROM pg_database;').splitlines())
+        for index,name in enumerate(listing['databases']):
+            if not isinstance(name,str) or not POSTGRES_DATABASE_NAME.fullmatch(name):raise ValueError('The database dump in this backup has no valid listing')
+            if name in existing:args=self.client(cid,'pg_restore',service,name,True)+['--exit-on-error','--single-transaction','--clean','--if-exists']
+            else:args=self.client(cid,'pg_restore',service,'postgres',True)+['--exit-on-error','--create']
+            code,_=dump_command(args,timeout,stdin=directory/('database-%d.pgdump'%index))
+            if code:raise ValueError('A PostgreSQL database dump could not be loaded')

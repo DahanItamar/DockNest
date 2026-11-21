@@ -176,6 +176,11 @@ def shutdown_evidence(services,containers,stopped_at,staging_root=None):
     evidence=[];by_id={c['Id']:c for c in containers}
     sqlite_cache={}
     for service in services:
+        if service.get('dump'):
+            # Online logical dump (docs/online-dumps.md): the database kept running; the dump is its evidence.
+            dump=service['dump']
+            evidence.append({'container':service['container'],'engine':service['engine'],'version':service['version'],'method':dump['method'],'format':dump['format'],'databases':dump['databases'],'bytes':dump['bytes'],'sha256':dump['sha256']})
+            continue
         c=inspect([service['container']])[0];state=c['State']
         sqlite_term=service['engine']=='generic' and service.get('sqliteFiles') and service.get('sqliteSigtermConfirmed') and state['ExitCode']==143 and c['Config'].get('StopSignal','SIGTERM') in ['SIGTERM','TERM','15']
         if state['Running'] or (state['ExitCode']!=0 and not sqlite_term) or state.get('OOMKilled'):raise ValueError('Clean shutdown failed: running, nonzero exit or OOM')

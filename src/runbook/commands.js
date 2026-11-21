@@ -222,6 +222,8 @@ export function restoreCommands({ app, backup, storage, reveal }) {
     steps.push({ text: 'Put each data folder and Docker volume back. Files already there are kept.', command: [...helpers, ...mounts.map(restoreMount)].join('\n') });
   }
   if (configs.length) steps.push({ text: app.composeFiles?.length ? 'Put the Compose files back.' : 'Put the settings files back.', command: configs.join('\n') });
+  // Online dumps (docs/online-dumps.md): the package holds an empty data folder and a dump to load into it.
+  if (backup.dumps?.length) steps.push({ text: `This backup saved ${backup.dumps.join(', ')} as an online dump, so its data folder is empty. Before you start the whole app, start only that database and load its dump with the steps this prints.`, command: command('sed', '-n', '/^# Database dumps/,$p', 'package/restore-guide.md') });
   steps.push(startStep(app, backup));
   return steps;
 }

@@ -146,6 +146,9 @@ const siteSchema = z.object({
     containers: z.array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/)).max(30),
     stagingRoot: linuxPath.refine(value => value !== '/', 'Use a dedicated staging directory.').refine(value => outsideSystemFolders(value.replace(/\/+$/, '')), 'Use a staging directory outside system folders such as /etc, /root or /usr/bin, for example /var/lib/docknest.').default('/var/lib/docknest'),
     deliveryMode: z.enum(['staged','direct']).default('staged'),
+    // Online logical dumps (docs/online-dumps.md): opt-in; absent means every database stops for a file copy.
+    onlineDumps: z.boolean().optional(),
+    dumpTimeout: z.number().int().min(60).max(21600).optional(),
     sqliteIntegrityCheck: z.enum(['full','off']).optional(),
     exclusiveSourcesConfirmed: z.boolean().default(false),
     stopTimeout: z.number().int().min(10).max(600).default(60),

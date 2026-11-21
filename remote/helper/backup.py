@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     atomic_json, complete_recovery, create_staging_root, diagnostic, docker, emit, inspect, run)
 from .guides import (
-    INCREMENTAL_GUIDE, RESTORE_GUIDE, RUN_DEFINITION_GUIDE, hand_steps_guide)
+    DUMP_GUIDE, INCREMENTAL_GUIDE, RESTORE_GUIDE, RUN_DEFINITION_GUIDE, hand_steps_guide)
 from .paths import (
     READINESS_SCAN_ENTRIES, classify_source, excluded_path, guarded_mount, lexical, mount_exclusions, mount_table,
     protected_mount, protected_mount_warning, protected_mounts, protected_path_warning, protected_paths,
@@ -16,6 +16,8 @@ from .keys import (
 from .databases import (
     ENGINES, data_checks, file_sha256, online_sqlite_checks, prepare_database_shutdown, restart_services,
     shutdown_evidence, sqlite_check_mode, sqlite_file_source, validate_database_contracts)
+from .dumps import (
+    dump_artifacts, dump_candidates, dump_failure, dump_timeout, take_dump)
 from .incremental import (
     INCREMENTAL_ROOT, annotate_mounts, copy_private, incremental_request, incremental_sources, manifest_snapshots,
     plan_incremental, reset_snapshot, site_lock, snapshot_records)
@@ -281,7 +283,7 @@ def service_order(services):
 def artifact_inventory(root):
     result={}
     for p in sorted(root.iterdir()):
-        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|static-files)\.tar|snapshot-[0-9a-f]{64}\.snar',p.name):
+        if p.name=='images.tar' or re.fullmatch(r'(?:mount-\d+-\d+|config-\d+|database-\d{1,3}|static-files)\.tar|snapshot-[0-9a-f]{64}\.snar',p.name):
             digest=hashlib.sha256()
             with open(p,'rb') as f:
                 for chunk in iter(lambda:f.read(1024*1024),b''):digest.update(chunk)
@@ -310,6 +312,8 @@ def verify_artifacts(root,manifest):
     if actual!=expected or not run_definition_intact(root,manifest.get('runDefinition') or {}):raise ValueError('Backup artifacts are missing, changed or unexpected')
     names={'static-files.tar'} if manifest.get('kind')=='static' else {'images.tar',*('mount-%d-%d.tar'%(i,j) for i,c in enumerate(manifest['containers']) for j,_ in enumerate(c['Mounts']))}
     names.update('config-%d.tar'%i for i,_ in enumerate(manifest.get('configurationFiles',[])))
+    # Online logical dumps (3.0.0): a helper without them does not list database-*.tar and so refuses the package.
+    names.update(dump_artifacts(manifest))
     if manifest.get('formatVersion')==2:
         # Format v2 (incremental-enabled sites) also carries the tar snapshot file of every source after this backup.
         for key,item in manifest_snapshots(manifest).items():
@@ -480,6 +484,16 @@ def readiness(cfg):
         try:keys,unscanned=protected_paths(selected.get('containers') or [],mount_exclusions(cfg,selected.get('containers') or []),READINESS_SCAN_ENTRIES)
         except ValueError:keys,unscanned=[],[]  # the configuration check above already names the problem
         if keys or unscanned:checks.append({'name':'Key folders that are not copied','ok':False,'required':False,'message':protected_path_warning(keys,unscanned)})
+    if cfg.get('kind')!='static' and cfg.get('onlineDumps') and selected.get('containers'):
+        # Read-only: which databases would take an online dump, and why any other keeps the stopped file copy.
+        try:
+            cs=selected['containers'];plan=backup_plan(cfg,cs)
+            chosen,fallbacks=dump_candidates({'onlineDumps':True},cfg,plan,cs,[c['Id'] for c in cs if c['State'].get('Running')])
+            names=[c.get('Name','').lstrip('/') for c in cs if c['Id'] in chosen]
+            message='; '.join((['Online dump: '+', '.join(names)] if names else [])+['%s stops for a file copy: %s'%(item['container'],item['reason']) for item in fallbacks]) or 'No running database to dump'
+            message+='. With incremental backups on, every database stops for a file copy instead.'
+            checks.append({'name':'Online database dumps','ok':not fallbacks,'required':False,'message':message})
+        except ValueError:pass  # the contracts check above already names the problem
     check('Application health',direct_health)
     if cfg.get('kind')=='static':
         checks[-1]['required']=False
@@ -594,6 +608,10 @@ def capture(req,output=None):
         image_bytes=sum(int(image.get('Size',0) or 0) for image in original_images)+sum(c.get('SizeRw',0) or 0 for c in cs)
         if shutil.disk_usage(root).free<image_bytes*2+1024**3:raise ValueError('Insufficient staging capacity for the image archive')
     running=[cid for cid in plan['restartOrder'] if any(c['Id']==cid and c['State']['Running'] for c in cs)]
+    # Online dumps (docs/online-dumps.md): chosen before anything stops; a move's final copy and incremental chains
+    # always stop every database. Each database that does not qualify keeps the stopped file copy, with its reason.
+    dumps,dump_fallbacks=dump_candidates(req,cfg,plan,cs,running) if inc is None and not req.get('keepStopped') else ({},[])
+    if output is not None and dumps and shutil.disk_usage(root).free<sum(int(run(['du','-sb',str(host)]).split()[0]) for _,host in dumps.values())+1024**3:raise ValueError('Insufficient staging capacity for the database dumps')
     cfg['_runningContainers']=running
     cfg['_serviceContracts']=plan['services']
     if output is not None:cfg['_directDelivery']=True
@@ -618,22 +636,35 @@ def capture(req,output=None):
             try:(root/'watchdog.done').touch(mode=0o600)
             except Exception:pass
         os._exit(0)
-    stopped_at=None;visitor_start=None;captured=None;images=[];archive=None;inventory=None
+    stopped_at=None;visitor_start=None;downtime_from=None;captured=None;images=[];archive=None;inventory=None
     try:
         emit(stage='stopping')
-        visitor_start=time.time()
-        maintenance(cfg,True)
+        # Nothing stops when every running container is a database taking an online dump: no maintenance page then.
+        if any(cid not in dumps for cid in running):visitor_start=time.time();maintenance(cfg,True)
         if backup_plan(cfg,preflight(cfg))['fingerprint']!=plan['fingerprint']:raise ValueError('Docker configuration changed after planning; capture blocked')
         stopped_at=time.time()
+        if visitor_start is not None:downtime_from=stopped_at
+        by_id={c['Id']:c for c in cs};index={c['Id']:i for i,c in enumerate(cs)}
         for cid in reversed(running):
             service=next(s for s in plan['services'] if s['container']==cid)
             if service['engine']!='generic':service['expectedChecks']=data_checks(cid,service)
+            if cid in dumps:
+                # Writers of this app are already stopped (they restart after the databases), so the dump is quiet.
+                try:
+                    service['dump']=take_dump(service,by_id[cid],*dumps[cid],root,index[cid],dump_timeout(cfg))
+                    continue
+                except Exception as error:
+                    # Fail closed: no partial dump is kept; this database stops for the file copy instead.
+                    dump_fallbacks.append({'container':by_id[cid].get('Name','').lstrip('/'),'engine':service['engine'],'reason':dump_failure(error)})
+                    if visitor_start is None:visitor_start=time.time();maintenance(cfg,True);downtime_from=time.time()
             prepare_database_shutdown(service)
             docker('stop','--time',str(stop_timeout),cid)
         shutdown_proof=shutdown_evidence(plan['services'],cs,stopped_at,root)
         emit(stage='copying')
         revalidate_sources(plan)
         archives={};specs=[];prepare={};scans={};labels={};renamed={}
+        # A dumped database's data folder is left out of its mount archive; a restore loads the dump into a fresh one.
+        dumped=[str(dumps[s['container']][1]) for s in plan['services'] if s.get('dump')]
         for i,c in enumerate(cs):
             # commit captures the writable layer; mounted data is archived separately.
             image=docker('commit',c['Id']).decode().strip();images.append(image)
@@ -648,16 +679,18 @@ def capture(req,output=None):
                     source=str(holder)
                 key=snapshot_sources.get(source) if increment else None
                 snapshot=increment['work']/(key+'.snar') if key else None
+                excluded=exclusions.get(source,[])+[folder for folder in dumped if folder.startswith(source.rstrip('/')+'/')]
+                folder_only=source in dumped
                 if output is not None:
                     link=archives.get(source) if share else None
-                    specs.append((target.name,None if link else source_archive_command(source,exclusions.get(source,[]),snapshot,guard),link))
+                    specs.append((target.name,None if link else source_archive_command(source,excluded,snapshot,guard,folder_only),link))
                     if key and not link:prepare[target.name]=lambda key=key:reset_snapshot(increment,key)
                     if key and not link and increment['level']:renamed[target.name]=key
                     archives[source]=link or target.name
                 elif share and source in archives:os.link(archives[source],target)
                 else:
                     if key:reset_snapshot(increment,key)
-                    source_archive(source,target,exclusions.get(source,[]),snapshot,guard);archives[source]=target
+                    source_archive(source,target,excluded,snapshot,guard,folder_only);archives[source]=target
                     if key and increment['level']:
                         with open(target,'rb') as written:increment['renames'][key]=archive_renames_safely(written)
         for i,filename in enumerate(cfg.get('composeFiles',[])+cfg.get('configFiles',[])):
@@ -665,6 +698,8 @@ def capture(req,output=None):
             if output is not None:specs.append(('config-%d.tar'%i,source_archive_command(source),None));labels['config-%d.tar'%i]=str(source)
             else:run(['tar','--xattrs','--acls','--numeric-owner','-cpf',str(root/('config-%d.tar'%i)),'-C',str(source.parent),'--',source.name])
         if output is not None:
+            for service in plan['services']:
+                if service.get('dump'):specs.append((service['dump']['artifact'],['cat','--',str(root/service['dump']['artifact'])],None))
             level=int(cfg.get('streamCompressLevel',1))
             if level<1 or level>9:raise ValueError('Stream compression level must be 1..9')
             # Direct capture compresses while services are stopped; favour speed.
@@ -674,6 +709,9 @@ def capture(req,output=None):
             for name in set(renamed)|set(key_members):scans[name]=archive_scanner(name,key_members.get(name,()),renamed,increment,packaged)
             inventory=stream_artifacts(archive,[('images.tar',['docker','save',*saved_ids,*images],None),*specs],root,{'images.tar'},prepare,scans,labels)
             revalidate_sources(plan)
+            # Streamed: the plaintext dump never stays in the staging folder.
+            for service in plan['services']:
+                if service.get('dump'):(root/service['dump']['artifact']).unlink(missing_ok=True)
         captured=time.time()
     except BaseException:
         # Abandon buffered payload bytes on a failed stream. Recovery below is
@@ -705,7 +743,8 @@ def capture(req,output=None):
         for key in increment['keys']:copy_private(increment['work']/(key+'.snar'),root/('snapshot-%s.snar'%key))
     if increment and output is not None:
         for key in increment['keys']:inventory['snapshot-%s.snar'%key]=stream_file(archive,'snapshot-%s.snar'%key,increment['work']/(key+'.snar'),snapshots[key])
-    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':restarted-stopped_at,'containerDowntimeSeconds':restarted-stopped_at,'visitorDowntimeSeconds':restarted-visitor_start,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
+    downtime=restarted-downtime_from if downtime_from is not None else 0
+    manifest={'formatVersion':1,'capturedAt':captured,'downtimeSeconds':downtime,'containerDowntimeSeconds':downtime,'visitorDowntimeSeconds':restarted-visitor_start if visitor_start is not None else 0,'architecture':docker('info','--format','{{.Architecture}}').decode().strip(),'containers':cs,'snapshotImages':images,'originalImages':original_images,'shutdownEvidence':shutdown_proof,'configurationFiles':cfg.get('composeFiles',[])+cfg.get('configFiles',[]),'complete':True,'restoreTested':False}
     # Restore reads RAM folders from the container record; this list keeps backups restorable by older helpers.
     manifest['temporaryMemoryFolders']=[{'container':c.get('Name','').lstrip('/'),'destination':destination} for c in manifest['containers'] for destination,_ in temporary_mounts(c)]
     if PROBE_POLICY_FALLBACKS:manifest['probePolicyFallback']=sorted(set(PROBE_POLICY_FALLBACKS))
@@ -721,7 +760,9 @@ def capture(req,output=None):
     definition=package_run_definition(cs,images)
     if definition:manifest['runDefinition']={name:document_record(data) for name,data in definition.items()}
     manifest['deliveryMode']='direct' if output is not None else 'staged'
-    manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
+    dumped_any=any(s.get('dump') for s in plan['services'])
+    manifest['consistency']={'status':'declared' if any(s['engine']=='generic' for s in plan['services']) else 'passed','method':'online native logical dumps, offline native shutdown evidence and declared writer quiescence' if dumped_any else 'offline native shutdown evidence plus declared writer quiescence','scope':'selected services and mounts','services':shutdown_proof}
+    if dump_fallbacks:manifest['onlineDumpFallbacks']=dump_fallbacks
     if increment:
         manifest['formatVersion']=2
         manifest['backupKind']='incremental' if increment['level'] else 'full'
@@ -752,6 +793,8 @@ def capture(req,output=None):
         with (root/'restore-guide.md').open('a') as guide:guide.write(INCREMENTAL_GUIDE)
     if definition:
         with (root/'restore-guide.md').open('a') as guide:guide.write(RUN_DEFINITION_GUIDE)
+    if dumped_any:
+        with (root/'restore-guide.md').open('a') as guide:guide.write(DUMP_GUIDE)
     if output is not None:
         stream_document(archive,'manifest.json',document)
         stream_document(archive,'restore-guide.md',(root/'restore-guide.md').read_text())
@@ -760,7 +803,7 @@ def capture(req,output=None):
     else:
         if definition:(root/'run-definition').mkdir(mode=0o700)
         for name,data in definition.items():(root/name).write_bytes(data);os.chmod(root/name,0o600)
-        run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('snapshot-*.snar')),*definition])
+        run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'images.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('mount-*.tar')],*[p.name for p in root.glob('config-*.tar')],*sorted(p.name for p in root.glob('database-*.tar')),*sorted(p.name for p in root.glob('snapshot-*.snar')),*definition])
     for image in images:
         try:docker('image','rm',image)
         except Exception:pass
