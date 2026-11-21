@@ -18,6 +18,8 @@ export function ExportDialog({api,apps,only,onClose,onMade}){
  const [sel,setSel]=useState(only&&ids.includes(only)?[only]:ids),[inc,setInc]=useState({addresses:false,logins:false,commands:true,tests:true,schedules:true,notes:true});
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[need,setNeed]=useState(false),[password,setPassword]=useState(''),[code,setCode]=useState(''),[checking,setChecking]=useState(false),[checkError,setCheckError]=useState('');
  useEffect(()=>{const d=ref.current;try{d.showModal()}catch{d.setAttribute('open','')}d.querySelector('h2')?.focus();return()=>{try{d.close()}catch{}}},[]);
+ // The warning, the sign-in check and errors sit low in a scrolling body: bring the newest one into view.
+ useEffect(()=>{const all=ref.current?.querySelectorAll('[data-reveal]');all?.[all.length-1]?.scrollIntoView?.({block:'nearest'})},[inc.logins,need,error]);
  const toggle=key=>{setInc(v=>({...v,[key]:!v[key]}));if(key==='logins')setNeed(false)};
  async function make(){
   setBusy(true);setError('');
@@ -46,14 +48,14 @@ export function ExportDialog({api,apps,only,onClose,onMade}){
       {!sel.length&&<p className="t-caption" role="status">Choose at least one app.</p>}</section>
      <section className="rg-stack"><h3>Include</h3>
       {OPTIONS.map(([key,label,caption])=><label className="rp-check" key={key}><input type="checkbox" checked={inc[key]} onChange={()=>toggle(key)}/><span><span className="rp-check-title">{label}</span>{caption&&<span className="t-caption">{caption}</span>}</span></label>)}</section>
-     {inc.logins&&<AlertPanel variant="warning">This PDF will hold logins to your backup storage. Anyone with the file can reach your backups. Keep it like a password. Creating it is recorded in the audit log.</AlertPanel>}
+     {inc.logins&&<div data-reveal><AlertPanel variant="warning">This PDF will hold logins to your backup storage. Anyone with the file can reach your backups. Keep it like a password. Creating it is recorded in the audit log.</AlertPanel></div>}
     </fieldset>
-    {need&&<div className="rg-reauth" role="group" aria-labelledby="rg-reauth-title"><b id="rg-reauth-title">Please confirm it is you</b><p>Login details need a fresh check. Enter the shared password and a fresh code from your authenticator.</p>
+    {need&&<div data-reveal className="rg-reauth" role="group" aria-labelledby="rg-reauth-title"><b id="rg-reauth-title">Please confirm it is you</b><p>Login details need a fresh check. Enter the shared password and a fresh code from your authenticator.</p>
      <label className="rg-field">Password<input type="password" name="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} aria-invalid={!!checkError||undefined} disabled={checking}/></label>
      <label className="rg-field">Authenticator code<input name="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)} aria-invalid={!!checkError||undefined} disabled={checking}/></label>
      {checkError&&<AlertPanel variant="error">{checkError}</AlertPanel>}
      <div className="rg-reauth-actions"><button type="button" disabled={checking} onClick={()=>setNeed(false)}>Not now</button><button type="button" className="primary" disabled={checking||!password||code.trim().length<6} onClick={verify}>Verify and create PDF</button></div></div>}
-    {error&&<AlertPanel variant="error">{error}</AlertPanel>}
+    {error&&<div data-reveal><AlertPanel variant="error">{error}</AlertPanel></div>}
    </div>
    <div className="rg-foot">{busy&&<span className="rg-spacer"><StatusLabel state="running">Creating the PDF…</StatusLabel></span>}<button type="button" onClick={onClose} disabled={locked}>Cancel</button><button type="submit" className="primary" aria-disabled={busy||!sel.length||need||undefined} disabled={checking}>{busy?'Creating PDF…':'Create PDF'}</button></div>
   </form>
