@@ -18,6 +18,8 @@ from .restore import (
     mount_bytes, network_peers, restore_network_plan, safe_extract, unpack_verified)
 from .move import (
     save_state)
+from .dumps import (
+    dump_bytes, dumped_services, load_dumps)
 from .install import (
     systemd_present)
 # Mutable state lives in common and is never copied by import: STOPPING
@@ -362,7 +364,7 @@ def restore_test_restore(req):
     if len(manifest.get('snapshotImages',[]))!=len(containers):raise TestOutcome('failed','The backup is missing snapshot images.',checks)
     multi=len(containers)>1
     if multi and docker_major()<28:raise TestOutcome('couldnt_run','Sites with more than one container need Docker 28 or newer on the test server.',checks)
-    if shutil.disk_usage(root).free<mount_bytes(unpacked)+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
+    if shutil.disk_usage(root).free<mount_bytes(unpacked)+dump_bytes(manifest)+TEST_MIN_FREE:raise TestOutcome('couldnt_run','The test server ran low on disk.',checks)
     prefix='dbm-test-'+tid[:12]
     labels=['--label',TEST_LABEL+'='+tid,'--label','com.docker.compose.project=docknest-test-'+tid[:12],'--label','com.docker.compose.project.working_dir=','--label','com.docker.compose.project.config_files=']
     definitions=[];sources={}
@@ -408,6 +410,13 @@ def restore_test_restore(req):
     try:
         for archive in image_archives(unpacked):docker('load','-i',str(archive))
     finally:restore_test_tags(state)
+    # Online logical dumps: loaded into the restored data folders (network none) before the copy's containers exist.
+    if dumped_services(manifest):
+        try:load_dumps(manifest,unpacked,root,definitions,sources,journal=lambda name:test_journal(d,state,'containers',name))
+        except ValueError as error:
+            checks.append(test_check('Database dump','dump',None,'failed',str(error)[:200]))
+            raise TestOutcome('failed','The database dump in the backup could not be loaded.',checks)
+        checks.append(test_check('Database dump','dump',None,'passed','%d loaded'%len(dumped_services(manifest))))
     networks={};created=[]
     # Every copy starts on fresh internal isolated networks only. With internet, a single container gets one such
     # network too (a `none` container cannot join the egress network later).

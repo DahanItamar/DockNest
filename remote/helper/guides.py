@@ -53,3 +53,21 @@ it holds that container's environment and contains secrets. Lines at the top of 
 recreate. On a new server: docker load -i images.tar, put each mount back where compose.yaml mounts it, then run
   docker compose -f run-definition/compose.yaml up -d
 """
+
+DUMP_GUIDE="""
+# Database dumps
+Some databases in this package took an online logical dump instead of a stopped file copy: the services in
+manifest.backupPlan.services with a "dump" entry. For each one, database-I.tar (I is the container's position in
+manifest.containers) holds the dump, listing.json and config/ (settings files from its data folder). Its data folder
+mount archive holds only the empty folder. To restore it by hand, put the mounts back as usual, start only the database
+container and wait until its log says "init process complete" (PostgreSQL) or "init process done" (MySQL, MariaDB).
+Copy each file from config/ into the data folder (listing.json dataDirectory), keeping the folder's owner, and restart
+the container. Then load the dump through the container's local socket, before any app container starts:
+  PostgreSQL: psql -X -U <user> -d postgres < globals.sql (an error "role ... already exists" is expected), then for
+    each name in listing.json databases, in order: pg_restore --exit-on-error --single-transaction --clean --if-exists
+    -U <user> -d <name> < database-N.pgdump when the database exists, else pg_restore --exit-on-error --create -U <user>
+    -d postgres < database-N.pgdump
+  MySQL or MariaDB: mysql (or mariadb) --user=root < all-databases.sql; it also restores the accounts
+Run each command inside the container with docker exec -i. DockNest's own restore does all of this in a container with
+no network before the app starts, then compares the configured data checks with the values recorded at backup.
+"""

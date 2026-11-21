@@ -4,7 +4,7 @@
 # These imports exist only so editors and linters can resolve names.
 import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,urllib.error,urllib.parse,tarfile,re,http.client,threading,ssl,socket,shlex,hashlib,stat,tempfile,sqlite3,io,ipaddress,posixpath,errno
 from .common import (
-    run)
+    NOFOLLOW, diagnostic, run)
 from .databases import (
     database_query)
 # </build:header>
@@ -82,6 +82,31 @@ class DatabaseEngine:
 
     def after_start(self,cid,service):
         """Runs once the restarted database answers; undoes prepare_stop."""
+
+    # Online logical dumps (docs/online-dumps.md). An engine that can take one sets `dump_format`, `dump_config` (data
+    # folder settings files a dump does not hold) and `init_marker` (the official entrypoint's log line once an empty
+    # data folder is set up), and implements data_directory, dump_blocker, dump and load_dump.
+    dump_format=None
+    dump_config=()
+    init_marker=None
+
+def dump_command(args,timeout,stdin=None,stdout=None):
+    """Run a dump or load command with files as stdin and stdout; returns (exit code, stderr text). The text is for
+    the caller's own checks only: it can hold table names or data and never reaches evidence, logs or errors."""
+    started=time.monotonic();label=pathlib.Path(args[0]).name+(' '+str(args[1]) if len(args)>1 and args[0]=='docker' else '')
+    diagnostic(command=label,phase='start')
+    source=open(stdin,'rb') if stdin is not None else subprocess.DEVNULL
+    target=os.open(stdout,os.O_WRONLY|os.O_CREAT|os.O_EXCL|NOFOLLOW,0o600) if stdout is not None else None
+    try:
+        result=subprocess.run(args,stdin=source,stdout=target if target is not None else subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=timeout)
+    except subprocess.TimeoutExpired:
+        diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='timeout',timeoutSeconds=timeout)
+        raise
+    finally:
+        if stdin is not None:source.close()
+        if target is not None:os.close(target)
+    diagnostic(command=label,phase='finish',elapsedMs=round((time.monotonic()-started)*1000),outcome='ok' if result.returncode==0 else 'exit',exitCode=result.returncode)
+    return result.returncode,result.stderr.decode(errors='replace')
 
 class SqlEngine(DatabaseEngine):
     """PostgreSQL and MySQL/MariaDB: a local SQL client (`query`), `SELECT 1` readiness and read-only row counts."""
