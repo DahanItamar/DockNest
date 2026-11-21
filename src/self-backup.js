@@ -33,7 +33,7 @@ export function saveSelfBackupSettings(input,actor){
  const data=schema.parse(input);
  let nextRun;try{nextRun=CronExpressionParser.parse(data.schedule,{tz:data.timezone}).next().toISOString();}catch{throw Object.assign(new Error('Use a valid schedule and IANA time zone.'),{status:400});}
  return transaction(()=>{
-  if(active())throw Object.assign(new Error('Wait for the current DockNest backup before changing its settings.'),{status:409});
+  if(active())throw Object.assign(new Error('Wait for the current Self Backup before changing its settings.'),{status:409});
   const previous=selfBackupConfig();
   if(!data.passphrase&&!previous?.passphrase)throw Object.assign(new Error('Enter a separate recovery passphrase of at least 24 characters.'),{status:400});
   const saved={enabled:data.enabled,schedule:data.schedule,timezone:data.timezone,nextRun:data.enabled?nextRun:null,passphrase:data.passphrase?seal(data.passphrase):previous.passphrase};
@@ -44,8 +44,8 @@ export function saveSelfBackupSettings(input,actor){
 // Every caller runs this inside one BEGIN IMMEDIATE transaction, so the hold cannot be set between the check and the insert.
 function queue(actor){
  requireNoDeploymentHold(db);
- if(!selfBackupConfig()?.passphrase)throw Object.assign(new Error('Set up DockNest self-backup first.'),{status:409});
- if(active())throw Object.assign(new Error('A DockNest backup is already queued or running.'),{status:409});
+ if(!selfBackupConfig()?.passphrase)throw Object.assign(new Error('Set up Self Backup first.'),{status:409});
+ if(active())throw Object.assign(new Error('A Self Backup is already queued or running.'),{status:409});
  const selected=destination();if(!selected.available)throw Object.assign(new Error('Select a connected SFTP or S3 destination in Storage before backing up DockNest.'),{status:409});
  const runId=id();db.prepare("INSERT INTO manager_backups(id,status,created_at,release,target_id) VALUES(?,'queued',?,?,?)").run(runId,now(),release,selected.id);
  audit(actor,'manager-backup.queued',runId,{targetId:selected.id});return {id:runId,status:'queued'};
@@ -58,7 +58,7 @@ export const enqueueSelfBackup=actor=>transaction(()=>queue(actor));
 export function replaceRecoveryPassphrase(passphrase,actor){
  const saved=selfBackupConfig();
  if(!saved?.passphrase)return false;
- if(active())throw Object.assign(new Error('Wait for the current DockNest backup before changing the split.'),{status:409});
+ if(active())throw Object.assign(new Error('Wait for the current Self Backup before changing the split.'),{status:409});
  if(typeof passphrase!=='string'||passphrase.length<24||passphrase.length>4096)throw Object.assign(new Error('Enter a new recovery passphrase of at least 24 characters: holders of the earlier split know the current one.'),{status:400});
  if(passphrase===open(saved.passphrase))throw Object.assign(new Error('Use a different recovery passphrase: holders of the earlier split know the current one.'),{status:400});
  db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify({...saved,passphrase:seal(passphrase)}),settingsKey);
@@ -120,7 +120,7 @@ export async function executeSelfBackup(run){
   db.prepare('UPDATE manager_backups SET target_id=?,path=? WHERE id=?').run(targetId,published,run.id);
   await makeDirectory(remoteDirectory);await publishVerified(file,published,evidence.sha256);
   // Terminal writes require status 'running': a worker that lost its lease must not overwrite the new holder's outcome.
-  completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`DockNest backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
+  completed=transaction(()=>{if(db.prepare("UPDATE manager_backups SET status='completed',finished_at=?,checksum=?,size=?,error=NULL WHERE id=? AND status='running'").run(now(),evidence.sha256,bytes.length,run.id).changes){audit('worker','manager-backup.completed',run.id,{size:bytes.length,release});return true;}console.error(`Self Backup ${run.id} is no longer running (another worker took over); its result was not recorded.`);return false;});
   if(completed){
    const copied=await copyKitToCopyDestinations(run,file,evidence,targetId);
    // With the optional split on, the same kit is also sealed to the emergency key (src/emergency/kits.js). Never fails the kit.
@@ -132,7 +132,7 @@ export async function executeSelfBackup(run){
   // Exception text may contain credential or archive contents; never persist it. Only the fixed hold message (a hold
   // set under a running backup, as by a forced upgrade) is recorded as it is.
   const held=error?.message===deploymentHoldMessage;
-  if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),held?deploymentHoldMessage+' Your previous successful copy is kept.':'DockNest backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id,held?{reason:'deployment-hold'}:{});
+  if(db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error=? WHERE id=? AND status='running'").run(now(),held?deploymentHoldMessage+' Your previous successful copy is kept.':'Self Backup failed. Check storage access, free space and the recovery configuration. Your previous successful copy is kept.',run.id).changes)audit('worker','manager-backup.failed',run.id,held?{reason:'deployment-hold'}:{});
  }finally{if(temporary)try{await rm(temporary,{recursive:true,force:true});}catch{/* Retry interrupted staging cleanup at worker startup. */}}
  try{await pruneSelfBackups();}catch{/* Cleanup failure must not prevent ordinary site jobs. */}
  return completed;
@@ -170,7 +170,7 @@ export async function pruneKitCopies(){
 }
 export async function recoverInterruptedSelfBackups(){
  if(!db.prepare('SELECT 1 FROM manager_backups LIMIT 1').get())return;
- db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error='Worker interrupted. Previous successful DockNest backup is kept.' WHERE status='running'").run(now());
+ db.prepare("UPDATE manager_backups SET status='failed',finished_at=?,error='Worker interrupted. Previous successful Self Backup is kept.' WHERE status='running'").run(now());
  try{const root=await selfBackupDirectory();
   for(const name of await readdir(root))if(/^\.(pending|kit-check)-[a-zA-Z0-9]+$/.test(name))await rm(join(root,name),{recursive:true,force:true});
   await pruneSelfBackups();
@@ -179,7 +179,7 @@ export async function recoverInterruptedSelfBackups(){
 export async function readLatestSelfBackup(){
  const lease=id(),row=transaction(()=>{
   const row=db.prepare("SELECT * FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
-  if(!row)throw Object.assign(new Error('No successful DockNest backup is available yet.'),{status:404});
+  if(!row)throw Object.assign(new Error('No successful Self Backup is available yet.'),{status:404});
   db.prepare('INSERT INTO manager_backup_downloads VALUES(?,?,?)').run(lease,row.id,Date.now()+3600000);return row;
  });
  try{
@@ -196,6 +196,6 @@ export async function readLatestSelfBackup(){
    handle=openSync(file,'r');const bytes=readFileSync(handle);
    if(digest(bytes)!==row.checksum)throw new Error('Recovery kit checksum mismatch');return {bytes,checksum:row.checksum,id:row.id};
   }finally{if(handle!==undefined)closeSync(handle);}
- }catch{throw Object.assign(new Error('Unable to read the saved DockNest backup. Check storage access and file integrity.'),{status:503});}
+ }catch{throw Object.assign(new Error('Unable to read the saved Self Backup. Check storage access and file integrity.'),{status:503});}
  finally{db.prepare('DELETE FROM manager_backup_downloads WHERE id=?').run(lease);}
 }

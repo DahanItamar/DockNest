@@ -11,6 +11,14 @@ const LEGACY=Object.freeze([
  "Site already has active work",
  "Site already has an active job or unresolved recovery",
  "This site was removed from active sites.",
+ // Self Backup was called "DockNest backup" before 2.16.5; errors stored by older versions still carry it.
+ "A DockNest backup is already queued or running.",
+ "DockNest backup requires the selected SFTP destination",
+ "No successful DockNest backup is available yet.",
+ "Set up DockNest self-backup first.",
+ "Unable to read the saved DockNest backup. Check storage access and file integrity.",
+ "Wait for the current DockNest backup before changing its settings.",
+ "Wait for the current DockNest backup before changing the split.",
 ]);
 // The plain explanation sentences DockNest shows above an error. They are constants too.
 export const EXPLAIN=Object.freeze({
@@ -20,7 +28,7 @@ export const EXPLAIN=Object.freeze({
  generic:'The worker reported this error for the attempt.',
  server:'The server connection test failed.',
  storage:'The storage connection test failed.',
- selfBackup:'The DockNest backup failed.',
+ selfBackup:'The Self Backup failed.',
 });
 export const EXPLANATIONS=Object.freeze(Object.values(EXPLAIN));
 export const catalogued=message=>(typeof message==='string'?CATALOGUE.find(entry=>entry===message)||LEGACY.find(entry=>entry===message)||null:null);

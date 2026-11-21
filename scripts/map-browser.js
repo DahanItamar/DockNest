@@ -313,8 +313,8 @@ await d.getByText('stay on media-box (not copied back)',{exact:false}).waitFor()
  await d.getByRole('button',{name:'Switch back'}).click();
  await d.getByRole('heading',{name:'Switch back to office-box?'}).waitFor();
  await d.getByRole('button',{name:'Switch back'}).click();
- assert.equal(mock.switchBacks,1);
  await d.getByRole('heading',{name:'shop.example.com is back on office-box'}).waitFor({timeout:6000});
+ assert.equal(mock.switchBacks,1);
  mock.phase='done';mock.askRemove=true;
  mock.listMoves=[{id:'m',siteId:SHOP,siteName:'shop.example.com',targetServerId:'a',state:'done',actions:{askRemoveOldCopy:true,resolve:[]}}];
  await d.getByRole('button',{name:'Close'}).click();await dialog(page).waitFor({state:'detached'});
@@ -373,6 +373,7 @@ mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
  await shot(page,scheme,'1440-8b-attention');
  await d.getByRole('button',{name:'Try again'}).waitFor();
  await d.getByRole('button',{name:'Undo'}).click();
+ for(let i=0;i<60&&mock.resolves.length<1;i++)await new Promise(r=>setTimeout(r,100));
  assert.deepEqual(mock.resolves,['undo']);
  mock.phase='rolled_back';
  await d.getByRole('heading',{name:'Move undone'}).waitFor({timeout:6000});

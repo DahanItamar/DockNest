@@ -1,11 +1,11 @@
-name: DockNest backup failure
-description: "Opened from DockNest backup after the recovery kit backup failed."
+name: Self Backup failure
+description: "Opened from Self Backup after the recovery kit backup failed."
 labels: [bug, self-backup-failure]
 body:
   - type: markdown
     attributes:
       value: |
-        Opened from DockNest (DockNest backup). DockNest filled in only fixed, typed values; your browser opened this form and nothing was posted.
+        Opened from DockNest (Self Backup). DockNest filled in only fixed, typed values; your browser opened this form and nothing was posted.
         Issues on this repository are public and linked to your GitHub account. Anyone can read what you share.
         Remove anything private before you submit: never paste host names, addresses, paths, user names, emails,
         site or server names, credentials, keys, logs or backup contents into any field.

@@ -107,12 +107,12 @@ export function buildServerReport({ version, installMode, env, includeEnvironmen
     fields: { check: c, error_class: cls, what_happened: what }, allow: { check: SERVER_CHECKS, error_class: SERVER_CLASSES }, labels: { check: 'Failed check', error_class: 'Error class' } }));
 }
 
-// DockNest self-backup failures (self-backup-failure.yml). The phase is not recorded yet (engine work); how it ended is.
+// Self Backup failures (self-backup-failure.yml). The phase is not recorded yet (engine work); how it ended is.
 export const SELF_BACKUP_DESTINATIONS = ['sftp', 's3', 'local'];
 export const SELF_BACKUP_ENDINGS = ['failed', 'worker-interrupted', 'deployment-hold'];
 export function buildSelfBackupReport({ version, installMode, env, includeEnvironment = true, destination, ended, message, explanation, excerpt } = {}) {
   const d = pick(SELF_BACKUP_DESTINATIONS, destination), e = pick(SELF_BACKUP_ENDINGS, ended) || 'failed';
-  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'self-backup-failure.yml', title: 'DockNest backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
+  return withWhat({ message, explanation, excerpt }, what => assemble({ template: 'self-backup-failure.yml', title: 'Self Backup failed' + (d ? ': ' + d : ''), version, installMode, env, includeEnvironment,
     fields: { destination: d, ended: e, what_happened: what }, allow: { destination: SELF_BACKUP_DESTINATIONS, ended: SELF_BACKUP_ENDINGS }, labels: { destination: 'Destination', ended: 'How it ended' } }));
 }
 
