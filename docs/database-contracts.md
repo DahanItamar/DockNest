@@ -1,5 +1,8 @@
 # Cold database consistency contracts
 
+Since 3.0.0 an app can opt in to [online dumps](online-dumps.md) for PostgreSQL, MySQL and MariaDB; everything below
+stays the default and the fallback.
+
 Each `config.services` entry names a selected container, `engine` (`auto`, `generic`, `postgres`, `mysql`, `mariadb`, `redis`, `mongo`), optional exact `version`, local `database` and `user`, and `dependsOn` selected services. Empty contracts use native detection automatically; adding a standard supported service needs no manually maintained engine list. Versions come from native binaries, not image tags. Database services must be running for planning; previously stopped databases require an offline adapter and are never started automatically for capture. Known unsupported stateful images cannot silently pass as generic applications.
 
 All application writers stop before databases. Explicit dependencies add ordering; cycles and dependencies outside the app block preflight. Restart reverses this order, waiting for container health and a local native `SELECT 1`, Redis `PING` or MongoDB `ping` before starting database dependants. Independent peers start together before their health barrier. Originally stopped generic containers remain stopped.
