@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
 import {LinkedLines} from '../linked/LinkedWarning.jsx';
-import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
+import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,ackNotes,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
 import {isDomainWarning} from './domains-model.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
@@ -68,6 +68,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const [anyway,setAnyway]=useState(false),[checkedOwn,setCheckedOwn]=useState(false);
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
+ const ackKey=ackNotes(preview);useEffect(()=>setCheckedOwn(false),[ackKey]);
  const needOwn=!blocked&&!!preview.needsOwnershipCheck,canMove=!blocked&&(!long||anyway)&&(!needOwn||checkedOwn)&&!busy;
  const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
  const cfReady=tokenSaved||cfConfigured;

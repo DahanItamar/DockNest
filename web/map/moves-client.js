@@ -29,6 +29,8 @@ export const BUSY_WORD=new Set(['cancelling','rolling_back','switching_back']);
 export const why=p=>p?.blockers?.[0]||p?.sentence||'This move is not possible right now.';
 export const blocked=p=>!p.ok||p.verdict==='blocked';
 export const warningText=w=>typeof w==='string'?w:w?.text||'';
+// The owner and permission notes an "I checked these" tick covers; a preview with other notes needs a new tick.
+export const ackNotes=p=>JSON.stringify((p?.warnings||[]).filter(w=>w?.requiresAcknowledgement).map(w=>[w.id,w.text]));
 export const duration=s=>{if(s==null)return null;s=Math.max(0,Math.round(s));if(s<60)return s+' s';const m=Math.round(s/60);return m===1?'1 minute':m+' minutes'};
 // Plain sentences for the codes the screens react to. Anything else keeps the server's own sentence.
 export const friendly=e=>e?.code==='MOVE_ANYWAY_REQUIRED'?'This move needs your OK first because your app will be offline for a long time. Tick the box to continue.'

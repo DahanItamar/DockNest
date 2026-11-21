@@ -10,7 +10,7 @@ import {createConnectionsClient} from '../connections/client.js';
 import {count} from '../plural.js';
 import {layoutMap,groupForList,databasesOf,domainsOf,elbow,METRICS,snapToGrid,homeOffset,clippedIn} from './layout.js';
 import {loadPositions,savePositions,prunePositions} from './saved-layout.js';
-import {createMovesClient,blocked,why,friendly} from './moves-client.js';
+import {createMovesClient,blocked,why,friendly,ackNotes} from './moves-client.js';
 import {createLaunchClient,stateText} from './launch-client.js';
 import {createSelfHealClient} from '../self-heal/self-heal-client.js';
 import {SelfHealSheet} from '../self-heal/SelfHealSheet.jsx';
@@ -198,6 +198,8 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
    // Advanced choices change the plan, so ask for a fresh preview that includes them.
    if(envRewrite.length||askBeforeSwitch||dnsMode==='cloudflare')p=await client.preview(flow.siteId,flow.targetId,{dnsMode,envRewrite,askBeforeSwitch});
    if(blocked(p)){setFlow(f=>({...f,preview:p,busy:false}));return;}
+   // The fresh preview names other owner or permission notes than the ones ticked: show them before anything starts.
+   if(ownershipChecked&&ackNotes(p)!==ackNotes(flow.preview)){setFlow(f=>({...f,preview:p,busy:false,error:'Something changed on the servers. Please review and press Move again.'}));return;}
    await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway,ownershipChecked});
    setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
   }catch(e){

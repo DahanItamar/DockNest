@@ -271,6 +271,8 @@ export function preflightHash(result, options = {}) {
   const material = {
     canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck,
     blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
+    // The owner and permission notes behind "I checked these": a new or different note needs a fresh review and tick.
+    acknowledged: result.details.checks.filter(item => item.status === 'warn' && item.requiresAcknowledgement).map(({ id, text }) => ({ id, text })),
     portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
     env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
     options,

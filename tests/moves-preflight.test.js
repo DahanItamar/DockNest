@@ -303,6 +303,12 @@ test('owner decision: findings are warnings that need "I checked these"; a faile
   const failed = evaluateMove(facts(f => { delete f.source.ownership; }));
   assert.equal(failed.canStart, false); assert.equal(failed.needsOwnershipCheck, false, 'a missing probe blocks; a tick cannot override it');
   assert.notEqual(preflightHash(remapped), preflightHash(evaluateMove(facts())), 'the acknowledgement need is part of what was reviewed');
+  // A tick covers the notes that were shown: a new or different note (still needing a tick) changes the hash.
+  const both = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(both.needsOwnershipCheck, true);
+  assert.notEqual(preflightHash(both), preflightHash(remapped), 'an extra note needs a fresh review');
+  const otherPath = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/other', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.notEqual(preflightHash(otherPath), preflightHash(lost), 'a note about another path needs a fresh review');
 });
 test('a partly scanned folder is a warning that says so', () => {
   const result = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
