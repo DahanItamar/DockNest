@@ -30,6 +30,8 @@ def dump_timeout(cfg):
 def official_entrypoint(c):
     """The official images set up an empty data folder on first start; a restore of a dump relies on that."""
     entrypoint=(c.get('Config') or {}).get('Entrypoint') or []
+    # The Valkey image runs it under tini: [tini, --, docker-entrypoint.sh].
+    if len(entrypoint)==3 and isinstance(entrypoint[0],str) and posixpath.basename(entrypoint[0])=='tini' and entrypoint[1]=='--':entrypoint=entrypoint[2:]
     return len(entrypoint)==1 and isinstance(entrypoint[0],str) and posixpath.basename(entrypoint[0])=='docker-entrypoint.sh'
 
 def dump_data_folder(service,c):

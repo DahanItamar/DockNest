@@ -307,6 +307,13 @@ class RedisFlavors(unittest.TestCase):
         evidence=self.engine.stop_evidence(service,container,container,123,None)
         self.assertTrue(evidence['cacheOnly']);self.assertFalse(evidence['finalRdbSaveVerified'])
 
+    def test_valkey_entrypoint_under_tini_is_the_official_one(self):
+        from helper import official_entrypoint
+        self.assertTrue(official_entrypoint({'Config':{'Entrypoint':['tini','--','docker-entrypoint.sh']}}))
+        self.assertTrue(official_entrypoint({'Config':{'Entrypoint':['docker-entrypoint.sh']}}))
+        self.assertFalse(official_entrypoint({'Config':{'Entrypoint':['tini','--','/bitnami/run.sh']}}))
+        self.assertFalse(official_entrypoint({'Config':{'Entrypoint':['sh','--','docker-entrypoint.sh']}}))
+
     def test_valkey_shutdown_log_is_accepted(self):
         service=online_fixture(flavor='valkey',version='8.0.1')
         container,*_=fixture()
