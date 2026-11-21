@@ -6,6 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 - Append-only SFTP storage: DockNest detects an SFTP account that refuses deletes and overwrites, keeps adding backups there, and leaves old ones for the storage server to expire. While the server enforces it, ransomware that reaches DockNest cannot delete or change stored backups. See [storage backends](docs/storage-backends.md#append-only-sftp-since-300).
+- Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
 - Sign-in: each password dot and 2FA digit now animates in as you type, with no focus border on those inputs (the caret and active-box tint show where you are). Off under reduced motion.
 - Consistent dialogs, tabs, notices and step-by-step flows.
 - Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).
