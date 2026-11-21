@@ -291,6 +291,19 @@ test('a probe that could not run blocks as "could not be checked", never passes'
     assert.equal(result.canStart, false);
   }
 });
+test('owner decision: findings are warnings that need "I checked these"; a failed or missing probe blocks and is not an acknowledgement case', () => {
+  assert.equal(evaluateMove(facts()).needsOwnershipCheck, false, 'nothing found, nothing to tick');
+  const remapped = evaluateMove(facts(f => { f.target.ownership.engine.mode = 'userns'; }));
+  assert.equal(remapped.canStart, true); assert.equal(remapped.needsOwnershipCheck, true);
+  assert.ok(own(remapped).every(item => item.status === 'warn' && item.requiresAcknowledgement === true));
+  const lost = evaluateMove(facts(f => { f.source.ownership.modes.findings = [{ path: '/srv/shop/data/bin/tool', modes: ['setid'] }]; f.target.ownership.filesystem.features = { setid: false, xattr: true }; }));
+  assert.equal(lost.canStart, true); assert.equal(lost.needsOwnershipCheck, true);
+  const partial = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
+  assert.equal(partial.needsOwnershipCheck, true);
+  const failed = evaluateMove(facts(f => { delete f.source.ownership; }));
+  assert.equal(failed.canStart, false); assert.equal(failed.needsOwnershipCheck, false, 'a missing probe blocks; a tick cannot override it');
+  assert.notEqual(preflightHash(remapped), preflightHash(evaluateMove(facts())), 'the acknowledgement need is part of what was reviewed');
+});
 test('a partly scanned folder is a warning that says so', () => {
   const result = evaluateMove(facts(f => { f.source.ownership.modes.truncated = true; f.source.ownership.modes.scanned = 20000; }));
   assert.deepEqual(own(result).map(item => [item.id, item.status]), [['file-mode', 'warn']]); assert.match(own(result)[0].text, /first 20000 files/);

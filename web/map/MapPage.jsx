@@ -191,14 +191,14 @@ export function MapPage({servers=[],sites=[],backups=[],policies=[],jobs=[],user
  function openMove(m,button){opener.current=button;setFlow({kind:'progress',siteId:m.siteId,targetId:m.targetServerId,moveId:m.id})}
  const strip=canMove&&moves.length>0&&<ul className="map-moves" aria-label="Moves">{moves.map(m=><li key={m.id}><span><b>{m.siteName}</b> <span className="map-caption">{m.actions?.resolve?.length?'Needs your attention':m.actions?.askRemoveOldCopy?'The old copy can be removed':m.state==='done'?'Moved. You can still switch back.':m.statusLine||'Moving'}</span></span><button type="button" onClick={e=>openMove(m,e.currentTarget)}>Open</button></li>)}</ul>;
  async function startMove(options){
-  const {envRewrite,askBeforeSwitch,moveAnyway,dnsMode}=options;
+  const {envRewrite,askBeforeSwitch,moveAnyway,ownershipChecked,dnsMode}=options;
   setFlow(f=>({...f,busy:true,error:''}));
   try{
    let p=flow.preview;
    // Advanced choices change the plan, so ask for a fresh preview that includes them.
    if(envRewrite.length||askBeforeSwitch||dnsMode==='cloudflare')p=await client.preview(flow.siteId,flow.targetId,{dnsMode,envRewrite,askBeforeSwitch});
    if(blocked(p)){setFlow(f=>({...f,preview:p,busy:false}));return;}
-   await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway});
+   await client.start(p.id,{preflightHash:p.preflightHash,moveAnyway,ownershipChecked});
    setFlow(f=>({kind:'progress',siteId:f.siteId,targetId:f.targetId,moveId:p.id}));
   }catch(e){
    if(e.code==='REAUTH_REQUIRED'){setFlow(f=>({...f,busy:false}));throw e;}

@@ -65,14 +65,14 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const guard=useGuard(client),[cfConfigured,setCfConfigured]=useState(false);
  const [cf,setCf]=useState(false),[token,setToken]=useState(''),[tokenSaved,setTokenSaved]=useState(false),[tokenErr,setTokenErr]=useState(''),[tokenBusy,setTokenBusy]=useState(false);
  const blocked=!preview.ok||preview.verdict==='blocked',long=!blocked&&preview.needsMoveAnyway;
- const [anyway,setAnyway]=useState(false);
+ const [anyway,setAnyway]=useState(false),[checkedOwn,setCheckedOwn]=useState(false);
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
- const canMove=!blocked&&(!long||anyway)&&!busy;
+ const needOwn=!blocked&&!!preview.needsOwnershipCheck,canMove=!blocked&&(!long||anyway)&&(!needOwn||checkedOwn)&&!busy;
  const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
  const cfReady=tokenSaved||cfConfigured;
  useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
- const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
+ const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway,ownershipChecked:needOwn&&checkedOwn}));
  async function saveToken(){
   setTokenBusy(true);setTokenErr('');
   await guard.run(async()=>{await client.saveCloudflareToken(token);setToken('');setTokenSaved(true);setCf(true)},e=>setTokenErr(friendly(e)));
@@ -84,6 +84,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
   <p className="map-lead"><b>{site.name}</b> moves from {from.name} to {to.name}.</p>
   {blocked&&!own.some(c=>c.status==='block'&&c.text===why(preview))&&<Note kind="error" icon={IconCircleX} role="alert">{why(preview)}</Note>}
   {own.map(c=><Note key={c.id+c.text} kind={c.status==='block'?'error':'warn'} icon={c.status==='block'?IconCircleX:IconAlertTriangle} role={c.status==='block'?'alert':undefined}>{c.text}</Note>)}
+  {needOwn&&<label className="map-check"><input type="checkbox" checked={checkedOwn} onChange={e=>setCheckedOwn(e.target.checked)}/>I checked these</label>}
   {installChecks(preview).map(c=>{const i=c.install,name=PACKAGE_NAME[i.package];return <div key={c.id||i.package} className="map-install">
    <Note kind="warn" icon={IconAlertTriangle}><b>{c.title||`${to.name} needs ${name}`}</b> {i.supported?(c.text||`DockNest can install ${name} for you.`):(i.reason||c.text||`DockNest cannot install ${name} on this system yet. Install it yourself, then check again.`)}</Note>
    <div className="map-inline-actions">{i.supported&&<button type="button" className="primary" onClick={()=>onInstall?.(c)}>Install {name}</button>}{i.command&&<button type="button" onClick={()=>onCommand?.(c)}>Show command</button>}</div>

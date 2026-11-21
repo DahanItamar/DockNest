@@ -81,8 +81,12 @@ docs/adr-3.0.0-keys-safe.md section 6):
   new file system does not keep. The note names the first path, never file content.
 - **Target folder** (block): the folder is on a read-only, noexec or nosuid mount, or a network file system that squashes root.
 
+What a probe finds (the first two) is a warning the person must acknowledge: the review dialog shows **I checked these**, Move
+stays off until it is ticked, and the server refuses to start without `ownershipChecked: true` (409 `OWNERSHIP_CHECK_REQUIRED`).
+The preview carries `needsOwnershipCheck` and `requiresAcknowledgement` on those warnings. The target folder findings still block.
+
 A probe that cannot run (an old helper, an unreadable mount table, a failed probe file) is never treated as fine: it blocks
-with "DockNest could not check ... Update DockNest on both servers, then check again." The only thing a probe writes is one
+with "DockNest could not check ... Update DockNest on both servers, then check again." No tick can override that block. The only thing a probe writes is one
 empty file in a private folder (the staging folder, and on a network mount the nearest existing folder), removed straight after.
 
 ## Installing missing software on the new server (optional)
@@ -331,9 +335,9 @@ change Advanced settings (for example `envRewrite`), post a new preview. `needsM
 ### POST /api/moves/:id/start ("Move")
 
 Needs a re-verification within the last 5 minutes (403 `REAUTH_REQUIRED` otherwise). Request:
-`{ "preflightHash": "<from the preview>", "moveAnyway"?: true }`. The server re-runs every check; if anything changed
+`{ "preflightHash": "<from the preview>", "moveAnyway"?: true, "ownershipChecked"?: true }`. The server re-runs every check; if anything changed
 it answers 409 `PREFLIGHT_CHANGED` with the fresh preview in `preview`. Long downtime without `moveAnyway` answers
-409 `MOVE_ANYWAY_REQUIRED`. Success: 202 with the move (same shape as GET).
+409 `MOVE_ANYWAY_REQUIRED`; owner or permission findings without `ownershipChecked` answer 409 `OWNERSHIP_CHECK_REQUIRED`. Success: 202 with the move (same shape as GET).
 
 ### GET /api/moves/:id (poll every few seconds)
 

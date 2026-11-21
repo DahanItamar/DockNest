@@ -100,6 +100,9 @@ function preview({siteId,targetServerId,options}){
 const nginx={id:'nginx',status:'block',title:'media-box needs nginx',text:mock.unsupported?'':'DockNest found Ubuntu 24.04 and can install it for you.',install:{package:'nginx',command:'sudo apt-get update && sudo apt-get install -y nginx',supported:!mock.unsupported,reason:mock.unsupported?'This server packages offer Docker 20.10; this site needs 28 or newer. Install Docker from the Docker repository instead.':undefined}};
  if(mock.needNginx&&targetServerId==='a')return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['media-box needs nginx. Install it, then try again.'],advanced:{...base.advanced,checks:[nginx]}};
  if(targetServerId==='c'||(mock.blockA&&targetServerId==='a'))return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',blockers:['This server is not connected. Reconnect it first.']};
+ // Owner decision: findings about owners and file permissions are warnings that need "I checked these"; a probe that failed blocks.
+ if(targetServerId==='d'&&mock.ownership==='warn'){const c={id:'owner-map',status:'warn',title:'Owners and groups',text:'Docker on zeta-Srv runs with remapped user IDs (userns). The app may not read its own files. Check it after the move.'};return {...base,verdict:'ready-with-notes',needsOwnershipCheck:true,warnings:[{id:'owner-map',text:c.text,advanced:false,requiresConfirmation:false,requiresAcknowledgement:true}],advanced:{...base.advanced,checks:[c]}}}
+ if(targetServerId==='d'&&mock.ownership==='block'){const c={id:'owner-map',status:'block',title:'Owners and groups',text:'DockNest could not check which user IDs Docker uses on zeta-Srv. Update DockNest on both servers, then check again.'};return {...base,ok:false,verdict:'blocked',sentence:'Cannot move.',needsOwnershipCheck:false,blockers:[c.text],advanced:{...base.advanced,checks:[c]}}}
  if(targetServerId==='d')return {...base,verdict:'ready-with-notes',needsMoveAnyway:true,mailBlocked:false,estimateSeconds:4000,downtimeSeconds:2400,warnings:[{id:'big',text:'The database is large.',advanced:false,requiresConfirmation:true},{id:'extra',text:'Extra note for the advanced list.',advanced:true}]};
  return base;
 }
@@ -387,6 +390,32 @@ mock.siteMoving=true;await dragSite(page,SHOP,'zeta-Srv');await save.click();
  assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
  await shot(page,scheme,'1440-9-blocked');
  await d.getByRole('button',{name:'Cancel'}).click();mock.blockA=false;
+ // Owner and file-permission findings: a warning, and Move stays off until "I checked these" is ticked
+ mock.ownership='warn';
+ await dragSite(page,SHOP,'zeta-Srv');await save.click();
+ await d.getByRole('heading',{name:'Ready to move'}).waitFor();
+ await d.getByText(/remapped user IDs/).waitFor();
+ assert.equal(await d.getByRole('alert').getByText(/remapped user IDs/).count(),0,'findings are a warning, not a block');
+ const goOwn=d.getByRole('button',{name:'Move',exact:true});
+ assert.equal(await goOwn.isDisabled(),true,'Move waits for I checked these');
+ await shot(page,scheme,'1440-9b-ownership');
+ await d.getByLabel('I checked these').check();assert.equal(await goOwn.isEnabled(),true);
+ await d.getByLabel('I checked these').uncheck();assert.equal(await goOwn.isDisabled(),true,'unticking disables Move again');
+ await d.getByLabel('I checked these').check();
+ await goOwn.click();
+ await d.getByRole('heading',{name:'Moving shop.example.com'}).waitFor();
+ assert.equal(mock.starts.at(-1).body.ownershipChecked,true,'the tick is sent to the server');
+ mock.phase='rolled_back';
+ await d.getByRole('heading',{name:'Move undone'}).waitFor({timeout:6000});
+ await d.getByRole('button',{name:'Close'}).click();
+ // A probe that failed blocks: no tick to offer
+ mock.ownership='block';
+ await dragSite(page,SHOP,'zeta-Srv');await save.click();
+ await d.getByRole('heading',{name:'Cannot move yet'}).waitFor();
+ await d.getByRole('alert').getByText(/could not check which user IDs/).first().waitFor();
+ assert.equal(await d.getByLabel('I checked these').count(),0,'a failed probe offers no tick');
+ assert.equal(await d.getByRole('button',{name:'Move',exact:true}).isDisabled(),true);
+ await d.getByRole('button',{name:'Cancel'}).click();mock.ownership=undefined;
 }
 
 async function stateIsClean(page,label){

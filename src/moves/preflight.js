@@ -84,6 +84,9 @@ export function describeDuration(seconds) {
   return `about ${hours} hours`;
 }
 
+// Owner decision (docs/moving-sites.md): what a probe FOUND is a warning the person must tick "I checked these" for; a probe that
+// failed or is missing stays a block. The server refuses to start without the tick (startMove).
+const ACK = { requiresAcknowledgement: true };
 const check = (id, status, title, text, extra) => ({ id, status, title, text, ...extra });
 // The CPU limit and CPU set a server with `count` CPUs accepts; mirrors cpu_fit in remote/helper/runspec.py.
 export function cpuFit(cpus, cpuset, count) {
@@ -148,19 +151,19 @@ export function evaluateMove(facts, options = {}) {
     if (docker && !dockerBlocked && !sameServer) {
       if (!MODES.includes(sourceMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses', source.name);
       else if (!MODES.includes(targetMode)) unverified('owner-map', 'Owners and groups', 'which user IDs Docker uses');
-      else if (sourceMode !== 'none' || targetMode !== 'none') add('owner-map', 'warn', 'Owners and groups', `Docker on ${sourceMode !== 'none' ? source.name : target.name} runs with remapped user IDs (${sourceMode !== 'none' ? sourceMode : targetMode}). File owners keep their numbers, but the owners the containers see on ${target.name} can differ, so the app may not read its own files. Check it after the move.`);
+      else if (sourceMode !== 'none' || targetMode !== 'none') add('owner-map', 'warn', 'Owners and groups', `Docker on ${sourceMode !== 'none' ? source.name : target.name} runs with remapped user IDs (${sourceMode !== 'none' ? sourceMode : targetMode}). File owners keep their numbers, but the owners the containers see on ${target.name} can differ, so the app may not read its own files. Check it after the move.`, ACK);
     }
     const modes = source.ownership?.modes, fsFacts = target.ownership?.filesystem;
     if (sameServer) { /* nothing moves */ }
     else if (!modes || modes.checked !== true) unverified('file-mode', 'File permissions', "the app's file permissions", source.name);
     else {
-      if (modes.truncated) add('file-mode', 'warn', 'File permissions', `DockNest looked at the first ${modes.scanned} files of ${site.name} only, so special permissions further on were not checked.`);
+      if (modes.truncated) add('file-mode', 'warn', 'File permissions', `DockNest looked at the first ${modes.scanned} files of ${site.name} only, so special permissions further on were not checked.`, ACK);
       if (modes.findings?.length) {
         const features = fsFacts?.features;
         if (!features || typeof features.setid !== 'boolean' || typeof features.xattr !== 'boolean') unverified('file-mode', 'File permissions', 'which file permissions the file system keeps');
         else {
           const lost = modes.findings.filter(item => (item.modes ?? []).some(mode => (mode === 'setid' && !features.setid) || (mode !== 'setid' && !features.xattr)));
-          if (lost.length) add('file-mode', 'warn', 'File permissions', `${lost[0].path}${lost.length > 1 ? ` and ${lost.length - 1} more` : ''} use special permissions (setuid or setgid bits, ACLs or extended attributes) that the file system on ${target.name} does not keep. The copy may lose them.`);
+          if (lost.length) add('file-mode', 'warn', 'File permissions', `${lost[0].path}${lost.length > 1 ? ` and ${lost.length - 1} more` : ''} use special permissions (setuid or setgid bits, ACLs or extended attributes) that the file system on ${target.name} does not keep. The copy may lose them.`, ACK);
         }
       }
     }
@@ -252,10 +255,11 @@ export function evaluateMove(facts, options = {}) {
 
   const blocks = checks.filter(item => item.status === 'block'), warnings = checks.filter(item => item.status === 'warn');
   const needsMoveAnyway = checks.some(item => item.requiresConfirmation);
+  const needsOwnershipCheck = checks.some(item => item.status === 'warn' && item.requiresAcknowledgement);
   const verdict = blocks.length ? 'blocked' : warnings.length ? 'ready-with-notes' : 'ready';
   const sentence = blocks.length ? blocks[0].text
     : `${site.name} is ready to move to ${target.name}. It stays online while the copy is tested${downtime ? `; expected downtime is ${downtime.text}` : ''}.`;
-  return { verdict, canStart: !blocks.length, needsMoveAnyway, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
+  return { verdict, canStart: !blocks.length, needsMoveAnyway, needsOwnershipCheck, sentence, details: { checks, portMap, env, downtime, blockers: blocks.length, warnings: warnings.length } };
 }
 
 // Binds "Start move" to what the owner reviewed. Only the parts that decide what the move will do are hashed.
@@ -265,7 +269,7 @@ export function evaluateMove(facts, options = {}) {
 export function preflightHash(result, options = {}) {
   const canonical = value => Array.isArray(value) ? value.map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const material = {
-    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway,
+    canStart: result.canStart, needsMoveAnyway: !!result.needsMoveAnyway, needsOwnershipCheck: !!result.needsOwnershipCheck,
     blockers: result.details.checks.filter(item => item.status === 'block').map(({ id, text }) => ({ id, text })),
     portMap: result.details.portMap.map(({ hostIp, protocol, containerPort, from, to }) => ({ hostIp, protocol, containerPort, from, to })),
     env: result.details.env.map(({ key, where, rewrite }) => ({ key, where, rewrite })),
