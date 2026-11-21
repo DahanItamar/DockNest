@@ -41,6 +41,22 @@ export function pdfString(value) {
   return '<' + bytes.toString('hex').toUpperCase() + '>';
 }
 
+// The font and glyph for one character: the style's font, then Roboto, then Noto Sans Hebrew, else a "?".
+function glyphFor(character, preferred) {
+  const code = character.codePointAt(0);
+  for (const key of [preferred, ...FALLBACK]) { const face = font(key), id = face.cmap.get(code); if (id) return { key, id, face }; }
+  const face = font(preferred); return { key: preferred, id: face.cmap.get(0x3f) ?? 0, face };
+}
+function measure(text, style) {
+  let total = 0;
+  for (const character of text) { const { id, face } = glyphFor(character, style.font); total += face.widths[id] * style.size / face.unitsPerEm; }
+  return total;
+}
+// A command box: a list item's box (the narrowest) holds lines up to COMMAND_WIDTH. Commands are folded to fit before
+// they get here (src/runbook/commands.js); a command line is never re-wrapped, as that would break it when copied.
+const BOX = { pad: 6, indent: 20 }, COMMAND_WIDTH = WIDTH - BOX.indent - 2 * BOX.pad;
+export const commandFits = line => measure(line, STYLES.mono) <= COMMAND_WIDTH;
+
 class Layout {
   constructor() { this.pages = []; this.used = new Map(); this.newPage(); }
   newPage() {
@@ -48,17 +64,7 @@ class Layout {
     this.page = []; this.pages.push(this.page); this.y = PAGE.height - PAGE.top;
   }
   ensure(height) { if (this.y - height < PAGE.bottom) this.newPage(); }
-  // The font and glyph for one character: the style's font, then Roboto, then Noto Sans Hebrew, else a "?".
-  glyph(character, preferred) {
-    const code = character.codePointAt(0);
-    for (const key of [preferred, ...FALLBACK]) { const face = font(key), id = face.cmap.get(code); if (id) return { key, id, face }; }
-    const face = font(preferred); return { key: preferred, id: face.cmap.get(0x3f) ?? 0, face };
-  }
-  width(text, style) {
-    let total = 0;
-    for (const character of text) { const { id, face } = this.glyph(character, style.font); total += face.widths[id] * style.size / face.unitsPerEm; }
-    return total;
-  }
+  width(text, style) { return measure(text, style); }
   // Logical lines that fit `width`; a word longer than a line is broken between characters.
   wrap(text, style, width) {
     const lines = [];
@@ -83,7 +89,7 @@ class Layout {
     if (!shown) return;
     const runs = [];
     for (const character of shown) {
-      const { key, id } = this.glyph(character, style.font);
+      const { key, id } = glyphFor(character, style.font);
       if (!this.used.has(key)) this.used.set(key, new Map());
       if (!this.used.get(key).has(id)) this.used.get(key).set(id, character);
       if (runs.at(-1)?.key === key) runs.at(-1).ids.push(id); else runs.push({ key, ids: [id] });
@@ -110,9 +116,13 @@ class Layout {
     this.ensure(style.before + style.lead + STYLES.body.lead * 2);
     this.y -= style.before; this.paragraph(text, style);
   }
-  command(text, indent = 0) {
-    const style = STYLES.mono, pad = 6, width = WIDTH - indent - 2 * pad, lines = [];
-    for (const line of String(text).split('\n')) this.wrap(line, style, width).forEach((part, index) => lines.push(index ? '  ' + part : part));
+  // `wrap`: a value box (a login detail), whose long lines may wrap; a command line that does not fit is an error.
+  command(text, indent = 0, { wrap = false } = {}) {
+    const style = STYLES.mono, pad = BOX.pad, width = WIDTH - indent - 2 * pad, lines = [];
+    for (const line of String(text).split('\n')) {
+      if (!wrap && measure(line, style) > width) throw new Error('A Recovery Guide command is wider than its box');
+      this.wrap(line, style, width).forEach((part, index) => lines.push(index ? '  ' + part : part));
+    }
     this.ensure(style.lead * Math.min(lines.length, 3) + pad * 2);
     this.rect(PAGE.margin + indent, this.y - pad, WIDTH - indent, pad, COLORS.box); this.y -= pad;
     for (const line of lines) {
@@ -205,7 +215,7 @@ export function renderPdf(document, { title, header = title, secrets = false, cr
     else if (block.type === 'heading') { if (block.newPage && layout.y < PAGE.height - PAGE.top) layout.newPage(); layout.heading(block.text, block.level ?? 1); }
     else if (block.type === 'paragraph') layout.paragraph(block.text, STYLES.body, { color: COLORS[block.tone] });
     else if (block.type === 'list') layout.list(block.items);
-    else if (block.type === 'command') layout.command(block.text);
+    else if (block.type === 'command') layout.command(block.text, 0, { wrap: block.wrap });
     else if (block.type === 'table') layout.table(block.columns, block.rows);
     else if (block.type === 'pageBreak') layout.newPage();
     else throw new Error('Unknown Recovery Guide block');

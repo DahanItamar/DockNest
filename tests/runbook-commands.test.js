@@ -4,8 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { quote, COLUMNS, CHECKED_ENGINES, fetchCommand, storageCheckCommand, installCommands, restoreCommands, checkCommands, revealer } from '../src/runbook/commands.js';
-import { font } from '../src/runbook/fonts.js';
+import { quote, CHECKED_ENGINES, fetchCommand, storageCheckCommand, installCommands, restoreCommands, checkCommands, revealer } from '../src/runbook/commands.js';
+import { renderPdf, commandFits } from '../src/runbook/pdf.js';
 import { ENGINE_IDS } from '../shared/database-engines.js';
 
 const shell = spawnSync('sh', ['-c', 'exit 0']).status === 0;
@@ -40,10 +40,24 @@ test('quote: safe words stay bare, everything else is single-quoted and reads ba
 
 test('a long word is folded into pieces the shell joins back, and no line is wider than the copy box', needsShell, () => {
   const command = fetchCommand(sftp, { path: longPath }, 'backup.enc', shown);
-  for (const line of command.split('\n')) assert.ok(line.length <= COLUMNS, line);
+  for (const line of command.split('\n')) assert.ok(commandFits(line), line);
   assert.deepEqual(args(command, ['curl']), ['--fail', '--silent', '--show-error', '--hostpubsha256', Buffer.from(sftp.hostKey, 'hex').toString('base64'), '--user', `backup:${sftp.password}`, '--output', 'backup.enc', `sftp://192.0.2.10:2222${longPath}`]);
-  const mono = font('mono'), boxWidth = 595.28 - 2 * 56 - 12;
-  assert.ok(mono.widths[mono.cmap.get(0x4d)] / mono.unitsPerEm * 8.5 * COLUMNS <= boxWidth, 'a full line fits the PDF copy box');
+});
+
+test('a long Hebrew path is folded by its measured width, fits the box and reads back whole', needsShell, () => {
+  const hebrew = '/srv/האתרים-של-המשפחה/חנות-הספרים-של-דנה-ורון-בתל-אביב/הגדרות-השרת-הראשי/compose.yaml';
+  const app = { ...compose, composeFiles: [hebrew], configFiles: [] }, steps = restoreCommands({ app, backup: composeBackup, storage: sftp, reveal: hidden });
+  for (const line of steps.flatMap(item => item.command.split('\n'))) assert.ok(commandFits(line), line);
+  const check = checkCommands({ app: { ...app, services: [], domains: [] } });
+  assert.ok(check.split('\n').length > 1 && check.split('\n').every(commandFits), 'the Hebrew path is folded to fit');
+  assert.ok(args(check, ['cd', 'docker']).includes(hebrew), 'the shell reads the whole path back');
+  assert.doesNotThrow(() => renderPdf([{ type: 'list', items: steps }], { title: 'Recovery Guide', createdAt: '2026-11-20T10:00:00.000Z' }));
+});
+
+test('the PDF never re-wraps a command line: one wider than its box is an error, a login value may wrap', () => {
+  const wide = 'x'.repeat(200);
+  assert.throws(() => renderPdf([{ type: 'command', text: wide }], { title: 'Recovery Guide', createdAt: '2026-11-20T10:00:00.000Z' }), /wider than its box/);
+  assert.doesNotThrow(() => renderPdf([{ type: 'command', text: wide, wrap: true }], { title: 'Recovery Guide', createdAt: '2026-11-20T10:00:00.000Z' }));
 });
 
 test('placeholders replace addresses and login details unless they are included', () => {
@@ -88,14 +102,17 @@ test('restore a Compose project: download, decrypt, images, data folders, Compos
     'Make a private folder for this app and download its backup into it.',
     'Decrypt the backup with the recovery kit and unpack it.',
     'Load the saved container images.',
-    'Put each data folder and Docker volume back where it was. Files already there are kept.',
+    'Put each data folder and Docker volume back. Files already there are kept.',
     'Put the Compose files back.',
     'Start the app with its Compose file.',
   ]);
   assert.match(text, /^node \/root\/docknest-kit\/recovery\/decrypt-backup\.js backup_[^ ]+\.tar\.gz\.enc \/root\/docknest-kit\/master\.key payload\.tar\.gz$/m);
   assert.match(text, /^docker load -i package\/images\.tar$/m);
   assert.match(text, /^src="\$\(field containers 0 Mounts 0 Source\)"$/m);
-  assert.match(text, /^src="\$\(field containers 1 Mounts 0 Source\)"$/m);
+  assert.match(text, /^volume="\$\(field containers 1 Mounts 0 Name\)"\ndocker volume create "\$volume"\ndst="\$\(docker volume inspect -f '\{\{\.Mountpoint\}\}' "\$volume"\)"$/m, 'a named volume is created here and filled through its own folder');
+  assert.match(text, /-xpf package\/mount-1-0\.tar --strip-components=1 -C "\$dst" && owner package\/mount-1-0\.tar "\$dst"$/m, "the volume folder takes the archive's owner and mode");
+  assert.ok(!text.includes('/var/lib/docker'), 'no Docker data folder is assumed');
+  assert.ok(!text.includes('containers 1 Mounts 0 Source'), "the old server's volume path is never used");
   assert.ok(!text.includes('mount-0-1.tar'), 'a temporary memory folder has no archive');
   assert.match(text, /package\/config-0\.tar -C \/srv\/shop$/m);
   assert.match(text, /package\/config-2\.tar -C \/srv\/shop$/m);

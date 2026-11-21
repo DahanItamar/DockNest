@@ -150,7 +150,7 @@ export function guideBlocks(guide) {
   blocks.push({ type: 'heading', level: 2, text: 'Where the backups are' }, { type: 'table', columns: ['Storage', 'Kind', ...(address ? ['Address'] : []), 'Holds'], rows: guide.fleet.storage.map(storage => [storage.name, storage.kind, ...(address ? [storage.address] : []), storage.holds.join(', ') || 'Nothing in this guide']) });
   for (const storage of guide.fleet.storage.filter(item => item.login)) {
     blocks.push({ type: 'paragraph', text: `Login details for ${storage.name}:`, tone: 'warning' });
-    for (const [label, value] of storage.login) blocks.push(label === 'Private key' ? { type: 'command', text: value } : { type: 'command', text: `${label}: ${value}` });
+    for (const [label, value] of storage.login) blocks.push({ type: 'command', text: label === 'Private key' ? value : `${label}: ${value}`, wrap: true });
   }
   blocks.push({ type: 'heading', level: 2, text: 'The emergency kit' }, { type: 'paragraph', text: guide.fleet.kit.summary });
   if (guide.fleet.kit.holders) blocks.push(list(guide.fleet.kit.holders));

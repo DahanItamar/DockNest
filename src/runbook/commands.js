@@ -7,6 +7,7 @@
 // with raw() are not.
 import path from 'node:path';
 import { backupRoot } from '../backup-layout.js';
+import { commandFits } from './pdf.js';
 
 export const REPOSITORY = 'https://github.com/DahanItamar/DockNest.git';
 export const KIT = '/root/docknest-kit';
@@ -21,29 +22,37 @@ export function quote(value) {
   const text = String(value);
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
 }
-// Commands are folded to fit the PDF's copy box: a word that does not fit goes on the next line after " \", and a
-// longer word is cut into quoted pieces joined by "\" at the end of the line (the shell joins them back into one word).
-export const COLUMNS = 88;
-const pieces = value => {
-  if (quote(value).length <= COLUMNS - 4) return [quote(value)];
-  const size = COLUMNS - 8, cut = [];
-  for (let at = 0; at < value.length; at += size) cut.push(`'${value.slice(at, at + size).replaceAll("'", `'\\''`)}'`);
-  return cut;
+// Commands are folded to fit the PDF's copy box, measured with its font (src/runbook/pdf.js commandFits): a word that
+// does not fit goes on the next line after " \", and a longer word is cut into quoted pieces joined by "\" at the end of
+// the line (the shell joins adjacent quoted pieces back into one word).
+const cut = (units, wrap) => {
+  const pieces = [];
+  let piece = '';
+  for (const unit of units) {
+    if (piece && !commandFits('  ' + wrap(piece + unit) + '\\')) { pieces.push(wrap(piece)); piece = ''; }
+    piece += unit;
+  }
+  return [...pieces, wrap(piece)];
 };
+const single = text => `'${text}'`, double = text => `"${text}"`;
+const pieces = value => (commandFits(quote(value) + ' \\') ? [quote(value)] : cut([...String(value)].map(character => (character === "'" ? `'\\''` : character)), single));
 const raw = text => ({ raw: text });
 function command(...words) {
   const lines = [];
   let line = '';
   for (const word of words.flat()) {
-    const [first, ...rest] = typeof word === 'object' ? [word.raw] : pieces(String(word));
-    if (line && line.length + 1 + first.length + 2 > COLUMNS) { lines.push(line + ' \\'); line = '  ' + first; } else line = line ? `${line} ${first}` : first;
+    const [first, ...rest] = typeof word !== 'object' ? pieces(String(word)) : word.units && !commandFits('  ' + word.raw + ' \\') ? cut(word.units, double) : [word.raw];
+    if (line && !commandFits(`${line} ${first} \\`)) { lines.push(line + ' \\'); line = '  ' + first; } else line = line ? `${line} ${first}` : first;
     for (const piece of rest) { lines.push(line + '\\'); line = piece; }
   }
   return [...lines, line].join('\n');
 }
 // A double-quoted word with command substitutions, as in "type=bind,src=$(field ...)": the fixed parts are escaped for
-// double quotes, so the word stays one argument.
-const join = (...parts) => raw('"' + parts.map(part => (typeof part === 'object' ? part.raw : String(part).replace(/["\\$`]/g, '\\$&'))).join('') + '"');
+// double quotes, so the word stays one argument. A long one is cut between characters of its fixed parts.
+function join(...parts) {
+  const units = parts.flatMap(part => (typeof part === 'object' ? [part.raw] : [...String(part)].map(character => character.replace(/["\\$`]/, '\\$&'))));
+  return { raw: double(units.join('')), units };
+}
 const field = (...keys) => raw(`$(field ${keys.join(' ')})`);
 const assign = (name, word) => raw(`${name}=${word.raw}`);
 const TAR = ['tar', '--xattrs', '--acls', '--numeric-owner', '--skip-old-files', '-xpf'];
@@ -51,9 +60,22 @@ const TAR = ['tar', '--xattrs', '--acls', '--numeric-owner', '--skip-old-files',
 const FIELD = [
   "field() { python3 - \"$@\" <<'PY'",
   'import json, sys',
-  'from functools import reduce',
-  "manifest = json.load(open('package/manifest.json'))",
-  'print(reduce(lambda v, k: v[int(k)] if isinstance(v, list) else v[k], sys.argv[1:], manifest))',
+  "value = json.load(open('package/manifest.json'))",
+  'for key in sys.argv[1:]:',
+  '    value = value[int(key)] if isinstance(value, list) else value[key]',
+  'print(value)',
+  'PY',
+  '}',
+].join('\n');
+// Gives a folder the owner, group and mode of the first entry of a mount archive: a Docker volume's own folder, which
+// tar --strip-components leaves as Docker made it.
+const OWNER = [
+  "owner() { python3 - \"$@\" <<'PY'",
+  'import os, sys, tarfile',
+  'with tarfile.open(sys.argv[1]) as archive:',
+  '    top = archive.next()',
+  'os.chown(sys.argv[2], top.uid, top.gid)',
+  'os.chmod(sys.argv[2], top.mode)',
   'PY',
   '}',
 ].join('\n');
@@ -73,7 +95,7 @@ const hostKeyHash = hex => Buffer.from(hex, 'hex').toString('base64');
 
 // One curl request for an object in `storage`: S3 signed with the access keys (`query` for a bucket listing), or SFTP
 // over the pinned host key. `output` writes the file there; without it curl prints it (for a folder, its listing).
-function storageRequest(storage, { path: objectPath = '', query = '' }, output, reveal) {
+export function fetchCommand(storage, { path: objectPath = '', query = '' }, output, reveal) {
   const common = ['curl', '--fail', '--silent', '--show-error'], target = output ? ['--output', output] : [];
   if (storage.mode === 's3') {
     const endpoint = new URL(storage.endpoint), host = reveal.address(endpoint.host), bucket = reveal.login(storage.bucket, PLACEHOLDERS.storageBucket), key = encodePath(objectPath) + query;
@@ -84,9 +106,8 @@ function storageRequest(storage, { path: objectPath = '', query = '' }, output, 
   const login = storage.auth === 'key' ? ['--user', user, '--key', 'storage-key'] : ['--user', `${user}:${reveal.login(storage.password, PLACEHOLDERS.storagePassword)}`];
   return command(common, '--hostpubsha256', hostKeyHash(storage.hostKey), login, target, url);
 }
-export const fetchCommand = (storage, location, output, reveal) => storageRequest(storage, location, output, reveal);
 // Lists the backup folder on the storage: proof that the address and the login work.
-export const storageCheckCommand = (storage, reveal) => storageRequest(storage, storage.mode === 's3' ? { query: '?list-type=2&max-keys=20' } : { path: backupRoot(storage.root) + '/' }, null, reveal);
+export const storageCheckCommand = (storage, reveal) => fetchCommand(storage, storage.mode === 's3' ? { query: '?list-type=2&max-keys=20' } : { path: backupRoot(storage.root) + '/' }, null, reveal);
 
 // Start here: a new server with Docker, Git and Node.js 24, DockNest from its release tag, the recovery kit opened and
 // its database and master key put in place, then DockNest started. `kit` is the newest Self Backup kit, or null. With
@@ -152,10 +173,20 @@ export function restoreCommands({ app, backup, storage, reveal }) {
   steps.push({ text: 'Load the saved container images.', command: command('docker', 'load', '-i', 'package/images.tar') });
   const mounts = backup.containers.flatMap((container, index) => container.mounts.map((mount, position) => ({ index, position, mount }))).filter(item => restorable(item.mount));
   if (mounts.length) {
-    steps.push({ text: 'Put each data folder and Docker volume back where it was. Files already there are kept.', command: [FIELD, ...mounts.map(({ index, position }) => [
-      command(assign('src', join(field('containers', index, 'Mounts', position, 'Source')))),
-      command('mkdir', '-p', raw('"$(dirname "$src")"'), raw('&&'), TAR, `package/mount-${index}-${position}.tar`, '-C', raw('"$(dirname "$src")"')),
-    ].join('\n'))].join('\n') });
+    // A bind folder goes back where it was. A named volume is created on this server and filled through the folder Docker
+    // gives it (docker volume inspect), wherever this server keeps its volumes; its own folder takes the archive's owner.
+    const archive = ({ index, position }) => `package/mount-${index}-${position}.tar`;
+    const restoreMount = item => (item.mount.type === 'volume' ? [
+      command(assign('volume', join(field('containers', item.index, 'Mounts', item.position, 'Name')))),
+      command('docker', 'volume', 'create', raw('"$volume"')),
+      command(assign('dst', raw(`"$(docker volume inspect -f '{{.Mountpoint}}' "$volume")"`))),
+      command(TAR, archive(item), '--strip-components=1', '-C', raw('"$dst"'), raw('&&'), 'owner', archive(item), raw('"$dst"')),
+    ] : [
+      command(assign('src', join(field('containers', item.index, 'Mounts', item.position, 'Source')))),
+      command('mkdir', '-p', raw('"$(dirname "$src")"'), raw('&&'), TAR, archive(item), '-C', raw('"$(dirname "$src")"')),
+    ]).join('\n');
+    const helpers = mounts.some(item => item.mount.type === 'volume') ? [FIELD, OWNER] : [FIELD];
+    steps.push({ text: 'Put each data folder and Docker volume back. Files already there are kept.', command: [...helpers, ...mounts.map(restoreMount)].join('\n') });
   }
   if (configs.length) steps.push({ text: app.composeFiles?.length ? 'Put the Compose files back.' : 'Put the settings files back.', command: configs.join('\n') });
   steps.push(startStep(app, backup));
