@@ -1,7 +1,7 @@
 // Turns state changes that already happen in the database into alert events (docs/alerts.md). It only READS the tables
-// jobs, site_moves, servers and update_checks and changes none of them, so backups, moves, server checks and update checks
-// behave exactly as before. A cursor in `settings` keeps each change from being seen twice; the first run starts at "now",
-// so enabling alerts never replays history.
+// jobs, site_moves, servers, update_checks and audit_events and changes none of them, so backups, moves, server checks and
+// update checks behave exactly as before. A cursor in `settings` keeps each change from being seen twice; the first run
+// starts at "now", so enabling alerts never replays history.
 import net from 'node:net';
 import { db } from '../db.js';
 import { checksEnabled, compareSemver, packageVersion, finalTag } from '../updates/check.js';
@@ -19,7 +19,7 @@ const write = (key, value) => db.prepare('INSERT INTO settings VALUES(?,?) ON CO
 
 export function detectJobsAndMoves(at = new Date().toISOString()) {
   const cursor = read(CURSOR);
-  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, edits: at, launches: at }); return 0; }
+  if (!cursor) { write(CURSOR, { jobs: at, moves: at, tests: at, testCleanups: at, copies: at, edits: at, launches: at, missed: at }); return 0; }
   let count = 0, jobs = cursor.jobs, moves = cursor.moves;
   // Restore tests: a cursor from before 2.9.0 has no `tests` field, which means "start now", so no history is replayed.
   const tests = cursor.tests ? detectRestoreTests(cursor.tests, cursor.testCleanups ?? cursor.tests) : { count: 0, tests: at, cleanups: at };
@@ -33,6 +33,9 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
   // Launches: a cursor from before 2.16.0 has no `launches` field, which means "start now" (no history replayed).
   const launches = cursor.launches ? detectLaunches(cursor.launches) : { count: 0, at };
   count += launches.count;
+  // Missed scheduled backups: a cursor from before 3.0.0 has no `missed` field, which means "start now" (no history replayed).
+  const missed = cursor.missed ? detectMissed(cursor.missed) : { count: 0, at };
+  count += missed.count;
   const finished = db.prepare(`SELECT j.id,j.status,j.finished_at,j.details,s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM jobs j JOIN sites s ON s.id=j.site_id JOIN servers v ON v.id=s.server_id
     WHERE (j.type='backup' AND j.status IN ('completed','failed','recovery_required') OR j.type='scrub' AND j.status='failed' AND json_extract(j.details,'$.chainBroken')=1) AND j.finished_at>? ORDER BY j.finished_at LIMIT 100`).all(cursor.jobs);
   for (const job of finished) {
@@ -52,7 +55,7 @@ export function detectJobsAndMoves(at = new Date().toISOString()) {
     count += emit({ type: needs ? 'move.needs_you' : 'move.finished', detail: needs ? (move.state === 'waiting' ? move.waiting_for : 'decision') : move.state, key: `occ:move:${move.id}:${move.state}:${move.waiting_for ?? ''}`, at: move.updated_at, siteId: move.site_id, serverId: move.source_server_id, targetServerId: move.target_server_id, siteName: move.site, serverName: move.source, targetName: move.target });
   }
   // Rows written in the same millisecond as the cursor are re-read next time; the queue's dedupe keys make that harmless.
-  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || edits.at !== cursor.edits || launches.at !== cursor.launches) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, edits: edits.at, launches: launches.at });
+  if (jobs !== cursor.jobs || moves !== cursor.moves || tests.tests !== cursor.tests || tests.cleanups !== cursor.testCleanups || copies.at !== cursor.copies || edits.at !== cursor.edits || launches.at !== cursor.launches || missed.at !== cursor.missed) write(CURSOR, { jobs, moves, tests: tests.tests, testCleanups: tests.cleanups, copies: copies.at, edits: edits.at, launches: launches.at, missed: missed.at });
   return count;
 }
 
@@ -127,6 +130,23 @@ function detectEdits(since) {
     if (!info) continue;
     const jobId = typeof detail.edit === 'string' ? db.prepare('SELECT job_id FROM site_edits WHERE id=?').get(detail.edit)?.job_id : undefined;
     count += emit({ type: EDIT_EVENTS[row.action], key: `occ:edit:${row.id}`, at: row.created_at, jobId, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server });
+  }
+  return { count, at: last };
+}
+
+// Missed scheduled backups (docs/alerts.md, "Missed scheduled backups"): read from the audit row the scheduler writes once
+// per miss (src/engine.js, noteMissed). Sent as the site's "Backup failed" with the code 'missed', so every line that
+// already reports failed backups also reports a run that never happened. The time shown is the time the run was due.
+function detectMissed(since) {
+  let count = 0, last = since;
+  const rows = db.prepare("SELECT id,target,detail,created_at FROM audit_events WHERE action='backup.missed' AND created_at>? ORDER BY created_at,id LIMIT 100").all(since);
+  for (const row of rows) {
+    last = row.created_at;
+    let detail = {}; try { detail = JSON.parse(row.detail || '{}'); } catch { /* keep {} */ }
+    const info = db.prepare('SELECT s.id AS site_id,s.name AS site,v.id AS server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(row.target ?? '');
+    if (!info) continue;
+    const due = typeof detail.scheduledFor === 'string' && !Number.isNaN(Date.parse(detail.scheduledFor)) ? detail.scheduledFor : row.created_at;
+    count += emit({ type: 'backup.failed', code: 'missed', key: `occ:missed:${row.id}`, at: due, siteId: info.site_id, serverId: info.server_id, timeZone: zoneFor(info.site_id), siteName: info.site, serverName: info.server });
   }
   return { count, at: last };
 }
