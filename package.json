@@ -59,7 +59,8 @@
     "test:login-typing": "node scripts/login-typing-browser.js",
     "test:auth": "node scripts/auth-browser.js",
     "test:launch": "node scripts/launch-browser.js",
-    "test:jobs-sqlite": "node scripts/jobs-sqlite-browser.js"
+    "test:jobs-sqlite": "node scripts/jobs-sqlite-browser.js",
+    "test:recovery-guide": "node scripts/recovery-guide-browser.js"
   },
   "dependencies": {
     "@fontsource-variable/roboto": "^5.3.0",

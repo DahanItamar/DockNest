@@ -5,6 +5,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Recovery Guide page: read the plain steps for a new server, the order to restore your apps and one page per app, see when it is out of date or not verified, and download the PDF from a short dialog (login details ask you to sign in again first).
 - Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
 - Sign-in: each password dot and 2FA digit now animates in as you type, with no focus border on those inputs (the caret and active-box tint show where you are). Off under reduced motion.
 - Consistent dialogs, tabs, notices and step-by-step flows.
