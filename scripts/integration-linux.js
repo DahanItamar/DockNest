@@ -306,6 +306,9 @@ try {
   await runIncrementalScenario({run,until,hosts,servers,db,directory,record,evidence,sftpDestinationId:destinationId});
   const {runEmergencyScenario}=await import('./integration-emergency.js');
   await runEmergencyScenario({run,hosts,db,record,directory});
+  // Before the capture failure cases below, which leave the source server waiting for a recovery review.
+  const {runRunbookScenario}=await import('./integration-runbook.js');
+  await runRunbookScenario({run,until,hosts,servers,db,record,directory,storagePassword});
   const {runCleanupScenario}=await import('./integration-cleanup.js');
   await runCleanupScenario({run,hosts,servers,db,record});
   const {runDomainsScenario}=await import('./integration-domains.js');

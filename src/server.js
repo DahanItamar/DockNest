@@ -11,6 +11,8 @@ import { pipeline } from 'node:stream/promises';
 import { storageCapacity, statFile, openRead } from './storage.js';
 import { storageTargets } from './storage-targets.js';
 import { selfBackupRoutes } from './self-backup-routes.js';
+import { runbookRoutes } from './runbook/routes.js';
+import { noteInventoryChange, runbookSummary } from './runbook/state.js';
 import { moveRoutes, cloudflareRoutes } from './moves/routes.js';
 import { deployKeyRoutes } from './launches/deploy-keys.js';
 import { launchRoutes, serverLaunchRoutes } from './launches/routes.js';
@@ -83,9 +85,17 @@ app.use('/api', lockMiddleware(updates));
 app.use('/api', session);
 app.use('/api/auth', auth);
 app.use('/api', requireAuth, csrf, rateLimit('api', 600, 60 * 1000));
+// A change to servers, apps, storage, Self Backup or the guide's note may leave the Recovery Guide out of date
+// (src/runbook/state.js): compare the digest once such a request has succeeded. Other changes do not touch its inputs.
+const INVENTORY_ROUTES = /^\/(servers|sites|storage-targets|self-backup|moves|runbook\/notes)(\/|$)/;
+app.use('/api', (req, res, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && INVENTORY_ROUTES.test(req.path)) res.once('finish', () => { if (res.statusCode < 400) noteInventoryChange().catch(() => {}); });
+  next();
+});
 app.use('/api/access', access);
 app.use('/api/storage-targets',storageTargets);
 app.use('/api/self-backup',selfBackupRoutes);
+app.use('/api/runbook', runbookRoutes);
 app.use('/api/moves', moveRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/connections', connectionRoutes);
@@ -182,7 +192,7 @@ app.get('/api/state', async (req, res) => {
   const heartbeat = db.prepare("SELECT value FROM settings WHERE key='worker_heartbeat'").get();
   const worker = heartbeat ? JSON.parse(heartbeat.value) : { running: false, lastSeen: null };
   worker.online = worker.running && Date.now() - Date.parse(worker.lastSeen) < 60000;
-  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), keys: keysView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) } } : {}) });
+  res.json({ servers: db.prepare('SELECT * FROM servers ORDER BY created_at').all().map(safeServer).map(view).map(server => ({ ...server, appLinks: serverLinksView(server.id) })), archivedSites: db.prepare('SELECT id,name,server_id FROM sites WHERE id IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view), sites: db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at').all().map(view).map(site => { const bootRecovery = bootRecoveryStatus(site.id); return { ...site, launch: launchOfSite(site.id), bootRecovery, bootRecoveryOutdated: bootRecovery.outdated, storage: siteStorageSummary(site.id), hardening: hardeningView(site.id), keys: keysView(site.id), ...(site.config?.kind !== 'static' ? { incremental: (({ enabled, interval }) => ({ enabled, interval }))(incrementalSettings(site.id)) } : {}) }; }), policies: db.prepare('SELECT * FROM policies').all().map(view), jobs: db.prepare("SELECT * FROM jobs WHERE type NOT IN ('self-heal','domain-check') ORDER BY created_at DESC,id DESC LIMIT 500").all().map(view), backups: ((tested, copies, chains) => backups.map(({ path: _path, ...backup }) => ({ ...view(backup, verifications), restoreTest: tested.get(backup.id) ?? notTested, ...copies.get(backup.id), ...chains.get(backup.id) })))(backupTestStates(backups.map(backup => backup.id)), backupCopyViews(backups), chainViews(backups)), restores: db.prepare('SELECT * FROM restores ORDER BY created_at DESC,id DESC LIMIT 500').all().map(view), audit: auditRows, actors: actorNames(auditRows), worker, storage, maintenance: settings ? normalizeMaintenance(JSON.parse(settings.value)) : maintenanceDefaults, alertsAccess: canManageAlerts(req.user), ...(req.user.role === 'admin' ? { update: { available: cachedOffer(db, release) }, runbook: runbookSummary() } : {}) });
 });
 // Keyset-paginated history: the cursor is the last row's (timestamp,id), so pages stay stable while new rows arrive.
 const historyCursor = z.string().max(512).transform((value, context) => { try { const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); return z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]).parse(decoded); } catch { context.addIssue({ code: 'custom', message: 'Invalid pagination cursor.' }); return z.NEVER; } });
