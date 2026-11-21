@@ -4,7 +4,7 @@ import { db, id, audit, transaction } from './db.js';
 import { seal } from './crypto.js';
 import { requireAdmin, requireRecentAuth, rateLimit } from './auth.js';
 import { testStorageTarget, targetOptions, activeStorage, targetMode, targetPrefix, copyBytesOn, parseRemote } from './storage.js';
-import { writeMode, recordWriteMode, releaseKept, keptSummary, leftovers, recordLeftovers, forgetLeftovers } from './storage/write-mode.js';
+import { writeMode, recordWriteMode, markUnverified, releaseKept, keptSummary, holdsFiles, leftovers, recordLeftovers, forgetLeftovers } from './storage/write-mode.js';
 import { destinationUsage, destinationInUse, requestDestinationCopyDeletion } from './backup-copies.js';
 import { isLoopback } from './storage/s3-client.js';
 import { backupRoot } from './backup-layout.js';
@@ -42,7 +42,7 @@ function safe(row){
   return {id:row.id,name:row.name,kind:'s3',status:row.status,created_at:row.created_at,last_tested_at:row.last_tested_at,endpoint:settings.endpoint,region:settings.region,bucket:settings.bucket,pathStyle:Boolean(settings.pathStyle),objectLock:settings.objectLock||null,root:row.root,hasCredential:Boolean(credential),trackedBytes:used};
  }
  const write=writeMode(row.id);
- return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used,writeMode:write.writeMode,writeModeCheckedAt:write.checkedAt,deletesRefusedAt:write.deletesRefusedAt,keptByStorage:keptSummary(row.id,targetPrefix({mode,id:row.id}))};
+ return {...rest,kind:'sftp',hasCredential:Boolean(credential),trackedBytes:used,writeMode:write.writeMode,writeModeCheckedAt:write.checkedAt,deletesRefusedAt:write.deletesRefusedAt,writeModeUnverifiedAt:write.unverifiedAt,unprotectedBefore:write.unprotectedBefore,keptByStorage:keptSummary(row.id,targetPrefix({mode,id:row.id}))};
 }
 // Probe files a test could not delete (src/storage/sftp.js) are listed for the owner, never retried.
 const probeRefs=(targetId,files=[])=>files.map(file=>targetPrefix({mode:'sftp',id:targetId})+file);
@@ -51,20 +51,27 @@ const probeRefs=(targetId,files=[])=>files.map(file=>targetPrefix({mode:'sftp',i
 async function settleWriteMode(targetId,result,actor){
  if(targetMode(db.prepare('SELECT auth_type FROM storage_targets WHERE id=?').get(targetId)??{})!=='sftp'||!result?.writeMode)return;
  recordLeftovers(targetId,probeRefs(targetId,result.probeLeftovers));
- const previous=recordWriteMode(targetId,result.writeMode,actor);
+ const prefix=targetPrefix({mode:'sftp',id:targetId}),previous=recordWriteMode(targetId,result.writeMode,actor,undefined,{holdsFiles:holdsFiles(targetId,prefix)});
+ // Newly append-only while it already holds DockNest files: those are protected only once made read-only on the server.
+ if(result.writeMode==='append-only'&&previous.writeMode!=='append-only'&&writeMode(targetId).unprotectedBefore)result.olderFilesWritable=true;
  if(result.writeMode!=='normal'||!previous.keepsFiles)return;
- const released=releaseKept(targetId,targetPrefix({mode:'sftp',id:targetId}));
+ const released=releaseKept(targetId,prefix);
  if(released.backups||released.copies)audit(actor,'storage.kept_released',targetId,released);
  const gone=[];
  // Straight to the adapter: a leftover that still cannot be removed stays listed without marking the destination again.
  for(const item of leftovers(targetId)){try{const {adapter,options,value}=parseRemote(item.path);await adapter.removeFile(options,value);gone.push(item.path);}catch(error){if(error?.code===2)gone.push(item.path);}}
  if(gone.length)forgetLeftovers(gone);
 }
-// A test that failed on a saved destination: its kept probe files are still listed.
-function recordFailedProbe(targetId,error){if(error?.probeLeftovers?.length&&db.prepare('SELECT 1 FROM storage_targets WHERE id=?').get(targetId))recordLeftovers(targetId,probeRefs(targetId,error.probeLeftovers));}
-async function testSaved(targetId,actor){
+// A test that failed on a saved destination: its kept probe files are still listed. One that found it broken (deletes
+// refused, files still changeable) leaves it unverified: every file is kept and the card warns until a test passes.
+function recordFailedProbe(targetId,error,actor){
+ if(!db.prepare('SELECT 1 FROM storage_targets WHERE id=?').get(targetId))return;
+ if(error?.probeLeftovers?.length)recordLeftovers(targetId,probeRefs(targetId,error.probeLeftovers));
+ if(error?.writeMode==='broken')markUnverified(targetId,actor);
+}
+export async function testSaved(targetId,actor){
  try{const result=await testStorageTarget(targetOptions(targetId));await settleWriteMode(targetId,result,actor);return result;}
- catch(error){recordFailedProbe(targetId,error);throw error;}
+ catch(error){recordFailedProbe(targetId,error,actor);throw error;}
 }
 // Public shape of a test result: never the probe paths.
 const testView=result=>{const {probeLeftovers,...rest}=result;return {...rest,...(probeLeftovers?.length?{probeLeftovers:probeLeftovers.length}:{})};};

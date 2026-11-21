@@ -57,13 +57,13 @@ async function makeRemoteDirectory(sftp,value){
 // retried here.
 export const PROBE_FOLDER='.docknest-probe';
 const PROBE=Buffer.from('DockNest storage probe');
-// SSH_FX_PERMISSION_DENIED, SSH_FX_FAILURE and SSH_FX_OP_UNSUPPORTED: the server said no to a change. Anything else (a
-// dropped connection, a missing file) is not an answer and fails the test. A delete, and the publishing rename, count as
-// refused only on an explicit "permission denied" or "unsupported": a generic failure could be a passing fault, and
-// calling such a destination append-only would promise a protection nobody verified.
-const REFUSED=new Set([3,4,8]),EXPLICITLY_REFUSED=new Set([3,8]);
+// A request counts as refused only on an explicit SSH_FX_PERMISSION_DENIED or SSH_FX_OP_UNSUPPORTED: a generic failure
+// could be a passing fault, and calling such a destination append-only would promise a protection nobody verified, so it
+// fails the test instead. The one exception is a rename over an existing file, which OpenSSH answers with SSH_FX_FAILURE
+// (link() gives EEXIST). Anything else (a dropped connection, a missing file) is not an answer and fails the test.
+const EXPLICITLY_REFUSED=new Set([3,8]),RENAME_OVER_REFUSED=new Set([3,4,8]);
 const CHANGE_NAMES={reopen:'open for writing',permissions:'permission changes',rename:'rename over a file',posixRename:'posix-rename over a file'};
-async function allowed(operation,refused=REFUSED){try{await operation();return true;}catch(error){if(refused.has(error?.code))return false;throw error;}}
+async function allowed(operation,refused=EXPLICITLY_REFUSED){try{await operation();return true;}catch(error){if(refused.has(error?.code))return false;throw error;}}
 async function writeProbe(sftp,file){
  const handle=await call(sftp,'open',file,'wx',0o400);
  try{await call(sftp,'write',handle,PROBE,0,PROBE.length,0);try{await call(sftp,'ext_openssh_fsync',handle);}catch{throw new Error('Storage requires working fsync@openssh.com support for durable backup files');}}
@@ -96,11 +96,11 @@ export async function test(options){
    // Each attempt targets the published probe only. A refused attempt changes nothing; an allowed one is recorded.
    const overwrite={reopen:await allowed(async()=>{const handle=await call(sftp,'open',published,'r+');await call(sftp,'close',handle);}),
     permissions:await allowed(()=>call(sftp,'setstat',published,{mode:0o600})),
-    rename:await allowed(()=>call(sftp,'rename',other,published))};
+    rename:await allowed(()=>call(sftp,'rename',other,published),RENAME_OVER_REFUSED)};
    overwrite.posixRename=!overwrite.rename&&await posixRenameAllowed(sftp,other,published);
    if(!await probeMatches(sftp,published))throw new Error('Storage read verification failed');
    const checks={connected:true,writeVerified:true,readVerified:true,renameVerified:true,fileFsyncVerified:true};
-   if(await allowed(()=>call(sftp,'unlink',published),EXPLICITLY_REFUSED)){
+   if(await allowed(()=>call(sftp,'unlink',published))){
     if(await exists(sftp,other))await call(sftp,'unlink',other);
     try{await call(sftp,'rmdir',folder);}catch{/* Another probe may be running, or the folder is kept: harmless. */}
     classified=true;return {...checks,writeMode:'normal'};

@@ -260,8 +260,9 @@ test('a normal destination that starts refusing deletes is marked for a new test
   appendOnly();
   const tested = await api('POST', `/storage-targets/${targetId}/test`, {});
   assert.equal(tested.status, 200); assert.equal(tested.body.writeMode, 'append-only'); assert.equal(tested.body.probeLeftovers, 2, 'the answer counts kept probe files, never names them');
+  assert.equal(tested.body.olderFilesWritable, true, 'it already held backups: the owner is told to make them read-only');
   const after = (await api('GET', '/storage-targets')).body.targets.find(target => target.id === targetId);
-  assert.equal(after.writeMode, 'append-only'); assert.equal(after.deletesRefusedAt, null); assert.equal(after.keptByStorage.leftovers, 2);
+  assert.equal(after.writeMode, 'append-only'); assert.equal(after.deletesRefusedAt, null); assert.equal(after.keptByStorage.leftovers, 2); assert.ok(after.unprotectedBefore);
   assert.equal(deferral(first).retry_after, storage.KEPT_UNTIL_RETEST, 'still kept: the destination is append-only now');
   // A test that fails as broken changes nothing it detected before and lists its probe files.
   Object.assign(fixture.denied, { setstat: false });
@@ -269,6 +270,13 @@ test('a normal destination that starts refusing deletes is marked for a new test
   assert.equal(broken.status, 400); assert.match(broken.body.error, /not safely append-only/);
   assert.equal(storage.targetOptions(targetId).writeMode, 'append-only');
   assert.equal(writeModes.leftovers(targetId).length, 4);
+  const unverified = (await api('GET', '/storage-targets')).body.targets.find(target => target.id === targetId);
+  assert.ok(unverified.writeModeUnverifiedAt, 'a broken re-test leaves it unverified'); assert.equal(storage.targetOptions(targetId).keepsFiles, true);
+  assert.equal(audits('storage.write_mode_unverified', targetId), 1);
+  // A passing test clears it again.
+  appendOnly();
+  assert.equal((await api('POST', `/storage-targets/${targetId}/test`, {})).status, 200);
+  assert.equal((await api('GET', '/storage-targets')).body.targets.find(target => target.id === targetId).writeModeUnverifiedAt, null);
   normal();
 });
 
@@ -332,5 +340,62 @@ test('emergency kits on an append-only destination: older kits stay listed and a
     assert.ok(versioned); assert.equal(fixture.files.get(versioned).toString(), emergencyToolSource().toString());
     assert.equal(kits.emergencyKits().filter(item => item.targetId === targetId).length, 2, 'the older kit stays listed');
     assert.deepEqual(removals(), []);
+    const { createHash } = await import('node:crypto'), toolHash = createHash('sha256').update(emergencyToolSource()).digest('hex');
+    const newest = kits.emergencyKits().filter(item => item.targetId === targetId).sort((x, y) => y.createdAt.localeCompare(x.createdAt))[0];
+    assert.deepEqual(newest.tool, { path: `sftp:${targetId}:${versioned}`, sha256: toolHash }, 'the kit record names the exact tool and its hash');
+    // A kept .partial at the versioned name (an interrupted attempt) gets a fresh name instead of failing every Self Backup.
+    const second = sftpTarget('Emergency vault 2');
+    writeModes.recordWriteMode(second.targetId, 'append-only', 'test');
+    const directory = `${backupRoot(second.folder)}/docknest-recovery/emergency`;
+    fixture.files.set(directory + '/emergency-open.js', Buffer.from('// older tool'));
+    fixture.files.set(directory + `/emergency-open-${toolHash.slice(0, 12)}.js.partial`, Buffer.from('half'));
+    const temporary = await mkdtemp(join(root, 'kit-'));
+    try { assert.equal(await kits.writeEmergencyKit({ run: { id: randomUUID() }, kit: randomBytes(64), passphrase: 'fixture', keyId: managerKey, targetIds: [second.targetId], temporary, release: 'test' }), 1); }
+    finally { await rm(temporary, { recursive: true, force: true }); }
+    const fresh = kits.emergencyKits().find(item => item.targetId === second.targetId).tool.path;
+    assert.match(fresh, new RegExp(`emergency-open-${toolHash.slice(0, 12)}-[0-9a-f]{8}\\.js$`));
+    assert.equal(fixture.files.get(fresh.slice(fresh.indexOf(':/') + 1)).toString(), emergencyToolSource().toString());
   } finally { db.prepare('UPDATE emergency_keys SET retired_at=? WHERE id=?').run(stamp(), keyRow); normal(); }
+});
+
+test('detection: a generic failure to reopen or change permissions is not an answer and fails the test', async () => {
+  Object.assign(fixture.denied, { remove: true, setstat: true, reopen: 4, rename: false, posixRename: true });
+  try {
+    await assert.rejects(storage.testStorageTarget(connection('/detect-generic-1')), error => !error.writeMode && !/append-only/.test(error.message));
+    Object.assign(fixture.denied, { reopen: true, setstat: 4 });
+    await assert.rejects(storage.testStorageTarget(connection('/detect-generic-2')), error => !error.writeMode && !/append-only/.test(error.message));
+  } finally { normal(); }
+});
+
+test('a brand-new destination that is append-only is not warned about older files; one with backups is', async () => {
+  appendOnly();
+  const { targetId } = sftpTarget('Empty vault');
+  const api = session();
+  const tested = await api('POST', `/storage-targets/${targetId}/test`, {});
+  assert.equal(tested.body.writeMode, 'append-only'); assert.equal(tested.body.olderFilesWritable, undefined);
+  assert.equal((await api('GET', '/storage-targets')).body.targets.find(target => target.id === targetId).unprotectedBefore, null);
+  normal();
+});
+
+test('leftovers past the named limit are still counted', () => {
+  const { targetId } = sftpTarget('Many leftovers');
+  writeModes.recordLeftovers(targetId, Array.from({ length: 503 }, (_, index) => `sftp:${targetId}:/x/${index}.partial`));
+  assert.equal(writeModes.leftovers(targetId).length <= 500, true);
+  assert.equal(writeModes.keptSummary(targetId, `sftp:${targetId}:`).leftovers, 503);
+});
+
+test('Recovery Guide: the emergency tool is fetched from the recorded path and checked before it runs', async () => {
+  const { installCommands } = await import('../src/runbook/commands.js');
+  const { revealer } = await import('../src/runbook/commands.js');
+  const sftp = { mode: 'sftp', auth: 'password', host: 'backup.example.com', port: 22, username: 'docknest', password: 'x', hostKey: 'a'.repeat(64) };
+  const sha256 = 'c'.repeat(64), toolPath = '/srv/BACKUP/docknest-recovery/emergency/emergency-open-cccccccccccc.js';
+  // Long words wrap across lines in the guide; join them back before matching.
+  const unwrap = value => value.replace(/'\\\n'/g, '').replace(/ \\\n\s*/g, ' ');
+  const text = unwrap(installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/k.dkit' }, storage: sftp, reveal: revealer(), emergency: { kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/emergency/emergency_0123456789abcdef_x--y.dkem', tool: { path: toolPath, sha256 } } } }).map(step => step.command).join('\n'));
+  assert.match(text, /--output emergency-open\.js '?sftp:\/\/[^\n]*emergency-open-cccccccccccc\.js/);
+  const check = text.indexOf(`${sha256}  /root/docknest-kit-files/emergency/emergency-open.js`), run = text.indexOf('node emergency-open.js open');
+  assert.ok(check > 0 && check < run, 'the hash is checked before node runs the tool');
+  assert.match(text, /\| sha256sum -c -/);
+  const legacy = unwrap(installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/k.dkit' }, storage: sftp, reveal: revealer(), emergency: { kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/emergency/emergency_0123456789abcdef_x--y.dkem' } } }).map(step => step.command).join('\n'));
+  assert.match(legacy, /emergency\/emergency-open\.js'?$/m); assert.doesNotMatch(legacy, /sha256sum -c/);
 });

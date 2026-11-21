@@ -22,6 +22,8 @@ export async function startSftpFixture(){
  // modes: the permissions each created file asked for. A RENAME over an existing file always fails, as in OpenSSH.
  const denied={remove:false,setstat:false,reopen:false,rename:false,posixRename:false},features={posixRename:false};
  const modes=new Map();
+ // A flag set to a number answers with that status code instead (4 = SSH_FX_FAILURE, a generic failure).
+ const refusal=flag=>typeof flag==='number'?flag:constants.STATUS_CODE.PERMISSION_DENIED;
  const attrs=file=>({mode:directories.has(file)?0o40700:0o100600,uid:1000,gid:1000,size:files.get(file)?.length||0,atime:1,mtime:1});
  const server=new Server({hostKeys:[host.private]},client=>{
   clients.add(client);client.on('error',()=>{}).on('close',()=>clients.delete(client));
@@ -52,7 +54,7 @@ export async function startSftpFixture(){
     stream.on('MKDIR',(request,file)=>{if(known(file))return status(request,constants.STATUS_CODE.FAILURE);if(!directories.has(path.posix.dirname(file)))return status(request,constants.STATUS_CODE.NO_SUCH_FILE);directories.add(file);status(request);});
     stream.on('OPEN',(request,file,flags,attrsIn)=>{
      if(flags&constants.OPEN_MODE.CREAT){if(files.has(file)&&(flags&constants.OPEN_MODE.EXCL))return status(request,constants.STATUS_CODE.FAILURE);if(!directories.has(path.posix.dirname(file)))return status(request,constants.STATUS_CODE.NO_SUCH_FILE);files.set(file,Buffer.alloc(0));modes.set(file,attrsIn?.mode??null);}
-     else if(denied.reopen&&files.has(file)&&(flags&constants.OPEN_MODE.WRITE))return status(request,constants.STATUS_CODE.PERMISSION_DENIED);
+     else if(denied.reopen&&files.has(file)&&(flags&constants.OPEN_MODE.WRITE))return status(request,refusal(denied.reopen));
      if(!files.has(file))return status(request,constants.STATUS_CODE.NO_SUCH_FILE);
      const handle=Buffer.alloc(4);handle.writeUInt32BE(counter++);handles.set(handle.readUInt32BE(),file);stream.handle(request,handle);
     });
@@ -67,7 +69,7 @@ export async function startSftpFixture(){
     });
     stream.on('FSTAT',(request,handle)=>{const file=fileFor(handle);file?stream.attrs(request,attrs(file)):status(request,constants.STATUS_CODE.FAILURE);});
     stream.on('FSETSTAT',request=>status(request,denied.setstat?constants.STATUS_CODE.PERMISSION_DENIED:constants.STATUS_CODE.OK));
-    stream.on('SETSTAT',(request,file,attributes)=>{if(denied.setstat)return status(request,constants.STATUS_CODE.PERMISSION_DENIED);if(!known(file))return status(request,constants.STATUS_CODE.NO_SUCH_FILE);if(typeof attributes?.mode==='number')modes.set(file,attributes.mode);status(request);});
+    stream.on('SETSTAT',(request,file,attributes)=>{if(denied.setstat)return status(request,refusal(denied.setstat));if(!known(file))return status(request,constants.STATUS_CODE.NO_SUCH_FILE);if(typeof attributes?.mode==='number')modes.set(file,attributes.mode);status(request);});
     stream.on('RMDIR',(request,file)=>{if(denied.remove)return status(request,constants.STATUS_CODE.PERMISSION_DENIED);if(!directories.has(file)||[...files.keys(),...directories].some(entry=>entry.startsWith(file+'/')))return status(request,constants.STATUS_CODE.FAILURE);directories.delete(file);status(request);});
     stream.on('CLOSE',(request,handle)=>{handles.delete(handle.readUInt32BE());status(request);});
     stream.on('EXTENDED',(request,name,data)=>{

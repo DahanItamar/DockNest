@@ -93,6 +93,27 @@ wrappers. On an append-only destination, new files are created 0400, so the acco
 - **An append-only destination allows deletes again.** DockNest keeps skipping deletes until a test finds it normal. That
   test releases what retention kept, so the next retention run deletes it. It also tries each listed leftover file once.
 - **A test fails.** The previously detected mode is unchanged.
+- **A test finds the destination broken.** Deletes are refused but files can still be changed. The destination is marked
+  unverified, DockNest keeps every file there, and the card shows a warning instead of **Append-only** until a test passes.
+- **The destination becomes append-only while it already holds DockNest files.** The test answer and the card say that
+  those older files can still be changed until you make them read-only on the server (`chmod -R a-w` on the DockNest
+  folder).
+- **The SFTP destination configured by environment variables** (`BACKUP_STORAGE=sftp`) is never tested for its mode. It
+  is always treated as normal. Add the account as a destination in the app to use append-only.
+
+**Emergency kits and the Recovery Guide.** Each emergency kit record keeps the path and SHA-256 of the tool published
+with it. On an append-only destination that path can be a versioned name. The Recovery Guide downloads that exact file
+and runs `sha256sum -c` before `node` runs it. If an interrupted attempt left a kept `.partial` at the versioned name,
+the tool gets a fresh suffix, so it never fails every Self Backup. Kits recorded before 3.0.0 name no tool, so the guide
+downloads `emergency-open.js` from the kit's folder as before.
+
+**Storage migration** (`scripts/migrate-storage.js`, run under the deployment hold). Moving packages to the current
+layout copies them inside the same destination and keeps the originals, so it works on an append-only destination. An
+interrupted run leaves a `.migration-partial` file the storage keeps. That file is listed as a leftover, and the next run
+writes beside it under a fresh name.
+
+**Leftovers.** The newest 500 leftover file paths are listed. Older ones are no longer named but are still counted per
+destination.
 
 **Example server setup (OpenSSH).** This uses a dedicated account, here `docknest`, whose files live in its own folder:
 

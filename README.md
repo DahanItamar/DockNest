@@ -83,7 +83,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Keys safe: DockNest finds the encryption keys apps keep in their settings (such as Laravel `APP_KEY`, n8n, Rails, authentik, Paperless-ngx, Outline, Gitea, Nextcloud and Vaultwarden) and checks that each one is inside the last backup, without ever reading the key into DockNest. A restore test confirms the restored copy has the same keys. It also tells you when an app's Compose or env files change outside Safe Edit. See [keys safe](docs/keys-safe.md).
 - Backups are encrypted with AES-256-GCM.
 - Optional S3 Object Lock: backups cannot be deleted or changed until the date you set, even by DockNest.
-- Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites, and keeps working with it, so ransomware that reaches DockNest cannot delete your backups.
+- Append-only SFTP: DockNest detects a storage account that refuses deletes and overwrites and keeps working with it. While the storage server enforces this, ransomware that reaches DockNest cannot delete or change backups already stored there (files written before need to be made read-only on the server).
 - SSH host keys are pinned and checked before connecting.
 - Every user signs in with a password and an authenticator app.
 - The dashboard never uses the Docker socket.

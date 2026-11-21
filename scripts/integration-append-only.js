@@ -87,6 +87,18 @@ export async function runAppendOnlyScenario({ run, until, hosts, servers, db, re
     copyId = JSON.parse(restored.details).result.containerId;
     assert.equal(await run('exec', hosts[1], 'docker', 'exec', copyId, 'python', '-c', "import sqlite3;print(sqlite3.connect('/site/database.sqlite').execute('SELECT value FROM records').fetchone()[0])"), 'append-first');
     record('Second-host restore from the package the append-only storage kept brings back its database row');
+    // The server stops refusing: a new test detects it (never assumed), releases the kept package, and retention deletes it.
+    await run('exec', storageHost, 'sed', '-i', `s|internal-sftp -P ${DENY_ALL}|internal-sftp|`, '/etc/ssh/sshd_config');
+    await run('kill', '--signal', 'HUP', storageHost);
+    const { testSaved } = await import('../src/storage-targets.js'), { retain } = await import('../src/engine.js');
+    let retested;
+    await until(async () => { retested = await testSaved(targetId, 'qa'); return retested.writeMode === 'normal'; }, 'The re-test did not detect the account as normal', 60);
+    assert.equal(targetOptions(targetId).writeMode, 'normal');
+    assert.equal(db.prepare('SELECT 1 FROM retention_deferrals WHERE backup_id=?').get(first.id), undefined, 'the kept package is released');
+    await retain(siteId);
+    assert.equal(db.prepare('SELECT 1 FROM backups WHERE id=?').get(first.id), undefined);
+    assert.equal(await run('exec', storageHost, 'sh', '-c', `test -e '${remotePath}' && echo kept || echo gone`), 'gone');
+    record('When the OpenSSH account stops refusing deletes, a new test detects it as normal, releases the kept package and the next retention deletes it');
   } finally {
     if (copyId) await run('exec', hosts[1], 'docker', 'rm', '-f', copyId).catch(() => {});
     await run('exec', hosts[0], 'docker', 'rm', '-f', 'ao-site').catch(() => {});
