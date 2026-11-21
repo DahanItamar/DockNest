@@ -26,9 +26,10 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
   // The image's entrypoint drops to the mongodb user before it reads _FILE variables, so the secret is mounted
   // read-only for everyone in the container (0444, like a Docker secret) on a disposable host.
   await secret('mongo-root', filePassword, '/root/qa-mongo-secret', '444');
+  // --password=VALUE (not -p VALUE): a random base64url password can start with "-" and mongosh then printed its usage and failed the probe (the intermittent "did not become ready").
   // The fixture's own shell, authenticated from the container environment or secret file like DockNest's helper.
   const mongo = (host, container, script) => run('exec', host, 'docker', 'exec', container, 'sh', '-c',
-    'p="${MONGO_INITDB_ROOT_PASSWORD:-}"; [ -z "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] || p=$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE"); exec mongosh --quiet --norc -u "$MONGO_INITDB_ROOT_USERNAME" -p "$p" --authenticationDatabase admin shop --eval "$1"', 'qa', script);
+    'p="${MONGO_INITDB_ROOT_PASSWORD:-}"; [ -z "${MONGO_INITDB_ROOT_PASSWORD_FILE:-}" ] || p=$(cat "$MONGO_INITDB_ROOT_PASSWORD_FILE"); exec mongosh --quiet --norc --username="$MONGO_INITDB_ROOT_USERNAME" --password="$p" --authenticationDatabase admin shop --eval "$1"', 'qa', script);
   const count = (host, container) => mongo(host, container, 'print(db.orders.countDocuments({}))');
   const redact = text => [password, filePassword].reduce((value, secretValue) => value.split(secretValue).join('[redacted]'), String(text ?? ''));
   // The image's first start runs a temporary localhost-only server (--bind_ip 127.0.0.1) to create the root user; the
