@@ -20,7 +20,7 @@ COPY --from=build --chown=node:node /app/src ./src
 COPY --from=build --chown=node:node /app/shared ./shared
 COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/remote ./remote
-COPY --from=build --chown=node:node /app/assets ./assets
+COPY --from=build --chown=node:node /app/assets/fonts ./assets/fonts
 # Release notes ship with the image so the dashboard can show what changed without going online.
 COPY --from=build --chown=node:node /app/docs/releases ./docs/releases
 COPY --from=build --chown=node:node /app/CHANGELOG.md ./CHANGELOG.md
