@@ -21,7 +21,7 @@ export function databasesOf(site){
  return list.filter(s=>engineLabel(s?.engine)).map(s=>({id:site.id+':'+s.container,siteId:site.id,container:s.container,engine:s.engine,
   label:engineLabel(s.engine)+(s.version?' '+s.version:'')+(s.database?' · '+s.database:'')}));
 }
-// The domains of a site. No DNS data is available here, so there is no DNS verdict.
+// The domains an app lists. Their DNS verdicts come from /api/domains (web/map/domains-model.js).
 export const domainsOf=site=>Array.isArray(site?.config?.domains)?site.config.domains.filter(d=>typeof d==='string'&&d):[];
 
 // Elbow with softly rounded corners. points: [[x,y],...]
@@ -35,13 +35,15 @@ export function elbow(points,r=8){
  }
  const last=p[p.length-1];return d+` L${last[0]} ${last[1]}`;
 }
+// Domains column (docs/domains.md): small nodes left of the servers. DOM_BLOCK is a node with its label.
+export const DOMAIN_METRICS={size:48,block:76,gap:16,x:52,toServer:130,stub:44,label:150};
 const route=(x1,y1,x2,y2,cx)=>y1===y2?[[x1,y1],[x2,y2]]:[[x1,y1],[cx,y1],[cx,y2],[x2,y2]];
 
 // opts.storage: [{id,...}] backup storage nodes; opts.links: [{id,a,b}] linked app pairs (drawn in a gutter right of the app column); opts.backupOf: {siteId: storageId} (which storage a site backs up to).
 export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const groups=groupForList(servers,sites),storage=[...(opts.storage||[])].sort(byName),backupOf=opts.backupOf||{};
- const serverX=m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
- const out={servers:[],sites:[],storage:[],paths:[],backupPaths:[],linkPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
+ const doms=opts.domains||[],D=DOMAIN_METRICS,DOMX=m.pad+D.x,DOMR=DOMX+D.size,serverX=doms.length?DOMR+D.toServer:m.pad,siteX=serverX+m.serverS+m.serverGap,channelS=serverX+m.serverS+m.serverGap/2;
+ const out={domains:[],domainPaths:[],nowhere:[],servers:[],sites:[],storage:[],paths:[],backupPaths:[],linkPaths:[],unassigned:[],alerts:[],docknest:null,rulePaths:[]};
  // Alerts: a band above the map holds the DockNest source and one lane per line; nothing is drawn until a channel exists.
  const chs=opts.alerts?.channels||[],on=chs.length>0,serverIds=new Set(servers.map(s=>s.id)),siteIds=new Set(sites.map(s=>s.id));
  const rules=on?(opts.alerts.rules||[]).filter(r=>chs.some(c=>c.id===r.channelId)&&(r.sourceKind==='docknest'||(r.sourceKind==='server'?serverIds.has(r.sourceId):siteIds.has(r.sourceId)))):[];
@@ -50,14 +52,24 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  const rightEdge=siteX+m.siteS,channelB=rightEdge+linkW+m.storageGap+16,storageX=channelB+m.storageGap;
  const rowH=m.siteS+m.label;
  let y=base;
+ // A line runs from each domain to the left edge of its server. Entry points are spread along the edge and the elbows are staggered, so lines nest and never cross.
+ const domainNode=(d,top)=>{const cy=top+D.size/2,n={id:d.id,serverId:d.serverId||null,x:DOMX,y:top,w:D.size,h:D.size,cy};n.block={x:DOMX+D.size/2-D.label/2,y:top,w:D.label,h:D.block};n.out={x:DOMR,y:cy};out.domains.push(n);return n};
+ function placeDomains(list,top0,srv){
+  const ns=list.map((d,i)=>domainNode(d,top0+i*(D.block+D.gap))),n=ns.length,cy0=srv.y+m.serverS/2;
+  const ent=ns.map((_,i)=>cy0+(i-(n-1)/2)*14),above=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy<ent[i]),below=ns.map((d,i)=>[d,i]).filter(([d,i])=>d.cy>ent[i]).reverse(),cx={};
+  above.forEach(([d],k)=>{cx[d.id]=DOMR+64+(above.length-1-k)*8});below.forEach(([d],k)=>{cx[d.id]=DOMR+64+(below.length-1-k)*8});
+  ns.forEach((d,i)=>{const e=ent[i],pts=d.cy===e?[[DOMR,e],[serverX-14,e]]:[[DOMR,d.cy],[cx[d.id],d.cy],[cx[d.id],e],[serverX-14,e]];out.domainPaths.push({id:d.id,serverId:srv.id,points:pts,d:elbow(pts)})});
+ }
  for(const g of groups){
   const stack=g.sites.length?g.sites.length*rowH+(g.sites.length-1)*m.rowGap:0,block=m.serverS+m.label;
-  const height=Math.max(g.server?block:0,stack);
+  const mineD=g.server?doms.filter(d=>d.serverId===g.server.id):[],domStack=mineD.length?mineD.length*D.block+(mineD.length-1)*D.gap:0;
+  const height=Math.max(g.server?block:0,stack,domStack);
   let node=null;
   if(g.server){
    node={id:g.server.id,x:serverX,y:y+(height-block)/2,w:m.serverS,h:m.serverS};
    node.block={x:node.x+node.w/2-m.labelW.server/2,y:node.y,w:m.labelW.server,h:block};node.alertOut={x:node.x+node.w,y:node.y+m.serverS/2};
    out.servers.push(node);
+   placeDomains(mineD,y+(height-domStack)/2,node);
   }
   let top=y+(height-stack)/2;
   for(const site of g.sites){
@@ -72,6 +84,14 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
    top+=rowH+m.rowGap;
   }
   y+=height+m.groupGap;
+ }
+ // Domains that reach none of the servers: "Points nowhere" (red stub) and "Not placed yet" (grey stub, never looked up).
+ for(const [kind,title] of [['nowhere','Points nowhere'],['unplaced','Not placed yet']]){
+  const list=doms.filter(d=>!d.serverId||!serverIds.has(d.serverId)).filter(d=>(d.loose||'unplaced')===kind);
+  if(!list.length)continue;
+  const head={kind,title,x:DOMX+D.size/2-D.label/2,y,w:D.label,ids:list.map(d=>d.id)};out.nowhere.push(head);let top=y+36;
+  for(const d of list){const n=domainNode(d,top);n.loose=kind;out.domainPaths.push({id:d.id,serverId:null,stub:kind,points:[[DOMR,n.cy],[DOMR+D.stub,n.cy]],d:'M'+DOMR+' '+n.cy+' L'+(DOMR+D.stub)+' '+n.cy,end:{x:DOMR+D.stub,y:n.cy}});top+=D.block+D.gap}
+  y=top-D.gap+m.groupGap;
  }
  let bottom=Math.max(y-m.groupGap+m.pad,m.pad*2+m.serverS+m.label);
  // Storage nodes sit at the average height of the sites that back up to them; a sweep keeps them apart.
@@ -137,7 +157,7 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
  // Free layout: the owner's saved positions replace the automatic ones node by node (unknown nodes keep their automatic place).
  // Lines are then drawn between the final ports with plain elbows; they can cross a card, which is the owner's choice.
  const pos=opts.positions||{};
- const nodes=[...out.servers.map(n=>['server:'+n.id,n]),...[...out.sites,...out.unassigned].map(n=>['site:'+n.id,n]),...out.storage.map(n=>['storage:'+n.id,n]),...out.alerts.map(n=>['alert:'+n.id,n]),...(out.docknest?[['docknest:root',out.docknest]]:[])];
+ const nodes=[...out.servers.map(n=>['server:'+n.id,n]),...[...out.sites,...out.unassigned].map(n=>['site:'+n.id,n]),...out.storage.map(n=>['storage:'+n.id,n]),...out.alerts.map(n=>['alert:'+n.id,n]),...out.domains.map(n=>['domain:'+n.id,n]),...(out.docknest?[['docknest:root',out.docknest]]:[])];
  out.keys=Object.fromEntries(nodes);
  if(nodes.some(([k])=>pos[k])){
   out.custom=true;
@@ -150,6 +170,9 @@ export function layoutMap(servers=[],sites=[],opts={},m=METRICS){
   const sv=Object.fromEntries(out.servers.map(n=>[n.id,n])),st=Object.fromEntries(out.storage.map(n=>[n.id,n])),al=Object.fromEntries(out.alerts.map(n=>[n.id,n]));
   out.paths=out.sites.filter(s=>sv[s.serverId]).map(s=>{const a=sv[s.serverId],pts=gen({x:a.x+a.w,y:a.y+a.h/2},{x:s.x,y:s.y+s.h/2});return {id:s.id,serverId:a.id,points:pts,d:elbow(pts)}});
   out.backupPaths=[...out.sites,...out.unassigned].filter(s=>s.backupId&&st[s.backupId]).map(s=>{const t=st[s.backupId],pts=gen(s.out,t.in);return {id:s.id,storageId:t.id,points:pts,d:elbow(pts)}});
+  const dom=Object.fromEntries(out.domains.map(n=>[n.id,n]));
+  out.domainPaths=out.domainPaths.map(p=>{const n=dom[p.id],a=n&&n.out;if(!a)return p;if(p.stub){const pts=[[a.x,a.y],[a.x+D.stub,a.y]];return {...p,points:pts,d:'M'+a.x+' '+a.y+' L'+(a.x+D.stub)+' '+a.y,end:{x:a.x+D.stub,y:a.y}}}const s=sv[p.serverId];if(!s)return p;const pts=gen(a,{x:s.x,y:s.y+s.h/2});return {...p,points:pts,d:elbow(pts)}});
+  out.nowhere=out.nowhere.filter(h=>!h.ids.some(id=>pos['domain:'+id]));
   out.rulePaths=out.rulePaths.map(p=>{const src=p.bundle?out.docknest:p.sourceKind==='docknest'?out.docknest:p.sourceKind==='server'?sv[p.sourceId]:[...out.sites,...out.unassigned].find(n=>n.id===p.sourceId),node=al[p.channelId],pts=gen(src.alertOut,node.in);return {...p,points:pts,d:elbow(pts,12)}});
   // The canvas grows in every direction: a node left of or above the automatic layout widens it there, with the same margin.
   let x0=0,y0=0,x1=0,y1=0;
