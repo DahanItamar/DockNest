@@ -154,7 +154,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
   // A stack a manager runs names it on its card (docs/site-setup.md); a plain container does not.
-  assert.equal(await siteDialog.getByRole('region',{name:'shop',exact:true}).getByText('Managed by Dockge',{exact:true}).count(),1);
+  await siteDialog.getByRole('region',{name:'shop',exact:true}).getByText('Managed by Dockge',{exact:true}).waitFor();
   assert.equal(await siteDialog.getByRole('region',{name:'blog',exact:true}).getByText(/Managed by/).count(),0);
   await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isVisible(),false,'Service controls stay collapsed during site selection');
