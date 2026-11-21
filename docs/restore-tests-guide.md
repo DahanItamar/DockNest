@@ -72,6 +72,18 @@ What DockNest blocks: outgoing mail on ports 25, 465, 587 and 2525, the cloud me
 the test server itself. Mail sent through a web API is not blocked. Results then read "Passed (tested with
 internet)".
 
+## Test a backup copy (optional)
+
+If the app keeps copies on other storage (an SFTP server or an S3 bucket, see
+[backup copies](backup-copies.md)), **Test from** picks what the test restores:
+
+- **Main storage** (the default) restores the main backup, as before.
+- **Copy on <storage>** restores the newest backup that has a verified copy there, and reads every part of it from
+  that storage only. If the copy, or a backup it builds on, is missing or damaged there, the test shows
+  **Couldn't run** with the reason. It never uses the main backup instead, so a pass means the copy itself restores.
+
+The test details show **Tested from** with the storage that was read.
+
 ## Limits
 
 - One test per app and one per test server at a time.
@@ -132,6 +144,8 @@ Read the reason on the test. Common ones:
 - **Needs an outside service.** The app cannot start without internet. Consider **Allow internet** and read the risks
   above.
 - **CPU above the server.** Lower the **CPU** limit to what the test server has.
+- **No verified copy there.** The test reads a copy, and the copy (or a backup it builds on) is missing, not verified
+  yet or damaged on that storage. Check the copy on the app's storage settings, or set **Test from** to Main storage.
 
 ### "Failed"
 

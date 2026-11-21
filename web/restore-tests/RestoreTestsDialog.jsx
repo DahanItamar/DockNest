@@ -40,7 +40,7 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
   if(!loaded)return;
   const s={...DEFAULT_SETTINGS,...(card?.settings||{})};
   setForm({enabled:!!s.enabled,cadence:s.cadence||'weekly',serverId:s.serverId||'',allow:!!s.allowLiveServer,allowInternet:!!s.allowInternet,
-   time:limitFrom(TIME,s.timeLimitMinutes),memory:limitFrom(MEMORY,s.memoryMb),cpu:limitFrom(CPU,s.cpus),path:s.probe?.path||'',probe:s.probe||null});
+   time:limitFrom(TIME,s.timeLimitMinutes),memory:limitFrom(MEMORY,s.memoryMb),cpu:limitFrom(CPU,s.cpus),path:s.probe?.path||'',probe:s.probe||null,source:s.sourceTargetId||''});
  },[loaded]);
 
  if(loadError)return <div className="modal-body"><AlertPanel variant="error" title="Could not load restore tests">{loadError}</AlertPanel><div className="modal-foot"><button type="button" onClick={onClose}>Close</button></div></div>;
@@ -49,7 +49,7 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
  const live=!!form.serverId&&form.serverId===site.serverId,target=servers.find(x=>x.id===form.serverId);
  const cores=Number(target?.capabilities?.cpus??target?.capabilities?.cpuCount)||null;
  const time=timeLimit(form.time),memory=memoryLimit(form.memory),cpu=cpuLimit(form.cpu,cores);
- const active=!!card?.active;
+ const active=!!card?.active,copyTargets=Array.isArray(card?.copyTargets)?card.copyTargets:[];
  const reason=whyNoRun({serverId:form.serverId,liveServer:live,allowLive:form.allow})||(active?'A test is already running.':'');
  const shown=(state,result)=>(tried||(state.pick==='custom'&&state.custom.trim()))?result.error:'';
  const set=patch=>{setForm(previous=>({...previous,...patch}));setStarted(false);setError('')};
@@ -57,7 +57,7 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
 
  function settingsBody(){
   const probe=form.path.trim()?{...(form.probe||{}),path:form.path.trim()}:null;
-  return {enabled:form.enabled,cadence:form.cadence,serverId:form.serverId||null,allowLiveServer:live&&form.allow,allowInternet:form.allowInternet,timeLimitMinutes:time.value,memoryMb:memory.value,cpus:cpu.value,probe};
+  return {enabled:form.enabled,cadence:form.cadence,serverId:form.serverId||null,allowLiveServer:live&&form.allow,allowInternet:form.allowInternet,timeLimitMinutes:time.value,memoryMb:memory.value,cpus:cpu.value,probe,sourceTargetId:form.source||null};
  }
  // Checks the page before anything is sent. Operators have no settings to check.
  function check(){
@@ -98,6 +98,13 @@ export function RestoreTestsDialog({linked=[],onOpenApp,client,site,servers,isAd
     </select>
     <small>Pick a spare server.</small>
    </label>
+   {copyTargets.length>0&&<label className="field"><span>Test from</span>
+    <select value={form.source} disabled={!isAdmin} onChange={event=>set({source:event.target.value})}>
+     <option value="">Main storage</option>
+     {copyTargets.map(copy=><option key={copy.targetId} value={copy.targetId}>{'Copy on '+copy.name}</option>)}
+    </select>
+    <small>{form.source?'Restores the copy from its own storage. If any part is missing there, the test doesn’t run.':'Restores the main backup.'}</small>
+   </label>}
    {live&&<AlertPanel variant="warning" title="Live server" action={<label className="check"><input type="checkbox" checked={form.allow} disabled={!isAdmin} onChange={event=>set({allow:event.target.checked})}/> Allow live server</label>}>Tests use this server’s CPU, memory and disk.</AlertPanel>}
    <details className="rt-adv" open={advOpen} onToggle={event=>setAdvOpen(event.currentTarget.open)}>
     <summary>Advanced settings<ChevronDown size={18} stroke={2} className="rt-chev" aria-hidden="true"/></summary>

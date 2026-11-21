@@ -3,7 +3,8 @@
 // a directory replaced by a real directory. Every restore point is restored on the second host and its file tree and
 // database are compared with the source as it was when that backup was taken. Also: a tampered package and a missing
 // link are refused before anything is sent, a restore test passes on the newest point, a chain with an S3 copy
-// restores from the copy, and the 2.11.1 helper refuses a version 2 package with a plain message.
+// restores from the copy, a restore test from that copy fails closed on a missing link and passes once every main
+// package is gone, and the 2.11.1 helper refuses a version 2 package with a plain message.
 // Credentials are throwaway values and are never printed. Nothing here is "validated" until this passes in CI on Linux.
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
@@ -62,13 +63,15 @@ function assertSameTree(expected, actual, label) {
 export async function runIncrementalScenario({ run, until, hosts, servers, db, directory, record, evidence, sftpDestinationId }) {
   const [source, target] = hosts;
   const { enqueueBackup, claimJob, executeJob, planRestore, enqueueRestore, verifyEncrypted } = await import('../src/engine.js');
-  const { updateIncrementalSettings, linkOf } = await import('../src/incremental.js');
+  const { updateIncrementalSettings, linkOf, loadChain } = await import('../src/incremental.js');
   const { updateSiteStorage } = await import('../src/site-storage.js');
   const { claimCopy } = await import('../src/artifact-journal.js');
   const { executeCopy } = await import('../src/backup-copies.js');
   const { removeFile, openRead, openWrite } = await import('../src/storage.js');
   const { incrementalSaving } = await import('../src/storage-report.js');
   const rt = await import('../src/restore-tests/engine.js');
+  const { detailFor } = await import('../src/restore-tests/views.js');
+  const { remote } = await import('../src/ssh.js');
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const app = 'inc-app';
   const sh = script => run('exec', source, 'docker', 'exec', app, 'sh', '-c', script);
@@ -310,17 +313,20 @@ ${listing}`);
 
     // ---- Restore test on the newest point ----------------------------------------------------------------------------------
     rt.testTiming.scale = 0.25; rt.testTiming.cancelPollMs = 200;
+    // The worker loop in this process for one restore test: tick, claim, run, until its result and clean-up are in.
+    const driveTest = async testId => {
+      const testDeadline = Date.now() + 20 * 60 * 1000;
+      for (;;) {
+        const current = rt.loadTest(testId);
+        if (current.result !== null && ['done', 'failed', 'acknowledged'].includes(current.cleanup)) return current;
+        assert.ok(Date.now() < testDeadline, 'The restore test did not finish in time: ' + JSON.stringify(rt.loadSteps(testId).map(step => [step.step, step.state, step.detail])));
+        rt.tickRestoreTests();
+        const job = claimJob();
+        if (job) await executeJob(job); else await wait(500);
+      }
+    };
     const testId = rt.createRestoreTest({ siteId, serverId: servers[1].id, actor: 'qa', probe: { service: app, port: 8080, path: '/' } }).id;
-    const testDeadline = Date.now() + 20 * 60 * 1000;
-    let test;
-    for (;;) {
-      test = rt.loadTest(testId);
-      if (test.result !== null && ['done', 'failed', 'acknowledged'].includes(test.cleanup)) break;
-      assert.ok(Date.now() < testDeadline, 'The restore test did not finish in time: ' + JSON.stringify(rt.loadSteps(testId).map(step => [step.step, step.state, step.detail])));
-      rt.tickRestoreTests();
-      const job = claimJob();
-      if (job) await executeJob(job); else await wait(500);
-    }
+    const test = await driveTest(testId);
     assert.equal(test.result, 'passed', test.reason ?? '');
     assert.ok(db.prepare("SELECT COUNT(*) AS n FROM backup_verification_history WHERE backup_id=? AND json_extract(evidence,'$.testId')=?").get(newest.backup.id, testId).n > 0, 'The restore test is recorded as evidence for the newest backup');
     record('A restore test on the newest point (an increment, so the whole chain) passes and is recorded as evidence for that backup');
@@ -366,6 +372,32 @@ ${listing}`);
     }
     for (const point of points) assert.equal(await verifyEncrypted(copyRow(point.backup.id).path), point.backup.checksum, 'The S3 copy is the same encrypted package');
 
+    // ---- Restore test from the S3 copy fails closed while the main packages are all there (docs/restore-tests.md, "Testing a copy") ----
+    const newestChain = loadChain(newest.backup.id), parent = newestChain.at(-2);
+    assert.ok(newestChain.length > 1 && parent, 'The newest point is an increment, so its copy test reads a chain');
+    const copyTest = () => rt.createRestoreTest({ siteId, serverId: servers[1].id, sourceTargetId: copyTargetId, actor: 'qa' }).id;
+    const beforeCopyTests = { containers: await containersOnTarget(), directories: await restoreDirectories() };
+    // The parent's copy is listed as not verified: the test stops at Check space and nothing reaches the test server.
+    db.prepare("UPDATE backup_copies SET status='failed' WHERE backup_id=? AND target_id=?").run(parent.id, copyTargetId);
+    const unlisted = await driveTest(copyTest());
+    db.prepare("UPDATE backup_copies SET status='verified' WHERE backup_id=? AND target_id=?").run(parent.id, copyTargetId);
+    assert.equal(unlisted.backup_id, newest.backup.id);
+    assert.equal(unlisted.result, 'couldnt_run'); assert.equal(unlisted.failed_step, 'check_space'); assert.equal(unlisted.cleanup, 'done');
+    assert.match(unlisted.reason, new RegExp(`^Backup ${parent.id}, which this backup builds on, has no verified copy on QA incremental copy S3`));
+    // The parent's object is gone from the bucket while its main package is intact: still no fallback to the main one.
+    const parentCopyPath = copyRow(parent.id).path, parentCopyBytes = await readAll(parentCopyPath);
+    await removeFile(parentCopyPath);
+    const unreadable = await driveTest(copyTest());
+    await put(parentCopyPath, parentCopyBytes);
+    assert.equal(await verifyEncrypted(parentCopyPath), parent.checksum);
+    assert.equal(unreadable.result, 'couldnt_run', unreadable.reason ?? ''); assert.equal(unreadable.failed_step, 'copy_backup');
+    assert.match(unreadable.reason, new RegExp(`^Backup ${parent.id}, which this backup builds on, could not be read from QA incremental copy S3.*never falls back to the main storage`));
+    assert.equal(db.prepare('SELECT verified FROM backups WHERE id=?').get(newest.backup.id).verified, 1, 'A missing copy never marks the main package unverified');
+    assert.deepEqual(await containersOnTarget(), beforeCopyTests.containers, 'No container was created from an incomplete copy');
+    assert.equal(await restoreDirectories(), beforeCopyTests.directories, 'Nothing stayed in the restore staging root');
+    for (const id of [unlisted.id, unreadable.id]) assert.equal((await remote(servers[1], { operation: 'restore-test-status', testId: id })).present, false, 'The test server has nothing left from the refused test');
+    record('A restore test from the S3 copy of an incremental chain is "couldn\'t run" when a link is not verified there (stopped at Check space, nothing sent) or its object is missing from the bucket (stopped at Copy backup, cleaned up), with the main packages intact: it never falls back to the main storage');
+
     // ---- Restore from the S3 copy -------------------------------------------------------------------------------------------
     for (const backupId of createdBackups) await removeFile(db.prepare('SELECT path FROM backups WHERE id=?').get(backupId).path);
     const fromCopy = await restoreAndCompare(newest, points.length - 1);
@@ -373,6 +405,17 @@ ${listing}`);
     assert.equal(fromCopy.plan.source.targetId, copyTargetId);
     assert.ok(db.prepare("SELECT 1 FROM audit_events WHERE action='restore.source_fallback' AND target=?").get(newest.backup.id), 'The fallback to the copy is audited');
     record('With every main package deleted from SFTP, the newest point restores from the S3 copies of the whole chain and equals the source at that time');
+
+    // ---- Restore test from the S3 copy passes with every main package gone ----------------------------------------------------
+    const fromCopyTest = await driveTest(rt.createRestoreTest({ siteId, serverId: servers[1].id, sourceTargetId: copyTargetId, actor: 'qa', probe: { service: app, port: 8080, path: '/' } }).id);
+    assert.equal(fromCopyTest.result, 'passed', fromCopyTest.reason ?? '');
+    assert.equal(fromCopyTest.backup_id, newest.backup.id);
+    assert.deepEqual(fromCopyTest.progress.source, { role: 'copy', targetId: copyTargetId, name: 'QA incremental copy S3' });
+    assert.deepEqual(detailFor(fromCopyTest.id).source, { role: 'copy', name: 'QA incremental copy S3', chosen: true });
+    assert.equal(fromCopyTest.progress.chain?.length, newestChain.length, 'The whole chain was sent from the copy');
+    assert.ok(db.prepare("SELECT 1 FROM backup_verification_history WHERE backup_id=? AND json_extract(evidence,'$.testId')=? AND json_extract(evidence,'$.sourceTargetId')=?").get(newest.backup.id, fromCopyTest.id, copyTargetId), 'The evidence names the copy that was restored');
+    assert.equal((await remote(servers[1], { operation: 'restore-test-status', testId: fromCopyTest.id })).present, false);
+    record('A restore test from the S3 copy (main packages all deleted) verifies every chain link there, restores the newest increment on the test server, passes, cleans up and records the copy as the tested source');
   } finally {
     const failures = [];
     try { updateSiteStorage(siteId, { mainTargetId: null, copies: [] }, 'qa'); } catch { failures.push('site storage reset'); }
