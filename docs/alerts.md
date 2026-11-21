@@ -60,7 +60,7 @@ saved token can never be pointed at a new server by editing the server alone.
 
 | Event | When it fires | Repeats |
 | --- | --- | --- |
-| `backup.failed` | A backup of an app ended failed or needing recovery | Same app: at most once per 10 minutes |
+| `backup.failed` | A backup of an app ended failed or needing recovery, or a scheduled backup did not start on time (titled "Backup missed", see below) | Same app: at most once per 10 minutes; a missed run once per miss |
 | `backup.succeeded` | A backup finished | Same app: at most once per 10 minutes |
 | `move.finished` | An app move completed, was rolled back, or failed | Once per move state |
 | `move.needs_you` | A move waits for the DNS change, for your OK to switch, or for your decision | Once per move state |
@@ -81,6 +81,25 @@ unreachable and low disk; DockNest with those plus update available.
 A `docknest` line covers the whole installation, a `server` line that server and the apps on it, a `site` line only
 that app. There is one line per source and node. A message goes to a Connection at most once per event, however many
 nodes and lines lead to it.
+
+## Missed scheduled backups
+
+Since 3.0.0 a scheduled backup that did not start on time raises the app's `backup.failed` alert, titled "Backup missed",
+so every line that already reports failed backups reports it too. Nothing to set up.
+
+- **When.** The scheduler checks each run when it falls due, in its normal tick (no extra timer). A run counts as missed
+  when it could not start within its grace: the schedule's own interval, at least 15 minutes and at most one hour. Typical
+  causes: DockNest or its worker was stopped or its host was down at the time, or the app stayed busy past the grace
+  (for example a backup that never finished, or a long move or change).
+- **Once per miss.** One alert, at the time the run was due. Further missed runs do not alert again until a backup of the
+  app completes; then the next miss is a new one. A backup that fails does not clear a miss (it has its own alert).
+- **The run still happens.** A missed run is never skipped: it starts as soon as the worker is running and the app is free,
+  exactly as before.
+- **While DockNest is down.** DockNest cannot send anything while it is not running. The alert goes out when it is back.
+  For an alert during an outage of the DockNest host itself, watch it from outside (for example an uptime monitor).
+- While an update holds the scheduler nothing is checked; a run still due after it is checked like any other. A disabled
+  schedule or an archived app is never checked.
+- Upgrades: an installation upgraded from 2.16 starts checking from the moment it runs 3.0.0; older runs are not replayed.
 
 ## Certificates
 
