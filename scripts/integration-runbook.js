@@ -75,7 +75,9 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
     await until(async () => (await run('exec', clean, 'docker', 'info', '--format', '{{.OSType}}')) === 'linux', 'The clean host Docker engine failed to start');
     await run('exec', clean, 'apk', 'add', '--no-cache', 'nodejs');
     await run('cp', opened, `${clean}:/root/docknest-kit`);
-    const storageAddress = `${await run('inspect', '--format', '{{.NetworkSettings.IPAddress}}', hosts[2])}:22`;
+    // Docker 29 has no top-level NetworkSettings.IPAddress any more: the address on the default bridge network.
+    const storageAddress = `${await run('inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', hosts[2])}:22`;
+    assert.match(storageAddress, /^\d+\.\d+\.\d+\.\d+:22$/, 'the storage host has one address on the test network');
     const inventory = await loadInventory({ logins: true }), guide = buildGuide(inventory, { appIds: demos.map(demo => demo.siteId), include: { logins: true }, version: VERSION });
     // Each printed step runs on its own, in the app's restore folder; a failing one is named, with the storage password
     // removed from what it printed.
