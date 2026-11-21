@@ -133,7 +133,9 @@ class RedisEngine(DatabaseEngine):
         reported=[server.get('valkey_version'),server.get('redis_version')] if flavor=='valkey' else [server.get('redis_version')]
         native=service['version'] if service['version'] in reported or (flavor=='valkey' and 'valkey_version' not in server) else None
         if not re.fullmatch(REDIS_SUPPORTED[flavor],service['version']):raise ValueError('Redis native capture is limited to tested Redis 7 and Valkey 8 versions')
-        if native!=service['version'] or server.get('redis_mode')!='standalone':raise ValueError('Redis native version/mode does not match the standalone contract')
+        if native!=service['version']:raise ValueError('Redis native version does not match the version of the installed server binary')
+        # Valkey 8.1 and later name the mode server_mode (redis_mode is kept only for Redis clients that ask).
+        if (server.get('redis_mode') or server.get('server_mode'))!='standalone':raise ValueError('Redis native version/mode does not match the standalone contract')
         if replication.get('role')!='master' or replication.get('connected_slaves')!='0':raise ValueError('Redis replication requires a reviewed adapter')
         options=redis_pairs(redis_query(cid,service,['CONFIG','GET','dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','tls-port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint','loglevel','logfile']))
         required=['dir','dbfilename','appendonly','appenddirname','appendfilename','save','port','cluster-enabled','aclfile','shutdown-on-sigterm','shutdown-on-sigint','loglevel','logfile']

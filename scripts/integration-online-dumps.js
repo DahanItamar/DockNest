@@ -171,7 +171,10 @@ async function runRedisSnapshotScenario({ run, until, hosts, servers, db, record
       services: [{ container: name, engine: 'redis', database: '0', dependsOn: [], checks: [{ name: 'Fixture value', key }] }] };
     const siteId = randomUUID();
     db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, servers[0].id, 'Online dump ' + flavor, JSON.stringify(cfg), new Date().toISOString());
-    const plan = await planBackup(siteId);
+    const plan = await planBackup(siteId).catch(async error => {
+      const info = await cli(source, name, 'INFO', 'server').catch(() => ''), binary = await run('exec', source, 'docker', 'exec', name, 'sh', '-c', '(redis-server --version || valkey-server --version) 2>&1').catch(() => '');
+      throw new Error(error.message + ' | ' + binary + ' | ' + info.split(/\r?\n/).filter(line => /version|mode|server_name/.test(line)).join(' '));
+    });
     assert.equal(plan.services[0].engine, 'redis');
     assert.equal(plan.services[0].flavor, flavor);
     assert.equal(plan.services[0].persistence, 'disk');
