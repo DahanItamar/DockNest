@@ -57,6 +57,7 @@ DockNest is a self-hosted web app. It connects to your Linux servers over SSH, b
 - Server cleanup: preview the space unused Docker images, stopped containers, anonymous volumes and old build cache take, then clean after you confirm. Anything an app, backup, restore test or move still needs is kept. See [server cleanup](docs/server-cleanup.md).
 - Hardening score: each app gets a grade from A to F with a plain fix for each finding, such as a mounted Docker socket or a database port open to the network. Read-only; it never changes the app. See [hardening score](docs/hardening-score.md).
 - Backup coverage: on the Apps page and the Map, see which containers and volumes on a server no app backs up, add them as an app, or skip them on purpose with a note. It reads Docker only when you open it. Adding a plain `docker run` container previews the Compose file DockNest keeps for it.
+- Portainer and Dockge stacks: adding an app finds the stack's Compose file in the manager's stacks folder and shows which manager runs it. Read-only; the manager is never changed. See [app setup](docs/site-setup.md).
 - Linked apps: each server scan shows which apps depend on each other, such as a database, network or volume they share, and which containers they use that no app backs up. Read-only and warn-only. See [linked apps](docs/linked-apps.md).
 - Update Center with an opt-in update check and click-to-update through a host updater.
 - Problem reports that open a pre-filled public GitHub issue with typed values only, after you review what is shared.

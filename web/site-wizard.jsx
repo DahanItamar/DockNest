@@ -3,13 +3,13 @@ import {Paginated} from './pagination.jsx';
 import {AlertPanel,Stepper} from "./system.jsx";
 import React,{useEffect,useRef,useState} from 'react';
 
-import {containerName,containerGroups,suggestedGroups} from './container-groups.js';
+import {containerName,containerGroups,suggestedGroups,STACK_MANAGERS} from './container-groups.js';
 import {RunDefinition} from './backup-coverage/RunDefinition.jsx';
 import {normalizeDomain} from '../shared/domains.js';
 import {coverageIndex,splitGroup,availableChoices,coveredCaption,hiddenCaption,hiddenOwners,ownerNames} from '../shared/backup-coverage.js';
 import {detectedConfiguration} from './site-configuration.js';
 import {ConfigurationFiles} from './configuration-files.jsx';
-import {HardDrive as Database,Plus} from './icons.jsx';
+import {HardDrive as Database,Layers,Plus} from './icons.jsx';
 import {sqliteGroups,sqliteProblem,mergeSqliteFiles} from './sqlite-files.js';
 const containerStatus=container=>typeof container.state==='object'?container.state.status:container.state||container.State?.Status||'unknown';
 
@@ -136,7 +136,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
       const names=group.containers.map(containerName);
       const chosen=group.kind==='static'?staticRoot===group.documentRoot:!isStatic&&names.length===selected.length&&names.every(name=>selected.includes(name));
       return <section className={'application-group'+(chosen?' chosen':'')} key={group.id} aria-label={group.name}>
-       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
+       <header><div><h4>{group.name}</h4><p>{group.kind==='static'?'Static nginx website · no downtime':group.kind==='network'?'Suggested app':group.compose?'Compose project':group.kind==='swarm'?'Swarm stack · this server only':'Single container · check whether it needs a database'} {group.kind!=='static'&&<span className="count">{group.kind==='network'?names.length+' containers on network '+group.name:names.length+' '+(names.length===1?'service':'services')}</span>}</p>{group.manager&&<p className="stack-manager"><Layers size={16} aria-hidden="true"/><span>Managed by {STACK_MANAGERS[group.manager]}</span></p>}{!!group.covered?.length&&<p className="t-caption" role="note">{coveredCaption(group)}</p>}</div><button type="button" aria-label={'Select app '+group.name} aria-pressed={chosen} onClick={()=>group.kind==='static'?selectStatic(group):selectNames(names,group.name)}>{chosen?'Selected':'Select app'}</button></header>
        <p className="site-services">{group.kind==='static'?group.documentRoot:group.containers.map(container=>container.service||containerName(container)).join(', ')}</p>
        {group.kind!=='static'&&<details className="site-service-review"><summary>Review services in {group.name}</summary><div className="container-list">{group.containers.map(container=>{const name=containerName(container);return <label className="container-option" key={name}><input type="checkbox" aria-label={'Include '+name} checked={selected.includes(name)} disabled={!selected.includes(name)&&selected.length>=30} onChange={event=>toggleGrouped(name,event.target.checked)}/><div><b>{container.service||name}</b><small>{name} / {container.image||container.Config?.Image||'Image unavailable'}</small></div><span className="container-state">{containerStatus(container)}</span></label>;})}</div></details>}
       </section>;
@@ -163,6 +163,7 @@ export function SiteWizard({canSetUpMaintenance=false,api,Field,servers,sites=[]
    <p className="hint">{isStatic?'The website address is filled in from nginx. Confirm that it loads normally.':'Published web ports fill in the health URL when available. Confirm this URL belongs to the selected app; without a detected web port, enter its health endpoint.'}</p>
    <section className="site-files" aria-label="Backup configuration files"><h4>Configuration files to include</h4>
     {!!temporaryFolders.length&&<div className="hint"><h4>Temporary RAM folders</h4><p>{temporaryFolders.map(item=>item.container+': '+item.destination).join(' | ')}</p><p>Docker empties these folders whenever the container restarts, so there is nothing in them to back up. A restore recreates them empty with their original size and permissions. Keep app files and database data in persistent mounts.</p></div>}
+    {detected.manager&&<p className="hint">Managed by {STACK_MANAGERS[detected.manager]}. DockNest reads this stack's Compose file from {STACK_MANAGERS[detected.manager]}'s stacks folder on the server and never changes {STACK_MANAGERS[detected.manager]}.</p>}
     {detected.compose&&<p>{detected.composeFiles.length?'Detected Compose files are filled in below. Review them and any environment files before saving.':'This app uses Compose. Select its project file so DockNest can recreate it.'}</p>}
     <Field label="Compose project files (one absolute path per line)" aria-label="Compose project files (one absolute path per line)" name="composeFiles" multiline value={settings.composeFiles} onChange={update} required={detected.compose} help="Project definitions needed to recreate this app."/>
     {allowFileBrowsing&&detected.compose&&<button type="button" onClick={()=>setBrowser('composeFiles')}>Browse Compose files</button>}

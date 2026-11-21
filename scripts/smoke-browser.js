@@ -132,7 +132,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await detailsDialog.waitFor({state:'hidden'});
   await page.getByRole('article',{name:'DemoBlog_srv',exact:true}).getByText('DemoBlog production',{exact:true}).waitFor();
   let discoveryFailed=true,createdSites=0;
-  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{webHints:{healthUrls:['http://127.0.0.1:8080/'],domains:[]},backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
+  await page.route('**/api/servers/host-one/discover',route=>route.fulfill({json:{containers:[{webHints:{healthUrls:['http://127.0.0.1:8080/'],domains:[]},backupConfiguration:{composeFiles:['/srv/shop/docker-compose.yml'],configFiles:['/srv/shop/.env'],directory:'/srv/shop',manager:'dockge'},temporaryMemoryFolders:['/tmp'],name:'shop',image:'shop:latest',state:{status:'running'},labels:{'com.docker.compose.project':'shop'},mounts:[{type:'volume',destination:'/data'}]},{name:'shop-db',image:'postgres:17',state:'running',labels:{'com.docker.compose.project':'shop'}},{name:'blog',image:'blog:latest',state:'running'}]}}));
   await page.route('**/api/servers/host-two/discover',route=>discoveryFailed?route.fulfill({status:502,json:{error:'The server is unavailable. Retry the connection.'}}):route.fulfill({json:{containers:[]}}));
   await page.route('**/api/sites',route=>{
     const body=route.request().postDataJSON();
@@ -153,6 +153,9 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   const siteDialog=page.getByRole('dialog');
   assert.equal(await siteDialog.getByRole('button',{name:'Continue',exact:true}).isDisabled(),true);
   await siteDialog.getByLabel('Source server').selectOption('host-one');
+  // A stack a manager runs names it on its card (docs/site-setup.md); a plain container does not.
+  assert.equal(await siteDialog.getByRole('region',{name:'shop',exact:true}).getByText('Managed by Dockge',{exact:true}).count(),1);
+  assert.equal(await siteDialog.getByRole('region',{name:'blog',exact:true}).getByText(/Managed by/).count(),0);
   await siteDialog.getByRole('button',{name:'Select app shop',exact:true}).click();
   assert.equal(await siteDialog.getByRole('checkbox',{name:'Include shop-db',exact:true}).isVisible(),false,'Service controls stay collapsed during site selection');
   await siteDialog.getByRole('button',{name:'Select app blog',exact:true}).click();
@@ -170,6 +173,7 @@ await page.screenshot({ path:path.join(screenshotDir,'setup-desktop.png'), fullP
   await page.setViewportSize({width:1440,height:960});
   await siteDialog.getByRole('button',{name:'Continue',exact:true}).click();
   assert.equal(await siteDialog.getByLabel('App name',{exact:true}).inputValue(),'shop','Container name becomes the site name');
+  await siteDialog.getByText(/^Managed by Dockge\. DockNest reads this stack's Compose file/).waitFor();
   assert.equal(await siteDialog.getByLabel('Compose project files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/docker-compose.yml','Detected Compose path is filled in');
   assert.equal(await siteDialog.getByLabel('Environment and other configuration files (one absolute path per line)',{exact:true}).inputValue(),'/srv/shop/.env','Detected .env is included without exposing its content');
   await page.route('**/api/servers/host-one/project-files?**',route=>{
