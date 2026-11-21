@@ -90,6 +90,12 @@ class DatabaseEngine:
     dump_config=()
     init_marker=None
 
+def time_left(deadline):
+    """Seconds left before one dump's shared deadline (time.monotonic()); every command of a dump shares it."""
+    left=deadline-time.monotonic()
+    if left<=0:raise subprocess.TimeoutExpired('online dump',0)
+    return left
+
 def dump_command(args,timeout,stdin=None,stdout=None):
     """Run a dump or load command with files as stdin and stdout; returns (exit code, stderr text). The text is for
     the caller's own checks only: it can hold table names or data and never reaches evidence, logs or errors."""

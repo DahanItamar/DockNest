@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     run)
 from .engine_base import (
-    SqlEngine, dump_command, in_writable_mount)
+    SqlEngine, dump_command, in_writable_mount, time_left)
 from .databases import (
     database_query)
 # </build:header>
@@ -69,20 +69,27 @@ class PostgresEngine(SqlEngine):
             try:run(['docker','exec',c['Id'],'sh','-c','command -v "$1"','docknest',tool],timeout=10)
             except subprocess.CalledProcessError:return 'its image has no '+tool
         if database_query(c['Id'],service,'SELECT COUNT(*) FROM pg_replication_slots;')!='0':return 'it has replication slots, which a dump does not keep'
+        if database_query(c['Id'],service,'SELECT COUNT(*) FROM pg_tablespace;')!='2':return 'it has its own tablespaces, which a dump does not keep'
+        # Every database but template0 must be dumped: a database that refuses connections, a user template or a
+        # template1 with objects of its own would not be in the dump.
+        if database_query(c['Id'],service,"SELECT COUNT(*) FROM pg_database WHERE datname NOT IN ('template0','template1') AND (datistemplate OR NOT datallowconn);")!='0':return 'it has a template database or one that refuses connections, which a dump does not keep'
+        template={**service,'database':'template1'}
+        objects=database_query(c['Id'],template,"SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%')+(SELECT COUNT(*) FROM pg_extension WHERE extname<>'plpgsql');")
+        if objects!='0':return 'its template1 database has objects of its own, which a dump does not keep'
         self.dump_databases(c['Id'],service)
         others=sorted(entry.name for entry in host.iterdir() if entry.name not in POSTGRES_DATA_ENTRIES)
         if others:return 'its data folder holds files a dump does not keep ('+', '.join(others[:5])+')'
         return None
 
-    def dump(self,cid,service,directory,timeout):
+    def dump(self,cid,service,directory,deadline):
         names=self.dump_databases(cid,service)
-        code,_=dump_command([*self.client(cid,'pg_dumpall',service,'postgres'),'--globals-only'],timeout,stdout=directory/'globals.sql')
+        code,_=dump_command([*self.client(cid,'pg_dumpall',service,'postgres'),'--globals-only'],time_left(deadline),stdout=directory/'globals.sql')
         if code:raise ValueError('pg_dumpall could not save the roles')
         for index,name in enumerate(names):
             target=directory/('database-%d.pgdump'%index)
-            code,_=dump_command([*self.client(cid,'pg_dump',service,name),'--format=custom'],timeout,stdout=target)
+            code,_=dump_command([*self.client(cid,'pg_dump',service,name),'--format=custom'],time_left(deadline),stdout=target)
             if code:raise ValueError('pg_dump failed')
-            code,_=dump_command(self.client(cid,'pg_restore',service,name,True)[:-1]+['--list'],timeout,stdin=target)
+            code,_=dump_command(self.client(cid,'pg_restore',service,name,True)[:-1]+['--list'],time_left(deadline),stdin=target)
             if code:raise ValueError('pg_restore could not read the dump it made')
         return {'format':self.dump_format,'databases':names}
 

@@ -90,7 +90,8 @@ def take_dump(service,c,data,host,root,index,timeout):
     work.mkdir(mode=0o700)
     try:
         started=time.monotonic();diagnostic(command='online dump',phase='start',engine=service['engine'])
-        record=engine.dump(c['Id'],service,work,timeout)
+        # One deadline for the whole dump of this database, shared by every command it runs.
+        record=engine.dump(c['Id'],service,work,started+timeout)
         carried=[]
         for filename in engine.dump_config:
             # Settings files in the data folder (a dump does not hold them); read on the host, never through a link.
@@ -174,9 +175,11 @@ def place_config(listing,directory,data_folder):
         if not isinstance(filename,str) or not DUMP_MEMBER.fullmatch('config/'+filename):raise ValueError('The database dump in this backup has no valid listing')
         content=(directory/'config'/filename).read_bytes()
         path=data_folder/filename
-        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|NOFOLLOW,0o600)
+        # Never truncate or block on something that is not a regular file (a planted FIFO or device): check, then cut.
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|NOFOLLOW|getattr(os,'O_NONBLOCK',0),0o600)
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('A restored database settings file is not a regular file')
+            os.ftruncate(fd,0)
             os.write(fd,content)
             if hasattr(os,'fchown'):os.fchown(fd,owner.st_uid,owner.st_gid)
         finally:os.close(fd)

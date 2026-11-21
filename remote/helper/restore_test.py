@@ -413,8 +413,9 @@ def restore_test_restore(req):
     # Online logical dumps: loaded into the restored data folders (network none) before the copy's containers exist.
     if dumped_services(manifest):
         try:load_dumps(manifest,unpacked,root,definitions,sources,journal=lambda name:test_journal(d,state,'containers',name))
-        except ValueError as error:
-            checks.append(test_check('Database dump','dump',None,'failed',str(error)[:200]))
+        except Exception as error:
+            # A ValueError names the step; anything else gets a fixed reason (never raw tool or Docker output).
+            checks.append(test_check('Database dump','dump',None,'failed',str(error)[:200] if isinstance(error,ValueError) else 'The database dump could not be loaded into the copy.'))
             raise TestOutcome('failed','The database dump in the backup could not be loaded.',checks)
         checks.append(test_check('Database dump','dump',None,'passed','%d loaded'%len(dumped_services(manifest))))
     networks={};created=[]

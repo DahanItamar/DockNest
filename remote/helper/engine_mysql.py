@@ -6,7 +6,7 @@ import sys,json,subprocess,os,time,uuid,pathlib,shutil,signal,urllib.request,url
 from .common import (
     run)
 from .engine_base import (
-    SqlEngine, dump_command, in_writable_mount)
+    SqlEngine, dump_command, in_writable_mount, time_left)
 from .databases import (
     database_query)
 # </build:header>
@@ -77,16 +77,22 @@ class MysqlEngine(SqlEngine):
     def dump_blocker(self,service,c,host):
         try:run(['docker','exec',c['Id'],'sh','-c','command -v "$1"','docknest',self.dumper],timeout=10)
         except subprocess.CalledProcessError:return 'its image has no '+self.dumper
-        count=database_query(c['Id'],service,"SELECT COUNT(*) FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NOT IN "+MYSQL_SYSTEM_SCHEMAS+" AND engine<>'InnoDB';")
+        return self.transaction_blocker(c['Id'],service)
+
+    def transaction_blocker(self,cid,service):
+        """Tables one InnoDB transaction cannot read consistently; checked when planning and again right before the dump."""
+        count=database_query(cid,service,"SELECT COUNT(*) FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NOT IN "+MYSQL_SYSTEM_SCHEMAS+" AND COALESCE(engine,'')<>'InnoDB';")
         if count!='0':return 'tables that are not InnoDB (%s) cannot be read in one transaction'%count
         return None
 
     def tool(self,container,service,tool,interactive=False):
         return ['docker','exec',*(['-i'] if interactive else []),container,'sh','-c',MYSQL_CLIENT_SCRIPT,'docknest',tool,service.get('user') or 'root']
 
-    def dump(self,cid,service,directory,timeout):
+    def dump(self,cid,service,directory,deadline):
+        problem=self.transaction_blocker(cid,service)
+        if problem:raise ValueError(problem)
         target=directory/'all-databases.sql'
-        code,_=dump_command([*self.tool(cid,service,self.dumper),*self.dump_options],timeout,stdout=target)
+        code,_=dump_command([*self.tool(cid,service,self.dumper),*self.dump_options],time_left(deadline),stdout=target)
         if code:raise ValueError(self.dumper+' failed')
         # A complete dump ends with this comment; anything else is a cut-off file and is never published.
         with open(target,'rb') as file:
