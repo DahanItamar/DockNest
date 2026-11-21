@@ -97,7 +97,7 @@ export async function runKeysSafeScenario({ run, until, hosts, servers, db, reco
   const pemProof = JSON.parse(increment.manifest).keys.find(key => `${key.rule}@${key.location}` === pemKey);
   assert.ok(pemProof.inBackup || pemProof.reason === 'not-in-package', JSON.stringify(pemProof));
   assert.equal(db.prepare('SELECT in_backup FROM app_keys WHERE site_id=? AND rule_id=? AND location=?').get(siteId, 'vaultwarden-rsa', `file:${volume}/rsa_key.pem`).in_backup, increment.id);
-  assert.equal(status()[pemKey], 'in-backup');
+  assert.equal(status()[pemKey], 'verified', 'still in the newest backup, and the restore test verified this same value');
   updateIncrementalSettings(siteId, { enabled: false }, 'qa');
   record('Keys safe: an increment that holds only changed files keeps the unchanged rsa_key.pem proven through its chain');
 
