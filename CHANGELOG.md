@@ -5,6 +5,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Adding an SFTP storage destination fills the Capacity field with the size the server reports (editable, never blocks adding). See [storage backends](docs/storage-backends.md).
 - Sign-in: each password dot and 2FA digit now animates in as you type, with no focus border on those inputs (the caret and active-box tint show where you are). Off under reduced motion.
 - Consistent dialogs, tabs, notices and step-by-step flows.
 - Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).

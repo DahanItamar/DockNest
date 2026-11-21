@@ -87,7 +87,7 @@ function S3Fields({Field,provider,s3,update,invalid,sites,policies}) {
 }
 
 export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],policies=[],usage={}}) {
- const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState(DEFAULT_PROVIDER),[showSteps,setShowSteps]=useState(false),[sftp,setSftp]=useState({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false}),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
+ const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState(DEFAULT_PROVIDER),[showSteps,setShowSteps]=useState(false),[capacity,setCapacity]=useState({text:'',source:'',touched:false,bytes:null}),capacityProbe=useRef({key:'',run:0}),[sftp,setSftp]=useState({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false}),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
  const removal=useDestinationRemoval(useMemo(()=>createCopiesClient(api),[api]),{onSessionExpired,onDone:async message=>{setNotice({message});await load();await onChanged();setRefreshKey(value=>value+1);}});
  const errorRef=useRef(null),update=changes=>setS3(previous=>({...previous,...changes}));
  const provider=providerById(providerId),kind=provider.kind;
@@ -96,7 +96,7 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
   if(typeSwitch)setAuthType('password');setS3(previous=>({...previous,region:next.region||previous.region,regionTouched:false,endpointTouched:false,accountId:'',endpoint:suggestedEndpoint(next,{region:next.region})}));};
  const complianceBlocked=kind==='s3'&&s3.lock&&s3.lockMode==='COMPLIANCE'&&!s3.confirmed;
  const invalid=name=>formError?.fields[name]?{'aria-invalid':'true','aria-describedby':'storage-form-error'}:{};
- function resetForm(){setSftp({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false});setProviderId(DEFAULT_PROVIDER);setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
+ function resetForm(){setCapacity({text:'',source:'',touched:false,bytes:null});capacityProbe.current={key:'',run:0};setSftp({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false});setProviderId(DEFAULT_PROVIDER);setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
  async function load(){try{setData(await api('/storage-targets'));}catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}}
  useEffect(()=>{load();},[]);
  useEffect(()=>{if(formError&&errorRef.current){errorRef.current.scrollIntoView?.({block:'center'});errorRef.current.focus();}},[formError]);
@@ -114,11 +114,26 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
    return null;
   }finally{inFlight.current=false;setBusy(false);}
  }
+ // Asks the server what the storage reports once the connection details are filled in. Never blocks adding; the typed value wins.
+ async function checkCapacity(event){
+  if(kind!=='sftp'||capacity.touched)return;
+  const form=event.currentTarget.closest('form'),fields=Object.fromEntries(new FormData(form));
+  const names=['host','port','username','hostKey','root',authType==='password'?'password':'privateKey'];
+  if(!names.every(name=>fields[name])||!form.checkValidity())return;
+  const body={host:fields.host,port:Number(fields.port),username:fields.username,hostKey:fields.hostKey,root:fields.root,authType,...(authType==='password'?{password:fields.password}:{privateKey:fields.privateKey})};
+  const key=JSON.stringify(body),probe=capacityProbe.current;
+  if(probe.key===key)return;
+  probe.key=key;const run=++probe.run;
+  setCapacity(previous=>({...previous,source:'checking'}));
+  let bytes=null;try{bytes=(await api('/storage-targets/capacity',body)).capacityBytes;}catch{}
+  if(run!==probe.run)return;
+  setCapacity(previous=>previous.touched?{...previous,source:''}:bytes?{text:String(Math.round(bytes/1e9)/1000),source:'server',touched:false,bytes}:{...previous,source:''});
+ }
  async function connect(event){
   event.preventDefault();if(busy)return;
   if(complianceBlocked){setFormError({fields:{},first:null,message:'Confirm that you understand Compliance mode before connecting.'});return;}
   const form=event.currentTarget,fields=Object.fromEntries(new FormData(form));
-  const result=kind==='s3'?await run('/storage-targets/s3/connect',{name:fields.name,endpoint:fields.endpoint,region:fields.region,bucket:fields.bucket,prefix:fields.prefix,pathStyle:fields.addressing==='path',accessKeyId:fields.accessKeyId,secretAccessKey:fields.secretAccessKey,objectLock:s3.lock?{mode:s3.lockMode,days:Number(s3.lockDays)}:null},'Storage connected. Upload, copy, ranged read and delete checks passed.','form','Testing storage connection…'):await run('/storage-targets/connect',{name:fields.name,host:fields.host,port:Number(fields.port),username:fields.username,hostKey:fields.hostKey,root:fields.root,capacityBytes:Math.round(Number(fields.capacityTB)*1e12),authType,...(authType==='password'?{password:fields.password}:{privateKey:fields.privateKey})},'Storage connected. Write, read and rename checks passed.','form','Testing storage connection…');
+  const result=kind==='s3'?await run('/storage-targets/s3/connect',{name:fields.name,endpoint:fields.endpoint,region:fields.region,bucket:fields.bucket,prefix:fields.prefix,pathStyle:fields.addressing==='path',accessKeyId:fields.accessKeyId,secretAccessKey:fields.secretAccessKey,objectLock:s3.lock?{mode:s3.lockMode,days:Number(s3.lockDays)}:null},'Storage connected. Upload, copy, ranged read and delete checks passed.','form','Testing storage connection…'):await run('/storage-targets/connect',{name:fields.name,host:fields.host,port:Number(fields.port),username:fields.username,hostKey:fields.hostKey,root:fields.root,...(capacity.touched&&fields.capacityTB?{capacityBytes:Math.round(Number(fields.capacityTB.replace(',','.'))*1e12)}:capacity.bytes?{capacityBytes:capacity.bytes}:{}),authType,...(authType==='password'?{password:fields.password}:{privateKey:fields.privateKey})},'Storage connected. Write, read and rename checks passed.','form','Testing storage connection…');
   if(result){form.reset();resetForm();setAdding(false);}
  }
  function closeForm(){if(busy)return;resetForm();setAdding(false);}
@@ -132,14 +147,14 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
   {adding&&<StorageDialog busy={busy} onClose={closeForm}><form className="storage-form" onSubmit={connect}><div className="modal-body storage-scroll">
    <div className="field" role="group" aria-labelledby="storage-l-provider"><span id="storage-l-provider">Provider</span><Combo labelledBy="storage-l-provider" value={providerId} onChange={pickProvider} items={PROVIDER_GROUPS.flatMap(group=>group.items.map(item=>({value:item.id,label:item.label,group:group.label,caption:item.sub})))}/></div>
    <Field label="Destination name" name="name" maxLength={100} required {...invalid('name')}/>
-   {kind==='s3'?<S3Fields key={providerId} Field={Field} provider={provider} s3={s3} update={update} invalid={invalid} sites={sites} policies={policies}/>:<div className="storage-sftp">
+   {kind==='s3'?<S3Fields key={providerId} Field={Field} provider={provider} s3={s3} update={update} invalid={invalid} sites={sites} policies={policies}/>:<div className="storage-sftp" onBlur={checkCapacity}>
    <div className="form-grid"><Field label="Hostname" name="host" required placeholder={provider.host} {...invalid('host')}/><Field label="Port" name="port" type="number" value={sftp.port} onChange={event=>setSftp(previous=>({...previous,port:event.target.value,portTouched:true}))} min={1} max={65535} required help={provider.note} {...invalid('port')}/></div>
    <Field label="Username" name="username" required placeholder={provider.username||undefined} autoComplete="off" {...invalid('username')}/>
    <Field label="Sign-in method" value={authType} onChange={event=>setAuthType(event.target.value)} options={[[ 'password','Password'],['ssh-key','SSH key']]}/>
    {authType==='password'?<Field key="password" label="Password" name="password" type="password" autoComplete="new-password" required maxLength={4096} {...invalid('password')}/>:<Field key="privateKey" label="SSH private key" name="privateKey" multiline autoComplete="off" spellCheck={false} minLength={50} maxLength={30000} required {...invalid('privateKey')}/>}
    <Field label="Host fingerprint" name="hostKey" required placeholder="SHA256:..." pattern="(?:[a-fA-F0-9]{64}|SHA256:[A-Za-z0-9+\/]{43}=?)" title="64 hexadecimal characters, or SHA256: followed by 43 base64 characters." {...invalid('hostKey')} help={'This identifies the server, like an ID check. '+provider.fingerprint+' DockNest refuses a changed fingerprint.'}/>
    <details className="rt-adv storage-more" open={showSteps} onToggle={event=>setShowSteps(event.currentTarget.open)}><summary>Where do I find it?<IconChevronDown size={18} stroke={1.75} className="rt-chev" aria-hidden="true"/></summary>{provider.steps==='ssh'?<p>On a machine you trust, run <code>ssh-keyscan -t ed25519 HOST | ssh-keygen -lf -</code> and copy the SHA256 value. You can also read it from the server's console. This is public server identification, not your password or private key.</p>:<p>{provider.steps}</p>}</details>
-   <div className="form-grid"><Field label="Backup directory" name="root" value={sftp.root} onChange={event=>setSftp(previous=>({...previous,root:event.target.value,rootTouched:true}))} required help="DockNest tests this directory before saving the encrypted credential." {...invalid('root')}/><Field label="Capacity (TB)" name="capacityTB" type="number" defaultValue={1} min={0.001} max={9000} step={0.001} required help="Your quota. Usage shown covers DockNest backups only." {...invalid('capacityTB')}/></div></div>}
+   <div className="form-grid"><Field label="Backup directory" name="root" value={sftp.root} onChange={event=>setSftp(previous=>({...previous,root:event.target.value,rootTouched:true}))} required help="DockNest tests this directory before saving the encrypted credential." {...invalid('root')}/><Field label="Capacity (TB)" name="capacityTB" type="text" inputMode="decimal" pattern="[0-9]*[.,]?[0-9]*" title="A number of terabytes, for example 1 or 0.5." placeholder="1" value={capacity.text} onChange={event=>setCapacity({text:event.target.value,source:'',touched:true,bytes:null})} help={capacity.source==='checking'?'Checking what the server reports…':capacity.source==='server'?'Reported by the server. You can change it. Usage shown covers DockNest backups only.':'Your quota. Leave empty to use what the server reports, or 1 TB. Usage shown covers DockNest backups only.'} {...invalid('capacityTB')}/></div></div>}
    {formError&&<div id="storage-form-error" tabIndex={-1} ref={errorRef}><AlertPanel variant="error" title="Could not connect storage." action={formError.errorClass?<div className="rp-actions"><ReportProblem summary="Storage connection test" excerptSource={catalogued(formError.message)||!formError.message?null:{error:formError.message}} excerptLabel="Include the error message" build={(facts,opts)=>buildStorageReport({...facts,...opts,protocol:kind==='s3'?'s3':'sftp',errorClass:formError.errorClass,message:formError.message,explanation:EXPLAIN.storage})}/></div>:undefined}>{formError.message}</AlertPanel></div>}
    {complianceBlocked&&<p className="hint" id="compliance-required">Confirm Compliance mode above to continue.</p>}
   </div>
