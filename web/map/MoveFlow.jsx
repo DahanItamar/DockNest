@@ -69,11 +69,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
  const canMove=!blocked&&(!long||anyway)&&!busy;
-<<<<<<< HEAD
- const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
-=======
- const warns=(preview.warnings||[]).filter(w=>!w.advanced&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
->>>>>>> feat/domains-ui
+ const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
  const cfReady=tokenSaved||cfConfigured;
  useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
  const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
