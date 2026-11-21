@@ -16,6 +16,8 @@ export function generateHostKey(){
 export async function startSftpFixture(){
  const host={private:generateHostKey()},password=randomBytes(32).toString('base64url');
  const files=new Map(),directories=new Set(['/']),clients=new Set(),events=[];
+ // Filesystem the fixture reports through statvfs@openssh.com; blocks of 0 means "not supported" (failure status).
+ const volume={blockSize:4096,blocks:0,free:0,available:0};
  const faults={writes:false,fsync:false,rename:false,remove:false,corruptReads:false};
  const attrs=file=>({mode:directories.has(file)?0o40700:0o100600,uid:1000,gid:1000,size:files.get(file)?.length||0,atime:1,mtime:1});
  const server=new Server({hostKeys:[host.private]},client=>{
@@ -29,8 +31,10 @@ export async function startSftpFixture(){
     const protocol=stream._protocol,send=protocol.channelData;
     protocol.channelData=function(channel,packet){
      if(channel===stream.outgoing.id&&packet.length===9&&packet[4]===2){
-      const name=Buffer.from('fsync@openssh.com'),value=Buffer.from('1'),extension=Buffer.alloc(8+name.length+value.length);
-      extension.writeUInt32BE(name.length);name.copy(extension,4);extension.writeUInt32BE(value.length,4+name.length);value.copy(extension,8+name.length);
+      const extension=Buffer.concat(['fsync@openssh.com','statvfs@openssh.com'].map(extensionName=>{
+       const name=Buffer.from(extensionName),value=Buffer.from(extensionName.startsWith('statvfs')?'2':'1'),entry=Buffer.alloc(8+name.length+value.length);
+       entry.writeUInt32BE(name.length);name.copy(entry,4);entry.writeUInt32BE(value.length,4+name.length);value.copy(entry,8+name.length);return entry;
+      }));
       packet=Buffer.concat([packet,extension]);packet.writeUInt32BE(packet.length-4);
      }
      return send.call(this,channel,packet);
@@ -58,7 +62,13 @@ export async function startSftpFixture(){
     stream.on('FSTAT',(request,handle)=>{const file=fileFor(handle);file?stream.attrs(request,attrs(file)):status(request,constants.STATUS_CODE.FAILURE);});
     stream.on('FSETSTAT',request=>status(request));
     stream.on('CLOSE',(request,handle)=>{handles.delete(handle.readUInt32BE());status(request);});
-    stream.on('EXTENDED',(request,name)=>{events.push({operation:'fsync'});status(request,name==='fsync@openssh.com'&&!faults.fsync?constants.STATUS_CODE.OK:constants.STATUS_CODE.FAILURE);});
+    stream.on('EXTENDED',(request,name)=>{
+     if(name==='statvfs@openssh.com'&&volume.blocks>0){
+      const reply=Buffer.alloc(9+11*8);reply.writeUInt32BE(reply.length-4);reply[4]=201;reply.writeUInt32BE(request,5);
+      [volume.blockSize,volume.blockSize,volume.blocks,volume.free,volume.available,0,0,0,0,0,255].forEach((value,index)=>reply.writeBigUInt64BE(BigInt(value),9+index*8));
+      return send.call(protocol,stream.outgoing.id,reply);
+     }
+events.push({operation:'fsync'});status(request,name==='fsync@openssh.com'&&!faults.fsync?constants.STATUS_CODE.OK:constants.STATUS_CODE.FAILURE);});
     stream.on('RENAME',(request,from,to)=>{
      if(faults.rename||!files.has(from)||files.has(to))return status(request,constants.STATUS_CODE.FAILURE);
      files.set(to,files.get(from));files.delete(from);events.push({operation:'rename',from,to});status(request);
@@ -68,5 +78,5 @@ export async function startSftpFixture(){
   }));
  });
  server.listen(0,'127.0.0.1');await new Promise((resolve,reject)=>server.once('listening',resolve).once('error',reject));
- return {files,faults,events,options:{host:'127.0.0.1',port:server.address().port,username:'fixture',password,hostKey:createHash('sha256').update(utils.parseKey(host.private).getPublicSSH()).digest('hex')},async close(){for(const client of clients)client.end();await new Promise(resolve=>server.close(resolve));}};
+ return {files,faults,events,volume,options:{host:'127.0.0.1',port:server.address().port,username:'fixture',password,hostKey:createHash('sha256').update(utils.parseKey(host.private).getPublicSSH()).digest('hex')},async close(){for(const client of clients)client.end();await new Promise(resolve=>server.close(resolve));}};
 }

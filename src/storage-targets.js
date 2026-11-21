@@ -71,7 +71,7 @@ storageTargets.get('/:id/tree',(req,res)=>{
  res.json({root:target.root,managedRoot:backupRoot(target.root),limited,recovery,servers:[...servers.values()].map(server=>({...server,sites:[...server.sites.values()].map(site=>({...site,days:[...site.days.values()]}))}))});
 });
 // Pre-fills the capacity field. Nothing is saved or logged; an unreadable server answers null so the form just stays empty.
-storageTargets.post('/capacity',rateLimit('storage-connect',10),async(req,res)=>{
+storageTargets.post('/capacity',rateLimit('storage-probe',30),async(req,res)=>{
  const data=probeSchema.parse(req.body),hostKey=data.hostKey.startsWith('SHA256:')?Buffer.from(data.hostKey.slice(7),'base64').toString('hex'):data.hostKey.toLowerCase();
  const total=await probeTargetCapacity({host:data.host,port:data.port,username:data.username,hostKey,root:data.root.replace(/\/+$/,''),...(data.authType==='password'?{password:data.password}:{privateKey:data.privateKey})});
  res.json({capacityBytes:Number.isSafeInteger(total)&&total>0?total:null});

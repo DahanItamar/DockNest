@@ -14,7 +14,7 @@ import {Paginated} from './pagination.jsx';
 import {formatDate} from './date-format.js';
 import {Combo} from './connections/parts.jsx';
 import {PROVIDER_GROUPS,DEFAULT_PROVIDER,providerById,suggestedEndpoint} from './storage-providers.js';
-import {splitFieldErrors,regionFromEndpoint,lockWarnings} from './storage-form.js';
+import {splitFieldErrors,regionFromEndpoint,lockWarnings,capacityText} from './storage-form.js';
 
 function StorageTree({api,target,refreshKey,onSessionExpired}) {
  const [tree,setTree]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[reload,setReload]=useState(0);
@@ -87,7 +87,7 @@ function S3Fields({Field,provider,s3,update,invalid,sites,policies}) {
 }
 
 export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],policies=[],usage={}}) {
- const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState(DEFAULT_PROVIDER),[showSteps,setShowSteps]=useState(false),[capacity,setCapacity]=useState({text:'',source:'',touched:false,bytes:null}),capacityProbe=useRef({key:'',run:0}),[sftp,setSftp]=useState({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false}),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
+ const [data,setData]=useState(null),[adding,setAdding]=useState(false),[authType,setAuthType]=useState('password'),[providerId,setProviderId]=useState(DEFAULT_PROVIDER),[showSteps,setShowSteps]=useState(false),[capacity,setCapacity]=useState({text:'',source:'',touched:false,bytes:null}),capacityProbe=useRef({key:'',run:0,timer:null}),[sftp,setSftp]=useState({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false}),[s3,setS3]=useState(initialS3),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(null),[formError,setFormError]=useState(null),[cardError,setCardError]=useState(null),[status,setStatus]=useState(''),[treeTarget,setTreeTarget]=useState(null),[refreshKey,setRefreshKey]=useState(0);
  const removal=useDestinationRemoval(useMemo(()=>createCopiesClient(api),[api]),{onSessionExpired,onDone:async message=>{setNotice({message});await load();await onChanged();setRefreshKey(value=>value+1);}});
  const errorRef=useRef(null),update=changes=>setS3(previous=>({...previous,...changes}));
  const provider=providerById(providerId),kind=provider.kind;
@@ -96,7 +96,7 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
   if(typeSwitch)setAuthType('password');setS3(previous=>({...previous,region:next.region||previous.region,regionTouched:false,endpointTouched:false,accountId:'',endpoint:suggestedEndpoint(next,{region:next.region})}));};
  const complianceBlocked=kind==='s3'&&s3.lock&&s3.lockMode==='COMPLIANCE'&&!s3.confirmed;
  const invalid=name=>formError?.fields[name]?{'aria-invalid':'true','aria-describedby':'storage-form-error'}:{};
- function resetForm(){setCapacity({text:'',source:'',touched:false,bytes:null});capacityProbe.current={key:'',run:0};setSftp({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false});setProviderId(DEFAULT_PROVIDER);setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
+ function resetForm(){setCapacity({text:'',source:'',touched:false,bytes:null});clearTimeout(capacityProbe.current.timer);capacityProbe.current={key:'',run:0,timer:null};setSftp({port:String(providerById(DEFAULT_PROVIDER).port),root:providerById(DEFAULT_PROVIDER).root,portTouched:false,rootTouched:false});setProviderId(DEFAULT_PROVIDER);setShowSteps(false);setAuthType('password');setS3(initialS3);setFormError(null);}
  async function load(){try{setData(await api('/storage-targets'));}catch(error){if(error.status===401)onSessionExpired();else setError(error.message);}}
  useEffect(()=>{load();},[]);
  useEffect(()=>{if(formError&&errorRef.current){errorRef.current.scrollIntoView?.({block:'center'});errorRef.current.focus();}},[formError]);
@@ -115,19 +115,25 @@ export function StorageTargets({api,Field,onChanged,onSessionExpired,sites=[],po
   }finally{inFlight.current=false;setBusy(false);}
  }
  // Asks the server what the storage reports once the connection details are filled in. Never blocks adding; the typed value wins.
- async function checkCapacity(event){
+ function checkCapacity(event){
   if(kind!=='sftp'||capacity.touched)return;
-  const form=event.currentTarget.closest('form'),fields=Object.fromEntries(new FormData(form));
-  const names=['host','port','username','hostKey','root',authType==='password'?'password':'privateKey'];
-  if(!names.every(name=>fields[name])||!form.checkValidity())return;
-  const body={host:fields.host,port:Number(fields.port),username:fields.username,hostKey:fields.hostKey,root:fields.root,authType,...(authType==='password'?{password:fields.password}:{privateKey:fields.privateKey})};
-  const key=JSON.stringify(body),probe=capacityProbe.current;
-  if(probe.key===key)return;
-  probe.key=key;const run=++probe.run;
-  setCapacity(previous=>({...previous,source:'checking'}));
-  let bytes=null;try{bytes=(await api('/storage-targets/capacity',body)).capacityBytes;}catch{}
-  if(run!==probe.run)return;
-  setCapacity(previous=>previous.touched?{...previous,source:''}:bytes?{text:String(Math.round(bytes/1e9)/1000),source:'server',touched:false,bytes}:{...previous,source:''});
+  const form=event.currentTarget.closest('form'),probe=capacityProbe.current;
+  clearTimeout(probe.timer);
+  // Debounced: moving between fields does not probe; only a settled, complete and distinct connection does.
+  probe.timer=setTimeout(async()=>{
+   if(!form.isConnected)return;
+   const fields=Object.fromEntries(new FormData(form));
+   const names=['host','port','username','hostKey','root',authType==='password'?'password':'privateKey'];
+   if(!names.every(name=>fields[name])||!form.checkValidity())return;
+   const body={host:fields.host,port:Number(fields.port),username:fields.username,hostKey:fields.hostKey,root:fields.root,authType,...(authType==='password'?{password:fields.password}:{privateKey:fields.privateKey})};
+   const key=JSON.stringify(body);
+   if(probe.key===key)return;
+   probe.key=key;const run=++probe.run;
+   setCapacity(previous=>({...previous,source:'checking'}));
+   let bytes=null;try{bytes=(await api('/storage-targets/capacity',body)).capacityBytes;}catch{}
+   if(run!==probe.run)return;
+   setCapacity(previous=>previous.touched?{...previous,source:''}:capacityText(bytes)?{text:capacityText(bytes),source:'server',touched:false,bytes}:{...previous,source:''});
+  },600);
  }
  async function connect(event){
   event.preventDefault();if(busy)return;
