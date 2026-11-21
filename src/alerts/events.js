@@ -75,11 +75,11 @@ export function messageFor(event) {
     // Keys safe (docs/keys-safe.md): Compose, env or configuration files changed outside Safe Edit. Names only, no diff.
     case 'config.changed': return `Configuration changed: the Compose or env files of ${site} on ${server} changed outside Safe Edit. Open DockNest to review.`;
     // Self Backup and the emergency kit (docs/emergency-kit.md): fixed sentences, never a key, a part or an error text.
-    // Recovery Guide (docs/recovery-guide.md): sent once per new inventory digest.
-    case 'runbook.outdated': return 'The Recovery Guide is out of date: apps, servers, storage or the emergency kit changed since it was made. Open DockNest to make a new one.';
     case 'selfbackup.kit_check_failed': return `Self Backup kit check failed${when}: the newest recovery kit did not open with the passphrase DockNest keeps. Open DockNest to see why.`;
     case 'emergency.key_changed': if (event.code === 'retired') return `Emergency kit split turned off${when}: the kit opens with one recovery passphrase again. If you did not do this, open DockNest now.`;
       return `Emergency kit key changed${when}: new emergency kits now open only with the parts of the latest split. If you did not split the kit, open DockNest now.`;
+    // Recovery Guide (docs/recovery-guide.md): sent once per new inventory digest.
+    case 'runbook.outdated': return 'The Recovery Guide is out of date: apps, servers, storage or the emergency kit changed since it was made. Open DockNest to make a new one.';
     default: return null;
   }
 }

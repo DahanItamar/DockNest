@@ -454,8 +454,7 @@ export const migrations = [
   { version: 23, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
   // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them.
   { version: 24, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
-  // Recovery Guide (docs/recovery-guide.md): two new tables, so 2.16 code ignores them. Provisional number: the next
-  // free one; renumbered at merge if another migration lands first.
+  // Recovery Guide (docs/recovery-guide.md): two new tables, so 2.16 code ignores them.
   { version: 25, name: 'runbook-state', compatible: true, up: db => db.exec(runbookStateSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
