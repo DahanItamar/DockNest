@@ -8,6 +8,7 @@ const catalogue = Object.freeze({
   'backup.failed:recovery_required': 'The backup stopped and the app needs recovery. Open DockNest to continue.',
   'backup.failed:chain_inconsistent': 'The backup could not be confirmed as part of its incremental chain, so it was not saved. The next backup will be full.',
   'backup.failed:chain_broken': 'A check found a broken incremental chain: some backups cannot be restored. Open DockNest to see which.',
+  'backup.failed:missed': 'The scheduled backup did not start on time: DockNest or its worker was not running, or the app stayed busy. It runs as soon as it can. Open DockNest to check it.',
   'backup.succeeded': 'The backup finished.',
   'move.finished': 'The app now runs on {target}.',
   'move.finished:rolled_back': 'The move was undone and the app is back where it was. Open DockNest for details.',

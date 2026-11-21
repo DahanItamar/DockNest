@@ -37,7 +37,9 @@ const daysText = value => { const days = Math.max(0, Math.floor(Number(value) ||
 export function messageFor(event) {
   const site = clean(event.siteName), server = clean(event.serverName, 'your server'), target = clean(event.targetName, 'the new server'), when = clock(event.at, event.timeZone);
   switch (event.type) {
-    case 'backup.failed': return `Backup failed: ${site} on ${server}${when}. Open DockNest to see why.`;
+    case 'backup.failed':
+      if (event.code === 'missed') return `Backup missed: ${site} on ${server} did not run when it was due${when}. Open DockNest to check it.`;
+      return `Backup failed: ${site} on ${server}${when}. Open DockNest to see why.`;
     case 'backup.succeeded': return `Backup finished: ${site} on ${server}${when}.`;
     case 'move.finished':
       if (event.detail === 'rolled_back') return `Move undone: ${site} is back on ${server}. Open DockNest for details.`;
@@ -113,7 +115,7 @@ export function jobLink(jobId, origin = config.origin) {
 export function templateFor(event, { origin = config.origin } = {}) {
   const at = event.at ?? new Date().toISOString();
   if (event.type === 'move.finished' && !event.detail) event = { ...event, detail: 'completed' };
-  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : event.type === 'certificate.expiring' && event.code === 'expired' ? 'Certificate expired' : TITLES[event.type];
+  const title = event.type === 'move.finished' ? ({ rolled_back: 'Move undone', failed: 'Move stopped' }[event.detail] ?? 'Move finished') : event.type === 'update.available' ? 'Update available' : event.type === 'test' ? 'DockNest test message' : event.type === 'certificate.expiring' && event.code === 'expired' ? 'Certificate expired' : event.type === 'backup.failed' && event.code === 'missed' ? 'Backup missed' : TITLES[event.type];
   if (!title) return null;
   const reason = reasonFor(event.type, event.code ?? event.detail, { target: clean(event.targetName, 'the new server'), version: event.type === 'update.available' ? clean(event.version, 'update') : '', destination: clean(event.destinationName, 'the copy destination'), free: event.freeBytes === undefined ? '' : gb(event.freeBytes), used: Math.round(Number(event.usedPercent) || 0), days: event.type === 'certificate.expiring' ? daysText(event.daysLeft) : '' });
   return {
