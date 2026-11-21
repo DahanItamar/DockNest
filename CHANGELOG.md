@@ -39,12 +39,12 @@ Draft for 3.0.0, not released yet. Upgrading: [docs/upgrading.md](docs/upgrading
 - Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
 - A new alert, "Configuration changed", tells you once when an app's Compose or env files change outside Safe Edit. Administrators can mark the current files as known-good.
 - Keys safe on screen: a padlock on each app in the Map and a Keys line on each app card (found in the last backup, missing, or changed), a Keys section in the app's Map panel with each key's name, place and short fingerprint (never the key), "Add file" for a key in a file the app does not back up, and "Mark as known-good" for administrators after a sign-in check. Self Backup shows a Recovery kit check card with its last result, and a move review lists owner, file-mode and target-folder findings as separate notes.
-- The recovery kit check on Self Backup now says which kit it opened ("Kit from 18 Nov 03:10").
-- Before a move, DockNest checks the new server for owner and permission problems: remapped Docker user IDs, files whose setuid, ACL or extended attributes the new file system would drop, and folders on read-only, noexec, nosuid or root-squashed mounts. A check that cannot run stops the move with a plain message instead of passing quietly.
+- The recovery kit check on Self Backup says which kit it opened ("Kit from 18 Nov 03:10") whenever it found one.
+- Before a move, DockNest checks the new server for owner and permission problems: remapped Docker user IDs, files whose setuid, ACL or extended attributes the new file system would drop, and folders on read-only, noexec, nosuid or root-squashed mounts. A check that cannot run stops the move with a plain message instead of passing quietly. What the checks find about owners and permissions is a warning: you tick "I checked these" before the move can start.
 
 ### Changed
 
-- Move to and Edit in an app's Map panel are plain underlined links; Open site stays the one filled button.
+- The app and server details panels on the Map have a new layout: a status line under the name, one label and value list, thin lines between sections, and Self-heal, Edit history and Add an app found here together under Tools. Move to and Edit are plain underlined links; Open site stays the one filled button.
 - Secondary actions in the Map panels, Keys, Recovery Guide and domain checks are plain underlined links instead of outlined buttons; main actions stay filled buttons.
 - A new look across the dashboard: consistent dialogs, tabs, notices, step-by-step flows, fields and buttons. Sign-in animates each password dot and 2FA digit as you type, with no focus border on those inputs. Off under reduced motion.
 - Cleaner lists: open details from the row, and find the extra actions in one menu on the Map, Apps, Servers, Storage and Backups.
