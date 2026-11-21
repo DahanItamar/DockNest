@@ -99,7 +99,9 @@ so every line that already reports failed backups reports it too. Nothing to set
   For an alert during an outage of the DockNest host itself, watch it from outside (for example an uptime monitor).
 - While an update holds the scheduler nothing is checked; a run still due after it is checked like any other. A disabled
   schedule or an archived app is never checked.
-- Upgrades: an installation upgraded from 2.16 starts checking from the moment it runs 3.0.0; older runs are not replayed.
+- An app that needs recovery already has its own alert and waits for you, so it is not reported as missed as well.
+- Upgrades: an installation upgraded from 2.16 starts checking from the moment it runs 3.0.0. A run that is already
+  overdue at that moment (for example behind a backup that never finished) alerts once; older runs are not replayed.
 
 ## Certificates
 

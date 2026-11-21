@@ -357,8 +357,22 @@ test('missed scheduled backup: one alert per miss after its grace, cleared by th
   assert.ok(rows.every(row => row.event === 'backup.failed' && row.payload.title === 'Backup missed' && /did not start on time/.test(row.payload.reason)), JSON.stringify(rows));
   assert.ok(rows.some(row => row.message === 'Backup missed: missed.example.com on miss-srv did not run when it was due at 03:00 UTC. Open DockNest to check it.'), JSON.stringify(rows.map(row => row.message)));
   assert.ok(!rows.some(row => /203\.0\.113/.test(row.message + JSON.stringify(row.payload))), 'no addresses');
+  // Not a miss: a site that needs recovery (it has its own alert), a disabled schedule, an update's deployment hold.
+  const recovering = site(srv, 'recovering.example.com'), disabled = site(srv, 'disabled.example.com'), held = site(srv, 'held.example.com');
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','recovery_required','recovery_required',?)").run(randomUUID(), recovering, '2026-02-01T02:00:00.000Z');
+  policy(recovering, '0 3 * * *', '2026-02-01T03:00:00.000Z'); policy(disabled, '0 3 * * *', '2026-02-01T03:00:00.000Z'); policy(held, '0 3 * * *', '2026-02-01T03:00:00.000Z');
+  db.prepare('UPDATE policies SET enabled=0 WHERE site_id=?').run(disabled);
+  tickScheduler(new Date('2026-02-01T09:00:00Z'));
+  assert.deepEqual([...misses(recovering), ...misses(disabled)], []);
+  assert.equal(misses(held).length, 1, 'the held site was missed before the hold');
+  db.exec("DELETE FROM audit_events WHERE action='backup.missed' AND target='" + held + "'");
+  db.prepare("INSERT INTO settings VALUES('deployment_hold','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+  db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run('2026-02-02T03:00:00.000Z', held);
+  tickScheduler(new Date('2026-02-02T09:00:00Z'));
+  assert.deepEqual(misses(held), [], 'nothing is checked during an update hold');
+  db.exec("DELETE FROM settings WHERE key='deployment_hold'");
   // Leave no rows that later tests' detector cursors would read.
-  for (const table of ['policies', 'jobs']) db.prepare(`DELETE FROM ${table} WHERE site_id IN (?,?)`).run(siteId, busySite);
+  for (const table of ['policies', 'jobs']) db.prepare(`DELETE FROM ${table} WHERE site_id IN (?,?,?,?,?)`).run(siteId, busySite, recovering, disabled, held);
   db.exec("DELETE FROM audit_events WHERE action='backup.missed'");
 });
 

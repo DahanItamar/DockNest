@@ -614,9 +614,11 @@ function noteMissed(policy,occurrence,currentDate){
  try{
   const due=occurrence.toISOString();
   if(missedChecked.get(policy.site_id)===due||currentDate.getTime()-occurrence.getTime()<=missedGraceMs(policy,occurrence))return;
+  // A site that needs recovery already has its own alert and waits for the owner: not a miss on top of it.
+  const recovering=db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='recovery_required'").get(policy.site_id);
+  const open=recovering||db.prepare("SELECT 1 FROM audit_events WHERE action='backup.missed' AND target=? AND created_at>COALESCE((SELECT MAX(finished_at) FROM jobs WHERE site_id=? AND type='backup' AND status='completed'),'')").get(policy.site_id,policy.site_id);
+  if(!open)audit('scheduler','backup.missed',policy.site_id,{scheduledFor:due});
   missedChecked.set(policy.site_id,due);
-  const open=db.prepare("SELECT 1 FROM audit_events WHERE action='backup.missed' AND target=? AND created_at>COALESCE((SELECT MAX(finished_at) FROM jobs WHERE site_id=? AND type='backup' AND status='completed'),'')").get(policy.site_id,policy.site_id);
-  if(!open)audit('scheduler','backup.missed',policy.site_id,{scheduledFor:occurrence.toISOString()});
  }catch{/* a miss check never stops the schedule itself */}
 }
 export function tickScheduler(currentDate=new Date()){
