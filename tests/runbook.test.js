@@ -202,7 +202,7 @@ test('an incremental backup: its whole chain is downloaded; a missing parent or 
   db.prepare("INSERT INTO backup_chain_links VALUES(?,'incremental','chain-1',?,1)").run(increment.backupId, full.backupId);
   const restore = async () => buildGuide(await loadInventory(), { version: '3.0.0', appIds: [chained] }).apps[0].restore;
   const whole = (await restore()).independent.map(item => item.command).join('\n');
-  assert.equal(whole.match(/^curl /gm).length, 2, 'the full backup and the increment');
+  assert.equal(whole.match(/^docker run --rm --user 0:0 /gm).length, 2, 'the full backup and the increment');
   assert.match(whole, /decrypt-backup\.js --chain/);
   db.prepare('UPDATE backups SET path=? WHERE id=?').run('/var/lib/docknest/backups/full.tar.gz.enc', full.backupId);
   let page = await restore();

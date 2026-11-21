@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { quote, CHECKED_ENGINES, fetchCommand, storageCheckCommand, installCommands, restoreCommands, checkCommands, revealer } from '../src/runbook/commands.js';
+import { quote, CURL, CHECKED_ENGINES, fetchCommand, storageCheckCommand, installCommands, restoreCommands, checkCommands, revealer } from '../src/runbook/commands.js';
 import { renderPdf, commandFits } from '../src/runbook/pdf.js';
 import { ENGINE_IDS } from '../shared/database-engines.js';
 
@@ -39,9 +39,9 @@ test('quote: safe words stay bare, everything else is single-quoted and reads ba
 });
 
 test('a long word is folded into pieces the shell joins back, and no line is wider than the copy box', needsShell, () => {
-  const command = fetchCommand(sftp, { path: longPath }, 'backup.enc', shown);
+  const command = fetchCommand(sftp, { path: longPath }, '/root/restore/backup.enc', shown);
   for (const line of command.split('\n')) assert.ok(commandFits(line), line);
-  assert.deepEqual(args(command, ['curl']), ['--fail', '--silent', '--show-error', '--hostpubsha256', Buffer.from(sftp.hostKey, 'hex').toString('base64'), '--user', `backup:${sftp.password}`, '--output', 'backup.enc', `sftp://192.0.2.10:2222${longPath}`]);
+  assert.deepEqual(args(command, ['docker']), ['run', '--rm', '--user', '0:0', '-v', '/root/restore:/root/restore', '-w', '/root/restore', CURL, '--fail', '--silent', '--show-error', '--hostpubsha256', Buffer.from(sftp.hostKey, 'hex').toString('base64'), '--user', `backup:${sftp.password}`, '--output', 'backup.enc', `sftp://192.0.2.10:2222${longPath}`]);
 });
 
 test('a long Hebrew path is folded by its measured width, fits the box and reads back whole', needsShell, () => {
@@ -71,7 +71,8 @@ test('placeholders replace addresses and login details unless they are included'
   assert.ok(!bucket.includes('s3.example.net') && !bucket.includes('family-backups'));
   assert.match(unfold(fetchCommand(s3, { path: 'k' }, 'k', shown)), /--aws-sigv4 aws:amz:eu-west-1:s3 --user AKIAEXAMPLE:secret\/key\+value --output k https:\/\/s3\.example\.net\/family-backups\/k$/);
   assert.match(unfold(fetchCommand({ ...s3, pathStyle: false }, { path: 'k' }, 'k', shown)), /https:\/\/family-backups\.s3\.example\.net\/k$/);
-  assert.match(unfold(fetchCommand({ ...sftp, auth: 'key', password: undefined }, { path: '/k' }, 'k', shown)), /--user backup --key storage-key --output k sftp:\/\/192\.0\.2\.10:2222\/k$/);
+  assert.match(unfold(fetchCommand({ ...sftp, auth: 'key', password: undefined }, { path: '/k' }, '/root/k', shown)), /-v \/root\/storage-key:\/root\/storage-key:ro .* --user backup --key \/root\/storage-key --output k sftp:\/\/192\.0\.2\.10:2222\/k$/);
+  assert.ok(unfold(storageCheckCommand(sftp, hidden)).startsWith(`docker run --rm --user 0:0 ${CURL} `), 'a listing mounts no folder');
   assert.match(unfold(fetchCommand({ ...sftp, host: '2001:db8::5' }, { path: '/k' }, 'k', shown)), /'sftp:\/\/\[2001:db8::5\]:2222\/k'$/);
   assert.match(storageCheckCommand(sftp, hidden), /'sftp:\/\/<storage-address>\/srv\/backups\/BACKUP\/'$/);
   assert.match(storageCheckCommand(s3, shown), /'https:\/\/s3\.example\.net\/family-backups\/\?list-type=2&max-keys=20'$/);
@@ -81,6 +82,7 @@ test('install: the release tag of this version, the kit opened and put in place,
   const steps = installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/backups/BACKUP/docknest-recovery/docknest_0123456789abcdef_2026-11-19_03-00-00Z--x.dkit' }, storage: sftp, reveal: hidden });
   const text = all(steps);
   assert.match(text, /^git clone --branch v3\.0\.0 https:\/\/github\.com\/DahanItamar\/DockNest\.git$/m);
+  assert.match(text, /^docker pull '?curlimages\/curl:8\.11\.1@sha256:[0-9a-f]{64}'?\ndocker tag '?curlimages\/curl:8\.11\.1@sha256:[0-9a-f]{64}'? docknest-curl:8\.11\.1$/m, 'the download tool is pulled by digest');
   assert.match(text, /^node scripts\/recovery-kit\.js restore \/root\/docknest-kit-files\/docknest-recovery\.dkit \/root\/docknest-kit \/root\/docknest-kit-files\/recovery\.passphrase$/m);
   assert.match(text, /^docker compose --profile https up -d --build$/m);
   assert.ok(steps.every(item => /^[A-Z]/.test(item.text) && item.text.endsWith('.')), 'each step is a sentence');
@@ -88,7 +90,7 @@ test('install: the release tag of this version, the kit opened and put in place,
   syntax(text);
   const split = all(installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/backups/BACKUP/docknest-recovery/k.dkit' }, storage: sftp, reveal: hidden, emergency: { kit: { targetId: 't', path: '/srv/backups/BACKUP/docknest-recovery/emergency/emergency_0123456789abcdef_x--y.dkem' } } }));
   syntax(split);
-  assert.match(split, /--output \/root\/docknest-kit-files\/emergency\/emergency-open\.js 'sftp:\/\/<storage-address>\/srv\/backups\/BACKUP\/docknest-recovery\/emergency\/emergency-open\.js'/);
+  assert.match(split, /-v \/root\/docknest-kit-files\/emergency:\/root\/docknest-kit-files\/emergency -w \/root\/docknest-kit-files\/emergency .* --output emergency-open\.js 'sftp:\/\/<storage-address>\/srv\/backups\/BACKUP\/docknest-recovery\/emergency\/emergency-open\.js'/);
   assert.match(split, /^node emergency-open\.js open \. \/root\/docknest-kit-files\/opened$/m);
   assert.match(split, /recovery-kit\.js restore \/root\/docknest-kit-files\/opened\/docknest-recovery\.dkit \/root\/docknest-kit \/root\/docknest-kit-files\/opened\/recovery-passphrase\.txt$/m);
   assert.ok(!split.includes('nano /root/docknest-kit-files/recovery.passphrase'), 'with the split, the tool gives the passphrase file');
@@ -138,7 +140,7 @@ test('restore a static website: files and nginx settings back, then nginx reload
   const app = { folder: 'docs--x', name: 'Docs', kind: 'static', documentRoot: '/var/www/docs site', configFiles: ['/etc/nginx/sites-enabled/docs'], composeFiles: [], domains: ['docs.example.com'] };
   const text = all(restoreCommands({ app, backup: backup([]), storage: sftp, reveal: hidden }));
   syntax(text);
-  assert.ok(!text.includes('docker'));
+  assert.ok(!/docker (load|compose|create)/.test(text), 'a static website needs no containers');
   assert.match(text, /^mkdir -p \/var\/www && tar --xattrs --acls --numeric-owner --skip-old-files -xpf package\/static-files\.tar -C \/var\/www$/m);
   assert.match(text, /package\/config-0\.tar -C \/etc\/nginx\/sites-enabled$/m);
   assert.match(text, /^nginx -t\nsystemctl reload nginx$/m);
@@ -149,7 +151,7 @@ test('restore an incremental chain: every package downloaded, then decrypt-backu
   const chain = [{ targetId: 't', path: '/srv/backups/BACKUP/s/backup_1--full.tar.gz.enc' }, { targetId: 't', path: '/srv/backups/BACKUP/s/backup_2--inc.tar.gz.enc' }];
   const text = all(restoreCommands({ app: compose, backup: { ...composeBackup, location: chain[1], fileName: 'backup_2--inc.tar.gz.enc', chain }, storage: sftp, reveal: hidden }));
   syntax(text);
-  assert.equal(text.match(/^curl /gm).length, 2);
+  assert.equal(text.match(/^docker run --rm --user 0:0 /gm).length, 2);
   assert.match(text, /decrypt-backup\.js --chain backup_2--inc\.tar\.gz\.enc/);
   assert.match(text, /^python3 \/root\/docknest-kit\/recovery\/helper\.py restore-chain chain files$/m);
 });

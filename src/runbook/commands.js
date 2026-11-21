@@ -93,18 +93,27 @@ const encodePath = value => value.split('/').map(encodeURIComponent).join('/');
 // Base64 of the SHA-256 of the storage server's host key, as curl --hostpubsha256 wants it: the same pinned key DockNest checks.
 const hostKeyHash = hex => Buffer.from(hex, 'hex').toString('base64');
 
-// One curl request for an object in `storage`: S3 signed with the access keys (`query` for a bucket listing), or SFTP
-// over the pinned host key. `output` writes the file there; without it curl prints it (for a folder, its listing).
+// curl from a pinned image, run with Docker: many servers' own curl has no SFTP (Alpine's has none, and only a curl
+// built with libssh2 checks a pinned host key), and every server in this guide has Docker.
+export const CURL_IMAGE = 'curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69';
+// Start here pulls it by digest once and names it CURL; every download then uses that name.
+export const CURL = 'docknest-curl:8.11.1';
+export const STORAGE_KEY = '/root/storage-key';
+// One request for an object in `storage`: S3 signed with the access keys (`query` for a bucket listing), or SFTP over
+// the pinned host key. `output` (an absolute path) writes the file there; without it curl prints it (for a folder, its
+// listing).
 export function fetchCommand(storage, { path: objectPath = '', query = '' }, output, reveal) {
-  const common = ['curl', '--fail', '--silent', '--show-error'], target = output ? ['--output', output] : [];
+  const folder = output ? path.posix.dirname(output) : null, key = storage.mode === 'sftp' && storage.auth === 'key';
+  const curl = ['docker', 'run', '--rm', '--user', '0:0', ...(folder ? ['-v', `${folder}:${folder}`, '-w', folder] : []), ...(key ? ['-v', `${STORAGE_KEY}:${STORAGE_KEY}:ro`] : []), CURL, '--fail', '--silent', '--show-error'];
+  const target = output ? ['--output', path.posix.basename(output)] : [];
   if (storage.mode === 's3') {
-    const endpoint = new URL(storage.endpoint), host = reveal.address(endpoint.host), bucket = reveal.login(storage.bucket, PLACEHOLDERS.storageBucket), key = encodePath(objectPath) + query;
-    const url = storage.pathStyle ? `${endpoint.protocol}//${host}/${bucket}${key ? '/' + key : ''}` : `${endpoint.protocol}//${bucket}.${host}/${key}`;
-    return command(common, '--aws-sigv4', `aws:amz:${storage.region || 'us-east-1'}:s3`, '--user', `${reveal.login(storage.accessKeyId, PLACEHOLDERS.storageAccessKey)}:${reveal.login(storage.secretAccessKey, PLACEHOLDERS.storageSecretKey)}`, target, url);
+    const endpoint = new URL(storage.endpoint), host = reveal.address(endpoint.host), bucket = reveal.login(storage.bucket, PLACEHOLDERS.storageBucket), objectKey = encodePath(objectPath) + query;
+    const url = storage.pathStyle ? `${endpoint.protocol}//${host}/${bucket}${objectKey ? '/' + objectKey : ''}` : `${endpoint.protocol}//${bucket}.${host}/${objectKey}`;
+    return command(curl, '--aws-sigv4', `aws:amz:${storage.region || 'us-east-1'}:s3`, '--user', `${reveal.login(storage.accessKeyId, PLACEHOLDERS.storageAccessKey)}:${reveal.login(storage.secretAccessKey, PLACEHOLDERS.storageSecretKey)}`, target, url);
   }
   const user = reveal.login(storage.username, PLACEHOLDERS.storageUser), url = `sftp://${hostPort(reveal.address(storage.host), reveal.address(storage.port, ''))}${encodePath(objectPath)}`;
-  const login = storage.auth === 'key' ? ['--user', user, '--key', 'storage-key'] : ['--user', `${user}:${reveal.login(storage.password, PLACEHOLDERS.storagePassword)}`];
-  return command(common, '--hostpubsha256', hostKeyHash(storage.hostKey), login, target, url);
+  const login = key ? ['--user', user, '--key', STORAGE_KEY] : ['--user', `${user}:${reveal.login(storage.password, PLACEHOLDERS.storagePassword)}`];
+  return command(curl, '--hostpubsha256', hostKeyHash(storage.hostKey), login, target, url);
 }
 // Lists the backup folder on the storage: proof that the address and the login work.
 export const storageCheckCommand = (storage, reveal) => fetchCommand(storage, storage.mode === 's3' ? { query: '?list-type=2&max-keys=20' } : { path: backupRoot(storage.root) + '/' }, null, reveal);
@@ -118,6 +127,7 @@ export function installCommands({ version, kit, storage, reveal, emergency = nul
   const files = `${KIT}-files`, steps = [
     { text: 'Download DockNest, the same version that made this guide.', command: [command('git', 'clone', '--branch', `v${version}`, REPOSITORY), command('cd', 'DockNest'), command('npm', 'ci'), command('npm', 'run', 'setup')].join('\n') },
     { text: 'Set the address of the dashboard. Open the file .env and set APP_DOMAIN and APP_ORIGIN.', command: command('nano', '.env') },
+    { text: 'Get the download tool. Every download in this guide uses it.', command: [command('docker', 'pull', CURL_IMAGE), command('docker', 'tag', CURL_IMAGE, CURL)].join('\n') },
   ];
   let opened;
   if (kit && storage && emergency) {
@@ -153,7 +163,7 @@ const restorable = mount => mount.type === 'bind' || mount.type === 'volume';
 // chain: [locations, full backup first] or null }.
 export function restoreCommands({ app, backup, storage, reveal }) {
   const folder = appFolder(app), steps = [];
-  const fetchAll = (backup.chain ?? [backup.location]).map(location => fetchCommand(storage, location, path.posix.basename(location.path), reveal));
+  const fetchAll = (backup.chain ?? [backup.location]).map(location => fetchCommand(storage, location, `${folder}/${path.posix.basename(location.path)}`, reveal));
   steps.push({ text: 'Make a private folder for this app and download its backup into it.', command: [command('mkdir', '-p', '-m', '0700', folder), command('cd', folder), ...fetchAll].join('\n') });
   if (backup.chain) {
     steps.push({ text: 'Check and decrypt the whole backup chain with the recovery kit.', command: command('node', `${KIT}/recovery/decrypt-backup.js`, '--chain', backup.fileName, `${KIT}/master.key`, 'chain') });
