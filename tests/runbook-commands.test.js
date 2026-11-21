@@ -88,7 +88,7 @@ test('restore a Compose project: download, decrypt, images, data folders, Compos
     'Make a private folder for this app and download its backup into it.',
     'Decrypt the backup with the recovery kit and unpack it.',
     'Load the saved container images.',
-    'Put each data folder back where it was. Files already there are kept.',
+    'Put each data folder and Docker volume back where it was. Files already there are kept.',
     'Put the Compose files back.',
     'Start the app with its Compose file.',
   ]);

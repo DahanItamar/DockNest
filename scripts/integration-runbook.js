@@ -1,8 +1,8 @@
 // Recovery Guide (docs/recovery-guide.md) on the real Linux hosts and SFTP storage. Called by scripts/integration-linux.js.
 // Proves: a Recovery Guide PDF passes `qpdf --check`, and `pdftotext` reads its text (Hebrew included) with no login
 // value when login details are off; a Self Backup writes the redacted copy next to the kit; and the guide's own
-// independent restore commands, run as printed on a clean Linux Docker host that never ran the app, bring a Compose
-// demo app back with its data. The commands are generated with login details on and without addresses, so the only
+// independent restore commands, run as printed on a clean Linux Docker host that never ran the apps, bring two Compose
+// demo apps back with their data: one in a bind-mounted folder, one in a Docker named volume. The commands are generated with login details on and without addresses, so the only
 // change made to them is the storage address placeholder, which becomes the storage host's address on the test network.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -28,15 +28,19 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
   const sh = (host, text) => run('exec', host, 'sh', '-c', text);
   await mkdir(work, { recursive: true, mode: 0o700 });
 
-  // A Compose demo app with a bind-mounted data folder, its record changed after the image was made.
-  const name = 'recoverydemo', folder = `/srv/${name}`;
-  await sh(source, `mkdir -p ${folder} && printf 'services:\\n  web:\\n    image: docknest-fixture:local\\n    restart: unless-stopped\\n    ports:\\n      - "127.0.0.1:8311:8080"\\n    volumes:\\n      - ./site:/site\\n' > ${folder}/compose.yaml && cd ${folder} && docker compose -f ${folder}/compose.yaml up -d`);
-  await until(async () => (await sh(source, `docker exec ${name}-web-1 python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/record').read().decode())"`)) === 'snapshot-record', 'The demo app did not start');
-  await sh(source, `docker exec ${name}-web-1 python -c "import sqlite3;d=sqlite3.connect('/site/database.sqlite');d.execute(\\"UPDATE records SET value='runbook-record'\\");d.commit()"`);
-  const siteId = randomUUID();
-  db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(siteId, servers[0].id, 'הדגמה Demo', JSON.stringify({ containers: [`${name}-web-1`], composeFiles: [`${folder}/compose.yaml`], stagingRoot: '/var/lib/docknest', exclusiveSourcesConfirmed: true, cleanShutdownConfirmed: true, shutdownProfile: 'generic', externalReferencesConfirmed: true, maintenanceRequired: false, healthUrl: '', domains: [] }), new Date().toISOString());
-  enqueueBackup(siteId, 'qa'); const job = claimJob(); await executeJob(job);
-  assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id).status, 'completed', 'the demo app is backed up');
+  // Two Compose demo apps, one with a bind-mounted data folder and one with a Docker named volume, each with its record
+  // changed after the image was made, then backed up for real.
+  const demos = [{ name: 'recoverydemo', label: 'הדגמה Demo', port: 8311, mount: './site:/site', volumes: '' }, { name: 'recoveryvolume', label: 'Volume demo', port: 8312, mount: 'data:/site', volumes: 'volumes:\n  data: {}\n' }];
+  for (const demo of demos) {
+    const folder = demo.folder = `/srv/${demo.name}`, container = `${demo.name}-web-1`;
+    await sh(source, `mkdir -p ${folder} && printf 'services:\n  web:\n    image: docknest-fixture:local\n    restart: unless-stopped\n    ports:\n      - "127.0.0.1:${demo.port}:8080"\n    volumes:\n      - ${demo.mount}\n${demo.volumes}' > ${folder}/compose.yaml && cd ${folder} && docker compose -f ${folder}/compose.yaml up -d`);
+    await until(async () => (await sh(source, `docker exec ${container} python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/record').read().decode())"`)) === 'snapshot-record', `The demo app ${demo.name} did not start`);
+    await sh(source, `docker exec ${container} python -c "import sqlite3;d=sqlite3.connect('/site/database.sqlite');d.execute(\\"UPDATE records SET value='runbook-${demo.name}'\\");d.commit()"`);
+    demo.siteId = randomUUID();
+    db.prepare('INSERT INTO sites VALUES(?,?,?,?,?)').run(demo.siteId, servers[0].id, demo.label, JSON.stringify({ containers: [container], composeFiles: [`${folder}/compose.yaml`], stagingRoot: '/var/lib/docknest', exclusiveSourcesConfirmed: true, cleanShutdownConfirmed: true, shutdownProfile: 'generic', externalReferencesConfirmed: true, maintenanceRequired: false, healthUrl: '', domains: [] }), new Date().toISOString());
+    enqueueBackup(demo.siteId, 'qa'); const job = claimJob(); await executeJob(job);
+    assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id).status, 'completed', `the demo app ${demo.name} is backed up`);
+  }
 
   // The PDF, as downloaded without login details: qpdf accepts it and pdftotext reads its text, Hebrew included.
   const inventory = await loadInventory(), file = join(work, 'recovery-guide.pdf');
@@ -71,18 +75,23 @@ export async function runRunbookScenario({ run, until, hosts, servers, db, recor
     await run('exec', clean, 'apk', 'add', '--no-cache', 'nodejs');
     await run('cp', opened, `${clean}:/root/docknest-kit`);
     const storageAddress = `${await run('inspect', '--format', '{{.NetworkSettings.IPAddress}}', hosts[2])}:22`;
-    const guide = buildGuide(await loadInventory({ logins: true }), { appIds: [siteId], include: { logins: true }, version: VERSION });
-    const steps = guide.apps[0].restore.independent;
-    assert.deepEqual(steps.map(item => item.text.split('.')[0]), ['Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder back where it was', 'Put the Compose files back', 'Start the app with its Compose file']);
-    const commands = steps.map(item => item.command).join('\n').replaceAll(PLACEHOLDERS.storageAddress, storageAddress);
-    assert.ok(!commands.includes('<'), 'no placeholder is left');
-    await run('exec', clean, 'sh', '-ec', commands);
-    await until(async () => (await sh(clean, `wget -qO- http://127.0.0.1:8311/record || true`)) === 'runbook-record', 'The restored demo app did not answer with its data');
-    assert.match(await sh(clean, guide.apps[0].works.command), /recoverydemo-web-1.*Up/s, 'the guide\'s own check shows the container up');
-    record('On a clean Linux Docker host, the Recovery Guide\'s printed restore commands (download over SFTP with the pinned key, decrypt with the kit, images, data folder, Compose file, start) bring the demo app back with its data');
+    const guide = buildGuide(await loadInventory({ logins: true }), { appIds: demos.map(demo => demo.siteId), include: { logins: true }, version: VERSION });
+    for (const demo of demos) {
+      const page = guide.apps.find(item => item.id === demo.siteId), steps = page.restore.independent;
+      assert.deepEqual(steps.map(item => item.text.split('.')[0]), ['Make a private folder for this app and download its backup into it', 'Decrypt the backup with the recovery kit and unpack it', 'Load the saved container images', 'Put each data folder and Docker volume back where it was', 'Put the Compose files back', 'Start the app with its Compose file']);
+      const commands = steps.map(item => item.command).join('\n').replaceAll(PLACEHOLDERS.storageAddress, storageAddress);
+      assert.ok(!commands.includes('<'), 'no placeholder is left');
+      await run('exec', clean, 'sh', '-ec', commands);
+      await until(async () => (await sh(clean, `wget -qO- http://127.0.0.1:${demo.port}/record || true`)) === `runbook-${demo.name}`, `The restored demo app ${demo.name} did not answer with its data`);
+      assert.match(await sh(clean, page.works.command), new RegExp(`${demo.name}-web-1.*Up`, 's'), "the guide's own check shows the container up");
+    }
+    assert.match(await run('exec', clean, 'docker', 'volume', 'inspect', '--format', '{{.Labels}}', 'recoveryvolume_data'), /com\.docker\.compose\.project:recoveryvolume/, 'the named volume belongs to the restored Compose project');
+    record("On a clean Linux Docker host, the Recovery Guide's printed restore commands (download over SFTP with the pinned key, decrypt with the kit, images, data back into a bind folder and into a Docker named volume, Compose file, start) bring both demo apps back with their data");
   } finally {
     await run('rm', '-f', '-v', clean).catch(() => {});
-    await sh(source, `cd ${folder} && docker compose -f ${folder}/compose.yaml down`).catch(() => {});
-    db.prepare('INSERT OR IGNORE INTO site_archives VALUES(?,?)').run(siteId, new Date().toISOString());
+    for (const demo of demos) {
+      await sh(source, `cd ${demo.folder} && docker compose -f ${demo.folder}/compose.yaml down -v`).catch(() => {});
+      db.prepare('INSERT OR IGNORE INTO site_archives VALUES(?,?)').run(demo.siteId, new Date().toISOString());
+    }
   }
 }

@@ -152,7 +152,7 @@ export function restoreCommands({ app, backup, storage, reveal }) {
   steps.push({ text: 'Load the saved container images.', command: command('docker', 'load', '-i', 'package/images.tar') });
   const mounts = backup.containers.flatMap((container, index) => container.mounts.map((mount, position) => ({ index, position, mount }))).filter(item => restorable(item.mount));
   if (mounts.length) {
-    steps.push({ text: 'Put each data folder back where it was. Files already there are kept.', command: [FIELD, ...mounts.map(({ index, position }) => [
+    steps.push({ text: 'Put each data folder and Docker volume back where it was. Files already there are kept.', command: [FIELD, ...mounts.map(({ index, position }) => [
       command(assign('src', join(field('containers', index, 'Mounts', position, 'Source')))),
       command('mkdir', '-p', raw('"$(dirname "$src")"'), raw('&&'), TAR, `package/mount-${index}-${position}.tar`, '-C', raw('"$(dirname "$src")"')),
     ].join('\n'))].join('\n') });

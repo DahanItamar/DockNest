@@ -24,18 +24,22 @@ monospaced box, made from DockNest's own records: the real backup file of that a
 folders and containers. The commands follow [independent recovery](independent-recovery.md): download with curl over
 SFTP (checking the storage server's pinned host key) or signed S3 requests, decrypt with the recovery kit's
 `decrypt-backup.js`, load the saved images, put each data folder and settings file back where it was (files already
-there are kept), then start the app (`docker compose up -d` for a Compose project, the saved snapshot for a single
+there are kept; a Docker named volume goes back into Docker's own volume folder, which Compose then takes over when it
+creates the volume), then start the app (`docker compose up -d` for a Compose project, the saved snapshot for a single
 container, an nginx reload for a static website). An incremental backup uses `decrypt-backup.js --chain` and
 `helper.py restore-chain`. The check commands show the containers, ask each database DockNest knows (PostgreSQL, MySQL,
-MariaDB, Redis) whether it answers, run `PRAGMA integrity_check` on each SQLite file and open each domain over HTTPS.
+MariaDB, Redis, MongoDB) whether it answers, run `PRAGMA integrity_check` on each SQLite file and open each domain over HTTPS.
 
 **Honest wording.** An app reads **Verified** only when its newest backup passed an automatic restore test, with the
 date and whether the test used the main backup or the off-site copy. Otherwise it reads **Backed up, not tested yet**,
-or **Not backed up yet**. A key that a backup left out is listed as a known gap once Keys safe records them.
+or **Not backed up yet**. With [Keys safe](keys-safe.md), each app page says how many of its keys the newest backup holds and lists each
+missing or changed key, and files changed since known-good, as a known gap. It never shows a key or its fingerprint.
 
 **The emergency kit** reads as it really is: "One kit, opened with your recovery passphrase", or, with the optional
 [split](emergency-kit.md), how many of the people together can open it, their labels and the key digest each part
-shows. It never holds a part, the recovery passphrase, the master key or the servers' SSH keys.
+shows. With the split on, Start here copies the `docknest-recovery/emergency/` folder from the storage (the offline tool
+`emergency-open.js` is in it), the holders type their parts into it, and the recovery kit it gives is opened as usual.
+It never holds a part, the recovery passphrase, the master key or the servers' SSH keys.
 
 ## Download (PDF)
 
@@ -44,7 +48,7 @@ shows. It never holds a part, the recovery passphrase, the master key or the ser
 | Option | Default | What it adds |
 |---|---|---|
 | `addresses` | off | Server and storage addresses. Off, commands show `<storage-address>`. |
-| `logins` | off | The backup storage logins DockNest keeps sealed (SFTP user and password or key, S3 bucket and keys). Off, commands show `<storage-user>`, `<storage-password>` and so on. Needs a re-verification in the last 5 minutes, checked on the server. Every page is then marked "Contains secrets". |
+| `logins` | off | The backup storage logins DockNest keeps sealed (SFTP user and password or key, S3 bucket and keys) and your login notes per app. Off, commands show `<storage-user>`, `<storage-password>` and so on. Needs a re-verification in the last 5 minutes, checked on the server. Every page is then marked "Contains secrets". |
 | `commands` | on | The command boxes. |
 | `tests` | on | Restore test results. |
 | `schedules` | on | Backup schedules. |
@@ -59,6 +63,15 @@ Mono and Noto Sans Hebrew (in `assets/fonts/`, SIL Open Font License), embedded 
 Hebrew and other right-to-left text is laid out right to left, also when it is mixed with English words and numbers on
 one line. Commands are folded to fit the box with a `\` at the end of the line, so they still work when copied. The PDF
 has no scripts, forms, attachments or links.
+
+## Login notes
+
+For each app you can keep a note on how to sign in to the app itself, for the person who restores it:
+`POST /api/runbook/apps/:id/login-note { "note": "..." }` (at most 4,000 characters; an empty note removes it). Only
+administrators who re-verified in the last 5 minutes can write one, checked on the server. It is sealed with the master
+key and bound to its app (`app_login_notes`), never sent back by the API (the page data says only whether an app has
+one), never logged, and the audit entry names the app only. It is in a PDF only when login details are included,
+inside the "Contains secrets" marking, and never in the copy next to the kit.
 
 ## Copy next to the kit
 
@@ -83,11 +96,12 @@ All for administrators; other roles get 403.
 - `GET /api/runbook`: `{ made, madeAt, madeBy, outdated, changes: [{ code, label }], notes, guide }`. `guide` is the
   whole guide for every app, without addresses or login details.
 - `POST /api/runbook/notes` `{ "notes": "..." }`: your "who to ask" note, at most 4,000 characters.
+- `POST /api/runbook/apps/:id/login-note`: an app's login note (above).
 - `POST /api/runbook/pdf`: above.
 - `GET /api/state` gives administrators `runbook: { made, outdated }`.
 
 Stored in `runbook_state` (one row): the digest and per-part hashes of the last downloaded guide, when and by whom it was
-made, and your note.
+made, and your note; and in `app_login_notes`, the sealed login notes. Both arrive with migration 25.
 
 ## Verification
 
@@ -95,7 +109,8 @@ made, and your note.
 `tests/runbook-commands.test.js` (quoting and folding through a real shell, each kind of app and database) and
 `tests/runbook.test.js` (the API, redaction, out of date, the copy next to the kit). On Linux,
 `scripts/integration-runbook.js` checks a PDF with `qpdf --check` and `pdftotext`, and runs the printed restore
-commands of a Compose demo app on a clean Docker host, which brings the app back with its data.
+commands of two Compose demo apps on a clean Docker host, one with a bind-mounted folder and one with a Docker named
+volume, which bring both apps back with their data.
 
 Selected upstream references: [Technical Writer](https://github.com/msitarzewski/agency-agents/blob/main/engineering/engineering-technical-writer.md)
 for the plain steps, [Security Architect](https://github.com/msitarzewski/agency-agents/blob/main/security/security-architect.md)
