@@ -39,7 +39,9 @@ class StackManagerTests(unittest.TestCase):
                             ('louislam/dockge', 'dockge'), ('example/portainer-ce:1', None), ('louislam/dockge-fork:1', None), ('', None)]:
             self.assertEqual(helper.stack_manager_kind(image), kind, image)
         custom = [{'Config': {'Image': 'portainer/portainer-ce:2', 'Cmd': ['--data', '/srv/portainer']}, 'Mounts': []},
-                  {'Config': {'Image': 'louislam/dockge:1', 'Env': ['DOCKGE_STACKS_DIR=/srv/../etc']}, 'Mounts': []}]
+                  {'Config': {'Image': 'louislam/dockge:1', 'Env': ['DOCKGE_STACKS_DIR=/srv/../etc']}, 'Mounts': []},
+                  {'Config': {'Image': 'louislam/dockge:1', 'Env': ['DOCKGE_STACKS_DIR=//./']}, 'Mounts': []},
+                  {'Config': {'Image': 'portainer/portainer-ce:2', 'Cmd': ['--data=/..']}, 'Mounts': []}]
         self.assertEqual([(m['kind'], m['stacks']) for m in helper.stack_managers(custom)], [('portainer', '/srv/portainer/compose')])
 
     def test_portainer_stack_maps_to_the_data_volume_on_the_host(self):

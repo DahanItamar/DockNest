@@ -34,7 +34,8 @@ def stack_managers(containers):
         else:
             # Only this one setting is read from the environment; no other value leaves the container record.
             stacks=next((str(value).partition('=')[2] for value in config.get('Env') or [] if str(value).startswith('DOCKGE_STACKS_DIR=')),'') or '/opt/stacks'
-        if not stacks.startswith('/') or '..' in stacks.split('/'):continue
+        # A stacks folder of '/' would map every path a container names; such a manager is skipped.
+        if not stacks.startswith('/') or '..' in stacks.split('/') or lexical(stacks)=='/':continue
         mounts=[(lexical(m['Destination']),m['Source']) for m in c.get('Mounts') or [] if m.get('Type') in ('bind','volume')
             and isinstance(m.get('Destination'),str) and m['Destination'].startswith('/') and isinstance(m.get('Source'),str) and m['Source']]
         managers.append({'kind':kind,'stacks':lexical(stacks),'mounts':sorted(mounts,key=lambda m:-len(m[0]))})
