@@ -173,7 +173,7 @@ const publicSource=({path:_path,...source})=>source;
 // The first source that authenticates in full against the stored checksum. Without a choice: the main copy, then each
 // verified copy. With `sourceTargetId`: only that one.
 async function authenticatedSource(backup,sourceTargetId=null){
- const candidates=restoreSources(backup).filter(source=>source.path&&(sourceTargetId?source.targetId===sourceTargetId:source.role==='main'||source.status==='verified'));
+ const candidates=restoreSources(backup).filter(source=>source.path&&(sourceTargetId?source.targetId===sourceTargetId&&source.status==='verified':source.role==='main'||source.status==='verified'));
  for(const source of candidates){
   try{const inspected=await inspectEncrypted(source.path);if(inspected.checksum===backup.checksum)return {...inspected,source};}catch{/* Try the next source. */}
  }

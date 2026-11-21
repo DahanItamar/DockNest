@@ -106,7 +106,9 @@ export function testableBackup(siteId, backupId = null, sourceTargetId = null) {
 // falls back to the main package, so a pass always means the copy itself restores.
 const NO_FALLBACK = 'It never falls back to the main storage.';
 const storageName = targetId => targetSummary(targetId)?.name ?? 'the chosen storage';
-const verifiedOn = (backup, targetId) => restoreSources(backup).some(source => source.targetId === targetId && source.status === 'verified' && source.path);
+// A copy queued for deletion (delete_state set) does not count, as in latestTestableBackup.
+const verifiedOn = (backup, targetId) => restoreSources(backup).some(source => source.targetId === targetId && source.status === 'verified' && source.path
+  && (source.role === 'main' || !!db.prepare('SELECT 1 FROM backup_copies WHERE backup_id=? AND target_id=? AND delete_state IS NULL').get(backup.id, targetId)));
 // Before anything reaches the test server: the backup and each package it builds on have a verified copy there.
 // A broken chain itself is the backup's fault, not the storage's: Copy backup reports it as a failed test.
 export function copyChainProblem(backupId, targetId) {

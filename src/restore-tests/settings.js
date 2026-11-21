@@ -83,8 +83,12 @@ export function saveSettings(site, input, { actor, recentlyVerified }) {
   if (cpus && limits.cpus > cpus) throw httpError(409, 'CPUS_ABOVE_SERVER', `The test server has ${cpus} CPU${cpus === 1 ? '' : 's'}, so it cannot give each container ${limits.cpus}. Lower the CPU limit.`);
   const probe = data.probe ? JSON.stringify(data.probe) : null;
   if (probe && probe.length > 512) throw httpError(400, 'INVALID', 'The web check settings are too long.');
-  // One of the app's copy destinations, or the saved one kept while its destination still exists.
-  const sourceTargetId = data.sourceTargetId === undefined ? before.sourceTargetId : data.sourceTargetId;
+  // One of the app's copy destinations, or the saved one kept while its destination still exists. A saved choice whose
+  // destination was removed is cleared (main storage) when the request leaves it out or turns tests off, so such a
+  // save never fails; asking for it again while tests stay on is refused.
+  const savedGone = !!before.sourceTargetId && !targetSummary(before.sourceTargetId);
+  let sourceTargetId = data.sourceTargetId === undefined ? before.sourceTargetId : data.sourceTargetId;
+  if (savedGone && sourceTargetId === before.sourceTargetId && (data.sourceTargetId === undefined || !data.enabled)) sourceTargetId = null;
   if (sourceTargetId && !(siteCopyTargets(site.id).some(row => row.target_id === sourceTargetId) || (sourceTargetId === before.sourceTargetId && targetSummary(sourceTargetId))))
     throw httpError(400, 'INVALID', 'Choose one of this app’s copy destinations, or the main storage.', { field: 'sourceTargetId' });
   const nowMs = testTransport.now();
