@@ -47,6 +47,7 @@ def dump_blocker(service,c,containers):
     engine=ENGINES.get(service['engine'])
     name=DUMP_ENGINE_NAMES.get(service['engine'],'This database')
     if engine is None or not engine.dump_format:return name+' has no online dump yet'
+    if service.get('persistence')=='cache':return 'it keeps nothing on disk'
     if not official_entrypoint(c):return 'its image does not use the official entrypoint that sets up an empty database on restore'
     data,host,problem=dump_data_folder(service,c)
     if problem:return problem
