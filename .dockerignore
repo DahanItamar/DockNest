@@ -13,6 +13,7 @@
 !scripts/
 !remote/
 !docs/releases/
+!assets/fonts/
 !CHANGELOG.md
 !tests/integration/start.sh
 # Re-excluded even inside allowed directories.

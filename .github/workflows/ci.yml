@@ -97,6 +97,7 @@ jobs:
           npm run test:connections
           npm run test:layout
           npm run test:jobs-sqlite
+          npm run test:login-typing
         env:
           TEST_BROWSER_CHANNEL: chromium
           TEST_BASE_URL: http://127.0.0.1:3000
@@ -115,6 +116,8 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      # The Recovery Guide scenario (scripts/integration-runbook.js) checks its PDF with qpdf and pdftotext.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qpdf poppler-utils
       # The maintenance page embeds a font from dist/ (src/engine.js maintenanceHtml); the launch scenario sets it up.
       - run: npm run build
       - run: npm run test:integration

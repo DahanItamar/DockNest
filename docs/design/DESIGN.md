@@ -37,7 +37,7 @@ Primitives:
 - Data table (`.data-table` in `.data-table-wrap`): fixed layout, 40px header in caption style on `--surface-muted`, 56px rows with one bottom line, tabular numbers, `.num` for right-aligned numeric columns, ellipsis on overflow. Below 768px it scrolls inside its own box.
 - Definition rows (`.def-list > .def-row > dt + dd`): caption label left, value right, full-width separators.
 
-Motion: durations `--dur-fast` 120ms, `--dur-base` 160ms, `--dur-slow` 240ms and one easing `--ease`. Cards, panels and alert panels enter with opacity and a 4px rise. All animation and transitions in the primitives are off under `prefers-reduced-motion`.
+Motion: durations `--dur-fast` 120ms, `--dur-base` 160ms, `--dur-slow` 240ms and one easing `--ease`. Cards, panels and alert panels enter with opacity and a 4px rise. All animation and transitions in the primitives are off under `prefers-reduced-motion`. Owner-approved exception to "no decorative motion": typing feedback on the sign-in password and 2FA code inputs (a 140 ms dot pop and a 150 ms digit slide, a blinking caret), with no focus border on those inputs, only the caret and the active-box tint.
 
 ## Problem reports (2.4.0)
 

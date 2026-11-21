@@ -4,3 +4,5 @@
 updater/** text eol=lf
 # The remote helper source is joined into one file that runs on Linux servers; keep LF.
 remote/helper/** text eol=lf
+# Vendored fonts (assets/fonts/, pinned by SHA-256 in tests/runbook-pdf.test.js) are binary.
+*.ttf binary

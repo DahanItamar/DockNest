@@ -18,6 +18,7 @@ import { recordTestVerification, recordVerification } from '../recovery-evidence
 import { secretValue } from '../moves/state.js';
 import { validateLimits, cpuProblem } from './limits.js';
 import { heldBy } from './hold.js';
+import { noteInventoryChange } from '../runbook/state.js';
 import { cleanupHeld } from '../cleanup-hold.js';
 import { launchHeld } from '../launches/hold.js';
 import { provenKeys, restoredKeysRequest, compareRestoredKeys, KEY_CHANGED_CHECK } from '../keys-safe/restored.js';
@@ -141,7 +142,7 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
   const at = clock(), failedStep = result === 'passed' ? null : step;
   const restoreSeconds = loadSteps(test.id).find(row => row.step === 'start_containers')?.state === 'done' || (result === 'passed' && test.progress.kind === 'static') ? Math.round(stepSeconds(test.id, ['copy_backup', 'restore_copy', 'start_containers'])) : null;
   const text = result === 'passed' ? null : plainReason(reason, result === 'cancelled' ? 'The test was cancelled.' : 'The test could not finish.');
-  return transaction(() => {
+  const concluded = transaction(() => {
     const changed = db.prepare("UPDATE restore_tests SET result=?,failed_step=?,reason=?,checks=?,restore_seconds=?,total_seconds=?,finished_at=?,step='clean_up',cleanup=COALESCE(cleanup,'done') WHERE id=? AND result IS NULL")
       .run(result, failedStep, text, JSON.stringify(all), restoreSeconds, test.started_at ? Math.round((at - Date.parse(test.started_at)) / 1000) : 0, iso(at), test.id).changes;
     if (!changed) return false;
@@ -156,6 +157,9 @@ function conclude(test, result, { step = test.step, reason = null, checks = [] }
     audit('worker', 'restore_test.' + result, test.site_id, { test: test.id, ...(failedStep ? { step: failedStep } : {}), server: test.server_id });
     return true;
   });
+  // The newest restore test result is part of the Recovery Guide (src/runbook/state.js).
+  if (concluded) noteInventoryChange().catch(() => {});
+  return concluded;
 }
 
 // ---------- the tick ----------
