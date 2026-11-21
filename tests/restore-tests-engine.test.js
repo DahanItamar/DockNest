@@ -18,6 +18,7 @@ const { deletionBlocked } = await import('../src/artifact-journal.js');
 const { recordVerification, backupVerification } = await import('../src/recovery-evidence.js');
 const installs = await import('../src/installs.js');
 const rt = await import('../src/restore-tests/engine.js');
+const views = await import('../src/restore-tests/views.js');
 const { validateLimits, LIMIT_PRESETS, LIMIT_DEFAULTS, cpuProblem } = await import('../src/restore-tests/limits.js');
 
 let now = Date.parse('2026-11-01T10:00:00.000Z');
@@ -41,10 +42,10 @@ rt.testTransport.remote = async (server, request, options = {}) => {
     default: throw new Error('unexpected operation ' + name(request));
   }
 };
-rt.testTransport.upload = async (server, backupId, jobId, { prepare, signal }) => {
-  calls.push({ server: server.name, request: { operation: 'upload', backupId }, options: {} });
-  if (answers.upload) return answers.upload({ prepare, signal });
-  await prepare();
+rt.testTransport.upload = async (server, backupId, jobId, options) => {
+  calls.push({ server: server.name, request: { operation: 'upload', backupId }, options: { sourceTargetId: options.sourceTargetId ?? null } });
+  if (answers.upload) return answers.upload(options);
+  await options.prepare();
   return { plaintextChecksum: 'f'.repeat(64) };
 };
 
@@ -362,4 +363,81 @@ test('upgrade safety: with no restore test rows the tick, claims and busy rules 
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM restore_test_settings').get().n, 0, 'tests are off for every site');
   const job = enqueueBackup(siteId, 'qa');
   assert.equal(claimJob().id, job.id); db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(job.id);
+});
+
+// ---------- testing a copy (docs/restore-tests.md, "Testing a copy") ----------
+function copyTarget(label) {
+  const targetId = randomUUID();
+  db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(targetId, label, '192.0.2.20', 22, 'docknest', 'a'.repeat(64), 'password', 'sealed-fixture', '/home/docknest', 1e12, 'connected', at(), at());
+  return targetId;
+}
+const copyOf = (backupId, targetId, status = 'verified') => db.prepare('INSERT INTO backup_copies(backup_id,target_id,path,status,verified_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(backup_id,target_id) DO UPDATE SET status=excluded.status').run(backupId, targetId, `sftp:${targetId}:/home/docknest/${backupId}.enc`, status, status === 'verified' ? at() : null, at(), at());
+// A full backup and one increment that builds on it, with links the chain check accepts.
+function chainRows(siteId) {
+  const chainId = randomUUID(), full = backupRow(siteId, { kind: 'docker', containers: [{ id: 'a' }], chain: { id: chainId, position: 0, parentBackupId: null, parentSha256: null } });
+  now += 1000;
+  const increment = backupRow(siteId, { kind: 'docker', containers: [{ id: 'a' }], chain: { id: chainId, position: 1, parentBackupId: full, parentSha256: 'a'.repeat(64) } });
+  db.prepare("INSERT INTO backup_chain_links VALUES(?,'full',?,NULL,0)").run(full, chainId);
+  db.prepare("INSERT INTO backup_chain_links VALUES(?,'incremental',?,?,1)").run(increment, chainId, full);
+  return { full, increment };
+}
+
+test('a test from a copy picks the newest backup copied there, reads only that copy and records it; the default still tests the main package', async () => {
+  const f = fixture('offsite'), target = copyTarget('Offsite SFTP');
+  copyOf(f.backupId, target);
+  now += 1000; const newer = backupRow(f.siteId); // the newest main package has no copy yet
+  assert.equal(rt.latestTestableBackup(f.siteId).id, newer);
+  assert.equal(rt.latestTestableBackup(f.siteId, target).id, f.backupId);
+  answers.upload = async ({ prepare, sourceTargetId }) => { assert.equal(sourceTargetId, target); await prepare(); return { plaintextChecksum: 'f'.repeat(64), source: { targetId: target, name: 'Offsite SFTP', role: 'copy', status: 'verified', verifiedAt: at() } }; };
+  const { id: testId } = rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: target, actor: 'admin-1' });
+  assert.equal(row(testId).limits.sourceTargetId, target);
+  const done = await drive(testId);
+  assert.equal(done.result, 'passed', done.reason ?? ''); assert.equal(done.backup_id, f.backupId);
+  assert.deepEqual(done.progress.source, { role: 'copy', targetId: target, name: 'Offsite SFTP' });
+  assert.equal(rt.loadSteps(testId).find(step => step.step === 'copy_backup').detail, 'From the copy on Offsite SFTP');
+  assert.deepEqual(views.detailFor(testId).source, { role: 'copy', name: 'Offsite SFTP', chosen: true });
+  assert.equal(views.cardFor(f.siteId).last.source.role, 'copy');
+  assert.equal(backupVerification(f.backupId).isolatedRestore.sourceTargetId, target, 'the evidence says which storage was restored');
+  // No source: exactly as before (the newest verified main package, no source asked for).
+  answers.upload = undefined; calls.length = 0;
+  const plain = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, actor: 'admin-1' }).id);
+  assert.equal(plain.result, 'passed'); assert.equal(plain.backup_id, newer);
+  assert.equal(calls.find(call => call.request.operation === 'upload').options.sourceTargetId, null);
+  assert.equal(plain.limits.sourceTargetId, undefined); assert.equal(views.detailFor(plain.id).source, null);
+});
+
+test('a test from a copy fails closed: a missing or unverified link is "couldn\'t run" before the server is touched, and an unreadable copy never falls back', async () => {
+  const f = fixture('offsite-closed'), target = copyTarget('Offsite bucket');
+  const empty = siteRow(f.live, 'no-copies'); backupRow(empty);
+  assert.throws(() => rt.createRestoreTest({ siteId: empty, serverId: f.testServer, sourceTargetId: target, actor: 'a' }), error => error.code === 'NO_VERIFIED_COPY' && /no verified copy on Offsite bucket/.test(error.message));
+  assert.throws(() => rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: randomUUID(), actor: 'a' }), error => error.code === 'SOURCE_UNAVAILABLE');
+  const { full, increment } = chainRows(f.siteId);
+  copyOf(increment, target);
+  const historyBefore = db.prepare('SELECT COUNT(*) AS n FROM backup_verification_history').get().n;
+  for (const status of [null, 'failed']) {
+    if (status) copyOf(full, target, status);
+    const testId = rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: target, actor: 'a' }).id;
+    assert.equal(row(testId).backup_id, increment);
+    const done = await drive(testId);
+    assert.equal(done.result, 'couldnt_run'); assert.equal(done.failed_step, 'check_space'); assert.equal(done.cleanup, 'done', 'nothing reached the test server');
+    assert.equal(done.reason, `Backup ${full}, which this backup builds on, has no verified copy on Offsite bucket, so the test did not run. It never falls back to the main storage.`);
+    assert.ok(!ops(testId).some(op => ['restore-test-check', 'upload'].includes(op)), 'no helper call and no upload');
+  }
+  // Every link is listed as verified there, but the parent cannot be read from that storage: still no fallback.
+  copyOf(full, target);
+  answers.upload = async ({ prepare }) => { await prepare(); throw Object.assign(new Error('unreadable'), { code: 'copy_unavailable', backupId: full, own: false }); };
+  const unreadable = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: target, actor: 'a' }).id);
+  assert.equal(unreadable.result, 'couldnt_run'); assert.equal(unreadable.failed_step, 'copy_backup');
+  assert.match(unreadable.reason, new RegExp(`^Backup ${full}, which this backup builds on, could not be read from Offsite bucket`));
+  assert.ok(ops(unreadable.id).includes('restore-test-teardown'), 'clean-up ran after prepare');
+  answers.upload = async () => { throw Object.assign(new Error('unreadable'), { code: 'copy_unavailable', backupId: increment, own: true }); };
+  const own = await drive(rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: target, actor: 'a' }).id);
+  assert.equal(own.reason, 'The copy on Offsite bucket could not be read or did not pass authentication, so the test did not run. It never falls back to the main storage.');
+  assert.equal(db.prepare('SELECT verified FROM backups WHERE id=?').get(increment).verified, 1, 'the main package is never marked unverified by its copy');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM backup_verification_history').get().n, historyBefore, 'couldnt_run writes no evidence');
+  // The destination is removed after the test was queued: couldn't run, never the main package.
+  const queued = rt.createRestoreTest({ siteId: f.siteId, serverId: f.testServer, sourceTargetId: target, actor: 'a' }).id;
+  db.prepare('DELETE FROM storage_targets WHERE id=?').run(target);
+  const removed = await drive(queued);
+  assert.equal(removed.result, 'couldnt_run'); assert.match(removed.reason, /copy storage chosen for this test was removed/);
 });

@@ -387,6 +387,39 @@ test('link verification: missing, reordered, swapped and tampered packages stop 
   db.prepare('UPDATE backup_chain_links SET parent_id=? WHERE backup_id=?').run(chain[1].id, chain[2].id);
   assert.equal(await attempt(), null, 'restored links pass again');
 });
+test('a restore test from a copy reads every chain package from that destination only; a missing or damaged copy never falls back', async () => {
+  const chain = await chainOf('strict-copy', 3), target = 'offsite-' + randomUUID().slice(0, 8);
+  const copyPath = backup => join(temporary, target + '-' + backup.id + '.enc');
+  for (const backup of chain) {
+    await writeFile(copyPath(backup), await readFile(backup.path));
+    db.prepare("INSERT INTO backup_copies(backup_id,target_id,path,status,verified_at,created_at,updated_at) VALUES(?,?,?,'verified',?,?,?)").run(backup.id, target, copyPath(backup), at, at, at);
+  }
+  const attempt = async () => { helper.prepared.length = 0; helper.uploads.length = 0; try { return await uploadBackupTo({ id: 'srv' }, chain[2].id, 'copy-job', { sourceTargetId: target }); } catch (error) { assert.equal(helper.prepared.length, 0, 'nothing prepared'); assert.equal(helper.uploads.length, 0, 'nothing uploaded'); return error; } };
+  // The main packages are damaged: a strict copy read never touches them.
+  const mains = await Promise.all(chain.map(backup => readFile(backup.path)));
+  for (const [index, backup] of chain.entries()) { const bad = Buffer.from(mains[index]); bad[20] ^= 1; await writeFile(backup.path, bad); }
+  const result = await attempt();
+  assert.equal(result.source.targetId, target); assert.equal(result.source.role, 'copy');
+  assert.deepEqual(result.chain.map(item => item.backupId), chain.map(backup => backup.id));
+  assert.equal(helper.uploads.length, 3);
+  // The main packages are fine again, but the parent's copy is damaged, then not verified: no fallback to the main one.
+  for (const [index, backup] of chain.entries()) await writeFile(backup.path, mains[index]);
+  const parentCopy = await readFile(copyPath(chain[1])), damaged = Buffer.from(parentCopy); damaged[20] ^= 1;
+  await writeFile(copyPath(chain[1]), damaged);
+  let error = await attempt();
+  assert.equal(error.code, 'copy_unavailable'); assert.equal(error.backupId, chain[1].id); assert.equal(error.own, false);
+  await writeFile(copyPath(chain[1]), parentCopy);
+  db.prepare("UPDATE backup_copies SET status='failed' WHERE backup_id=? AND target_id=?").run(chain[0].id, target);
+  error = await attempt();
+  assert.equal(error.code, 'copy_unavailable'); assert.equal(error.backupId, chain[0].id);
+  db.prepare("UPDATE backup_copies SET status='verified' WHERE backup_id=? AND target_id=?").run(chain[0].id, target);
+  db.prepare("UPDATE backup_copies SET status='failed' WHERE backup_id=? AND target_id=?").run(chain[2].id, target);
+  error = await attempt();
+  assert.equal(error.code, 'copy_unavailable'); assert.equal(error.own, true);
+  // Without a source the same chain restores from its main packages, exactly as before.
+  helper.uploads.length = 0;
+  assert.equal((await uploadBackupTo({ id: 'srv' }, chain[2].id, 'main-job')).source.role, 'main');
+});
 test('scrub of an increment verifies its whole chain and marks the damaged package', async () => {
   const chain = await chainOf('scrub', 3);
   const scrub = async () => { const { id } = enqueueScrub(chain[2].id, 'test'); await executeJob(claimJob()); return db.prepare('SELECT * FROM jobs WHERE id=?').get(id); };
