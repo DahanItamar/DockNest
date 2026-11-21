@@ -41,3 +41,9 @@ export function lockWarnings(days,sites=[],policies=[]){
  if(lockDays>365)warnings.push('Locks longer than a year keep every backup, and its storage cost, for more than a year.');
  return warnings;
 }
+// Terabytes as shown in the Capacity field: three significant digits, never "0" for a small but real size; '' when unusable.
+export function capacityText(bytes){
+ if(!Number.isSafeInteger(bytes)||bytes<=0)return '';
+ const text=Number((bytes/1e12).toPrecision(3)).toFixed(6).replace(/\.?0+$/,'');
+ return text==='0'?'':text;
+}

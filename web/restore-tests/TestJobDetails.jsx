@@ -1,7 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {AlertPanel,StatusLabel} from '../system.jsx';
 import {ACTIVE_STATES,STEP_LABELS,runError} from './restore-tests-client.js';
-import {clockOf,stepDuration} from './model.js';
+import {clockOf,sourceText,stepDuration} from './model.js';
 import {STEP_ICON} from './parts.jsx';
 
 const wording=(test,fallback)=>test.reason||fallback;
@@ -29,7 +29,7 @@ export function TestJobDetails({client,job,testId,siteName,isAdmin,onRun,onChang
  const bad=test.result==='failed',stopped=test.result==='couldnt_run',steps=Array.isArray(test.steps)?test.steps:[];
  return <div className="job-details dn-jd">
   <section className={'dn-hero '+(bad?'is-bad':test.result==='passed'?'is-ok':'is-run')} aria-label="Job outcome">
-   <div className="dn-hero-text"><div className="dn-hero-title"><h3>Restore test</h3><StatusLabel state={resultState(test)}>{resultLabel(test)}</StatusLabel></div><p>{siteName||test.siteId}</p></div>
+   <div className="dn-hero-text"><div className="dn-hero-title"><h3>Restore test</h3><StatusLabel state={resultState(test)}>{resultLabel(test)}</StatusLabel></div><p>{siteName||test.siteId}</p>{sourceText(test.source)&&<p className="t-caption">Tested from {sourceText(test.source)}</p>}</div>
    <div className="dn-actions">
     <button type="button" onClick={()=>act(async()=>{},'')} disabled={busy}>Refresh</button>
     {active?<button type="button" disabled={busy||test.cancelRequested} onClick={()=>act(()=>client.cancel(test.id),'Stopping the test.')}>{test.cancelRequested?'Stopping':'Cancel test'}</button>

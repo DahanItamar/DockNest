@@ -112,6 +112,10 @@ async function remoteCapacity(options){
   }finally{clearTimeout(timer);}
  });
 }
+// One uncached reading for a destination that is not saved yet; null when the server reports nothing usable.
+export async function probeCapacity(options){
+ try{return (await remoteCapacity(options)).total;}catch{return null;}
+}
 let capacityReading;
 export async function capacity(options,{maxAgeMs=0}={}){
  const identity=JSON.stringify([options.id,options.host,options.port,options.username,options.hostKey,options.root]);

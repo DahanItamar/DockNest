@@ -31,6 +31,7 @@ Recovery after a crash re-authenticates whichever file exists before adopting it
 - Writes use exclusive create (`wx`, mode 0600) and are synced with `fsync@openssh.com`. Connecting fails if the server does not support it.
 - Publication is an atomic SFTP rename. SFTP cannot sync directories, so whether a rename survives power loss depends on the storage server.
 - Host keys are pinned by SHA256 fingerprint. Capacity comes from `statvfs@openssh.com` when the server offers it.
+- Since 3.0.0, the Add storage destination form fills the Capacity field from that same reading once the connection details are complete (`POST /api/storage-targets/capacity`, which saves nothing and returns only a size or `null`). The field says "Reported by the server", stays editable, and what you type always wins. If the server reports nothing the field stays empty; leaving it empty saves what the server reports, else 1 TB. Saved destinations are never changed.
 
 ## S3-compatible storage
 
