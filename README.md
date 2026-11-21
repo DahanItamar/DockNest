@@ -190,6 +190,8 @@ scripts/upgrade.sh --dry-run    # show the plan only
 
 With the host updater installed, a command-line upgrade that cannot register the new version itself (for example a checkout not owned by root) ends by printing the `sudo scripts/install-updater.sh --repair` command to run.
 
+Upgrading from 2.16.x to 3.0.0 adds only compatible database tables, so rolling back to 2.16.x works without restoring a snapshot; see [Upgrading to 3.0.0](docs/upgrading.md#upgrading-to-300).
+
 Before going back to 2.11 from 2.12, turn incremental backups off for every app, then make a backup. Details, rollback and exit codes: [Upgrading](docs/upgrading.md) and [Host updater and Update Center](docs/upgrading.md#host-updater-and-update-center). The in-app update path is in use on a real Linux Docker host.
 
 ## Security and privacy
