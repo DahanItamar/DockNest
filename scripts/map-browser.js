@@ -1137,6 +1137,11 @@ try{
    const panel=w>=768?page.locator('.map-panel'):dialog(page);await panel.waitFor();
    await asLink(panel.getByRole('button',{name:'Self-heal'}),'Self-heal at '+w,w);
    await asLink(panel.getByRole('button',{name:'Edit history'}),'Edit history at '+w,w);
+   // The panel footer: Move to and Edit are links, Open site is the one filled action
+   await asLink(panel.getByRole('button',{name:'Move to…'}),'Move to at '+w,w);
+   if(await panel.getByRole('button',{name:'Edit',exact:true}).count())await asLink(panel.getByRole('button',{name:'Edit',exact:true}),'Edit at '+w,w);
+   assert.equal(await panel.locator('.map-panel-foot button.primary').count(),1,'one filled action in the footer at '+w);
+   assert.equal(await panel.locator('.map-panel-foot button.primary').innerText(),'Open site');
    await context.close();
   }
  }
