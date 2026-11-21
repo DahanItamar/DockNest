@@ -92,9 +92,12 @@ try {
   // CI MongoDB matrix (one job per tested major, MONGO_IMAGE); aggregate-gate merges its evidence for the release gate.
   const only = process.env.INTEGRATION_ONLY || '';
   if (only) {
-    if (!['self-heal','launch','mongo'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch" or "mongo", not "${only.slice(0, 40)}"`);
+    if (!['self-heal','launch','mongo','dumps'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch", "mongo" or "dumps", not "${only.slice(0, 40)}"`);
     evidence.only = only;
-    if (only === 'mongo') {
+    if (only === 'dumps') {
+      const {runOnlineDumpScenario}=await import('./integration-online-dumps.js');
+      await runOnlineDumpScenario({run,until,hosts,servers,db,record});
+    } else if (only === 'mongo') {
       const {runMongoCompatibility}=await import('./integration-mongo.js');
       await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
     } else if (only === 'launch') {
@@ -112,6 +115,7 @@ try {
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_mongo.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_dumps.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_gaps.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_domains.py');
@@ -294,6 +298,8 @@ try {
   await runRedisCompatibility({run,until,hosts,servers,db,directory,evidence,record});
   const {runMilestones}=await import('./integration-milestones.js');
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
+  const {runOnlineDumpScenario}=await import('./integration-online-dumps.js');
+  await runOnlineDumpScenario({run,until,hosts,servers,db,record});
   const {runMoveScenario}=await import('./integration-move.js');
   await runMoveScenario({run,until,hosts,servers,db,record,directory});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
