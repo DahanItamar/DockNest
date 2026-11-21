@@ -42,26 +42,23 @@ for(const theme of ['light','dark']){
  assert.match(await panel.innerText(),/Backups you can prove\.\s*Servers you can move\./);
  assert.match(await panel.innerText(),/Self-hosted Docker backup and restore/);
  assert.equal(await page.locator('.lg-brandpanel .lg-path').count(),40,'twenty lines in each set');
- assert.deepEqual(await page.locator('.lg-pg').evaluateAll(g=>g.map(x=>getComputedStyle(x).animationDuration)),['52s','60s']);
+ assert.deepEqual(await page.locator(".lg-pg").evaluateAll(g=>g.map(x=>getComputedStyle(x).animationName)),["none","none"],"v2: the background lines no longer drift");
  assert.equal(await page.locator('.lg-paths path').evaluateAll(p=>p.every(x=>getComputedStyle(x).animationName==='none')),true,'only transforms move, never the path data');
  assert.match(await colour(page,'.lg-brandpanel .lg-logo','maskImage'),/\/brand\/logo\.png/);
  const heading=await page.locator('.lg-title').evaluate(el=>getComputedStyle(el).color);
  assert.equal(await colour(page,'.lg-brandpanel .lg-logo','backgroundColor'),heading,'monochrome logo uses the heading colour');
  await password(page).fill('secret1');
  assert.equal(await page.locator('button.primary.wide').getAttribute('aria-disabled'),null,'primary is at full emphasis once a password is typed');
- await wait(page,h=>getComputedStyle(document.querySelector('button.primary.wide')).backgroundColor===h,heading);
- assert.equal(await colour(page,'button.primary.wide','backgroundColor'),heading,'monochrome primary button');
- assert.equal(await page.locator('.lg-rise').evaluateAll(e=>e.map(x=>getComputedStyle(x).animationName+' '+getComputedStyle(x).animationDelay).join()),'dn-enter 0s,dn-enter 0.12s');
+ const brand=await page.evaluate(()=>{const e=document.createElement("i");e.style.color="var(--dn-brand-solid)";document.body.append(e);const c=getComputedStyle(e).color;e.remove();return c});
+ await wait(page,h=>getComputedStyle(document.querySelector("button.primary.wide")).backgroundColor===h,brand);
+ assert.equal(await colour(page,"button.primary.wide","backgroundColor"),brand,"v2 primary button uses the brand solid");
+ assert.equal(await page.locator(".lg-rise").evaluateAll(e=>e.every(x=>getComputedStyle(x).animationName==="none")),true,"v2: the form does not rise in");
  await noBox(page);await fit(page,'sign-in '+theme);
  assert.equal(await page.locator('.lg-head-logo').isVisible(),false,'top-bar wordmark hidden on desktop');
  {const [w,t]=await Promise.all([page.locator('.lg-bp-top .lg-logo').boundingBox(),page.locator('.lg-head .theme-toggle').boundingBox()]);assert.ok(Math.abs((w.y+w.height/2)-(t.y+t.height/2))<=1,'wordmark and theme toggle share one row on desktop');}
  const pw=page.getByLabel('Password',{exact:true});assert.equal(await pw.getAttribute('type'),'password');
  await page.getByRole('button',{name:'Show password'}).click();assert.equal(await pw.getAttribute('type'),'text');
  await page.getByRole('button',{name:'Hide password'}).click();assert.equal(await pw.getAttribute('type'),'password');
- await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:true,configurable:true});document.dispatchEvent(new Event('visibilitychange'))});
- assert.equal(await colour(page,'.lg-pg','animationPlayState'),'paused','a hidden tab pauses the drift');
- await page.evaluate(()=>{Object.defineProperty(document,'hidden',{value:false,configurable:true});document.dispatchEvent(new Event('visibilitychange'))});
- assert.equal(await colour(page,'.lg-pg','animationPlayState'),'running');
  await page.waitForTimeout(400);
  await page.screenshot({path:`${shots}/signin-${theme}-1440.png`});
  await context.close();
@@ -275,7 +272,7 @@ const track=async page=>{const bodies=[];await page.route('**/api/auth/verify',r
  assert.equal(await colour(page,'.otp-digit','animationName'),'otp-in');
  assert.equal(await colour(page,'.otp-caret','animationName'),'otp-blink');
  await codeInput(page).pressSequentially('3456');await page.getByRole('alert').waitFor();
- assert.equal(await colour(page,'.otp-boxes','animationName'),'otp-shake');
+ assert.equal(await colour(page,".otp-boxes","animationName"),"none","v2: a wrong code does not shake the boxes");
  await context.close();
 }
 { // empty password: Continue does nothing silently, native validation flags the field and no request is sent
@@ -319,6 +316,7 @@ for(const theme of ['light','dark']){ // the faded primary stays readable (4.5:1
  assert.equal(await page.locator('#probe').inputValue(),'6','keyboard ArrowUp still steps the value');
  await context.close();
 }
+
 await browser.close();
 assert.deepEqual(problems,[]);
 console.log('Auth page checks passed: split screen at 1024, monochrome scope, one generic inline error, reduced motion, phone targets, setup screens, app tokens unchanged.');

@@ -106,3 +106,16 @@ button[role=switch][role=switch][aria-checked]:disabled::after{background:var(--
 /* No spin buttons on number fields; type, min/max, arrow keys and validation are unchanged. */
 input[type=number]{-moz-appearance:textfield;appearance:textfield}
 input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+
+/* Password typing animation: dots are an overlay, the real input keeps focus, autofill and paste. No focus border here; the caret shows where you are. */
+.pw-wrap{position:relative;display:block;width:100%}
+.pw-in:focus-visible{outline:none}
+.pw-masked{color:transparent;caret-color:var(--dn-text-primary)}
+.pw-masked::selection{background:var(--dn-border-subtle);color:transparent}
+.pw-masked:-webkit-autofill{animation:pw-autofill 1ms}
+@keyframes pw-autofill{from{opacity:1}to{opacity:1}}
+.pw-dots{position:absolute;inset:0;display:flex;align-items:center;overflow:hidden;white-space:pre;pointer-events:none;color:var(--dn-text-primary);box-sizing:border-box}
+.pw-dot{display:inline-block;animation:pw-pop 140ms cubic-bezier(.2,.7,.3,1) both}
+@keyframes pw-pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+.pw-in:disabled~.pw-dots{color:var(--dn-text-disabled)}
+@media(prefers-reduced-motion:reduce){.pw-dot{animation:none}}

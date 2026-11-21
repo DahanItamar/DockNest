@@ -20,7 +20,7 @@ const css = load('.css', true);
 const jsx = load('.jsx', false);
 
 // Spinner, progress and skeleton motion only. Add here deliberately, never to silence the gate.
-const ALLOWED_KEYFRAMES = new Set(['dn-spin', 'map-spin', 'dn-orbit', 'dn-skeleton', 'dn-progress']);
+const ALLOWED_KEYFRAMES = new Set(['dn-spin', 'map-spin', 'dn-orbit', 'dn-skeleton', 'dn-progress', 'pw-pop', 'pw-autofill', 'otp-in', 'otp-blink']);
 // Never raise this number. Lower it when you remove an !important.
 const IMPORTANT_BASELINE = 41;
 

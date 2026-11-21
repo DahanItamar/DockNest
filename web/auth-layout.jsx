@@ -1,4 +1,5 @@
 import React,{useEffect,useId,useMemo,useState} from 'react';
+import {PasswordInput} from "./password-input.jsx";
 import {Eye,EyeOff,CircleX} from './icons.jsx';
 import {ThemeToggle} from './brand.jsx';
 
@@ -40,7 +41,7 @@ export function AuthField({label,help,error,...props}){
 
 export function PasswordField({label,help,error,...props}){
  const id=useId(),[shown,setShown]=useState(false);
- return <div className="field"><label htmlFor={id}>{label}</label><div className="lg-in lg-pw"><input {...props} id={id} type={shown?'text':'password'} aria-invalid={error?'true':undefined} aria-describedby={error?'lg-err':undefined}/><button type="button" className="lg-eye" aria-label={shown?'Hide password':'Show password'} aria-pressed={shown} onClick={()=>setShown(v=>!v)}>{shown?<EyeOff size={20} stroke={1.75} aria-hidden="true"/>:<Eye size={20} stroke={1.75} aria-hidden="true"/>}</button></div>{help&&<small>{help}</small>}</div>;
+ return <div className="field"><label htmlFor={id}>{label}</label><div className="lg-in lg-pw"><PasswordInput {...props} id={id} reveal={shown} aria-invalid={error?'true':undefined} aria-describedby={error?'lg-err':undefined}/><button type="button" className="lg-eye" aria-label={shown?'Hide password':'Show password'} aria-pressed={shown} onClick={()=>setShown(v=>!v)}>{shown?<EyeOff size={20} stroke={1.75} aria-hidden="true"/>:<Eye size={20} stroke={1.75} aria-hidden="true"/>}</button></div>{help&&<small>{help}</small>}</div>;
 }
 
 export function AuthError({children}){
