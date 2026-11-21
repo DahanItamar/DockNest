@@ -33,14 +33,21 @@ export async function runMongoCompatibility({ run, until, hosts, servers, db, di
   const redact = text => [password, filePassword].reduce((value, secretValue) => value.split(secretValue).join('[redacted]'), String(text ?? ''));
   // The image's first start runs a temporary localhost-only server (--bind_ip 127.0.0.1) to create the root user; the
   // real one starts with --bind_ip_all. getCmdLineOpts.argv is the literal command line (parsed reports bindIp '*').
+  // Ready means the real server (not the init one) answers an authenticated ping on two consecutive probes, so a
+  // restart between the init server and the real one cannot slip through. 8.0 on a cold nested host can need minutes
+  // for first-start initialisation, so the window is 300 s; an exited container fails at once instead of waiting it out.
   const ready = async container => {
-    const end = Date.now() + 180 * 1000;
-    let last = '';
+    const end = Date.now() + 300 * 1000;
+    let last = '', streak = 0;
     while (Date.now() < end) {
       try {
-        if (await mongo(source, container, "print(db.adminCommand({ getCmdLineOpts: 1 }).argv.includes('--bind_ip_all'))") === 'true') return;
-        last = 'the temporary init server is still running';
-      } catch (error) { last = String(error.stderr || error.message).slice(-600); }
+        const argv = await mongo(source, container, "print(db.adminCommand({ getCmdLineOpts: 1 }).argv.includes('--bind_ip_all'))");
+        if (argv === 'true' && await mongo(source, container, 'print(db.runCommand({ ping: 1 }).ok)') === '1') { if (++streak >= 2) return; }
+        else { streak = 0; last = 'the temporary init server is still running'; }
+      } catch (error) {
+        streak = 0; last = String(error.stderr || error.message).slice(-600);
+        if (await running(container).catch(() => true) === false) { last = 'the container exited. ' + last; break; }
+      }
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     // Diagnosable without the password: the fixture's state, its last log lines and the last probe error, redacted.
