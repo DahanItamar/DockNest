@@ -33,11 +33,13 @@ backup carries a warning "Online dumps: NAME stopped for a file copy because REA
 - the image does not use the official `docker-entrypoint.sh`, which sets up an empty data folder on restore;
 - the data folder is not a plain folder in a captured writable mount, or another container of the app mounts it;
 - PostgreSQL: `pg_dump`, `pg_dumpall` or `pg_restore` is missing, the server has replication slots, a database name
-  cannot be passed safely, or its data folder holds files PostgreSQL does not keep there itself (a certificate, for
-  example), which a dump would lose;
+  cannot be passed safely, it has tablespaces of its own, a database refuses connections or is a template (other than
+  template0 and an unchanged template1), template1 holds objects or extensions of its own, or its data folder holds
+  files PostgreSQL does not keep there itself (a certificate, for example): a dump would lose any of these;
 - MySQL or MariaDB: the dump tool is missing, or a table outside the system schemas is not InnoDB (MyISAM, Aria, CSV
-  and others cannot be read in one transaction);
-- the dump fails or times out (`config.dumpTimeout`, 60 to 21600 seconds, default 3600). Nothing of a failed dump is
+  and others cannot be read in one transaction); this is checked when planning and again right before the dump;
+- the dump fails or times out (`config.dumpTimeout`, 60 to 21600 seconds, default 3600, one deadline for every
+  command of that database's dump). Nothing of a failed dump is
   kept; the database then stops and is copied as usual.
 
 A move always stops every database (its final copy must be a stopped one), and incremental backups keep the stopped
@@ -70,6 +72,10 @@ Guide give the steps by hand.
 ## Limits
 
 - PostgreSQL databases are each consistent, not with each other; the app's writers are stopped, so they are quiet.
+- PostgreSQL databases the fresh copy already has (`postgres` and the image's `POSTGRES_DB`) are loaded with
+  `--clean`, which keeps the copy's database-level owner, privileges and `ALTER DATABASE ... SET` settings: those come
+  from the image's own setup, not from the dump. Objects inside the database keep their saved owners and privileges.
+  A database the copy does not have is created from the dump with all of them.
 - MySQL system tables in MyISAM or Aria (accounts) are not covered by the transaction; an account change during the
   dump is not.
 - `ALTER`, `DROP`, `RENAME` or `TRUNCATE` from another app during a MySQL dump can break it; a failure falls back.
@@ -79,4 +85,5 @@ Guide give the steps by hand.
 Python: `remote/test_dumps.py`. Linux Docker integration (`scripts/integration-online-dumps.js`, in the full suite and
 `INTEGRATION_ONLY=dumps`): PostgreSQL 16 (staged), MySQL 8.4 (staged) and MariaDB 11.4 (direct) keep running through
 the backup, the isolated restore loads roles, a second database or accounts and the data checks pass; a MyISAM table
-falls back with its warning; an automatic restore test of a dumped backup passes.
+falls back with its warning; an app with a writer next to PostgreSQL stops only the writer and restores both; an
+automatic restore test of a dumped backup passes.
