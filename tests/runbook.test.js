@@ -30,7 +30,7 @@ const { buildGuide, restoreOrder } = await import('../src/runbook/guide.js');
 const { guideCopies, COPY_OPTIONS } = await import('../src/runbook/copy.js');
 
 const fixture = await startSftpFixture(), target = id(), now = () => new Date().toISOString();
-const SECRET = fixture.options.password, SERVER_ADDRESS = '203.0.113.7', STORAGE_ADDRESS = fixture.options.host;
+const LOGIN_NOTE = 'Sign in as dana with Shop-Pass-0042.', SECRET = fixture.options.password, SERVER_ADDRESS = '203.0.113.7', STORAGE_ADDRESS = fixture.options.host;
 db.prepare('INSERT INTO storage_targets VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(target, 'Home storage', fixture.options.host, fixture.options.port, fixture.options.username, fixture.options.hostKey, 'password', seal(SECRET), '/backups', 1e12, 'connected', now(), now());
 db.prepare("INSERT INTO settings VALUES('backup_storage_target',?)").run(target);
 const [administrator, operator, stale] = [id(), id(), id()], csrf = 'fixture-csrf', tokens = [0, 1, 2].map(() => randomBytes(32).toString('base64url'));
@@ -130,6 +130,26 @@ test('bad requests are refused: no apps, over 200 apps, unknown apps or options'
   assert.equal((await request('/runbook/notes', { body: { notes: 'x'.repeat(4001) } })).status, 400);
 });
 
+test('login notes per app: re-verified administrators write them, sealed, never read back, only in a PDF with logins', async () => {
+  const note = (body, index = 0, app = shop) => request(`/runbook/apps/${app}/login-note`, { index, body });
+  assert.equal((await note({ note: LOGIN_NOTE }, 1)).status, 403, 'operators cannot');
+  const stale = await note({ note: LOGIN_NOTE }, 2);
+  assert.equal(stale.status, 403); assert.equal((await stale.json()).code, 'REAUTH_REQUIRED');
+  assert.equal((await note({ note: LOGIN_NOTE }, 0, id())).status, 404);
+  assert.equal((await note({ note: 'x'.repeat(4001) })).status, 400);
+  const saved = await note({ note: LOGIN_NOTE });
+  assert.equal(saved.status, 200); assert.deepEqual(await saved.json(), { saved: true, hasLoginNote: true });
+  assert.ok(!JSON.stringify(db.prepare('SELECT * FROM app_login_notes').all()).includes('Dana'), 'sealed in the database');
+  assert.deepEqual(JSON.parse(db.prepare("SELECT detail FROM audit_events WHERE action='runbook.login_note'").get().detail), { cleared: false });
+  const page = await (await request('/runbook')).json();
+  assert.equal(page.guide.apps.find(item => item.id === shop).hasLoginNote, true);
+  assert.ok(!JSON.stringify(page).includes(LOGIN_NOTE), 'never sent back');
+  assert.ok(!readText((await pdf({ apps: allApps })).bytes).includes(LOGIN_NOTE), 'not in a PDF without login details');
+  const lines = readLines((await pdf({ apps: [shop], include: { logins: true } })).bytes), at = lines.find(line => line.text === LOGIN_NOTE || line.actual === LOGIN_NOTE);
+  assert.ok(at, 'in the PDF with login details');
+  assert.ok(lines.some(line => line.page === at.page && line.text.startsWith('Contains secrets')), 'inside the secrets marking');
+});
+
 test('out of date: categories of what changed, the Overview line, and runbook.outdated once per digest', async () => {
   db.prepare("INSERT INTO connections(id,provider,name,secret,settings,created_at,updated_at) VALUES('phone','telegram','phone','sealed','{}',?,?)").run(now(), now());
   db.prepare("INSERT INTO alert_nodes(id,provider,name,connection_id,created_at,updated_at) VALUES('node-phone','telegram','phone','phone',?,?)").run(now(), now());
@@ -189,7 +209,7 @@ test('after each Self Backup a redacted copy is written next to the kit and repl
   enqueueSelfBackup(administrator); assert.equal(await executeSelfBackup(claimSelfBackup()), true);
   assert.equal(copies().length, 1);
   const first = copies()[0], text = readText(fixture.files.get(first));
-  for (const secret of [SECRET, '198.51.100.9', `${STORAGE_ADDRESS}:${fixture.options.port}`, fixture.options.username, 'Contains secrets']) assert.ok(!text.includes(secret), 'the copy has no address or login');
+  for (const secret of [SECRET, LOGIN_NOTE, '198.51.100.9', `${STORAGE_ADDRESS}:${fixture.options.port}`, fixture.options.username, 'Contains secrets']) assert.ok(!text.includes(secret), 'the copy has no address or login');
   for (const expected of ['Shop', 'בלוג', 'Docs', 'Wiki', '<storage-password>']) assert.ok(text.includes(expected), expected);
   assert.deepEqual(guideCopies().map(item => item.path), [`sftp:${target}:${first}`]);
   await new Promise(resolve => setTimeout(resolve, 1100));
@@ -202,7 +222,7 @@ test('after each Self Backup a redacted copy is written next to the kit and repl
 test('no secret reaches the logs, the audit trail, job details or settings', async () => {
   await settle();
   const stored = JSON.stringify([db.prepare('SELECT * FROM audit_events').all(), db.prepare('SELECT * FROM jobs').all(), db.prepare('SELECT * FROM settings').all(), db.prepare('SELECT * FROM runbook_state').all()]);
-  for (const secret of [SECRET, 'fixture-private-key']) {
+  for (const secret of [SECRET, LOGIN_NOTE, 'fixture-private-key']) {
     assert.ok(!stored.includes(secret), 'not in the database');
     assert.ok(!printed.some(line => line.includes(secret)), 'not printed');
   }

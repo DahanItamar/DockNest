@@ -44,12 +44,18 @@ export function restoreOrder(apps, links) {
   ];
 }
 
+// With the split on: the newest emergency kit on the storage that holds the recovery kit, if one was written there.
+function emergencyOn(inventory, kitStorage) {
+  if (!inventory.emergency.split || !kitStorage) return null;
+  const kit = inventory.selfBackup.emergencyKits.find(location => location.targetId === kitStorage.id);
+  return kit ? { kit } : null;
+}
 function kitText(emergency) {
   if (!emergency.split) return { summary: 'One kit, opened with your recovery passphrase.', details: ['The recovery passphrase is not in this guide. Keep it where the owner told you.'] };
   return {
     summary: `Split between trusted people: any ${emergency.k} of these ${emergency.n} people together can open it.`,
     holders: emergency.labels,
-    details: [`Each part shows this key digest. Check that it matches: ${emergency.digest.match(/.{4}/g).join(' ')}.`, 'Open the kit with the offline tool recovery/emergency-open.js, or ask someone who knows Linux to do it.'],
+    details: [`Each part shows this key digest. Check that it matches: ${emergency.digest.match(/.{4}/g).join(' ')}.`, 'To open it, copy the folder docknest-recovery/emergency from the backup storage. The tool emergency-open.js is in it and needs only Node.js 24, no network. Start here says how.'],
   };
 }
 
@@ -69,7 +75,8 @@ function appPage(app, inventory, { include, version, reveal }) {
     lastBackup: backup ? formatDate(backup.capturedAt, { time: true }) : null,
     ...(include.tests ? { lastTest: testText(app.lastTest) } : {}),
     ...(include.schedules ? { schedule: scheduleText(app.schedule) } : {}),
-    keyGaps: app.keyGaps,
+    keyGaps: app.keyGaps, hasLoginNote: app.hasLoginNote,
+    ...(include.logins && app.loginNote ? { loginNote: app.loginNote } : {}),
     works: { steps: works, ...(include.commands ? { command: checkCommands({ app }) } : {}) },
     down: ['Open DockNest and sign in.', `Open Apps and choose ${app.name}.`, 'Read its newest job under Jobs. It says what went wrong.', `Check under Servers that ${server.name} answers.`, 'If the server is lost, restore the app on a new server with the steps below.'],
     restore: {
@@ -91,7 +98,7 @@ export function buildGuide(inventory, { appIds, include: chosen = {}, version, m
     title: 'Recovery Guide', madeAt, version, secrets: include.logins, include,
     startHere: {
       server: ['Get a new Linux server with at least as much disk space as the old one.', 'Install Docker, Git and Node.js 24 on it.', 'Sign in to it as root. Run every command in this guide there.'],
-      install: installCommands({ version, kit: inventory.selfBackup.kit?.location ?? null, storage: kitStorage, reveal }).map(item => step(item.text, item.command, include)),
+      install: installCommands({ version, kit: inventory.selfBackup.kit?.location ?? null, storage: kitStorage, reveal, emergency: emergencyOn(inventory, kitStorage) }).map(item => step(item.text, item.command, include)),
       storage: [
         'Open DockNest and sign in with an administrator account.',
         'Open Storage. Each backup storage should say Connected.',
@@ -151,6 +158,7 @@ export function guideBlocks(guide) {
     if (app.lastBackup) blocks.push({ type: 'paragraph', text: `Last good backup: ${app.lastBackup}.` });
     if (app.schedule) blocks.push({ type: 'paragraph', text: app.schedule });
     for (const gap of app.keyGaps) blocks.push({ type: 'paragraph', text: `Known gap: ${gap}`, tone: 'warning' });
+    if (app.loginNote) blocks.push({ type: 'heading', level: 2, text: 'How to sign in to it' }, { type: 'paragraph', text: app.loginNote, tone: 'warning' });
     blocks.push({ type: 'heading', level: 2, text: 'How to tell it works' }, list(app.works.steps));
     if (app.works.command) blocks.push({ type: 'paragraph', text: 'Or check it from the server:' }, { type: 'command', text: app.works.command });
     blocks.push({ type: 'heading', level: 2, text: 'If it is down' }, list(app.down));

@@ -311,9 +311,11 @@ CREATE TABLE IF NOT EXISTS config_fingerprints (site_id TEXT NOT NULL REFERENCES
 `;
 // Recovery Guide (docs/recovery-guide.md): one row (id 1) once the owner writes a note or downloads a guide. `digest`
 // and `parts` (one SHA-256 per inventory part, never the values) describe what the last downloaded guide was made from;
-// `notes` is the owner's "who to ask" text. No row means the guide was never made.
+// `notes` is the owner's "who to ask" text. No row means the guide was never made. app_login_notes: the owner's login
+// notes per app, sealed with the master key (src/runbook/login-notes.js); no row means no note.
 export const runbookStateSchema = `
 CREATE TABLE IF NOT EXISTS runbook_state (id INTEGER PRIMARY KEY CHECK (id = 1),digest TEXT CHECK (digest IS NULL OR length(digest) = 64),parts TEXT CHECK (parts IS NULL OR length(parts) <= 1048576),made_at TEXT,made_by TEXT CHECK (made_by IS NULL OR length(made_by) <= 64),notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000));
+CREATE TABLE IF NOT EXISTS app_login_notes (site_id TEXT PRIMARY KEY REFERENCES sites(id),sealed TEXT NOT NULL CHECK (length(sealed) <= 16384),updated_at TEXT NOT NULL,updated_by TEXT NOT NULL CHECK (length(updated_by) <= 64));
 `;
 // Self-heal (docs/self-heal.md, "Data model"). Additive only: two new tables, an index and triggers, no rows, nothing
 // altered, so 2.14 code ignores them. No settings row means off. `watched` holds the Compose project, service and name
@@ -452,7 +454,7 @@ export const migrations = [
   { version: 23, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
   // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them.
   { version: 24, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
-  // Recovery Guide (docs/recovery-guide.md): one new table, so 2.16 code ignores it. Provisional number: the next
+  // Recovery Guide (docs/recovery-guide.md): two new tables, so 2.16 code ignores them. Provisional number: the next
   // free one; renumbered at merge if another migration lands first.
   { version: 25, name: 'runbook-state', compatible: true, up: db => db.exec(runbookStateSchema) },
 ];

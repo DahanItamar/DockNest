@@ -1,12 +1,14 @@
 // What the Recovery Guide is made from (docs/recovery-guide.md): servers, apps, their newest backups and restore tests,
 // the backup storage, the schedules, the emergency kit and the owner's note, read from the database when the guide is
-// asked for. Storage logins are read (unsealed) only when `logins` is true; nothing here is stored or logged.
+// asked for. Storage logins and the apps' login notes are read (unsealed) only when `logins` is true; nothing here is stored or logged.
 import { db, parse } from '../db.js';
 import { backupLayout } from '../backup-layout.js';
 import { backupVerification, TEST_METHOD } from '../recovery-evidence.js';
 import { targetOptions } from '../storage.js';
 import { selfBackupConfig } from '../self-backup.js';
 import { emergencyStatus } from '../emergency/keys.js';
+import { activeEmergencyKey, emergencyKits } from '../emergency/kits.js';
+import { appsWithLoginNotes, openLoginNotes } from './login-notes.js';
 
 const json = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 // "sftp:<target id>:/path" or "s3:<target id>:key": the destination and the path inside it. A local or legacy path has none.
@@ -71,6 +73,7 @@ const keyGaps = () => [];
 export async function loadInventory({ logins = false } = {}) {
   const servers = db.prepare('SELECT id,name,host,port,note FROM servers ORDER BY created_at,id').all();
   const serverById = new Map(servers.map(server => [server.id, server]));
+  const noted = appsWithLoginNotes(), notes = logins ? openLoginNotes() : new Map();
   const defaultTarget = db.prepare("SELECT value FROM settings WHERE key='backup_storage_target'").get()?.value ?? null;
   const apps = db.prepare('SELECT * FROM sites WHERE id NOT IN (SELECT site_id FROM site_archives) ORDER BY created_at,id').all().map(parse).filter(site => serverById.has(site.server_id)).map(site => {
     const config = site.config ?? {}, policy = db.prepare('SELECT enabled,schedule,timezone FROM policies WHERE site_id=?').get(site.id);
@@ -85,14 +88,17 @@ export async function loadInventory({ logins = false } = {}) {
       schedule: policy ? { enabled: Boolean(policy.enabled), schedule: policy.schedule, timezone: policy.timezone } : null,
       lastTest: test ? { result: test.result, finishedAt: test.finished_at } : null,
       backup: newestBackup(site.id), keyGaps: keyGaps(),
+      hasLoginNote: noted.has(site.id), ...(logins && notes.has(site.id) ? { loginNote: notes.get(site.id) } : {}),
     };
   });
   const kit = db.prepare("SELECT path,finished_at FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
-  const selfBackup = selfBackupConfig();
+  const selfBackup = selfBackupConfig(), key = activeEmergencyKey();
+  // The newest emergency kit of the active split on each destination (docs/emergency-kit.md), next to its offline tool.
+  const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => locationOf(item.path)).filter(Boolean) : [];
   return {
     servers, apps, links: await appLinks(servers), defaultTarget,
     storage: db.prepare('SELECT * FROM storage_targets ORDER BY created_at,id').all().map(row => storageTarget(row, logins)),
-    selfBackup: { schedule: selfBackup ? { enabled: Boolean(selfBackup.enabled), schedule: selfBackup.schedule, timezone: selfBackup.timezone } : null, kit: kit ? { location: locationOf(kit.path), finishedAt: kit.finished_at } : null },
+    selfBackup: { schedule: selfBackup ? { enabled: Boolean(selfBackup.enabled), schedule: selfBackup.schedule, timezone: selfBackup.timezone } : null, kit: kit ? { location: locationOf(kit.path), finishedAt: kit.finished_at } : null, emergencyKits: emergencyKitLocations },
     emergency: emergencyStatus(), notes: runbookState().notes,
   };
 }
