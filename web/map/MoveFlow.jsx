@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {IconCheck,IconLoader2,IconClock,IconCopy,IconChevronDown,IconCircleX,IconAlertTriangle,IconCircleCheck,IconInfoCircle,IconMinus} from '@tabler/icons-react';
 import {LinkedLines} from '../linked/LinkedWarning.jsx';
 import {FINISHED,STOP_POLLING,BUSY_WORD,duration,why,warningText,friendly,PACKAGE_NAME,installChecks,jobSteps,jobState} from './moves-client.js';
+import {isDomainWarning} from './domains-model.js';
 
 // Native modal dialog with an explicit Tab trap; Escape closes, focus returns to the opener (handled by the page).
 export function Sheet({title,labelId,onClose,children,actions,className,fixedHead}){
@@ -68,7 +69,11 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
  const adv=preview.advanced||{};
  const [env,setEnv]=useState({}),[ask,setAsk]=useState(false),[open,setOpen]=useState(false);
  const canMove=!blocked&&(!long||anyway)&&!busy;
+<<<<<<< HEAD
  const own=ownershipChecks(preview),warns=(preview.warnings||[]).filter(w=>!w.advanced&&!OWNERSHIP.has(w.id)),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
+=======
+ const warns=(preview.warnings||[]).filter(w=>!w.advanced&&!isDomainWarning(w)),domainNotes=(preview.warnings||[]).filter(isDomainWarning),advWarns=(preview.warnings||[]).filter(w=>w.advanced);
+>>>>>>> feat/domains-ui
  const cfReady=tokenSaved||cfConfigured;
  useEffect(()=>{if(open)client.cloudflareStatus().then(s=>setCfConfigured(!!s?.configured)).catch(()=>{})},[open,client]);
  const submit=()=>guard.run(()=>onMove({envRewrite:Object.keys(env).filter(k=>env[k]),askBeforeSwitch:ask,dnsMode:cf&&cfReady?'cloudflare':'manual',moveAnyway:long&&anyway}));
@@ -95,6 +100,7 @@ export function ReviewDialog({linked=[],onOpenApp,site,from,to,preview,onCancel,
   </div>}
   {long&&<Note kind="warn" icon={IconAlertTriangle} role="alert">Your app will be offline for a long time.{warns[0]?' '+warningText(warns[0]):''}</Note>}
   {!blocked&&!long&&warns.length>0&&<Note kind="warn" icon={IconAlertTriangle}>{warns.map(warningText).join(' ')}</Note>}
+  {!blocked&&domainNotes.map((w,i)=><Note key={'d'+i} kind="warn" icon={IconAlertTriangle}>{w.text}</Note>)}
   {long&&<label className="map-check"><input type="checkbox" checked={anyway} onChange={e=>setAnyway(e.target.checked)}/>I accept about {duration(preview.downtimeSeconds)||"a long time"} offline</label>}
   {!blocked&&<div className="map-advanced">
    <button type="button" className="map-disclose" aria-expanded={open} aria-controls="map-adv" onClick={()=>setOpen(!open)}>Advanced settings<IconChevronDown size={18} stroke={1.75} aria-hidden="true" className={open?'open':''}/></button>

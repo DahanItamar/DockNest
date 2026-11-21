@@ -48,6 +48,7 @@
     "test:reports": "node scripts/problem-reports-browser.js",
     "test:status-pages": "node scripts/status-pages-browser.js",
     "test:map": "node scripts/map-browser.js",
+    "test:domains": "node scripts/domains-browser.js",
     "test:connections": "node scripts/connections-browser.js",
     "test:zip": "node scripts/zip-dialog-browser.js",
     "test:hardening": "node scripts/hardening-browser.js",
