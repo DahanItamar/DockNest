@@ -7,6 +7,8 @@ from .common import (
     DEFAULT_CAPABILITIES, docker, inspect, run)
 from .paths import (
     SITE_PATH)
+from .routing import (
+    match_upstream, upstream_address)
 # </build:header>
 def project_roots(container):
     labels=container.get('Config',{}).get('Labels',{}) or {}
@@ -39,44 +41,95 @@ def nginx_walk(nodes):
     for name,args,children in nodes:
         yield name,args,children
         yield from nginx_walk(children)
-def nginx_servers(folders=None):
+CONFIG_LIMIT=1024*1024
+def read_config(path,follow_links=True,limit=CONFIG_LIMIT):
+    """The text of one regular configuration file of at most `limit` bytes, or None. Opened without blocking and checked
+    on the open descriptor, so a FIFO or device swapped in never hangs the helper; with follow_links False a symbolic
+    link is refused too (files a container controls, such as Nginx Proxy Manager's and Caddy's)."""
+    flags=os.O_RDONLY|getattr(os,'O_NONBLOCK',0)|(0 if follow_links else getattr(os,'O_NOFOLLOW',0))
+    if not follow_links and os.path.islink(path):return None
+    try:descriptor=os.open(str(path),flags)
+    except OSError:return None
+    with os.fdopen(descriptor,'rb') as handle:
+        info=os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size>limit:return None
+        data=handle.read(limit+1)
+    return data.decode('utf-8','replace') if len(data)<=limit else None
+def nginx_file_nodes(file,follow_links=True):
+    """The parsed directives of one nginx file of at most 1 MB, or None."""
+    text=read_config(file,follow_links)
+    if text is None:return None
+    try:
+        lexer=shlex.shlex(text,posix=True,punctuation_chars='{};');lexer.whitespace_split=True
+        return nginx_parse(iter(lexer))
+    except ValueError:return None
+def nginx_servers(folders=None,follow_links=True):
     """(file, domains, directives) of every nginx server block with a domain name. Contents never leave the helper."""
     for folder in folders or ['/etc/nginx/sites-enabled','/etc/nginx/conf.d']:
         directory=pathlib.Path(folder)
         if not directory.is_dir():continue
         for file in sorted(directory.iterdir()):
-            if not file.is_file() or file.stat().st_size>1024*1024:continue
-            try:
-                lexer=shlex.shlex(file.read_text(),posix=True,punctuation_chars='{};');lexer.whitespace_split=True
-                nodes=nginx_parse(iter(lexer))
-            except (ValueError,OSError):continue
-            for name,args,children in nginx_walk(nodes):
+            nodes=nginx_file_nodes(file,follow_links)
+            for name,args,children in nginx_walk(nodes or []):
                 if name!='server':continue
                 domains=[v for key,values,_ in children if key=='server_name' for v in values if re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]+',v) and '.' in v]
                 if domains:yield file,domains,children
 
-def nginx_sites(folders=None):
+NGINX_CERTIFICATE=re.compile(r'/live/([A-Za-z0-9][A-Za-z0-9._-]{0,127})/[A-Za-z0-9._-]+')
+CERTIFICATE_FILE=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+def nginx_listen_port(args):
+    """The port of one `listen` directive (80, 443 ssl, [::]:443, 127.0.0.1:8080), or None for a Unix socket."""
+    value=(args or ['80'])[0]
+    if value.startswith('unix:'):return None
+    port=value.rsplit(']',1)[-1]
+    port=port.rsplit(':',1)[1] if ':' in port else port if port.isdigit() else '80'
+    return int(port) if port.isdigit() and 0<int(port)<65536 else None
+def nginx_certificate_name(path):
+    """A certbot certificate's name (/etc/letsencrypt/live/NAME/fullchain.pem), else the file name. Never a path."""
+    if '$' in path:return None
+    match=NGINX_CERTIFICATE.search(path)
+    if match:return match.group(1)
+    name=path.rsplit('/',1)[-1]
+    return name if CERTIFICATE_FILE.fullmatch(name) else None
+def nginx_pools(file,follow_links=True):
+    """Named upstream blocks of one file: proxy_pass http://shop reaches their servers."""
+    return {args[0]:[v[0] for k,v,_ in children if k=='server' and v] for name,args,children in nginx_walk(nginx_file_nodes(file,follow_links) or []) if name=='upstream' and args}
+def nginx_targets(flattened,pools):
+    """proxy_pass targets of one server block. Nginx Proxy Manager writes `set $server "app"; set $port 8080;` and proxies
+    to $forward_scheme://$server:$port through an include, so those variables are filled in."""
+    variables={values[0][1:]:values[1] for key,values,_ in flattened if key=='set' and len(values)==2 and values[0] in ('$forward_scheme','$server','$port')}
+    substitute=lambda value,known:re.sub(r'\$(forward_scheme|server|port)\b',lambda match:known.get(match.group(1),match.group(0)),value).replace('$request_uri','')
+    proxies=[substitute(values[0],variables) for key,values,_ in flattened if key=='proxy_pass' and values]
+    if not proxies and {'server','port'}<=set(variables):proxies=[substitute('$forward_scheme://$server:$port',{'forward_scheme':'http',**variables})]
+    names=[value.split('://',1)[-1].rstrip('/') for value in proxies]
+    return [target for value,name in zip(proxies,names) for target in (['http://'+server for server in pools[name]] if name in pools else [value])]
+def nginx_sites(folders=None,follow_links=True):
     """Return routing metadata only, never nginx configuration contents or TLS keys."""
-    sites=[]
-    for file,domains,children in nginx_servers(folders):
+    sites=[];pools={}
+    for file,domains,children in nginx_servers(folders,follow_links):
+        if file not in pools:pools[file]=nginx_pools(file,follow_links)
         flattened=list(nginx_walk(children))
-        proxies=[values[0] for key,values,_ in flattened if key=='proxy_pass' and values]
+        proxies=nginx_targets(flattened,pools[file])
         dynamic=any(key in ['proxy_pass','fastcgi_pass','uwsgi_pass','scgi_pass'] for key,_,_ in flattened)
+        facts={'listen':sorted({port for key,values,_ in children if key=='listen' for port in [nginx_listen_port(values)] if port}) or [80],
+            'certificates':sorted({name for key,values,_ in children if key=='ssl_certificate' and values for name in [nginx_certificate_name(values[0])] if name})}
         roots=[values[0] for key,values,_ in children if key=='root' and values]
         if not roots:
             roots=[v[0] for key,values,nested in children if key=='location' and values==['/'] for k,v,_ in nested if k=='root' and v]
         for root in roots[:1] if not dynamic else []:
             p=pathlib.Path(root)
             if p.is_absolute() and '..' not in p.parts and str(p) not in ['/','/etc','/root','/home','/var','/var/www','/srv','/opt','/tmp'] and p.is_dir() and p.resolve()==p and (p/'index.html').is_file():
-                sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0]})
-        if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies})
+                sites.append({'kind':'static','name':domains[0],'domains':domains,'documentRoot':str(p),'configFiles':[str(file.resolve())],'healthUrl':'https://'+domains[0],**facts})
+        if proxies:sites.append({'kind':'proxy','domains':domains,'upstreams':proxies,**facts})
     unique={}
     for site in sites:unique[(site['kind'],tuple(site['domains']),site.get('documentRoot',''))]=site
     return list(unique.values())
 
 def web_hints(container,routes):
+    """Health URL candidates (loopback ports of common web ports) and the domains whose nginx upstream reaches this
+    container, by the matcher every proxy adapter shares (remote/helper/routing.py)."""
     ports=container.get('NetworkSettings',{}).get('Ports',{}) or {}
-    candidates=[];domains=[]
+    candidates=[]
     for internal,bindings in ports.items():
         if not internal.endswith('/tcp'):continue
         for binding in bindings or []:
@@ -84,8 +137,8 @@ def web_hints(container,routes):
             if not port.isdigit() or host not in ['127.0.0.1','0.0.0.0','::','::1']:continue
             if internal.split('/')[0] not in ['80','8080','3000','5173','8000','5000','5678']:continue
             candidates.append('http://127.0.0.1:'+port+'/')
-            for route in routes:
-                if any(re.fullmatch(r'http://(?:127\.0\.0\.1|localhost):'+port+r'(?:/.*)?',value) for value in route.get('upstreams',[])):domains.extend(route['domains'])
+    domains=[domain for route in routes for value in route.get('upstreams',[]) for upstream in [upstream_address(value)]
+        if upstream and match_upstream(upstream,[container]) for domain in route['domains']]
     return {'healthUrls':list(dict.fromkeys(candidates)),'domains':list(dict.fromkeys(domains))}
 
 def inspect_each(ids):

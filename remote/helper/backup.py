@@ -31,6 +31,8 @@ from .move import (
     hand_placed)
 from .restore import (
     PRIVILEGE_BITS, recover, safe_extract)
+from .routing import (
+    proxy_routes)
 from .runspec import (
     run_definition, standalone)
 # Mutable state lives in common and is never copied by import: CAPTURE_DIAGNOSTICS, PROBE_POLICY_FALLBACKS, TRANSFER
@@ -379,7 +381,7 @@ def capture_static(req):
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600)
     emit(stage='packing')
     run(['tar','-czf',str(root/'payload.tar.gz'),'-C',str(root),'static-files.tar','manifest.json','restore-guide.md',*[p.name for p in root.glob('config-*.tar')]])
-    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'remotePath':str(root/'payload.tar.gz'),'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def capture_static_stream(req,output):
     cfg=req['config'];source=static_preflight(cfg);uuid.UUID(req['job']);plan=backup_plan(cfg,[])
@@ -399,7 +401,7 @@ def capture_static_stream(req,output):
         stream_document(archive,'manifest.json',json.dumps(manifest))
         stream_document(archive,'restore-guide.md','Static website backup. Restore static-files.tar into a new private directory and verify staticFiles.sha256. Never overwrite the live website automatically.\n')
     (root/'disarmed').touch(mode=0o600);(root/'watchdog.done').touch(mode=0o600);output.flush()
-    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts()})
+    emit(result={'streamed':True,'root':str(root),'manifest':manifest,'certificates':certificate_facts(),'routing':proxy_routes()})
 
 def preflight(cfg):
     if cfg.get('deliveryMode','staged') not in ['staged','direct']:raise ValueError('Unsupported backup delivery mode')
@@ -494,7 +496,7 @@ def readiness(cfg):
     if cfg.get('kind')!='static':
         check('Maintenance proxy and website',proxy)
         if checks[-1]['message']==MAINTENANCE_NOT_SET_UP:checks[-1]['required']=False
-    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'restoreGaps':restore_check(cfg,selected.get('containers'))}
+    return {'ready':all(item['ok'] or item.get('required') is False for item in checks),'checks':checks,'readOnly':True,'maintenanceActivationTested':False,'certificates':certificate_facts(),'restoreGaps':restore_check(cfg,selected.get('containers')),'routing':proxy_routes()}
 def key_archive_member(hit,cfg,containers):
     """(archive, member) of the package that holds a key file: config-N.tar for a configuration file, else the first
     archive of its mount source (a source shared by mounts is archived once, in its first archive)."""
@@ -767,4 +769,4 @@ def capture(req,output=None):
     # Hardening facts and the key proof travel beside the manifest, never inside the package, so the package format is
     # unchanged.
     proof=packaged_keys(key_request,key_found,root,output is not None,key_members,packaged,cfg,cs,exclusions)
-    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts(),**({'keys':proof} if proof else {})})
+    emit(result={**({'streamed':True} if output is not None else {'remotePath':str(root/'payload.tar.gz')}),'root':str(root),'manifest':manifest,'hardening':hardening_report(cs),'certificates':certificate_facts(),'routing':proxy_routes(),**({'keys':proof} if proof else {})})

@@ -95,7 +95,7 @@ websites have no keys and no Compose files, so they are not scanned.
 
 ## Data
 
-Migration 23 (a placeholder number, set in merge order), additive and compatible: `app_keys` (site, rule, location, fingerprint, in backup,
+Migration 24, additive and compatible: `app_keys` (site, rule, location, fingerprint, in backup,
 verified test, first seen, changed at) and `config_fingerprints` (site, item, fingerprint, known-good, its source and
 time, first seen changed, alerted fingerprint). Both start empty.
 

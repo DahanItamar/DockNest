@@ -286,6 +286,14 @@ CREATE TABLE IF NOT EXISTS site_restore_decisions (site_id TEXT NOT NULL REFEREN
 // never an error text); at most one check is queued or running. emergency_keys holds only public material of the optional
 // K-of-N split (the X25519 public key, its digest, the SLIP-0039 identifier, K, N and the holder labels): no row exists
 // unless the owner opts in, and at most one key is not retired.
+// The domain path (docs/domains.md, "Data"): the newest check of each domain. The domain is lowercase and at most 253
+// characters (the certificate module's NAME pattern is checked before storage); either id is null when the domain points
+// nowhere. hops holds states, reason codes and safe parameters only. Additive only: one new table and two indexes.
+export const domainChecksSchema = `
+CREATE TABLE IF NOT EXISTS domain_checks (domain TEXT PRIMARY KEY CHECK (length(domain) BETWEEN 1 AND 253 AND domain = lower(domain)),server_id TEXT REFERENCES servers(id),site_id TEXT REFERENCES sites(id),hops TEXT NOT NULL CHECK (length(hops) <= 8192 AND json_valid(hops)),checked_at TEXT NOT NULL,trigger TEXT NOT NULL CHECK (trigger IN ('manual','discover','readiness','backup','move')));
+CREATE INDEX IF NOT EXISTS domain_checks_server ON domain_checks(server_id);
+CREATE INDEX IF NOT EXISTS domain_checks_site ON domain_checks(site_id);
+`;
 export const kitChecksSchema = `
 CREATE TABLE IF NOT EXISTS kit_checks (id TEXT PRIMARY KEY,backup_id TEXT,requested_by TEXT NOT NULL CHECK (length(requested_by) <= 64),created_at TEXT NOT NULL,checked_at TEXT,result TEXT NOT NULL CHECK (result IN ('queued','running','passed','failed')),reason TEXT CHECK (reason IS NULL OR length(reason) <= 32));
 CREATE UNIQUE INDEX IF NOT EXISTS kit_checks_active ON kit_checks((1)) WHERE result IN ('queued','running');
@@ -433,9 +441,11 @@ export const migrations = [
   // Kit check and emergency kit (docs/emergency-kit.md): two new tables, so 2.16 code ignores them. Provisional
   // number: the next free one; renumbered at merge if another migration lands first.
   { version: 22, name: 'kit-checks-emergency-keys', compatible: true, up: db => db.exec(kitChecksSchema) },
-  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them. A placeholder number: the next one on this
-  // base, so versions stay contiguous; the final number is set in merge order with the other 3.0.0 migrations.
-  { version: 23, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
+  // The domain path (docs/domains.md): one new table and its indexes, so 2.16 code ignores them. Provisional number: the
+  // next free one; renumbered at merge if another migration lands first.
+  { version: 23, name: 'domain-checks', compatible: true, up: db => db.exec(domainChecksSchema) },
+  // Keys safe (docs/keys-safe.md): two new tables only, so 2.16 code ignores them.
+  { version: 24, name: 'keys-safe', compatible: true, up: db => db.exec(keysSafeSchema) },
 ];
 export const schemaVersion = migrations.at(-1).version;
 export const snapshotsKept = 5;

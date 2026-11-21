@@ -14,6 +14,7 @@ import { formatBytes } from '../../shared/format-bytes.js';
  *     architecture?: string, packageBytes: number, ports?: PortBinding[], bindPaths?: string[],
  *     names?: { containers?: string[], volumes?: string[], networks?: string[] }, nginxDirectives?: string[],
  *     maintenanceReady?: boolean, env?: EnvFinding[], timings?: { backupSeconds?: number, restoreSeconds?: number },
+ *     domainPaths?: { stopping: string[], viaProxy: { domain: string, proxy: string }[] },
  *     hardening?: { hardened: boolean, problems: string[], apparmor: string[], hostAppArmor?: string[], seccomp?: string[] },
  *     unsupported?: { container: string, settings: string[] }[], unreadableMounts?: string[],
  *     cpuLimits?: { container: string, cpus: string|null, cpuset: string|null }[] },
@@ -197,6 +198,13 @@ export function evaluateMove(facts, options = {}) {
   if (!records.length) add('dns', 'warn', 'DNS', `${primary} does not resolve yet; check DNS before you switch.`);
   else if (source.addresses?.length && !a.some(record => source.addresses.includes(record.value)) && !cname.length) add('dns', 'warn', 'DNS', `${primary} does not currently point to ${source.name}; check DNS before you switch.`);
   if (aaaa.length) add('dns', 'warn', 'DNS', dns.mode === 'cloudflare' ? `${primary} also has an IPv6 (AAAA) record. DockNest changes only the IPv4 record; update the IPv6 record yourself.` : `${primary} also has an IPv6 (AAAA) record. Change it too when you switch.`, { advanced: true });
+
+  // Every domain that stops working (docs/domains.md, "Move"): a warning, never a block. A domain another server's proxy
+  // sends here is its own warning, because the move does not change that proxy.
+  const stopping = site.domainPaths?.stopping ?? [];
+  if (stopping.length === 1) add('domains', 'warn', 'Domains', `${stopping[0]} stops working until DNS points to ${target.name}.`);
+  else if (stopping.length) add('domains', 'warn', 'Domains', `${stopping.length} domains stop working until DNS points to ${target.name}: ${stopping.join(', ')}.`);
+  for (const item of site.domainPaths?.viaProxy ?? []) add('domains', 'warn', 'Domains', `${item.domain} reaches ${site.name} through the proxy on ${item.proxy}. The move does not change that proxy, so point it to ${target.name} after the move.`);
 
   // Honest downtime: the site is offline during the final sync.
   const seconds = estimateDowntime(facts);

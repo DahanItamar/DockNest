@@ -27,9 +27,10 @@ import { incrementalSettings,decideCapture,chainRecord,clearForceFull,setForceFu
 import { takeCertificates } from './alerts/certificates.js';
 import { keysRequest, fingerprintKeyCheck } from './keys-safe/fingerprint.js';
 import { recordScan, cleanScan } from './keys-safe/store.js';
+import { takeRouting, withoutRouting } from './domains/check.js';
 import { withRestoreDecisions } from './restore-decisions.js';
 const now=()=>new Date().toISOString();
-// Certificate facts in helper answers (docs/alerts.md, "Certificates") are recorded and taken out: never stored with the
+// Certificate facts in helper answers (docs/alerts.md, "Certificates") and proxy routing facts (docs/domains.md) are recorded and taken out: never stored with the
 // server's capabilities and never returned by the API. A discovery scan an administrator runs also refreshes the hardening
 // facts of the sites on that server (docs/hardening-score.md) and the server's linked apps facts (docs/linked-apps.md);
 // other roles only read.
@@ -43,8 +44,10 @@ export function keyScanBusy(siteId){return Boolean(busy(siteId)||movingSite(site
 const keyApps=serverId=>db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId).map(parse).filter(site=>site.config?.kind!=='static'&&site.config?.containers?.length&&!keyScanBusy(site.id)).map(site=>({id:site.id,config:{containers:site.config.containers,composeFiles:site.config.composeFiles||[],configFiles:site.config.configFiles||[]}}));
 export const discover=async(server,{record=false,scanKeys=false}={})=>{
   const apps=scanKeys?keyApps(server.id):[];
-  let result=takeCertificates({serverId:server.id},await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})})),scans=null;
-  if(result&&typeof result==='object'&&!Array.isArray(result)&&'keyScans' in result)({keyScans:scans,...result}=result);
+  // Routing facts are stored (and the domains checked) only by a scan that records facts; other scans drop them.
+  let answer=await transport.remote(server,{operation:'discover',...(apps.length?{keys:keysRequest(server.id,{apps})}:{})}),scans=null;
+  if(answer&&typeof answer==='object'&&!Array.isArray(answer)&&'keyScans' in answer)({keyScans:scans,...answer}=answer);
+  const result=takeCertificates({serverId:server.id},record?takeRouting({serverId:server.id},answer,'discover'):withoutRouting(answer));
   if(record){
     try{recordDiscoveredHardening(server.id,result);}catch{/* A grade is never worth failing a scan. */}
     try{recordDiscoveredLinks(server.id,result);}catch{/* Neither are links. */}
@@ -72,7 +75,7 @@ export async function installBootRecovery(siteId){const {site,server}=siteInfo(s
 export async function checkReadiness(siteId){
  const {site,server}=siteInfo(siteId);
  if(busy(siteId))throw Object.assign(new Error('Finish active work or resolve recovery before checking readiness.'),{status:409});
- const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})}));
+ const {keyScan,...result}=takeCertificates({serverId:server.id,siteId},takeRouting({serverId:server.id},await transport.remote(server,{operation:'readiness',config:site.config,...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})}),'readiness'));
  if(keyScan)recordKeyScan(siteId,keyScan);
  const probe=storedProbeProblem(site.config);if(probe)result.checks.unshift({name:'Probe URL policy',ok:false,message:probe.message});
  try{await checkStorageReadiness(siteMainStorage(siteId));result.checks.push({name:'Backup storage connection',ok:true,message:'Storage is reachable with at least 1 GB available. This check reads directory metadata; verify write access when connecting storage.'});}catch{result.checks.push({name:'Backup storage connection',ok:false,message:'Connect a backup storage destination, verify its access and ensure at least 1 GB is available.'});}
@@ -522,7 +525,7 @@ export async function executeJob(job){
    published=storageJoin(directory,backupFilename(backupId,new Date(captured.ms)));temporary=published+'.partial';artifactTemporary=temporary;
   }
   captured||=trustedCaptureTime(result.manifest.capturedAt,startedMs);
-  result=takeCertificates({serverId:site.server_id,siteId:site.id},result);
+  result=takeCertificates({serverId:site.server_id,siteId:site.id},takeRouting({serverId:site.server_id},result,'backup'));
   // The key proof (docs/keys-safe.md): rule ids, locations and fingerprints only, kept with the backup so a restore test
   // can compare the restored copy with what this package holds.
   const keyProof=cleanScan(result.keys);
@@ -628,10 +631,10 @@ export function claimJob({healOnly=false}={}){
    const reason=claimHooks.heal?claimHooks.heal.check(job):'unavailable';
    if(reason){if(claimHooks.heal)claimHooks.heal.skip(job,reason);else db.prepare("UPDATE jobs SET status='completed',stage='skipped',finished_at=? WHERE id=? AND status='heal_queued'").run(now(),job.id);db.exec('COMMIT');continue;}
   }
-  // Site-move, restore-test and self-heal jobs use their own statuses so a release without them (for example after a
+  // Site-move, restore-test, self-heal and domain-check jobs use their own statuses so a release without them (for example after a
   // rollback) never claims them as backups, and its startup never turns them into recovery work.
   // Guarded by the selected status: a job withdrawn in the meantime (a cancelled test_queued step) is never started.
-  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'edit_queued' THEN 'edit_running' WHEN 'heal_queued' THEN 'heal_running' ELSE 'running' END,stage=CASE WHEN status IN ('test_queued','edit_queued') THEN stage WHEN status='heal_queued' THEN 'restarting' ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
+  if(job&&db.prepare("UPDATE jobs SET status=CASE status WHEN 'move_queued' THEN 'move_running' WHEN 'test_queued' THEN 'test_running' WHEN 'edit_queued' THEN 'edit_running' WHEN 'heal_queued' THEN 'heal_running' WHEN 'domain_queued' THEN 'domain_running' ELSE 'running' END,stage=CASE WHEN status IN ('test_queued','edit_queued') THEN stage WHEN status='heal_queued' THEN 'restarting' WHEN status='domain_queued' THEN 'checking' ELSE 'preflight' END,started_at=? WHERE id=? AND status=?").run(now(),job.id,job.status).changes!==1){db.exec('COMMIT');return null;}
   db.exec('COMMIT');return job;
  }catch(e){db.exec('ROLLBACK');throw e;}
  }

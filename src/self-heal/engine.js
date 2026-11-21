@@ -48,7 +48,7 @@ function record(event) {
 }
 // Attempts in the window: restarts, failed restarts and retryable attempts that never reached Docker.
 const restartsSince = (siteId, container, sinceMs) => db.prepare(`SELECT COUNT(*) AS n,MAX(at) AS last,MIN(at) AS first FROM self_heal_events WHERE site_id=? AND container=? AND at>? AND (kind IN ('restarted','restart_failed') OR (kind='skipped' AND reason IN (${[...RETRYABLE].map(() => '?').join(',')})))`).get(siteId, container, iso(sinceMs), ...RETRYABLE);
-const settleEnds = (siteId, nowMs) => { const last = db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL").get(siteId)?.at; return last ? Date.parse(last) + timing.settleMs - nowMs : 0; };
+const settleEnds = (siteId, nowMs) => { const last = db.prepare("SELECT MAX(finished_at) AS at FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test','domain-check') AND finished_at IS NOT NULL").get(siteId)?.at; return last ? Date.parse(last) + timing.settleMs - nowMs : 0; };
 const activeHealJob = (siteId, container) => db.prepare("SELECT id FROM jobs WHERE site_id=? AND type='self-heal' AND status IN ('heal_queued','heal_running') AND json_extract(details,'$.container')=?").get(siteId, container);
 const siteNames = siteId => db.prepare('SELECT s.name AS site,s.server_id,v.name AS server FROM sites s JOIN servers v ON v.id=s.server_id WHERE s.id=?').get(siteId);
 const zoneFor = siteId => { try { return db.prepare('SELECT timezone FROM policies WHERE site_id=?').get(siteId)?.timezone || 'UTC'; } catch { return 'UTC'; } };
@@ -69,7 +69,7 @@ export function blockReason(siteId, nowMs = healClock.now(), ownJobId = null) {
   if (db.prepare('SELECT 1 FROM site_edits WHERE site_id=? AND result IS NULL').get(siteId)) return 'site_busy';
   if (movingSite(siteId)) return 'moving';
   if (inMaintenance(siteId)) return 'maintenance';
-  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';
+  if (db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND type NOT IN ('self-heal','restore-test','domain-check') AND finished_at IS NOT NULL AND finished_at>?").get(siteId, iso(nowMs - timing.settleMs))) return 'settling';
   return null;
 }
 

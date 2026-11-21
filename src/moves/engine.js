@@ -20,6 +20,7 @@ import { coverageConflict } from '../site-coverage.js';
 import { initialSteps, planSteps, stepDefinition, nextAction, beginStep, completeStep, failStep, skipStep, undoneStep, undoFailedStep, applyTransition, answerGate, cancelDecision, recoverStep, isTerminal, MoveStateError } from './state.js';
 import { confirmKnownGood } from '../keys-safe/scan.js';
 import { checkDns, currentRecords, cloudflare, ipv4, cloudflareProxied } from './dns.js';
+import { moveDomains, checkDomains } from '../domains/check.js';
 
 export const RETENTION_DAYS = 7;
 export const DRAFT_TTL_MS = 60 * 60 * 1000;
@@ -122,11 +123,12 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const recordValue = [...literal(target.host), ...targetAddresses].find(ipv4) ?? null;
   const recordValue6 = (targetFacts?.addresses ?? []).find(value => isIP(value) === 6 && !/^f[cde]|^::1$/i.test(value)) ?? null;
   const sourceValue = [...literal(source.host), ...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])].find(ipv4) ?? null;
+  const domainPaths = await movePaths(site, source, sf.domains, options);
   const composeOverride = sf.kind === 'compose' && !!sf.compose && composeAtLeast(targetFacts?.composeVersion, [2, 24]);
   const mailBlocking = sf.kind !== 'static' && !!targetFacts?.firewall?.mailBlocking;
   const facts = {
     site: { id: site.id, name: site.name, kind: sf.kind, domains: sf.domains, containerCount: sf.containerCount, architecture: sf.architecture, packageBytes: backup ? chainSize(backup.id) : 0,
-      ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening,
+      ports: sf.ports, bindPaths: sf.bindPaths, handPlaced: sf.handPlaced, names: sf.names, networks: sf.networks, nginxDirectives: sf.nginxDirectives, maintenanceReady: sf.maintenanceReady ?? undefined, env: sf.env, hardening: sf.hardening, domainPaths,
       ...(composeOverride ? {} : { unsupported: sf.unsupported, unreadableMounts: sf.unreadableMounts, cpuLimits: sf.cpuLimits }), timings: backup?.seconds ? { backupSeconds: backup.seconds } : undefined },
     source: { id: source.id, name: source.name, addresses: [...new Set([...(await resolved(source.host)), ...(sourceFacts.addresses ?? [])])] },
     target: targetFacts ? { id: target.id, name: target.name, reachable: true, hostKeyOk, ...targetFacts, existingPaths: targetFacts.probe?.existingPaths ?? [], conflicts: targetFacts.probe?.conflicts ?? {}, apparmorLoaded: targetFacts.probe?.apparmorLoaded, apparmorEnabled: targetFacts.probe?.apparmorEnabled, seccompPresent: targetFacts.probe?.seccompPresent, reservedPorts }
@@ -154,6 +156,18 @@ export async function previewFacts(siteId, targetServerId, options, ownMove = nu
   const plan = { kind: sf.kind, domains: sf.domains, nginxDirectives: sf.nginxDirectives ?? [], web: sf.web ?? null, running: sf.running, networks: sf.networks, portMap: result.details.portMap, healthPath: healthPath(cfg),
     targetAddresses, recordValue, recordValue6, sourceValue, maintenanceDirectory: targetMaintenanceDirectory(site), compose: composeOverride ? sf.compose : null, handPlaced: sf.handPlaced ?? [], volumes: sf.volumes ?? [], mailBlocking, oldAddresses: [source.host, ...(sourceFacts.addresses ?? [])].filter(value => !/^127\.|^::1$/.test(value)), estimateSeconds: estimateTotal(facts, result) };
   return { site, source, target, result, plan, hash: preflightHash(result, options) };
+}
+// The domains a move breaks, from every server's stored routes (src/domains/). Their paths are checked first (DNS at most
+// once an hour), so the domain path shows the state the preview was made in. A check that fails never stops a preview.
+async function movePaths(site, source, domains, options) {
+  try {
+    const { own, viaProxy } = await moveDomains(site.id, source.id);
+    await checkDomains([...domains, ...own, ...viaProxy.map(item => item.domain)], { trigger: 'move' });
+    // With Cloudflare switching, DockNest points the first domain at the new server itself.
+    const switched = options.dnsMode === 'cloudflare' ? domains[0] : null;
+    return { stopping: [...new Set([...domains, ...own])].filter(domain => domain !== switched && !viaProxy.some(item => item.domain === domain && !own.includes(domain))),
+      viaProxy: viaProxy.map(item => ({ domain: item.domain, proxy: server(item.serverId)?.name ?? 'another server' })) };
+  } catch { return { stopping: domains.filter(domain => !(options.dnsMode === 'cloudflare' && domain === domains[0])), viaProxy: [] }; }
 }
 function composeAtLeast(text, need) {
   const match = /(\d+)\.(\d+)/.exec(String(text ?? ''));

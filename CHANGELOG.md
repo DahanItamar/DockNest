@@ -6,6 +6,8 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 - Consistent dialogs, tabs, notices and step-by-step flows.
+- Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).
+- A move preview lists every domain that stops working until DNS points to the new server, and separately the domains another server's proxy sends to the app.
 
 - A backup of an app started with plain `docker run` now also holds a readable Compose file and env files that recreate it with the same settings, so you can bring it back without DockNest.
 - Backup coverage on the Apps page and the Map: every container and volume on a server, and whether an app backs it up, its first backup is pending, or nothing does. Add an app for what is missing in one click, or skip what you leave out on purpose, with a note. It reads Docker only when you open it or press Scan again.

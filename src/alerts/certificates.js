@@ -28,13 +28,14 @@ export function setCertificateDays(days, actor, role) {
   return { certificateDays: certificateDays() };
 }
 
-const NAME = /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
-const LINEAGE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// Certificate DNS names; the domain path (src/domains/) validates every domain with the same pattern before storing it.
+export const NAME = /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
+export const LINEAGE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const host = value => String(value ?? '').toLowerCase().replace(/\.$/, '');
 // One fact as the helper sent it, checked field by field; anything odd is dropped, never stored.
 // A certbot certificate that nothing renews (no renewal settings) and that has already expired is an orphan left on
 // disk, not what a site serves: it is dropped, so it can never raise a false "expired" alert.
-function normalize(fact, at = Date.now()) {
+export function normalizeCertificate(fact, at = Date.now()) {
   if (!fact || typeof fact !== 'object' || !['tls', 'certbot'].includes(fact.source)) return null;
   const name = fact.source === 'tls' ? host(fact.name) : String(fact.name ?? '');
   if (!(fact.source === 'tls' ? NAME.test(name) || /^[0-9a-f.:]{2,45}$/.test(name) : LINEAGE.test(name))) return null;
@@ -66,7 +67,7 @@ const STALE_MS = 7 * 86400_000;
 export function recordCertificates({ serverId, siteId = null }, facts, { at = Date.now() } = {}) {
   if (!Array.isArray(facts)) return 0;
   try {
-    const list = facts.slice(0, 60).map(fact => normalize(fact, at)).filter(Boolean), checked = new Date(at).toISOString(), touched = [];
+    const list = facts.slice(0, 60).map(fact => normalizeCertificate(fact, at)).filter(Boolean), checked = new Date(at).toISOString(), touched = [];
     const sites = db.prepare('SELECT id,config FROM sites WHERE server_id=? AND id NOT IN (SELECT site_id FROM site_archives)').all(serverId);
     for (const site of sites) {
       const own = site.id === siteId, domains = domainsOf(site);

@@ -68,6 +68,19 @@ export async function records(domain) {
 }
 
 export const available = () => !!stored();
+// Read-only token check for the domain path (docs/domains.md, "DNS"): the token is opened in memory for the call only,
+// and the answer keeps only 'active' or 'expired' and the names of missing scopes. null when Cloudflare cannot be
+// reached, so an outage is never reported as a bad token.
+export async function tokenStatus(domain) {
+  if (!stored()) return null;
+  const refused = error => error.status === 400;
+  try { if ((await call(token(), '/user/tokens/verify'))?.status !== 'active') return { state: 'expired', missing: [] }; }
+  catch (error) { return refused(error) ? { state: 'expired', missing: [] } : null; }
+  const zone = zoneFor(domain);
+  if (!zone) return { state: 'active', missing: [] };
+  try { await call(token(), `/zones/${zone.id}/dns_records?per_page=1`); return { state: 'active', missing: [] }; }
+  catch (error) { return refused(error) ? { state: 'active', missing: ['Zone.DNS:Read'] } : null; }
+}
 // Points the A record (and an AAAA record when the new server has IPv6) at the new server. Returns the journal entry
 // needed to switch back: record ids and their previous content, never the token.
 // The journal (record ids and previous content) is handed to `onJournal` and must be stored BEFORE any change. A
