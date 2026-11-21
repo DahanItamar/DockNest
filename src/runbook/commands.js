@@ -89,17 +89,33 @@ export const fetchCommand = (storage, location, output, reveal) => storageReques
 export const storageCheckCommand = (storage, reveal) => storageRequest(storage, storage.mode === 's3' ? { query: '?list-type=2&max-keys=20' } : { path: backupRoot(storage.root) + '/' }, null, reveal);
 
 // Start here: a new server with Docker, Git and Node.js 24, DockNest from its release tag, the recovery kit opened and
-// its database and master key put in place, then DockNest started. `kit` is the newest Self Backup kit, or null.
-export function installCommands({ version, kit, storage, reveal }) {
-  const steps = [
+// its database and master key put in place, then DockNest started. `kit` is the newest Self Backup kit, or null. With
+// the optional split on, `emergency` is { kit } (the newest emergency kit on the same storage): holders copy the
+// docknest-recovery/emergency folder, which holds the offline tool emergency-open.js, and K of them type their parts
+// into it; it gives the recovery kit and its passphrase file.
+export function installCommands({ version, kit, storage, reveal, emergency = null }) {
+  const files = `${KIT}-files`, steps = [
     { text: 'Download DockNest, the same version that made this guide.', command: [command('git', 'clone', '--branch', `v${version}`, REPOSITORY), command('cd', 'DockNest'), command('npm', 'ci'), command('npm', 'run', 'setup')].join('\n') },
     { text: 'Set the address of the dashboard. Open the file .env and set APP_DOMAIN and APP_ORIGIN.', command: command('nano', '.env') },
   ];
-  if (kit && storage) {
+  let opened;
+  if (kit && storage && emergency) {
+    const folder = path.posix.dirname(emergency.kit.path);
     steps.push(
-      { text: 'Download the newest recovery kit from the backup storage.', command: [command('mkdir', '-p', '-m', '0700', `${KIT}-files`), fetchCommand(storage, kit, `${KIT}-files/docknest-recovery.dkit`, reveal)].join('\n') },
-      { text: 'Type the recovery passphrase into a private file. It is not in this guide.', command: [command('install', '-m', '600', '/dev/null', `${KIT}-files/recovery.passphrase`), command('nano', `${KIT}-files/recovery.passphrase`)].join('\n') },
-      { text: 'Open the recovery kit. It holds DockNest\'s database, its master key and the recovery tools.', command: command('node', 'scripts/recovery-kit.js', 'restore', `${KIT}-files/docknest-recovery.dkit`, KIT, `${KIT}-files/recovery.passphrase`) },
+      { text: 'Copy the emergency folder from the backup storage. The tool that opens the kit is in it.', command: [command('mkdir', '-p', '-m', '0700', `${files}/emergency`), fetchCommand(storage, { path: `${folder}/emergency-open.js` }, `${files}/emergency/emergency-open.js`, reveal), fetchCommand(storage, emergency.kit, `${files}/emergency/${path.posix.basename(emergency.kit.path)}`, reveal)].join('\n') },
+      { text: 'Ask the people who hold the parts to type them in, one at a time, when the tool asks.', command: [command('cd', `${files}/emergency`), command('node', 'emergency-open.js', 'open', '.', `${files}/opened`), command('cd', raw('-'))].join('\n') },
+    );
+    opened = { kit: `${files}/opened/docknest-recovery.dkit`, passphrase: `${files}/opened/recovery-passphrase.txt` };
+  } else if (kit && storage) {
+    steps.push(
+      { text: 'Download the newest recovery kit from the backup storage.', command: [command('mkdir', '-p', '-m', '0700', files), fetchCommand(storage, kit, `${files}/docknest-recovery.dkit`, reveal)].join('\n') },
+      { text: 'Type the recovery passphrase into a private file. It is not in this guide.', command: [command('install', '-m', '600', '/dev/null', `${files}/recovery.passphrase`), command('nano', `${files}/recovery.passphrase`)].join('\n') },
+    );
+    opened = { kit: `${files}/docknest-recovery.dkit`, passphrase: `${files}/recovery.passphrase` };
+  }
+  if (opened) {
+    steps.push(
+      { text: 'Open the recovery kit. It holds DockNest\'s database, its master key and the recovery tools.', command: command('node', 'scripts/recovery-kit.js', 'restore', opened.kit, KIT, opened.passphrase) },
       { text: 'Put the master key and the database in place.', command: [command('cp', `${KIT}/master.key`, 'data/master.key'), command('docker', 'volume', 'create', 'docknest_state'), command('docker', 'run', '--rm', '-v', 'docknest_state:/data', '-v', `${KIT}:/kit:ro`, 'node:24-bookworm-slim', 'sh', '-c', 'cp /kit/state.sqlite /data/state.sqlite && chown 1000:1000 /data/state.sqlite')].join('\n') },
     );
   }

@@ -71,6 +71,12 @@ test('install: the release tag of this version, the kit opened and put in place,
   assert.ok(steps.every(item => /^[A-Z]/.test(item.text) && item.text.endsWith('.')), 'each step is a sentence');
   assert.ok(!text.includes('passphrase=') && !/recovery\.passphrase [^\n]*[A-Za-z0-9]{24}/.test(text), 'the recovery passphrase is never in a command');
   syntax(text);
+  const split = all(installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/backups/BACKUP/docknest-recovery/k.dkit' }, storage: sftp, reveal: hidden, emergency: { kit: { targetId: 't', path: '/srv/backups/BACKUP/docknest-recovery/emergency/emergency_0123456789abcdef_x--y.dkem' } } }));
+  syntax(split);
+  assert.match(split, /--output \/root\/docknest-kit-files\/emergency\/emergency-open\.js 'sftp:\/\/<storage-address>\/srv\/backups\/BACKUP\/docknest-recovery\/emergency\/emergency-open\.js'/);
+  assert.match(split, /^node emergency-open\.js open \. \/root\/docknest-kit-files\/opened$/m);
+  assert.match(split, /recovery-kit\.js restore \/root\/docknest-kit-files\/opened\/docknest-recovery\.dkit \/root\/docknest-kit \/root\/docknest-kit-files\/opened\/recovery-passphrase\.txt$/m);
+  assert.ok(!split.includes('nano /root/docknest-kit-files/recovery.passphrase'), 'with the split, the tool gives the passphrase file');
   assert.deepEqual(installCommands({ version: '3.0.0', kit: null, storage: null, reveal: hidden }).map(item => item.text).slice(-1), ['Start DockNest. It gets its HTTPS certificate by itself.']);
 });
 
