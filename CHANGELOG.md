@@ -6,6 +6,7 @@ All notable changes to DockNest are documented here. The format follows [Keep a 
 
 ### Added
 - Online database dumps (opt-in per app): PostgreSQL, MySQL and MariaDB keep running while a consistent dump is taken, and a restore loads it into a fresh database. Anything a dump cannot cover safely keeps the stopped copy, with the reason. See [online dumps](docs/online-dumps.md).
+- Missed backup alert: when a scheduled backup could not start on time (DockNest was down, or the app stayed busy), your alert lines for failed backups get one "Backup missed" message. The run still happens as soon as it can. See [alerts](docs/alerts.md#missed-scheduled-backups).
 - Sign-in: each password dot and 2FA digit now animates in as you type, with no focus border on those inputs (the caret and active-box tint show where you are). Off under reduced motion.
 - Consistent dialogs, tabs, notices and step-by-step flows.
 - Domain checks: DockNest follows each domain of your apps through DNS, the proxy (nginx, Nginx Proxy Manager, Caddy or Traefik), the app and its certificate, and says which step is broken and why. Checks run when you ask and after scans, readiness checks and backups, never on a timer. See [domains](docs/domains.md).
