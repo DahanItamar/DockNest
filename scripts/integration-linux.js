@@ -92,9 +92,12 @@ try {
   // CI MongoDB matrix (one job per tested major, MONGO_IMAGE); aggregate-gate merges its evidence for the release gate.
   const only = process.env.INTEGRATION_ONLY || '';
   if (only) {
-    if (!['self-heal','launch','mongo'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch" or "mongo", not "${only.slice(0, 40)}"`);
+    if (!['self-heal','launch','mongo','dumps'].includes(only)) throw new Error(`INTEGRATION_ONLY supports only "self-heal", "launch", "mongo" or "dumps", not "${only.slice(0, 40)}"`);
     evidence.only = only;
-    if (only === 'mongo') {
+    if (only === 'dumps') {
+      const {runOnlineDumpScenario}=await import('./integration-online-dumps.js');
+      await runOnlineDumpScenario({run,until,hosts,servers,db,record});
+    } else if (only === 'mongo') {
       const {runMongoCompatibility}=await import('./integration-mongo.js');
       await runMongoCompatibility({run,until,hosts,servers,db,directory,evidence,record});
     } else if (only === 'launch') {
@@ -112,6 +115,7 @@ try {
   await run('exec',hosts[0],'python3','/qa-helper/test_helper.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_redis.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_mongo.py');
+  await run('exec',hosts[0],'python3','/qa-helper/test_dumps.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_tests.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_restore_gaps.py');
   await run('exec',hosts[0],'python3','/qa-helper/test_domains.py');
@@ -283,6 +287,8 @@ try {
   record('Native static discovery, real SFTP encrypted backup and second-host restore preserve original files and permissions; live nginx stays online, live edits survive and unsafe roots are blocked');
   const {runRestoreCheckScenario}=await import('./integration-restore-check.js');
   await runRestoreCheckScenario({run,hosts,servers,db,record});
+  const {runStackManagersScenario}=await import('./integration-stack-managers.js');
+  await runStackManagersScenario({run,hosts,servers,record});
   const {runS3Scenario}=await import('./integration-s3.js');
   await runS3Scenario({run,until,hosts,servers,db,record,siteId,sftpDestinationId:destinationId});
   const {runCopiesScenario,runHardenedRestoreScenario}=await import('./integration-copies.js');
@@ -294,6 +300,8 @@ try {
   await runRedisCompatibility({run,until,hosts,servers,db,directory,evidence,record});
   const {runMilestones}=await import('./integration-milestones.js');
   await runMilestones({run,until,hosts,servers,db,remote,directory,evidence,record});
+  const {runOnlineDumpScenario}=await import('./integration-online-dumps.js');
+  await runOnlineDumpScenario({run,until,hosts,servers,db,record});
   const {runMoveScenario}=await import('./integration-move.js');
   await runMoveScenario({run,until,hosts,servers,db,record,directory});
   const {runRestoreTestScenario}=await import('./integration-restore-test.js');
@@ -315,6 +323,8 @@ try {
   await runDomainsScenario({run,until,hosts,servers,db,record});
   const {runLaunchScenario}=await import('./integration-launch.js');
   await runLaunchScenario({run,until,hosts,servers,db,record,evidence,directory});
+  const {runAppendOnlyScenario}=await import('./integration-append-only.js');
+  await runAppendOnlyScenario({run,until,hosts,servers,db,record});
   const wrapper=join(directory,'tar-wrapper');
   await writeFile(wrapper,'#!/bin/sh\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-fail-copy ]; then rm /tmp/docknest-fail-copy; exit 42; fi\nif [ "$1" = "--xattrs" ] && [ -f /tmp/docknest-interrupt-copy ]; then rm /tmp/docknest-interrupt-copy; sleep 180; fi\nexec /bin/tar "$@"\n');
   await run('cp',wrapper,hosts[0]+':/usr/local/bin/tar');await run('exec',hosts[0],'chmod','755','/usr/local/bin/tar');

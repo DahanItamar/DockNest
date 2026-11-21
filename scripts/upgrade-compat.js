@@ -3,7 +3,7 @@
 // Usage: node scripts/upgrade-compat.js [vX.Y.Z]   (needs the tag locally: fetch-depth 0 in CI). Synthetic data only.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile, copyFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, copyFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +29,10 @@ db.prepare("INSERT INTO sites VALUES('site','server','Fixture site',?,?)").run(J
 db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone,retention) VALUES('site',1,'0 3 * * *','UTC',7)").run();
 db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job','site','backup','completed','completed',?)").run(now);
 db.prepare("INSERT INTO backups VALUES('backup','site','job',?,'fixture/site.enc',1024,?,'{}',1,1,?)").run(now,'a'.repeat(64),now);
+db.prepare("INSERT INTO sites VALUES('site2','server','Second fixture site',?,?)").run(JSON.stringify({containers:['db'],domains:['two.example.invalid']}),now);
+db.prepare("INSERT INTO policies(site_id,enabled,schedule,timezone,retention) VALUES('site2',0,'30 2 * * 0','UTC',3)").run();
+db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES('job2','site2','backup','completed','completed',?)").run(now);
+db.prepare("INSERT INTO backups VALUES('backup2','site2','job2',?,'fixture/site2.enc',2048,?,'{}',0,1,?)").run(now,'c'.repeat(64),now);
 db.prepare("INSERT INTO settings VALUES('manager_backup_config',?)").run(JSON.stringify({enabled:true,schedule:'0 3 * * *',timezone:'UTC',nextRun:null,passphrase:'sealed-fixture'}));
 db.prepare("INSERT INTO manager_backups(id,status,created_at,finished_at,checksum,size,release) VALUES('kit','completed',?,?,?,2048,'fixture')").run(now,now,'b'.repeat(64));
 db.close();`, { cwd: old });
@@ -60,6 +64,7 @@ db.close();`, { cwd: old });
   assert.deepEqual(JSON.parse(db.prepare("SELECT config FROM sites WHERE id='site'").get().config).domains, ['site.example.invalid']);
   assert.equal(db.prepare("SELECT schedule FROM policies WHERE site_id='site'").get().schedule, '0 3 * * *');
   assert.equal(db.prepare("SELECT pinned FROM backups WHERE id='backup'").get().pinned, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM backups').get().count, 2); assert.equal(db.prepare("SELECT retention FROM policies WHERE site_id='site2'").get().retention, 3);
   assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
   // Self Backup keeps its settings and kit; the kit check and the optional split start empty (one passphrase, no key pair).
   assert.equal(JSON.parse(db.prepare("SELECT value FROM settings WHERE key='manager_backup_config'").get().value).passphrase, 'sealed-fixture');
@@ -83,6 +88,18 @@ db.close();`, { cwd: old });
   assert.deepEqual(domains.prepare('PRAGMA foreign_key_check(domain_checks)').all(), []);
   domains.close();
 
+  // Documented rollback when every newer migration is compatible: the previous release starts on the upgraded database
+  // as is (no snapshot restore) and still sees its own data. Only releases that know the compatibility floor can do this.
+  const oldKnowsFloor = await readFile(join(old, 'src', 'migrations.js'), 'utf8').then(text => text.includes('schema_compat_floor'), () => false);
+  const floorDb = new DatabaseSync(state, { readOnly: true });
+  const floor = Number(floorDb.prepare("SELECT value FROM settings WHERE key='schema_compat_floor'").get()?.value ?? 0); floorDb.close();
+  let compatibleRollback = false;
+  if (migrated && oldKnowsFloor && floor <= from) {
+    const asIs = node("const {db}=await import('./src/db.js');console.log(db.prepare('SELECT COUNT(*) AS count FROM backups').get().count+','+db.prepare('SELECT COUNT(*) AS count FROM sites').get().count);db.close();", { cwd: old });
+    assert.equal(asIs.trim(), '2,2', 'previous release runs on the upgraded database and sees its data');
+    assert.equal(version(state), schemaVersion, 'the previous release leaves the newer schema alone'); compatibleRollback = true;
+  }
+
   // Downgrade guard: a schema newer than this code that needs newer code (compat floor above ours) refuses to start and leaves the database alone.
   const future = new DatabaseSync(state); future.exec(`PRAGMA user_version=${schemaVersion + 1}`); future.prepare("UPDATE settings SET value=? WHERE key='schema_compat_floor'").run(String(schemaVersion + 1)); future.close();
   assert.throws(() => node("await import('./src/db.js');", { cwd }), error => /newer than this release understands/.test(error.stderr) && /upgrade-snapshots/.test(error.stderr));
@@ -92,6 +109,6 @@ db.close();`, { cwd: old });
   if (migrated) { for (const suffix of ['', '-wal', '-shm']) await rm(state + suffix, { force: true }); await copyFile(join(data, 'upgrade-snapshots', snapshots[0]), state); }
   else { const reset = new DatabaseSync(state); reset.exec(`PRAGMA user_version=${from}`); reset.close(); }
   const restored = node("const {db}=await import('./src/db.js');console.log(db.prepare(\"SELECT COUNT(*) AS count FROM backups\").get().count);db.close();", { cwd: old });
-  assert.equal(restored.trim(), '1'); assert.equal(version(state), from);
-  console.log(JSON.stringify({ from: tag, schemaVersion, snapshot: snapshots[0] || null, dataIntact: true, downgradeRefused: true, rollbackRestored: true }));
+  assert.equal(restored.trim(), '2'); assert.equal(version(state), from);
+  console.log(JSON.stringify({ from: tag, schemaVersion, snapshot: snapshots[0] || null, dataIntact: true, compatibleRollback, downgradeRefused: true, rollbackRestored: true }));
 } finally { await rm(work, { recursive: true, force: true }); }

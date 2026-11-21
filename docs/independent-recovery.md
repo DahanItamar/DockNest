@@ -53,6 +53,12 @@ helper, which also handles a symlink later replaced by a folder and two folders 
 
 Check paths in every archive as for a full backup, including directory-listing entries.
 
+## Restoring a database dump
+
+A database that took an [online dump](online-dumps.md) has an empty data folder in the package and its dump in
+`database-I.tar`. Follow "Database dumps" in the package's `restore-guide.md` (the Recovery Guide prints it) before the
+app starts.
+
 ## Independent protected copies
 
 Keep an offline or independently administered archive. The manager must not possess its root/deletion credential. On that separate Linux archive host, create a root-owned 0700 archive under root-owned ancestors without group/other write permission. Fetch a package/kit with a read-only primary-storage credential, then run:

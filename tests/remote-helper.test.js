@@ -19,6 +19,11 @@ test('MongoDB contracts refuse unsafe topology, TLS, logging, credentials and lo
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for MongoDB contract verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
+test('online database dumps: opt-in, fail closed with a reason, whole checked artifacts, credentials in the container, strict loading',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_dumps.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for online dump verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
 test('incremental backups: snapshot state, chain links verified before extraction, dumpdir path checks and ZIP refusal',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_incremental.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for incremental backup helper verification');
@@ -102,6 +107,11 @@ test('restore check finds host schedules, Docker objects and files outside the a
 test('linked apps facts: Compose project and depends_on, user-defined networks, volumes, bind sources and links, and no secrets',()=>{
  const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_app_links.py'],{encoding:'utf8'});
  if(result.error?.code==='ENOENT')throw new Error('Python3 is required for linked apps helper verification');
+ assert.equal(result.status,0,result.stderr||result.error?.message);
+});
+test('Portainer and Dockge stacks map to their Compose folder on the host and are marked with their manager',()=>{
+ const result=spawnSync(process.platform==='win32'?'python':'python3',['remote/test_stack_managers.py'],{encoding:'utf8'});
+ if(result.error?.code==='ENOENT')throw new Error('Python3 is required for stack manager helper verification');
  assert.equal(result.status,0,result.stderr||result.error?.message);
 });
 test('a plain container gets one run spec: docker create flags for Move, a Compose file and env files for its backup, a preview without env values',()=>{

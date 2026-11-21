@@ -5,11 +5,13 @@ releases ignore move jobs but cannot continue or undo a move.
 
 Before rolling back to 2.8.x or older, finish or cancel every automatic restore test and its clean-up ([restore-tests-guide.md](restore-tests-guide.md)). Older releases ignore test jobs and cannot continue a test or clean up its copy on the test server. The test server's safety timer removes leftovers in that case, but it is better to see "Clean up" finish first. Releases from 2.9.0 add new tables only (migration 9, `compatible: true`), so older releases run on the upgraded database. Restore test settings and history stay in the database and show again after you upgrade.
 
+Before rolling back from 3.0.0 to 2.16.x, read [Upgrading to 3.0.0](#upgrading-to-300): the migrations added since 2.16.4 are all compatible, so 2.16.x runs on the upgraded database as is, but it ignores everything the newer release added.
+
 Before rolling back to 2.14.x or older, let every Safe Edit finish ([safe-edit-guide.md](safe-edit-guide.md)), including one that needs attention. Older releases cannot see Safe Edit jobs, so they could neither finish nor roll back a change. `scripts/upgrade.sh` refuses such a downgrade while an edit is unfinished (and when it cannot check), and its wait for running work counts Safe Edit and self-heal steps. Releases from 2.15.0 add new tables only (migrations 15 and 16, `compatible: true`), so older releases run on the upgraded database.
 
 This page covers upgrades and rollbacks for a server installed with `git clone`, `scripts/setup.js` and `docker compose up -d --build`. It also lists what stays stable between versions.
 
-Upgrades never move, rename or delete your volumes, secrets, certificates, app configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database.
+Upgrades never move, rename or delete your volumes, secrets, certificates, app configuration or remote backups. Before the metadata schema changes, DockNest writes a snapshot of the database. `scripts/upgrade.sh` (and so the Update Center) also copies `.env`, `compose.override.yaml`, `data/master.key` and `data/setup.token` to `data/upgrade-backups/` before it changes anything; the database snapshot is taken by DockNest itself on the first start of the new release. Going back is described in [Rolling back](#rolling-back).
 
 Before a release is tagged, its commit is upgraded from a real v2.0.0 Compose installation in CI, then downgraded and upgraded again with `scripts/upgrade.sh`; see [Release validation](release-validation.md) for what that run proves and what it does not.
 
@@ -348,9 +350,52 @@ The upgrade script refuses to run if tracked files are edited, because an upgrad
 
 If `git status` lists a modified file, move the change into one of these, then run `git restore <file>`.
 
+## Upgrading to 3.0.0
+
+Applies to an install on 2.16.x (the oldest upgrade `minUpgradeFrom` allows is still 2.0.0, see below). 3.0.0 is not released yet; this section describes the 3.0.0 development line (`integration/2.16.5`) and is updated as it changes. Upgrade the usual way: the Update Center, or `scripts/upgrade.sh`. Take no other step: the `.env` file, secrets, Compose services and volumes are unchanged, and the only addition to the image is the bundled dashboard fonts.
+
+**Database migrations.** From 2.16.4 (schema 18) the database moves to schema 25 in one start. Every one of these migrations only adds tables and is marked `compatible: true`:
+
+| Migration | Adds |
+| --- | --- |
+| 19 `server-coverage-ignores` | What you chose to skip in backup coverage |
+| 20 `server-app-links` | Linked-app facts found by a scan |
+| 21 `site-restore-decisions` | Your answers in the restore check |
+| 22 `kit-checks-emergency-keys` | Recovery kit checks and the optional emergency kit split |
+| 23 `domain-checks` | Domain checks |
+| 24 `keys-safe` | App keys and configuration fingerprints |
+| 25 `runbook-state` | Recovery Guide state and login notes |
+
+Open pull requests add more if they are included in 3.0.0. At the time of writing only one adds a migration:
+
+| Pull request | Migration | Adds |
+| --- | --- | --- |
+| Restore test from a backup copy (#230) | 26 `restore-test-source`, compatible | An empty-by-default "Test from" choice on restore test settings |
+| Portainer and Dockge stacks (#229), capacity auto-fill (#231), append-only SFTP (#232), online database dumps (#233) | none | These add no migration |
+
+If #230 is not included, the schema ends at 25. If more migrations land before the release, they are added here.
+
+**What changes for you.**
+
+- Sites are called Apps (menu entry **Apps & schedules**), and DockNest's own backup is called **Self Backup**. Settings, links, bookmarks and existing backups are untouched.
+- A new look (design system v2): colours, fonts, dialogs, tabs, lists with an actions menu, and an animated sign-in. Nothing to configure. Reduced motion is respected.
+- Recovery Guide: numbered steps to rebuild every app on a new server, with an optional PDF. It starts as "never made".
+- Keys safe: DockNest finds the encryption keys of your apps and checks they are inside the last backup. The first scan of each app is a silent baseline, so an upgrade raises no "Configuration changed" alert.
+- Domain checks, backup coverage, linked apps and the restore check's extra findings. They read your servers only when you ask or after a scan, readiness check or backup.
+- A "Backup missed" alert when a scheduled backup could not start on time. It uses your existing channels and alert lines for failed backups.
+- If included: Portainer and Dockge stacks in Add app, restore tests from a backup copy, capacity auto-fill for SFTP, append-only SFTP storage, and opt-in online dumps for PostgreSQL, MySQL and MariaDB. Each is off or unchanged until you use it.
+
+**Beta labels stay.** Features labelled beta in 2.16 (for example incremental backups, launching apps and safe changes) keep their label in 3.0.0 until the soak period on the owner's own servers ends. The label is removed in a later release, not by the upgrade.
+
+**`minUpgradeFrom`.** It stays at 2.0.0. The 3.0.0 migrations are additive and the upgrade test below runs from every final release since 2.0.0. A direct upgrade from 2.0.0 and from 2.16.4 both pass it. Upgrading from an older 2.x straight to 3.0.0 therefore needs no intermediate release.
+
+**Rolling back to 2.16.x.** All migrations since 2.16.4 are compatible, so 2.16.x starts on the upgraded database as is: `scripts/upgrade.sh --version v2.16.4` checks out that tag, rebuilds and starts it, with no snapshot restore and no `--allow-data-rollback`. What 2.16.x does not know stays in the database and is ignored (kit checks, domain checks, keys safe, Recovery Guide state). It shows again after you upgrade once more. The Update Center does not downgrade: it only upgrades, so a downgrade is a command-line task. If you also want the exact database from before the upgrade (for example because something looks wrong), use the snapshot DockNest wrote on the first start, `upgrade-snapshots/state-v18-to-v25-<UTC time>.sqlite` in the state volume (named `state-v18-to-v26-…` if migration 26 is included), with the steps in [Rolling back](#rolling-back). That discards every job, backup record and setting change made after the upgrade. The copy of `.env` and the secrets in `data/upgrade-backups/` is only needed if you changed them.
+
+**What the upgrade test checks.** The CI `upgrade` job (`npm run test:upgrade -- vX.Y.Z`, `scripts/upgrade-compat.js`) fills a database with the code of each released version since `minUpgradeFrom` (including v2.16.4): users, a session, a server, two apps with schedules, two backups, the Self Backup settings and its kit. It starts the current API on it and checks that the data and the session survive and that the new tables start empty. It then starts the old release on the upgraded database as is (when its migrations are all compatible), checks the downgrade guard, restores the pre-upgrade snapshot and checks that the old release reads its data again. It uses made-up data, not a real Docker host or a real Update Center run: the in-app path and a rollback on a real host are validated separately.
+
 ## Stability contract
 
-DockNest follows [Semantic Versioning](https://semver.org/). Within a major version (2.x), the following stay compatible. A new release may add to them but will not rename, remove or reinterpret them.
+DockNest follows [Semantic Versioning](https://semver.org/). Within a major version (2.x, and 3.x from 3.0.0), the following stay compatible. A new release may add to them but will not rename, remove or reinterpret them.
 
 | Area | Stable items |
 | --- | --- |

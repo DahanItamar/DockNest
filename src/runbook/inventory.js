@@ -43,6 +43,11 @@ function chainOf(backupId) {
   return locations.every(Boolean) ? { locations } : { broken: true };
 }
 
+function dumpedContainers(manifest) {
+  const names = new Map((manifest.containers ?? []).map(container => [container.id, String(container.name ?? '').replace(/^\//, '')]));
+  return (manifest.consistency?.services ?? []).filter(item => item?.method === 'online logical dump' && names.has(item.container)).map(item => names.get(item.container));
+}
+
 function newestBackup(siteId) {
   const row = db.prepare('SELECT id,captured_at,path,manifest FROM backups WHERE site_id=? ORDER BY captured_at DESC,rowid DESC LIMIT 1').get(siteId);
   if (!row) return null;
@@ -52,6 +57,8 @@ function newestBackup(siteId) {
     id: row.id, capturedAt: row.captured_at, location, fileName: location ? location.path.split('/').at(-1) : null,
     chain: chain?.locations ?? null, chainBroken: Boolean(chain?.broken),
     containers: (manifest.containers ?? []).map(container => ({ name: String(container.name ?? '').replace(/^\//, ''), image: container.image, mounts: (container.mounts ?? []).map(mount => ({ type: mount.type, destination: mount.destination })) })),
+    // Databases saved as an online logical dump (docs/online-dumps.md): their data folders in the package are empty.
+    dumps: dumpedContainers(manifest),
     // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. Restore tests read
     // the main backup.
     verified: evidence ? { at: evidence.checkedAt } : null,
@@ -100,7 +107,7 @@ export function loadInventory({ logins = false, digestOnly = false } = {}) {
   const kit = db.prepare("SELECT path,finished_at FROM manager_backups WHERE status='completed' ORDER BY rowid DESC LIMIT 1").get();
   const selfBackup = selfBackupConfig(), key = activeEmergencyKey();
   // The newest emergency kit of the active split on each destination (docs/emergency-kit.md), next to its offline tool.
-  const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => locationOf(item.path)).filter(Boolean) : [];
+  const emergencyKitLocations = key ? emergencyKits().filter(item => item.keyId === key.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => { const location = locationOf(item.path), tool = item.tool && locationOf(item.tool.path); return location && { ...location, ...(tool && /^[a-f0-9]{64}$/.test(item.tool.sha256) ? { tool: { path: tool.path, sha256: item.tool.sha256 } } : {}) }; }).filter(Boolean) : [];
   return {
     servers, apps, links: digestOnly ? [] : appLinks(servers), defaultTarget,
     storage: db.prepare('SELECT * FROM storage_targets ORDER BY created_at,id').all().map(row => storageTarget(row, logins)),

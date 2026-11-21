@@ -1,5 +1,5 @@
 import { db,transaction,audit } from './db.js';
-import { statFile,renameFile,removeFile,syncFile } from './storage.js';
+import { statFile,renameFile,removeFile,syncFile,keptByStorage,KEPT_UNTIL_RETEST } from './storage.js';
 import { recordVerification } from './recovery-evidence.js';
 import { deploymentHeld } from './deployment-hold.js';
 import { siteCopyTargets,effectiveRetention,sameLocation,copyPathFor,targetIdOfPath,targetSummary } from './site-storage.js';
@@ -83,6 +83,15 @@ export function deferDeletion(backupId,retainUntil=null,at=Date.now()){
   if(!previous||previous.retain_until!==(retainUntil||null))audit('worker','retention.deferred',backupId,{retainUntil:retainUntil||null});
  });
 }
+// An append-only destination keeps the main package (src/storage/write-mode.js): the backup stays listed and usable, its
+// bytes stay counted, and retention leaves it alone until a test finds the destination normal again. Audited once.
+export function keepForStorage(backupId,at=Date.now()){
+ transaction(()=>{
+  db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backupId);
+  const changed=db.prepare('INSERT INTO retention_deferrals VALUES(?,?,NULL,?) ON CONFLICT(backup_id) DO UPDATE SET retry_after=excluded.retry_after,retain_until=NULL WHERE retry_after<>excluded.retry_after').run(backupId,KEPT_UNTIL_RETEST,at).changes;
+  if(changed)audit('worker','retention.kept_by_storage',backupId,{});
+ });
+}
 export const deletionDeferred=(backupId,at=Date.now())=>Boolean(db.prepare('SELECT 1 FROM retention_deferrals WHERE backup_id=? AND retry_after>?').get(backupId,at));
 // The main package ages out (site retention). Copies that their own destination still keeps survive it: the main file is
 // removed first (Object Lock on it defers everything, as before), then the copies no destination keeps. backups.path keeps
@@ -93,7 +102,10 @@ export async function finishDeletion(backupId){
  if(deletionBlocked(backupId)){db.prepare('DELETE FROM retention_operations WHERE backup_id=?').run(backupId);return;}
  const kept=new Set(keptCopies(backupId).map(copy=>copy.target_id));
  try{if(await fileExists(backup.path))await removeFile(backup.path);}
- catch(error){if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};}
+ catch(error){
+  if(keptByStorage(error)){keepForStorage(backupId);return {deferred:true,kept:true};}
+  if(error?.code!=='EOBJECTLOCKED')throw error;deferDeletion(backupId,error.retainUntil);return {deferred:true};
+ }
  // Recorded at once: if a copy deletion below throws, startup checks read the copy, not the gone main package.
  const verified=db.prepare("SELECT target_id FROM backup_copies WHERE backup_id=? AND status='verified' AND (delete_state IS NULL OR delete_state='deferred') ORDER BY delete_state IS NOT NULL,verified_at DESC,target_id LIMIT 1").get(backupId);
  if(verified)markMainRemoved(backup,verified.target_id);
@@ -266,7 +278,8 @@ export async function recoverInterruptedCopies(verify){
    }
    if(await fileExists(temporary)){
     if(await authenticateCopyFile(temporary,copy,verify)){await renameFile(temporary,copy.path);await syncFile(copy.path);completeCopy(copy,{adopted:true});result.adopted++;continue;}
-    await removeFile(temporary);
+    // Kept by an append-only destination: the next attempt writes under a fresh name (src/backup-copies.js).
+    await removeFile(temporary).catch(error=>{if(!keptByStorage(error))throw error;});
    }
    db.prepare("UPDATE backup_copies SET status='pending',next_attempt_at=?,updated_at=? WHERE backup_id=? AND target_id=? AND status='copying'").run(Date.now(),now(),copy.backup_id,copy.target_id);
    audit('worker','backup.copy_resumed',copy.backup_id,{targetId:copy.target_id});result.retried++;
@@ -293,9 +306,16 @@ export async function removeCopyFiles(copy,{partialOnly=false}={}){
  if(!partialOnly)await removeIfPresent(copy.path);
 }
 // Removes one copy's package. Object Lock defers it, for this copy only, until the lock ends (24 h when no date is given).
+// An append-only copy destination keeps it (src/storage/write-mode.js): the copy stays verified and usable, out of its
+// destination's count, until a test finds the destination normal again. Audited once.
 export async function deleteCopyFiles(copy,at=Date.now()){
  try{await removeCopyFiles(copy);return {deleted:true};}
  catch(error){
+  if(keptByStorage(error)){
+   const changed=db.prepare("UPDATE backup_copies SET delete_state='deferred',delete_after=?,retain_until=NULL,updated_at=? WHERE backup_id=? AND target_id=? AND (delete_after IS NULL OR delete_after<>?)").run(KEPT_UNTIL_RETEST,now(),copy.backup_id,copy.target_id,KEPT_UNTIL_RETEST).changes;
+   if(changed)audit('worker','backup.copy_kept_by_storage',copy.backup_id,{targetId:copy.target_id});
+   return {deferred:true,kept:true};
+  }
   if(error?.code!=='EOBJECTLOCKED')throw error;
   const until=Date.parse(error.retainUntil),retry=Number.isFinite(until)&&until>at?until:at+86400000;
   db.prepare("UPDATE backup_copies SET delete_state='deferred',delete_after=?,retain_until=?,updated_at=? WHERE backup_id=? AND target_id=?").run(retry,error.retainUntil||null,now(),copy.backup_id,copy.target_id);
@@ -333,7 +353,8 @@ export async function reconcileArtifacts(verify,{checkCompleted=false,onJobCompl
    if(operation.state==='prepared'){
     // No durable authentication record: never publish a partial package, even if it looks complete.
     if(await fileExists(operation.published))throw new Error('Unexpected published package requires review');
-    if(await fileExists(operation.temporary))await removeFile(operation.temporary);
+    // An append-only destination keeps the .partial (listed as a leftover); it is never a package either way.
+    if(await fileExists(operation.temporary))await removeFile(operation.temporary).catch(error=>{if(!keptByStorage(error))throw error;});
     db.prepare("UPDATE artifact_operations SET state='aborted',updated_at=? WHERE backup_id=?").run(now(),operation.backup_id);continue;
    }
    const exists=await fileExists(operation.published),file=exists?operation.published:operation.temporary;

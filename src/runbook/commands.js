@@ -151,8 +151,11 @@ export function installCommands({ version, kit, storage, reveal, emergency = nul
     const folder = path.posix.dirname(emergency.kit.path);
     steps.push(
       ...trusted(storage, reveal),
-      { text: 'Copy the emergency folder from the backup storage. The tool that opens the kit is in it.', command: [command('mkdir', '-p', '-m', '0700', `${files}/emergency`), fetchCommand(storage, { path: `${folder}/emergency-open.js` }, `${files}/emergency/emergency-open.js`, reveal), fetchCommand(storage, emergency.kit, `${files}/emergency/${path.posix.basename(emergency.kit.path)}`, reveal)].join('\n') },
-      { text: 'Ask the people who hold the parts to type them in, one at a time, when the tool asks.', command: [command('cd', `${files}/emergency`), command('node', 'emergency-open.js', 'open', '.', `${files}/opened`), command('cd', raw('-'))].join('\n') },
+      // The exact tool published with this kit (an append-only destination may hold it under a versioned name), checked against
+      // the SHA-256 recorded when it was published before node runs it. Kits recorded before 3.0.0 name no tool: the folder's one.
+      { text: emergency.kit.tool ? 'Copy the emergency kit and the tool that opens it from the backup storage, then check the tool is the one DockNest published.' : 'Copy the emergency folder from the backup storage. The tool that opens the kit is in it.', command: [command('mkdir', '-p', '-m', '0700', `${files}/emergency`), fetchCommand(storage, { path: emergency.kit.tool?.path ?? `${folder}/emergency-open.js` }, `${files}/emergency/emergency-open.js`, reveal), fetchCommand(storage, emergency.kit, `${files}/emergency/${path.posix.basename(emergency.kit.path)}`, reveal), ...(emergency.kit.tool ? [command('echo', `${emergency.kit.tool.sha256}  ${files}/emergency/emergency-open.js`, raw('|'), 'sha256sum', '-c', '-')] : [])].join('\n') },
+      // Fail-closed: with a recorded hash the run itself checks the tool first, so node never starts a swapped tool.
+      { text: emergency.kit.tool ? 'Ask the people who hold the parts to type them in, one at a time, when the tool asks. The tool is checked first. If the check does not print OK, stop: the tool is not the one DockNest published.' : 'Ask the people who hold the parts to type them in, one at a time, when the tool asks.', command: [command('cd', `${files}/emergency`), emergency.kit.tool ? command('echo', `${emergency.kit.tool.sha256}  emergency-open.js`, raw('|'), 'sha256sum', '-c', '-', raw('&&'), 'node', 'emergency-open.js', 'open', '.', `${files}/opened`) : command('node', 'emergency-open.js', 'open', '.', `${files}/opened`), command('cd', raw('-'))].join('\n') },
     );
     opened = { kit: `${files}/opened/docknest-recovery.dkit`, passphrase: `${files}/opened/recovery-passphrase.txt` };
   } else if (kit && storage) {
@@ -219,6 +222,8 @@ export function restoreCommands({ app, backup, storage, reveal }) {
     steps.push({ text: 'Put each data folder and Docker volume back. Files already there are kept.', command: [...helpers, ...mounts.map(restoreMount)].join('\n') });
   }
   if (configs.length) steps.push({ text: app.composeFiles?.length ? 'Put the Compose files back.' : 'Put the settings files back.', command: configs.join('\n') });
+  // Online dumps (docs/online-dumps.md): the package holds an empty data folder and a dump to load into it.
+  if (backup.dumps?.length) steps.push({ text: `This backup saved ${backup.dumps.join(', ')} as an online dump, so its data folder is empty. Before you start the whole app, start only that database and load its dump with the steps this prints.`, command: command('sed', '-n', '/^# Database dumps/,$p', 'package/restore-guide.md') });
   steps.push(startStep(app, backup));
   return steps;
 }
