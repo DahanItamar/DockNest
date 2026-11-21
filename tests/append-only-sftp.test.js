@@ -396,6 +396,9 @@ test('Recovery Guide: the emergency tool is fetched from the recorded path and c
   const check = text.indexOf(`${sha256}  /root/docknest-kit-files/emergency/emergency-open.js`), run = text.indexOf('node emergency-open.js open');
   assert.ok(check > 0 && check < run, 'the hash is checked before node runs the tool');
   assert.match(text, /\| sha256sum -c -/);
+  // Fail-closed: the run step itself checks the tool and starts node only when the check passes.
+  assert.match(text, new RegExp(`^echo '${sha256}  emergency-open\\.js' \\| sha256sum -c - && node emergency-open\\.js open \\. /root/docknest-kit-files/opened$`, 'm'));
+  assert.doesNotMatch(text, /^node emergency-open\.js/m, 'node never runs without the check');
   const legacy = unwrap(installCommands({ version: '3.0.0', kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/k.dkit' }, storage: sftp, reveal: revealer(), emergency: { kit: { targetId: 't', path: '/srv/BACKUP/docknest-recovery/emergency/emergency_0123456789abcdef_x--y.dkem' } } }).map(step => step.command).join('\n'));
-  assert.match(legacy, /emergency\/emergency-open\.js'?$/m); assert.doesNotMatch(legacy, /sha256sum -c/);
+  assert.match(legacy, /emergency\/emergency-open\.js'?$/m); assert.doesNotMatch(legacy, /sha256sum -c/); assert.match(legacy, /^node emergency-open\.js open \. \/root\/docknest-kit-files\/opened$/m, 'no recorded hash: the earlier command');
 });
