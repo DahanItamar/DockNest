@@ -19,7 +19,7 @@ from .net import (
 from .maintenance import (
     maintenance)
 from .discovery import (
-    nginx_sites)
+    engine_rootless, nginx_sites)
 from .runspec import (
     UNREADABLE_MOUNTS, create_args, fit_host, port_argument, port_bindings, run_spec, unbound_exposed, yaml_str)
 from .restore import (
@@ -301,6 +301,104 @@ def target_probe(probe):
     seccomp=[p for p in (probe.get('seccomp') or [])[:30] if isinstance(p,str) and COMPOSE_SECCOMP.fullmatch('seccomp='+p) and '..' not in pathlib.PurePosixPath(p).parts]
     return {'existingPaths':paths,'conflicts':conflicts,'apparmorLoaded':[p for p in wanted if apparmor_loaded(p)],'apparmorEnabled':os.path.isfile(APPARMOR_PROFILES),
         'seccompPresent':[p for p in seccomp if os.path.isfile(p) and not os.path.islink(p)]}
+# ---- Ownership, modes and file system (docs/adr-3.0.0-keys-safe.md, section 6). Read-only, except one probe file that is
+# created in a private folder and removed in every case. Every function returns an error marker instead of raising, so an
+# unreadable fact reaches the preview as "could not be checked" and blocks, and never as a silent pass.
+OWNERSHIP_SCAN_LIMIT=20000
+OWNERSHIP_FINDINGS=20
+def mount_details(text=None):
+    """Mount point, file system and options from /proc/self/mountinfo (paths.mount_table keeps only read-only)."""
+    if text is None:text=pathlib.Path('/proc/self/mountinfo').read_text()
+    def unescape(value):return re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),value)
+    result=[]
+    for line in text.splitlines():
+        fields=line.split();divider=fields.index('-')
+        options=set(fields[5].split(','))|set(fields[divider+3].split(','))
+        result.append({'path':unescape(fields[4]),'filesystem':fields[divider+1],'options':options})
+    if not result:raise ValueError('empty mount table')
+    return result
+def covering_mount(path,table):
+    covering=[m for m in table if path==m['path'] or path.startswith(m['path'].rstrip('/')+'/')]
+    return max(covering,key=lambda m:len(m['path'])) if covering else None
+def nearest_existing(path):
+    p=pathlib.Path(path)
+    while not (p.exists() or p.is_symlink()):
+        if p.parent==p:break
+        p=p.parent
+    return p
+def source_modes(paths):
+    """Setuid and setgid bits, ACLs and extended attributes below the site's bind paths: names paths only, never content."""
+    try:
+        findings=[];scanned=0;unreadable=0;truncated=False;xattr=hasattr(os,'listxattr')
+        stack=[str(p) for p in (paths or [])[:50] if isinstance(p,str) and os.path.isabs(p) and '..' not in pathlib.PurePosixPath(p).parts]
+        while stack and not truncated:
+            current=stack.pop()
+            try:info=os.lstat(current)
+            except OSError:unreadable+=1;continue
+            if stat.S_ISLNK(info.st_mode):continue
+            scanned+=1
+            if scanned>OWNERSHIP_SCAN_LIMIT:truncated=True;break
+            kinds=[]
+            if info.st_mode&(stat.S_ISUID|stat.S_ISGID):kinds.append('setid')
+            if xattr:
+                try:names=os.listxattr(current,follow_symlinks=False)
+                except OSError as error:
+                    if error.errno not in (errno.ENOTSUP,errno.ENODATA):unreadable+=1
+                    names=[]
+                if any(n.startswith('system.posix_acl') for n in names):kinds.append('acl')
+                if any(n.startswith('user.') or n=='security.capability' for n in names):kinds.append('xattr')
+            if kinds and len(findings)<OWNERSHIP_FINDINGS:findings.append({'key':'file-mode','kind':'file-mode','path':current,'modes':kinds})
+            if stat.S_ISDIR(info.st_mode):
+                try:stack.extend(os.path.join(current,name) for name in sorted(os.listdir(current),reverse=True))
+                except OSError:unreadable+=1
+        return {'checked':True,'scanned':min(scanned,OWNERSHIP_SCAN_LIMIT),'truncated':truncated,'unreadable':unreadable,'xattrChecked':xattr,'findings':findings}
+    except Exception:return {'checked':False,'error':'scan'}
+def staging_features(directory):
+    """Whether the file system under the staging folder keeps setuid bits and extended attributes (tested on a probe file)."""
+    try:
+        made=tempfile.mkdtemp(prefix='.docknest-probe-',dir=str(directory))
+        try:
+            probe=os.path.join(made,'f');open(probe,'w').close()
+            os.chmod(probe,0o4755);setid=bool(os.stat(probe).st_mode&stat.S_ISUID)
+            try:os.setxattr(probe,'user.docknest',b'1');xattr=True
+            except OSError as error:
+                if error.errno not in (errno.ENOTSUP,errno.EPERM):raise
+                xattr=False
+            return {'setid':setid,'xattr':xattr}
+        finally:shutil.rmtree(made,ignore_errors=True)
+    except Exception:return None
+def squashes_root(directory):
+    """True when root cannot own files on this (NFS) mount, False when it can, None when that could not be tested."""
+    folder=nearest_existing(directory)
+    if not folder.is_dir():folder=folder.parent
+    try:made=tempfile.mkdtemp(prefix='.docknest-probe-',dir=str(folder))
+    except PermissionError:return True
+    except OSError:return None
+    try:
+        probe=os.path.join(made,'f');open(probe,'w').close()
+        try:os.chown(probe,1,1);return False
+        except PermissionError:return True
+    except PermissionError:return True
+    except OSError:return None
+    finally:shutil.rmtree(made,ignore_errors=True)
+def target_filesystem(paths,staging):
+    try:
+        table=mount_details();mounts={}
+        for value in (paths or [])[:200]:
+            if not isinstance(value,str) or not os.path.isabs(value) or '..' in pathlib.PurePosixPath(value).parts:continue
+            where=nearest_existing(value);mount=covering_mount(os.path.realpath(where),table)
+            if mount is None:return {'error':'mounts'}
+            if mount['path'] in mounts:continue
+            nfs=mount['filesystem'].startswith('nfs')
+            mounts[mount['path']]={'mount':mount['path'],'filesystem':mount['filesystem'],'readOnly':'ro' in mount['options'],'noexec':'noexec' in mount['options'],'nosuid':'nosuid' in mount['options'],'rootSquash':squashes_root(where) if nfs else False,'sample':str(value)}
+        features=staging_features(staging)
+        return {'mounts':list(mounts.values()),'features':features} if features else {'error':'probe'}
+    except Exception:return {'error':'mounts'}
+def ownership_facts(role,req,facts):
+    result={'engine':{'mode':engine_rootless()}}
+    if role=='source':result['modes']=source_modes((facts.get('site') or {}).get('bindPaths'))
+    elif req.get('probe'):result['filesystem']=target_filesystem(req['probe'].get('paths'),facts.get('stagingExisting'))
+    return result
 def move_facts(req):
     """Read-only facts for the move preflight (src/moves/preflight.js decides). Never returns env values."""
     cfg=req.get('config') or {}
@@ -318,6 +416,8 @@ def move_facts(req):
     tokens=[t for t in req.get('hosts',[]) if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9.:-]{1,253}',t)]+[a for a in facts['addresses'] if not a.startswith(('127.','::1'))]
     if req.get('role')=='source':facts['site']=source_site_facts(cfg,list(dict.fromkeys(tokens)))
     if req.get('probe'):facts['probe']=target_probe(req['probe'])
+    facts['stagingExisting']=str(existing)
+    facts['ownership']=ownership_facts(req.get('role'),req,facts)
     emit(result=facts)
 IMAGE_BASED_LINKS=('home','srv','opt','mnt')
 def image_based_form(path):

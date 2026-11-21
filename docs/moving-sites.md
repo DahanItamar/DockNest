@@ -70,6 +70,21 @@ DockNest refuses a move rather than risk breaking an app. It tells you the reaso
 
 Fix the reason, then press **Save changes** again to re-check.
 
+### Owners, permissions and folders (read-only checks)
+
+The preview also asks both servers three read-only questions (ids `owner-map`, `file-mode`, `target-filesystem`; see
+docs/adr-3.0.0-keys-safe.md section 6):
+
+- **Owners and groups** (warning): Docker uses remapped user IDs (userns-remap or rootless) on either server, so the owners a
+  container sees can differ from the archive.
+- **File permissions** (warning): files under the app's folders use setuid or setgid bits, ACLs or extended attributes that the
+  new file system does not keep. The note names the first path, never file content.
+- **Target folder** (block): the folder is on a read-only, noexec or nosuid mount, or a network file system that squashes root.
+
+A probe that cannot run (an old helper, an unreadable mount table, a failed probe file) is never treated as fine: it blocks
+with "DockNest could not check ... Update DockNest on both servers, then check again." The only thing a probe writes is one
+empty file in a private folder (the staging folder, and on a network mount the nearest existing folder), removed straight after.
+
 ## Installing missing software on the new server (optional)
 
 When a move is blocked because the new server has no nginx, Docker, Docker Compose 2 or certbot, DockNest can install
