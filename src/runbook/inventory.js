@@ -43,6 +43,11 @@ function chainOf(backupId) {
   return locations.every(Boolean) ? { locations } : { broken: true };
 }
 
+function dumpedContainers(manifest) {
+  const names = new Map((manifest.containers ?? []).map(container => [container.id, String(container.name ?? '').replace(/^\//, '')]));
+  return (manifest.consistency?.services ?? []).filter(item => item?.method === 'online logical dump' && names.has(item.container)).map(item => names.get(item.container));
+}
+
 function newestBackup(siteId) {
   const row = db.prepare('SELECT id,captured_at,path,manifest FROM backups WHERE site_id=? ORDER BY captured_at DESC,rowid DESC LIMIT 1').get(siteId);
   if (!row) return null;
@@ -52,6 +57,8 @@ function newestBackup(siteId) {
     id: row.id, capturedAt: row.captured_at, location, fileName: location ? location.path.split('/').at(-1) : null,
     chain: chain?.locations ?? null, chainBroken: Boolean(chain?.broken),
     containers: (manifest.containers ?? []).map(container => ({ name: String(container.name ?? '').replace(/^\//, ''), image: container.image, mounts: (container.mounts ?? []).map(mount => ({ type: mount.type, destination: mount.destination })) })),
+    // Databases saved as an online logical dump (docs/online-dumps.md): their data folders in the package are empty.
+    dumps: dumpedContainers(manifest),
     // "Verified" only with a passed automatic restore test (src/recovery-evidence.js), with its date. Restore tests read
     // the main backup.
     verified: evidence ? { at: evidence.checkedAt } : null,

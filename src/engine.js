@@ -331,6 +331,12 @@ export function protectedPathWarning(items){
  const list=notCopiedList(items,'path');
  return list&&`${list} These folders hold SSH or GPG keys, which DockNest never copies; recover them separately before using a restored copy.`;
 }
+// Online dumps (docs/online-dumps.md): each database that kept the stopped file copy, and why.
+export function onlineDumpWarnings(config,{incremental=false,move=false,fallbacks=[]}={}){
+ if(config?.onlineDumps!==true||config.kind==='static'||move)return [];
+ if(incremental)return ['Online dumps: incremental backups are on, so every database stopped for a file copy.'];
+ return (Array.isArray(fallbacks)?fallbacks:[]).filter(item=>item&&typeof item.container==='string'&&typeof item.reason==='string').map(item=>`Online dumps: ${item.container} stopped for a file copy because ${item.reason}.`);
+}
 // Keeps enqueue-time warnings and adds the helper's record of probes it skipped (names resolved on the host).
 function probeWarnings(job,skipped=[]){
  let details={};try{details=JSON.parse(db.prepare('SELECT details FROM jobs WHERE id=?').get(job)?.details||'{}');}catch{}
@@ -507,7 +513,10 @@ export async function executeJob(job){
   // Without the option the request and the package are exactly as before.
   const decision=decideCapture({site,plan,directory,jobDetails});
   // keepStopped: a site move's final copy leaves the source stopped behind its maintenance page once captured.
-  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})};
+  // Online dumps (opt-in per app, docs/online-dumps.md): never for a move, whose copy must be a stopped one, nor with
+  // incremental backups, whose chains store files.
+  const onlineDumps=site.config.kind!=='static'&&site.config.onlineDumps===true&&!jobDetails.moveId&&!decision;
+  const request={operation:'capture',job:job.id,config:site.config,planFingerprint:plan.fingerprint,diagnostics:process.env.DOCKNEST_CAPTURE_DIAGNOSTICS==='1',...(jobDetails.keepStopped?{keepStopped:true}:{}),...(decision?{incremental:decision.request}:{}),...(onlineDumps?{onlineDumps:true}:{}),...(site.config.kind!=='static'?{keys:keysRequest(server.id)}:{})};
   const onStage=value=>{remoteStage=value;stage(job.id,value);};
   const onDiagnostic=value=>recordBackupDiagnostic(job.id,value);
   const onProgress=value=>recordTransferProgress(job.id,value);
@@ -538,6 +547,7 @@ export async function executeJob(job){
   if(result.manifest.excludedPaths)manifest.excludedPaths=result.manifest.excludedPaths;
   if(result.manifest.restoreReferences)manifest.restoreReferences=result.manifest.restoreReferences;
   if(result.manifest.probePolicyFallback)manifest.probePolicyFallback=result.manifest.probePolicyFallback;
+  if(result.manifest.onlineDumpFallbacks)manifest.onlineDumpFallbacks=result.manifest.onlineDumpFallbacks;
   // keysCheck: which fingerprint key made the proof, so a restore test after a key change does not compare across keys.
   if(keyProof){manifest.keys=keyProof.keys;manifest.keysServerId=server.id;manifest.keysCheck=fingerprintKeyCheck(server.id);}
   if(captured.adjusted)manifest.sourceClock={reportedCapturedAt:Number.isFinite(result.manifest.capturedAt)?result.manifest.capturedAt:null,adjusted:true};
@@ -561,6 +571,7 @@ export async function executeJob(job){
   const keysNotCopied=protectedPathWarning(manifest.protectedPaths);if(keysNotCopied)warnings.push(keysNotCopied);
   if(captured.adjusted)warnings.push('Source server clock: the reported capture time was outside this job\'s run, so the DockNest server time was recorded. Check the source server clock (NTP).');
   if(decision&&!chain)warnings.push('Incremental backups: the server made a standard full backup. Check that the app server can run the current helper.');
+  warnings.push(...onlineDumpWarnings(site.config,{incremental:!!decision,move:!!jobDetails.moveId,fallbacks:manifest.onlineDumpFallbacks}));
   await renameFile(temporary,published);
   // The job completes in the same transaction that publishes the point, and only while this worker still owns it.
   const owned=finalizePublication(backupId,{ownedDetails:{backupId,downtimeSeconds:manifest.downtimeSeconds,...(warnings.length?{warnings}:{}),...incrementalDetails,...(jobDetails.moveId?{moveId:jobDetails.moveId}:{}),...(jobDetails.editId?{editId:jobDetails.editId}:{})}});

@@ -52,7 +52,7 @@ export function plainReason(text, fallback = 'The test could not finish.') {
   value = value.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[address]').replace(/(?:\/[\w.@%+-]+){2,}\/?/g, '[path]');
   return value.length > 300 ? value.slice(0, 297) + '...' : value;
 }
-const CHECK_KINDS = new Set(['package', 'authentic', 'running', 'health', 'stable', 'database', 'sqlite', 'http', 'static-files', 'keys']);
+const CHECK_KINDS = new Set(['package', 'authentic', 'running', 'health', 'stable', 'database', 'sqlite', 'dump', 'http', 'static-files', 'keys']);
 const CHECK_STATUS = new Set(['passed', 'failed', 'skipped', 'not-configured']);
 function cleanChecks(list) {
   const checks = [];
