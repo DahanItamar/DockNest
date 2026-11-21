@@ -308,6 +308,88 @@ test('incremental chains: a backup not saved for its chain and a scrub that foun
   assert.ok(!messages.some(row => /rename-marking|b1|\d+\.\d+\.\d+\.\d+/.test(row.message + row.reason)), 'no codes, ids or addresses in the text');
 });
 
+test('missed scheduled backup: one alert per miss after its grace, cleared by the next completed backup', async () => {
+  reset(); db.exec("DELETE FROM settings WHERE key='alerts_cursor'");
+  const { tickScheduler, missedGraceMs } = await import('../src/engine.js');
+  const srv = server('miss-srv'), siteId = site(srv, 'missed.example.com'), busySite = site(srv, 'busy.example.com');
+  const channel = store.createChannel(tgNode(), 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  detect.detectJobsAndMoves(new Date(Date.now() - 1000).toISOString());
+  const policy = (id, schedule, nextRun) => db.prepare('INSERT INTO policies(site_id,enabled,schedule,timezone,retention,next_run) VALUES(?,1,?,?,7,?)').run(id, schedule, 'UTC', nextRun);
+  const misses = id => db.prepare("SELECT detail FROM audit_events WHERE action='backup.missed' AND target=? ORDER BY created_at,id").all(id).map(row => JSON.parse(row.detail).scheduledFor);
+  const finishAll = (id, finished = new Date(Date.now() + 1000).toISOString()) => db.prepare("UPDATE jobs SET status='completed',stage='completed',finished_at=? WHERE site_id=? AND status IN ('queued','running')").run(finished, id);
+  // The grace is the schedule's interval, 15 minutes to one hour.
+  assert.equal(missedGraceMs({ schedule: '*/5 * * * *', timezone: 'UTC' }, new Date('2026-02-01T03:00:00Z')), 15 * 60_000);
+  assert.equal(missedGraceMs({ schedule: '*/30 * * * *', timezone: 'UTC' }, new Date('2026-02-01T03:30:00Z')), 30 * 60_000);
+  assert.equal(missedGraceMs({ schedule: '0 3 * * *', timezone: 'UTC' }, new Date('2026-02-01T03:00:00Z')), 60 * 60_000);
+  // Started late but within the grace (DockNest restarted after a short stop): runs, no alert.
+  policy(siteId, '0 3 * * *', '2026-02-01T03:00:00.000Z');
+  tickScheduler(new Date('2026-02-01T03:40:00Z'));
+  assert.deepEqual(misses(siteId), []);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE site_id=? AND status='queued'").get(siteId).n, 1, 'the run still starts');
+  finishAll(siteId, '2026-01-01T00:00:00.000Z');
+  // DockNest was down at 03:00 and came back at 07:00: the backup is queued now and the miss is written once.
+  db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run('2026-02-02T03:00:00.000Z', siteId);
+  tickScheduler(new Date('2026-02-02T07:00:00Z'));
+  assert.deepEqual(misses(siteId), ['2026-02-02T03:00:00.000Z']);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE site_id=? AND status='queued'").get(siteId).n, 1);
+  // The next day is missed too before any backup completed: still the same miss, no second row.
+  db.prepare("UPDATE jobs SET status='failed',stage='failed',finished_at=? WHERE site_id=? AND status='queued'").run('2026-01-01T00:00:00.000Z', siteId);
+  db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run('2026-02-03T03:00:00.000Z', siteId);
+  tickScheduler(new Date('2026-02-03T08:00:00Z'));
+  assert.equal(misses(siteId).length, 1, 'a failed backup does not clear a miss');
+  // A completed backup clears it; the next miss is a new one.
+  finishAll(siteId);
+  db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run('2026-02-04T03:00:00.000Z', siteId);
+  tickScheduler(new Date('2026-02-04T09:00:00Z'));
+  assert.deepEqual(misses(siteId), ['2026-02-02T03:00:00.000Z', '2026-02-04T03:00:00.000Z']);
+  // A site that stays busy (a backup that never finished) past the grace: the due run waits, and is reported once.
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','running','copying',?)").run(randomUUID(), busySite, '2026-02-01T02:00:00.000Z');
+  policy(busySite, '0 * * * *', '2026-02-01T03:00:00.000Z');
+  tickScheduler(new Date('2026-02-01T03:30:00Z')); tickScheduler(new Date('2026-02-01T04:30:00Z')); tickScheduler(new Date('2026-02-01T05:30:00Z'));
+  assert.deepEqual(misses(busySite), ['2026-02-01T03:00:00.000Z']);
+  assert.equal(db.prepare("SELECT next_run FROM policies WHERE site_id=?").get(busySite).next_run, '2026-02-01T03:00:00.000Z', 'still due, not skipped');
+  // The detector sends each miss once, titled "Backup missed", at the time the run was due.
+  assert.equal(detect.detectJobsAndMoves(), 3);
+  assert.equal(detect.detectJobsAndMoves(), 0, 'never twice');
+  const rows = db.prepare("SELECT event,dedupe_key,message,payload FROM alert_outbox WHERE dedupe_key LIKE 'backup.failed:occ:missed:%' ORDER BY created_at").all().map(row => ({ ...row, payload: JSON.parse(row.payload) }));
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every(row => row.event === 'backup.failed' && row.payload.title === 'Backup missed' && /did not start on time/.test(row.payload.reason)), JSON.stringify(rows));
+  assert.ok(rows.some(row => row.message === 'Backup missed: missed.example.com on miss-srv did not run when it was due at 03:00 UTC. Open DockNest to check it.'), JSON.stringify(rows.map(row => row.message)));
+  assert.ok(!rows.some(row => /203\.0\.113/.test(row.message + JSON.stringify(row.payload))), 'no addresses');
+  // Not a miss: a site that needs recovery (it has its own alert), a disabled schedule, an update's deployment hold.
+  const recovering = site(srv, 'recovering.example.com'), disabled = site(srv, 'disabled.example.com'), held = site(srv, 'held.example.com');
+  db.prepare("INSERT INTO jobs(id,site_id,type,status,stage,created_at) VALUES(?,?,'backup','recovery_required','recovery_required',?)").run(randomUUID(), recovering, '2026-02-01T02:00:00.000Z');
+  policy(recovering, '0 3 * * *', '2026-02-01T03:00:00.000Z'); policy(disabled, '0 3 * * *', '2026-02-01T03:00:00.000Z'); policy(held, '0 3 * * *', '2026-02-01T03:00:00.000Z');
+  db.prepare('UPDATE policies SET enabled=0 WHERE site_id=?').run(disabled);
+  tickScheduler(new Date('2026-02-01T09:00:00Z'));
+  assert.deepEqual([...misses(recovering), ...misses(disabled)], []);
+  assert.equal(misses(held).length, 1, 'the held site was missed before the hold');
+  db.exec("DELETE FROM audit_events WHERE action='backup.missed' AND target='" + held + "'");
+  db.prepare("INSERT INTO settings VALUES('deployment_hold','true') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
+  db.prepare('UPDATE policies SET next_run=? WHERE site_id=?').run('2026-02-02T03:00:00.000Z', held);
+  tickScheduler(new Date('2026-02-02T09:00:00Z'));
+  assert.deepEqual(misses(held), [], 'nothing is checked during an update hold');
+  db.exec("DELETE FROM settings WHERE key='deployment_hold'");
+  // Leave no rows that later tests' detector cursors would read.
+  for (const table of ['policies', 'jobs']) db.prepare(`DELETE FROM ${table} WHERE site_id IN (?,?,?,?,?)`).run(siteId, busySite, recovering, disabled, held);
+  db.exec("DELETE FROM audit_events WHERE action='backup.missed'");
+});
+
+test('missed scheduled backup: an alert cursor from before 3.0.0 starts now and replays no old misses', () => {
+  reset();
+  const srv = server('old-srv'), siteId = site(srv, 'old.example.com');
+  const channel = store.createChannel(tgNode(), 'test');
+  store.createRule({ channelId: channel.id, sourceKind: 'docknest', events: ['backup.failed'] }, 'test');
+  db.prepare("INSERT INTO audit_events VALUES(?,?,?,?,?,?)").run(randomUUID(), 'scheduler', 'backup.missed', siteId, JSON.stringify({ scheduledFor: '2026-01-01T03:00:00.000Z' }), new Date().toISOString());
+  const old = new Date(Date.now() - 60_000).toISOString();
+  db.prepare("INSERT INTO settings VALUES('alerts_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify({ jobs: old, moves: old, tests: old, testCleanups: old, copies: old, edits: old, launches: old }));
+  assert.equal(detect.detectJobsAndMoves(new Date(Date.now() + 1000).toISOString()), 0);
+  assert.ok(JSON.parse(db.prepare("SELECT value FROM settings WHERE key='alerts_cursor'").get().value).missed, 'the cursor gains its missed field');
+  assert.equal(detect.detectJobsAndMoves(), 0);
+  db.exec("DELETE FROM audit_events WHERE action='backup.missed'");
+});
+
 test('update.available fires once per new release, only when update checks are on', () => {
   reset(); db.exec("DELETE FROM settings WHERE key='alerts_update_notified'");
   const channel = store.createChannel(tgNode(), 'test'), owner = db.prepare('SELECT id FROM users LIMIT 1').get().id;

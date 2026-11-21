@@ -598,12 +598,36 @@ export async function executeJob(job){
   if(finishJob(job.id,'status=?,stage=?,finished_at=?,error=?,details=?',recovery?'recovery_required':'failed',recovery?'recovery_required':'failed',now(),String(error.message).slice(0,1000),JSON.stringify(details)))audit('worker','backup.failed',job.site_id,{job:job.id,recoveryRequired:recovery});
  }
 }
+// Missed runs (docs/alerts.md, "Missed scheduled backups"). A scheduled occurrence that could not start within its grace
+// (DockNest or its worker was down, or the site stayed busy past it, for example with a backup that never finished) is
+// written once as a `backup.missed` audit row, which the alert detector turns into the site's alert. One row per miss:
+// none is written again until a backup of the site completes after it. The grace is the schedule's own interval, at
+// least 15 minutes and at most one hour, so a busy site on a short schedule is not reported every few minutes.
+export const MISSED_GRACE_MS=Object.freeze({min:15*60_000,max:60*60_000});
+export function missedGraceMs(policy,occurrence){
+ const after=CronExpressionParser.parse(policy.schedule,{tz:policy.timezone||'UTC',currentDate:occurrence}).next().getTime();
+ return Math.min(MISSED_GRACE_MS.max,Math.max(MISSED_GRACE_MS.min,after-occurrence.getTime()));
+}
+// The occurrence each site was last checked for, so a site that stays busy is looked up once, not on every tick.
+const missedChecked=new Map();
+function noteMissed(policy,occurrence,currentDate){
+ try{
+  const due=occurrence.toISOString();
+  if(missedChecked.get(policy.site_id)===due||currentDate.getTime()-occurrence.getTime()<=missedGraceMs(policy,occurrence))return;
+  // A site that needs recovery already has its own alert and waits for the owner: not a miss on top of it.
+  const recovering=db.prepare("SELECT 1 FROM jobs WHERE site_id=? AND status='recovery_required'").get(policy.site_id);
+  const open=recovering||db.prepare("SELECT 1 FROM audit_events WHERE action='backup.missed' AND target=? AND created_at>COALESCE((SELECT MAX(finished_at) FROM jobs WHERE site_id=? AND type='backup' AND status='completed'),'')").get(policy.site_id,policy.site_id);
+  if(!open)audit('scheduler','backup.missed',policy.site_id,{scheduledFor:due});
+  missedChecked.set(policy.site_id,due);
+ }catch{/* a miss check never stops the schedule itself */}
+}
 export function tickScheduler(currentDate=new Date()){
  if(deploymentHeld(db))return;
  const policies=db.prepare('SELECT * FROM policies WHERE enabled=1 AND site_id NOT IN (SELECT site_id FROM site_archives)').all();
  for(const policy of policies){
   try{
    const next=policy.next_run?new Date(policy.next_run):null;
+   if(next&&next<=currentDate)noteMissed(policy,next,currentDate);
    // Keep a missed occurrence due while the site is busy; coalesce it once free.
    if(next&&next<=currentDate){if(busy(policy.site_id)||movingSite(policy.site_id)||editingSite(policy.site_id))continue;enqueueBackup(policy.site_id);}
    if(!next||next<=currentDate){
